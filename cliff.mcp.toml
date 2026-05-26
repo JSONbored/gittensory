@@ -24,6 +24,10 @@ split_commits = false
 tag_pattern = "^mcp-v[0-9].*"
 sort_commits = "oldest"
 
+commit_preprocessors = [
+  { pattern = " \\(#[0-9]+\\)$", replace = "" },
+]
+
 commit_parsers = [
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Fixes" },

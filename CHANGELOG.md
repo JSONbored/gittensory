@@ -55,9 +55,11 @@
 
 - Add explicit favicon metadata
 
-- Restore Nightward-style homepage flow (#9)
+- Restore Nightward-style homepage flow
 
 - Use Gittensor screenshot in homepage hero
+
+- Strip squash PR suffixes
 
 
 
