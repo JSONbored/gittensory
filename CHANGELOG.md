@@ -45,5 +45,7 @@
 
 - Add public registration polish gates
 
+- Add analytics and mcp version widget
+
 
 
