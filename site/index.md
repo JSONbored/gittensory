@@ -3,8 +3,11 @@ layout: home
 
 hero:
   name: Gittensory
-  text: Gittensor repo intelligence for miners, maintainers, and coding agents.
-  tagline: Backend-only signals, MCP branch preflight, and GitHub App review context. Not a Gittensor frontend.
+  text: Private repo intelligence for Gittensor work.
+  tagline: "For Gittensor miners, maintainers, and agents: MCP preflight, scoreability projections, and GitHub App review packets. Still not a Gittensor frontend."
+  image:
+    src: /logo.svg
+    alt: Gittensory signal mark
   actions:
     - theme: brand
       text: Install MCP
@@ -14,35 +17,58 @@ hero:
       link: /guide/github-app-setup
 
 features:
-  - title: Miner Decision Packs
-    details: Rank next actions with private reward/risk reasoning, lane context, score blockers, open PR pressure, and maintainer friction.
-  - title: Local MCP Preflight
-    details: Let Codex, Claude, Cursor, and other MCP clients inspect branch metadata without uploading source contents.
-  - title: Maintainer Reviewability
-    details: Generate PR packets, check runs, duplicate context, and public-safe guidance that reduces noisy Gittensor-driven review load.
-  - title: Registry-Aware Signals
-    details: Normalize Gittensor registry data, repo lanes, label multipliers, queue health, collisions, bounties, and configuration readiness.
-  - title: Private By Default
-    details: GitHub OAuth sessions are short-lived Gittensory tokens. User PATs are not stored. Public comments never include private score context.
-  - title: API First
-    details: The API is the product surface. Lovable or other frontends can consume it later without turning Gittensory into another Gittensor dashboard.
+  - title: Scoreability
+    details: Current estimate, ungated potential, and near-term what-if scenarios.
+  - title: Queue Pressure
+    details: Open PR gates, stale branches, duplicate risk, and cleanup-first actions.
+  - title: Role Context
+    details: Contributor lane, maintainer lane, owner history, and repo-specific evidence.
+  - title: Reviewability
+    details: Private maintainer packets plus public-safe PR guidance.
+  - title: Registry Signals
+    details: Repo lanes, label multipliers, issue discovery, bounties, and config drift.
+  - title: MCP Native
+    details: Codex, Claude, Cursor, and agents get structured JSON without code upload.
 ---
 
-## What Gittensory Is
+<div class="gtn-home">
+  <div class="gtn-strip">
+    <div class="gtn-strip__item">
+      <div class="gtn-kicker">01 / Miners</div>
+      <strong>Pick work with less guesswork.</strong>
+      <span>Score blockers, lane fit, stale base checks, and cleanup-first guidance.</span>
+    </div>
+    <div class="gtn-strip__item">
+      <div class="gtn-kicker">02 / Maintainers</div>
+      <strong>Review signal, not noise.</strong>
+      <span>Role-aware context, duplicate risk, validation evidence, and next action.</span>
+    </div>
+    <div class="gtn-strip__item">
+      <div class="gtn-kicker">03 / Agents</div>
+      <strong>Local branch context.</strong>
+      <span>Metadata-only MCP tools for Codex, Claude, Cursor, and automation.</span>
+    </div>
+    <div class="gtn-strip__item">
+      <div class="gtn-kicker">04 / Privacy</div>
+      <strong>Private by default.</strong>
+      <span>No PAT storage, no source upload, no public score or wallet leakage.</span>
+    </div>
+  </div>
 
-Gittensory is a backend intelligence layer for Gittensor registered repositories.
-It helps Gittensor miners and contributors decide what to work on next, and it helps maintainers understand whether a Gittensor-driven PR is clean, duplicate-prone, stale, missing evidence, or worth reviewing.
-
-It is not a Gittensor frontend, not a public leaderboard, and not a reward estimator for public comments. The useful surface is the signal: role-aware repo context, official Gittensor stats, local branch preflight, queue health, duplicate risk, and maintainer-friendly review packets.
-
-## Primary Surfaces
-
-| Surface | Who uses it | What it does |
-| --- | --- | --- |
-| MCP package | miners and coding agents | Runs local branch analysis, score blocker checks, preflight, and PR packet generation. |
-| REST API | internal tools and future clients | Serves decision packs, repo intelligence, reviewability, readiness, and branch analysis. |
-| GitHub App | maintainers and repo owners | Adds private check-run intelligence and optional public-safe PR comments. |
-
-## Current Status
-
-Gittensory is public beta. The MCP package is public, while sensitive score, trust, and maintainer context stays in authenticated API/MCP/check-run surfaces.
+  <div class="gtn-panel">
+    <section>
+      <h2>Not another Gittensor frontend.</h2>
+      <p>
+        Gittensory is the private signal layer behind better contributions:
+        official miner context, registry lanes, queue pressure, scoreability
+        projections, maintainer friction, and public-safe PR packets.
+      </p>
+    </section>
+    <section class="gtn-terminal" aria-label="Gittensory signal example">
+      <div><b>lane</b><span>direct_pr / issue_discovery / maintainer</span></div>
+      <div><b>score</b><span>current 0, potential visible, scenario gated</span></div>
+      <div><b>risk</b><span>open PR pressure, credibility, stale base</span></div>
+      <div><b>output</b><span>private MCP JSON + sanitized PR packet</span></div>
+    </section>
+  </div>
+</div>
