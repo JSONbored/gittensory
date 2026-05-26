@@ -1,4 +1,4 @@
-import { integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const installations = sqliteTable("installations", {
   id: integer("id").primaryKey(),
@@ -38,8 +38,154 @@ export const repositorySettings = sqliteTable("repository_settings", {
   commentMode: text("comment_mode").notNull().default("off"),
   publicSignalLevel: text("public_signal_level").notNull().default("standard"),
   checkRunMode: text("check_run_mode").notNull().default("enabled"),
+  checkRunDetailLevel: text("check_run_detail_level").notNull().default("standard"),
+  backfillEnabled: integer("backfill_enabled", { mode: "boolean" }).notNull().default(true),
+  privateTrustEnabled: integer("private_trust_enabled", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
   updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
+export const repoSyncState = sqliteTable("repo_sync_state", {
+  repoFullName: text("repo_full_name").primaryKey(),
+  status: text("status").notNull().default("never_synced"),
+  sourceKind: text("source_kind").notNull().default("github"),
+  primaryLanguage: text("primary_language"),
+  defaultBranch: text("default_branch"),
+  isPrivate: integer("is_private", { mode: "boolean" }),
+  openIssuesCount: integer("open_issues_count").notNull().default(0),
+  openPullRequestsCount: integer("open_pull_requests_count").notNull().default(0),
+  recentMergedPullRequestsCount: integer("recent_merged_pull_requests_count").notNull().default(0),
+  labelsSyncedAt: text("labels_synced_at"),
+  issuesSyncedAt: text("issues_synced_at"),
+  pullRequestsSyncedAt: text("pull_requests_synced_at"),
+  mergedPullRequestsSyncedAt: text("merged_pull_requests_synced_at"),
+  lastStartedAt: text("last_started_at"),
+  lastCompletedAt: text("last_completed_at"),
+  errorSummary: text("error_summary"),
+  warningsJson: text("warnings_json").notNull().default("[]"),
+  updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
+export const repoSyncSegments = sqliteTable(
+  "repo_sync_segments",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name").notNull(),
+    segment: text("segment").notNull(),
+    status: text("status").notNull().default("never_synced"),
+    sourceKind: text("source_kind").notNull().default("github"),
+    mode: text("mode").notNull().default("light"),
+    lastCursor: text("last_cursor"),
+    nextCursor: text("next_cursor"),
+    fetchedCount: integer("fetched_count").notNull().default(0),
+    expectedCount: integer("expected_count"),
+    pageCount: integer("page_count").notNull().default(0),
+    startedAt: text("started_at"),
+    completedAt: text("completed_at"),
+    staleAt: text("stale_at"),
+    rateLimitResetAt: text("rate_limit_reset_at"),
+    etag: text("etag"),
+    lastModified: text("last_modified"),
+    warningsJson: text("warnings_json").notNull().default("[]"),
+    errorSummary: text("error_summary"),
+    updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    repoSegment: uniqueIndex("repo_sync_segments_repo_segment_unique").on(table.repoFullName, table.segment),
+    repoStatus: index("repo_sync_segments_repo_status_idx").on(table.repoFullName, table.status),
+  }),
+);
+
+export const githubRateLimitObservations = sqliteTable(
+  "github_rate_limit_observations",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name"),
+    resource: text("resource").notNull().default("rest"),
+    path: text("path").notNull(),
+    statusCode: integer("status_code").notNull(),
+    limitValue: integer("limit_value"),
+    remaining: integer("remaining"),
+    resetAt: text("reset_at"),
+    observedAt: text("observed_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    repoObserved: index("github_rate_limit_observations_repo_observed_idx").on(table.repoFullName, table.observedAt),
+    reset: index("github_rate_limit_observations_reset_idx").on(table.resetAt),
+  }),
+);
+
+export const repoGithubTotalsSnapshots = sqliteTable(
+  "repo_github_totals_snapshots",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name").notNull(),
+    openIssuesTotal: integer("open_issues_total").notNull().default(0),
+    openPullRequestsTotal: integer("open_pull_requests_total").notNull().default(0),
+    mergedPullRequestsTotal: integer("merged_pull_requests_total").notNull().default(0),
+    closedUnmergedPullRequestsTotal: integer("closed_unmerged_pull_requests_total").notNull().default(0),
+    labelsTotal: integer("labels_total").notNull().default(0),
+    sourceKind: text("source_kind").notNull().default("github"),
+    fetchedAt: text("fetched_at").notNull(),
+    rateLimitRemaining: integer("rate_limit_remaining"),
+    rateLimitResetAt: text("rate_limit_reset_at"),
+    payloadJson: text("payload_json").notNull().default("{}"),
+  },
+  (table) => ({
+    repoFetched: index("repo_github_totals_repo_fetched_idx").on(table.repoFullName, table.fetchedAt),
+  }),
+);
+
+export const pullRequestDetailSyncState = sqliteTable(
+  "pull_request_detail_sync_state",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name").notNull(),
+    pullNumber: integer("pull_number").notNull(),
+    status: text("status").notNull().default("never_synced"),
+    filesSyncedAt: text("files_synced_at"),
+    reviewsSyncedAt: text("reviews_synced_at"),
+    checksSyncedAt: text("checks_synced_at"),
+    lastSyncedAt: text("last_synced_at"),
+    errorSummary: text("error_summary"),
+    updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    repoPull: uniqueIndex("pull_request_detail_sync_repo_pull_unique").on(table.repoFullName, table.pullNumber),
+    repoStatus: index("pull_request_detail_sync_repo_status_idx").on(table.repoFullName, table.status),
+  }),
+);
+
+export const repoLabels = sqliteTable(
+  "repo_labels",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name").notNull(),
+    name: text("name").notNull(),
+    color: text("color"),
+    description: text("description"),
+    isConfigured: integer("is_configured", { mode: "boolean" }).notNull().default(false),
+    observedCount: integer("observed_count").notNull().default(0),
+    payloadJson: text("payload_json").notNull().default("{}"),
+    lastSeenAt: text("last_seen_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    repoLabel: uniqueIndex("repo_labels_repo_name_unique").on(table.repoFullName, table.name),
+  }),
+);
+
+export const repoSnapshots = sqliteTable("repo_snapshots", {
+  id: text("id").primaryKey(),
+  repoFullName: text("repo_full_name").notNull(),
+  snapshotKind: text("snapshot_kind").notNull(),
+  sourceKind: text("source_kind").notNull().default("github"),
+  fetchedAt: text("fetched_at").notNull(),
+  primaryLanguage: text("primary_language"),
+  defaultBranch: text("default_branch"),
+  openIssuesCount: integer("open_issues_count").notNull().default(0),
+  openPullRequestsCount: integer("open_pull_requests_count").notNull().default(0),
+  recentMergedPullRequestsCount: integer("recent_merged_pull_requests_count").notNull().default(0),
+  payloadJson: text("payload_json").notNull().default("{}"),
 });
 
 export const registrySnapshots = sqliteTable("registry_snapshots", {
@@ -71,12 +217,87 @@ export const pullRequests = sqliteTable(
     htmlUrl: text("html_url"),
     labelsJson: text("labels_json").notNull().default("[]"),
     linkedIssuesJson: text("linked_issues_json").notNull().default("[]"),
+    lastSeenOpenAt: text("last_seen_open_at"),
     payloadJson: text("payload_json").notNull().default("{}"),
     createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
     updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
   },
   (table) => ({
     repoNumber: uniqueIndex("pull_requests_repo_number_unique").on(table.repoFullName, table.number),
+  }),
+);
+
+export const pullRequestFiles = sqliteTable(
+  "pull_request_files",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name").notNull(),
+    pullNumber: integer("pull_number").notNull(),
+    path: text("path").notNull(),
+    status: text("status"),
+    additions: integer("additions").notNull().default(0),
+    deletions: integer("deletions").notNull().default(0),
+    changes: integer("changes").notNull().default(0),
+    previousFilename: text("previous_filename"),
+    payloadJson: text("payload_json").notNull().default("{}"),
+    updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    repoPullPath: uniqueIndex("pull_request_files_repo_pull_path_unique").on(table.repoFullName, table.pullNumber, table.path),
+  }),
+);
+
+export const pullRequestReviews = sqliteTable("pull_request_reviews", {
+  id: text("id").primaryKey(),
+  repoFullName: text("repo_full_name").notNull(),
+  pullNumber: integer("pull_number").notNull(),
+  reviewerLogin: text("reviewer_login"),
+  state: text("state").notNull(),
+  authorAssociation: text("author_association"),
+  submittedAt: text("submitted_at"),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
+export const checkSummaries = sqliteTable(
+  "check_summaries",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name").notNull(),
+    pullNumber: integer("pull_number"),
+    headSha: text("head_sha"),
+    name: text("name").notNull(),
+    status: text("status").notNull(),
+    conclusion: text("conclusion"),
+    startedAt: text("started_at"),
+    completedAt: text("completed_at"),
+    detailsUrl: text("details_url"),
+    payloadJson: text("payload_json").notNull().default("{}"),
+    updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    repoShaName: uniqueIndex("check_summaries_repo_sha_name_unique").on(table.repoFullName, table.headSha, table.name),
+  }),
+);
+
+export const recentMergedPullRequests = sqliteTable(
+  "recent_merged_pull_requests",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name").notNull(),
+    number: integer("number").notNull(),
+    title: text("title").notNull(),
+    authorLogin: text("author_login"),
+    htmlUrl: text("html_url"),
+    mergedAt: text("merged_at"),
+    labelsJson: text("labels_json").notNull().default("[]"),
+    linkedIssuesJson: text("linked_issues_json").notNull().default("[]"),
+    changedFilesJson: text("changed_files_json").notNull().default("[]"),
+    payloadJson: text("payload_json").notNull().default("{}"),
+    updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    repoNumber: uniqueIndex("recent_merged_pull_requests_repo_number_unique").on(table.repoFullName, table.number),
   }),
 );
 
@@ -93,6 +314,7 @@ export const issues = sqliteTable(
     htmlUrl: text("html_url"),
     labelsJson: text("labels_json").notNull().default("[]"),
     linkedPrsJson: text("linked_prs_json").notNull().default("[]"),
+    lastSeenOpenAt: text("last_seen_open_at"),
     payloadJson: text("payload_json").notNull().default("{}"),
     createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
     updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
@@ -119,6 +341,78 @@ export const bounties = sqliteTable(
     repoIssue: uniqueIndex("bounties_repo_issue_unique").on(table.repoFullName, table.issueNumber),
   }),
 );
+
+export const contributors = sqliteTable("contributors", {
+  login: text("login").primaryKey(),
+  githubProfileJson: text("github_profile_json").notNull().default("{}"),
+  topLanguagesJson: text("top_languages_json").notNull().default("[]"),
+  publicRepos: integer("public_repos"),
+  followers: integer("followers"),
+  source: text("source").notNull().default("github"),
+  firstSeenAt: text("first_seen_at").notNull().default("CURRENT_TIMESTAMP"),
+  lastSeenAt: text("last_seen_at").notNull().default("CURRENT_TIMESTAMP"),
+  updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
+export const contributorRepoStats = sqliteTable(
+  "contributor_repo_stats",
+  {
+    id: text("id").primaryKey(),
+    login: text("login").notNull(),
+    repoFullName: text("repo_full_name").notNull(),
+    pullRequests: integer("pull_requests").notNull().default(0),
+    mergedPullRequests: integer("merged_pull_requests").notNull().default(0),
+    openPullRequests: integer("open_pull_requests").notNull().default(0),
+    issues: integer("issues").notNull().default(0),
+    stalePullRequests: integer("stale_pull_requests").notNull().default(0),
+    unlinkedPullRequests: integer("unlinked_pull_requests").notNull().default(0),
+    dominantLabelsJson: text("dominant_labels_json").notNull().default("[]"),
+    lastActivityAt: text("last_activity_at"),
+    updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    loginRepo: uniqueIndex("contributor_repo_stats_login_repo_unique").on(table.login, table.repoFullName),
+  }),
+);
+
+export const collisionEdges = sqliteTable("collision_edges", {
+  id: text("id").primaryKey(),
+  repoFullName: text("repo_full_name").notNull(),
+  leftType: text("left_type").notNull(),
+  leftNumber: integer("left_number").notNull(),
+  leftTitle: text("left_title").notNull(),
+  rightType: text("right_type").notNull(),
+  rightNumber: integer("right_number").notNull(),
+  rightTitle: text("right_title").notNull(),
+  risk: text("risk").notNull(),
+  reason: text("reason").notNull(),
+  sharedTermsJson: text("shared_terms_json").notNull().default("[]"),
+  generatedAt: text("generated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
+export const signalSnapshots = sqliteTable("signal_snapshots", {
+  id: text("id").primaryKey(),
+  signalType: text("signal_type").notNull(),
+  targetKey: text("target_key").notNull(),
+  repoFullName: text("repo_full_name"),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  generatedAt: text("generated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
+export const installationHealth = sqliteTable("installation_health", {
+  installationId: integer("installation_id").primaryKey(),
+  accountLogin: text("account_login").notNull(),
+  repositorySelection: text("repository_selection"),
+  installedReposCount: integer("installed_repos_count").notNull().default(0),
+  registeredInstalledCount: integer("registered_installed_count").notNull().default(0),
+  status: text("status").notNull(),
+  missingPermissionsJson: text("missing_permissions_json").notNull().default("[]"),
+  missingEventsJson: text("missing_events_json").notNull().default("[]"),
+  permissionsJson: text("permissions_json").notNull().default("{}"),
+  eventsJson: text("events_json").notNull().default("[]"),
+  checkedAt: text("checked_at").notNull(),
+  errorSummary: text("error_summary"),
+});
 
 export const advisories = sqliteTable("advisories", {
   id: text("id").primaryKey(),
@@ -163,3 +457,124 @@ export const syncRuns = sqliteTable("sync_runs", {
   startedAt: text("started_at").notNull().default("CURRENT_TIMESTAMP"),
   completedAt: text("completed_at"),
 });
+
+export const scoringModelSnapshots = sqliteTable("scoring_model_snapshots", {
+  id: text("id").primaryKey(),
+  sourceKind: text("source_kind").notNull(),
+  sourceUrl: text("source_url").notNull(),
+  fetchedAt: text("fetched_at").notNull(),
+  activeModel: text("active_model").notNull(),
+  constantsJson: text("constants_json").notNull().default("{}"),
+  programmingLanguagesJson: text("programming_languages_json").notNull().default("{}"),
+  registrySnapshotId: text("registry_snapshot_id"),
+  warningsJson: text("warnings_json").notNull().default("[]"),
+  payloadJson: text("payload_json").notNull().default("{}"),
+});
+
+export const scorePreviews = sqliteTable("score_previews", {
+  id: text("id").primaryKey(),
+  scoringModelSnapshotId: text("scoring_model_snapshot_id").notNull(),
+  repoFullName: text("repo_full_name").notNull(),
+  targetType: text("target_type").notNull(),
+  targetKey: text("target_key").notNull(),
+  contributorLogin: text("contributor_login"),
+  inputJson: text("input_json").notNull().default("{}"),
+  resultJson: text("result_json").notNull().default("{}"),
+  generatedAt: text("generated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
+export const contributorEvidence = sqliteTable("contributor_evidence", {
+  login: text("login").primaryKey(),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  generatedAt: text("generated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
+export const contributorScoringProfiles = sqliteTable("contributor_scoring_profiles", {
+  login: text("login").primaryKey(),
+  scoringModelSnapshotId: text("scoring_model_snapshot_id").notNull(),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  generatedAt: text("generated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
+export const issueQualityReports = sqliteTable(
+  "issue_quality_reports",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name").notNull(),
+    issueNumber: integer("issue_number").notNull(),
+    payloadJson: text("payload_json").notNull().default("{}"),
+    generatedAt: text("generated_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    repoIssue: uniqueIndex("issue_quality_reports_repo_issue_unique").on(table.repoFullName, table.issueNumber),
+  }),
+);
+
+export const burdenForecasts = sqliteTable("burden_forecasts", {
+  repoFullName: text("repo_full_name").primaryKey(),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  generatedAt: text("generated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
+export const registryDriftEvents = sqliteTable("registry_drift_events", {
+  id: text("id").primaryKey(),
+  repoFullName: text("repo_full_name").notNull(),
+  driftType: text("drift_type").notNull(),
+  detail: text("detail").notNull(),
+  previousSnapshotId: text("previous_snapshot_id"),
+  currentSnapshotId: text("current_snapshot_id"),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  generatedAt: text("generated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
+export const bountyLifecycleEvents = sqliteTable("bounty_lifecycle_events", {
+  id: text("id").primaryKey(),
+  bountyId: text("bounty_id").notNull(),
+  repoFullName: text("repo_full_name").notNull(),
+  issueNumber: integer("issue_number").notNull(),
+  status: text("status").notNull(),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  generatedAt: text("generated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
+export const authSessions = sqliteTable(
+  "auth_sessions",
+  {
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull(),
+    login: text("login").notNull(),
+    githubUserId: integer("github_user_id"),
+    scopesJson: text("scopes_json").notNull().default("[]"),
+    expiresAt: text("expires_at").notNull(),
+    revokedAt: text("revoked_at"),
+    createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
+    lastSeenAt: text("last_seen_at"),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+  },
+  (table) => ({
+    tokenHash: uniqueIndex("auth_sessions_token_hash_unique").on(table.tokenHash),
+    login: index("auth_sessions_login_idx").on(table.login),
+    expires: index("auth_sessions_expires_idx").on(table.expiresAt),
+    revoked: index("auth_sessions_revoked_idx").on(table.revokedAt),
+  }),
+);
+
+export const auditEvents = sqliteTable(
+  "audit_events",
+  {
+    id: text("id").primaryKey(),
+    eventType: text("event_type").notNull(),
+    actor: text("actor"),
+    route: text("route"),
+    targetKey: text("target_key"),
+    outcome: text("outcome").notNull(),
+    detail: text("detail"),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+    createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    typeCreated: index("audit_events_type_created_idx").on(table.eventType, table.createdAt),
+    actorCreated: index("audit_events_actor_created_idx").on(table.actor, table.createdAt),
+    routeCreated: index("audit_events_route_created_idx").on(table.route, table.createdAt),
+  }),
+);

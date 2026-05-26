@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, notInArray } from "drizzle-orm";
 import { getDb } from "../db/client";
 import { registrySnapshots, repositories, syncRuns } from "../db/schema";
 import type { RegistrySnapshot } from "../types";
@@ -122,6 +122,22 @@ export async function persistRegistrySnapshot(env: Env, snapshot: RegistrySnapsh
         },
       });
   }
+
+  const registeredFullNames = snapshot.repositories.map((repo) => repo.repo);
+  if (registeredFullNames.length > 0) {
+    await db
+      .update(repositories)
+      .set({
+        isRegistered: false,
+        registryConfigJson: null,
+        emissionShare: null,
+        issueDiscoveryShare: null,
+        maintainerCut: 0,
+        labelMultipliersJson: "{}",
+        updatedAt: nowIso(),
+      })
+      .where(and(eq(repositories.isRegistered, true), notInArray(repositories.fullName, registeredFullNames)));
+  }
 }
 
 export async function getLatestRegistrySnapshot(env: Env): Promise<RegistrySnapshot | null> {
@@ -129,4 +145,10 @@ export async function getLatestRegistrySnapshot(env: Env): Promise<RegistrySnaps
   const [row] = await db.select().from(registrySnapshots).orderBy(desc(registrySnapshots.fetchedAt)).limit(1);
   if (!row) return null;
   return JSON.parse(row.payloadJson) as RegistrySnapshot;
+}
+
+export async function listLatestRegistrySnapshots(env: Env, limit = 2): Promise<RegistrySnapshot[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(registrySnapshots).orderBy(desc(registrySnapshots.fetchedAt)).limit(limit);
+  return rows.map((row) => JSON.parse(row.payloadJson) as RegistrySnapshot);
 }

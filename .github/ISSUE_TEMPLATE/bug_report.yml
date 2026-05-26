@@ -1,0 +1,47 @@
+name: Bug report
+description: Report a backend, API, MCP, GitHub App, or signal issue.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is wrong?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - REST API
+        - MCP
+        - GitHub App
+        - Registry sync
+        - GitHub backfill
+        - Signal logic
+        - Tests/CI
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation
+      description: Include commands, status codes, or sanitized logs. Do not include secrets, wallet details, or private tokens.
+    validations:
+      required: false

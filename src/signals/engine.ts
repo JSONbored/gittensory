@@ -1,12 +1,23 @@
 import type {
   AdvisoryFinding,
   BountyRecord,
+  CheckSummaryRecord,
+  CollisionEdgeRecord,
+  ContributorRepoStatRecord,
   IssueRecord,
+  PullRequestFileRecord,
   PullRequestRecord,
+  PullRequestReviewRecord,
+  RecentMergedPullRequestRecord,
+  RegistrySnapshot,
+  RepoLabelRecord,
+  RepoSyncStateRecord,
   RepositoryRecord,
   RepositorySettings,
+  ScoringModelSnapshotRecord,
 } from "../types";
 import type { PublicContributorProfile } from "../github/public";
+import type { GittensorContributorSnapshot } from "../gittensor/api";
 import { nowIso } from "../utils/json";
 
 export type ParticipationLane = "direct_pr" | "issue_discovery" | "split" | "inactive" | "unknown";
@@ -23,11 +34,15 @@ export type LaneAdvice = {
 };
 
 export type CollisionItem = {
-  type: "issue" | "pull_request";
+  type: "issue" | "pull_request" | "recent_merged_pull_request";
   number: number;
   title: string;
   authorLogin?: string | null | undefined;
   htmlUrl?: string | null | undefined;
+  labels?: string[] | undefined;
+  linkedIssues?: number[] | undefined;
+  changedFiles?: string[] | undefined;
+  body?: string | null | undefined;
 };
 
 export type CollisionCluster = {
@@ -61,8 +76,19 @@ export type QueueHealth = {
     stalePullRequests: number;
     maintainerAuthoredPullRequests: number;
     collisionClusters: number;
+    ageBuckets: {
+      under7Days: number;
+      days7To30: number;
+      over30Days: number;
+    };
+    likelyReviewablePullRequests: number;
   };
   findings: SignalFinding[];
+};
+
+export type QueueSignalCounts = {
+  openIssues?: number | undefined;
+  openPullRequests?: number | undefined;
 };
 
 export type ConfigQuality = {
@@ -77,10 +103,44 @@ export type ConfigQuality = {
   findings: SignalFinding[];
 };
 
+export type LabelAudit = {
+  repoFullName: string;
+  generatedAt: string;
+  configuredLabels: string[];
+  liveLabels: string[];
+  observedLabels: Array<{ name: string; count: number; configured: boolean; existsOnGitHub: boolean }>;
+  missingConfiguredLabels: string[];
+  suspiciousConfiguredLabels: string[];
+  trustedPipelineReady: boolean;
+  findings: SignalFinding[];
+};
+
 export type ContributorProfile = {
   login: string;
   generatedAt: string;
   github: PublicContributorProfile;
+  source: "gittensor_api" | "github_cache";
+  gittensor?: {
+    githubId: string;
+    githubUsername: string;
+    uid?: number | undefined;
+    hotkey?: string | undefined;
+    evaluatedAt?: string | undefined;
+    updatedAt?: string | undefined;
+    isEligible: boolean;
+    credibility: number;
+    eligibleRepoCount: number;
+    issueDiscoveryScore: number;
+    issueTokenScore: number;
+    issueCredibility: number;
+    isIssueEligible: boolean;
+    issueEligibleRepoCount: number;
+    alphaPerDay: number;
+    taoPerDay: number;
+    usdPerDay: number;
+    totals: GittensorContributorSnapshot["totals"];
+    repositories: GittensorContributorSnapshot["repositories"];
+  } | undefined;
   registeredRepoActivity: {
     pullRequests: number;
     mergedPullRequests: number;
@@ -107,6 +167,152 @@ export type ContributorOpportunity = {
   warnings: string[];
 };
 
+export type ContributorFit = {
+  login: string;
+  generatedAt: string;
+  profile: ContributorProfile;
+  summary: string;
+  languageFit: Array<{ repoFullName: string; language?: string | null; match: boolean }>;
+  repoStats: ContributorRepoStatRecord[];
+  opportunities: ContributorOpportunity[];
+  findings: SignalFinding[];
+};
+
+export type ContributorRole = "outside_contributor" | "repo_maintainer" | "org_member" | "collaborator" | "owner" | "unknown";
+
+export type RoleContext = {
+  login: string;
+  repoFullName: string;
+  generatedAt: string;
+  role: ContributorRole;
+  maintainerLane: boolean;
+  normalContributorEvidenceAllowed: boolean;
+  source: "github_association" | "repo_owner_match" | "gittensor_api" | "cache" | "unknown";
+  association?: string | null | undefined;
+  reasons: string[];
+  guidance: string;
+};
+
+export type ContributorOutcomeHistory = {
+  login: string;
+  generatedAt: string;
+  source: ContributorProfile["source"];
+  totals: {
+    pullRequests: number;
+    mergedPullRequests: number;
+    openPullRequests: number;
+    closedPullRequests: number;
+    closedPullRequestRate: number;
+    issues: number;
+    openIssues: number;
+    closedIssues: number;
+    solvedIssues: number;
+    validSolvedIssues: number;
+    credibility: number;
+    issueCredibility: number;
+  };
+  repoOutcomes: Array<{
+    repoFullName: string;
+    role: ContributorRole;
+    lane: ParticipationLane;
+    maintainerLane: boolean;
+    pullRequests: number;
+    mergedPullRequests: number;
+    openPullRequests: number;
+    closedPullRequests: number;
+    closedPullRequestRate: number;
+    issues: number;
+    openIssues: number;
+    closedIssues: number;
+    solvedIssues: number;
+    validSolvedIssues: number;
+    credibility: number;
+    issueCredibility: number;
+    isEligible: boolean;
+    successLevel: "strong" | "emerging" | "weak" | "maintainer_context";
+    strengths: string[];
+    risks: string[];
+  }>;
+  successPatterns: OutcomePattern[];
+  failurePatterns: OutcomePattern[];
+  summary: string;
+};
+
+export type OutcomePattern = {
+  repoFullName?: string | undefined;
+  title: string;
+  detail: string;
+  confidence: "high" | "medium" | "low";
+};
+
+export type ContributorPatternReport = {
+  login: string;
+  generatedAt: string;
+  patternType: "success" | "failure";
+  patterns: OutcomePattern[];
+  summary: string;
+};
+
+export type RepoFitRecommendation = {
+  login: string;
+  repoFullName: string;
+  generatedAt: string;
+  roleContext: RoleContext;
+  lane: LaneAdvice;
+  recommendation: "pursue" | "cleanup_first" | "maintainer_lane" | "avoid_for_now" | "unknown";
+  confidence: "high" | "medium" | "low";
+  reasons: string[];
+  risks: string[];
+  nextActions: string[];
+  rewardRisk?: Record<string, unknown> | undefined;
+  reasoning?: string[] | undefined;
+  actionImpact?: Record<string, unknown> | undefined;
+};
+
+export type MaintainerLaneReport = {
+  repoFullName: string;
+  generatedAt: string;
+  lane: LaneAdvice;
+  maintainerCut: number;
+  maintainerCutConfigured: boolean;
+  queueHealth: QueueHealth;
+  configQuality: ConfigQuality;
+  contributorIntakeHealth: ContributorIntakeHealth;
+  summary: string;
+  findings: SignalFinding[];
+};
+
+export type MaintainerCutReadiness = {
+  repoFullName: string;
+  generatedAt: string;
+  ready: boolean;
+  maintainerCut: number;
+  recommendedAction: "leave_disabled" | "consider_small_cut" | "review_existing_cut" | "fix_config_first";
+  reasons: string[];
+  warnings: string[];
+};
+
+export type ContributorIntakeHealth = {
+  repoFullName: string;
+  generatedAt: string;
+  level: "healthy" | "watch" | "strained" | "blocked";
+  score: number;
+  queueHealth: Pick<QueueHealth, "burdenScore" | "level" | "signals">;
+  configLevel: ConfigQuality["level"];
+  duplicateClusters: number;
+  reviewablePullRequests: number;
+  summary: string;
+  findings: SignalFinding[];
+};
+
+export type PullRequestReviewIntelligence = PullRequestMaintainerPacket & {
+  roleContext: RoleContext;
+  outcomeContext?: ContributorOutcomeHistory["repoOutcomes"][number] | undefined;
+  recommendation: RepoFitRecommendation["recommendation"] | "review" | "needs_author" | "watch" | "likely_duplicate" | "maintainer_lane";
+  privateSummary: string;
+  reviewability?: Record<string, unknown> | undefined;
+};
+
 export type PreflightInput = {
   repoFullName: string;
   contributorLogin?: string | undefined;
@@ -130,6 +336,23 @@ export type PreflightResult = {
   collisions: CollisionCluster[];
 };
 
+export type LocalDiffPreflightInput = PreflightInput & {
+  changedLineCount?: number | undefined;
+  testFiles?: string[] | undefined;
+  commitMessage?: string | undefined;
+};
+
+export type LocalDiffPreflightResult = PreflightResult & {
+  localDiff: {
+    changedFileCount: number;
+    changedLineCount: number;
+    testFileCount: number;
+    codeFileCount: number;
+    inferredLinkedIssues: number[];
+    summary: string;
+  };
+};
+
 export type MaintainerPacket = {
   repoFullName: string;
   generatedAt: string;
@@ -144,6 +367,33 @@ export type MaintainerPacket = {
     reasons: string[];
   }>;
   suggestedActions: string[];
+};
+
+export type PullRequestMaintainerPacket = {
+  repoFullName: string;
+  pullNumber: number;
+  generatedAt: string;
+  reviewPriority: "review" | "needs_author" | "watch";
+  summary: string;
+  changeSummary: {
+    fileCount: number;
+    codeFileCount: number;
+    testFileCount: number;
+    additions: number;
+    deletions: number;
+    topPaths: string[];
+  };
+  reviewSignals: {
+    reviewCount: number;
+    approvalCount: number;
+    changeRequestCount: number;
+    checkFailureCount: number;
+    linkedIssues: number[];
+    collisionClusters: number;
+  };
+  findings: SignalFinding[];
+  contributorNextSteps: string[];
+  maintainerNotes: string[];
 };
 
 export type BountyAdvisory = {
@@ -165,6 +415,93 @@ export type ContributorDetection = {
   priorIssues: number;
 };
 
+export type RegistryChangeReport = {
+  generatedAt: string;
+  currentSnapshotId?: string | undefined;
+  previousSnapshotId?: string | undefined;
+  addedRepos: string[];
+  removedRepos: string[];
+  changedRepos: Array<{
+    repoFullName: string;
+    changes: string[];
+  }>;
+  summary: string;
+};
+
+export type IssueQualityReport = {
+  repoFullName: string;
+  generatedAt: string;
+  lane: LaneAdvice;
+  issues: Array<{
+    number: number;
+    title: string;
+    status: "ready" | "needs_proof" | "hold" | "do_not_use";
+    score: number;
+    reasons: string[];
+    warnings: string[];
+  }>;
+  summary: string;
+};
+
+export type BurdenForecast = {
+  repoFullName: string;
+  generatedAt: string;
+  horizonDays: 7 | 30;
+  level: "low" | "medium" | "high" | "critical";
+  forecast: {
+    projectedReviewLoad: number;
+    reviewablePullRequests: number;
+    stalePullRequests: number;
+    duplicateTrend: number;
+    queueGrowthRisk: number;
+  };
+  findings: SignalFinding[];
+  summary: string;
+};
+
+export type ContributorScoringProfile = {
+  login: string;
+  generatedAt: string;
+  scoringModelSnapshotId: string;
+  evidence: {
+    registeredRepoPullRequests: number;
+    mergedPullRequests: number;
+    openPullRequests: number;
+    stalePullRequests: number;
+    unlinkedPullRequests: number;
+    issueDiscoveryReports: number;
+    languageMatches: number;
+    credibilityAssumption: number;
+  };
+  privateSignals: string[];
+};
+
+export type ContributorStrategy = {
+  login: string;
+  generatedAt: string;
+  scoringModelSnapshotId: string;
+  summary: string;
+  bestFitRepos: Array<{
+    repoFullName: string;
+    lane: ParticipationLane;
+    fit: ContributorOpportunity["fit"];
+    opportunityScore: number;
+    privateScoringReadiness: "good" | "caution" | "hold";
+    reasons: string[];
+    warnings: string[];
+  }>;
+  avoidRepos: Array<{ repoFullName: string; reason: string }>;
+  cleanupFirst: Array<{ repoFullName: string; reason: string }>;
+  maintainerLaneRepos: Array<{ repoFullName: string; reason: string }>;
+  successPatterns: OutcomePattern[];
+  failurePatterns: OutcomePattern[];
+  laneWarnings: string[];
+  nextActions: string[];
+  rewardRisk?: Record<string, unknown> | undefined;
+  reasoning?: string[] | undefined;
+  actionImpact?: string[] | undefined;
+};
+
 const STOPWORDS = new Set([
   "the",
   "and",
@@ -183,6 +520,9 @@ const STOPWORDS = new Set([
   "update",
   "improve",
 ]);
+const MAX_COLLISION_PAIRWISE_ISSUES = 80;
+const MAX_COLLISION_PAIRWISE_PULL_REQUESTS = 120;
+const MAX_COLLISION_PAIRWISE_RECENT_MERGES = 40;
 
 export function buildLaneAdvice(repo: RepositoryRecord | null, fullName: string): LaneAdvice {
   const config = repo?.registryConfig;
@@ -241,13 +581,27 @@ export function buildLaneAdvice(repo: RepositoryRecord | null, fullName: string)
   };
 }
 
-export function buildCollisionReport(repoFullName: string, issues: IssueRecord[], pullRequests: PullRequestRecord[]): CollisionReport {
+export function buildCollisionReport(
+  repoFullName: string,
+  issues: IssueRecord[],
+  pullRequests: PullRequestRecord[],
+  recentMergedPullRequests: RecentMergedPullRequestRecord[] = [],
+): CollisionReport {
   const openIssues = issues.filter((issue) => issue.state === "open");
   const openPullRequests = pullRequests.filter((pr) => pr.state === "open");
   const clusters = new Map<string, CollisionCluster>();
+  const pullRequestsByLinkedIssue = new Map<number, PullRequestRecord[]>();
+
+  for (const pr of openPullRequests) {
+    for (const issueNumber of pr.linkedIssues) {
+      const linkedPrs = pullRequestsByLinkedIssue.get(issueNumber) ?? [];
+      linkedPrs.push(pr);
+      pullRequestsByLinkedIssue.set(issueNumber, linkedPrs);
+    }
+  }
 
   for (const issue of openIssues) {
-    const linkedPrs = openPullRequests.filter((pr) => pr.linkedIssues.includes(issue.number));
+    const linkedPrs = pullRequestsByLinkedIssue.get(issue.number) ?? [];
     if (linkedPrs.length === 0) continue;
     const items = [issueItem(issue), ...linkedPrs.map(prItem)];
     clusters.set(`issue-${issue.number}`, {
@@ -258,13 +612,31 @@ export function buildCollisionReport(repoFullName: string, issues: IssueRecord[]
     });
   }
 
-  const items = [...openIssues.map(issueItem), ...openPullRequests.map(prItem)];
+  const pairwiseIssues = boundedCollisionIssues(openIssues, openPullRequests);
+  const pairwisePullRequests = openPullRequests.slice(0, MAX_COLLISION_PAIRWISE_PULL_REQUESTS);
+  const pairwiseRecentMergedPullRequests = recentMergedPullRequests.slice(0, MAX_COLLISION_PAIRWISE_RECENT_MERGES);
+  const items = [...pairwiseIssues.map(issueItem), ...pairwisePullRequests.map(prItem), ...pairwiseRecentMergedPullRequests.map(recentMergedItem)];
+  const itemTerms = new Map<string, CollisionTerms>();
+  for (const item of items) itemTerms.set(itemKey(item), collisionTerms(item));
   for (let leftIndex = 0; leftIndex < items.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < items.length; rightIndex += 1) {
       const left = items[leftIndex];
       const right = items[rightIndex];
       if (!left || !right) continue;
-      const overlap = titleOverlap(left.title, right.title);
+      const sharedIssue = (left.linkedIssues ?? []).find((issue) => (right.linkedIssues ?? []).includes(issue));
+      if (sharedIssue) {
+        const key = [itemKey(left), itemKey(right)].sort().join("--");
+        if (!clusters.has(key)) {
+          clusters.set(key, {
+            id: key,
+            risk: right.type === "recent_merged_pull_request" || left.type === "recent_merged_pull_request" ? "medium" : "high",
+            reason: `Items reference the same linked issue #${sharedIssue}.`,
+            items: [left, right],
+          });
+        }
+        continue;
+      }
+      const overlap = termOverlap(itemTerms.get(itemKey(left)) ?? collisionTerms(left), itemTerms.get(itemKey(right)) ?? collisionTerms(right));
       if (overlap.score < 0.58 || overlap.shared < 2) continue;
       const key = [itemKey(left), itemKey(right)].sort().join("--");
       if (clusters.has(key)) continue;
@@ -284,7 +656,7 @@ export function buildCollisionReport(repoFullName: string, issues: IssueRecord[]
     summary: {
       clusterCount: clusterList.length,
       highRiskCount: clusterList.filter((cluster) => cluster.risk === "high").length,
-      itemsReviewed: openIssues.length + openPullRequests.length,
+      itemsReviewed: openIssues.length + openPullRequests.length + recentMergedPullRequests.length,
     },
     clusters: clusterList,
   };
@@ -295,19 +667,33 @@ export function buildQueueHealth(
   issues: IssueRecord[],
   pullRequests: PullRequestRecord[],
   collisions: CollisionReport,
+  countOverrides: QueueSignalCounts = {},
 ): QueueHealth {
   const repoFullName = repo?.fullName ?? collisions.repoFullName;
   const openIssues = issues.filter((issue) => issue.state === "open");
   const openPullRequests = pullRequests.filter((pr) => pr.state === "open");
+  const openIssueCount = Math.max(openIssues.length, countOverrides.openIssues ?? 0);
+  const openPullRequestCount = Math.max(openPullRequests.length, countOverrides.openPullRequests ?? 0);
   const unlinkedPullRequests = openPullRequests.filter((pr) => pr.linkedIssues.length === 0);
   const stalePullRequests = openPullRequests.filter((pr) => daysSince(pr.updatedAt ?? pr.createdAt) >= 14);
   const maintainerAuthoredPullRequests = openPullRequests.filter((pr) => isMaintainerAssociation(pr.authorAssociation));
+  const likelyReviewablePullRequests = openPullRequests.filter((pr) => pr.linkedIssues.length > 0 && daysSince(pr.updatedAt ?? pr.createdAt) < 30).length;
+  const ageBuckets = {
+    under7Days: openPullRequests.filter((pr) => daysSince(pr.updatedAt ?? pr.createdAt) < 7).length,
+    days7To30: openPullRequests.filter((pr) => {
+      const age = daysSince(pr.updatedAt ?? pr.createdAt);
+      return age >= 7 && age <= 30;
+    }).length,
+    over30Days: openPullRequests.filter((pr) => daysSince(pr.updatedAt ?? pr.createdAt) > 30).length,
+  };
   const burdenScore = clamp(
-    openPullRequests.length * 6 +
-      openIssues.length +
+    openPullRequestCount * 6 +
+      openIssueCount +
       unlinkedPullRequests.length * 8 +
       stalePullRequests.length * 6 +
-      collisions.summary.clusterCount * 10,
+      ageBuckets.over30Days * 4 +
+      collisions.summary.clusterCount * 10 -
+      likelyReviewablePullRequests * 2,
     0,
     100,
   );
@@ -344,14 +730,16 @@ export function buildQueueHealth(
     generatedAt: nowIso(),
     burdenScore,
     level,
-    summary: `Queue burden is ${level} with ${openPullRequests.length} open PR(s), ${openIssues.length} open issue(s), and ${collisions.summary.clusterCount} overlap cluster(s).`,
+    summary: `Queue burden is ${level} with ${openPullRequestCount} open PR(s), ${openIssueCount} open issue(s), and ${collisions.summary.clusterCount} overlap cluster(s).`,
     signals: {
-      openIssues: openIssues.length,
-      openPullRequests: openPullRequests.length,
+      openIssues: openIssueCount,
+      openPullRequests: openPullRequestCount,
       unlinkedPullRequests: unlinkedPullRequests.length,
       stalePullRequests: stalePullRequests.length,
       maintainerAuthoredPullRequests: maintainerAuthoredPullRequests.length,
       collisionClusters: collisions.summary.clusterCount,
+      ageBuckets,
+      likelyReviewablePullRequests,
     },
     findings,
   };
@@ -422,28 +810,189 @@ export function buildConfigQuality(
   };
 }
 
+export function buildLabelAudit(repo: RepositoryRecord | null, repoLabels: RepoLabelRecord[], issues: IssueRecord[], pullRequests: PullRequestRecord[], fullName: string): LabelAudit {
+  const configuredLabels = Object.keys(repo?.registryConfig?.labelMultipliers ?? {}).sort();
+  const liveLabels = repoLabels.map((label) => label.name).sort();
+  const observedCountMap = new Map<string, number>();
+  for (const label of repoLabels) observedCountMap.set(label.name, Math.max(observedCountMap.get(label.name) ?? 0, label.observedCount));
+  for (const label of [...issues, ...pullRequests].flatMap((record) => record.labels)) {
+    observedCountMap.set(label, (observedCountMap.get(label) ?? 0) + 1);
+  }
+  const observedLabels = [...observedCountMap.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([name, count]) => ({
+      name,
+      count,
+      configured: configuredLabels.includes(name),
+      existsOnGitHub: liveLabels.includes(name),
+    }));
+  const missingConfiguredLabels = configuredLabels.filter((label) => !liveLabels.includes(label));
+  const suspiciousConfiguredLabels = configuredLabels.filter((label) => /^(status|state|source|bot|codex|gittensory|reward|score|miner|verified|risk)[:/-]?/i.test(label));
+  const findings: SignalFinding[] = [];
+  if (repo?.registryConfig?.trustedLabelPipeline && missingConfiguredLabels.length > 0) {
+    findings.push({
+      code: "trusted_labels_missing",
+      severity: "warning",
+      title: "Trusted label config references missing labels",
+      detail: `Configured label(s) not found in live GitHub labels: ${missingConfiguredLabels.join(", ")}.`,
+      action: "Create those labels or remove them from the registry config.",
+    });
+  }
+  if (suspiciousConfiguredLabels.length > 0) {
+    findings.push({
+      code: "suspicious_configured_labels",
+      severity: "warning",
+      title: "Configured labels look like status or source labels",
+      detail: `Potentially weak work-value labels: ${suspiciousConfiguredLabels.join(", ")}.`,
+      action: "Prefer labels that describe work type or user impact.",
+    });
+  }
+  if (configuredLabels.length > 0 && observedLabels.filter((label) => label.configured).length === 0) {
+    findings.push({
+      code: "configured_labels_unused",
+      severity: "info",
+      title: "Configured labels are not visible in cached work",
+      detail: "No configured label has been observed on cached issues or pull requests.",
+    });
+  }
+  return {
+    repoFullName: fullName,
+    generatedAt: nowIso(),
+    configuredLabels,
+    liveLabels,
+    observedLabels,
+    missingConfiguredLabels,
+    suspiciousConfiguredLabels,
+    trustedPipelineReady: Boolean(repo?.registryConfig?.trustedLabelPipeline) && missingConfiguredLabels.length === 0 && suspiciousConfiguredLabels.length === 0,
+    findings,
+  };
+}
+
 export function buildContributorProfile(
   login: string,
   github: PublicContributorProfile,
   pullRequests: PullRequestRecord[],
   issues: IssueRecord[],
+  repoStats: ContributorRepoStatRecord[] = [],
+  gittensorSnapshot: GittensorContributorSnapshot | null = null,
 ): ContributorProfile {
+  if (gittensorSnapshot) return buildGittensorContributorProfile(login, github, pullRequests, repoStats, gittensorSnapshot);
+
   const authoredPullRequests = pullRequests.filter((pr) => sameLogin(pr.authorLogin, login));
   const authoredIssues = issues.filter((issue) => sameLogin(issue.authorLogin, login));
   const mergedPullRequests = authoredPullRequests.filter((pr) => pr.mergedAt || pr.state === "merged");
-  const reposTouched = [...new Set([...authoredPullRequests, ...authoredIssues].map((record) => record.repoFullName))].sort();
-  const dominantLabels = topItems([...authoredPullRequests, ...authoredIssues].flatMap((record) => record.labels), 8);
-  const unlinkedOpenPullRequests = authoredPullRequests.filter((pr) => pr.state === "open" && pr.linkedIssues.length === 0).length;
+  const matchingStats = repoStats.filter((stat) => sameLogin(stat.login, login));
+  const statPullRequests = matchingStats.reduce((sum, stat) => sum + stat.pullRequests, 0);
+  const statMergedPullRequests = matchingStats.reduce((sum, stat) => sum + stat.mergedPullRequests, 0);
+  const statIssues = matchingStats.reduce((sum, stat) => sum + stat.issues, 0);
+  const reposTouched = [
+    ...new Set([
+      ...authoredPullRequests.map((record) => record.repoFullName),
+      ...authoredIssues.map((record) => record.repoFullName),
+      ...matchingStats.filter((stat) => stat.pullRequests > 0 || stat.issues > 0).map((stat) => stat.repoFullName),
+    ]),
+  ].sort();
+  const dominantLabels = topItems(
+    [
+      ...authoredPullRequests.flatMap((record) => record.labels),
+      ...authoredIssues.flatMap((record) => record.labels),
+      ...matchingStats.flatMap((stat) => stat.dominantLabels),
+    ],
+    8,
+  );
+  const unlinkedOpenPullRequests = Math.max(
+    authoredPullRequests.filter((pr) => pr.state === "open" && pr.linkedIssues.length === 0).length,
+    matchingStats.reduce((sum, stat) => sum + stat.unlinkedPullRequests, 0),
+  );
   const maintainerAssociatedPullRequests = authoredPullRequests.filter((pr) => isMaintainerAssociation(pr.authorAssociation)).length;
-  const evidenceScore = clamp(mergedPullRequests.length * 15 + reposTouched.length * 10 + authoredIssues.length * 2 - unlinkedOpenPullRequests * 8, 0, 100);
+  const pullRequestCount = Math.max(authoredPullRequests.length, statPullRequests);
+  const mergedPullRequestCount = Math.max(mergedPullRequests.length, statMergedPullRequests);
+  const issueCount = Math.max(authoredIssues.length, statIssues);
+  const evidenceScore = clamp(mergedPullRequestCount * 15 + reposTouched.length * 10 + issueCount * 2 - unlinkedOpenPullRequests * 8, 0, 100);
   return {
     login,
     generatedAt: nowIso(),
     github,
+    source: "github_cache",
     registeredRepoActivity: {
-      pullRequests: authoredPullRequests.length,
-      mergedPullRequests: mergedPullRequests.length,
-      issues: authoredIssues.length,
+      pullRequests: pullRequestCount,
+      mergedPullRequests: mergedPullRequestCount,
+      issues: issueCount,
+      reposTouched,
+      dominantLabels,
+    },
+    trustSignals: {
+      evidenceScore,
+      level: evidenceScore >= 60 ? "established" : evidenceScore >= 25 ? "emerging" : "new",
+      unlinkedOpenPullRequests,
+      maintainerAssociatedPullRequests,
+    },
+  };
+}
+
+function buildGittensorContributorProfile(
+  login: string,
+  github: PublicContributorProfile,
+  pullRequests: PullRequestRecord[],
+  repoStats: ContributorRepoStatRecord[],
+  snapshot: GittensorContributorSnapshot,
+): ContributorProfile {
+  const matchingStats = repoStats.filter((stat) => sameLogin(stat.login, snapshot.githubUsername) || sameLogin(stat.login, login));
+  const unlinkedOpenPullRequests = matchingStats.reduce((sum, stat) => sum + stat.unlinkedPullRequests, 0);
+  const maintainerAssociatedPullRequests = pullRequests.filter((pr) => sameLogin(pr.authorLogin, login) && isMaintainerAssociation(pr.authorAssociation)).length;
+  const reposTouched = snapshot.repositories
+    .filter((repo) => repo.pullRequests + repo.openIssues + repo.closedIssues > 0)
+    .map((repo) => repo.repoFullName)
+    .sort();
+  const dominantLabels = topItems(
+    [
+      ...snapshot.pullRequests.flatMap((pr) => (pr.label ? [pr.label] : [])),
+      ...snapshot.issueLabels,
+      ...matchingStats.flatMap((stat) => stat.dominantLabels),
+    ],
+    8,
+  );
+  const issues = snapshot.totals.openIssues + snapshot.totals.closedIssues;
+  const evidenceScore = clamp(
+    snapshot.totals.mergedPullRequests * 15 +
+      reposTouched.length * 10 +
+      issues * 2 +
+      snapshot.totals.validSolvedIssues * 10 -
+      snapshot.totals.closedPullRequests * 4 -
+      unlinkedOpenPullRequests * 8,
+    0,
+    100,
+  );
+  return {
+    login,
+    generatedAt: nowIso(),
+    github,
+    source: "gittensor_api",
+    gittensor: {
+      githubId: snapshot.githubId,
+      githubUsername: snapshot.githubUsername,
+      uid: snapshot.uid,
+      hotkey: snapshot.hotkey,
+      evaluatedAt: snapshot.evaluatedAt,
+      updatedAt: snapshot.updatedAt,
+      isEligible: snapshot.isEligible,
+      credibility: snapshot.credibility,
+      eligibleRepoCount: snapshot.eligibleRepoCount,
+      issueDiscoveryScore: snapshot.issueDiscoveryScore,
+      issueTokenScore: snapshot.issueTokenScore,
+      issueCredibility: snapshot.issueCredibility,
+      isIssueEligible: snapshot.isIssueEligible,
+      issueEligibleRepoCount: snapshot.issueEligibleRepoCount,
+      alphaPerDay: snapshot.alphaPerDay,
+      taoPerDay: snapshot.taoPerDay,
+      usdPerDay: snapshot.usdPerDay,
+      totals: snapshot.totals,
+      repositories: snapshot.repositories,
+    },
+    registeredRepoActivity: {
+      pullRequests: snapshot.totals.pullRequests,
+      mergedPullRequests: snapshot.totals.mergedPullRequests,
+      issues,
       reposTouched,
       dominantLabels,
     },
@@ -461,28 +1010,36 @@ export function detectGittensorContributor(
   currentPr: PullRequestRecord,
   pullRequests: PullRequestRecord[],
   issues: IssueRecord[],
+  repoStats: ContributorRepoStatRecord[] = [],
 ): ContributorDetection {
   const priorPullRequests = pullRequests.filter(
     (pr) => sameLogin(pr.authorLogin, login) && !(pr.repoFullName === currentPr.repoFullName && pr.number === currentPr.number),
   );
   const priorIssues = issues.filter((issue) => sameLogin(issue.authorLogin, login));
   const priorMergedPullRequests = priorPullRequests.filter((pr) => pr.mergedAt || pr.state === "merged");
-  if (priorMergedPullRequests.length > 0) {
+  const matchingStats = repoStats.filter((stat) => sameLogin(stat.login, login));
+  const statPullRequests = matchingStats.reduce((sum, stat) => sum + stat.pullRequests, 0);
+  const statMergedPullRequests = matchingStats.reduce((sum, stat) => sum + stat.mergedPullRequests, 0);
+  const statIssues = matchingStats.reduce((sum, stat) => sum + stat.issues, 0);
+  const priorPullRequestCount = Math.max(priorPullRequests.length, statPullRequests);
+  const priorMergedPullRequestCount = Math.max(priorMergedPullRequests.length, statMergedPullRequests);
+  const priorIssueCount = Math.max(priorIssues.length, statIssues);
+  if (priorMergedPullRequestCount > 0) {
     return {
       detected: true,
       reason: "Contributor has prior merged PR activity in registered repos cached by Gittensory.",
-      priorPullRequests: priorPullRequests.length,
-      priorMergedPullRequests: priorMergedPullRequests.length,
-      priorIssues: priorIssues.length,
+      priorPullRequests: priorPullRequestCount,
+      priorMergedPullRequests: priorMergedPullRequestCount,
+      priorIssues: priorIssueCount,
     };
   }
-  if (priorPullRequests.length > 0 || priorIssues.length > 0) {
+  if (priorPullRequestCount > 0 || priorIssueCount > 0) {
     return {
       detected: true,
       reason: "Contributor has prior registered-repo activity cached by Gittensory.",
-      priorPullRequests: priorPullRequests.length,
-      priorMergedPullRequests: priorMergedPullRequests.length,
-      priorIssues: priorIssues.length,
+      priorPullRequests: priorPullRequestCount,
+      priorMergedPullRequests: priorMergedPullRequestCount,
+      priorIssues: priorIssueCount,
     };
   }
   return {
@@ -554,6 +1111,432 @@ export function buildContributorOpportunities(
   return opportunities.sort((left, right) => right.score - left.score || left.repoFullName.localeCompare(right.repoFullName)).slice(0, 25);
 }
 
+export function buildContributorFit(
+  profile: ContributorProfile,
+  repositories: RepositoryRecord[],
+  issues: IssueRecord[],
+  pullRequests: PullRequestRecord[],
+  repoSyncStates: RepoSyncStateRecord[],
+  repoStats: ContributorRepoStatRecord[],
+): ContributorFit {
+  const opportunities = buildContributorOpportunities(profile, repositories, issues, pullRequests);
+  const languageSet = new Set(profile.github.topLanguages.map((language) => language.toLowerCase()));
+  const syncByRepo = new Map(repoSyncStates.map((state) => [state.repoFullName, state]));
+  const languageFit = repositories
+    .filter((repo) => repo.isRegistered)
+    .map((repo) => {
+      const language = syncByRepo.get(repo.fullName)?.primaryLanguage ?? null;
+      return {
+        repoFullName: repo.fullName,
+        language,
+        match: Boolean(language && languageSet.has(language.toLowerCase())),
+      };
+    })
+    .sort((left, right) => Number(right.match) - Number(left.match) || left.repoFullName.localeCompare(right.repoFullName));
+  const findings: SignalFinding[] = [];
+  const matchedLanguages = languageFit.filter((fit) => fit.match).length;
+  if (matchedLanguages === 0 && profile.github.topLanguages.length > 0) {
+    findings.push({
+      code: "no_language_fit",
+      severity: "info",
+      title: "No strong language fit found in cached repo metadata",
+      detail: "The contributor's public GitHub languages do not match cached primary languages for registered repos.",
+    });
+  }
+  const highQueueMatches = opportunities.filter((opportunity) => opportunity.warnings.some((warning) => /busy|queue/i.test(warning)));
+  if (highQueueMatches.length > 0) {
+    findings.push({
+      code: "busy_queue_matches",
+      severity: "info",
+      title: "Some apparent fits have busy queues",
+      detail: `${highQueueMatches.length} ranked opportunity/opportunities carry queue-pressure warnings.`,
+    });
+  }
+  return {
+    login: profile.login,
+    generatedAt: nowIso(),
+    profile,
+    summary: `${profile.login} has ${profile.registeredRepoActivity.pullRequests} ${profile.source === "gittensor_api" ? "Gittensor API" : "cached"} registered-repo PR(s), ${profile.registeredRepoActivity.mergedPullRequests} merged PR(s), and ${opportunities.length} ranked opportunity/opportunities.`,
+    languageFit,
+    repoStats,
+    opportunities,
+    findings,
+  };
+}
+
+export function buildRoleContext(args: {
+  login: string;
+  repo: RepositoryRecord | null;
+  repoFullName: string;
+  pullRequests?: PullRequestRecord[] | undefined;
+  issues?: IssueRecord[] | undefined;
+  profile?: ContributorProfile | null | undefined;
+}): RoleContext {
+  const normalizedLogin = args.login.toLowerCase();
+  const [owner] = args.repoFullName.split("/");
+  const authoredAssociations = [
+    ...(args.pullRequests ?? []).filter((pr) => pr.repoFullName === args.repoFullName && sameLogin(pr.authorLogin, args.login)).map((pr) => pr.authorAssociation),
+    ...(args.issues ?? []).filter((issue) => issue.repoFullName === args.repoFullName && sameLogin(issue.authorLogin, args.login)).map((issue) => issue.authorAssociation),
+  ].filter(Boolean) as string[];
+  const officialRepo = args.profile?.gittensor?.repositories.find((repo) => repo.repoFullName.toLowerCase() === args.repoFullName.toLowerCase());
+  const touchedByOfficial = Boolean(officialRepo && officialRepo.pullRequests + officialRepo.openIssues + officialRepo.closedIssues > 0);
+  const touchedByCache = Boolean(
+    args.profile?.registeredRepoActivity.reposTouched.some((repo) => repo.toLowerCase() === args.repoFullName.toLowerCase()) ||
+      (args.pullRequests ?? []).some((pr) => pr.repoFullName === args.repoFullName && sameLogin(pr.authorLogin, args.login)) ||
+      (args.issues ?? []).some((issue) => issue.repoFullName === args.repoFullName && sameLogin(issue.authorLogin, args.login)),
+  );
+
+  let role: ContributorRole = "unknown";
+  let source: RoleContext["source"] = "unknown";
+  const association = strongestAssociation(authoredAssociations);
+  if (owner?.toLowerCase() === normalizedLogin || args.repo?.owner.toLowerCase() === normalizedLogin) {
+    role = "owner";
+    source = "repo_owner_match";
+  } else if (association === "OWNER") {
+    role = "owner";
+    source = "github_association";
+  } else if (association === "MEMBER") {
+    role = "org_member";
+    source = "github_association";
+  } else if (association === "COLLABORATOR") {
+    role = "collaborator";
+    source = "github_association";
+  } else if (authoredAssociations.some(isMaintainerAssociation)) {
+    role = "repo_maintainer";
+    source = "github_association";
+  } else if (touchedByOfficial) {
+    role = "outside_contributor";
+    source = "gittensor_api";
+  } else if (touchedByCache) {
+    role = "outside_contributor";
+    source = "cache";
+  }
+
+  const maintainerLane = role === "owner" || role === "org_member" || role === "collaborator" || role === "repo_maintainer";
+  const reasons = [
+    ...(source === "repo_owner_match" ? [`${args.login} appears to own ${args.repoFullName}.`] : []),
+    ...(source === "github_association" && association ? [`GitHub association for cached activity is ${association}.`] : []),
+    ...(source === "gittensor_api" ? ["Official Gittensor API shows activity on this repo."] : []),
+    ...(source === "cache" ? ["Cached GitHub activity shows activity on this repo."] : []),
+    ...(maintainerLane ? ["Maintainer-associated repo activity should be treated separately from normal contributor evidence."] : []),
+  ];
+  return {
+    login: args.login,
+    repoFullName: args.repoFullName,
+    generatedAt: nowIso(),
+    role,
+    maintainerLane,
+    normalContributorEvidenceAllowed: !maintainerLane,
+    source,
+    association,
+    reasons: reasons.length > 0 ? reasons : ["No maintainer or contributor relationship is visible in current Gittensory data."],
+    guidance: maintainerLane
+      ? "Use maintainer-lane guidance for repo health, queue quality, labels, contributor triage, and maintainer_cut readiness; do not count this repo as normal contributor evidence for this user."
+      : role === "outside_contributor"
+        ? "Use contributor-lane guidance: fit, duplicate risk, open/closed pressure, linked issue quality, and review hygiene."
+        : "Relationship is unknown; rely on public preflight signals until more GitHub or Gittensor data is available.",
+  };
+}
+
+export function buildContributorOutcomeHistory(args: {
+  login: string;
+  profile: ContributorProfile;
+  repositories: RepositoryRecord[];
+  pullRequests: PullRequestRecord[];
+  issues: IssueRecord[];
+  repoStats: ContributorRepoStatRecord[];
+}): ContributorOutcomeHistory {
+  const repoByName = new Map(args.repositories.map((repo) => [repo.fullName.toLowerCase(), repo]));
+  const repoNamesByKey = new Map<string, { repoFullName: string; priority: number }>();
+  const addRepoName = (repoFullName: string, priority: number) => {
+    const key = repoFullName.toLowerCase();
+    const current = repoNamesByKey.get(key);
+    if (!current || priority >= current.priority) repoNamesByKey.set(key, { repoFullName, priority });
+  };
+  for (const repo of args.repositories) addRepoName(repo.fullName, 1);
+  for (const repoFullName of args.profile.registeredRepoActivity.reposTouched) addRepoName(repoFullName, 2);
+  for (const stat of args.repoStats.filter((stat) => sameLogin(stat.login, args.login))) addRepoName(stat.repoFullName, 2);
+  for (const pr of args.pullRequests.filter((pr) => sameLogin(pr.authorLogin, args.login))) addRepoName(pr.repoFullName, 3);
+  for (const issue of args.issues.filter((issue) => sameLogin(issue.authorLogin, args.login))) addRepoName(issue.repoFullName, 3);
+  for (const repo of args.profile.gittensor?.repositories ?? []) addRepoName(repo.repoFullName, 4);
+  const repoNames = new Set([...repoNamesByKey.values()].map((entry) => entry.repoFullName));
+  const officialByRepo = new Map(args.profile.gittensor?.repositories.map((repo) => [repo.repoFullName.toLowerCase(), repo]) ?? []);
+  const statsByRepo = new Map(args.repoStats.filter((stat) => sameLogin(stat.login, args.login)).map((stat) => [stat.repoFullName.toLowerCase(), stat]));
+  const repoOutcomes = [...repoNames]
+    .sort()
+    .map((repoFullName) => {
+      const repo = repoByName.get(repoFullName.toLowerCase()) ?? null;
+      const official = officialByRepo.get(repoFullName.toLowerCase());
+      const cachedStat = statsByRepo.get(repoFullName.toLowerCase());
+      const cachedPrs = args.pullRequests.filter((pr) => pr.repoFullName === repoFullName && sameLogin(pr.authorLogin, args.login));
+      const cachedIssues = args.issues.filter((issue) => issue.repoFullName === repoFullName && sameLogin(issue.authorLogin, args.login));
+      const pullRequests = official?.pullRequests ?? Math.max(cachedPrs.length, cachedStat?.pullRequests ?? 0);
+      const mergedPullRequests = official?.mergedPullRequests ?? Math.max(cachedPrs.filter((pr) => pr.mergedAt || pr.state === "merged").length, cachedStat?.mergedPullRequests ?? 0);
+      const openPullRequests = official?.openPullRequests ?? Math.max(cachedPrs.filter((pr) => pr.state === "open").length, cachedStat?.openPullRequests ?? 0);
+      const closedPullRequests = official?.closedPullRequests ?? Math.max(cachedPrs.filter((pr) => pr.state === "closed").length, pullRequests - mergedPullRequests - openPullRequests, 0);
+      const openIssues = official?.openIssues ?? cachedIssues.filter((issue) => issue.state === "open").length;
+      const closedIssues = official?.closedIssues ?? cachedIssues.filter((issue) => issue.state !== "open").length;
+      const solvedIssues = official?.solvedIssues ?? 0;
+      const validSolvedIssues = official?.validSolvedIssues ?? 0;
+      const roleContext = buildRoleContext({ login: args.login, repo, repoFullName, pullRequests: args.pullRequests, issues: args.issues, profile: args.profile });
+      const closedPullRequestRate = rate(closedPullRequests, pullRequests);
+      const lane = buildLaneAdvice(repo, repoFullName).lane;
+      const risks = [
+        ...(roleContext.maintainerLane ? ["Maintainer-lane repo; do not treat this as normal contributor evidence."] : []),
+        ...(closedPullRequestRate >= 0.3 ? [`Closed PR rate is ${percent(closedPullRequestRate)}.`] : []),
+        ...(openPullRequests >= 5 ? [`${openPullRequests} open PR(s) create review and threshold pressure.`] : []),
+        ...(openIssues >= 10 && validSolvedIssues === 0 ? ["Issue activity is mostly open/raw, not valid solved issue-discovery evidence."] : []),
+        ...((official?.credibility ?? 1) < 0.8 ? [`Repo credibility is ${round(official?.credibility ?? 0)}.`] : []),
+      ];
+      const strengths = [
+        ...(mergedPullRequests >= 5 ? [`${mergedPullRequests} merged PR(s) show strong repo-specific history.`] : []),
+        ...(mergedPullRequests > 0 && closedPullRequestRate < 0.25 ? ["Merged history is stronger than closed-PR pressure."] : []),
+        ...(validSolvedIssues > 0 ? [`${validSolvedIssues} valid solved issue-discovery report(s).`] : []),
+        ...((official?.credibility ?? 0) >= 0.9 ? ["Official repo credibility is strong."] : []),
+      ];
+      const successLevel: ContributorOutcomeHistory["repoOutcomes"][number]["successLevel"] = roleContext.maintainerLane
+        ? "maintainer_context"
+        : mergedPullRequests >= 5 && closedPullRequestRate < 0.3
+          ? "strong"
+          : mergedPullRequests > 0
+            ? "emerging"
+            : "weak";
+      return {
+        repoFullName,
+        role: roleContext.role,
+        lane,
+        maintainerLane: roleContext.maintainerLane,
+        pullRequests,
+        mergedPullRequests,
+        openPullRequests,
+        closedPullRequests,
+        closedPullRequestRate,
+        issues: openIssues + closedIssues,
+        openIssues,
+        closedIssues,
+        solvedIssues,
+        validSolvedIssues,
+        credibility: official?.credibility ?? 0,
+        issueCredibility: official?.issueCredibility ?? 0,
+        isEligible: Boolean(official?.isEligible),
+        successLevel,
+        strengths: strengths.length > 0 ? strengths : ["No strong success pattern detected yet."],
+        risks: risks.length > 0 ? risks : ["No major repo-specific risk detected from current signals."],
+      };
+    })
+    .filter((outcome) => outcome.pullRequests + outcome.issues > 0 || outcome.maintainerLane);
+  const totals = {
+    pullRequests: args.profile.gittensor?.totals.pullRequests ?? args.profile.registeredRepoActivity.pullRequests,
+    mergedPullRequests: args.profile.gittensor?.totals.mergedPullRequests ?? args.profile.registeredRepoActivity.mergedPullRequests,
+    openPullRequests: args.profile.gittensor?.totals.openPullRequests ?? args.repoStats.reduce((sum, stat) => sum + stat.openPullRequests, 0),
+    closedPullRequests: args.profile.gittensor?.totals.closedPullRequests ?? repoOutcomes.reduce((sum, outcome) => sum + outcome.closedPullRequests, 0),
+    closedPullRequestRate: 0,
+    issues: args.profile.registeredRepoActivity.issues,
+    openIssues: args.profile.gittensor?.totals.openIssues ?? repoOutcomes.reduce((sum, outcome) => sum + outcome.openIssues, 0),
+    closedIssues: args.profile.gittensor?.totals.closedIssues ?? repoOutcomes.reduce((sum, outcome) => sum + outcome.closedIssues, 0),
+    solvedIssues: args.profile.gittensor?.totals.solvedIssues ?? 0,
+    validSolvedIssues: args.profile.gittensor?.totals.validSolvedIssues ?? 0,
+    credibility: args.profile.gittensor?.credibility ?? 0,
+    issueCredibility: args.profile.gittensor?.issueCredibility ?? 0,
+  };
+  totals.closedPullRequestRate = rate(totals.closedPullRequests, totals.pullRequests);
+  const history = {
+    login: args.login,
+    generatedAt: nowIso(),
+    source: args.profile.source,
+    totals,
+    repoOutcomes,
+    successPatterns: [] as OutcomePattern[],
+    failurePatterns: [] as OutcomePattern[],
+    summary: "",
+  };
+  history.successPatterns = outcomeSuccessPatterns(history);
+  history.failurePatterns = outcomeFailurePatterns(history);
+  history.summary = `${args.login} has ${totals.pullRequests} official/cached PR(s), ${totals.mergedPullRequests} merged, ${totals.closedPullRequests} closed, ${totals.openPullRequests} open, and ${history.repoOutcomes.length} repo-specific outcome profile(s).`;
+  return history;
+}
+
+export function buildContributorPatternReport(history: ContributorOutcomeHistory, patternType: "success" | "failure"): ContributorPatternReport {
+  const patterns = patternType === "success" ? history.successPatterns : history.failurePatterns;
+  return {
+    login: history.login,
+    generatedAt: nowIso(),
+    patternType,
+    patterns,
+    summary: `${patterns.length} ${patternType} pattern(s) generated from ${history.source === "gittensor_api" ? "official Gittensor API plus cached GitHub" : "cached GitHub"} evidence.`,
+  };
+}
+
+export function buildRepoFitRecommendation(args: {
+  login: string;
+  repo: RepositoryRecord | null;
+  repoFullName: string;
+  profile: ContributorProfile;
+  outcomeHistory: ContributorOutcomeHistory;
+  issues: IssueRecord[];
+  pullRequests: PullRequestRecord[];
+}): RepoFitRecommendation {
+  const roleContext = buildRoleContext({ login: args.login, repo: args.repo, repoFullName: args.repoFullName, pullRequests: args.pullRequests, issues: args.issues, profile: args.profile });
+  const lane = buildLaneAdvice(args.repo, args.repoFullName);
+  const repoOutcome = args.outcomeHistory.repoOutcomes.find((outcome) => outcome.repoFullName.toLowerCase() === args.repoFullName.toLowerCase());
+  const collisions = buildCollisionReport(args.repoFullName, args.issues, args.pullRequests);
+  const queueHealth = buildQueueHealth(args.repo, args.issues, args.pullRequests, collisions);
+  const risks = [
+    ...(repoOutcome?.risks ?? []),
+    ...(lane.lane === "inactive" || lane.lane === "unknown" ? [lane.summary] : []),
+    ...(queueHealth.level === "high" || queueHealth.level === "critical" ? [`Queue burden is ${queueHealth.level}.`] : []),
+    ...(collisions.summary.highRiskCount > 0 ? [`${collisions.summary.highRiskCount} high-risk collision cluster(s).`] : []),
+  ];
+  const reasons = [
+    lane.summary,
+    ...(repoOutcome?.strengths ?? []),
+    ...(roleContext.reasons ?? []),
+  ];
+  const recommendation: RepoFitRecommendation["recommendation"] = roleContext.maintainerLane
+    ? "maintainer_lane"
+    : lane.lane === "unknown" || lane.lane === "inactive"
+      ? "unknown"
+      : (repoOutcome?.openPullRequests ?? 0) >= 5 || (repoOutcome?.closedPullRequestRate ?? 0) >= 0.35 || queueHealth.level === "critical"
+        ? "cleanup_first"
+        : risks.some((risk) => /collision|Queue burden is high|direct-PR first/i.test(risk))
+          ? "avoid_for_now"
+          : "pursue";
+  const nextActions = [
+    ...(recommendation === "maintainer_lane" ? ["Use repo-health and contributor-triage actions instead of normal contributor work for this repo."] : []),
+    ...(recommendation === "cleanup_first" ? ["Close, land, or update existing open work before opening another PR."] : []),
+    ...(recommendation === "avoid_for_now" ? ["Pick a lower-collision or lower-burden repo unless the work is already well proven."] : []),
+    ...(recommendation === "pursue" ? ["Run local diff preflight, check collisions, and keep the submission tightly scoped."] : []),
+    ...(lane.lane === "issue_discovery" ? ["Use issue-discovery quality gates; do not file issues you plan to solve yourself."] : []),
+  ];
+  return {
+    login: args.login,
+    repoFullName: args.repoFullName,
+    generatedAt: nowIso(),
+    roleContext,
+    lane,
+    recommendation,
+    confidence: args.profile.source === "gittensor_api" || repoOutcome ? "high" : args.repo ? "medium" : "low",
+    reasons: [...new Set(reasons)],
+    risks: [...new Set(risks)],
+    nextActions: [...new Set(nextActions.length > 0 ? nextActions : ["Gather more repo-specific evidence before acting."])],
+  };
+}
+
+export function buildContributorIntakeHealth(
+  repo: RepositoryRecord | null,
+  issues: IssueRecord[],
+  pullRequests: PullRequestRecord[],
+  fullName: string,
+  collisions = buildCollisionReport(fullName, issues, pullRequests),
+  countOverrides: QueueSignalCounts = {},
+): ContributorIntakeHealth {
+  const queueHealth = buildQueueHealth(repo, issues, pullRequests, collisions, countOverrides);
+  const configQuality = buildConfigQuality(repo, issues, pullRequests, fullName);
+  const configPenalty = configQuality.level === "fragile" ? 30 : configQuality.level === "needs_attention" ? 18 : configQuality.level === "good" ? 6 : 0;
+  const score = clamp(100 - queueHealth.burdenScore * 0.55 - collisions.summary.clusterCount * 8 - configPenalty, 0, 100);
+  const level: ContributorIntakeHealth["level"] = score >= 75 ? "healthy" : score >= 50 ? "watch" : score >= 25 ? "strained" : "blocked";
+  const findings: SignalFinding[] = [
+    ...(queueHealth.findings ?? []),
+    ...(configQuality.findings ?? []),
+    ...(collisions.summary.highRiskCount > 0
+      ? [
+          {
+            code: "high_risk_collisions",
+            severity: "warning" as const,
+            title: "High-risk duplicate clusters are present",
+            detail: `${collisions.summary.highRiskCount} high-risk collision cluster(s) should be triaged before inviting more contributor work.`,
+          },
+        ]
+      : []),
+  ];
+  return {
+    repoFullName: fullName,
+    generatedAt: nowIso(),
+    level,
+    score,
+    queueHealth: {
+      burdenScore: queueHealth.burdenScore,
+      level: queueHealth.level,
+      signals: queueHealth.signals,
+    },
+    configLevel: configQuality.level,
+    duplicateClusters: collisions.summary.clusterCount,
+    reviewablePullRequests: queueHealth.signals.likelyReviewablePullRequests,
+    summary: `Contributor intake is ${level}; queue burden ${queueHealth.burdenScore}/100, config ${configQuality.level}, duplicate clusters ${collisions.summary.clusterCount}.`,
+    findings,
+  };
+}
+
+export function buildMaintainerCutReadiness(
+  repo: RepositoryRecord | null,
+  issues: IssueRecord[],
+  pullRequests: PullRequestRecord[],
+  fullName: string,
+  countOverrides: QueueSignalCounts = {},
+  collisions = buildCollisionReport(fullName, issues, pullRequests),
+): MaintainerCutReadiness {
+  const configQuality = buildConfigQuality(repo, issues, pullRequests, fullName);
+  const queueHealth = buildQueueHealth(repo, issues, pullRequests, collisions, countOverrides);
+  const maintainerCut = repo?.registryConfig?.maintainerCut ?? 0;
+  const warnings = [
+    ...(!repo?.isRegistered ? ["Repository is not registered in the local snapshot."] : []),
+    ...(configQuality.level === "fragile" || configQuality.level === "needs_attention" ? [`Config quality is ${configQuality.level}.`] : []),
+    ...(queueHealth.level === "high" || queueHealth.level === "critical" ? [`Queue burden is ${queueHealth.level}.`] : []),
+  ];
+  const ready = Boolean(repo?.isRegistered) && warnings.length === 0;
+  return {
+    repoFullName: fullName,
+    generatedAt: nowIso(),
+    ready,
+    maintainerCut,
+    recommendedAction: maintainerCut > 0 ? "review_existing_cut" : ready ? "consider_small_cut" : repo?.isRegistered ? "fix_config_first" : "leave_disabled",
+    reasons: [
+      ...(maintainerCut > 0 ? [`Current maintainer_cut is ${maintainerCut}.`] : ["No maintainer_cut is configured."]),
+      ...(ready ? ["Repo config and queue signals are clean enough to discuss maintainer-lane economics privately."] : []),
+    ],
+    warnings,
+  };
+}
+
+export function buildMaintainerLaneReport(
+  repo: RepositoryRecord | null,
+  issues: IssueRecord[],
+  pullRequests: PullRequestRecord[],
+  fullName: string,
+  collisions = buildCollisionReport(fullName, issues, pullRequests),
+  countOverrides: QueueSignalCounts = {},
+): MaintainerLaneReport {
+  const queueHealth = buildQueueHealth(repo, issues, pullRequests, collisions, countOverrides);
+  const configQuality = buildConfigQuality(repo, issues, pullRequests, fullName);
+  const contributorIntakeHealth = buildContributorIntakeHealth(repo, issues, pullRequests, fullName, collisions, countOverrides);
+  const maintainerCut = repo?.registryConfig?.maintainerCut ?? 0;
+  const findings: SignalFinding[] = [
+    ...(maintainerCut === 0
+      ? [
+          {
+            code: "maintainer_cut_not_configured",
+            severity: "info" as const,
+            title: "Maintainer cut is not configured",
+            detail: "Maintainer-associated work is separate from normal contributor evidence; maintainer_cut is the explicit maintainer lane when configured.",
+          },
+        ]
+      : []),
+    ...contributorIntakeHealth.findings,
+  ];
+  return {
+    repoFullName: fullName,
+    generatedAt: nowIso(),
+    lane: buildLaneAdvice(repo, fullName),
+    maintainerCut,
+    maintainerCutConfigured: maintainerCut > 0,
+    queueHealth,
+    configQuality,
+    contributorIntakeHealth,
+    summary: `Maintainer lane for ${fullName}: maintainer_cut ${maintainerCut > 0 ? "configured" : "not configured"}, contributor intake ${contributorIntakeHealth.level}.`,
+    findings,
+  };
+}
+
 export function buildPreflightResult(
   input: PreflightInput,
   repo: RepositoryRecord | null,
@@ -618,6 +1601,62 @@ export function buildPreflightResult(
   };
 }
 
+export function buildLocalDiffPreflightResult(
+  input: LocalDiffPreflightInput,
+  repo: RepositoryRecord | null,
+  issues: IssueRecord[],
+  pullRequests: PullRequestRecord[],
+): LocalDiffPreflightResult {
+  const changedFiles = [...new Set([...(input.changedFiles ?? []), ...(input.testFiles ?? [])])];
+  const linkedFromCommit = extractLinkedIssueNumbers([input.commitMessage, input.body, input.title].filter(Boolean).join("\n"));
+  const base = buildPreflightResult(
+    {
+      ...input,
+      changedFiles,
+      linkedIssues: [...new Set([...(input.linkedIssues ?? []), ...linkedFromCommit])],
+      tests: [...(input.tests ?? []), ...(input.testFiles ?? [])],
+    },
+    repo,
+    issues,
+    pullRequests,
+  );
+  const codeFileCount = changedFiles.filter(isCodeFile).length;
+  const testFileCount = changedFiles.filter(isTestFile).length;
+  const changedLineCount = input.changedLineCount ?? 0;
+  const findings = [...base.findings];
+  if (changedLineCount > 800) {
+    findings.push({
+      code: "large_local_diff",
+      severity: "warning",
+      title: "Local diff is large",
+      detail: "The planned change is large enough to create avoidable review burden.",
+      action: "Split unrelated work or clearly explain why the scope needs to stay together.",
+    });
+  }
+  if (codeFileCount > 0 && testFileCount === 0) {
+    findings.push({
+      code: "local_diff_missing_tests",
+      severity: "warning",
+      title: "Local diff has code changes without test files",
+      detail: "Changed paths include code files but no test paths.",
+      action: "Add regression coverage or include concrete validation evidence.",
+    });
+  }
+  return {
+    ...base,
+    findings,
+    status: base.status === "hold" ? "hold" : findings.some((finding) => finding.severity === "warning" || finding.severity === "critical") ? "needs_work" : "ready",
+    localDiff: {
+      changedFileCount: changedFiles.length,
+      changedLineCount,
+      testFileCount,
+      codeFileCount,
+      inferredLinkedIssues: linkedFromCommit,
+      summary: `${changedFiles.length} file(s), ${changedLineCount} changed line(s), ${testFileCount} test file(s), ${codeFileCount} code file(s).`,
+    },
+  };
+}
+
 export function buildMaintainerPacket(
   repo: RepositoryRecord | null,
   issues: IssueRecord[],
@@ -661,6 +1700,450 @@ export function buildMaintainerPacket(
     collisions,
     pullRequestPackets,
     suggestedActions: suggestedActions.length > 0 ? suggestedActions : ["Queue looks manageable from cached Gittensory signals."],
+  };
+}
+
+export function buildPullRequestMaintainerPacket(args: {
+  repo: RepositoryRecord | null;
+  pullRequest: PullRequestRecord | null;
+  issues: IssueRecord[];
+  pullRequests: PullRequestRecord[];
+  files: PullRequestFileRecord[];
+  reviews: PullRequestReviewRecord[];
+  checks: CheckSummaryRecord[];
+  recentMergedPullRequests: RecentMergedPullRequestRecord[];
+  repoFullName: string;
+  pullNumber: number;
+}): PullRequestMaintainerPacket {
+  const pr = args.pullRequest;
+  const collisions = buildCollisionReport(args.repoFullName, args.issues, args.pullRequests, args.recentMergedPullRequests);
+  const prCollisionCount = pr
+    ? collisions.clusters.filter((cluster) => cluster.items.some((item) => item.type === "pull_request" && item.number === pr.number)).length
+    : 0;
+  const codeFiles = args.files.filter((file) => isCodeFile(file.path));
+  const testFiles = args.files.filter((file) => isTestFile(file.path));
+  const additions = args.files.reduce((sum, file) => sum + file.additions, 0);
+  const deletions = args.files.reduce((sum, file) => sum + file.deletions, 0);
+  const approvalCount = args.reviews.filter((review) => review.state.toUpperCase() === "APPROVED").length;
+  const changeRequestCount = args.reviews.filter((review) => review.state.toUpperCase() === "CHANGES_REQUESTED").length;
+  const checkFailureCount = args.checks.filter((check) => check.conclusion === "failure" || check.conclusion === "timed_out" || check.conclusion === "cancelled").length;
+  const findings: SignalFinding[] = [];
+  if (!pr) {
+    findings.push({
+      code: "pr_not_cached",
+      severity: "warning",
+      title: "PR is not cached",
+      detail: "Gittensory does not have this pull request in the local cache.",
+    });
+  } else {
+    if (pr.linkedIssues.length === 0) {
+      findings.push({
+        code: "missing_linked_issue",
+        severity: "warning",
+        title: "No linked issue detected",
+        detail: "The PR body does not include a closing issue reference in cached metadata.",
+        action: "Ask for issue context or a no-issue rationale before deep review.",
+      });
+    }
+    if (prCollisionCount > 0) {
+      findings.push({
+        code: "pr_collision_context",
+        severity: "warning",
+        title: "PR overlaps active or recent work",
+        detail: `${prCollisionCount} collision cluster(s) include this PR.`,
+        action: "Review overlap before spending detailed review time.",
+      });
+    }
+    if (codeFiles.length > 0 && testFiles.length === 0) {
+      findings.push({
+        code: "missing_test_files",
+        severity: "warning",
+        title: "Code changes do not include cached test files",
+        detail: "Cached file metadata includes code paths but no obvious test paths.",
+        action: "Ask for test evidence or a clear validation note.",
+      });
+    }
+    if (checkFailureCount > 0) {
+      findings.push({
+        code: "checks_need_attention",
+        severity: "warning",
+        title: "Checks need attention",
+        detail: `${checkFailureCount} cached check(s) ended with a non-success conclusion.`,
+      });
+    }
+  }
+  const reviewPriority = findings.some((finding) => finding.severity === "warning" || finding.severity === "critical")
+    ? "needs_author"
+    : approvalCount > 0 && checkFailureCount === 0
+      ? "review"
+      : "watch";
+  return {
+    repoFullName: args.repoFullName,
+    pullNumber: args.pullNumber,
+    generatedAt: nowIso(),
+    reviewPriority,
+    summary: pr
+      ? `PR #${pr.number} has ${args.files.length} cached file(s), ${args.reviews.length} review(s), ${args.checks.length} check summary/summaries, and ${prCollisionCount} collision cluster(s).`
+      : `PR #${args.pullNumber} is not cached yet.`,
+    changeSummary: {
+      fileCount: args.files.length,
+      codeFileCount: codeFiles.length,
+      testFileCount: testFiles.length,
+      additions,
+      deletions,
+      topPaths: args.files.map((file) => file.path).slice(0, 12),
+    },
+    reviewSignals: {
+      reviewCount: args.reviews.length,
+      approvalCount,
+      changeRequestCount,
+      checkFailureCount,
+      linkedIssues: pr?.linkedIssues ?? [],
+      collisionClusters: prCollisionCount,
+    },
+    findings,
+    contributorNextSteps: findings.flatMap((finding) => (finding.action ? [finding.action] : [])),
+    maintainerNotes: findings.length > 0 ? findings.map((finding) => finding.title) : ["No obvious maintainer-blocking signal in cached metadata."],
+  };
+}
+
+export function buildPullRequestReviewIntelligence(args: {
+  repo: RepositoryRecord | null;
+  pullRequest: PullRequestRecord | null;
+  issues: IssueRecord[];
+  pullRequests: PullRequestRecord[];
+  files: PullRequestFileRecord[];
+  reviews: PullRequestReviewRecord[];
+  checks: CheckSummaryRecord[];
+  recentMergedPullRequests: RecentMergedPullRequestRecord[];
+  repoFullName: string;
+  pullNumber: number;
+  profile?: ContributorProfile | null | undefined;
+  outcomeHistory?: ContributorOutcomeHistory | null | undefined;
+}): PullRequestReviewIntelligence {
+  const packet = buildPullRequestMaintainerPacket(args);
+  const login = args.pullRequest?.authorLogin ?? args.profile?.login ?? "unknown";
+  const roleContext = buildRoleContext({
+    login,
+    repo: args.repo,
+    repoFullName: args.repoFullName,
+    pullRequests: args.pullRequests,
+    issues: args.issues,
+    profile: args.profile,
+  });
+  const outcomeContext = args.outcomeHistory?.repoOutcomes.find((outcome) => outcome.repoFullName.toLowerCase() === args.repoFullName.toLowerCase());
+  const recommendation: PullRequestReviewIntelligence["recommendation"] = roleContext.maintainerLane
+    ? "maintainer_lane"
+    : packet.reviewSignals.collisionClusters > 0
+      ? "likely_duplicate"
+      : packet.reviewPriority === "needs_author"
+        ? "needs_author"
+        : packet.reviewPriority === "review"
+          ? "review"
+          : "watch";
+  return {
+    ...packet,
+    roleContext,
+    outcomeContext,
+    recommendation,
+    privateSummary: [
+      `Role: ${roleContext.role}${roleContext.maintainerLane ? " (maintainer lane)" : ""}.`,
+      ...(outcomeContext ? [`Repo history: ${outcomeContext.mergedPullRequests} merged, ${outcomeContext.closedPullRequests} closed, ${outcomeContext.openPullRequests} open PR(s).`] : []),
+      `Recommended maintainer action: ${recommendation}.`,
+    ].join(" "),
+  };
+}
+
+export function buildIssueQualityReport(
+  repo: RepositoryRecord | null,
+  issues: IssueRecord[],
+  pullRequests: PullRequestRecord[],
+  fullName: string,
+): IssueQualityReport {
+  const lane = buildLaneAdvice(repo, fullName);
+  const collisions = buildCollisionReport(fullName, issues, pullRequests);
+  const reports = issues
+    .filter((issue) => issue.state === "open")
+    .slice(0, 100)
+    .map((issue) => {
+      const linkedPrs = pullRequests.filter((pr) => pr.linkedIssues.includes(issue.number));
+      const issueCollisions = collisions.clusters.filter((cluster) => cluster.items.some((item) => item.type === "issue" && item.number === issue.number));
+      const age = daysSince(issue.updatedAt ?? issue.createdAt);
+      const bodyLength = issue.body?.trim().length ?? 0;
+      const reasons = [
+        ...(bodyLength >= 200 ? ["Issue has enough body detail to evaluate."] : []),
+        ...(issue.labels.length > 0 ? [`Labels: ${issue.labels.join(", ")}.`] : []),
+        ...(linkedPrs.length === 0 ? ["No active PR is linked in cached metadata."] : []),
+      ];
+      const warnings = [
+        ...(bodyLength < 80 ? ["Issue body is thin; contributor may need more proof before acting."] : []),
+        ...(linkedPrs.length > 0 ? [`${linkedPrs.length} active PR(s) already reference this issue.`] : []),
+        ...(issueCollisions.length > 0 ? ["Potential duplicate or overlapping issue/PR context exists."] : []),
+        ...(age > 90 ? ["Issue is stale in cached metadata."] : []),
+        ...(lane.lane === "direct_pr" ? ["Repo is direct-PR first; issue filing is not the primary Gittensor lane."] : []),
+      ];
+      const score = clamp(100 - warnings.length * 18 + reasons.length * 5 - (age > 180 ? 15 : 0), 0, 100);
+      const status: IssueQualityReport["issues"][number]["status"] =
+        linkedPrs.length > 0 || issueCollisions.some((cluster) => cluster.risk === "high")
+          ? "do_not_use"
+          : warnings.some((warning) => /thin|stale|direct-PR/i.test(warning))
+            ? "needs_proof"
+            : score < 45
+              ? "hold"
+              : "ready";
+      return { number: issue.number, title: issue.title, status, score, reasons, warnings };
+    })
+    .sort((left, right) => right.score - left.score || left.number - right.number);
+  return {
+    repoFullName: fullName,
+    generatedAt: nowIso(),
+    lane,
+    issues: reports,
+    summary: `${reports.length} open issue(s) evaluated; ${reports.filter((report) => report.status === "ready").length} look ready from cached metadata.`,
+  };
+}
+
+export function buildBurdenForecast(
+  repo: RepositoryRecord | null,
+  issues: IssueRecord[],
+  pullRequests: PullRequestRecord[],
+  collisions: CollisionReport,
+  horizonDays: 7 | 30 = 30,
+  countOverrides: QueueSignalCounts = {},
+): BurdenForecast {
+  const queueHealth = buildQueueHealth(repo, issues, pullRequests, collisions, countOverrides);
+  const openPrs = pullRequests.filter((pr) => pr.state === "open");
+  const updatedRecently = openPrs.filter((pr) => daysSince(pr.updatedAt ?? pr.createdAt) <= horizonDays).length;
+  const stalePrs = openPrs.filter((pr) => daysSince(pr.updatedAt ?? pr.createdAt) > 30).length;
+  const projectedReviewLoad = clamp(openPrs.length * 3 + updatedRecently * 2 + collisions.summary.highRiskCount * 4 + stalePrs, 0, 100);
+  const queueGrowthRisk = clamp((openPrs.length - queueHealth.signals.likelyReviewablePullRequests) * 5 + collisions.summary.clusterCount * 7, 0, 100);
+  const level = projectedReviewLoad >= 80 || queueGrowthRisk >= 80 ? "critical" : projectedReviewLoad >= 55 || queueGrowthRisk >= 55 ? "high" : projectedReviewLoad >= 25 ? "medium" : "low";
+  const findings: SignalFinding[] = [
+    ...(queueGrowthRisk >= 55
+      ? [
+          {
+            code: "queue_growth_risk",
+            severity: "warning" as const,
+            title: "Queue growth risk is elevated",
+            detail: "Cached PR volume, reviewable count, and collision signals suggest maintainers may see avoidable triage load.",
+            action: "Prefer smaller, linked, lower-collision submissions until the queue clears.",
+          },
+        ]
+      : []),
+    ...(stalePrs > 0
+      ? [
+          {
+            code: "stale_review_load",
+            severity: "info" as const,
+            title: "Stale PRs affect maintainer load",
+            detail: `${stalePrs} open PR(s) appear stale in cached metadata.`,
+          },
+        ]
+      : []),
+  ];
+  return {
+    repoFullName: repo?.fullName ?? collisions.repoFullName,
+    generatedAt: nowIso(),
+    horizonDays,
+    level,
+    forecast: {
+      projectedReviewLoad,
+      reviewablePullRequests: queueHealth.signals.likelyReviewablePullRequests,
+      stalePullRequests: stalePrs,
+      duplicateTrend: collisions.summary.clusterCount,
+      queueGrowthRisk,
+    },
+    findings,
+    summary: `${horizonDays}-day maintainer load forecast is ${level}; projected review load ${projectedReviewLoad}/100 and queue growth risk ${queueGrowthRisk}/100.`,
+  };
+}
+
+export function buildContributorScoringProfile(args: {
+  login: string;
+  fit: ContributorFit;
+  scoringSnapshot: ScoringModelSnapshotRecord;
+}): ContributorScoringProfile {
+  const stats = args.fit.repoStats;
+  const mergedPullRequests = stats.reduce((sum, stat) => sum + stat.mergedPullRequests, 0);
+  const openPullRequests = stats.reduce((sum, stat) => sum + stat.openPullRequests, 0);
+  const stalePullRequests = stats.reduce((sum, stat) => sum + stat.stalePullRequests, 0);
+  const unlinkedPullRequests = stats.reduce((sum, stat) => sum + stat.unlinkedPullRequests, 0);
+  const languageMatches = args.fit.languageFit.filter((fit) => fit.match).length;
+  const credibilityAssumption = clamp(0.75 + mergedPullRequests * 0.04 + languageMatches * 0.02 - stalePullRequests * 0.03 - unlinkedPullRequests * 0.02, 0.25, 1);
+  const officialTotals = args.fit.profile.gittensor?.totals;
+  const officialSource = args.fit.profile.source === "gittensor_api";
+  const issueDiscoveryReports = officialTotals
+    ? Math.max(officialTotals.validSolvedIssues, officialTotals.solvedIssues)
+    : args.fit.profile.registeredRepoActivity.issues;
+  const sourceLabel = officialSource ? "Gittensor API" : "cached";
+  const privateSignals = [
+    `${mergedPullRequests} ${sourceLabel} merged registered-repo PR(s).`,
+    `${openPullRequests} ${sourceLabel} open registered-repo PR(s).`,
+    `${issueDiscoveryReports} ${sourceLabel} valid/solved issue-discovery report(s).`,
+    `${languageMatches} cached registered repo language match(es).`,
+    ...(unlinkedPullRequests > 0 ? [`${unlinkedPullRequests} ${sourceLabel} unlinked PR pattern(s).`] : []),
+  ];
+  return {
+    login: args.login,
+    generatedAt: nowIso(),
+    scoringModelSnapshotId: args.scoringSnapshot.id,
+    evidence: {
+      registeredRepoPullRequests: args.fit.profile.registeredRepoActivity.pullRequests,
+      mergedPullRequests,
+      openPullRequests,
+      stalePullRequests,
+      unlinkedPullRequests,
+      issueDiscoveryReports,
+      languageMatches,
+      credibilityAssumption,
+    },
+    privateSignals,
+  };
+}
+
+export function buildContributorStrategy(args: {
+  login: string;
+  fit: ContributorFit;
+  scoringProfile: ContributorScoringProfile;
+  scoringSnapshot: ScoringModelSnapshotRecord;
+  outcomeHistory?: ContributorOutcomeHistory | null | undefined;
+}): ContributorStrategy {
+  const outcomeByRepo = new Map((args.outcomeHistory?.repoOutcomes ?? []).map((outcome) => [outcome.repoFullName, outcome]));
+  const bestFitRepos = args.fit.opportunities.slice(0, 10).map((opportunity) => {
+    const outcome = outcomeByRepo.get(opportunity.repoFullName);
+    const privateScoringReadiness: ContributorStrategy["bestFitRepos"][number]["privateScoringReadiness"] =
+      outcome?.maintainerLane
+        ? "hold"
+        : opportunity.fit === "hold" || opportunity.warnings.some((warning) => /busy|duplicate|inactive|unknown/i.test(warning)) || (outcome?.closedPullRequestRate ?? 0) >= 0.35
+        ? "hold"
+        : args.scoringProfile.evidence.credibilityAssumption >= 0.8 && opportunity.fit === "good" && (outcome?.openPullRequests ?? 0) < 5
+          ? "good"
+          : "caution";
+    return {
+      repoFullName: opportunity.repoFullName,
+      lane: opportunity.lane,
+      fit: opportunity.fit,
+      opportunityScore: opportunity.score,
+      privateScoringReadiness,
+      reasons: [...opportunity.reasons, ...(outcome?.strengths ?? [])],
+      warnings: [...opportunity.warnings, ...(outcome?.risks.filter((risk) => !/No major/i.test(risk)) ?? [])],
+    };
+  });
+  const avoidRepos = (args.outcomeHistory?.repoOutcomes ?? [])
+    .filter((outcome) => !outcome.maintainerLane && (outcome.closedPullRequestRate >= 0.35 || outcome.credibility > 0 && outcome.credibility < 0.8))
+    .map((outcome) => ({
+      repoFullName: outcome.repoFullName,
+      reason: outcome.closedPullRequestRate >= 0.35 ? `Closed PR rate is ${percent(outcome.closedPullRequestRate)}.` : `Official repo credibility is ${round(outcome.credibility)}.`,
+    }))
+    .slice(0, 8);
+  const cleanupFirst = (args.outcomeHistory?.repoOutcomes ?? [])
+    .filter((outcome) => !outcome.maintainerLane && outcome.openPullRequests >= 3)
+    .map((outcome) => ({ repoFullName: outcome.repoFullName, reason: `${outcome.openPullRequests} open PR(s) are still active.` }))
+    .slice(0, 8);
+  const maintainerLaneRepos = (args.outcomeHistory?.repoOutcomes ?? [])
+    .filter((outcome) => outcome.maintainerLane)
+    .map((outcome) => ({ repoFullName: outcome.repoFullName, reason: "Maintainer-associated repo; use repo-health guidance instead of contributor-lane guidance." }))
+    .slice(0, 8);
+  const laneWarnings = [
+    ...bestFitRepos.filter((repo) => repo.lane === "direct_pr").map((repo) => `${repo.repoFullName}: direct PR lane; prioritize tested implementation work.`),
+    ...bestFitRepos.filter((repo) => repo.lane === "issue_discovery").map((repo) => `${repo.repoFullName}: issue-discovery lane; prioritize actionable reports and avoid duplicate reports.`),
+    ...maintainerLaneRepos.map((repo) => `${repo.repoFullName}: maintainer lane; treat as repo health and contributor triage.`),
+  ];
+  const nextActions = [
+    ...(bestFitRepos.some((repo) => repo.privateScoringReadiness === "good") ? ["Start with the highest-fit repo that has low duplicate and queue pressure."] : []),
+    ...(args.scoringProfile.evidence.unlinkedPullRequests > 0 ? ["Clean up linked issue/context patterns before adding more open PRs."] : []),
+    ...(cleanupFirst.length > 0 ? ["Clean up active open PR pressure before adding more work in those repos."] : []),
+    ...(maintainerLaneRepos.length > 0 ? ["For maintainer-owned repos, focus on config quality, labels, queue health, and contributor intake rather than contributor-lane submissions."] : []),
+    ...(args.scoringProfile.evidence.languageMatches === 0 ? ["Prefer repos where the changed files match prior language evidence, or keep first submissions small."] : []),
+    "Use local diff preflight before opening the PR so maintainers get a cleaner submission.",
+  ];
+  return {
+    login: args.login,
+    generatedAt: nowIso(),
+    scoringModelSnapshotId: args.scoringSnapshot.id,
+    summary: `${args.login} has ${bestFitRepos.length} ranked private strategy candidate(s), ${cleanupFirst.length} cleanup-first repo(s), and ${maintainerLaneRepos.length} maintainer-lane repo(s).`,
+    bestFitRepos,
+    avoidRepos,
+    cleanupFirst,
+    maintainerLaneRepos,
+    successPatterns: args.outcomeHistory?.successPatterns ?? [],
+    failurePatterns: args.outcomeHistory?.failurePatterns ?? [],
+    laneWarnings: [...new Set(laneWarnings)],
+    nextActions: [...new Set(nextActions)],
+  };
+}
+
+export function buildCollisionEdges(report: CollisionReport): CollisionEdgeRecord[] {
+  return report.clusters.flatMap((cluster) => {
+    const [left, right] = cluster.items;
+    if (!left || !right) return [];
+    const rightTerms = new Set(tokenize(collisionItemText(right)));
+    return [
+      {
+        id: `${report.repoFullName}#${cluster.id}`,
+        repoFullName: report.repoFullName,
+        leftType: left.type,
+        leftNumber: left.number,
+        leftTitle: left.title,
+        rightType: right.type,
+        rightNumber: right.number,
+        rightTitle: right.title,
+        risk: cluster.risk,
+        reason: cluster.reason,
+        sharedTerms: [...new Set(tokenize(collisionItemText(left)).filter((term) => rightTerms.has(term)))],
+        generatedAt: report.generatedAt,
+      },
+    ];
+  });
+}
+
+export function buildRegistryChangeReport(snapshots: RegistrySnapshot[]): RegistryChangeReport {
+  const [current, previous] = snapshots;
+  if (!current) {
+    return {
+      generatedAt: nowIso(),
+      addedRepos: [],
+      removedRepos: [],
+      changedRepos: [],
+      summary: "No registry snapshots are available.",
+    };
+  }
+  if (!previous) {
+    return {
+      generatedAt: nowIso(),
+      currentSnapshotId: current.id,
+      addedRepos: current.repositories.map((repo) => repo.repo).sort(),
+      removedRepos: [],
+      changedRepos: [],
+      summary: "Only one registry snapshot is available; every current repo is treated as newly observed.",
+    };
+  }
+  const currentByRepo = new Map(current.repositories.map((repo) => [repo.repo, repo]));
+  const previousByRepo = new Map(previous.repositories.map((repo) => [repo.repo, repo]));
+  const addedRepos = [...currentByRepo.keys()].filter((repo) => !previousByRepo.has(repo)).sort();
+  const removedRepos = [...previousByRepo.keys()].filter((repo) => !currentByRepo.has(repo)).sort();
+  const changedRepos = [...currentByRepo.entries()]
+    .flatMap(([repoFullName, repo]) => {
+      const old = previousByRepo.get(repoFullName);
+      if (!old) return [];
+      const changes = [
+        ...(repo.emissionShare !== old.emissionShare ? [`emission_share ${old.emissionShare} -> ${repo.emissionShare}`] : []),
+        ...(repo.issueDiscoveryShare !== old.issueDiscoveryShare ? [`issue_discovery_share ${old.issueDiscoveryShare} -> ${repo.issueDiscoveryShare}`] : []),
+        ...(repo.maintainerCut !== old.maintainerCut ? [`maintainer_cut ${old.maintainerCut} -> ${repo.maintainerCut}`] : []),
+        ...(JSON.stringify(repo.labelMultipliers) !== JSON.stringify(old.labelMultipliers) ? ["label_multipliers changed"] : []),
+        ...(repo.trustedLabelPipeline !== old.trustedLabelPipeline ? [`trusted_label_pipeline ${old.trustedLabelPipeline ?? false} -> ${repo.trustedLabelPipeline ?? false}`] : []),
+      ];
+      return changes.length > 0 ? [{ repoFullName, changes }] : [];
+    })
+    .sort((left, right) => left.repoFullName.localeCompare(right.repoFullName));
+  return {
+    generatedAt: nowIso(),
+    currentSnapshotId: current.id,
+    previousSnapshotId: previous.id,
+    addedRepos,
+    removedRepos,
+    changedRepos,
+    summary: `${addedRepos.length} added, ${removedRepos.length} removed, ${changedRepos.length} changed repo(s) between the latest registry snapshots.`,
   };
 }
 
@@ -722,7 +2205,16 @@ export function buildPublicPrIntelligenceComment(args: {
     .slice(0, args.settings.publicSignalLevel === "minimal" ? 2 : 5);
   const collisionCount = args.collisions.clusters.length;
   const linkedIssues = args.pr.linkedIssues.length > 0 ? args.pr.linkedIssues.map((issue) => `#${issue}`).join(", ") : "None detected";
+  const roleContext = buildRoleContext({
+    login: args.pr.authorLogin ?? args.profile.login,
+    repo: args.repo,
+    repoFullName: args.pr.repoFullName,
+    pullRequests: [args.pr],
+    issues: [],
+    profile: args.profile,
+  });
   const nextSteps = [
+    ...(roleContext.maintainerLane ? ["Treat this as maintainer-lane context rather than normal contributor-lane activity."] : []),
     ...(args.pr.linkedIssues.length === 0 ? ["Link the issue being solved, or explain why this is a no-issue PR."] : []),
     ...(collisionCount > 0 ? ["Check overlapping issues/PRs before review continues."] : []),
     ...(publicFindings.length > 0 ? publicFindings.flatMap((finding) => (finding.action ? [finding.action] : [])) : []),
@@ -735,6 +2227,7 @@ export function buildPublicPrIntelligenceComment(args: {
     "",
     "### Contributor context",
     `- Author: \`${args.pr.authorLogin ?? "unknown"}\``,
+    `- Role context: ${roleContext.role}${roleContext.maintainerLane ? " (maintainer lane)" : ""}`,
     `- Registered-repo signal: ${args.detection.detected ? args.detection.reason : "No prior cached registered-repo activity detected."}`,
     `- Prior cached PRs/issues: ${args.detection.priorPullRequests} PR(s), ${args.detection.priorIssues} issue(s)`,
     `- Public profile languages: ${args.profile.github.topLanguages.length > 0 ? args.profile.github.topLanguages.join(", ") : "not available"}`,
@@ -765,6 +2258,9 @@ function issueItem(issue: IssueRecord): CollisionItem {
     title: issue.title,
     authorLogin: issue.authorLogin,
     htmlUrl: issue.htmlUrl,
+    labels: issue.labels,
+    linkedIssues: [issue.number],
+    body: issue.body,
   };
 }
 
@@ -775,20 +2271,66 @@ function prItem(pr: PullRequestRecord): CollisionItem {
     title: pr.title,
     authorLogin: pr.authorLogin,
     htmlUrl: pr.htmlUrl,
+    labels: pr.labels,
+    linkedIssues: pr.linkedIssues,
+    body: pr.body,
   };
+}
+
+function recentMergedItem(pr: RecentMergedPullRequestRecord): CollisionItem {
+  return {
+    type: "recent_merged_pull_request",
+    number: pr.number,
+    title: pr.title,
+    authorLogin: pr.authorLogin,
+    htmlUrl: pr.htmlUrl,
+    labels: pr.labels,
+    linkedIssues: pr.linkedIssues,
+    changedFiles: pr.changedFiles,
+  };
+}
+
+function boundedCollisionIssues(openIssues: IssueRecord[], openPullRequests: PullRequestRecord[]): IssueRecord[] {
+  if (openIssues.length <= MAX_COLLISION_PAIRWISE_ISSUES) return openIssues;
+  const linkedIssueNumbers = new Set(openPullRequests.flatMap((pr) => pr.linkedIssues));
+  const selected = new Map<number, IssueRecord>();
+  for (const issue of openIssues) {
+    if (linkedIssueNumbers.has(issue.number)) selected.set(issue.number, issue);
+    if (selected.size >= MAX_COLLISION_PAIRWISE_ISSUES) return [...selected.values()];
+  }
+  for (const issue of openIssues) {
+    selected.set(issue.number, issue);
+    if (selected.size >= MAX_COLLISION_PAIRWISE_ISSUES) break;
+  }
+  return [...selected.values()];
 }
 
 function itemKey(item: CollisionItem): string {
   return `${item.type}-${item.number}`;
 }
 
-function titleOverlap(left: string, right: string): { score: number; shared: number } {
-  const leftTerms = tokenize(left);
-  const rightTerms = tokenize(right);
-  if (leftTerms.length === 0 || rightTerms.length === 0) return { score: 0, shared: 0 };
-  const rightSet = new Set(rightTerms);
-  const shared = new Set(leftTerms.filter((term) => rightSet.has(term))).size;
-  return { score: shared / Math.min(new Set(leftTerms).size, new Set(rightTerms).size), shared };
+type CollisionTerms = {
+  terms: Set<string>;
+  size: number;
+};
+
+function collisionTerms(item: CollisionItem): CollisionTerms {
+  const terms = new Set(tokenize(collisionItemText(item)));
+  return { terms, size: terms.size };
+}
+
+function termOverlap(left: CollisionTerms, right: CollisionTerms): { score: number; shared: number } {
+  if (left.size === 0 || right.size === 0) return { score: 0, shared: 0 };
+  let shared = 0;
+  const [smaller, larger] = left.size <= right.size ? [left.terms, right.terms] : [right.terms, left.terms];
+  for (const term of smaller) {
+    if (larger.has(term)) shared += 1;
+  }
+  return { score: shared / Math.min(left.size, right.size), shared };
+}
+
+function collisionItemText(item: CollisionItem): string {
+  return [item.title, item.body, ...(item.labels ?? []), ...(item.changedFiles ?? [])].filter(Boolean).join(" ");
 }
 
 function tokenize(value: string): string[] {
@@ -801,6 +2343,104 @@ function tokenize(value: string): string[] {
 function extractLinkedIssueNumbers(text: string): number[] {
   const matches = [...text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)];
   return [...new Set(matches.map((match) => Number(match[1])).filter((value) => Number.isInteger(value) && value > 0))];
+}
+
+function outcomeSuccessPatterns(history: ContributorOutcomeHistory): OutcomePattern[] {
+  const patterns: OutcomePattern[] = [];
+  for (const outcome of history.repoOutcomes) {
+    if (outcome.maintainerLane) {
+      patterns.push({
+        repoFullName: outcome.repoFullName,
+        title: "Maintainer-side repo context",
+        detail: `${outcome.repoFullName} is maintainer-lane for this user; use it for repo health and contributor triage, not normal contributor fit.`,
+        confidence: "high",
+      });
+      continue;
+    }
+    if (outcome.mergedPullRequests >= 5 && outcome.closedPullRequestRate < 0.3) {
+      patterns.push({
+        repoFullName: outcome.repoFullName,
+        title: "Strong merge history",
+        detail: `${outcome.mergedPullRequests} merged PR(s) with ${percent(outcome.closedPullRequestRate)} closed PR rate.`,
+        confidence: outcome.credibility >= 0.9 || outcome.mergedPullRequests >= 10 ? "high" : "medium",
+      });
+    } else if (outcome.mergedPullRequests > 0) {
+      patterns.push({
+        repoFullName: outcome.repoFullName,
+        title: "Emerging repo fit",
+        detail: `${outcome.mergedPullRequests} merged PR(s) show usable repo familiarity.`,
+        confidence: "medium",
+      });
+    }
+    if (outcome.validSolvedIssues > 0) {
+      patterns.push({
+        repoFullName: outcome.repoFullName,
+        title: "Valid issue-discovery evidence",
+        detail: `${outcome.validSolvedIssues} valid solved issue-discovery report(s) are visible in official data.`,
+        confidence: "high",
+      });
+    }
+  }
+  return patterns.sort((left, right) => patternRank(right) - patternRank(left) || (left.repoFullName ?? "").localeCompare(right.repoFullName ?? "")).slice(0, 12);
+}
+
+function outcomeFailurePatterns(history: ContributorOutcomeHistory): OutcomePattern[] {
+  const patterns: OutcomePattern[] = [];
+  if (history.totals.openPullRequests >= 5) {
+    patterns.push({
+      title: "Open PR pressure",
+      detail: `${history.totals.openPullRequests} open PR(s) are visible; clean up active work before adding more.`,
+      confidence: "high",
+    });
+  }
+  if (history.totals.closedPullRequestRate >= 0.25) {
+    patterns.push({
+      title: "Closed PR credibility pressure",
+      detail: `Overall closed PR rate is ${percent(history.totals.closedPullRequestRate)}.`,
+      confidence: "medium",
+    });
+  }
+  if (history.totals.openIssues > 0 && history.totals.validSolvedIssues === 0) {
+    patterns.push({
+      title: "Raw issue activity is not solved discovery evidence",
+      detail: `${history.totals.openIssues} open issue(s) are visible, but no valid solved issue-discovery evidence is visible in official totals.`,
+      confidence: "medium",
+    });
+  }
+  for (const outcome of history.repoOutcomes) {
+    if (outcome.openIssues >= 10 && outcome.validSolvedIssues === 0) {
+      patterns.push({
+        repoFullName: outcome.repoFullName,
+        title: "Raw issue activity is not solved discovery evidence",
+        detail: `${outcome.repoFullName} has ${outcome.openIssues} open issue(s), but no valid solved issue-discovery evidence for that repo.`,
+        confidence: outcome.maintainerLane ? "high" : "medium",
+      });
+    }
+    if (!outcome.maintainerLane && outcome.closedPullRequestRate >= 0.35) {
+      patterns.push({
+        repoFullName: outcome.repoFullName,
+        title: "Repo-specific closed PR risk",
+        detail: `${outcome.repoFullName} has ${outcome.closedPullRequests} closed PR(s) and ${percent(outcome.closedPullRequestRate)} closed PR rate.`,
+        confidence: "high",
+      });
+    }
+    if (!outcome.maintainerLane && outcome.openPullRequests >= 3) {
+      patterns.push({
+        repoFullName: outcome.repoFullName,
+        title: "Repo-specific open PR pressure",
+        detail: `${outcome.repoFullName} has ${outcome.openPullRequests} open PR(s).`,
+        confidence: "medium",
+      });
+    }
+  }
+  return patterns.sort((left, right) => patternRank(right) - patternRank(left) || (left.repoFullName ?? "").localeCompare(right.repoFullName ?? "")).slice(0, 12);
+}
+
+function strongestAssociation(values: string[]): string | undefined {
+  for (const association of ["OWNER", "MEMBER", "COLLABORATOR"]) {
+    if (values.includes(association)) return association;
+  }
+  return values[0];
 }
 
 function isMaintainerAssociation(value: string | null | undefined): boolean {
@@ -818,6 +2458,22 @@ function topItems(items: string[], limit: number): string[] {
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .slice(0, limit)
     .map(([item]) => item);
+}
+
+function rate(numerator: number, denominator: number): number {
+  return denominator > 0 ? round(numerator / denominator) : 0;
+}
+
+function percent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function round(value: number): number {
+  return Math.round(value * 10000) / 10000;
+}
+
+function patternRank(pattern: OutcomePattern): number {
+  return pattern.confidence === "high" ? 3 : pattern.confidence === "medium" ? 2 : 1;
 }
 
 function daysSince(value: string | null | undefined): number {

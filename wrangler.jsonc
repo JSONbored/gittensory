@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "gittensory-api",
   "main": "src/index.ts",
-  "compatibility_date": "2026-05-22",
+  "compatibility_date": "2026-05-26",
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true,
@@ -11,6 +11,7 @@
   "vars": {
     "GITHUB_APP_ID": "3824093",
     "GITHUB_APP_SLUG": "gittensory",
+    "GITHUB_OAUTH_CLIENT_ID": "Iv23li574mpdLo2PnVN4",
     "GITTENSOR_REGISTRY_URL": "https://raw.githubusercontent.com/entrius/gittensor/test/gittensor/validator/weights/master_repositories.json",
     "PUBLIC_API_ORIGIN": "https://gittensory-api.zeronode.workers.dev"
   },
@@ -20,6 +21,20 @@
       "database_name": "gittensory",
       "database_id": "b2c79dd6-7771-4b1f-aa6b-085d5f3e9528",
       "migrations_dir": "migrations"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RATE_LIMITER",
+        "class_name": "RateLimiter"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-rate-limiter",
+      "new_sqlite_classes": ["RateLimiter"]
     }
   ],
   "queues": {

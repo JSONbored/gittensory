@@ -1,0 +1,55 @@
+name: Publish MCP Package
+
+on:
+  push:
+    tags:
+      - "mcp-v*.*.*"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+
+      - name: Verify release tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          node -e 'const tag=process.env.REF_NAME; if (!/^mcp-v[0-9]+\.[0-9]+\.[0-9]+$/.test(tag)) { throw new Error("Invalid MCP release tag: " + tag); }'
+          export VERSION="${REF_NAME#mcp-v}"
+          node -e 'const pkg=require("./packages/gittensory-mcp/package.json"); const expected=process.env.VERSION; if (pkg.version !== expected) { throw new Error("package version " + pkg.version + " does not match tag " + expected); }'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Full validation gate
+        run: npm run test:ci
+
+      - name: Packed tarball smoke test
+        run: |
+          set -euo pipefail
+          PACK_JSON="$(npm pack --workspace @jsonbored/gittensory-mcp --json)"
+          TARBALL="$(node -e 'const fs=require("fs"); const input=fs.readFileSync(0,"utf8"); process.stdout.write(JSON.parse(input)[0].filename)' <<< "$PACK_JSON")"
+          TMP="$(mktemp -d)"
+          npm --prefix "$TMP" init -y >/dev/null
+          npm --prefix "$TMP" install "$PWD/$TARBALL" >/dev/null
+          "$TMP/node_modules/.bin/gittensory-mcp" --help >/dev/null
+
+      - name: Publish with npm trusted publishing
+        run: npm publish --workspace @jsonbored/gittensory-mcp --access public --provenance

@@ -28,7 +28,7 @@ export function buildRepositoryAdvisory(repo: RepositoryRecord | null, fullName:
 export function buildPullRequestAdvisory(
   repo: RepositoryRecord | null,
   pr: PullRequestRecord | null,
-  context: { otherOpenPullRequests?: PullRequestRecord[] } = {},
+  context: { otherOpenPullRequests?: PullRequestRecord[]; reviewabilityText?: string } = {},
 ): Advisory {
   const repoFullName = pr?.repoFullName ?? repo?.fullName ?? "unknown/unknown";
   const targetKey = pr ? `${repoFullName}#${pr.number}` : `${repoFullName}#unknown`;
@@ -54,6 +54,14 @@ export function buildPullRequestAdvisory(
     });
   } else {
     addPullRequestFindings(repo, pr, findings, context.otherOpenPullRequests ?? []);
+  }
+  if (context.reviewabilityText) {
+    findings.push({
+      code: "private_reviewability_context",
+      severity: "info",
+      title: "Private reviewability context",
+      detail: context.reviewabilityText,
+    });
   }
   return advisory("pull_request", targetKey, repoFullName, findings, "Pull request advisory generated.", pr?.number, undefined, pr?.headSha ?? undefined);
 }

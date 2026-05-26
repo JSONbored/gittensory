@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createOrUpdateCheckRun } from "../../src/github/app";
+import { createInstallationToken, createOrUpdateCheckRun, getInstallationId } from "../../src/github/app";
 import type { Advisory } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
 
@@ -101,6 +101,56 @@ describe("GitHub check runs", () => {
 
     expect(result?.id).toBe(42);
     expect(methods.some((call) => call.startsWith("PATCH ") && call.includes("/check-runs/42"))).toBe(true);
+  });
+
+  it("skips check creation when no head SHA is available", async () => {
+    const result = await createOrUpdateCheckRun(createTestEnv(), 123, "JSONbored/gittensory", {
+      id: "advisory-3",
+      targetType: "pull_request",
+      targetKey: "JSONbored/gittensory#1",
+      repoFullName: "JSONbored/gittensory",
+      pullNumber: 1,
+      conclusion: "success",
+      severity: "info",
+      title: "Gittensory advisory passed",
+      summary: "Pull request advisory generated.",
+      findings: [],
+      generatedAt: "2026-05-22T00:00:00.000Z",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("rejects invalid repo names and missing app credentials", async () => {
+    await expect(
+      createOrUpdateCheckRun(createTestEnv(), 123, "invalid", {
+        id: "advisory-4",
+        targetType: "pull_request",
+        targetKey: "invalid#1",
+        repoFullName: "invalid",
+        pullNumber: 1,
+        headSha: "abc123",
+        conclusion: "success",
+        severity: "info",
+        title: "Gittensory advisory passed",
+        summary: "Pull request advisory generated.",
+        findings: [],
+        generatedAt: "2026-05-22T00:00:00.000Z",
+      }),
+    ).rejects.toThrow(/Invalid repository full name/);
+
+    await expect(createInstallationToken(createTestEnv({ GITHUB_APP_PRIVATE_KEY: "" }), 123)).rejects.toThrow(/not configured/);
+    expect(getInstallationId({ action: "created", installation: { id: 123 } })).toBe(123);
+    expect(getInstallationId({ action: "created" })).toBeNull();
+  });
+
+  it("surfaces GitHub token response failures", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    vi.stubGlobal("fetch", async () => new Response("bad credentials", { status: 401 }));
+    await expect(createInstallationToken(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123)).rejects.toThrow(/Failed to create GitHub installation token/);
+
+    vi.stubGlobal("fetch", async () => Response.json({}));
+    await expect(createInstallationToken(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123)).rejects.toThrow(/did not include a token/);
   });
 });
 

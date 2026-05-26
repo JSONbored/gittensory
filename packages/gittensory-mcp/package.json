@@ -1,0 +1,44 @@
+{
+  "name": "@jsonbored/gittensory-mcp",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "description": "Local stdio MCP wrapper for private Gittensory contributor intelligence.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JSONbored/gittensory.git",
+    "directory": "packages/gittensory-mcp"
+  },
+  "homepage": "https://github.com/JSONbored/gittensory#readme",
+  "bugs": {
+    "url": "https://github.com/JSONbored/gittensory/issues"
+  },
+  "keywords": [
+    "gittensor",
+    "mcp",
+    "model-context-protocol",
+    "github",
+    "contributors",
+    "preflight"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "gittensory-mcp": "bin/gittensory-mcp.js"
+  },
+  "files": [
+    "bin",
+    "lib"
+  ],
+  "scripts": {
+    "build": "node --check bin/gittensory-mcp.js && node --check lib/local-branch.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "zod": "^3.25.76"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

@@ -84,4 +84,89 @@ describe("advisory rules", () => {
 
     expect(advisory.findings.map((finding) => finding.code)).toContain("duplicate_pr_risk");
   });
+
+  it("adds private reviewability context to check output without reward language", () => {
+    const pr: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 12,
+      title: "Add registry sync",
+      state: "open",
+      authorLogin: "oktofeesh1",
+      authorAssociation: "NONE",
+      headSha: "abc123",
+      labels: [],
+      linkedIssues: [4],
+    };
+
+    const advisory = buildPullRequestAdvisory(repo, pr, {
+      reviewabilityText: "Reviewability 72/100; action needs_author; missing tests and duplicate context should be cleared first.",
+    });
+
+    expect(advisory.findings.map((finding) => finding.code)).toContain("private_reviewability_context");
+    expect(formatCheckRunOutput(advisory).text).toContain("Reviewability 72/100");
+    expect(formatCheckRunOutput(advisory).text).not.toMatch(/reward|farming|wallet|hotkey/i);
+  });
+
+  it("covers repository config lane advisories", () => {
+    const issueDiscoveryRepo: RepositoryRecord = {
+      ...repo,
+      registryConfig: {
+        ...repo.registryConfig!,
+        issueDiscoveryShare: 1,
+        maintainerCut: 0.2,
+      },
+    };
+    const missingConfigRepo: RepositoryRecord = { ...repo, registryConfig: null };
+    const unregisteredRepo: RepositoryRecord = { ...repo, isRegistered: false };
+
+    expect(buildRepositoryAdvisory(issueDiscoveryRepo, repo.fullName).findings.map((finding) => finding.code)).toEqual([
+      "direct_pr_pool_disabled",
+      "maintainer_cut_enabled",
+    ]);
+    expect(buildRepositoryAdvisory(missingConfigRepo, repo.fullName).findings.map((finding) => finding.code)).toContain("repo_config_missing");
+    expect(buildRepositoryAdvisory(unregisteredRepo, repo.fullName).conclusion).toBe("action_required");
+  });
+
+  it("classifies closed and maintainer-authored PR metadata", () => {
+    const pr: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 15,
+      title: "Tidy registry sync",
+      state: "closed",
+      authorLogin: "maintainer",
+      authorAssociation: "OWNER",
+      labels: ["feature"],
+      linkedIssues: [9],
+    };
+    const otherOpenPullRequests = Array.from({ length: 10 }, (_, index): PullRequestRecord => ({
+      ...pr,
+      number: 100 + index,
+      state: "open",
+      authorAssociation: "NONE",
+      linkedIssues: [20 + index],
+    }));
+
+    const advisory = buildPullRequestAdvisory(repo, pr, { otherOpenPullRequests });
+    const codes = advisory.findings.map((finding) => finding.code);
+
+    expect(codes).toEqual(expect.arrayContaining(["pr_not_open", "busy_pr_queue", "label_context_found", "maintainer_authored_pr"]));
+  });
+
+  it("handles uncached PRs and closed issues", () => {
+    const closedIssue: IssueRecord = {
+      repoFullName: repo.fullName,
+      number: 22,
+      title: "Closed issue",
+      state: "closed",
+      authorLogin: "reporter",
+      labels: [],
+      linkedPrs: [],
+    };
+    const uncachedPr = buildPullRequestAdvisory(repo, null);
+    const issueAdvisory = buildIssueAdvisory(repo, closedIssue);
+
+    expect(uncachedPr.findings.map((finding) => finding.code)).toContain("pr_not_cached");
+    expect(issueAdvisory.findings.map((finding) => finding.code)).toEqual(expect.arrayContaining(["issue_not_open", "issue_discovery_not_configured"]));
+    expect(formatCheckRunOutput({ ...uncachedPr, findings: [] }).text).toBe("No advisory findings.");
+  });
 });

@@ -1,0 +1,12 @@
+title = "Gittensory secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public GitHub App OAuth client ID"
+regexes = ['''Iv23li574mpdLo2PnVN4''']
+paths = [
+  '''^wrangler\.jsonc$''',
+  '''^worker-configuration\.d\.ts$''',
+]

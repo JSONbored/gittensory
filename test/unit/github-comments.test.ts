@@ -64,6 +64,10 @@ describe("GitHub PR intelligence comments", () => {
     expect(result?.id).toBe(101);
     expect(calls.some((call) => call.startsWith("PATCH ") && call.includes("/issues/comments/101"))).toBe(true);
   });
+
+  it("rejects invalid repository names before calling GitHub", async () => {
+    await expect(createOrUpdatePrIntelligenceComment(createTestEnv(), 123, "invalid", 12, "body")).rejects.toThrow(/Invalid repository full name/);
+  });
 });
 
 async function generatePrivateKeyPem(): Promise<string> {

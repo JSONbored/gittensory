@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createOpaqueToken, hashToken, timingSafeEqual } from "../../src/auth/security";
 import { verifyGitHubSignature } from "../../src/utils/crypto";
 
 describe("webhook signature verification", () => {
@@ -13,5 +14,19 @@ describe("webhook signature verification", () => {
 
     await expect(verifyGitHubSignature(body, `sha256=${signature}`, secret)).resolves.toBe(true);
     await expect(verifyGitHubSignature(`${body}x`, `sha256=${signature}`, secret)).resolves.toBe(false);
+    await expect(verifyGitHubSignature(body, null, secret)).resolves.toBe(false);
+    await expect(verifyGitHubSignature(body, "bad-prefix", secret)).resolves.toBe(false);
+    await expect(verifyGitHubSignature(body, `sha256=${signature}`, "")).resolves.toBe(false);
+  });
+
+  it("uses timing-safe token comparisons and one-way token hashes", async () => {
+    await expect(timingSafeEqual("token-a", "token-a")).resolves.toBe(true);
+    await expect(timingSafeEqual("token-a", "token-b")).resolves.toBe(false);
+    await expect(timingSafeEqual("token-a", undefined)).resolves.toBe(false);
+    await expect(hashToken("token-a")).resolves.toMatch(/^[0-9a-f]{64}$/);
+
+    const token = createOpaqueToken();
+    expect(token).toMatch(/^gts_[0-9a-f]{64}$/);
+    expect(token).not.toContain("token-a");
   });
 });

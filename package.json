@@ -2,6 +2,10 @@
   "name": "gittensory",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
+  "workspaces": [
+    "packages/*"
+  ],
   "type": "module",
   "description": "GitHub-native advisory backend for Gittensor registered repositories.",
   "scripts": {
@@ -11,10 +15,18 @@
     "db:migrate:local": "wrangler d1 migrations apply gittensory --local",
     "db:migrate:remote": "wrangler d1 migrations apply gittensory --remote",
     "drizzle:generate": "drizzle-kit generate",
+    "build:mcp": "npm --workspace @jsonbored/gittensory-mcp run build",
+    "test:mcp-pack": "node scripts/check-mcp-package.mjs",
+    "changelog": "git-cliff --config cliff.toml --output CHANGELOG.md",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "test:workers": "vitest run --config vitest.workers.config.ts",
+    "test:coverage": "vitest run --coverage",
+    "test:ci": "npm run typecheck && npm run test:coverage && npm run test:workers && npm run build:mcp && npm run test:mcp-pack && npm audit --audit-level=moderate",
     "test:watch": "vitest",
-    "validate": "npm run typecheck && npm test"
+    "validate": "npm run typecheck && npm run test:coverage"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.4",
@@ -27,8 +39,12 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.16.9",
     "@types/node": "^24.10.1",
+    "@vitest/coverage-v8": "^4.1.7",
     "drizzle-kit": "^0.31.7",
+    "fast-check": "^4.8.0",
+    "git-cliff": "^2.13.1",
     "node-addon-api": "^8.5.0",
     "node-gyp": "^12.1.0",
     "typescript": "^5.9.3",
@@ -40,5 +56,19 @@
   },
   "overrides": {
     "esbuild": "^0.25.4"
-  }
+  },
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JSONbored/gittensory.git"
+  },
+  "keywords": [],
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/JSONbored/gittensory/issues"
+  },
+  "homepage": "https://github.com/JSONbored/gittensory#readme"
 }

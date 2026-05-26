@@ -1,20 +1,85 @@
-import { and, desc, eq, not } from "drizzle-orm";
+import { and, desc, eq, not, sql } from "drizzle-orm";
 import { getDb } from "./client";
-import { advisories, bounties, installations, issues, pullRequests, repositories, repositorySettings, webhookEvents } from "./schema";
+import {
+  advisories,
+  auditEvents,
+  authSessions,
+  bounties,
+  bountyLifecycleEvents,
+  checkSummaries,
+  burdenForecasts,
+  contributorEvidence,
+  collisionEdges,
+  contributorRepoStats,
+  contributorScoringProfiles,
+  contributors,
+  installationHealth,
+  installations,
+  issueQualityReports,
+  issues,
+  githubRateLimitObservations,
+  pullRequestFiles,
+  pullRequestDetailSyncState,
+  pullRequestReviews,
+  pullRequests,
+  recentMergedPullRequests,
+  repositories,
+  repoGithubTotalsSnapshots,
+  registryDriftEvents,
+  repoLabels,
+  repoSnapshots,
+  repoSyncSegments,
+  repoSyncState,
+  repositorySettings,
+  scorePreviews,
+  scoringModelSnapshots,
+  signalSnapshots,
+  webhookEvents,
+} from "./schema";
 import type {
   Advisory,
+  AuditEventRecord,
+  AuthSessionRecord,
+  BountyLifecycleEventRecord,
   BountyRecord,
+  BurdenForecastRecord,
+  CheckSummaryRecord,
+  CollisionEdgeRecord,
+  ContributorEvidenceRecord,
+  ContributorRecord,
+  ContributorRepoStatRecord,
+  ContributorScoringProfileRecord,
   GitHubIssuePayload,
   GitHubPullRequestPayload,
+  GitHubRateLimitObservationRecord,
   GitHubRepositoryPayload,
   GitHubWebhookPayload,
+  InstallationHealthRecord,
+  InstallationRecord,
   IssueRecord,
+  IssueQualityReportRecord,
+  JsonValue,
+  PullRequestFileRecord,
+  PullRequestDetailSyncStateRecord,
   PullRequestRecord,
+  PullRequestReviewRecord,
+  RecentMergedPullRequestRecord,
   RegistryRepoConfig,
+  RegistryDriftEventRecord,
+  RepoLabelRecord,
+  RepoGithubTotalsSnapshotRecord,
+  RepoSnapshotRecord,
+  RepoSyncSegmentRecord,
+  RepoSyncStateRecord,
   RepositorySettings,
   RepositoryRecord,
+  ScorePreviewRecord,
+  ScoringModelSnapshotRecord,
+  SignalSnapshotRecord,
 } from "../types";
 import { jsonString, nowIso, parseJson, repoParts } from "../utils/json";
+
+const MAX_STORED_BODY_CHARS = 4000;
 
 export async function upsertInstallation(env: Env, payload: GitHubWebhookPayload): Promise<void> {
   if (!payload.installation?.id) return;
@@ -57,6 +122,12 @@ export async function markInstallationDeleted(env: Env, installationId: number):
     .where(eq(repositories.installationId, installationId));
 }
 
+export async function listInstallations(env: Env): Promise<InstallationRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(installations).orderBy(desc(installations.updatedAt)).limit(100);
+  return rows.map(toInstallationRecord);
+}
+
 export async function upsertRepositoryFromGitHub(env: Env, repo: GitHubRepositoryPayload, installationId?: number): Promise<void> {
   const db = getDb(env.DB);
   const parts = repoParts(repo.full_name);
@@ -92,9 +163,11 @@ export async function upsertPullRequestFromGitHub(
   env: Env,
   repoFullName: string,
   pr: GitHubPullRequestPayload,
+  options: { seenOpenAt?: string } = {},
 ): Promise<PullRequestRecord> {
   const record = toPullRequestRecord(repoFullName, pr);
   const db = getDb(env.DB);
+  const lastSeenOpenAt = pr.state === "open" ? (options.seenOpenAt ?? nowIso()) : null;
   await db
     .insert(pullRequests)
     .values({
@@ -112,7 +185,8 @@ export async function upsertPullRequestFromGitHub(
       htmlUrl: pr.html_url,
       labelsJson: jsonString(record.labels),
       linkedIssuesJson: jsonString(record.linkedIssues),
-      payloadJson: jsonString(pr as unknown as Record<string, unknown>),
+      lastSeenOpenAt,
+      payloadJson: jsonString(compactGitHubPayload(pr)),
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -129,16 +203,18 @@ export async function upsertPullRequestFromGitHub(
         htmlUrl: pr.html_url,
         labelsJson: jsonString(record.labels),
         linkedIssuesJson: jsonString(record.linkedIssues),
-        payloadJson: jsonString(pr as unknown as Record<string, unknown>),
+        lastSeenOpenAt,
+        payloadJson: jsonString(compactGitHubPayload(pr)),
         updatedAt: nowIso(),
       },
     });
   return record;
 }
 
-export async function upsertIssueFromGitHub(env: Env, repoFullName: string, issue: GitHubIssuePayload): Promise<IssueRecord> {
+export async function upsertIssueFromGitHub(env: Env, repoFullName: string, issue: GitHubIssuePayload, options: { seenOpenAt?: string } = {}): Promise<IssueRecord> {
   const record = toIssueRecord(repoFullName, issue);
   const db = getDb(env.DB);
+  const lastSeenOpenAt = issue.state === "open" ? (options.seenOpenAt ?? nowIso()) : null;
   await db
     .insert(issues)
     .values({
@@ -152,7 +228,8 @@ export async function upsertIssueFromGitHub(env: Env, repoFullName: string, issu
       htmlUrl: issue.html_url,
       labelsJson: jsonString(record.labels),
       linkedPrsJson: jsonString(record.linkedPrs),
-      payloadJson: jsonString(issue as unknown as Record<string, unknown>),
+      lastSeenOpenAt,
+      payloadJson: jsonString(compactGitHubPayload(issue)),
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -165,7 +242,8 @@ export async function upsertIssueFromGitHub(env: Env, repoFullName: string, issu
         htmlUrl: issue.html_url,
         labelsJson: jsonString(record.labels),
         linkedPrsJson: jsonString(record.linkedPrs),
-        payloadJson: jsonString(issue as unknown as Record<string, unknown>),
+        lastSeenOpenAt,
+        payloadJson: jsonString(compactGitHubPayload(issue)),
         updatedAt: nowIso(),
       },
     });
@@ -175,7 +253,13 @@ export async function upsertIssueFromGitHub(env: Env, repoFullName: string, issu
 export async function getRepository(env: Env, fullName: string): Promise<RepositoryRecord | null> {
   const db = getDb(env.DB);
   const [row] = await db.select().from(repositories).where(eq(repositories.fullName, fullName)).limit(1);
-  return row ? toRepositoryRecord(row) : null;
+  if (row) return toRepositoryRecord(row);
+  const [caseInsensitiveRow] = await db
+    .select()
+    .from(repositories)
+    .where(sql`lower(${repositories.fullName}) = ${fullName.toLowerCase()}`)
+    .limit(1);
+  return caseInsensitiveRow ? toRepositoryRecord(caseInsensitiveRow) : null;
 }
 
 export async function listRepositories(env: Env): Promise<RepositoryRecord[]> {
@@ -193,6 +277,9 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       commentMode: "off",
       publicSignalLevel: "standard",
       checkRunMode: "enabled",
+      checkRunDetailLevel: "standard",
+      backfillEnabled: true,
+      privateTrustEnabled: true,
     };
   }
   return {
@@ -200,6 +287,9 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     commentMode: parseCommentMode(row.commentMode),
     publicSignalLevel: row.publicSignalLevel === "minimal" ? "minimal" : "standard",
     checkRunMode: "enabled",
+    checkRunDetailLevel: parseCheckRunDetailLevel(row.checkRunDetailLevel),
+    backfillEnabled: row.backfillEnabled,
+    privateTrustEnabled: row.privateTrustEnabled,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -214,6 +304,9 @@ export async function upsertRepositorySettings(env: Env, settings: RepositorySet
       commentMode: settings.commentMode,
       publicSignalLevel: settings.publicSignalLevel,
       checkRunMode: "enabled",
+      checkRunDetailLevel: settings.checkRunDetailLevel,
+      backfillEnabled: settings.backfillEnabled,
+      privateTrustEnabled: settings.privateTrustEnabled,
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -222,10 +315,514 @@ export async function upsertRepositorySettings(env: Env, settings: RepositorySet
         commentMode: settings.commentMode,
         publicSignalLevel: settings.publicSignalLevel,
         checkRunMode: "enabled",
+        checkRunDetailLevel: settings.checkRunDetailLevel,
+        backfillEnabled: settings.backfillEnabled,
+        privateTrustEnabled: settings.privateTrustEnabled,
         updatedAt: nowIso(),
       },
     });
   return getRepositorySettings(env, settings.repoFullName);
+}
+
+export async function upsertRepoSyncState(env: Env, state: RepoSyncStateRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(repoSyncState)
+    .values({
+      repoFullName: state.repoFullName,
+      status: state.status,
+      sourceKind: state.sourceKind,
+      primaryLanguage: state.primaryLanguage,
+      defaultBranch: state.defaultBranch,
+      isPrivate: state.isPrivate,
+      openIssuesCount: state.openIssuesCount,
+      openPullRequestsCount: state.openPullRequestsCount,
+      recentMergedPullRequestsCount: state.recentMergedPullRequestsCount,
+      labelsSyncedAt: state.labelsSyncedAt,
+      issuesSyncedAt: state.issuesSyncedAt,
+      pullRequestsSyncedAt: state.pullRequestsSyncedAt,
+      mergedPullRequestsSyncedAt: state.mergedPullRequestsSyncedAt,
+      lastStartedAt: state.lastStartedAt,
+      lastCompletedAt: state.lastCompletedAt,
+      errorSummary: state.errorSummary,
+      warningsJson: jsonString(state.warnings),
+      updatedAt: nowIso(),
+    })
+    .onConflictDoUpdate({
+      target: repoSyncState.repoFullName,
+      set: {
+        status: state.status,
+        sourceKind: state.sourceKind,
+        primaryLanguage: state.primaryLanguage,
+        defaultBranch: state.defaultBranch,
+        isPrivate: state.isPrivate,
+        openIssuesCount: state.openIssuesCount,
+        openPullRequestsCount: state.openPullRequestsCount,
+        recentMergedPullRequestsCount: state.recentMergedPullRequestsCount,
+        labelsSyncedAt: state.labelsSyncedAt,
+        issuesSyncedAt: state.issuesSyncedAt,
+        pullRequestsSyncedAt: state.pullRequestsSyncedAt,
+        mergedPullRequestsSyncedAt: state.mergedPullRequestsSyncedAt,
+        lastStartedAt: state.lastStartedAt,
+        lastCompletedAt: state.lastCompletedAt,
+        errorSummary: state.errorSummary,
+        warningsJson: jsonString(state.warnings),
+        updatedAt: nowIso(),
+      },
+    });
+}
+
+export async function getRepoSyncState(env: Env, fullName: string): Promise<RepoSyncStateRecord | null> {
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(repoSyncState).where(eq(repoSyncState.repoFullName, fullName)).limit(1);
+  return row ? toRepoSyncStateRecord(row) : null;
+}
+
+export async function listRepoSyncStates(env: Env): Promise<RepoSyncStateRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(repoSyncState).orderBy(desc(repoSyncState.updatedAt)).limit(500);
+  return rows.map(toRepoSyncStateRecord);
+}
+
+export async function upsertRepoSyncSegment(env: Env, segment: RepoSyncSegmentRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(repoSyncSegments)
+    .values({
+      id: `${segment.repoFullName}#${segment.segment}`,
+      repoFullName: segment.repoFullName,
+      segment: segment.segment,
+      status: segment.status,
+      sourceKind: segment.sourceKind,
+      mode: segment.mode,
+      lastCursor: segment.lastCursor ?? null,
+      nextCursor: segment.nextCursor ?? null,
+      fetchedCount: segment.fetchedCount,
+      expectedCount: segment.expectedCount ?? null,
+      pageCount: segment.pageCount,
+      startedAt: segment.startedAt ?? null,
+      completedAt: segment.completedAt ?? null,
+      staleAt: segment.staleAt ?? null,
+      rateLimitResetAt: segment.rateLimitResetAt ?? null,
+      etag: segment.etag ?? null,
+      lastModified: segment.lastModified ?? null,
+      warningsJson: jsonString(segment.warnings),
+      errorSummary: segment.errorSummary ?? null,
+      updatedAt: nowIso(),
+    })
+    .onConflictDoUpdate({
+      target: [repoSyncSegments.repoFullName, repoSyncSegments.segment],
+      set: {
+        status: segment.status,
+        sourceKind: segment.sourceKind,
+        mode: segment.mode,
+        lastCursor: segment.lastCursor ?? null,
+        nextCursor: segment.nextCursor ?? null,
+        fetchedCount: segment.fetchedCount,
+        expectedCount: segment.expectedCount ?? null,
+        pageCount: segment.pageCount,
+        startedAt: segment.startedAt ?? null,
+        completedAt: segment.completedAt ?? null,
+        staleAt: segment.staleAt ?? null,
+        rateLimitResetAt: segment.rateLimitResetAt ?? null,
+        etag: segment.etag ?? null,
+        lastModified: segment.lastModified ?? null,
+        warningsJson: jsonString(segment.warnings),
+        errorSummary: segment.errorSummary ?? null,
+        updatedAt: nowIso(),
+      },
+    });
+}
+
+export async function getRepoSyncSegment(env: Env, fullName: string, segment: RepoSyncSegmentRecord["segment"]): Promise<RepoSyncSegmentRecord | null> {
+  const db = getDb(env.DB);
+  const [row] = await db
+    .select()
+    .from(repoSyncSegments)
+    .where(and(eq(repoSyncSegments.repoFullName, fullName), eq(repoSyncSegments.segment, segment)))
+    .limit(1);
+  return row ? toRepoSyncSegmentRecord(row) : null;
+}
+
+export async function listRepoSyncSegments(env: Env, fullName?: string): Promise<RepoSyncSegmentRecord[]> {
+  const db = getDb(env.DB);
+  const rows = fullName
+    ? await db
+        .select()
+        .from(repoSyncSegments)
+        .where(eq(repoSyncSegments.repoFullName, fullName))
+        .orderBy(repoSyncSegments.repoFullName, repoSyncSegments.segment)
+        .limit(500)
+    : await db.select().from(repoSyncSegments).orderBy(repoSyncSegments.repoFullName, repoSyncSegments.segment).limit(2000);
+  return rows.map(toRepoSyncSegmentRecord);
+}
+
+export async function recordGitHubRateLimitObservation(env: Env, observation: GitHubRateLimitObservationRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db.insert(githubRateLimitObservations).values({
+    id: observation.id ?? crypto.randomUUID(),
+    repoFullName: observation.repoFullName,
+    resource: observation.resource,
+    path: observation.path,
+    statusCode: observation.statusCode,
+    limitValue: observation.limitValue,
+    remaining: observation.remaining,
+    resetAt: observation.resetAt,
+    observedAt: observation.observedAt ?? nowIso(),
+  });
+}
+
+export async function listLatestGitHubRateLimitObservations(env: Env, limit = 50): Promise<GitHubRateLimitObservationRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(githubRateLimitObservations).orderBy(desc(githubRateLimitObservations.observedAt)).limit(limit);
+  return rows.map(toGitHubRateLimitObservationRecord);
+}
+
+export async function persistRepoGithubTotalsSnapshot(env: Env, snapshot: RepoGithubTotalsSnapshotRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db.insert(repoGithubTotalsSnapshots).values({
+    id: snapshot.id,
+    repoFullName: snapshot.repoFullName,
+    openIssuesTotal: snapshot.openIssuesTotal,
+    openPullRequestsTotal: snapshot.openPullRequestsTotal,
+    mergedPullRequestsTotal: snapshot.mergedPullRequestsTotal,
+    closedUnmergedPullRequestsTotal: snapshot.closedUnmergedPullRequestsTotal,
+    labelsTotal: snapshot.labelsTotal,
+    sourceKind: snapshot.sourceKind,
+    fetchedAt: snapshot.fetchedAt,
+    rateLimitRemaining: snapshot.rateLimitRemaining,
+    rateLimitResetAt: snapshot.rateLimitResetAt,
+    payloadJson: jsonString(snapshot.payload),
+  });
+}
+
+export async function getLatestRepoGithubTotalsSnapshot(env: Env, fullName: string): Promise<RepoGithubTotalsSnapshotRecord | null> {
+  const db = getDb(env.DB);
+  const [row] = await db
+    .select()
+    .from(repoGithubTotalsSnapshots)
+    .where(eq(repoGithubTotalsSnapshots.repoFullName, fullName))
+    .orderBy(desc(repoGithubTotalsSnapshots.fetchedAt))
+    .limit(1);
+  return row ? toRepoGithubTotalsSnapshotRecord(row) : null;
+}
+
+export async function listLatestRepoGithubTotalsSnapshots(env: Env): Promise<RepoGithubTotalsSnapshotRecord[]> {
+  const db = getDb(env.DB);
+  const latestRows = await db
+    .select({
+      repoFullName: repoGithubTotalsSnapshots.repoFullName,
+      fetchedAt: sql<string>`max(${repoGithubTotalsSnapshots.fetchedAt})`,
+    })
+    .from(repoGithubTotalsSnapshots)
+    .groupBy(repoGithubTotalsSnapshots.repoFullName);
+  const rows = [];
+  for (const latest of latestRows) {
+    const [row] = await db
+      .select()
+      .from(repoGithubTotalsSnapshots)
+      .where(and(eq(repoGithubTotalsSnapshots.repoFullName, latest.repoFullName), eq(repoGithubTotalsSnapshots.fetchedAt, latest.fetchedAt)))
+      .limit(1);
+    if (row) rows.push(row);
+  }
+  return rows.map(toRepoGithubTotalsSnapshotRecord).sort((left, right) => left.repoFullName.localeCompare(right.repoFullName));
+}
+
+export async function upsertPullRequestDetailSyncState(env: Env, state: PullRequestDetailSyncStateRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(pullRequestDetailSyncState)
+    .values({
+      id: `${state.repoFullName}#${state.pullNumber}`,
+      repoFullName: state.repoFullName,
+      pullNumber: state.pullNumber,
+      status: state.status,
+      filesSyncedAt: state.filesSyncedAt,
+      reviewsSyncedAt: state.reviewsSyncedAt,
+      checksSyncedAt: state.checksSyncedAt,
+      lastSyncedAt: state.lastSyncedAt,
+      errorSummary: state.errorSummary,
+      updatedAt: nowIso(),
+    })
+    .onConflictDoUpdate({
+      target: [pullRequestDetailSyncState.repoFullName, pullRequestDetailSyncState.pullNumber],
+      set: {
+        status: state.status,
+        filesSyncedAt: state.filesSyncedAt,
+        reviewsSyncedAt: state.reviewsSyncedAt,
+        checksSyncedAt: state.checksSyncedAt,
+        lastSyncedAt: state.lastSyncedAt,
+        errorSummary: state.errorSummary,
+        updatedAt: nowIso(),
+      },
+    });
+}
+
+export async function listPullRequestDetailSyncStates(env: Env, fullName: string): Promise<PullRequestDetailSyncStateRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(pullRequestDetailSyncState).where(eq(pullRequestDetailSyncState.repoFullName, fullName)).limit(2000);
+  return rows.map(toPullRequestDetailSyncStateRecord).sort((left, right) => left.pullNumber - right.pullNumber);
+}
+
+export async function listAllPullRequestDetailSyncStates(env: Env): Promise<PullRequestDetailSyncStateRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(pullRequestDetailSyncState).orderBy(pullRequestDetailSyncState.repoFullName, pullRequestDetailSyncState.pullNumber).limit(10000);
+  return rows.map(toPullRequestDetailSyncStateRecord);
+}
+
+export async function persistScoringModelSnapshot(env: Env, snapshot: ScoringModelSnapshotRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db.insert(scoringModelSnapshots).values({
+    id: snapshot.id,
+    sourceKind: snapshot.sourceKind,
+    sourceUrl: snapshot.sourceUrl,
+    fetchedAt: snapshot.fetchedAt,
+    activeModel: snapshot.activeModel,
+    constantsJson: jsonString(snapshot.constants),
+    programmingLanguagesJson: jsonString(snapshot.programmingLanguages),
+    registrySnapshotId: snapshot.registrySnapshotId,
+    warningsJson: jsonString(snapshot.warnings),
+    payloadJson: jsonString(snapshot.payload),
+  });
+}
+
+export async function getLatestScoringModelSnapshot(env: Env): Promise<ScoringModelSnapshotRecord | null> {
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(scoringModelSnapshots).orderBy(desc(scoringModelSnapshots.fetchedAt)).limit(1);
+  return row ? toScoringModelSnapshotRecord(row) : null;
+}
+
+export async function persistScorePreview(env: Env, preview: ScorePreviewRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db.insert(scorePreviews).values({
+    id: preview.id,
+    scoringModelSnapshotId: preview.scoringModelSnapshotId,
+    repoFullName: preview.repoFullName,
+    targetType: preview.targetType,
+    targetKey: preview.targetKey,
+    contributorLogin: preview.contributorLogin,
+    inputJson: jsonString(preview.input),
+    resultJson: jsonString(preview.result),
+    generatedAt: preview.generatedAt,
+  });
+}
+
+export async function getLatestScorePreview(env: Env, repoFullName: string, targetKey: string): Promise<ScorePreviewRecord | null> {
+  const db = getDb(env.DB);
+  const [row] = await db
+    .select()
+    .from(scorePreviews)
+    .where(and(eq(scorePreviews.repoFullName, repoFullName), eq(scorePreviews.targetKey, targetKey)))
+    .orderBy(desc(scorePreviews.generatedAt))
+    .limit(1);
+  return row ? toScorePreviewRecord(row) : null;
+}
+
+export async function upsertContributorEvidence(env: Env, evidence: ContributorEvidenceRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(contributorEvidence)
+    .values({ login: evidence.login, payloadJson: jsonString(evidence.payload), generatedAt: evidence.generatedAt })
+    .onConflictDoUpdate({
+      target: contributorEvidence.login,
+      set: { payloadJson: jsonString(evidence.payload), generatedAt: evidence.generatedAt },
+    });
+}
+
+export async function getContributorEvidence(env: Env, login: string): Promise<ContributorEvidenceRecord | null> {
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(contributorEvidence).where(eq(contributorEvidence.login, login)).limit(1);
+  return row ? { login: row.login, payload: parseJson(row.payloadJson, {}), generatedAt: row.generatedAt } : null;
+}
+
+export async function createAuthSession(env: Env, session: AuthSessionRecord): Promise<AuthSessionRecord> {
+  const db = getDb(env.DB);
+  await db.insert(authSessions).values({
+    id: session.id,
+    tokenHash: session.tokenHash,
+    login: session.login,
+    githubUserId: session.githubUserId,
+    scopesJson: jsonString(session.scopes),
+    expiresAt: session.expiresAt,
+    revokedAt: session.revokedAt,
+    createdAt: session.createdAt,
+    lastSeenAt: session.lastSeenAt,
+    metadataJson: jsonString(session.metadata),
+  });
+  return session;
+}
+
+export async function getAuthSessionByTokenHash(env: Env, tokenHash: string): Promise<AuthSessionRecord | null> {
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(authSessions).where(eq(authSessions.tokenHash, tokenHash)).limit(1);
+  return row ? toAuthSessionRecord(row) : null;
+}
+
+export async function touchAuthSession(env: Env, sessionId: string): Promise<void> {
+  const db = getDb(env.DB);
+  await db.update(authSessions).set({ lastSeenAt: nowIso() }).where(eq(authSessions.id, sessionId));
+}
+
+export async function revokeAuthSession(env: Env, sessionId: string): Promise<void> {
+  const db = getDb(env.DB);
+  await db.update(authSessions).set({ revokedAt: nowIso(), lastSeenAt: nowIso() }).where(eq(authSessions.id, sessionId));
+}
+
+export async function recordAuditEvent(env: Env, event: AuditEventRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db.insert(auditEvents).values({
+    id: event.id ?? crypto.randomUUID(),
+    eventType: event.eventType,
+    actor: event.actor,
+    route: event.route,
+    targetKey: event.targetKey,
+    outcome: event.outcome,
+    detail: event.detail,
+    metadataJson: jsonString(event.metadata ?? {}),
+    createdAt: event.createdAt ?? nowIso(),
+  });
+}
+
+export async function upsertContributorScoringProfile(env: Env, profile: ContributorScoringProfileRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(contributorScoringProfiles)
+    .values({
+      login: profile.login,
+      scoringModelSnapshotId: profile.scoringModelSnapshotId,
+      payloadJson: jsonString(profile.payload),
+      generatedAt: profile.generatedAt,
+    })
+    .onConflictDoUpdate({
+      target: contributorScoringProfiles.login,
+      set: {
+        scoringModelSnapshotId: profile.scoringModelSnapshotId,
+        payloadJson: jsonString(profile.payload),
+        generatedAt: profile.generatedAt,
+      },
+    });
+}
+
+export async function getContributorScoringProfile(env: Env, login: string): Promise<ContributorScoringProfileRecord | null> {
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(contributorScoringProfiles).where(eq(contributorScoringProfiles.login, login)).limit(1);
+  return row
+    ? { login: row.login, scoringModelSnapshotId: row.scoringModelSnapshotId, payload: parseJson(row.payloadJson, {}), generatedAt: row.generatedAt }
+    : null;
+}
+
+export async function upsertIssueQualityReport(env: Env, report: IssueQualityReportRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(issueQualityReports)
+    .values({
+      id: report.id,
+      repoFullName: report.repoFullName,
+      issueNumber: report.issueNumber,
+      payloadJson: jsonString(report.payload),
+      generatedAt: report.generatedAt,
+    })
+    .onConflictDoUpdate({
+      target: [issueQualityReports.repoFullName, issueQualityReports.issueNumber],
+      set: { payloadJson: jsonString(report.payload), generatedAt: report.generatedAt },
+    });
+}
+
+export async function upsertBurdenForecast(env: Env, forecast: BurdenForecastRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(burdenForecasts)
+    .values({ repoFullName: forecast.repoFullName, payloadJson: jsonString(forecast.payload), generatedAt: forecast.generatedAt })
+    .onConflictDoUpdate({
+      target: burdenForecasts.repoFullName,
+      set: { payloadJson: jsonString(forecast.payload), generatedAt: forecast.generatedAt },
+    });
+}
+
+export async function persistRegistryDriftEvents(env: Env, events: RegistryDriftEventRecord[]): Promise<void> {
+  const db = getDb(env.DB);
+  for (const event of events) {
+    await db.insert(registryDriftEvents).values({
+      id: event.id,
+      repoFullName: event.repoFullName,
+      driftType: event.driftType,
+      detail: event.detail,
+      previousSnapshotId: event.previousSnapshotId,
+      currentSnapshotId: event.currentSnapshotId,
+      payloadJson: jsonString(event.payload),
+      generatedAt: event.generatedAt,
+    });
+  }
+}
+
+export async function persistBountyLifecycleEvent(env: Env, event: BountyLifecycleEventRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db.insert(bountyLifecycleEvents).values({
+    id: event.id,
+    bountyId: event.bountyId,
+    repoFullName: event.repoFullName,
+    issueNumber: event.issueNumber,
+    status: event.status,
+    payloadJson: jsonString(event.payload),
+    generatedAt: event.generatedAt,
+  });
+}
+
+export async function upsertRepoLabel(env: Env, label: RepoLabelRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(repoLabels)
+    .values({
+      id: `${label.repoFullName}#${label.name.toLowerCase()}`,
+      repoFullName: label.repoFullName,
+      name: label.name,
+      color: label.color,
+      description: label.description,
+      isConfigured: label.isConfigured,
+      observedCount: label.observedCount,
+      payloadJson: jsonString(label.payload),
+      lastSeenAt: label.lastSeenAt ?? nowIso(),
+    })
+    .onConflictDoUpdate({
+      target: [repoLabels.repoFullName, repoLabels.name],
+      set: {
+        color: label.color,
+        description: label.description,
+        isConfigured: label.isConfigured,
+        observedCount: label.observedCount,
+        payloadJson: jsonString(label.payload),
+        lastSeenAt: label.lastSeenAt ?? nowIso(),
+      },
+    });
+}
+
+export async function listRepoLabels(env: Env, fullName: string): Promise<RepoLabelRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(repoLabels).where(eq(repoLabels.repoFullName, fullName)).limit(500);
+  return rows.map(toRepoLabelRecord).sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export async function countRepoLabels(env: Env, fullName: string): Promise<number> {
+  const db = getDb(env.DB);
+  const [row] = await db.select({ count: sql<number>`count(*)` }).from(repoLabels).where(eq(repoLabels.repoFullName, fullName));
+  return Number(row?.count ?? 0);
+}
+
+export async function persistRepoSnapshot(env: Env, snapshot: RepoSnapshotRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db.insert(repoSnapshots).values({
+    id: snapshot.id,
+    repoFullName: snapshot.repoFullName,
+    snapshotKind: snapshot.snapshotKind,
+    sourceKind: snapshot.sourceKind,
+    fetchedAt: snapshot.fetchedAt,
+    primaryLanguage: snapshot.primaryLanguage,
+    defaultBranch: snapshot.defaultBranch,
+    openIssuesCount: snapshot.openIssuesCount,
+    openPullRequestsCount: snapshot.openPullRequestsCount,
+    recentMergedPullRequestsCount: snapshot.recentMergedPullRequestsCount,
+    payloadJson: jsonString(snapshot.payload),
+  });
 }
 
 export async function getPullRequest(env: Env, fullName: string, number: number): Promise<PullRequestRecord | null> {
@@ -246,8 +843,44 @@ export async function getIssue(env: Env, fullName: string, number: number): Prom
 
 export async function listOpenIssues(env: Env, fullName: string): Promise<IssueRecord[]> {
   const db = getDb(env.DB);
-  const rows = await db.select().from(issues).where(and(eq(issues.repoFullName, fullName), eq(issues.state, "open"))).limit(100);
+  const rows = await db.select().from(issues).where(and(eq(issues.repoFullName, fullName), eq(issues.state, "open"))).orderBy(desc(issues.updatedAt)).limit(10000);
   return rows.map(toIssueRecordFromRow);
+}
+
+export async function countOpenIssues(env: Env, fullName: string): Promise<number> {
+  const db = getDb(env.DB);
+  const [row] = await db.select({ count: sql<number>`count(*)` }).from(issues).where(and(eq(issues.repoFullName, fullName), eq(issues.state, "open")));
+  return Number(row?.count ?? 0);
+}
+
+export async function listOpenIssueNumbers(env: Env, fullName: string): Promise<number[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select({ number: issues.number })
+    .from(issues)
+    .where(and(eq(issues.repoFullName, fullName), eq(issues.state, "open")))
+    .limit(10000);
+  return rows.map((row) => row.number);
+}
+
+export async function listIssueSignalSample(env: Env, fullName: string, limit = 400): Promise<IssueRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select()
+    .from(issues)
+    .where(and(eq(issues.repoFullName, fullName), eq(issues.state, "open")))
+    .orderBy(desc(issues.updatedAt))
+    .limit(limit);
+  return rows.map(toIssueRecordFromRow);
+}
+
+export async function markUnseenOpenIssuesClosed(env: Env, fullName: string, seenOpenAt: string): Promise<number> {
+  const db = getDb(env.DB);
+  const result = await db
+    .update(issues)
+    .set({ state: "closed", updatedAt: nowIso() })
+    .where(sql`${issues.repoFullName} = ${fullName} AND ${issues.state} = 'open' AND (${issues.lastSeenOpenAt} IS NULL OR ${issues.lastSeenOpenAt} < ${seenOpenAt})`);
+  return Number(result.meta.changes ?? 0);
 }
 
 export async function listIssues(env: Env, fullName: string): Promise<IssueRecord[]> {
@@ -264,8 +897,25 @@ export async function listAllIssues(env: Env): Promise<IssueRecord[]> {
 
 export async function listOpenPullRequests(env: Env, fullName: string): Promise<PullRequestRecord[]> {
   const db = getDb(env.DB);
-  const rows = await db.select().from(pullRequests).where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.state, "open"))).limit(500);
+  const rows = await db.select().from(pullRequests).where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.state, "open"))).limit(10000);
   return rows.map(toPullRequestRecordFromRow);
+}
+
+export async function countOpenPullRequests(env: Env, fullName: string): Promise<number> {
+  const db = getDb(env.DB);
+  const [row] = await db.select({ count: sql<number>`count(*)` }).from(pullRequests).where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.state, "open")));
+  return Number(row?.count ?? 0);
+}
+
+export async function markUnseenOpenPullRequestsClosed(env: Env, fullName: string, seenOpenAt: string): Promise<number> {
+  const db = getDb(env.DB);
+  const result = await db
+    .update(pullRequests)
+    .set({ state: "closed", updatedAt: nowIso() })
+    .where(
+      sql`${pullRequests.repoFullName} = ${fullName} AND ${pullRequests.state} = 'open' AND (${pullRequests.lastSeenOpenAt} IS NULL OR ${pullRequests.lastSeenOpenAt} < ${seenOpenAt})`,
+    );
+  return Number(result.meta.changes ?? 0);
 }
 
 export async function listPullRequests(env: Env, fullName: string): Promise<PullRequestRecord[]> {
@@ -292,14 +942,267 @@ export async function listOtherOpenPullRequests(env: Env, fullName: string, numb
 
 export async function listContributorPullRequests(env: Env, login: string): Promise<PullRequestRecord[]> {
   const db = getDb(env.DB);
-  const rows = await db.select().from(pullRequests).where(eq(pullRequests.authorLogin, login)).limit(1000);
+  const rows = await db.select().from(pullRequests).where(loginMatches(pullRequests.authorLogin, login)).limit(1000);
   return rows.map(toPullRequestRecordFromRow);
 }
 
 export async function listContributorIssues(env: Env, login: string): Promise<IssueRecord[]> {
   const db = getDb(env.DB);
-  const rows = await db.select().from(issues).where(eq(issues.authorLogin, login)).limit(1000);
+  const rows = await db.select().from(issues).where(loginMatches(issues.authorLogin, login)).limit(1000);
   return rows.map(toIssueRecordFromRow);
+}
+
+export async function upsertPullRequestFile(env: Env, file: PullRequestFileRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(pullRequestFiles)
+    .values({
+      id: `${file.repoFullName}#${file.pullNumber}#${file.path}`,
+      repoFullName: file.repoFullName,
+      pullNumber: file.pullNumber,
+      path: file.path,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      changes: file.changes,
+      previousFilename: file.previousFilename,
+      payloadJson: jsonString(file.payload),
+      updatedAt: nowIso(),
+    })
+    .onConflictDoUpdate({
+      target: [pullRequestFiles.repoFullName, pullRequestFiles.pullNumber, pullRequestFiles.path],
+      set: {
+        status: file.status,
+        additions: file.additions,
+        deletions: file.deletions,
+        changes: file.changes,
+        previousFilename: file.previousFilename,
+        payloadJson: jsonString(file.payload),
+        updatedAt: nowIso(),
+      },
+    });
+}
+
+export async function listPullRequestFiles(env: Env, fullName: string, pullNumber: number): Promise<PullRequestFileRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select()
+    .from(pullRequestFiles)
+    .where(and(eq(pullRequestFiles.repoFullName, fullName), eq(pullRequestFiles.pullNumber, pullNumber)))
+    .limit(500);
+  return rows.map(toPullRequestFileRecord);
+}
+
+export async function upsertPullRequestReview(env: Env, review: PullRequestReviewRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(pullRequestReviews)
+    .values({
+      id: review.id,
+      repoFullName: review.repoFullName,
+      pullNumber: review.pullNumber,
+      reviewerLogin: review.reviewerLogin,
+      state: review.state,
+      authorAssociation: review.authorAssociation,
+      submittedAt: review.submittedAt,
+      payloadJson: jsonString(review.payload),
+      updatedAt: nowIso(),
+    })
+    .onConflictDoUpdate({
+      target: pullRequestReviews.id,
+      set: {
+        reviewerLogin: review.reviewerLogin,
+        state: review.state,
+        authorAssociation: review.authorAssociation,
+        submittedAt: review.submittedAt,
+        payloadJson: jsonString(review.payload),
+        updatedAt: nowIso(),
+      },
+    });
+}
+
+export async function listPullRequestReviews(env: Env, fullName: string, pullNumber: number): Promise<PullRequestReviewRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select()
+    .from(pullRequestReviews)
+    .where(and(eq(pullRequestReviews.repoFullName, fullName), eq(pullRequestReviews.pullNumber, pullNumber)))
+    .limit(500);
+  return rows.map(toPullRequestReviewRecord);
+}
+
+export async function upsertCheckSummary(env: Env, check: CheckSummaryRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(checkSummaries)
+    .values({
+      id: check.id,
+      repoFullName: check.repoFullName,
+      pullNumber: check.pullNumber,
+      headSha: check.headSha,
+      name: check.name,
+      status: check.status,
+      conclusion: check.conclusion,
+      startedAt: check.startedAt,
+      completedAt: check.completedAt,
+      detailsUrl: check.detailsUrl,
+      payloadJson: jsonString(check.payload),
+      updatedAt: nowIso(),
+    })
+    .onConflictDoUpdate({
+      target: [checkSummaries.repoFullName, checkSummaries.headSha, checkSummaries.name],
+      set: {
+        pullNumber: check.pullNumber,
+        status: check.status,
+        conclusion: check.conclusion,
+        startedAt: check.startedAt,
+        completedAt: check.completedAt,
+        detailsUrl: check.detailsUrl,
+        payloadJson: jsonString(check.payload),
+        updatedAt: nowIso(),
+      },
+    });
+}
+
+export async function listCheckSummaries(env: Env, fullName: string, pullNumber: number): Promise<CheckSummaryRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select()
+    .from(checkSummaries)
+    .where(and(eq(checkSummaries.repoFullName, fullName), eq(checkSummaries.pullNumber, pullNumber)))
+    .limit(500);
+  return rows.map(toCheckSummaryRecord);
+}
+
+export async function upsertRecentMergedPullRequest(env: Env, pr: RecentMergedPullRequestRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(recentMergedPullRequests)
+    .values({
+      id: `${pr.repoFullName}#${pr.number}`,
+      repoFullName: pr.repoFullName,
+      number: pr.number,
+      title: pr.title,
+      authorLogin: pr.authorLogin,
+      htmlUrl: pr.htmlUrl,
+      mergedAt: pr.mergedAt,
+      labelsJson: jsonString(pr.labels),
+      linkedIssuesJson: jsonString(pr.linkedIssues),
+      changedFilesJson: jsonString(pr.changedFiles),
+      payloadJson: jsonString(pr.payload),
+      updatedAt: nowIso(),
+    })
+    .onConflictDoUpdate({
+      target: [recentMergedPullRequests.repoFullName, recentMergedPullRequests.number],
+      set: {
+        title: pr.title,
+        authorLogin: pr.authorLogin,
+        htmlUrl: pr.htmlUrl,
+        mergedAt: pr.mergedAt,
+        labelsJson: jsonString(pr.labels),
+        linkedIssuesJson: jsonString(pr.linkedIssues),
+        changedFilesJson: jsonString(pr.changedFiles),
+        payloadJson: jsonString(pr.payload),
+        updatedAt: nowIso(),
+      },
+    });
+}
+
+export async function listRecentMergedPullRequests(env: Env, fullName: string): Promise<RecentMergedPullRequestRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select()
+    .from(recentMergedPullRequests)
+    .where(eq(recentMergedPullRequests.repoFullName, fullName))
+    .orderBy(desc(recentMergedPullRequests.mergedAt))
+    .limit(200);
+  return rows.map(toRecentMergedPullRequestRecord);
+}
+
+export async function countRecentMergedPullRequests(env: Env, fullName: string): Promise<number> {
+  const db = getDb(env.DB);
+  const [row] = await db.select({ count: sql<number>`count(*)` }).from(recentMergedPullRequests).where(eq(recentMergedPullRequests.repoFullName, fullName));
+  return Number(row?.count ?? 0);
+}
+
+export async function listContributorRecentMergedPullRequests(env: Env, login: string): Promise<RecentMergedPullRequestRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select()
+    .from(recentMergedPullRequests)
+    .where(loginMatches(recentMergedPullRequests.authorLogin, login))
+    .orderBy(desc(recentMergedPullRequests.mergedAt))
+    .limit(1000);
+  return rows.map(toRecentMergedPullRequestRecord);
+}
+
+export async function upsertContributor(env: Env, contributor: ContributorRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(contributors)
+    .values({
+      login: contributor.login,
+      githubProfileJson: jsonString(contributor.githubProfile),
+      topLanguagesJson: jsonString(contributor.topLanguages),
+      publicRepos: contributor.publicRepos,
+      followers: contributor.followers,
+      source: contributor.source,
+      lastSeenAt: contributor.lastSeenAt ?? nowIso(),
+      updatedAt: nowIso(),
+    })
+    .onConflictDoUpdate({
+      target: contributors.login,
+      set: {
+        githubProfileJson: jsonString(contributor.githubProfile),
+        topLanguagesJson: jsonString(contributor.topLanguages),
+        publicRepos: contributor.publicRepos,
+        followers: contributor.followers,
+        source: contributor.source,
+        lastSeenAt: contributor.lastSeenAt ?? nowIso(),
+        updatedAt: nowIso(),
+      },
+    });
+}
+
+export async function upsertContributorRepoStat(env: Env, stat: ContributorRepoStatRecord): Promise<void> {
+  const db = getDb(env.DB);
+  const login = stat.login.toLowerCase();
+  await db
+    .insert(contributorRepoStats)
+    .values({
+      id: `${login}#${stat.repoFullName}`,
+      login,
+      repoFullName: stat.repoFullName,
+      pullRequests: stat.pullRequests,
+      mergedPullRequests: stat.mergedPullRequests,
+      openPullRequests: stat.openPullRequests,
+      issues: stat.issues,
+      stalePullRequests: stat.stalePullRequests,
+      unlinkedPullRequests: stat.unlinkedPullRequests,
+      dominantLabelsJson: jsonString(stat.dominantLabels),
+      lastActivityAt: stat.lastActivityAt,
+      updatedAt: nowIso(),
+    })
+    .onConflictDoUpdate({
+      target: [contributorRepoStats.login, contributorRepoStats.repoFullName],
+      set: {
+        pullRequests: stat.pullRequests,
+        mergedPullRequests: stat.mergedPullRequests,
+        openPullRequests: stat.openPullRequests,
+        issues: stat.issues,
+        stalePullRequests: stat.stalePullRequests,
+        unlinkedPullRequests: stat.unlinkedPullRequests,
+        dominantLabelsJson: jsonString(stat.dominantLabels),
+        lastActivityAt: stat.lastActivityAt,
+        updatedAt: nowIso(),
+      },
+    });
+}
+
+export async function listContributorRepoStats(env: Env, login: string): Promise<ContributorRepoStatRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(contributorRepoStats).where(loginMatches(contributorRepoStats.login, login)).limit(500);
+  return mergeContributorRepoStats(rows.map(toContributorRepoStatRecord));
 }
 
 export async function listBounties(env: Env): Promise<BountyRecord[]> {
@@ -361,6 +1264,105 @@ export async function persistAdvisory(env: Env, advisory: Advisory): Promise<voi
   });
 }
 
+export async function replaceCollisionEdges(env: Env, repoFullName: string, edges: CollisionEdgeRecord[]): Promise<void> {
+  const db = getDb(env.DB);
+  await env.DB.prepare("DELETE FROM collision_edges WHERE repo_full_name = ?").bind(repoFullName).run();
+  const limitedEdges = edges.slice(0, 40);
+  for (const edge of limitedEdges) {
+    await db.insert(collisionEdges).values({
+      id: edge.id,
+      repoFullName: edge.repoFullName,
+      leftType: edge.leftType,
+      leftNumber: edge.leftNumber,
+      leftTitle: edge.leftTitle,
+      rightType: edge.rightType,
+      rightNumber: edge.rightNumber,
+      rightTitle: edge.rightTitle,
+      risk: edge.risk,
+      reason: edge.reason,
+      sharedTermsJson: jsonString(edge.sharedTerms),
+      generatedAt: edge.generatedAt ?? nowIso(),
+    });
+  }
+}
+
+export async function listCollisionEdges(env: Env, repoFullName: string): Promise<CollisionEdgeRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(collisionEdges).where(eq(collisionEdges.repoFullName, repoFullName)).limit(1000);
+  return rows.map(toCollisionEdgeRecord);
+}
+
+export async function persistSignalSnapshot(env: Env, snapshot: SignalSnapshotRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db.insert(signalSnapshots).values({
+    id: snapshot.id,
+    signalType: snapshot.signalType,
+    targetKey: snapshot.targetKey,
+    repoFullName: snapshot.repoFullName,
+    payloadJson: jsonString(snapshot.payload),
+    generatedAt: snapshot.generatedAt ?? nowIso(),
+  });
+}
+
+export async function listSignalSnapshots(env: Env, signalType: string, targetKey: string): Promise<SignalSnapshotRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select()
+    .from(signalSnapshots)
+    .where(and(eq(signalSnapshots.signalType, signalType), eq(signalSnapshots.targetKey, targetKey)))
+    .orderBy(desc(signalSnapshots.generatedAt))
+    .limit(100);
+  return rows.map(toSignalSnapshotRecord);
+}
+
+export async function upsertInstallationHealth(env: Env, health: InstallationHealthRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .insert(installationHealth)
+    .values({
+      installationId: health.installationId,
+      accountLogin: health.accountLogin,
+      repositorySelection: health.repositorySelection,
+      installedReposCount: health.installedReposCount,
+      registeredInstalledCount: health.registeredInstalledCount,
+      status: health.status,
+      missingPermissionsJson: jsonString(health.missingPermissions),
+      missingEventsJson: jsonString(health.missingEvents),
+      permissionsJson: jsonString(health.permissions),
+      eventsJson: jsonString(health.events),
+      checkedAt: health.checkedAt,
+      errorSummary: health.errorSummary,
+    })
+    .onConflictDoUpdate({
+      target: installationHealth.installationId,
+      set: {
+        accountLogin: health.accountLogin,
+        repositorySelection: health.repositorySelection,
+        installedReposCount: health.installedReposCount,
+        registeredInstalledCount: health.registeredInstalledCount,
+        status: health.status,
+        missingPermissionsJson: jsonString(health.missingPermissions),
+        missingEventsJson: jsonString(health.missingEvents),
+        permissionsJson: jsonString(health.permissions),
+        eventsJson: jsonString(health.events),
+        checkedAt: health.checkedAt,
+        errorSummary: health.errorSummary,
+      },
+    });
+}
+
+export async function listInstallationHealth(env: Env): Promise<InstallationHealthRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(installationHealth).orderBy(desc(installationHealth.checkedAt)).limit(100);
+  return rows.map(toInstallationHealthRecord);
+}
+
+export async function getInstallationHealth(env: Env, installationId: number): Promise<InstallationHealthRecord | null> {
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(installationHealth).where(eq(installationHealth.installationId, installationId)).limit(1);
+  return row ? toInstallationHealthRecord(row) : null;
+}
+
 export async function recordWebhookEvent(
   env: Env,
   args: {
@@ -416,6 +1418,21 @@ export async function getWebhookEvent(
   };
 }
 
+function toInstallationRecord(row: typeof installations.$inferSelect): InstallationRecord {
+  return {
+    id: row.id,
+    accountLogin: row.accountLogin,
+    accountId: row.accountId,
+    targetType: row.targetType,
+    repositorySelection: row.repositorySelection,
+    permissions: parseJson<Record<string, string>>(row.permissionsJson, {}),
+    events: parseJson<string[]>(row.eventsJson, []),
+    suspendedAt: row.suspendedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 function toRepositoryRecord(row: typeof repositories.$inferSelect): RepositoryRecord {
   return {
     fullName: row.fullName,
@@ -428,6 +1445,140 @@ function toRepositoryRecord(row: typeof repositories.$inferSelect): RepositoryRe
     htmlUrl: row.htmlUrl,
     defaultBranch: row.defaultBranch,
     registryConfig: parseJson<RegistryRepoConfig | null>(row.registryConfigJson, null),
+  };
+}
+
+function toRepoSyncStateRecord(row: typeof repoSyncState.$inferSelect): RepoSyncStateRecord {
+  return {
+    repoFullName: row.repoFullName,
+    status: parseSyncStatus(row.status),
+    sourceKind: parseSyncSourceKind(row.sourceKind),
+    primaryLanguage: row.primaryLanguage,
+    defaultBranch: row.defaultBranch,
+    isPrivate: row.isPrivate,
+    openIssuesCount: row.openIssuesCount,
+    openPullRequestsCount: row.openPullRequestsCount,
+    recentMergedPullRequestsCount: row.recentMergedPullRequestsCount,
+    labelsSyncedAt: row.labelsSyncedAt,
+    issuesSyncedAt: row.issuesSyncedAt,
+    pullRequestsSyncedAt: row.pullRequestsSyncedAt,
+    mergedPullRequestsSyncedAt: row.mergedPullRequestsSyncedAt,
+    lastStartedAt: row.lastStartedAt,
+    lastCompletedAt: row.lastCompletedAt,
+    errorSummary: row.errorSummary,
+    warnings: parseJson<string[]>(row.warningsJson, []),
+    updatedAt: row.updatedAt,
+  };
+}
+
+function toRepoSyncSegmentRecord(row: typeof repoSyncSegments.$inferSelect): RepoSyncSegmentRecord {
+  return {
+    repoFullName: row.repoFullName,
+    segment: parseRepoSyncSegment(row.segment),
+    status: parseRepoSyncSegmentStatus(row.status),
+    sourceKind: parseSyncSourceKind(row.sourceKind),
+    mode: parseBackfillMode(row.mode),
+    lastCursor: row.lastCursor,
+    nextCursor: row.nextCursor,
+    fetchedCount: row.fetchedCount,
+    expectedCount: row.expectedCount,
+    pageCount: row.pageCount,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt,
+    staleAt: row.staleAt,
+    rateLimitResetAt: row.rateLimitResetAt,
+    etag: row.etag,
+    lastModified: row.lastModified,
+    warnings: parseJson<string[]>(row.warningsJson, []),
+    errorSummary: row.errorSummary,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function toGitHubRateLimitObservationRecord(row: typeof githubRateLimitObservations.$inferSelect): GitHubRateLimitObservationRecord {
+  return {
+    id: row.id,
+    repoFullName: row.repoFullName,
+    resource: row.resource === "graphql" ? "graphql" : "rest",
+    path: row.path,
+    statusCode: row.statusCode,
+    limitValue: row.limitValue,
+    remaining: row.remaining,
+    resetAt: row.resetAt,
+    observedAt: row.observedAt,
+  };
+}
+
+function toRepoGithubTotalsSnapshotRecord(row: typeof repoGithubTotalsSnapshots.$inferSelect): RepoGithubTotalsSnapshotRecord {
+  return {
+    id: row.id,
+    repoFullName: row.repoFullName,
+    openIssuesTotal: row.openIssuesTotal,
+    openPullRequestsTotal: row.openPullRequestsTotal,
+    mergedPullRequestsTotal: row.mergedPullRequestsTotal,
+    closedUnmergedPullRequestsTotal: row.closedUnmergedPullRequestsTotal,
+    labelsTotal: row.labelsTotal,
+    sourceKind: parseSyncSourceKind(row.sourceKind),
+    fetchedAt: row.fetchedAt,
+    rateLimitRemaining: row.rateLimitRemaining,
+    rateLimitResetAt: row.rateLimitResetAt,
+    payload: parseJson<Record<string, JsonValue>>(row.payloadJson, {}),
+  };
+}
+
+function toPullRequestDetailSyncStateRecord(row: typeof pullRequestDetailSyncState.$inferSelect): PullRequestDetailSyncStateRecord {
+  return {
+    repoFullName: row.repoFullName,
+    pullNumber: row.pullNumber,
+    status: parsePullRequestDetailSyncStatus(row.status),
+    filesSyncedAt: row.filesSyncedAt,
+    reviewsSyncedAt: row.reviewsSyncedAt,
+    checksSyncedAt: row.checksSyncedAt,
+    lastSyncedAt: row.lastSyncedAt,
+    errorSummary: row.errorSummary,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function toScoringModelSnapshotRecord(row: typeof scoringModelSnapshots.$inferSelect): ScoringModelSnapshotRecord {
+  return {
+    id: row.id,
+    sourceKind: parseScoringSourceKind(row.sourceKind),
+    sourceUrl: row.sourceUrl,
+    fetchedAt: row.fetchedAt,
+    activeModel: parseActiveScoringModel(row.activeModel),
+    constants: parseJson<Record<string, number>>(row.constantsJson, {}),
+    programmingLanguages: parseJson<Record<string, never>>(row.programmingLanguagesJson, {}),
+    registrySnapshotId: row.registrySnapshotId,
+    warnings: parseJson<string[]>(row.warningsJson, []),
+    payload: parseJson<Record<string, never>>(row.payloadJson, {}),
+  };
+}
+
+function toScorePreviewRecord(row: typeof scorePreviews.$inferSelect): ScorePreviewRecord {
+  return {
+    id: row.id,
+    scoringModelSnapshotId: row.scoringModelSnapshotId,
+    repoFullName: row.repoFullName,
+    targetType: parseScorePreviewTargetType(row.targetType),
+    targetKey: row.targetKey,
+    contributorLogin: row.contributorLogin,
+    input: parseJson<Record<string, never>>(row.inputJson, {}),
+    result: parseJson<Record<string, never>>(row.resultJson, {}),
+    generatedAt: row.generatedAt,
+  };
+}
+
+function toRepoLabelRecord(row: typeof repoLabels.$inferSelect): RepoLabelRecord {
+  return {
+    repoFullName: row.repoFullName,
+    name: row.name,
+    color: row.color,
+    description: row.description,
+    isConfigured: row.isConfigured,
+    observedCount: row.observedCount,
+    payload: parseJson<Record<string, never>>(row.payloadJson, {}),
+    lastSeenAt: row.lastSeenAt,
   };
 }
 
@@ -487,6 +1638,19 @@ function toIssueRecord(repoFullName: string, issue: GitHubIssuePayload): IssueRe
   };
 }
 
+function compactGitHubPayload(payload: { body?: string | null; created_at?: string | null; updated_at?: string | null }): Record<string, JsonValue> {
+  return {
+    body: truncateBody(payload.body),
+    created_at: payload.created_at ?? null,
+    updated_at: payload.updated_at ?? null,
+  };
+}
+
+function truncateBody(body: string | null | undefined): string | null {
+  if (!body) return body ?? null;
+  return body.length > MAX_STORED_BODY_CHARS ? body.slice(0, MAX_STORED_BODY_CHARS) : body;
+}
+
 function toIssueRecordFromRow(row: typeof issues.$inferSelect): IssueRecord {
   const payload = parseJson<{ body?: string | null; created_at?: string | null; updated_at?: string | null }>(row.payloadJson, {});
   return {
@@ -505,6 +1669,117 @@ function toIssueRecordFromRow(row: typeof issues.$inferSelect): IssueRecord {
   };
 }
 
+function toPullRequestFileRecord(row: typeof pullRequestFiles.$inferSelect): PullRequestFileRecord {
+  return {
+    repoFullName: row.repoFullName,
+    pullNumber: row.pullNumber,
+    path: row.path,
+    status: row.status,
+    additions: row.additions,
+    deletions: row.deletions,
+    changes: row.changes,
+    previousFilename: row.previousFilename,
+    payload: parseJson<Record<string, never>>(row.payloadJson, {}),
+  };
+}
+
+function toPullRequestReviewRecord(row: typeof pullRequestReviews.$inferSelect): PullRequestReviewRecord {
+  return {
+    id: row.id,
+    repoFullName: row.repoFullName,
+    pullNumber: row.pullNumber,
+    reviewerLogin: row.reviewerLogin,
+    state: row.state,
+    authorAssociation: row.authorAssociation,
+    submittedAt: row.submittedAt,
+    payload: parseJson<Record<string, never>>(row.payloadJson, {}),
+  };
+}
+
+function toCheckSummaryRecord(row: typeof checkSummaries.$inferSelect): CheckSummaryRecord {
+  return {
+    id: row.id,
+    repoFullName: row.repoFullName,
+    pullNumber: row.pullNumber,
+    headSha: row.headSha,
+    name: row.name,
+    status: row.status,
+    conclusion: row.conclusion,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt,
+    detailsUrl: row.detailsUrl,
+    payload: parseJson<Record<string, never>>(row.payloadJson, {}),
+  };
+}
+
+function toRecentMergedPullRequestRecord(row: typeof recentMergedPullRequests.$inferSelect): RecentMergedPullRequestRecord {
+  return {
+    repoFullName: row.repoFullName,
+    number: row.number,
+    title: row.title,
+    authorLogin: row.authorLogin,
+    htmlUrl: row.htmlUrl,
+    mergedAt: row.mergedAt,
+    labels: parseJson<string[]>(row.labelsJson, []),
+    linkedIssues: parseJson<number[]>(row.linkedIssuesJson, []),
+    changedFiles: parseJson<string[]>(row.changedFilesJson, []),
+    payload: parseJson<Record<string, never>>(row.payloadJson, {}),
+  };
+}
+
+function toContributorRepoStatRecord(row: typeof contributorRepoStats.$inferSelect): ContributorRepoStatRecord {
+  return {
+    login: row.login,
+    repoFullName: row.repoFullName,
+    pullRequests: row.pullRequests,
+    mergedPullRequests: row.mergedPullRequests,
+    openPullRequests: row.openPullRequests,
+    issues: row.issues,
+    stalePullRequests: row.stalePullRequests,
+    unlinkedPullRequests: row.unlinkedPullRequests,
+    dominantLabels: parseJson<string[]>(row.dominantLabelsJson, []),
+    lastActivityAt: row.lastActivityAt,
+  };
+}
+
+function mergeContributorRepoStats(stats: ContributorRepoStatRecord[]): ContributorRepoStatRecord[] {
+  const byRepo = new Map<string, ContributorRepoStatRecord>();
+  for (const stat of stats) {
+    const key = stat.repoFullName.toLowerCase();
+    const existing = byRepo.get(key);
+    if (!existing) {
+      byRepo.set(key, stat);
+      continue;
+    }
+    byRepo.set(key, {
+      login: stat.login,
+      repoFullName: stat.repoFullName,
+      pullRequests: Math.max(existing.pullRequests, stat.pullRequests),
+      mergedPullRequests: Math.max(existing.mergedPullRequests, stat.mergedPullRequests),
+      openPullRequests: Math.max(existing.openPullRequests, stat.openPullRequests),
+      issues: Math.max(existing.issues, stat.issues),
+      stalePullRequests: Math.max(existing.stalePullRequests, stat.stalePullRequests),
+      unlinkedPullRequests: Math.max(existing.unlinkedPullRequests, stat.unlinkedPullRequests),
+      dominantLabels: topStringItems([...existing.dominantLabels, ...stat.dominantLabels], 8),
+      lastActivityAt: latestIso([existing.lastActivityAt, stat.lastActivityAt]),
+    });
+  }
+  return [...byRepo.values()].sort((left, right) => left.repoFullName.localeCompare(right.repoFullName));
+}
+
+function topStringItems(values: string[], limit: number): string[] {
+  const counts = new Map<string, number>();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, limit)
+    .map(([value]) => value);
+}
+
+function latestIso(values: Array<string | null | undefined>): string | null | undefined {
+  return values.filter(Boolean).sort().at(-1);
+}
+
 function toBountyRecord(row: typeof bounties.$inferSelect): BountyRecord {
   return {
     id: row.id,
@@ -519,9 +1794,175 @@ function toBountyRecord(row: typeof bounties.$inferSelect): BountyRecord {
   };
 }
 
+function toCollisionEdgeRecord(row: typeof collisionEdges.$inferSelect): CollisionEdgeRecord {
+  return {
+    id: row.id,
+    repoFullName: row.repoFullName,
+    leftType: parseCollisionItemType(row.leftType),
+    leftNumber: row.leftNumber,
+    leftTitle: row.leftTitle,
+    rightType: parseCollisionItemType(row.rightType),
+    rightNumber: row.rightNumber,
+    rightTitle: row.rightTitle,
+    risk: parseCollisionRisk(row.risk),
+    reason: row.reason,
+    sharedTerms: parseJson<string[]>(row.sharedTermsJson, []),
+    generatedAt: row.generatedAt,
+  };
+}
+
+function toSignalSnapshotRecord(row: typeof signalSnapshots.$inferSelect): SignalSnapshotRecord {
+  return {
+    id: row.id,
+    signalType: row.signalType,
+    targetKey: row.targetKey,
+    repoFullName: row.repoFullName,
+    payload: parseJson<Record<string, never>>(row.payloadJson, {}),
+    generatedAt: row.generatedAt,
+  };
+}
+
+function toInstallationHealthRecord(row: typeof installationHealth.$inferSelect): InstallationHealthRecord {
+  return {
+    installationId: row.installationId,
+    accountLogin: row.accountLogin,
+    repositorySelection: row.repositorySelection,
+    installedReposCount: row.installedReposCount,
+    registeredInstalledCount: row.registeredInstalledCount,
+    status: parseInstallationHealthStatus(row.status),
+    missingPermissions: parseJson<string[]>(row.missingPermissionsJson, []),
+    missingEvents: parseJson<string[]>(row.missingEventsJson, []),
+    permissions: parseJson<Record<string, string>>(row.permissionsJson, {}),
+    events: parseJson<string[]>(row.eventsJson, []),
+    checkedAt: row.checkedAt,
+    errorSummary: row.errorSummary,
+  };
+}
+
+function toAuthSessionRecord(row: typeof authSessions.$inferSelect): AuthSessionRecord {
+  return {
+    id: row.id,
+    tokenHash: row.tokenHash,
+    login: row.login,
+    githubUserId: row.githubUserId,
+    scopes: parseJson<string[]>(row.scopesJson, []),
+    expiresAt: row.expiresAt,
+    revokedAt: row.revokedAt,
+    createdAt: row.createdAt,
+    lastSeenAt: row.lastSeenAt,
+    metadata: parseJson<Record<string, never>>(row.metadataJson, {}),
+  };
+}
+
 function parseCommentMode(value: string): RepositorySettings["commentMode"] {
   if (value === "detected_contributors_only" || value === "all_prs") return value;
   return "off";
+}
+
+function parseCheckRunDetailLevel(value: string): RepositorySettings["checkRunDetailLevel"] {
+  if (value === "minimal" || value === "deep") return value;
+  return "standard";
+}
+
+function parseSyncStatus(value: string): RepoSyncStateRecord["status"] {
+  if (
+    value === "running" ||
+    value === "success" ||
+    value === "partial" ||
+    value === "error" ||
+    value === "skipped" ||
+    value === "capped" ||
+    value === "rate_limited" ||
+    value === "stale"
+  ) {
+    return value;
+  }
+  return "never_synced";
+}
+
+function parseSyncSourceKind(value: string): RepoSyncStateRecord["sourceKind"] {
+  if (value === "installation" || value === "test") return value;
+  return "github";
+}
+
+function parseRepoSyncSegment(value: string): RepoSyncSegmentRecord["segment"] {
+  if (
+    value === "metadata" ||
+    value === "labels" ||
+    value === "open_issues" ||
+    value === "open_pull_requests" ||
+    value === "recent_merged_pull_requests" ||
+    value === "pull_request_files" ||
+    value === "pull_request_reviews" ||
+    value === "check_summaries"
+  ) {
+    return value;
+  }
+  return "metadata";
+}
+
+function parseRepoSyncSegmentStatus(value: string): RepoSyncSegmentRecord["status"] {
+  if (
+    value === "running" ||
+    value === "refreshing" ||
+    value === "complete" ||
+    value === "partial" ||
+    value === "capped" ||
+    value === "sampled" ||
+    value === "stale" ||
+    value === "rate_limited" ||
+    value === "waiting_rate_limit" ||
+    value === "error" ||
+    value === "skipped" ||
+    value === "not_modified"
+  ) {
+    return value;
+  }
+  return "never_synced";
+}
+
+function parseBackfillMode(value: string): RepoSyncSegmentRecord["mode"] {
+  if (value === "full" || value === "resume") return value;
+  return "light";
+}
+
+function parseCollisionItemType(value: string): CollisionEdgeRecord["leftType"] {
+  if (value === "pull_request" || value === "recent_merged_pull_request") return value;
+  return "issue";
+}
+
+function parseCollisionRisk(value: string): CollisionEdgeRecord["risk"] {
+  if (value === "high" || value === "medium") return value;
+  return "low";
+}
+
+function parseInstallationHealthStatus(value: string): InstallationHealthRecord["status"] {
+  if (value === "healthy" || value === "broken") return value;
+  return "needs_attention";
+}
+
+function parseScoringSourceKind(value: string): ScoringModelSnapshotRecord["sourceKind"] {
+  if (value === "raw-github" || value === "api" || value === "test") return value;
+  return "fallback";
+}
+
+function parseActiveScoringModel(value: string): ScoringModelSnapshotRecord["activeModel"] {
+  if (value === "current_density_model" || value === "pending_saturation_model") return value;
+  return "unknown";
+}
+
+function parseScorePreviewTargetType(value: string): ScorePreviewRecord["targetType"] {
+  if (value === "pull_request" || value === "local_diff" || value === "variant") return value;
+  return "planned_pr";
+}
+
+function parsePullRequestDetailSyncStatus(value: string): PullRequestDetailSyncStateRecord["status"] {
+  if (value === "running" || value === "complete" || value === "partial" || value === "waiting_rate_limit" || value === "error") return value;
+  return "never_synced";
+}
+
+function loginMatches(column: unknown, login: string) {
+  return sql`lower(${column}) = ${login.toLowerCase()}`;
 }
 
 export function extractLinkedIssueNumbers(text: string): number[] {

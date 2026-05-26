@@ -2,28 +2,50 @@ import { createMcpHandler } from "agents/mcp";
 import type { Context } from "hono";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { authenticatePrivateToken, extractBearerToken } from "../auth/security";
 import {
+  countOpenIssues,
+  countOpenPullRequests,
   getBounty,
+  getContributorEvidence,
+  getLatestRepoGithubTotalsSnapshot,
   getIssue,
   getRepository,
-  listAllIssues,
-  listAllPullRequests,
+  listContributorRepoStats,
   listContributorIssues,
   listContributorPullRequests,
+  listIssueSignalSample,
   listIssues,
+  listOpenPullRequests,
   listPullRequests,
+  listRecentMergedPullRequests,
+  listRepoSyncSegments,
+  listRepoSyncStates,
   listRepositories,
 } from "../db/repositories";
+import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
 import { fetchPublicContributorProfile } from "../github/public";
+import { listLatestRegistrySnapshots } from "../registry/sync";
+import { getOrCreateScoringModelSnapshot } from "../scoring/model";
+import { buildScorePreview, makeScorePreviewRecord } from "../scoring/preview";
+import { loadFreshContributorDecisionPack, repoDecisionFromPack } from "../services/decision-pack";
 import {
   buildBountyAdvisory,
   buildCollisionReport,
   buildConfigQuality,
-  buildContributorOpportunities,
+  buildContributorFit,
+  buildContributorOutcomeHistory,
   buildContributorProfile,
+  buildContributorScoringProfile,
+  buildLaneAdvice,
+  buildLocalDiffPreflightResult,
   buildPreflightResult,
   buildQueueHealth,
+  buildRegistryChangeReport,
+  buildRoleContext,
 } from "../signals/engine";
+import { buildLocalBranchAnalysis } from "../signals/local-branch";
+import { buildRepoDataQuality } from "../signals/data-quality";
 
 type AppContext = Context<{ Bindings: Env }>;
 type ToolPayload = {
@@ -40,6 +62,12 @@ const loginShape = {
   login: z.string().min(1),
 };
 
+const loginRepoShape = {
+  login: z.string().min(1),
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+};
+
 const bountyShape = {
   id: z.string().min(1),
 };
@@ -54,6 +82,93 @@ const preflightShape = {
   linkedIssues: z.array(z.number().int().positive()).optional(),
   tests: z.array(z.string()).optional(),
   authorAssociation: z.string().optional(),
+};
+
+const localDiffPreflightShape = {
+  ...preflightShape,
+  changedLineCount: z.number().int().min(0).optional(),
+  testFiles: z.array(z.string()).optional(),
+  commitMessage: z.string().optional(),
+};
+
+const localBranchAnalysisShape = {
+  login: z.string().min(1),
+  repoFullName: z.string().min(3),
+  baseRef: z.string().min(1).optional(),
+  headRef: z.string().min(1).optional(),
+  branchName: z.string().min(1).optional(),
+  commitMessages: z.array(z.string()).max(30).optional(),
+  changedFiles: z
+    .array(
+      z
+        .object({
+          path: z.string().min(1),
+          previousPath: z.string().min(1).optional(),
+          additions: z.number().int().min(0).optional(),
+          deletions: z.number().int().min(0).optional(),
+          status: z.enum(["added", "modified", "deleted", "renamed", "copied", "unknown"]).optional(),
+          binary: z.boolean().optional(),
+        })
+        .strict(),
+    )
+    .max(500)
+    .optional(),
+  validation: z
+    .array(
+      z
+        .object({
+          command: z.string().min(1),
+          status: z.enum(["passed", "failed", "not_run"]),
+          summary: z.string().optional(),
+        })
+        .strict(),
+    )
+    .max(50)
+    .optional(),
+  linkedIssues: z.array(z.number().int().positive()).optional(),
+  labels: z.array(z.string()).optional(),
+  title: z.string().min(1).optional(),
+  body: z.string().optional(),
+  localScorer: z
+    .object({
+      mode: z.enum(["metadata_only", "external_command", "gittensor_root"]),
+      activeModel: z.string().optional(),
+      sourceTokenScore: z.number().min(0).optional(),
+      totalTokenScore: z.number().min(0).optional(),
+      sourceLines: z.number().min(0).optional(),
+      testTokenScore: z.number().min(0).optional(),
+      nonCodeTokenScore: z.number().min(0).optional(),
+      warnings: z.array(z.string()).optional(),
+    })
+    .strict()
+    .optional(),
+};
+
+const localBranchVariantsShape = {
+  variants: z.array(z.object(localBranchAnalysisShape).strict()).min(1).max(10),
+};
+
+const scorePreviewShape = {
+  repoFullName: z.string().min(3),
+  targetType: z.enum(["planned_pr", "pull_request", "local_diff", "variant"]).default("local_diff"),
+  targetKey: z.string().optional(),
+  contributorLogin: z.string().min(1).optional(),
+  labels: z.array(z.string()).optional(),
+  linkedIssueMode: z.enum(["none", "standard", "maintainer"]).default("none"),
+  sourceTokenScore: z.number().min(0).optional(),
+  totalTokenScore: z.number().min(0).optional(),
+  sourceLines: z.number().min(0).optional(),
+  testTokenScore: z.number().min(0).optional(),
+  nonCodeTokenScore: z.number().min(0).optional(),
+  existingContributorTokenScore: z.number().min(0).optional(),
+  openPrCount: z.number().int().min(0).optional(),
+  credibility: z.number().min(0).max(1).optional(),
+  changesRequestedCount: z.number().int().min(0).optional(),
+  metadataOnly: z.boolean().default(true),
+};
+
+const variantsShape = {
+  variants: z.array(z.object(scorePreviewShape)).min(1).max(10),
 };
 
 export async function handleMcpRequest(c: AppContext): Promise<Response> {
@@ -92,12 +207,21 @@ export class GittensoryMcp {
     );
 
     server.registerTool(
-      "gittensory_find_opportunities",
+      "gittensory_get_decision_pack",
       {
-        description: "Return ranked registered-repo opportunities for a GitHub login using cached Gittensory signals.",
+        description: "Return the canonical private contributor decision pack for a GitHub login.",
         inputSchema: loginShape,
       },
-      async (input) => this.toolResult(await this.findOpportunities(input.login)),
+      async (input) => this.toolResult(await this.getDecisionPack(input.login)),
+    );
+
+    server.registerTool(
+      "gittensory_explain_repo_decision",
+      {
+        description: "Return the contributor/repo decision from the canonical decision pack.",
+        inputSchema: loginRepoShape,
+      },
+      async (input) => this.toolResult(await this.explainRepoDecision(input)),
     );
 
     server.registerTool(
@@ -110,24 +234,6 @@ export class GittensoryMcp {
     );
 
     server.registerTool(
-      "gittensory_get_queue_health",
-      {
-        description: "Return maintainer burden and queue-health signals for a registered repository.",
-        inputSchema: ownerRepoShape,
-      },
-      async (input) => this.toolResult(await this.getQueueHealth(input)),
-    );
-
-    server.registerTool(
-      "gittensory_get_collisions",
-      {
-        description: "Return duplicate and WIP collision clusters for a registered repository.",
-        inputSchema: ownerRepoShape,
-      },
-      async (input) => this.toolResult(await this.getCollisions(input)),
-    );
-
-    server.registerTool(
       "gittensory_get_bounty_advisory",
       {
         description: "Return lifecycle, funding, and consensus-risk context for a cached Gittensor bounty.",
@@ -136,52 +242,244 @@ export class GittensoryMcp {
       async (input) => this.toolResult(await this.getBountyAdvisory(input.id)),
     );
 
+    server.registerTool(
+      "gittensory_get_registry_changes",
+      {
+        description: "Return the diff between the latest cached Gittensor registry snapshots.",
+        inputSchema: {},
+      },
+      async () => this.toolResult(await this.getRegistryChanges()),
+    );
+
+    server.registerTool(
+      "gittensory_preflight_local_diff",
+      {
+        description: "Preflight local git-diff metadata without uploading code content.",
+        inputSchema: localDiffPreflightShape,
+      },
+      async (input) => this.toolResult(await this.preflightLocalDiff(input)),
+    );
+
+    server.registerTool(
+      "gittensory_preview_local_pr_score",
+      {
+        description: "Return a private scoring preview from local diff metrics or supplied metadata. Source contents are not required.",
+        inputSchema: scorePreviewShape,
+      },
+      async (input) => this.toolResult(await this.previewScore(input)),
+    );
+
+    server.registerTool(
+      "gittensory_explain_review_risk",
+      {
+        description: "Explain review risk for a planned PR using preflight, lane, duplicate, and role context.",
+        inputSchema: preflightShape,
+      },
+      async (input) => this.toolResult(await this.explainReviewRisk(input)),
+    );
+
+    server.registerTool(
+      "gittensory_compare_pr_variants",
+      {
+        description: "Compare private scoring previews for multiple PR variants.",
+        inputSchema: variantsShape,
+      },
+      async (input) => this.toolResult(await this.comparePrVariants(input.variants)),
+    );
+
+    server.registerTool(
+      "gittensory_local_status",
+      {
+        description: "Return Gittensory local-MCP contract status and privacy defaults.",
+        inputSchema: {},
+      },
+      async () =>
+        this.toolResult({
+          summary: "Gittensory local MCP status.",
+          data: {
+            apiAvailable: true,
+            sourceUploadDefault: false,
+            supportedEndpoint: "/v1/local/branch-analysis",
+            supportedTools: [
+              "gittensory_get_decision_pack",
+              "gittensory_explain_repo_decision",
+              "gittensory_preflight_current_branch",
+              "gittensory_preview_current_branch_score",
+              "gittensory_rank_local_next_actions",
+              "gittensory_compare_local_variants",
+              "gittensory_explain_local_blockers",
+              "gittensory_prepare_pr_packet",
+            ],
+          },
+        }),
+    );
+
+    server.registerTool(
+      "gittensory_preflight_current_branch",
+      {
+        description: "Analyze current-branch metadata supplied by a local MCP wrapper and return PR readiness.",
+        inputSchema: localBranchAnalysisShape,
+      },
+      async (input) => this.toolResult(await this.localBranchSlice(input, "preflight")),
+    );
+
+    server.registerTool(
+      "gittensory_preview_current_branch_score",
+      {
+        description: "Analyze current-branch metadata and return private scoreability context.",
+        inputSchema: localBranchAnalysisShape,
+      },
+      async (input) => this.toolResult(await this.localBranchSlice(input, "scorePreview")),
+    );
+
+    server.registerTool(
+      "gittensory_rank_local_next_actions",
+      {
+        description: "Analyze current-branch metadata and rank local next actions by private reward/risk signals.",
+        inputSchema: localBranchAnalysisShape,
+      },
+      async (input) => this.toolResult(await this.localBranchSlice(input, "nextActions")),
+    );
+
+    server.registerTool(
+      "gittensory_explain_local_blockers",
+      {
+        description: "Analyze current-branch metadata and explain private scoreability and review blockers.",
+        inputSchema: localBranchAnalysisShape,
+      },
+      async (input) => this.toolResult(await this.localBranchSlice(input, "scoreBlockers")),
+    );
+
+    server.registerTool(
+      "gittensory_prepare_pr_packet",
+      {
+        description: "Analyze current-branch metadata and return a public-safe PR packet for coding agents.",
+        inputSchema: localBranchAnalysisShape,
+      },
+      async (input) => this.toolResult(await this.localBranchSlice(input, "prPacket")),
+    );
+
+    server.registerTool(
+      "gittensory_compare_local_variants",
+      {
+        description: "Compare private local-branch analysis variants without source uploads.",
+        inputSchema: localBranchVariantsShape,
+      },
+      async (input) => this.toolResult(await this.compareLocalVariants(input.variants)),
+    );
+
     return server;
   }
 
   private async getRepoContext(input: { owner: string; repo: string }): Promise<ToolPayload> {
     const fullName = `${input.owner}/${input.repo}`;
-    const [repo, issues, pullRequests] = await Promise.all([getRepository(this.env, fullName), listIssues(this.env, fullName), listPullRequests(this.env, fullName)]);
-    const collisions = buildCollisionReport(fullName, issues, pullRequests);
+    const [repo, issues, pullRequests, recentMergedPullRequests, queueCounts] = await Promise.all([
+      getRepository(this.env, fullName),
+      listIssueSignalSample(this.env, fullName),
+      listOpenPullRequests(this.env, fullName),
+      listRecentMergedPullRequests(this.env, fullName),
+      this.loadOpenQueueCounts(fullName),
+    ]);
+    const collisions = buildCollisionReport(fullName, issues, pullRequests, recentMergedPullRequests);
     return {
       summary: `Gittensory repo context for ${fullName}.`,
       data: {
+        repoFullName: fullName,
         repo,
-        queueHealth: buildQueueHealth(repo, issues, pullRequests, collisions),
+        lane: buildLaneAdvice(repo, fullName),
+        queueHealth: buildQueueHealth(repo, issues, pullRequests, collisions, queueCounts),
         collisions,
         configQuality: buildConfigQuality(repo, issues, pullRequests, fullName),
+        dataQuality: await this.loadRepoDataQuality(fullName),
       },
+    };
+  }
+
+  private async loadOpenQueueCounts(fullName: string): Promise<{ openIssues: number; openPullRequests: number }> {
+    const [totals, openIssues, openPullRequests] = await Promise.all([
+      getLatestRepoGithubTotalsSnapshot(this.env, fullName),
+      countOpenIssues(this.env, fullName),
+      countOpenPullRequests(this.env, fullName),
+    ]);
+    return {
+      openIssues: totals?.openIssuesTotal ?? openIssues,
+      openPullRequests: totals?.openPullRequestsTotal ?? openPullRequests,
     };
   }
 
   private async getContributorProfile(login: string): Promise<ToolPayload> {
-    const [github, pullRequests, issues] = await Promise.all([
+    const [github, pullRequests, issues, cachedRepoStats, gittensorSnapshot] = await Promise.all([
       fetchPublicContributorProfile(login),
       listContributorPullRequests(this.env, login),
       listContributorIssues(this.env, login),
+      listContributorRepoStats(this.env, login),
+      fetchGittensorContributorSnapshot(login),
     ]);
+    const repoStats = authoritativeContributorRepoStats(gittensorSnapshot, cachedRepoStats);
     return {
       summary: `Gittensory contributor profile for ${login}.`,
-      data: buildContributorProfile(login, github, pullRequests, issues) as unknown as Record<string, unknown>,
+      data: buildContributorProfile(login, github, pullRequests, issues, repoStats, gittensorSnapshot) as unknown as Record<string, unknown>,
     };
   }
 
-  private async findOpportunities(login: string): Promise<ToolPayload> {
-    const [github, contributorPullRequests, contributorIssues, repositories, allIssues, allPullRequests] = await Promise.all([
-      fetchPublicContributorProfile(login),
-      listContributorPullRequests(this.env, login),
-      listContributorIssues(this.env, login),
-      listRepositories(this.env),
-      listAllIssues(this.env),
-      listAllPullRequests(this.env),
-    ]);
-    const profile = buildContributorProfile(login, github, contributorPullRequests, contributorIssues);
+  private async getDecisionPack(login: string): Promise<ToolPayload> {
+    const pack = await loadFreshContributorDecisionPack(this.env, login);
+    if (pack) {
+      return {
+        summary: `Gittensory decision pack for ${login}.`,
+        data: pack as unknown as Record<string, unknown>,
+      };
+    }
+    await this.env.JOBS.send({ type: "build-contributor-decision-packs", requestedBy: "api", login });
     return {
-      summary: `Gittensory opportunities for ${login}.`,
+      summary: `Gittensory decision pack for ${login} needs a snapshot refresh.`,
       data: {
-        profile,
-        opportunities: buildContributorOpportunities(profile, repositories, allIssues, allPullRequests),
+        status: "needs_snapshot_refresh",
+        login,
+        generatedAt: new Date().toISOString(),
+        reason: "missing_snapshot",
+        enqueued: true,
       },
+    };
+  }
+
+  private async explainRepoDecision(input: { login: string; owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    const pack = await loadFreshContributorDecisionPack(this.env, input.login);
+    if (!pack) {
+      await this.env.JOBS.send({ type: "build-contributor-decision-packs", requestedBy: "api", login: input.login });
+      return {
+        summary: `Gittensory repo decision for ${input.login} in ${fullName} needs a snapshot refresh.`,
+        data: {
+          status: "needs_snapshot_refresh",
+          login: input.login,
+          repoFullName: fullName,
+          generatedAt: new Date().toISOString(),
+          reason: "missing_snapshot",
+          enqueued: true,
+        },
+      };
+    }
+    const decision = repoDecisionFromPack(pack, fullName);
+    return {
+      summary: `Gittensory repo decision for ${input.login} in ${fullName}.`,
+      data: {
+        status: decision ? "ready" : "not_found",
+        login: input.login,
+        repoFullName: fullName,
+        generatedAt: pack.generatedAt,
+        source: pack.source,
+        decision,
+        dataQuality: pack.dataQuality,
+      },
+    };
+  }
+
+  private async getRegistryChanges(): Promise<ToolPayload> {
+    const report = buildRegistryChangeReport(await listLatestRegistrySnapshots(this.env, 2));
+    return {
+      summary: "Gittensory registry changes from latest cached snapshots.",
+      data: report as unknown as Record<string, unknown>,
     };
   }
 
@@ -197,22 +495,137 @@ export class GittensoryMcp {
     };
   }
 
-  private async getQueueHealth(input: { owner: string; repo: string }): Promise<ToolPayload> {
-    const fullName = `${input.owner}/${input.repo}`;
-    const [repo, issues, pullRequests] = await Promise.all([getRepository(this.env, fullName), listIssues(this.env, fullName), listPullRequests(this.env, fullName)]);
-    const collisions = buildCollisionReport(fullName, issues, pullRequests);
+  private async preflightLocalDiff(input: z.infer<z.ZodObject<typeof localDiffPreflightShape>>): Promise<ToolPayload> {
+    const [repo, issues, pullRequests] = await Promise.all([
+      getRepository(this.env, input.repoFullName),
+      listIssues(this.env, input.repoFullName),
+      listPullRequests(this.env, input.repoFullName),
+    ]);
     return {
-      summary: `Gittensory queue health for ${fullName}.`,
-      data: buildQueueHealth(repo, issues, pullRequests, collisions) as unknown as Record<string, unknown>,
+      summary: `Gittensory local diff preflight for ${input.repoFullName}.`,
+      data: buildLocalDiffPreflightResult(input, repo, issues, pullRequests) as unknown as Record<string, unknown>,
     };
   }
 
-  private async getCollisions(input: { owner: string; repo: string }): Promise<ToolPayload> {
-    const fullName = `${input.owner}/${input.repo}`;
-    const [issues, pullRequests] = await Promise.all([listIssues(this.env, fullName), listPullRequests(this.env, fullName)]);
+  private async previewScore(input: z.infer<z.ZodObject<typeof scorePreviewShape>>): Promise<ToolPayload> {
+    const [repo, snapshot, evidence] = await Promise.all([
+      getRepository(this.env, input.repoFullName),
+      getOrCreateScoringModelSnapshot(this.env),
+      input.contributorLogin ? getContributorEvidence(this.env, input.contributorLogin) : Promise.resolve(null),
+    ]);
+    const result = buildScorePreview({ input, repo, snapshot, contributorEvidence: evidence });
     return {
-      summary: `Gittensory collision report for ${fullName}.`,
-      data: buildCollisionReport(fullName, issues, pullRequests) as unknown as Record<string, unknown>,
+      summary: `Private Gittensory scoring preview for ${input.repoFullName}.`,
+      data: makeScorePreviewRecord(input, snapshot, result) as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async explainReviewRisk(input: z.infer<z.ZodObject<typeof preflightShape>>): Promise<ToolPayload> {
+    const [repo, issues, pullRequests] = await Promise.all([
+      getRepository(this.env, input.repoFullName),
+      listIssues(this.env, input.repoFullName),
+      listPullRequests(this.env, input.repoFullName),
+    ]);
+    const preflight = buildPreflightResult(input, repo, issues, pullRequests);
+    const roleContext = input.contributorLogin
+      ? buildRoleContext({ login: input.contributorLogin, repo, repoFullName: input.repoFullName, pullRequests, issues })
+      : null;
+    return {
+      summary: `Gittensory review-risk explanation for ${input.repoFullName}.`,
+      data: {
+        preflight,
+        roleContext,
+        recommendation: preflight.collisions.some((cluster) => cluster.risk === "high")
+          ? "likely_duplicate"
+          : roleContext?.maintainerLane
+            ? "maintainer_lane"
+            : preflight.status === "needs_work"
+              ? "needs_author"
+              : preflight.status === "ready"
+                ? "review"
+                : "watch",
+      },
+    };
+  }
+
+  private async comparePrVariants(variants: Array<z.infer<z.ZodObject<typeof scorePreviewShape>>>): Promise<ToolPayload> {
+    const previews = [];
+    for (const variant of variants) previews.push((await this.previewScore({ ...variant, targetType: "variant" })).data);
+    previews.sort((left, right) => {
+      const leftScore = Number((left as { result: { scoreEstimate: { estimatedMergedScore: number } } }).result.scoreEstimate.estimatedMergedScore);
+      const rightScore = Number((right as { result: { scoreEstimate: { estimatedMergedScore: number } } }).result.scoreEstimate.estimatedMergedScore);
+      return rightScore - leftScore;
+    });
+    return {
+      summary: "Private Gittensory PR variant comparison.",
+      data: { variants: previews },
+    };
+  }
+
+  private async localBranchSlice(input: z.infer<z.ZodObject<typeof localBranchAnalysisShape>>, slice: "preflight" | "scorePreview" | "nextActions" | "scoreBlockers" | "prPacket"): Promise<ToolPayload> {
+    const analysis = await this.analyzeLocalBranch(input);
+    return {
+      summary: `${analysis.summary} (${slice}).`,
+      data: {
+        login: analysis.login,
+        repoFullName: analysis.repoFullName,
+        generatedAt: analysis.generatedAt,
+        [slice]: analysis[slice],
+        dataQuality: analysis.dataQuality,
+      } as Record<string, unknown>,
+    };
+  }
+
+  private async compareLocalVariants(variants: Array<z.infer<z.ZodObject<typeof localBranchAnalysisShape>>>): Promise<ToolPayload> {
+    const analyses = [];
+    for (const variant of variants) analyses.push(await this.analyzeLocalBranch(variant));
+    analyses.sort(
+      (left, right) =>
+        (right.nextActions[0]?.priorityScore ?? 0) - (left.nextActions[0]?.priorityScore ?? 0) ||
+        right.scorePreview.scoreEstimate.estimatedMergedScore - left.scorePreview.scoreEstimate.estimatedMergedScore ||
+        left.repoFullName.localeCompare(right.repoFullName),
+    );
+    return {
+      summary: "Gittensory local branch variant comparison.",
+      data: {
+        variants: analyses.map((analysis) => ({
+          repoFullName: analysis.repoFullName,
+          branchName: analysis.branchName,
+          preflightStatus: analysis.preflight.status,
+          scoreBlockers: analysis.scoreBlockers,
+          scorePreview: analysis.scorePreview,
+          topAction: analysis.nextActions[0] ?? null,
+          prPacket: analysis.prPacket,
+          dataQuality: analysis.dataQuality,
+        })),
+      },
+    };
+  }
+
+  private async analyzeLocalBranch(input: z.infer<z.ZodObject<typeof localBranchAnalysisShape>>) {
+    const [context, repo, issues, pullRequests, recentMergedPullRequests, snapshot] = await Promise.all([
+      this.loadContributorFastContext(input.login),
+      getRepository(this.env, input.repoFullName),
+      listIssues(this.env, input.repoFullName),
+      listPullRequests(this.env, input.repoFullName),
+      listRecentMergedPullRequests(this.env, input.repoFullName),
+      getOrCreateScoringModelSnapshot(this.env),
+    ]);
+    const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
+    const scoringProfile = buildContributorScoringProfile({ login: input.login, fit, scoringSnapshot: snapshot });
+    return {
+      ...buildLocalBranchAnalysis({
+        input,
+        repo,
+        issues,
+        pullRequests,
+        recentMergedPullRequests,
+        profile: context.profile,
+        outcomeHistory: context.outcomeHistory,
+        scoringSnapshot: snapshot,
+        scoringProfile,
+      }),
+      dataQuality: await this.loadRepoDataQuality(input.repoFullName),
     };
   }
 
@@ -226,25 +639,78 @@ export class GittensoryMcp {
     };
   }
 
+  private async loadContributorFastContext(login: string) {
+    const [github, contributorPullRequests, contributorIssues, repositories, syncStates, cachedRepoStats, gittensorSnapshot] = await Promise.all([
+      fetchPublicContributorProfile(login),
+      listContributorPullRequests(this.env, login),
+      listContributorIssues(this.env, login),
+      listRepositories(this.env),
+      listRepoSyncStates(this.env),
+      listContributorRepoStats(this.env, login),
+      fetchGittensorContributorSnapshot(login),
+    ]);
+    const repoStats = authoritativeContributorRepoStats(gittensorSnapshot, cachedRepoStats);
+    const profile = buildContributorProfile(login, github, contributorPullRequests, contributorIssues, repoStats, gittensorSnapshot);
+    const outcomeHistory = buildContributorOutcomeHistory({
+      login,
+      profile,
+      repositories,
+      pullRequests: contributorPullRequests,
+      issues: contributorIssues,
+      repoStats,
+    });
+    return {
+      profile,
+      repositories,
+      syncStates,
+      repoStats,
+      outcomeHistory,
+    };
+  }
+
+  private async loadRepoDataQuality(fullName: string) {
+    const [syncStates, syncSegments] = await Promise.all([listRepoSyncStates(this.env), listRepoSyncSegments(this.env, fullName)]);
+    return buildRepoDataQuality(
+      fullName,
+      syncStates.find((state) => state.repoFullName === fullName),
+      syncSegments,
+    );
+  }
+
   private toolResult(payload: ToolPayload) {
+    const data = redactSensitiveForMcp(payload.data) as Record<string, unknown>;
     return {
       content: [
         {
           type: "text" as const,
-          text: `${payload.summary}\n\n${JSON.stringify(payload.data, null, 2)}`,
+          text: `${payload.summary}\n\n${JSON.stringify(data, null, 2)}`,
         },
       ],
-      structuredContent: payload.data,
+      structuredContent: data,
     };
   }
 }
 
+function redactSensitiveForMcp(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => redactSensitiveForMcp(item));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !/hotkey|coldkey|wallet|private_key|privateKey|mnemonic/i.test(key))
+      .map(([key, entry]) => [key, redactSensitiveForMcp(entry)]),
+  );
+}
+
+function authoritativeContributorRepoStats(
+  gittensorSnapshot: Awaited<ReturnType<typeof fetchGittensorContributorSnapshot>>,
+  cachedRepoStats: Awaited<ReturnType<typeof listContributorRepoStats>>,
+) {
+  const officialRepoStats = contributorRepoStatsFromGittensor(gittensorSnapshot);
+  return officialRepoStats.length > 0 ? officialRepoStats : cachedRepoStats;
+}
+
 async function isAuthorizedMcpRequest(c: AppContext): Promise<boolean> {
-  const expected = c.env.GITTENSORY_MCP_TOKEN;
-  if (!expected) return false;
-  const actual = c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
-  if (!actual) return false;
-  return actual === expected;
+  return Boolean(await authenticatePrivateToken(c.env, extractBearerToken(c.req.header("authorization"))));
 }
 
 function getExecutionContext(c: AppContext): ExecutionContext<unknown> {

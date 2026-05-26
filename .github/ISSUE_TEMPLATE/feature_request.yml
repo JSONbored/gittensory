@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest a backend signal, API, MCP, GitHub App, or operational improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What contributor, maintainer, or repo-owner problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the backend behavior, signal, or API shape.
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Boundaries
+      options:
+        - label: This is backend-only.
+        - label: This does not require storing user PATs.
+        - label: This does not expose wallet details, raw trust scores, or private rankings publicly.
+        - label: This does not auto-label, auto-close, or auto-merge contributor work.

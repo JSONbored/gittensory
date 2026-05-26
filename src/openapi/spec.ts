@@ -1,20 +1,58 @@
 import { OpenApiGeneratorV3, OpenAPIRegistry } from "@asteasolutions/zod-to-openapi";
+import { z } from "zod";
 import {
   AdvisorySchema,
   BountyAdvisorySchema,
   BountySchema,
+  BurdenForecastSchema,
   CollisionReportSchema,
   ConfigQualitySchema,
+  ContributorFitSchema,
+  ContributorIntakeHealthSchema,
+  ContributorOutcomeHistorySchema,
   ContributorOpportunitiesResponseSchema,
   ContributorOpportunitySchema,
+  ContributorPatternReportSchema,
+  ContributorDecisionPackSchema,
+  ContributorRewardRiskStrategySchema,
   ContributorProfileSchema,
+  ContributorScoringProfileSchema,
+  ContributorStrategySchema,
   HealthSchema,
+  InstallationHealthSchema,
+  IssueQualityReportSchema,
+  LabelAuditSchema,
+  LaneAdviceSchema,
+  LocalBranchAnalysisSchema,
+  LocalDiffPreflightResultSchema,
   MaintainerPacketSchema,
+  MaintainerCutReadinessSchema,
+  MaintainerLaneReportSchema,
+  MaintainerNoiseReportSchema,
+  PullRequestMaintainerPacketSchema,
+  PullRequestReviewIntelligenceSchema,
+  PullRequestReviewabilitySchema,
   PreflightResultSchema,
   QueueHealthSchema,
+  ReadinessSchema,
+  RegistryChangeReportSchema,
+  DecisionPackRefreshNeededSchema,
+  RepoFitRecommendationSchema,
+  RepoDecisionResponseSchema,
+  RepoIntelligenceSchema,
+  RepoRewardRiskSchema,
   RegistrySnapshotSchema,
+  GitHubRateLimitObservationSchema,
+  RepoSyncSegmentSchema,
+  RepoSyncStateSchema,
   RepositorySchema,
   RepositorySettingsSchema,
+  RoleContextSchema,
+  RewardRiskActionSchema,
+  ScorePreviewSchema,
+  ScoringModelSnapshotSchema,
+  SignalFidelitySchema,
+  SyncStatusSchema,
   WorkboardItemSchema,
 } from "./schemas";
 
@@ -28,14 +66,51 @@ export function buildOpenApiSpec() {
   registry.register("QueueHealth", QueueHealthSchema);
   registry.register("CollisionReport", CollisionReportSchema);
   registry.register("ConfigQuality", ConfigQualitySchema);
+  registry.register("LabelAudit", LabelAuditSchema);
   registry.register("ContributorProfile", ContributorProfileSchema);
   registry.register("ContributorOpportunity", ContributorOpportunitySchema);
   registry.register("ContributorOpportunitiesResponse", ContributorOpportunitiesResponseSchema);
+  registry.register("ContributorFit", ContributorFitSchema);
+  registry.register("RoleContext", RoleContextSchema);
+  registry.register("ContributorOutcomeHistory", ContributorOutcomeHistorySchema);
+  registry.register("ContributorPatternReport", ContributorPatternReportSchema);
+  registry.register("ContributorDecisionPack", ContributorDecisionPackSchema);
+  registry.register("DecisionPackRefreshNeeded", DecisionPackRefreshNeededSchema);
+  registry.register("RepoDecisionResponse", RepoDecisionResponseSchema);
+  registry.register("RepoIntelligence", RepoIntelligenceSchema);
+  registry.register("RepoFitRecommendation", RepoFitRecommendationSchema);
   registry.register("PreflightResult", PreflightResultSchema);
+  registry.register("LocalDiffPreflightResult", LocalDiffPreflightResultSchema);
+  registry.register("LocalBranchAnalysis", LocalBranchAnalysisSchema);
   registry.register("MaintainerPacket", MaintainerPacketSchema);
+  registry.register("MaintainerLaneReport", MaintainerLaneReportSchema);
+  registry.register("MaintainerCutReadiness", MaintainerCutReadinessSchema);
+  registry.register("ContributorIntakeHealth", ContributorIntakeHealthSchema);
+  registry.register("PullRequestMaintainerPacket", PullRequestMaintainerPacketSchema);
+  registry.register("PullRequestReviewIntelligence", PullRequestReviewIntelligenceSchema);
   registry.register("Bounty", BountySchema);
   registry.register("BountyAdvisory", BountyAdvisorySchema);
   registry.register("RepositorySettings", RepositorySettingsSchema);
+  registry.register("RepoSyncState", RepoSyncStateSchema);
+  registry.register("RepoSyncSegment", RepoSyncSegmentSchema);
+  registry.register("GitHubRateLimitObservation", GitHubRateLimitObservationSchema);
+  registry.register("SignalFidelity", SignalFidelitySchema);
+  registry.register("InstallationHealth", InstallationHealthSchema);
+  registry.register("SyncStatus", SyncStatusSchema);
+  registry.register("Readiness", ReadinessSchema);
+  registry.register("RegistryChangeReport", RegistryChangeReportSchema);
+  registry.register("LaneAdvice", LaneAdviceSchema);
+  registry.register("ScoringModelSnapshot", ScoringModelSnapshotSchema);
+  registry.register("ScorePreview", ScorePreviewSchema);
+  registry.register("IssueQualityReport", IssueQualityReportSchema);
+  registry.register("BurdenForecast", BurdenForecastSchema);
+  registry.register("ContributorScoringProfile", ContributorScoringProfileSchema);
+  registry.register("ContributorStrategy", ContributorStrategySchema);
+  registry.register("RewardRiskAction", RewardRiskActionSchema);
+  registry.register("RepoRewardRisk", RepoRewardRiskSchema);
+  registry.register("ContributorRewardRiskStrategy", ContributorRewardRiskStrategySchema);
+  registry.register("MaintainerNoiseReport", MaintainerNoiseReportSchema);
+  registry.register("PullRequestReviewability", PullRequestReviewabilitySchema);
 
   registry.registerPath({
     method: "get",
@@ -53,6 +128,67 @@ export function buildOpenApiSpec() {
   });
   registry.registerPath({
     method: "get",
+    path: "/v1/registry/changes",
+    responses: {
+      200: { description: "Diff between latest registry snapshots", content: { "application/json": { schema: RegistryChangeReportSchema } } },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/scoring/model",
+    responses: {
+      200: { description: "Latest private scoring model snapshot", content: { "application/json": { schema: ScoringModelSnapshotSchema } } },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/scoring/preview",
+    responses: {
+      200: { description: "Private scoring preview artifact", content: { "application/json": { schema: ScorePreviewSchema } } },
+      400: { description: "Invalid scoring preview input" },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/sync/status",
+    responses: {
+      200: { description: "Repository and installation sync status", content: { "application/json": { schema: SyncStatusSchema } } },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/readiness",
+    responses: {
+      200: { description: "Operational readiness summary for private beta and public-review preparation", content: { "application/json": { schema: ReadinessSchema } } },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/installations",
+    responses: {
+      200: {
+        description: "GitHub App installations and health",
+        content: {
+          "application/json": {
+            schema: z.object({
+              installations: z.array(z.record(z.unknown())),
+              health: z.array(InstallationHealthSchema),
+            }),
+          },
+        },
+      },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/installations/{id}/health",
+    responses: {
+      200: { description: "GitHub App installation health", content: { "application/json": { schema: InstallationHealthSchema } } },
+      404: { description: "Installation health not found" },
+    },
+  });
+  registry.registerPath({
+    method: "get",
     path: "/v1/repos",
     responses: {
       200: { description: "Known repositories", content: { "application/json": { schema: RepositorySchema.array() } } },
@@ -66,45 +202,11 @@ export function buildOpenApiSpec() {
       404: { description: "Repository not found" },
     },
   });
-  for (const path of [
-    "/v1/repos/{owner}/{repo}/advisory",
-    "/v1/repos/{owner}/{repo}/pulls/{number}/advisory",
-    "/v1/repos/{owner}/{repo}/issues/{number}/advisory",
-  ]) {
-    registry.registerPath({
-      method: "get",
-      path,
-      responses: {
-        200: { description: "Generated advisory", content: { "application/json": { schema: AdvisorySchema } } },
-      },
-    });
-  }
   registry.registerPath({
     method: "get",
-    path: "/v1/repos/{owner}/{repo}/workboard",
+    path: "/v1/repos/{owner}/{repo}/intelligence",
     responses: {
-      200: { description: "Contributor workboard", content: { "application/json": { schema: WorkboardItemSchema.array() } } },
-    },
-  });
-  registry.registerPath({
-    method: "get",
-    path: "/v1/repos/{owner}/{repo}/queue-health",
-    responses: {
-      200: { description: "Maintainer burden and queue health signals", content: { "application/json": { schema: QueueHealthSchema } } },
-    },
-  });
-  registry.registerPath({
-    method: "get",
-    path: "/v1/repos/{owner}/{repo}/collisions",
-    responses: {
-      200: { description: "Duplicate and WIP collision clusters", content: { "application/json": { schema: CollisionReportSchema } } },
-    },
-  });
-  registry.registerPath({
-    method: "get",
-    path: "/v1/repos/{owner}/{repo}/config-quality",
-    responses: {
-      200: { description: "Gittensor repository config quality signals", content: { "application/json": { schema: ConfigQualitySchema } } },
+      200: { description: "Canonical repository intelligence bundle", content: { "application/json": { schema: RepoIntelligenceSchema } } },
     },
   });
   registry.registerPath({
@@ -116,9 +218,16 @@ export function buildOpenApiSpec() {
   });
   registry.registerPath({
     method: "get",
-    path: "/v1/repos/{owner}/{repo}/maintainer-packet",
+    path: "/v1/repos/{owner}/{repo}/pulls/{number}/maintainer-packet",
     responses: {
-      200: { description: "Maintainer-friendly repo review packet", content: { "application/json": { schema: MaintainerPacketSchema } } },
+      200: { description: "PR-specific maintainer review packet", content: { "application/json": { schema: PullRequestMaintainerPacketSchema } } },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/repos/{owner}/{repo}/pulls/{number}/reviewability",
+    responses: {
+      200: { description: "Private PR reviewability score and maintainer action", content: { "application/json": { schema: PullRequestReviewabilitySchema } } },
     },
   });
   registry.registerPath({
@@ -130,16 +239,21 @@ export function buildOpenApiSpec() {
   });
   registry.registerPath({
     method: "get",
-    path: "/v1/contributors/{login}/opportunities",
+    path: "/v1/contributors/{login}/decision-pack",
     responses: {
       200: {
-        description: "Contributor profile and ranked opportunities",
-        content: {
-          "application/json": {
-            schema: ContributorOpportunitiesResponseSchema,
-          },
-        },
+        description: "Canonical private contributor decision pack",
+        content: { "application/json": { schema: ContributorDecisionPackSchema } },
       },
+      202: { description: "Decision pack snapshot is missing or stale", content: { "application/json": { schema: DecisionPackRefreshNeededSchema } } },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/contributors/{login}/repos/{owner}/{repo}/decision",
+    responses: {
+      200: { description: "Repo-specific contributor decision from decision pack", content: { "application/json": { schema: RepoDecisionResponseSchema } } },
+      202: { description: "Decision pack snapshot is missing or stale", content: { "application/json": { schema: DecisionPackRefreshNeededSchema } } },
     },
   });
   registry.registerPath({
@@ -148,6 +262,23 @@ export function buildOpenApiSpec() {
     responses: {
       200: { description: "Submission preflight result", content: { "application/json": { schema: PreflightResultSchema } } },
       400: { description: "Invalid preflight input" },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/preflight/local-diff",
+    responses: {
+      200: { description: "Local diff preflight result", content: { "application/json": { schema: LocalDiffPreflightResultSchema } } },
+      400: { description: "Invalid local diff preflight input" },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/local/branch-analysis",
+    responses: {
+      200: { description: "Private local branch analysis for MCP clients", content: { "application/json": { schema: LocalBranchAnalysisSchema } } },
+      400: { description: "Invalid local branch analysis input" },
+      401: { description: "Unauthorized" },
     },
   });
   registry.registerPath({
@@ -173,6 +304,27 @@ export function buildOpenApiSpec() {
       401: { description: "Invalid webhook signature" },
     },
   });
+  for (const path of ["/v1/auth/github/device/start", "/v1/auth/github/device/poll", "/v1/auth/github/session", "/v1/auth/logout"]) {
+    registry.registerPath({
+      method: "post",
+      path,
+      responses: {
+        200: { description: "Auth request completed" },
+        201: { description: "Auth session created" },
+        400: { description: "Invalid auth request" },
+        401: { description: "Unauthorized" },
+        429: { description: "Rate limited" },
+      },
+    });
+  }
+  registry.registerPath({
+    method: "get",
+    path: "/v1/auth/session",
+    responses: {
+      200: { description: "Current auth session" },
+      401: { description: "Unauthorized" },
+    },
+  });
   registry.registerPath({
     method: "post",
     path: "/v1/internal/jobs/refresh-registry",
@@ -181,6 +333,49 @@ export function buildOpenApiSpec() {
       401: { description: "Invalid internal token" },
     },
   });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/internal/jobs/backfill-registered-repos",
+    responses: {
+      202: { description: "Registered repo backfill queued" },
+      401: { description: "Invalid internal token" },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/internal/jobs/backfill-repo-segment",
+    responses: {
+      202: { description: "Repository segment backfill queued" },
+      400: { description: "Invalid segment request" },
+      401: { description: "Invalid internal token" },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/internal/jobs/backfill-pr-details",
+    responses: {
+      202: { description: "Open PR detail backfill queued" },
+      400: { description: "Invalid PR detail backfill request" },
+      401: { description: "Invalid internal token" },
+    },
+  });
+  for (const path of [
+    "/v1/internal/jobs/refresh-scoring-model",
+    "/v1/internal/jobs/build-contributor-evidence",
+    "/v1/internal/jobs/build-contributor-decision-packs",
+    "/v1/internal/jobs/build-burden-forecasts",
+    "/v1/internal/jobs/generate-signal-snapshots",
+    "/v1/internal/jobs/repair-data-fidelity",
+  ]) {
+    registry.registerPath({
+      method: "post",
+      path,
+      responses: {
+        202: { description: "Internal job queued" },
+        401: { description: "Invalid internal token" },
+      },
+    });
+  }
   registry.registerPath({
     method: "post",
     path: "/v1/internal/bounties/import",

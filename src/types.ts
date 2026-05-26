@@ -11,6 +11,67 @@ export type JobMessage =
   | {
       type: "refresh-registry";
       requestedBy: "schedule" | "api" | "test";
+    }
+  | {
+      type: "backfill-registered-repos";
+      requestedBy: "schedule" | "api" | "test";
+      repoFullName?: string;
+      force?: boolean;
+      mode?: "light" | "full" | "resume";
+    }
+  | {
+      type: "backfill-repo-segment";
+      requestedBy: "schedule" | "api" | "test";
+      repoFullName: string;
+      segment: "labels" | "open_issues" | "open_pull_requests" | "recent_merged_pull_requests";
+      mode?: "light" | "full" | "resume";
+      force?: boolean;
+      cursor?: string;
+    }
+  | {
+      type: "backfill-pr-details";
+      requestedBy: "schedule" | "api" | "test";
+      repoFullName: string;
+      mode?: "light" | "full" | "resume";
+      cursor?: number;
+    }
+  | {
+      type: "refresh-installation-health";
+      requestedBy: "schedule" | "api" | "test";
+    }
+  | {
+      type: "generate-signal-snapshots";
+      requestedBy: "schedule" | "api" | "test";
+      repoFullName?: string;
+    }
+  | {
+      type: "refresh-scoring-model";
+      requestedBy: "schedule" | "api" | "test";
+    }
+  | {
+      type: "build-contributor-evidence";
+      requestedBy: "schedule" | "api" | "test";
+      login?: string;
+    }
+  | {
+      type: "build-contributor-decision-packs";
+      requestedBy: "schedule" | "api" | "test";
+      login?: string;
+    }
+  | {
+      type: "refresh-contributor-activity";
+      requestedBy: "schedule" | "api" | "test";
+      login: string;
+      repoFullName?: string;
+    }
+  | {
+      type: "build-burden-forecasts";
+      requestedBy: "schedule" | "api" | "test";
+      repoFullName?: string;
+    }
+  | {
+      type: "repair-data-fidelity";
+      requestedBy: "schedule" | "api" | "test";
     };
 
 export type GitHubWebhookPayload = {
@@ -55,6 +116,8 @@ export type GitHubPullRequestPayload = {
   state: string;
   html_url?: string;
   merged_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
   user?: {
     login?: string;
   };
@@ -75,6 +138,8 @@ export type GitHubIssuePayload = {
   title: string;
   state: string;
   html_url?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
   user?: {
     login?: string;
   };
@@ -203,6 +268,379 @@ export type RepositorySettings = {
   commentMode: "off" | "detected_contributors_only" | "all_prs";
   publicSignalLevel: "minimal" | "standard";
   checkRunMode: "enabled";
+  checkRunDetailLevel: "minimal" | "standard" | "deep";
+  backfillEnabled: boolean;
+  privateTrustEnabled: boolean;
   createdAt?: string | null | undefined;
   updatedAt?: string | null | undefined;
+};
+
+export type RepoSyncStateRecord = {
+  repoFullName: string;
+  status: "never_synced" | "running" | "success" | "partial" | "error" | "skipped" | "capped" | "rate_limited" | "stale";
+  sourceKind: "github" | "installation" | "test";
+  primaryLanguage?: string | null | undefined;
+  defaultBranch?: string | null | undefined;
+  isPrivate?: boolean | null | undefined;
+  openIssuesCount: number;
+  openPullRequestsCount: number;
+  recentMergedPullRequestsCount: number;
+  labelsSyncedAt?: string | null | undefined;
+  issuesSyncedAt?: string | null | undefined;
+  pullRequestsSyncedAt?: string | null | undefined;
+  mergedPullRequestsSyncedAt?: string | null | undefined;
+  lastStartedAt?: string | null | undefined;
+  lastCompletedAt?: string | null | undefined;
+  errorSummary?: string | null | undefined;
+  warnings: string[];
+  updatedAt?: string | null | undefined;
+};
+
+export type RepoSyncSegmentRecord = {
+  repoFullName: string;
+  segment:
+    | "metadata"
+    | "labels"
+    | "open_issues"
+    | "open_pull_requests"
+    | "recent_merged_pull_requests"
+    | "pull_request_files"
+    | "pull_request_reviews"
+    | "check_summaries";
+  status:
+    | "never_synced"
+    | "running"
+    | "refreshing"
+    | "complete"
+    | "partial"
+    | "capped"
+    | "sampled"
+    | "stale"
+    | "rate_limited"
+    | "waiting_rate_limit"
+    | "error"
+    | "skipped"
+    | "not_modified";
+  sourceKind: "github" | "installation" | "test";
+  mode: "light" | "full" | "resume";
+  lastCursor?: string | null | undefined;
+  nextCursor?: string | null | undefined;
+  fetchedCount: number;
+  expectedCount?: number | null | undefined;
+  pageCount: number;
+  startedAt?: string | null | undefined;
+  completedAt?: string | null | undefined;
+  staleAt?: string | null | undefined;
+  rateLimitResetAt?: string | null | undefined;
+  etag?: string | null | undefined;
+  lastModified?: string | null | undefined;
+  warnings: string[];
+  errorSummary?: string | null | undefined;
+  updatedAt?: string | null | undefined;
+};
+
+export type RepoGithubTotalsSnapshotRecord = {
+  id: string;
+  repoFullName: string;
+  openIssuesTotal: number;
+  openPullRequestsTotal: number;
+  mergedPullRequestsTotal: number;
+  closedUnmergedPullRequestsTotal: number;
+  labelsTotal: number;
+  sourceKind: "github" | "installation" | "test";
+  fetchedAt: string;
+  rateLimitRemaining?: number | null | undefined;
+  rateLimitResetAt?: string | null | undefined;
+  payload: Record<string, JsonValue>;
+};
+
+export type PullRequestDetailSyncStateRecord = {
+  repoFullName: string;
+  pullNumber: number;
+  status: "never_synced" | "running" | "complete" | "partial" | "waiting_rate_limit" | "error";
+  filesSyncedAt?: string | null | undefined;
+  reviewsSyncedAt?: string | null | undefined;
+  checksSyncedAt?: string | null | undefined;
+  lastSyncedAt?: string | null | undefined;
+  errorSummary?: string | null | undefined;
+  updatedAt?: string | null | undefined;
+};
+
+export type GitHubRateLimitObservationRecord = {
+  id?: string | undefined;
+  repoFullName?: string | null | undefined;
+  resource: "rest" | "graphql";
+  path: string;
+  statusCode: number;
+  limitValue?: number | null | undefined;
+  remaining?: number | null | undefined;
+  resetAt?: string | null | undefined;
+  observedAt?: string | null | undefined;
+};
+
+export type DataQuality = {
+  status: "complete" | "degraded" | "blocked" | "unknown";
+  generatedAt: string;
+  repoFullName?: string | null | undefined;
+  stale: boolean;
+  partial: boolean;
+  capped: boolean;
+  rateLimited: boolean;
+  segmentCount: number;
+  incompleteSegments: string[];
+  cappedSegments: string[];
+  staleSegments: string[];
+  rateLimitedSegments: string[];
+  warnings: string[];
+  syncState?: Pick<RepoSyncStateRecord, "status" | "lastCompletedAt" | "updatedAt" | "warnings"> | undefined;
+};
+
+export type RepoLabelRecord = {
+  repoFullName: string;
+  name: string;
+  color?: string | null | undefined;
+  description?: string | null | undefined;
+  isConfigured: boolean;
+  observedCount: number;
+  payload: Record<string, JsonValue>;
+  lastSeenAt?: string | null | undefined;
+};
+
+export type RepoSnapshotRecord = {
+  id: string;
+  repoFullName: string;
+  snapshotKind: string;
+  sourceKind: string;
+  fetchedAt: string;
+  primaryLanguage?: string | null | undefined;
+  defaultBranch?: string | null | undefined;
+  openIssuesCount: number;
+  openPullRequestsCount: number;
+  recentMergedPullRequestsCount: number;
+  payload: Record<string, JsonValue>;
+};
+
+export type PullRequestFileRecord = {
+  repoFullName: string;
+  pullNumber: number;
+  path: string;
+  status?: string | null | undefined;
+  additions: number;
+  deletions: number;
+  changes: number;
+  previousFilename?: string | null | undefined;
+  payload: Record<string, JsonValue>;
+};
+
+export type PullRequestReviewRecord = {
+  id: string;
+  repoFullName: string;
+  pullNumber: number;
+  reviewerLogin?: string | null | undefined;
+  state: string;
+  authorAssociation?: string | null | undefined;
+  submittedAt?: string | null | undefined;
+  payload: Record<string, JsonValue>;
+};
+
+export type CheckSummaryRecord = {
+  id: string;
+  repoFullName: string;
+  pullNumber?: number | null | undefined;
+  headSha?: string | null | undefined;
+  name: string;
+  status: string;
+  conclusion?: string | null | undefined;
+  startedAt?: string | null | undefined;
+  completedAt?: string | null | undefined;
+  detailsUrl?: string | null | undefined;
+  payload: Record<string, JsonValue>;
+};
+
+export type RecentMergedPullRequestRecord = {
+  repoFullName: string;
+  number: number;
+  title: string;
+  authorLogin?: string | null | undefined;
+  htmlUrl?: string | null | undefined;
+  mergedAt?: string | null | undefined;
+  labels: string[];
+  linkedIssues: number[];
+  changedFiles: string[];
+  payload: Record<string, JsonValue>;
+};
+
+export type ContributorRecord = {
+  login: string;
+  githubProfile: Record<string, JsonValue>;
+  topLanguages: string[];
+  publicRepos?: number | null | undefined;
+  followers?: number | null | undefined;
+  source: "github" | "unavailable";
+  firstSeenAt?: string | null | undefined;
+  lastSeenAt?: string | null | undefined;
+  updatedAt?: string | null | undefined;
+};
+
+export type ContributorRepoStatRecord = {
+  login: string;
+  repoFullName: string;
+  pullRequests: number;
+  mergedPullRequests: number;
+  openPullRequests: number;
+  issues: number;
+  stalePullRequests: number;
+  unlinkedPullRequests: number;
+  dominantLabels: string[];
+  lastActivityAt?: string | null | undefined;
+};
+
+export type CollisionEdgeRecord = {
+  id: string;
+  repoFullName: string;
+  leftType: "issue" | "pull_request" | "recent_merged_pull_request";
+  leftNumber: number;
+  leftTitle: string;
+  rightType: "issue" | "pull_request" | "recent_merged_pull_request";
+  rightNumber: number;
+  rightTitle: string;
+  risk: "low" | "medium" | "high";
+  reason: string;
+  sharedTerms: string[];
+  generatedAt?: string | null | undefined;
+};
+
+export type SignalSnapshotRecord = {
+  id: string;
+  signalType: string;
+  targetKey: string;
+  repoFullName?: string | null | undefined;
+  payload: Record<string, JsonValue>;
+  generatedAt?: string | null | undefined;
+};
+
+export type InstallationRecord = {
+  id: number;
+  accountLogin: string;
+  accountId: number;
+  targetType: string;
+  repositorySelection?: string | null | undefined;
+  permissions: Record<string, string>;
+  events: string[];
+  suspendedAt?: string | null | undefined;
+  createdAt?: string | null | undefined;
+  updatedAt?: string | null | undefined;
+};
+
+export type InstallationHealthRecord = {
+  installationId: number;
+  accountLogin: string;
+  repositorySelection?: string | null | undefined;
+  installedReposCount: number;
+  registeredInstalledCount: number;
+  status: "healthy" | "needs_attention" | "broken";
+  missingPermissions: string[];
+  missingEvents: string[];
+  permissions: Record<string, string>;
+  events: string[];
+  checkedAt: string;
+  errorSummary?: string | null | undefined;
+};
+
+export type ScoringModelSnapshotRecord = {
+  id: string;
+  sourceKind: "raw-github" | "api" | "fallback" | "test";
+  sourceUrl: string;
+  fetchedAt: string;
+  activeModel: "current_density_model" | "pending_saturation_model" | "unknown";
+  constants: Record<string, number>;
+  programmingLanguages: Record<string, JsonValue>;
+  registrySnapshotId?: string | null | undefined;
+  warnings: string[];
+  payload: Record<string, JsonValue>;
+};
+
+export type ScorePreviewRecord = {
+  id: string;
+  scoringModelSnapshotId: string;
+  repoFullName: string;
+  targetType: "planned_pr" | "pull_request" | "local_diff" | "variant";
+  targetKey: string;
+  contributorLogin?: string | null | undefined;
+  input: Record<string, JsonValue>;
+  result: Record<string, JsonValue>;
+  generatedAt: string;
+};
+
+export type ContributorEvidenceRecord = {
+  login: string;
+  payload: Record<string, JsonValue>;
+  generatedAt: string;
+};
+
+export type ContributorScoringProfileRecord = {
+  login: string;
+  scoringModelSnapshotId: string;
+  payload: Record<string, JsonValue>;
+  generatedAt: string;
+};
+
+export type IssueQualityReportRecord = {
+  id: string;
+  repoFullName: string;
+  issueNumber: number;
+  payload: Record<string, JsonValue>;
+  generatedAt: string;
+};
+
+export type BurdenForecastRecord = {
+  repoFullName: string;
+  payload: Record<string, JsonValue>;
+  generatedAt: string;
+};
+
+export type RegistryDriftEventRecord = {
+  id: string;
+  repoFullName: string;
+  driftType: string;
+  detail: string;
+  previousSnapshotId?: string | null | undefined;
+  currentSnapshotId?: string | null | undefined;
+  payload: Record<string, JsonValue>;
+  generatedAt: string;
+};
+
+export type BountyLifecycleEventRecord = {
+  id: string;
+  bountyId: string;
+  repoFullName: string;
+  issueNumber: number;
+  status: string;
+  payload: Record<string, JsonValue>;
+  generatedAt: string;
+};
+
+export type AuthSessionRecord = {
+  id: string;
+  tokenHash: string;
+  login: string;
+  githubUserId?: number | null | undefined;
+  scopes: string[];
+  expiresAt: string;
+  revokedAt?: string | null | undefined;
+  createdAt: string;
+  lastSeenAt?: string | null | undefined;
+  metadata: Record<string, JsonValue>;
+};
+
+export type AuditEventRecord = {
+  id?: string | undefined;
+  eventType: string;
+  actor?: string | null | undefined;
+  route?: string | null | undefined;
+  targetKey?: string | null | undefined;
+  outcome: "success" | "denied" | "error" | "queued" | "completed";
+  detail?: string | null | undefined;
+  metadata?: Record<string, JsonValue> | undefined;
+  createdAt?: string | null | undefined;
 };
