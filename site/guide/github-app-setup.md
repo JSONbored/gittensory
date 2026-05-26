@@ -4,7 +4,7 @@ The GitHub App is the maintainer/install surface. GitHub OAuth is the MCP user-a
 
 ## Basic Fields
 
-Use these values for private beta:
+Use these values:
 
 | Field | Value |
 | --- | --- |
@@ -74,4 +74,4 @@ Before Marketplace submission, add:
 - clear setup flow
 - valid webhook and install diagnostics
 
-Do not submit while Gittensory is private beta or invite-only.
+Do not submit until the privacy, support, terms, install diagnostics, and public setup flow are complete.

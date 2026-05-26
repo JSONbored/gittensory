@@ -2,7 +2,7 @@
 
 ## `gittensory-mcp: command not found`
 
-For private beta:
+If the command is not installed globally:
 
 ```sh
 npm link --workspace @jsonbored/gittensory-mcp

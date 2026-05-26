@@ -1,10 +1,23 @@
 # Install
 
-Gittensory has two install paths: private beta from the repository, and public npm once the package is intentionally launched.
+Gittensory has two install paths: public npm for normal use, and local checkout for development.
 
-## Private Beta
+## Public npm
 
-Use this while `JSONbored/gittensory` is still private.
+Use this for Codex, Claude Desktop, Cursor, or any other stdio MCP client:
+
+```sh
+npm install -g @jsonbored/gittensory-mcp
+gittensory-mcp login
+gittensory-mcp status
+gittensory-mcp --stdio
+```
+
+The login command uses GitHub Device Flow and stores a short-lived Gittensory session token in your local config directory.
+
+## Local checkout
+
+Use this when developing Gittensory itself:
 
 ```sh
 git clone https://github.com/JSONbored/gittensory.git
@@ -12,29 +25,8 @@ cd gittensory
 npm install
 npm link --workspace @jsonbored/gittensory-mcp
 gittensory-mcp login
-gittensory-mcp status
-```
-
-After login, start the MCP server with:
-
-```sh
 gittensory-mcp --stdio
 ```
-
-The login command uses GitHub Device Flow and stores a short-lived Gittensory session token in your local config directory.
-
-## Public npm
-
-This path is prepared but stays disabled until public launch.
-
-```sh
-npx @jsonbored/gittensory-mcp login
-npm install -g @jsonbored/gittensory-mcp
-gittensory-mcp status
-gittensory-mcp --stdio
-```
-
-The package should remain restricted until the launch gate passes. Public launch means changing npm publish access to `public`, bumping the MCP package version, and publishing from the release workflow.
 
 ## Verify The Install
 

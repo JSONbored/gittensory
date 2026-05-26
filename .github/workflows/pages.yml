@@ -41,8 +41,8 @@ jobs:
 
       - name: Build docs
         env:
-          GITTENSORY_SITE_URL: https://jsonbored.github.io/gittensory/
-          GITTENSORY_SITE_BASE: /gittensory/
+          GITTENSORY_SITE_URL: https://gittensory.aethereal.dev/
+          GITTENSORY_SITE_BASE: /
         run: npm run docs:build
 
       - name: Upload Pages artifact

@@ -30,7 +30,7 @@ features:
 
 ## What Gittensory Is
 
-Gittensory is a private backend intelligence layer for Gittensor registered repositories.
+Gittensory is a backend intelligence layer for Gittensor registered repositories.
 It helps Gittensor miners and contributors decide what to work on next, and it helps maintainers understand whether a Gittensor-driven PR is clean, duplicate-prone, stale, missing evidence, or worth reviewing.
 
 It is not a Gittensor frontend, not a public leaderboard, and not a reward estimator for public comments. The useful surface is the signal: role-aware repo context, official Gittensor stats, local branch preflight, queue health, duplicate risk, and maintainer-friendly review packets.
@@ -45,4 +45,4 @@ It is not a Gittensor frontend, not a public leaderboard, and not a reward estim
 
 ## Current Status
 
-Gittensory is still private beta. The MCP package remains restricted until the public launch gate passes, but the install flow is already shaped for a simple public npm path.
+Gittensory is public beta. The MCP package is public, while sensitive score, trust, and maintainer context stays in authenticated API/MCP/check-run surfaces.

@@ -1,6 +1,6 @@
 # API Reference
 
-The REST API is private beta and bearer-token protected except for `/health`, GitHub webhook delivery, and public auth start/poll endpoints.
+The REST API is bearer-token protected except for `/health`, GitHub webhook delivery, and public auth start/poll endpoints.
 
 Use the live OpenAPI document when authenticated:
 
@@ -46,4 +46,4 @@ curl "$GITTENSORY_API_URL/openapi.json" \
 
 ## MCP Endpoint
 
-`POST /mcp` exposes remote private-beta MCP over Streamable HTTP style requests. The local npm wrapper is still the preferred MCP user surface.
+`POST /mcp` exposes remote MCP over Streamable HTTP style requests. The local npm wrapper is still the preferred MCP user surface.

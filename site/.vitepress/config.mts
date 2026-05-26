@@ -1,7 +1,7 @@
 import { defineConfig } from "vitepress";
 
-const siteUrl = process.env.GITTENSORY_SITE_URL ?? "https://jsonbored.github.io/gittensory/";
-const siteBase = process.env.GITTENSORY_SITE_BASE ?? "/gittensory/";
+const siteUrl = process.env.GITTENSORY_SITE_URL ?? "https://gittensory.aethereal.dev/";
+const siteBase = process.env.GITTENSORY_SITE_BASE ?? "/";
 
 export default defineConfig({
   title: "Gittensory",

@@ -2,27 +2,26 @@
 
 Local stdio MCP wrapper for Gittensory contributor intelligence.
 
-It inspects local git metadata and calls the private Gittensory API for branch preflight, score blockers, reward/risk reasoning, contributor decision packs, and public-safe PR packets. It does not upload source contents in v1.
+It inspects local git metadata and calls the Gittensory API for branch preflight, score blockers, reward/risk reasoning, contributor decision packs, and public-safe PR packets. It does not upload source contents in v1.
 
 ## Status
 
-The package is restricted during private beta. Public npm install will be enabled only after the launch gate passes.
+The package is public beta. Gittensory still keeps sensitive score, trust, and maintainer context out of public PR comments.
 
 ## Install
 
-Private beta from the repo:
+Public npm:
+
+```sh
+npm install -g @jsonbored/gittensory-mcp
+gittensory-mcp login
+```
+
+From a local checkout:
 
 ```sh
 npm install
 npm link --workspace @jsonbored/gittensory-mcp
-gittensory-mcp login
-```
-
-Public npm path once launched:
-
-```sh
-npx @jsonbored/gittensory-mcp login
-npm install -g @jsonbored/gittensory-mcp
 ```
 
 ## Commands

@@ -53,4 +53,4 @@ jobs:
           "$TMP/node_modules/.bin/gittensory-mcp" --help >/dev/null
 
       - name: Publish with npm trusted publishing
-        run: npx -y npm@11.15.0 publish --workspace @jsonbored/gittensory-mcp --access restricted
+        run: npx -y npm@11.15.0 publish --workspace @jsonbored/gittensory-mcp --access public

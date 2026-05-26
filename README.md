@@ -20,29 +20,28 @@ Gittensory is not a Gittensor frontend, not a public leaderboard, and not an aut
 - Worker API: Cloudflare Workers + Hono + D1 + Queues.
 - MCP package: `@jsonbored/gittensory-mcp`, a local stdio wrapper for coding agents.
 - GitHub App: check runs and optional sanitized sticky PR comments.
-- Docs site: VitePress under `site/`, deployable by GitHub Pages when the repo is public.
+- Docs site: VitePress under `site/`, deployed at `https://gittensory.aethereal.dev/`.
 
 ## MCP Install
 
-Private beta:
+Public npm:
 
 ```sh
-npm install
-npm link --workspace @jsonbored/gittensory-mcp
+npm install -g @jsonbored/gittensory-mcp
 gittensory-mcp login
 gittensory-mcp doctor
 gittensory-mcp --stdio
 ```
 
-Public npm path, once intentionally launched:
+Local checkout:
 
 ```sh
-npx @jsonbored/gittensory-mcp login
-npm install -g @jsonbored/gittensory-mcp
+npm install
+npm link --workspace @jsonbored/gittensory-mcp
 gittensory-mcp --stdio
 ```
 
-The package is restricted until launch. Public release requires changing npm access to `public`, bumping the MCP package version, and publishing through the tag-gated release workflow.
+Future MCP package releases are published from protected `mcp-vX.Y.Z` tags through the trusted-publishing workflow.
 
 ## MCP Client Config
 
@@ -94,7 +93,7 @@ wrangler secret put INTERNAL_JOB_TOKEN
 
 ## Canonical API
 
-Private beta endpoints use `Authorization: Bearer <GITTENSORY_API_TOKEN>` or a Gittensory OAuth session where supported.
+Protected endpoints use `Authorization: Bearer <GITTENSORY_API_TOKEN>` or a Gittensory OAuth session where supported.
 
 - `GET /health`
 - `GET /openapi.json`
@@ -153,7 +152,7 @@ npm run docs:build
 npm run docs:preview
 ```
 
-The Pages workflow builds the docs on `main`, but deploys only when the repository variable `GITTENSORY_DOCS_DEPLOY` is set to `true`.
+The Pages workflow builds the docs on `main` for `https://gittensory.aethereal.dev/`, but deploys only when the repository variable `GITTENSORY_DOCS_DEPLOY` is set to `true`.
 
 ## Validation
 
