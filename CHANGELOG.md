@@ -61,5 +61,7 @@
 
 - Strip squash PR suffixes
 
+- Label mcp release workflow changes
+
 
 

@@ -26,6 +26,7 @@ sort_commits = "oldest"
 
 commit_preprocessors = [
   { pattern = " \\(#[0-9]+\\)$", replace = "" },
+  { pattern = "^fix\\(docs\\): use Gittensor screenshot in homepage hero$", replace = "fix(release): create GitHub releases for MCP tag publishes" },
 ]
 
 commit_parsers = [
