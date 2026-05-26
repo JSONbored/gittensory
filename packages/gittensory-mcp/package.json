@@ -1,6 +1,6 @@
 {
   "name": "@jsonbored/gittensory-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "AGPL-3.0-only",
   "type": "module",
   "description": "Local stdio MCP wrapper for private Gittensory contributor intelligence.",
@@ -22,7 +22,7 @@
     "preflight"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "restricted"
   },
   "bin": {
     "gittensory-mcp": "bin/gittensory-mcp.js"
