@@ -97,6 +97,10 @@ const localBranchAnalysisShape = {
   baseRef: z.string().min(1).optional(),
   headRef: z.string().min(1).optional(),
   branchName: z.string().min(1).optional(),
+  baseSha: z.string().min(1).optional(),
+  headSha: z.string().min(1).optional(),
+  mergeBaseSha: z.string().min(1).optional(),
+  remoteTrackingSha: z.string().min(1).optional(),
   commitMessages: z.array(z.string()).max(30).optional(),
   changedFiles: z
     .array(
@@ -129,6 +133,12 @@ const localBranchAnalysisShape = {
   labels: z.array(z.string()).optional(),
   title: z.string().min(1).optional(),
   body: z.string().optional(),
+  pendingMergedPrCount: z.number().int().min(0).optional(),
+  pendingClosedPrCount: z.number().int().min(0).optional(),
+  approvedPrCount: z.number().int().min(0).optional(),
+  expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
+  projectedCredibility: z.number().min(0).max(1).optional(),
+  scenarioNotes: z.array(z.string()).max(20).optional(),
   localScorer: z
     .object({
       mode: z.enum(["metadata_only", "external_command", "gittensor_root"]),
@@ -165,6 +175,12 @@ const scorePreviewShape = {
   credibility: z.number().min(0).max(1).optional(),
   changesRequestedCount: z.number().int().min(0).optional(),
   metadataOnly: z.boolean().default(true),
+  pendingMergedPrCount: z.number().int().min(0).optional(),
+  pendingClosedPrCount: z.number().int().min(0).optional(),
+  approvedPrCount: z.number().int().min(0).optional(),
+  expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
+  projectedCredibility: z.number().min(0).max(1).optional(),
+  scenarioNotes: z.array(z.string()).max(20).optional(),
 };
 
 const variantsShape = {
@@ -571,6 +587,10 @@ export class GittensoryMcp {
         repoFullName: analysis.repoFullName,
         generatedAt: analysis.generatedAt,
         [slice]: analysis[slice],
+        scenarioScorePreview: slice === "scorePreview" || slice === "scoreBlockers" ? analysis.scenarioScorePreview : undefined,
+        branchQualityBlockers: slice === "scoreBlockers" ? analysis.branchQualityBlockers : undefined,
+        accountStateBlockers: slice === "scoreBlockers" ? analysis.accountStateBlockers : undefined,
+        recommendedRerunCondition: slice === "scoreBlockers" || slice === "nextActions" ? analysis.recommendedRerunCondition : undefined,
         dataQuality: analysis.dataQuality,
       } as Record<string, unknown>,
     };
@@ -582,7 +602,7 @@ export class GittensoryMcp {
     analyses.sort(
       (left, right) =>
         (right.nextActions[0]?.priorityScore ?? 0) - (left.nextActions[0]?.priorityScore ?? 0) ||
-        right.scorePreview.scoreEstimate.estimatedMergedScore - left.scorePreview.scoreEstimate.estimatedMergedScore ||
+        right.scorePreview.effectiveEstimatedScore - left.scorePreview.effectiveEstimatedScore ||
         left.repoFullName.localeCompare(right.repoFullName),
     );
     return {

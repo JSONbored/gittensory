@@ -35,6 +35,10 @@ export function collectLocalBranchMetadata(input) {
   if (!repoFullName) throw new Error("Could not infer repoFullName from git remote; pass --repo owner/repo.");
   const branchName = input.branchName ?? gitLines(cwd, ["branch", "--show-current"])[0] ?? "local-branch";
   const headRef = input.headRef ?? gitLines(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])[0] ?? branchName;
+  const baseSha = gitLines(cwd, ["rev-parse", "--verify", baseRef])[0];
+  const headSha = gitLines(cwd, ["rev-parse", "--verify", "HEAD"])[0];
+  const mergeBaseSha = gitLines(cwd, ["merge-base", baseRef, "HEAD"])[0];
+  const remoteTrackingSha = collectRemoteTrackingSha(cwd, baseRef);
   const changedFiles = collectChangedFiles(cwd, baseRef);
   const commitMessages = input.commitMessages ?? collectCommitMessages(cwd, baseRef);
   const title = input.title ?? titleFromBranch(branchName) ?? firstCommitTitle(commitMessages);
@@ -47,6 +51,10 @@ export function collectLocalBranchMetadata(input) {
     baseRef,
     headRef,
     branchName,
+    baseSha,
+    headSha,
+    mergeBaseSha,
+    remoteTrackingSha,
     commitMessages,
     changedFiles,
     validation: input.validation,
@@ -54,6 +62,12 @@ export function collectLocalBranchMetadata(input) {
     labels: input.labels,
     title,
     body: input.body,
+    pendingMergedPrCount: input.pendingMergedPrCount,
+    pendingClosedPrCount: input.pendingClosedPrCount,
+    approvedPrCount: input.approvedPrCount,
+    expectedOpenPrCountAfterMerge: input.expectedOpenPrCountAfterMerge,
+    projectedCredibility: input.projectedCredibility,
+    scenarioNotes: input.scenarioNotes,
   };
   return stripUndefined(payload);
 }
@@ -101,7 +115,7 @@ export function setupGuidanceForLocalScorer(status) {
 
 export function gitLines(cwd, args) {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 })
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean);
@@ -169,6 +183,14 @@ function defaultBaseRef(cwd) {
   return "HEAD";
 }
 
+function collectRemoteTrackingSha(cwd, baseRef) {
+  const match = String(baseRef ?? "").replace(/^refs\/remotes\//, "").match(/^origin\/(.+)$/);
+  const branch = match?.[1];
+  if (!branch) return undefined;
+  const remoteRow = gitLines(cwd, ["ls-remote", "--heads", "origin", branch])[0];
+  return remoteRow?.split(/\s+/)[0];
+}
+
 function normalizeScorerOutput(payload) {
   return stripUndefined({
     mode: "external_command",
@@ -226,7 +248,13 @@ function firstCommitTitle(messages) {
 }
 
 function isTestFile(file) {
-  return /(^|\/)(test|tests|spec|__tests__)\//i.test(file) || /\.(test|spec)\.(ts|tsx|js|jsx|py|rb|rs)$/i.test(file);
+  return (
+    /(^|\/)(test|tests|spec|__tests__)\//i.test(file) ||
+    /(^|\/)src\/test\//i.test(file) ||
+    /(^|\/)[^/]+_test\.(go|py|rb)$/i.test(file) ||
+    /(^|\/)[^/]+_spec\.rb$/i.test(file) ||
+    /\.(test|spec)\.(ts|tsx|js|jsx|py|rb|rs)$/i.test(file)
+  );
 }
 
 function isCodeFile(file) {

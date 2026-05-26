@@ -50,6 +50,96 @@ describe("local branch analysis", () => {
     expect(JSON.stringify(analysis.prPacket)).not.toMatch(/reward|score|wallet|hotkey|farming|payout|ranking|trust score/i);
   });
 
+  it("projects a blocked local branch into a useful after-pending-merge scenario", () => {
+    const pressuredHistory: ContributorOutcomeHistory = {
+      ...outcomeHistory,
+      totals: { ...outcomeHistory.totals, openPullRequests: 3, credibility: 0 },
+      repoOutcomes: [
+        {
+          ...outcomeHistory.repoOutcomes[0]!,
+          openPullRequests: 3,
+          credibility: 0,
+          closedPullRequestRate: 0,
+          closedPullRequests: 0,
+        },
+      ],
+    };
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        baseRef: "upstream/main",
+        branchName: "fix-15233-entity-model",
+        body: "Fixes #15233",
+        changedFiles: [
+          { path: "internal/entity/model.go", additions: 30, deletions: 4, status: "modified" },
+          { path: "internal/entity/model_test.go", additions: 44, deletions: 0, status: "modified" },
+          { path: "internal/service/entity.go", additions: 12, deletions: 2, status: "modified" },
+          { path: "docs/entity.md", additions: 8, deletions: 1, status: "modified" },
+        ],
+        validation: [{ command: "go test ./internal/entity ./internal/service", status: "passed", summary: "focused Go tests passed" }],
+        pendingMergedPrCount: 3,
+        projectedCredibility: 0.8,
+        scenarioNotes: ["three approved PRs are expected to merge"],
+        localScorer: {
+          mode: "external_command",
+          sourceTokenScore: 60,
+          totalTokenScore: 100,
+          sourceLines: 80,
+          testTokenScore: 44,
+        },
+      },
+      repo,
+      issues: [{ repoFullName: repo.fullName, number: 15233, title: "Entity model edge case", state: "open", labels: ["bug"], linkedPrs: [] }],
+      pullRequests: [],
+      profile,
+      outcomeHistory: pressuredHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    expect(analysis.preflight.localDiff).toMatchObject({ changedFileCount: 4, testFileCount: 1, codeFileCount: 2, inferredLinkedIssues: [15233] });
+    expect(analysis.scorePreview.effectiveEstimatedScore).toBe(0);
+    expect(analysis.scorePreview.underlyingPotentialScore).toBeGreaterThan(0);
+    expect(analysis.scenarioScorePreview.afterPendingMerges?.source).toBe("user_supplied");
+    expect(analysis.scenarioScorePreview.afterPendingMerges?.effectiveEstimatedScore).toBeGreaterThan(0);
+    expect(analysis.accountStateBlockers.join(" ")).toMatch(/Open PR count|Credibility/i);
+    expect(analysis.branchQualityBlockers.join(" ")).not.toMatch(/test/i);
+    expect(analysis.recommendedRerunCondition).toMatch(/pending PRs merge\/close|open PR count/i);
+    expect(analysis.nextActions[0]?.whyThisHelps.join(" ")).toMatch(/waiting for pending PRs/i);
+  });
+
+  it("classifies stale base state and treats passed validation as test evidence", () => {
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        baseRef: "origin/main",
+        baseSha: "old-base",
+        headSha: "head",
+        mergeBaseSha: "old-base",
+        remoteTrackingSha: "new-base",
+        body: "Fixes #7",
+        changedFiles: [{ path: "internal/entity/model.go", additions: 10, deletions: 2, status: "modified" }],
+        validation: [{ command: "go test ./internal/entity", status: "passed", summary: "focused regression passed" }],
+      },
+      repo,
+      issues: [{ repoFullName: repo.fullName, number: 7, title: "Entity model edge case", state: "open", labels: ["bug"], linkedPrs: [] }],
+      pullRequests: [],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    expect(analysis.baseFreshness.status).toBe("stale");
+    expect(analysis.baseFreshness.warnings.join(" ")).toMatch(/behind remote tracking SHA/i);
+    expect(analysis.localFindings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "stale_base_ref" })]));
+    expect(analysis.preflight.findings.map((finding) => finding.code)).not.toContain("missing_test_evidence");
+    expect(analysis.preflight.findings.map((finding) => finding.code)).not.toContain("local_diff_missing_tests");
+    expect(analysis.recommendedRerunCondition).toMatch(/git fetch origin/i);
+  });
+
   it("keeps unregistered gittensory work in product/maintainer context instead of miner target context", () => {
     const analysis = buildLocalBranchAnalysis({
       input: {

@@ -155,6 +155,10 @@ const localBranchAnalysisSchema = z
     baseRef: z.string().min(1).optional(),
     headRef: z.string().min(1).optional(),
     branchName: z.string().min(1).optional(),
+    baseSha: z.string().min(1).optional(),
+    headSha: z.string().min(1).optional(),
+    mergeBaseSha: z.string().min(1).optional(),
+    remoteTrackingSha: z.string().min(1).optional(),
     commitMessages: z.array(z.string()).max(30).optional(),
     changedFiles: z.array(localBranchChangedFileSchema).max(500).optional(),
     validation: z.array(localBranchValidationSchema).max(50).optional(),
@@ -163,6 +167,12 @@ const localBranchAnalysisSchema = z
     title: z.string().min(1).optional(),
     body: z.string().optional(),
     localScorer: localBranchScorerSchema.optional(),
+    pendingMergedPrCount: z.number().int().min(0).optional(),
+    pendingClosedPrCount: z.number().int().min(0).optional(),
+    approvedPrCount: z.number().int().min(0).optional(),
+    expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
+    projectedCredibility: z.number().min(0).max(1).optional(),
+    scenarioNotes: z.array(z.string()).max(20).optional(),
   })
   .strict();
 
@@ -184,6 +194,12 @@ const scorePreviewSchema = z.object({
   changesRequestedCount: z.number().int().min(0).optional(),
   fixedBaseScore: z.number().min(0).optional(),
   metadataOnly: z.boolean().default(false),
+  pendingMergedPrCount: z.number().int().min(0).optional(),
+  pendingClosedPrCount: z.number().int().min(0).optional(),
+  approvedPrCount: z.number().int().min(0).optional(),
+  expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
+  projectedCredibility: z.number().min(0).max(1).optional(),
+  scenarioNotes: z.array(z.string()).max(20).optional(),
 });
 
 const repositorySettingsSchema = z.object({

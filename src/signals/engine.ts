@@ -1633,7 +1633,7 @@ export function buildLocalDiffPreflightResult(
       action: "Split unrelated work or clearly explain why the scope needs to stay together.",
     });
   }
-  if (codeFileCount > 0 && testFileCount === 0) {
+  if (codeFileCount > 0 && testFileCount === 0 && (input.tests ?? []).length === 0) {
     findings.push({
       code: "local_diff_missing_tests",
       severity: "warning",
@@ -2488,7 +2488,13 @@ function isCodeFile(file: string): boolean {
 }
 
 function isTestFile(file: string): boolean {
-  return /(^|\/)(test|tests|spec|__tests__)\//i.test(file) || /\.(test|spec)\.(ts|tsx|js|jsx|py|rb|rs)$/i.test(file);
+  return (
+    /(^|\/)(test|tests|spec|__tests__)\//i.test(file) ||
+    /(^|\/)src\/test\//i.test(file) ||
+    /(^|\/)[^/]+_test\.(go|py|rb)$/i.test(file) ||
+    /(^|\/)[^/]+_spec\.rb$/i.test(file) ||
+    /\.(test|spec)\.(ts|tsx|js|jsx|py|rb|rs)$/i.test(file)
+  );
 }
 
 function riskRank(risk: CollisionCluster["risk"]): number {

@@ -67,6 +67,12 @@ const localScoreShape = {
   openPrCount: z.number().int().min(0).optional(),
   credibility: z.number().min(0).max(1).optional(),
   changesRequestedCount: z.number().int().min(0).optional(),
+  pendingMergedPrCount: z.number().int().min(0).optional(),
+  pendingClosedPrCount: z.number().int().min(0).optional(),
+  approvedPrCount: z.number().int().min(0).optional(),
+  expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
+  projectedCredibility: z.number().min(0).max(1).optional(),
+  scenarioNotes: z.array(z.string()).optional(),
   scorePreviewCommand: z.string().optional(),
 };
 
@@ -85,6 +91,12 @@ const currentBranchShape = {
   body: z.string().optional(),
   labels: z.array(z.string()).optional(),
   linkedIssues: z.array(z.number().int().positive()).optional(),
+  pendingMergedPrCount: z.number().int().min(0).optional(),
+  pendingClosedPrCount: z.number().int().min(0).optional(),
+  approvedPrCount: z.number().int().min(0).optional(),
+  expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
+  projectedCredibility: z.number().min(0).max(1).optional(),
+  scenarioNotes: z.array(z.string()).optional(),
   validation: z
     .array(
       z.object({
@@ -109,7 +121,7 @@ if (cliArgs[0] && cliArgs[0] !== "--stdio") {
 
 const server = new McpServer({
   name: "gittensory-local",
-  version: "0.1.0",
+  version: "0.1.3",
 });
 
 server.registerTool(
@@ -208,7 +220,7 @@ server.registerTool(
   async ({ variants }) => {
     const previews = [];
     for (const variant of variants) previews.push(await previewLocalScore({ ...variant, targetKey: variant.targetKey ?? `variant:${previews.length + 1}` }));
-    previews.sort((left, right) => Number(right?.remotePreview?.result?.scoreEstimate?.estimatedMergedScore ?? 0) - Number(left?.remotePreview?.result?.scoreEstimate?.estimatedMergedScore ?? 0));
+    previews.sort((left, right) => Number(right?.remotePreview?.result?.effectiveEstimatedScore ?? right?.remotePreview?.result?.scoreEstimate?.estimatedMergedScore ?? 0) - Number(left?.remotePreview?.result?.effectiveEstimatedScore ?? left?.remotePreview?.result?.scoreEstimate?.estimatedMergedScore ?? 0));
     return toolResult("Gittensory PR variant comparison.", { variants: previews });
   },
 );
@@ -262,7 +274,13 @@ server.registerTool(
   },
   async (input) => {
     const result = await analyzeCurrentBranch(input);
-    return toolResult("Gittensory current-branch private score preview.", { local: result.local, scorePreview: result.analysis.scorePreview, scoreBlockers: result.analysis.scoreBlockers });
+    return toolResult("Gittensory current-branch private score preview.", {
+      local: result.local,
+      scorePreview: result.analysis.scorePreview,
+      scenarioScorePreview: result.analysis.scenarioScorePreview,
+      scoreBlockers: result.analysis.scoreBlockers,
+      recommendedRerunCondition: result.analysis.recommendedRerunCondition,
+    });
   },
 );
 
@@ -274,7 +292,7 @@ server.registerTool(
   },
   async (input) => {
     const result = await analyzeCurrentBranch(input);
-    return toolResult("Gittensory local next-action ranking.", { local: result.local, nextActions: result.analysis.nextActions, rewardRisk: result.analysis.rewardRisk });
+    return toolResult("Gittensory local next-action ranking.", { local: result.local, nextActions: result.analysis.nextActions, rewardRisk: result.analysis.rewardRisk, recommendedRerunCondition: result.analysis.recommendedRerunCondition });
   },
 );
 
@@ -286,7 +304,15 @@ server.registerTool(
   },
   async (input) => {
     const result = await analyzeCurrentBranch(input);
-    return toolResult("Gittensory local blocker explanation.", { local: result.local, scoreBlockers: result.analysis.scoreBlockers, localFindings: result.analysis.localFindings });
+    return toolResult("Gittensory local blocker explanation.", {
+      local: result.local,
+      scoreBlockers: result.analysis.scoreBlockers,
+      branchQualityBlockers: result.analysis.branchQualityBlockers,
+      accountStateBlockers: result.analysis.accountStateBlockers,
+      baseFreshness: result.analysis.baseFreshness,
+      localFindings: result.analysis.localFindings,
+      recommendedRerunCondition: result.analysis.recommendedRerunCondition,
+    });
   },
 );
 
@@ -314,7 +340,7 @@ server.registerTool(
     analyses.sort(
       (left, right) =>
         Number(right.analysis.nextActions?.[0]?.priorityScore ?? 0) - Number(left.analysis.nextActions?.[0]?.priorityScore ?? 0) ||
-        Number(right.analysis.scorePreview?.scoreEstimate?.estimatedMergedScore ?? 0) - Number(left.analysis.scorePreview?.scoreEstimate?.estimatedMergedScore ?? 0),
+        Number(right.analysis.scorePreview?.effectiveEstimatedScore ?? right.analysis.scorePreview?.scoreEstimate?.estimatedMergedScore ?? 0) - Number(left.analysis.scorePreview?.effectiveEstimatedScore ?? left.analysis.scorePreview?.scoreEstimate?.estimatedMergedScore ?? 0),
     );
     return toolResult("Gittensory local variant comparison.", {
       variants: analyses.map((entry) => ({
@@ -352,6 +378,12 @@ async function runCli(args) {
     body: options.body,
     labels: options.label,
     linkedIssues: options.issue?.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0),
+    pendingMergedPrCount: optionalInteger(options.pendingMergedPrs),
+    pendingClosedPrCount: optionalInteger(options.pendingClosedPrs),
+    approvedPrCount: optionalInteger(options.approvedPrs),
+    expectedOpenPrCountAfterMerge: optionalInteger(options.expectedOpenPrs),
+    projectedCredibility: optionalNumber(options.projectedCredibility),
+    scenarioNotes: options.scenarioNote,
     validation: validationFromOptions(options),
     scorePreviewCommand: options.scorePreviewCommand,
   });
@@ -383,8 +415,8 @@ function printHelp() {
   gittensory-mcp status [--json]
   gittensory-mcp doctor [--cwd path] [--json]
   gittensory-mcp init-client --print codex|claude|cursor [--json]
-  gittensory-mcp analyze-branch --login <github-login> [--repo owner/repo] [--base origin/main] [--validation "passed|npm test|summary"] [--json]
-  gittensory-mcp preflight --login <github-login> [--repo owner/repo] [--base origin/main] [--validation "passed|npm test|summary"] [--json]
+  gittensory-mcp analyze-branch --login <github-login> [--repo owner/repo] [--base origin/main] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--scenario-note "..."] [--validation "passed|npm test|summary"] [--json]
+  gittensory-mcp preflight --login <github-login> [--repo owner/repo] [--base origin/main] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--validation "passed|npm test|summary"] [--json]
 
 Environment:
   GITTENSORY_API_URL
@@ -399,7 +431,7 @@ Environment:
 
 function parseOptions(args) {
   const options = {};
-  const repeatable = new Set(["label", "issue", "validation", "validationCommand", "validationStatus", "validationSummary"]);
+  const repeatable = new Set(["label", "issue", "validation", "validationCommand", "validationStatus", "validationSummary", "scenarioNote"]);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--json") {
@@ -609,6 +641,18 @@ function validationFromOptions(options) {
   return [...direct, ...expanded].filter((entry) => typeof entry.command === "string" && entry.command.length > 0);
 }
 
+function optionalInteger(value) {
+  if (value === undefined || value === true) return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function optionalNumber(value) {
+  if (value === undefined || value === true) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function isValidationStatus(value) {
   return value === "passed" || value === "failed" || value === "not_run";
 }
@@ -701,7 +745,13 @@ async function analyzeCurrentBranch(input) {
       baseRef: body.baseRef,
       headRef: body.headRef,
       branchName: body.branchName,
+      baseSha: body.baseSha,
+      headSha: body.headSha,
+      mergeBaseSha: body.mergeBaseSha,
+      remoteTrackingSha: body.remoteTrackingSha,
       changedFileCount: body.changedFiles?.length ?? 0,
+      testFileCount: body.changedFiles?.filter((file) => /(^|\/)(test|tests|spec|__tests__)\/|(^|\/)src\/test\/|(^|\/)[^/]+_test\.(go|py|rb)$|(^|\/)[^/]+_spec\.rb$|\.(test|spec)\.(ts|tsx|js|jsx|py|rb|rs)$/i.test(file.path)).length ?? 0,
+      passedValidationCount: body.validation?.filter((entry) => entry.status === "passed").length ?? 0,
       localScorerStatus,
       setupGuidance: setupGuidanceForLocalScorer(localScorerStatus),
     },
@@ -729,6 +779,12 @@ async function previewLocalScore(input) {
     openPrCount: input.openPrCount,
     credibility: input.credibility,
     changesRequestedCount: input.changesRequestedCount,
+    pendingMergedPrCount: input.pendingMergedPrCount,
+    pendingClosedPrCount: input.pendingClosedPrCount,
+    approvedPrCount: input.approvedPrCount,
+    expectedOpenPrCountAfterMerge: input.expectedOpenPrCountAfterMerge,
+    projectedCredibility: input.projectedCredibility,
+    scenarioNotes: input.scenarioNotes,
     metadataOnly: !upstreamPreview.ok,
   };
   return {

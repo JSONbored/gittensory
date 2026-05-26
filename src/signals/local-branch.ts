@@ -47,6 +47,10 @@ export type LocalBranchAnalysisInput = {
   baseRef?: string | undefined;
   headRef?: string | undefined;
   branchName?: string | undefined;
+  baseSha?: string | undefined;
+  headSha?: string | undefined;
+  mergeBaseSha?: string | undefined;
+  remoteTrackingSha?: string | undefined;
   commitMessages?: string[] | undefined;
   changedFiles?: LocalBranchChangedFile[] | undefined;
   validation?: LocalBranchValidation[] | undefined;
@@ -55,6 +59,12 @@ export type LocalBranchAnalysisInput = {
   title?: string | undefined;
   body?: string | undefined;
   localScorer?: LocalBranchScorer | undefined;
+  pendingMergedPrCount?: number | undefined;
+  pendingClosedPrCount?: number | undefined;
+  approvedPrCount?: number | undefined;
+  expectedOpenPrCountAfterMerge?: number | undefined;
+  projectedCredibility?: number | undefined;
+  scenarioNotes?: string[] | undefined;
 };
 
 export type LocalBranchAnalysis = {
@@ -64,12 +74,35 @@ export type LocalBranchAnalysis = {
   baseRef?: string | undefined;
   headRef?: string | undefined;
   branchName?: string | undefined;
+  baseFreshness: {
+    status: "fresh" | "stale" | "possibly_stale" | "unknown";
+    baseRef?: string | undefined;
+    baseSha?: string | undefined;
+    headSha?: string | undefined;
+    mergeBaseSha?: string | undefined;
+    remoteTrackingSha?: string | undefined;
+    changedFileCount: number;
+    testFileCount: number;
+    passedValidationCount: number;
+    warnings: string[];
+    recommendation?: string | undefined;
+  };
   lane: ReturnType<typeof buildLaneAdvice>;
   roleContext: RoleContext;
   preflight: LocalDiffPreflightResult;
   scorePreview: ScorePreviewResult;
+  scenarioScorePreview: {
+    current: ScorePreviewResult["scenarioPreviews"][number];
+    bestReasonableCase: ScorePreviewResult["scenarioPreviews"][number];
+    afterPendingMerges?: ScorePreviewResult["scenarioPreviews"][number] | undefined;
+    gateDeltas: ScorePreviewResult["gateDeltas"];
+    blockedBy: ScorePreviewResult["blockedBy"];
+  };
   rewardRisk: RepoRewardRisk;
   scoreBlockers: string[];
+  branchQualityBlockers: string[];
+  accountStateBlockers: string[];
+  recommendedRerunCondition: string;
   localFindings: Array<{
     code: string;
     severity: "info" | "warning" | "critical";
@@ -161,6 +194,8 @@ export function buildLocalBranchAnalysis(args: {
     repo: args.repo,
     snapshot: args.scoringSnapshot,
   });
+  const validationSummary = summarizeValidation(args.input.validation ?? []);
+  const baseFreshness = buildBaseFreshness(args.input, changedFiles.length, testFiles.length, validationSummary.passed);
   const rewardRisk = buildRepoRewardRisk({
     login: args.input.login,
     repo: args.repo,
@@ -182,8 +217,19 @@ export function buildLocalBranchAnalysis(args: {
     issues: args.issues,
     pullRequests: args.pullRequests,
   });
-  const localFindings = buildLocalFindings(args.input, changedFiles, preflight, scorePreview);
-  const validationSummary = summarizeValidation(args.input.validation ?? []);
+  const localFindings = buildLocalFindings(args.input, changedFiles, preflight, scorePreview, baseFreshness);
+  const branchQualityBlockers = branchQualityBlockersFor(preflight, localFindings);
+  const accountStateBlockers = accountStateBlockersFor(scorePreview);
+  const currentScenario = scorePreview.scenarioPreviews.find((scenario) => scenario.name === "current") ?? scorePreview.scenarioPreviews[0]!;
+  const bestReasonableScenario = scorePreview.scenarioPreviews.find((scenario) => scenario.name === "bestReasonableCase") ?? currentScenario;
+  const scenarioScorePreview = {
+    current: currentScenario,
+    bestReasonableCase: bestReasonableScenario,
+    afterPendingMerges: scorePreview.scenarioPreviews.find((scenario) => scenario.name === "afterPendingMerges"),
+    gateDeltas: scorePreview.gateDeltas,
+    blockedBy: scorePreview.blockedBy,
+  };
+  const recommendedRerunCondition = recommendedRerunFor(baseFreshness, branchQualityBlockers, accountStateBlockers, scorePreview);
   const prPacket = buildPublicSafePrPacket({
     title,
     preflight,
@@ -205,12 +251,17 @@ export function buildLocalBranchAnalysis(args: {
     baseRef: args.input.baseRef,
     headRef: args.input.headRef,
     branchName: args.input.branchName,
+    baseFreshness,
     lane,
     roleContext,
     preflight,
     scorePreview,
+    scenarioScorePreview,
     rewardRisk,
     scoreBlockers: [...new Set(scoreBlockers)],
+    branchQualityBlockers,
+    accountStateBlockers,
+    recommendedRerunCondition,
     localFindings,
     maintainerFit: {
       recommendation: recommendation.recommendation,
@@ -221,7 +272,7 @@ export function buildLocalBranchAnalysis(args: {
       risks: recommendation.risks,
     },
     prPacket,
-    nextActions: rewardRisk.actions.slice(0, 6),
+    nextActions: withSituationalAction(rewardRisk.actions, branchQualityBlockers, accountStateBlockers, scorePreview).slice(0, 6),
     summary: `${args.input.repoFullName}: local branch analysis is ${preflight.status}; ${rewardRisk.actions[0]?.actionKind ?? "no ranked action"} is the top private next action.`,
   };
 }
@@ -257,6 +308,12 @@ function buildLocalScoreInput(args: {
     openPrCount: args.outcomeHistory.totals.openPullRequests,
     credibility: args.repoOutcome?.credibility ?? args.outcomeHistory.totals.credibility,
     metadataOnly: scorer?.mode !== "gittensor_root" && scorer?.mode !== "external_command",
+    pendingMergedPrCount: args.input.pendingMergedPrCount,
+    pendingClosedPrCount: args.input.pendingClosedPrCount,
+    approvedPrCount: args.input.approvedPrCount,
+    expectedOpenPrCountAfterMerge: args.input.expectedOpenPrCountAfterMerge,
+    projectedCredibility: args.input.projectedCredibility,
+    scenarioNotes: args.input.scenarioNotes,
   };
 }
 
@@ -265,6 +322,7 @@ function buildLocalFindings(
   changedFiles: LocalBranchChangedFile[],
   preflight: LocalDiffPreflightResult,
   scorePreview: ScorePreviewResult,
+  baseFreshness: LocalBranchAnalysis["baseFreshness"],
 ): LocalBranchAnalysis["localFindings"] {
   const failedValidation = (input.validation ?? []).filter((entry) => entry.status === "failed");
   return [
@@ -306,6 +364,17 @@ function buildLocalFindings(
           },
         ]
       : []),
+    ...(baseFreshness.status === "stale" || baseFreshness.status === "possibly_stale"
+      ? [
+          {
+            code: "stale_base_ref",
+            severity: "warning" as const,
+            title: "Base ref may be stale",
+            detail: baseFreshness.warnings.join(" "),
+            action: baseFreshness.recommendation,
+          },
+        ]
+      : []),
     ...scorePreview.warnings.map((warning) => ({
       code: "score_preview_warning",
       severity: /not registered|no active|exceeds|credibility/i.test(warning) ? ("warning" as const) : ("info" as const),
@@ -320,6 +389,106 @@ function buildLocalFindings(
       action: finding.action,
     })),
   ];
+}
+
+function buildBaseFreshness(
+  input: LocalBranchAnalysisInput,
+  changedFileCount: number,
+  testFileCount: number,
+  passedValidationCount: number,
+): LocalBranchAnalysis["baseFreshness"] {
+  const warnings: string[] = [];
+  if (input.remoteTrackingSha && input.baseSha && input.remoteTrackingSha !== input.baseSha) {
+    warnings.push(`Local base ${input.baseRef ?? "base"} is behind remote tracking SHA; current diff has ${changedFileCount} changed file(s).`);
+  }
+  if (input.mergeBaseSha && input.baseSha && input.mergeBaseSha !== input.baseSha) {
+    warnings.push(`Merge-base does not match the selected base ref; current diff has ${changedFileCount} changed file(s).`);
+  }
+  if (changedFileCount >= 50 && !input.remoteTrackingSha) {
+    warnings.push(`Large local diff has ${changedFileCount} changed file(s), but remote base freshness could not be verified.`);
+  }
+  const status =
+    warnings.length === 0 && input.remoteTrackingSha && input.baseSha
+      ? "fresh"
+      : warnings.some((warning) => /behind remote|Merge-base/i.test(warning))
+        ? "stale"
+        : warnings.length > 0
+          ? "possibly_stale"
+          : "unknown";
+  return {
+    status,
+    baseRef: input.baseRef,
+    baseSha: input.baseSha,
+    headSha: input.headSha,
+    mergeBaseSha: input.mergeBaseSha,
+    remoteTrackingSha: input.remoteTrackingSha,
+    changedFileCount,
+    testFileCount,
+    passedValidationCount,
+    warnings,
+    recommendation: warnings.length > 0 ? "Run `git fetch origin` and rerun Gittensory branch analysis against the refreshed base." : undefined,
+  };
+}
+
+function branchQualityBlockersFor(preflight: LocalDiffPreflightResult, localFindings: LocalBranchAnalysis["localFindings"]): string[] {
+  return [
+    ...preflight.findings.filter((finding) => finding.severity !== "info").map((finding) => finding.title),
+    ...localFindings
+      .filter((finding) => finding.severity !== "info" && finding.code !== "score_preview_warning")
+      .map((finding) => finding.title),
+  ].filter(unique);
+}
+
+function accountStateBlockersFor(scorePreview: ScorePreviewResult): string[] {
+  return scorePreview.blockedBy
+    .filter((blocker) => ["repo_not_registered", "inactive_allocation", "open_pr_threshold", "credibility_floor"].includes(blocker.code))
+    .map((blocker) => blocker.detail)
+    .filter(unique);
+}
+
+function recommendedRerunFor(
+  baseFreshness: LocalBranchAnalysis["baseFreshness"],
+  branchQualityBlockers: string[],
+  accountStateBlockers: string[],
+  scorePreview: ScorePreviewResult,
+): string {
+  if (baseFreshness.status === "stale" || baseFreshness.status === "possibly_stale") return "Run `git fetch origin` and rerun; current diff size may be inflated by stale base state.";
+  if (branchQualityBlockers.length > 0) return "Rerun after fixing branch-quality blockers or adding explicit validation/linked-context evidence.";
+  const afterPending = scorePreview.scenarioPreviews.find((scenario) => scenario.name === "afterPendingMerges");
+  if (accountStateBlockers.length > 0 && afterPending && afterPending.effectiveEstimatedScore > scorePreview.effectiveEstimatedScore) {
+    return `Rerun after pending PRs merge/close or after open PR count is at or below ${afterPending.gates.openPrThreshold}; projected score changes ${scorePreview.effectiveEstimatedScore} -> ${afterPending.effectiveEstimatedScore}.`;
+  }
+  if (accountStateBlockers.length > 0) return "Rerun after account/queue maturity blockers clear.";
+  return "Rerun after any branch, base, or PR state changes before opening/submitting.";
+}
+
+function withSituationalAction(
+  actions: RewardRiskAction[],
+  branchQualityBlockers: string[],
+  accountStateBlockers: string[],
+  scorePreview: ScorePreviewResult,
+): RewardRiskAction[] {
+  const afterPending = scorePreview.scenarioPreviews.find((scenario) => scenario.name === "afterPendingMerges");
+  if (branchQualityBlockers.length > 0 || accountStateBlockers.length === 0 || !afterPending || afterPending.effectiveEstimatedScore <= scorePreview.effectiveEstimatedScore) {
+    return actions;
+  }
+  const waitAction: RewardRiskAction = {
+    actionKind: "land_existing_prs",
+    repoFullName: scorePreview.repoFullName,
+    priorityScore: Math.max(95, actions[0]?.priorityScore ?? 0),
+    laneValueScore: 0,
+    scoreabilityScore: afterPending.effectiveEstimatedScore,
+    personalFitScore: 0,
+    riskPenalty: 0,
+    maintainerFrictionPenalty: 0,
+    actionLeverageScore: 100,
+    whyThisHelps: [
+      `Branch metadata is not the main blocker; waiting for pending PRs to merge/close changes effective score ${scorePreview.effectiveEstimatedScore} -> ${afterPending.effectiveEstimatedScore}.`,
+      afterPending.deltaExplanation,
+    ],
+    nextActions: ["Wait for approved/pending PRs to merge or close, then rerun branch analysis before opening more work."],
+  };
+  return [waitAction, ...actions];
 }
 
 function buildPublicSafePrPacket(args: {
@@ -404,7 +573,13 @@ function isPublicSafeText(text: string): boolean {
 }
 
 function isTestFile(file: string): boolean {
-  return /(^|\/)(test|tests|spec|__tests__)\//i.test(file) || /\.(test|spec)\.(ts|tsx|js|jsx|py|rb|rs)$/i.test(file);
+  return (
+    /(^|\/)(test|tests|spec|__tests__)\//i.test(file) ||
+    /(^|\/)src\/test\//i.test(file) ||
+    /(^|\/)[^/]+_test\.(go|py|rb)$/i.test(file) ||
+    /(^|\/)[^/]+_spec\.rb$/i.test(file) ||
+    /\.(test|spec)\.(ts|tsx|js|jsx|py|rb|rs)$/i.test(file)
+  );
 }
 
 function isCodeFile(file: string): boolean {
@@ -417,4 +592,8 @@ function sameRepo(left: string, right: string): boolean {
 
 function nonNegative(value: number | undefined): number {
   return Number.isFinite(value) ? Math.max(0, value ?? 0) : 0;
+}
+
+function unique<T>(value: T, index: number, values: T[]): boolean {
+  return values.indexOf(value) === index;
 }

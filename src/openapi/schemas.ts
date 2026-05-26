@@ -698,6 +698,78 @@ export const ScoringModelSnapshotSchema = z
   })
   .openapi("ScoringModelSnapshot");
 
+const ScoreEstimateSchema = z.object({
+  baseScore: z.number(),
+  densityMultiplier: z.number(),
+  contributionBonus: z.number(),
+  labelMultiplier: z.number(),
+  issueMultiplier: z.number(),
+  credibilityMultiplier: z.number(),
+  reviewPenaltyMultiplier: z.number(),
+  openPrMultiplier: z.number(),
+  estimatedMergedScore: z.number(),
+  pendingSaturationScore: z.number(),
+});
+
+const ScoreGatesSchema = z.object({
+  baseTokenGatePassed: z.boolean(),
+  openPrThreshold: z.number(),
+  openPrCount: z.number(),
+  collateralFraction: z.number(),
+  credibilityFloor: z.number(),
+  credibilityObserved: z.number(),
+});
+
+const ScoreGateBlockerSchema = z.object({
+  code: z.enum(["repo_not_registered", "inactive_allocation", "base_token_gate", "open_pr_threshold", "credibility_floor", "review_penalty", "metadata_only"]),
+  severity: z.enum(["blocker", "reducer", "context"]),
+  detail: z.string(),
+});
+
+const ScoreGateDeltaSchema = z.object({
+  gate: z.enum(["open_pr_threshold", "credibility_floor", "linked_issue_multiplier"]),
+  current: z.string(),
+  projected: z.string(),
+  explanation: z.string(),
+});
+
+const ScoreScenarioPreviewSchema = z.object({
+  name: z.enum(["current", "cleanGates", "afterPendingMerges", "linkedIssueFixed", "bestReasonableCase"]),
+  source: z.enum(["current_data", "user_supplied", "gittensory_projection"]),
+  assumptions: z.array(z.string()),
+  scoreEstimate: ScoreEstimateSchema,
+  gates: ScoreGatesSchema,
+  effectiveEstimatedScore: z.number(),
+  underlyingPotentialScore: z.number(),
+  blockedBy: z.array(ScoreGateBlockerSchema),
+  deltaExplanation: z.string(),
+});
+
+export const ScorePreviewResultSchema = z
+  .object({
+    repoFullName: z.string(),
+    generatedAt: z.string(),
+    scoringModelSnapshotId: z.string(),
+    activeModel: z.enum(["current_density_model", "pending_saturation_model", "unknown"]),
+    privateOnly: z.literal(true),
+    laneMath: z.record(z.number()),
+    scoreEstimate: ScoreEstimateSchema,
+    gates: ScoreGatesSchema,
+    effectiveEstimatedScore: z.number(),
+    underlyingPotentialScore: z.number(),
+    blockedBy: z.array(ScoreGateBlockerSchema),
+    gateDeltas: z.array(ScoreGateDeltaSchema),
+    scenarioPreviews: z.array(ScoreScenarioPreviewSchema),
+    scoreabilityStatus: z.enum(["blocked", "conditionally_scoreable", "scoreable", "hold"]),
+    warnings: z.array(z.string()),
+    assumptions: z.array(z.string()),
+    recommendation: z.object({
+      level: z.enum(["strong_fit", "reasonable_fit", "needs_work", "hold"]),
+      actions: z.array(z.string()),
+    }),
+  })
+  .openapi("ScorePreviewResult");
+
 export const ScorePreviewSchema = z
   .object({
     id: z.string(),
@@ -707,7 +779,7 @@ export const ScorePreviewSchema = z
     targetKey: z.string(),
     contributorLogin: z.string().nullable().optional(),
     input: z.record(z.unknown()),
-    result: z.record(z.unknown()),
+    result: ScorePreviewResultSchema,
     generatedAt: z.string(),
   })
   .openapi("ScorePreview");
@@ -1020,12 +1092,35 @@ export const LocalBranchAnalysisSchema = z
     baseRef: z.string().optional(),
     headRef: z.string().optional(),
     branchName: z.string().optional(),
+    baseFreshness: z.object({
+      status: z.enum(["fresh", "stale", "possibly_stale", "unknown"]),
+      baseRef: z.string().optional(),
+      baseSha: z.string().optional(),
+      headSha: z.string().optional(),
+      mergeBaseSha: z.string().optional(),
+      remoteTrackingSha: z.string().optional(),
+      changedFileCount: z.number(),
+      testFileCount: z.number(),
+      passedValidationCount: z.number(),
+      warnings: z.array(z.string()),
+      recommendation: z.string().optional(),
+    }),
     lane: LaneAdviceSchema,
     roleContext: RoleContextSchema,
     preflight: LocalDiffPreflightResultSchema,
-    scorePreview: ScorePreviewSchema,
+    scorePreview: ScorePreviewResultSchema,
+    scenarioScorePreview: z.object({
+      current: ScoreScenarioPreviewSchema,
+      bestReasonableCase: ScoreScenarioPreviewSchema,
+      afterPendingMerges: ScoreScenarioPreviewSchema.optional(),
+      gateDeltas: z.array(ScoreGateDeltaSchema),
+      blockedBy: z.array(ScoreGateBlockerSchema),
+    }),
     rewardRisk: RepoRewardRiskSchema,
     scoreBlockers: z.array(z.string()),
+    branchQualityBlockers: z.array(z.string()),
+    accountStateBlockers: z.array(z.string()),
+    recommendedRerunCondition: z.string(),
     localFindings: z.array(FindingSchema),
     maintainerFit: z.object({
       recommendation: z.enum(["pursue", "cleanup_first", "maintainer_lane", "avoid_for_now", "unknown"]),

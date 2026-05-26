@@ -40,6 +40,17 @@ gittensory-mcp preflight --login jsonbored --json
 gittensory-mcp --stdio
 ```
 
+For near-term what-if scoreability, pass the situational assumptions explicitly:
+
+```sh
+gittensory-mcp analyze-branch --login jsonbored \
+  --pending-merged-prs 3 \
+  --expected-open-prs 0 \
+  --projected-credibility 0.8 \
+  --scenario-note "approved PRs expected to merge" \
+  --json
+```
+
 ## Auth
 
 `login` uses GitHub Device Flow by default. For non-interactive bootstrap:

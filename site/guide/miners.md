@@ -26,10 +26,25 @@ The response includes:
 - role context
 - preflight findings
 - private score blockers
+- current vs projected scoreability scenarios
 - reward/risk reasoning
+- base freshness warnings when the local diff may be inflated
 - maintainer-fit notes
 - public-safe PR packet
 - ranked next actions
+
+When the current score is blocked by temporary account/queue state, pass the assumptions explicitly:
+
+```sh
+gittensory-mcp analyze-branch --login YOUR_GITHUB_LOGIN \
+  --pending-merged-prs 3 \
+  --expected-open-prs 0 \
+  --projected-credibility 0.8 \
+  --scenario-note "approved PRs expected to merge" \
+  --json
+```
+
+Gittensory labels that as a user-supplied scenario. It shows the current effective score, the underlying potential score, and what changes if the open-PR and credibility gates clear.
 
 ## Preflight
 

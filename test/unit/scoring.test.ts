@@ -97,6 +97,57 @@ IGNORED = "not numeric"
     expect(preview.privateOnly).toBe(true);
   });
 
+  it("shows conditional scoreability when current open PR pressure zeroes the effective score", () => {
+    const preview = buildScorePreview({
+      repo,
+      snapshot,
+      input: {
+        repoFullName: repo.fullName,
+        linkedIssueMode: "standard",
+        sourceTokenScore: 60,
+        totalTokenScore: 90,
+        sourceLines: 50,
+        openPrCount: 3,
+        credibility: 1,
+        pendingMergedPrCount: 1,
+      },
+    });
+    expect(preview.effectiveEstimatedScore).toBe(0);
+    expect(preview.underlyingPotentialScore).toBeGreaterThan(0);
+    expect(preview.scoreabilityStatus).toBe("conditionally_scoreable");
+    expect(preview.blockedBy).toEqual(expect.arrayContaining([expect.objectContaining({ code: "open_pr_threshold" })]));
+    expect(preview.scenarioPreviews.find((scenario) => scenario.name === "cleanGates")?.scoreEstimate.openPrMultiplier).toBe(1);
+    expect(preview.scenarioPreviews.find((scenario) => scenario.name === "afterPendingMerges")?.effectiveEstimatedScore).toBeGreaterThan(0);
+    expect(preview.gateDeltas).toEqual(expect.arrayContaining([expect.objectContaining({ gate: "open_pr_threshold" })]));
+  });
+
+  it("projects credibility and linked-issue scenarios without claiming guaranteed payouts", () => {
+    const preview = buildScorePreview({
+      repo,
+      snapshot,
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 60,
+        totalTokenScore: 90,
+        sourceLines: 50,
+        openPrCount: 0,
+        credibility: 0,
+        approvedPrCount: 3,
+        projectedCredibility: 0.8,
+        scenarioNotes: ["three approved PRs are expected to merge tonight"],
+      },
+    });
+    const afterPending = preview.scenarioPreviews.find((scenario) => scenario.name === "afterPendingMerges");
+    const linkedIssueFixed = preview.scenarioPreviews.find((scenario) => scenario.name === "linkedIssueFixed");
+    expect(preview.effectiveEstimatedScore).toBe(0);
+    expect(preview.blockedBy).toEqual(expect.arrayContaining([expect.objectContaining({ code: "credibility_floor" })]));
+    expect(afterPending?.source).toBe("user_supplied");
+    expect(afterPending?.gates.credibilityObserved).toBe(0.8);
+    expect(afterPending?.effectiveEstimatedScore).toBeGreaterThan(0);
+    expect(linkedIssueFixed?.scoreEstimate.issueMultiplier).toBe(1.33);
+    expect(JSON.stringify(preview)).not.toMatch(/guaranteed payout|wallet|hotkey|farming/i);
+  });
+
   it("warns on metadata-only weak previews without using public reward or wallet language", () => {
     const preview = buildScorePreview({
       repo: null,
