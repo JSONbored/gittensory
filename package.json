@@ -22,6 +22,7 @@
     "docs:build": "vitepress build site",
     "docs:preview": "vitepress preview site --host 127.0.0.1",
     "docs:check": "node scripts/check-docs.mjs",
+    "docs:smoke": "node scripts/check-docs-build.mjs",
     "changelog": "npm run changelog:root && npm run changelog:mcp",
     "changelog:root": "git-cliff --config cliff.toml --output CHANGELOG.md",
     "changelog:mcp": "git-cliff --config cliff.mcp.toml --include-path 'packages/gittensory-mcp/**' --include-path '.github/workflows/npm-publish.yml' --output packages/gittensory-mcp/CHANGELOG.md",
@@ -32,7 +33,7 @@
     "test:integration": "vitest run test/integration",
     "test:workers": "vitest run --config vitest.workers.config.ts",
     "test:coverage": "vitest run --coverage",
-    "test:ci": "git diff --check && npm run actionlint && npm run typecheck && npm run test:coverage && npm run test:workers && npm run build:mcp && npm run test:mcp-pack && npm run docs:check && npm run docs:build && npm run changelog:check && npm audit --audit-level=moderate",
+    "test:ci": "git diff --check && npm run actionlint && npm run typecheck && npm run test:coverage && npm run test:workers && npm run build:mcp && npm run test:mcp-pack && npm run docs:check && npm run docs:build && npm run docs:smoke && npm run changelog:check && npm audit --audit-level=moderate",
     "test:watch": "vitest",
     "validate": "npm run typecheck && npm run test:coverage"
   },

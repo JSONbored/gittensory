@@ -2,6 +2,10 @@
 
 Gittensory handles contribution intelligence, not wallets or private source code.
 
+## Docs Analytics
+
+The public docs site may use privacy-preserving Umami analytics to count traffic and high-level page usage. Analytics are configured only at build time, do not run in local docs builds by default, and are separate from the MCP/API product.
+
 ## No PAT Storage
 
 MCP login uses GitHub OAuth Device Flow. The backend exchanges the GitHub token for a Gittensory session token and stores only the hashed Gittensory token server-side.

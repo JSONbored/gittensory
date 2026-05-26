@@ -1,7 +1,27 @@
-import { defineConfig } from "vitepress";
+import { defineConfig, type HeadConfig } from "vitepress";
 
 const siteUrl = process.env.GITTENSORY_SITE_URL ?? "https://gittensory.aethereal.dev/";
 const siteBase = process.env.GITTENSORY_SITE_BASE ?? "/";
+const umamiScriptUrl = process.env.GITTENSORY_UMAMI_SCRIPT_URL;
+const umamiWebsiteId = process.env.GITTENSORY_UMAMI_WEBSITE_ID;
+const umamiDomains = process.env.GITTENSORY_UMAMI_DOMAINS ?? "gittensory.aethereal.dev";
+
+const analyticsHead: HeadConfig[] = umamiScriptUrl && umamiWebsiteId
+  ? [
+      [
+        "script",
+        {
+          defer: "",
+          src: umamiScriptUrl,
+          "data-website-id": umamiWebsiteId,
+          "data-domains": umamiDomains,
+          "data-do-not-track": "true",
+          "data-exclude-search": "true",
+          "data-exclude-hash": "true",
+        },
+      ],
+    ]
+  : [];
 
 export default defineConfig({
   title: "Gittensory",
@@ -18,6 +38,7 @@ export default defineConfig({
     ["meta", { property: "og:description", content: "Private decision intelligence for healthier Gittensor repo participation." }],
     ["meta", { property: "og:url", content: siteUrl }],
     ["meta", { name: "theme-color", content: "#050608" }],
+    ...analyticsHead,
   ],
   themeConfig: {
     logo: "/logo.svg",

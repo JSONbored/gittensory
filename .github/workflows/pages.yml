@@ -43,6 +43,9 @@ jobs:
         env:
           GITTENSORY_SITE_URL: https://gittensory.aethereal.dev/
           GITTENSORY_SITE_BASE: /
+          GITTENSORY_UMAMI_SCRIPT_URL: ${{ vars.GITTENSORY_UMAMI_SCRIPT_URL }}
+          GITTENSORY_UMAMI_WEBSITE_ID: ${{ vars.GITTENSORY_UMAMI_WEBSITE_ID }}
+          GITTENSORY_UMAMI_DOMAINS: ${{ vars.GITTENSORY_UMAMI_DOMAINS }}
         run: npm run docs:build
 
       - name: Upload Pages artifact
