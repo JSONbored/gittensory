@@ -25,6 +25,7 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
+          registry-url: https://registry.npmjs.org
 
       - name: Verify release tag
         env:
@@ -52,4 +53,4 @@ jobs:
           "$TMP/node_modules/.bin/gittensory-mcp" --help >/dev/null
 
       - name: Publish with npm trusted publishing
-        run: npm publish --workspace @jsonbored/gittensory-mcp --access public --provenance
+        run: npx -y npm@11.15.0 publish --workspace @jsonbored/gittensory-mcp --access public
