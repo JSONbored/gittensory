@@ -203,9 +203,16 @@ const scorePreviewSchema = z.object({
 });
 
 const repositorySettingsSchema = z.object({
-  commentMode: z.enum(["off", "detected_contributors_only", "all_prs"]),
+  commentMode: z.enum(["off", "detected_contributors_only", "all_prs"]).default("detected_contributors_only"),
   publicSignalLevel: z.enum(["minimal", "standard"]).default("standard"),
+  checkRunMode: z.enum(["off", "enabled"]).default("off"),
   checkRunDetailLevel: z.enum(["minimal", "standard", "deep"]).default("standard"),
+  autoLabelEnabled: z.boolean().default(true),
+  gittensorLabel: z.string().trim().min(1).max(50).default("gittensor"),
+  createMissingLabel: z.boolean().default(true),
+  publicSurface: z.enum(["off", "comment_and_label", "comment_only", "label_only"]).default("comment_and_label"),
+  includeMaintainerAuthors: z.boolean().default(false),
+  requireLinkedIssue: z.boolean().default(false),
   backfillEnabled: z.boolean().default(true),
   privateTrustEnabled: z.boolean().default(true),
 });
@@ -864,8 +871,14 @@ export function createApp() {
         repoFullName: fullName,
         commentMode: parsed.data.commentMode,
         publicSignalLevel: parsed.data.publicSignalLevel,
-        checkRunMode: "enabled",
+        checkRunMode: parsed.data.checkRunMode,
         checkRunDetailLevel: parsed.data.checkRunDetailLevel,
+        autoLabelEnabled: parsed.data.autoLabelEnabled,
+        gittensorLabel: parsed.data.gittensorLabel,
+        createMissingLabel: parsed.data.createMissingLabel,
+        publicSurface: parsed.data.publicSurface,
+        includeMaintainerAuthors: parsed.data.includeMaintainerAuthors,
+        requireLinkedIssue: parsed.data.requireLinkedIssue,
         backfillEnabled: parsed.data.backfillEnabled,
         privateTrustEnabled: parsed.data.privateTrustEnabled,
       }),

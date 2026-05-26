@@ -47,4 +47,4 @@ Rate-limited responses return `429` with retry metadata.
 
 ## GitHub App Boundaries
 
-The GitHub App is advisory-only. It does not auto-label, close, merge, or rewrite contributor work.
+The GitHub App is advisory-only. It can apply a maintainer-configured label to confirmed miner PRs, but it does not close, merge, rewrite, or publicly score contributor work.

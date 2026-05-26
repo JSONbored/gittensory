@@ -229,7 +229,12 @@ describe("data spine repositories", () => {
     expect(await getRepository(env, "owner/repo")).toMatchObject({ owner: "owner", isInstalled: false, isPrivate: false });
     expect(await getRepository(env, "OWNER/REPO")).toMatchObject({ fullName: "owner/repo" });
     expect(await getRepository(env, "missing/repo")).toBeNull();
-    expect(await getRepositorySettings(env, "missing/repo")).toMatchObject({ commentMode: "off", checkRunDetailLevel: "standard" });
+    expect(await getRepositorySettings(env, "missing/repo")).toMatchObject({
+      commentMode: "detected_contributors_only",
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      publicSurface: "comment_and_label",
+    });
     expect(await getRepoSyncState(env, "missing/repo")).toBeNull();
     expect(await getPullRequest(env, "owner/repo", 404)).toBeNull();
     expect(await getIssue(env, "owner/repo", 404)).toBeNull();

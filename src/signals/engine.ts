@@ -410,6 +410,7 @@ export type BountyAdvisory = {
 export type ContributorDetection = {
   detected: boolean;
   reason: string;
+  source?: "official_gittensor_api" | "github_cache";
   priorPullRequests: number;
   priorMergedPullRequests: number;
   priorIssues: number;
@@ -1053,8 +1054,8 @@ export function detectGittensorContributor(
 
 export function shouldPublishPrIntelligenceComment(settings: RepositorySettings, detection: ContributorDetection): boolean {
   if (settings.commentMode === "off") return false;
-  if (settings.commentMode === "all_prs") return true;
-  return detection.detected;
+  if (settings.publicSurface !== "comment_and_label" && settings.publicSurface !== "comment_only") return false;
+  return detection.detected && detection.source === "official_gittensor_api";
 }
 
 export function buildContributorOpportunities(
@@ -2202,9 +2203,16 @@ export function buildPublicPrIntelligenceComment(args: {
 }): string {
   const publicFindings = args.preflight.findings
     .filter((finding) => finding.severity !== "critical")
+    .filter((finding) => args.settings.requireLinkedIssue || finding.code !== "missing_linked_issue")
+    .filter((finding) => !containsPrivatePublicTerm([finding.code, finding.title, finding.detail, finding.publicText, finding.action].filter(Boolean).join(" ")))
     .slice(0, args.settings.publicSignalLevel === "minimal" ? 2 : 5);
   const collisionCount = args.collisions.clusters.length;
-  const linkedIssues = args.pr.linkedIssues.length > 0 ? args.pr.linkedIssues.map((issue) => `#${issue}`).join(", ") : "None detected";
+  const linkedIssues =
+    args.pr.linkedIssues.length > 0
+      ? args.pr.linkedIssues.map((issue) => `#${issue}`).join(", ")
+      : args.settings.requireLinkedIssue
+        ? "None detected"
+        : "Not required by this repo setting";
   const roleContext = buildRoleContext({
     login: args.pr.authorLogin ?? args.profile.login,
     repo: args.repo,
@@ -2215,20 +2223,21 @@ export function buildPublicPrIntelligenceComment(args: {
   });
   const nextSteps = [
     ...(roleContext.maintainerLane ? ["Treat this as maintainer-lane context rather than normal contributor-lane activity."] : []),
-    ...(args.pr.linkedIssues.length === 0 ? ["Link the issue being solved, or explain why this is a no-issue PR."] : []),
+    ...(args.settings.requireLinkedIssue && args.pr.linkedIssues.length === 0 ? ["Link the issue being solved, or explain why this is a no-issue PR."] : []),
     ...(collisionCount > 0 ? ["Check overlapping issues/PRs before review continues."] : []),
     ...(publicFindings.length > 0 ? publicFindings.flatMap((finding) => (finding.action ? [finding.action] : [])) : []),
-  ];
+  ].filter((step) => !containsPrivatePublicTerm(step));
   return [
     "<!-- gittensory-pr-intelligence -->",
     "## Gittensory contribution context",
     "",
-    "_Advisory context generated from public GitHub metadata and Gittensory's registered-repo cache. This is not an endorsement or compensation estimate._",
+    "_Advisory context generated from public GitHub metadata and Gittensory's registered-repo cache. This is not an endorsement._",
     "",
     "### Contributor context",
     `- Author: \`${args.pr.authorLogin ?? "unknown"}\``,
+    `- Confirmed Gittensor miner: ${args.detection.source === "official_gittensor_api" ? "yes" : "not confirmed"}`,
     `- Role context: ${roleContext.role}${roleContext.maintainerLane ? " (maintainer lane)" : ""}`,
-    `- Registered-repo signal: ${args.detection.detected ? args.detection.reason : "No prior cached registered-repo activity detected."}`,
+    `- Gittensory signal: ${args.detection.detected ? args.detection.reason : "No confirmed Gittensor miner activity detected."}`,
     `- Prior cached PRs/issues: ${args.detection.priorPullRequests} PR(s), ${args.detection.priorIssues} issue(s)`,
     `- Public profile languages: ${args.profile.github.topLanguages.length > 0 ? args.profile.github.topLanguages.join(", ") : "not available"}`,
     "",
@@ -2249,6 +2258,10 @@ export function buildPublicPrIntelligenceComment(args: {
     "### Contributor next steps",
     ...(nextSteps.length > 0 ? [...new Set(nextSteps)].map((step) => `- ${step}`) : ["- Keep the PR focused and include validation evidence before maintainer review."]),
   ].join("\n");
+}
+
+function containsPrivatePublicTerm(value: string): boolean {
+  return /\b(reward|payout|farming|wallet|hotkey|trust score|raw trust|estimated score|scoreability|likely_duplicate|reviewability\s*\d|\/100)\b/i.test(value);
 }
 
 function issueItem(issue: IssueRecord): CollisionItem {

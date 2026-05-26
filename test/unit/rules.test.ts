@@ -20,7 +20,7 @@ const repo: RepositoryRecord = {
 };
 
 describe("advisory rules", () => {
-  it("flags missing linked issues on PR advisories", () => {
+  it("suppresses missing linked issues on direct-contribution PR advisories by default", () => {
     const pr: PullRequestRecord = {
       repoFullName: repo.fullName,
       number: 12,
@@ -35,14 +35,38 @@ describe("advisory rules", () => {
 
     const advisory = buildPullRequestAdvisory(repo, pr);
 
+    expect(advisory.conclusion).toBe("success");
+    expect(advisory.findings.map((finding) => finding.code)).not.toContain("missing_linked_issue");
+    expect(formatCheckRunOutput(advisory).text).not.toMatch(/reward|farming/i);
+  });
+
+  it("flags missing linked issues only when a repo explicitly requires linkage", () => {
+    const pr: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 12,
+      title: "Add registry sync",
+      state: "open",
+      authorLogin: "oktofeesh1",
+      authorAssociation: "NONE",
+      headSha: "abc123",
+      labels: ["feature"],
+      linkedIssues: [],
+    };
+
+    const advisory = buildPullRequestAdvisory(repo, pr, { requireLinkedIssue: true });
+
     expect(advisory.conclusion).toBe("neutral");
     expect(advisory.findings.map((finding) => finding.code)).toContain("missing_linked_issue");
-    expect(formatCheckRunOutput(advisory).text).not.toMatch(/reward|farming/i);
   });
 
   it("marks unknown repositories as action required", () => {
     const advisory = buildRepositoryAdvisory(null, "owner/repo");
     expect(advisory.conclusion).toBe("action_required");
+  });
+
+  it("handles uncached PR and issue advisories for unknown repositories", () => {
+    expect(buildPullRequestAdvisory(null, null).findings.map((finding) => finding.code)).toEqual(["repo_not_registered", "pr_not_cached"]);
+    expect(buildIssueAdvisory(null, null).findings.map((finding) => finding.code)).toEqual(["repo_not_registered", "issue_not_cached"]);
   });
 
   it("warns when an issue already has linked PRs", () => {
@@ -85,7 +109,7 @@ describe("advisory rules", () => {
     expect(advisory.findings.map((finding) => finding.code)).toContain("duplicate_pr_risk");
   });
 
-  it("adds private reviewability context to check output without reward language", () => {
+  it("keeps private reviewability context out of check output", () => {
     const pr: PullRequestRecord = {
       repoFullName: repo.fullName,
       number: 12,
@@ -98,13 +122,12 @@ describe("advisory rules", () => {
       linkedIssues: [4],
     };
 
-    const advisory = buildPullRequestAdvisory(repo, pr, {
-      reviewabilityText: "Reviewability 72/100; action needs_author; missing tests and duplicate context should be cleared first.",
-    });
+    const advisory = buildPullRequestAdvisory(repo, pr);
+    const output = formatCheckRunOutput(advisory);
 
-    expect(advisory.findings.map((finding) => finding.code)).toContain("private_reviewability_context");
-    expect(formatCheckRunOutput(advisory).text).toContain("Reviewability 72/100");
-    expect(formatCheckRunOutput(advisory).text).not.toMatch(/reward|farming|wallet|hotkey/i);
+    expect(advisory.findings.map((finding) => finding.code)).not.toContain("private_reviewability_context");
+    expect(output.text).not.toMatch(/reviewability|likely_duplicate|needs_author|reward|farming|wallet|hotkey/i);
+    expect(output.title).toBe("Gittensory context checked");
   });
 
   it("covers repository config lane advisories", () => {
@@ -167,6 +190,6 @@ describe("advisory rules", () => {
 
     expect(uncachedPr.findings.map((finding) => finding.code)).toContain("pr_not_cached");
     expect(issueAdvisory.findings.map((finding) => finding.code)).toEqual(expect.arrayContaining(["issue_not_open", "issue_discovery_not_configured"]));
-    expect(formatCheckRunOutput({ ...uncachedPr, findings: [] }).text).toBe("No advisory findings.");
+    expect(formatCheckRunOutput({ ...uncachedPr, findings: [] }).text).toContain("No detailed findings are published");
   });
 });

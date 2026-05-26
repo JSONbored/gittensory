@@ -22,10 +22,11 @@ describe("GitHub check runs", () => {
         return Response.json({ total_count: 0, check_runs: [] });
       }
       if (url.includes("/check-runs")) {
-        const body = JSON.parse(String(init?.body)) as { name: string; conclusion: string; output: { text: string } };
+        const body = JSON.parse(String(init?.body)) as { name: string; conclusion: string; output: { title: string; text: string } };
         expect(body.name).toBe("Gittensory");
         expect(body.conclusion).toBe("neutral");
-        expect(body.output.text).not.toMatch(/reward|farming/i);
+        expect(body.output.title).toBe("Gittensory context posted");
+        expect(body.output.text).not.toMatch(/linked issue|reviewability|reward|farming|wallet|hotkey|trust score/i);
         return Response.json({ id: 42, html_url: "https://github.com/checks/42" }, { status: 201 });
       }
       return new Response("not found", { status: 404 });
@@ -41,7 +42,7 @@ describe("GitHub check runs", () => {
       headSha: "abc123",
       conclusion: "neutral",
       severity: "warning",
-      title: "Gittensory advisory needs review",
+      title: "Gittensory advisory available",
       summary: "1 advisory finding generated.",
       findings: [
         {
@@ -85,9 +86,11 @@ describe("GitHub check runs", () => {
         return Response.json({ total_count: 1, check_runs: [{ id: 42, name: "Gittensory" }] });
       }
       if (url.includes("/check-runs/42")) {
-        const body = JSON.parse(String(init?.body)) as { name: string; conclusion: string };
+        const body = JSON.parse(String(init?.body)) as { name: string; conclusion: string; output: { title: string; text: string } };
         expect(body.name).toBe("Gittensory");
         expect(body.conclusion).toBe("success");
+        expect(body.output.title).toBe("Gittensory context checked");
+        expect(body.output.text).not.toMatch(/reviewability|reward|farming|wallet|hotkey|trust score/i);
         return Response.json({ id: 42, html_url: "https://github.com/checks/42" });
       }
       return new Response("not found", { status: 404 });

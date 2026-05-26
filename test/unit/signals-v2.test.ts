@@ -1226,10 +1226,24 @@ describe("v2 signal builders", () => {
       queueHealth: buildQueueHealth(repo, [], [], buildCollisionReport(repo.fullName, [], [])),
       collisions: buildCollisionReport(repo.fullName, [], []),
       preflight: buildPreflightResult({ repoFullName: repo.fullName, title: "Docs", body: "No linked issue", changedFiles: ["README.md"], tests: ["manual"] }, repo, [], []),
-      settings: { repoFullName: repo.fullName, commentMode: "all_prs", publicSignalLevel: "standard", checkRunMode: "enabled", checkRunDetailLevel: "standard", backfillEnabled: true, privateTrustEnabled: true },
+      settings: {
+        repoFullName: repo.fullName,
+        commentMode: "detected_contributors_only",
+        publicSignalLevel: "standard",
+        checkRunMode: "off",
+        checkRunDetailLevel: "minimal",
+        autoLabelEnabled: true,
+        gittensorLabel: "gittensor",
+        createMissingLabel: true,
+        publicSurface: "comment_and_label",
+        includeMaintainerAuthors: false,
+        requireLinkedIssue: false,
+        backfillEnabled: true,
+        privateTrustEnabled: true,
+      },
     });
     expect(comment).toContain("Author: `unknown`");
-    expect(comment).toContain("No prior cached registered-repo activity detected.");
+    expect(comment).toContain("No confirmed Gittensor miner activity detected.");
     expect(comment).not.toMatch(/wallet|raw trust score|ranking/i);
   });
 });

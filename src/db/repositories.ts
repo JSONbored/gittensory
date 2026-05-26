@@ -274,10 +274,16 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
   if (!row) {
     return {
       repoFullName: fullName,
-      commentMode: "off",
+      commentMode: "detected_contributors_only",
       publicSignalLevel: "standard",
-      checkRunMode: "enabled",
-      checkRunDetailLevel: "standard",
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      autoLabelEnabled: true,
+      gittensorLabel: "gittensor",
+      createMissingLabel: true,
+      publicSurface: "comment_and_label",
+      includeMaintainerAuthors: false,
+      requireLinkedIssue: false,
       backfillEnabled: true,
       privateTrustEnabled: true,
     };
@@ -286,8 +292,14 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     repoFullName: row.repoFullName,
     commentMode: parseCommentMode(row.commentMode),
     publicSignalLevel: row.publicSignalLevel === "minimal" ? "minimal" : "standard",
-    checkRunMode: "enabled",
+    checkRunMode: parseCheckRunMode(row.checkRunMode),
     checkRunDetailLevel: parseCheckRunDetailLevel(row.checkRunDetailLevel),
+    autoLabelEnabled: row.autoLabelEnabled,
+    gittensorLabel: row.gittensorLabel,
+    createMissingLabel: row.createMissingLabel,
+    publicSurface: parsePublicSurface(row.publicSurface),
+    includeMaintainerAuthors: row.includeMaintainerAuthors,
+    requireLinkedIssue: row.requireLinkedIssue,
     backfillEnabled: row.backfillEnabled,
     privateTrustEnabled: row.privateTrustEnabled,
     createdAt: row.createdAt,
@@ -295,33 +307,60 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
   };
 }
 
-export async function upsertRepositorySettings(env: Env, settings: RepositorySettings): Promise<RepositorySettings> {
+export async function upsertRepositorySettings(env: Env, settings: Partial<RepositorySettings> & { repoFullName: string }): Promise<RepositorySettings> {
+  const resolved: RepositorySettings = {
+    repoFullName: settings.repoFullName,
+    commentMode: settings.commentMode ?? "detected_contributors_only",
+    publicSignalLevel: settings.publicSignalLevel ?? "standard",
+    checkRunMode: settings.checkRunMode ?? "off",
+    checkRunDetailLevel: settings.checkRunDetailLevel ?? "minimal",
+    autoLabelEnabled: settings.autoLabelEnabled ?? true,
+    gittensorLabel: settings.gittensorLabel ?? "gittensor",
+    createMissingLabel: settings.createMissingLabel ?? true,
+    publicSurface: settings.publicSurface ?? "comment_and_label",
+    includeMaintainerAuthors: settings.includeMaintainerAuthors ?? false,
+    requireLinkedIssue: settings.requireLinkedIssue ?? false,
+    backfillEnabled: settings.backfillEnabled ?? true,
+    privateTrustEnabled: settings.privateTrustEnabled ?? true,
+  };
   const db = getDb(env.DB);
   await db
     .insert(repositorySettings)
     .values({
-      repoFullName: settings.repoFullName,
-      commentMode: settings.commentMode,
-      publicSignalLevel: settings.publicSignalLevel,
-      checkRunMode: "enabled",
-      checkRunDetailLevel: settings.checkRunDetailLevel,
-      backfillEnabled: settings.backfillEnabled,
-      privateTrustEnabled: settings.privateTrustEnabled,
+      repoFullName: resolved.repoFullName,
+      commentMode: resolved.commentMode,
+      publicSignalLevel: resolved.publicSignalLevel,
+      checkRunMode: resolved.checkRunMode,
+      checkRunDetailLevel: resolved.checkRunDetailLevel,
+      autoLabelEnabled: resolved.autoLabelEnabled,
+      gittensorLabel: resolved.gittensorLabel,
+      createMissingLabel: resolved.createMissingLabel,
+      publicSurface: resolved.publicSurface,
+      includeMaintainerAuthors: resolved.includeMaintainerAuthors,
+      requireLinkedIssue: resolved.requireLinkedIssue,
+      backfillEnabled: resolved.backfillEnabled,
+      privateTrustEnabled: resolved.privateTrustEnabled,
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
       target: repositorySettings.repoFullName,
       set: {
-        commentMode: settings.commentMode,
-        publicSignalLevel: settings.publicSignalLevel,
-        checkRunMode: "enabled",
-        checkRunDetailLevel: settings.checkRunDetailLevel,
-        backfillEnabled: settings.backfillEnabled,
-        privateTrustEnabled: settings.privateTrustEnabled,
+        commentMode: resolved.commentMode,
+        publicSignalLevel: resolved.publicSignalLevel,
+        checkRunMode: resolved.checkRunMode,
+        checkRunDetailLevel: resolved.checkRunDetailLevel,
+        autoLabelEnabled: resolved.autoLabelEnabled,
+        gittensorLabel: resolved.gittensorLabel,
+        createMissingLabel: resolved.createMissingLabel,
+        publicSurface: resolved.publicSurface,
+        includeMaintainerAuthors: resolved.includeMaintainerAuthors,
+        requireLinkedIssue: resolved.requireLinkedIssue,
+        backfillEnabled: resolved.backfillEnabled,
+        privateTrustEnabled: resolved.privateTrustEnabled,
         updatedAt: nowIso(),
       },
     });
-  return getRepositorySettings(env, settings.repoFullName);
+  return getRepositorySettings(env, resolved.repoFullName);
 }
 
 export async function upsertRepoSyncState(env: Env, state: RepoSyncStateRecord): Promise<void> {
@@ -1859,9 +1898,18 @@ function parseCommentMode(value: string): RepositorySettings["commentMode"] {
   return "off";
 }
 
+function parseCheckRunMode(value: string): RepositorySettings["checkRunMode"] {
+  return value === "enabled" ? "enabled" : "off";
+}
+
 function parseCheckRunDetailLevel(value: string): RepositorySettings["checkRunDetailLevel"] {
   if (value === "minimal" || value === "deep") return value;
   return "standard";
+}
+
+function parsePublicSurface(value: string): RepositorySettings["publicSurface"] {
+  if (value === "comment_only" || value === "label_only" || value === "off") return value;
+  return "comment_and_label";
 }
 
 function parseSyncStatus(value: string): RepoSyncStateRecord["status"] {

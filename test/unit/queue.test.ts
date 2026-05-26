@@ -344,7 +344,7 @@ describe("queue processors", () => {
         id: 123,
         account: { login: "JSONbored", id: 1, type: "User" },
         repository_selection: "selected",
-        permissions: { checks: "write", metadata: "read", pull_requests: "read", issues: "read" },
+        permissions: { metadata: "read", pull_requests: "read", issues: "write" },
         events: ["issues", "pull_request", "repository"],
       },
       repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }],
@@ -357,7 +357,7 @@ describe("queue processors", () => {
           id: 123,
           account: { login: "JSONbored", id: 1, type: "User" },
           repository_selection: "selected",
-          permissions: { checks: "write", metadata: "read", pull_requests: "read", issues: "read" },
+          permissions: { metadata: "read", pull_requests: "read", issues: "write" },
           events: ["issues", "pull_request", "repository"],
         });
       }
@@ -369,7 +369,7 @@ describe("queue processors", () => {
   });
 
   it("processes GitHub webhook jobs for PRs, issues, comments-off, comment-attempt, and deleted installs", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
       env,
       normalizeRegistryPayload(
@@ -387,10 +387,80 @@ describe("queue processors", () => {
       labels: [{ name: "bug" }],
       body: "Fixes #1",
     });
-    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const visibleCalls = { comments: 0, labelsCreated: 0, labelsApplied: 0, checks: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          {
+            uid: 7,
+            githubUsername: "oktofeesh1",
+            githubId: "123",
+            totalPrs: 4,
+            totalMergedPrs: 3,
+            totalOpenPrs: 1,
+            totalClosedPrs: 0,
+            totalOpenIssues: 0,
+            totalClosedIssues: 0,
+            totalSolvedIssues: 0,
+            totalValidSolvedIssues: 0,
+            isEligible: true,
+            credibility: 1,
+            eligibleRepoCount: 1,
+            hotkey: "must-not-leak",
+          },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({
+          repositories: [
+            {
+              repositoryFullName: "JSONbored/gittensory",
+              totalPrs: "4",
+              totalMergedPrs: "3",
+              totalOpenPrs: "1",
+              totalClosedPrs: "0",
+              totalOpenIssues: "0",
+              totalClosedIssues: "0",
+              isEligible: true,
+              credibility: "1.000000",
+            },
+          ],
+        });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
       if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
       if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/issues/3/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/3/comments") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string };
+        expect(body.body).toContain("<!-- gittensory-pr-intelligence -->");
+        expect(body.body).toContain("Confirmed Gittensor miner: yes");
+        expect(body.body).not.toMatch(/reviewability|likely_duplicate|reward|scoreability|estimated score|wallet|hotkey|trust score|payout|farming/i);
+        visibleCalls.comments += 1;
+        return Response.json({ id: 1, html_url: "https://github.com/comment/1" }, { status: 201 });
+      }
+      if (url.includes("/issues/3/labels") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/3/labels") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { labels?: string[] };
+        expect(body.labels).toEqual(["gittensor"]);
+        visibleCalls.labelsApplied += 1;
+        return Response.json([{ name: "gittensor" }]);
+      }
+      if (url.includes("/repos/JSONbored/gittensory/labels") && !url.includes("/issues/") && method === "GET") return Response.json([]);
+      if (url.includes("/repos/JSONbored/gittensory/labels") && !url.includes("/issues/") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { name?: string };
+        expect(body.name).toBe("gittensor");
+        visibleCalls.labelsCreated += 1;
+        return Response.json({ name: "gittensor" }, { status: 201 });
+      }
+      if (url.includes("/check-runs")) {
+        visibleCalls.checks += 1;
+        return new Response("checks disabled", { status: 500 });
+      }
       return new Response("not found", { status: 404 });
     });
 
@@ -399,12 +469,23 @@ describe("queue processors", () => {
         id: 123,
         account: { login: "JSONbored", id: 1, type: "User" },
         repository_selection: "selected",
-        permissions: { checks: "write", metadata: "read", pull_requests: "read" },
+        permissions: { metadata: "read", pull_requests: "read", issues: "write" },
         events: ["issues", "pull_request", "repository"],
       },
       repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } },
     };
 
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSignalLevel: "standard",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      backfillEnabled: true,
+      privateTrustEnabled: true,
+    });
     await processJob(env, {
       type: "github-webhook",
       deliveryId: "pr-off",
@@ -428,8 +509,10 @@ describe("queue processors", () => {
       repoFullName: "JSONbored/gittensory",
       commentMode: "detected_contributors_only",
       publicSignalLevel: "standard",
-      checkRunMode: "enabled",
-      checkRunDetailLevel: "standard",
+      publicSurface: "comment_and_label",
+      autoLabelEnabled: true,
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
       backfillEnabled: true,
       privateTrustEnabled: true,
     });
@@ -473,8 +556,10 @@ describe("queue processors", () => {
       repoFullName: "JSONbored/gittensory",
       commentMode: "all_prs",
       publicSignalLevel: "minimal",
-      checkRunMode: "enabled",
-      checkRunDetailLevel: "standard",
+      publicSurface: "comment_and_label",
+      autoLabelEnabled: true,
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
       backfillEnabled: true,
       privateTrustEnabled: true,
     });
@@ -519,9 +604,98 @@ describe("queue processors", () => {
       eventName: "installation",
       payload: { action: "deleted", installation: { id: 123 } },
     });
+
+    expect(visibleCalls).toEqual({ comments: 1, labelsCreated: 1, labelsApplied: 1, checks: 0 });
+    const skipped = await env.DB.prepare("select detail from audit_events where event_type = ? order by created_at").bind("github_app.pr_visibility_skipped").all<{
+      detail: string;
+    }>();
+    expect(skipped.results.map((event) => event.detail)).toEqual(expect.arrayContaining(["not_official_gittensor_miner", "missing_author"]));
   });
 
-  it("records webhook processing errors when GitHub check creation fails", async () => {
+  it("skips bots and maintainer authors, and keeps explicitly enabled checks minimal", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "enabled",
+    });
+    const calls = { minerList: 0, checks: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        calls.minerList += 1;
+        return Response.json([{ githubUsername: "oktofeesh1", githubId: "123", totalPrs: 1, totalMergedPrs: 1, isEligible: true, credibility: 1 }]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") return Response.json({ repositories: [] });
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1" });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/commits/abc123/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { output?: { title?: string; text?: string } };
+        expect(body.output).toMatchObject({ title: "Gittensory context checked", text: "No detailed findings are published in check runs." });
+        calls.checks += 1;
+        return Response.json({ id: 99 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const basePayload = {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+      repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } },
+    };
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "bot-skip",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        ...basePayload,
+        pull_request: { number: 20, title: "Dependency update", state: "open", user: { login: "renovate[bot]", type: "Bot" }, labels: [], body: "" },
+      },
+    });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "maintainer-skip",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        ...basePayload,
+        pull_request: { number: 21, title: "Maintainer work", state: "open", user: { login: "jsonbored" }, author_association: "OWNER", labels: [], body: "" },
+      },
+    });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "check-enabled",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        ...basePayload,
+        pull_request: { number: 22, title: "Miner work", state: "open", user: { login: "oktofeesh1" }, head: { sha: "abc123" }, labels: [], body: "No issue needed." },
+      },
+    });
+
+    expect(calls).toEqual({ minerList: 1, checks: 1 });
+    const skipped = await env.DB.prepare("select detail from audit_events where event_type = ? order by created_at").bind("github_app.pr_visibility_skipped").all<{
+      detail: string;
+    }>();
+    expect(skipped.results.map((event) => event.detail)).toEqual(expect.arrayContaining(["bot_author", "maintainer_author"]));
+  });
+
+  it("fails closed when official miner detection is unavailable", async () => {
     const env = createTestEnv();
     const payload = {
       action: "opened",
@@ -538,7 +712,17 @@ describe("queue processors", () => {
       },
     };
 
-    await expect(processJob(env, { type: "github-webhook", deliveryId: "check-fail", eventName: "pull_request", payload })).rejects.toThrow();
+    vi.stubGlobal("fetch", async () => new Response("gittensor unavailable", { status: 503 }));
+
+    await expect(processJob(env, { type: "github-webhook", deliveryId: "miner-unavailable", eventName: "pull_request", payload })).resolves.toBeUndefined();
+    const audit = await env.DB.prepare("select event_type, outcome, detail from audit_events where target_key = ?")
+      .bind("JSONbored/gittensory#10")
+      .all<{ event_type: string; outcome: string; detail: string }>();
+    expect(audit.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event_type: "github_app.miner_detection_unavailable", outcome: "error", detail: expect.stringContaining("Gittensor API failed") }),
+      ]),
+    );
   });
 });
 

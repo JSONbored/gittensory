@@ -4,7 +4,6 @@ import {
   getLatestRepoGithubTotalsSnapshot,
   getRepository,
   getRepositorySettings,
-  listCheckSummaries,
   listAllIssues,
   listAllPullRequests,
   listContributorIssues,
@@ -14,8 +13,6 @@ import {
   listIssueSignalSample,
   listOtherOpenPullRequests,
   listOpenPullRequests,
-  listPullRequestFiles,
-  listPullRequestReviews,
   listPullRequests,
   listRecentMergedPullRequests,
   listRepoLabels,
@@ -44,9 +41,10 @@ import {
   refreshContributorActivity,
   refreshInstallationHealth,
 } from "../github/backfill";
-import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
+import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot, fetchOfficialGittensorMiner, type GittensorContributorSnapshot } from "../gittensor/api";
 import { createOrUpdateCheckRun, getInstallationId } from "../github/app";
 import { createOrUpdatePrIntelligenceComment } from "../github/comments";
+import { ensurePullRequestLabel } from "../github/labels";
 import { fetchPublicContributorProfile } from "../github/public";
 import { refreshRegistry } from "../registry/sync";
 import { buildIssueAdvisory, buildPullRequestAdvisory } from "../rules/advisory";
@@ -70,9 +68,7 @@ import {
   buildPublicPrIntelligenceComment,
   buildQueueHealth,
   detectGittensorContributor,
-  shouldPublishPrIntelligenceComment,
 } from "../signals/engine";
-import { buildPullRequestReviewability } from "../signals/reward-risk";
 import type { ContributorEvidenceRecord, GitHubWebhookPayload, JobMessage, JsonValue } from "../types";
 
 export async function processJob(env: Env, message: JobMessage): Promise<void> {
@@ -431,38 +427,24 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
     if (payload.repository) await upsertRepositoryFromGitHub(env, payload.repository, installationId ?? undefined);
 
     if (payload.repository?.full_name && payload.pull_request) {
-      const pr = await upsertPullRequestFromGitHub(env, payload.repository.full_name, payload.pull_request);
-      const repo = await getRepository(env, payload.repository.full_name);
-      const [otherOpenPullRequests, issues, pullRequests, files, reviews, checks, recentMergedPullRequests] = await Promise.all([
-        listOtherOpenPullRequests(env, payload.repository.full_name, pr.number),
-        listIssues(env, payload.repository.full_name),
-        listPullRequests(env, payload.repository.full_name),
-        listPullRequestFiles(env, payload.repository.full_name, pr.number),
-        listPullRequestReviews(env, payload.repository.full_name, pr.number),
-        listCheckSummaries(env, payload.repository.full_name, pr.number),
-        listRecentMergedPullRequests(env, payload.repository.full_name),
+      const repoFullName = payload.repository.full_name;
+      const pr = await upsertPullRequestFromGitHub(env, repoFullName, payload.pull_request);
+      const [repo, settings, otherOpenPullRequests] = await Promise.all([
+        getRepository(env, repoFullName),
+        getRepositorySettings(env, repoFullName),
+        listOtherOpenPullRequests(env, repoFullName, pr.number),
       ]);
-      const reviewability = buildPullRequestReviewability({
-        repo,
-        pullRequest: pr,
-        issues,
-        pullRequests,
-        files,
-        reviews,
-        checks,
-        recentMergedPullRequests,
-        repoFullName: payload.repository.full_name,
-        pullNumber: pr.number,
-      });
-      const advisory = buildPullRequestAdvisory(repo, pr, { otherOpenPullRequests, reviewabilityText: reviewability.privateSummary });
+      const advisory = buildPullRequestAdvisory(repo, pr, { otherOpenPullRequests, requireLinkedIssue: settings.requireLinkedIssue });
       await persistAdvisory(env, advisory);
-      if (installationId && advisory.headSha) await createOrUpdateCheckRun(env, installationId, payload.repository.full_name, advisory);
       if (installationId) {
-        await maybePublishPrIntelligenceComment(env, installationId, payload.repository.full_name, pr, repo).catch((error) => {
+        await maybePublishPrPublicSurface(env, installationId, repoFullName, pr, repo, settings, advisory, {
+          deliveryId,
+          authorType: payload.pull_request.user?.type,
+        }).catch((error) => {
           console.error(
             JSON.stringify({
               level: "warn",
-              event: "pr_intelligence_comment_failed",
+              event: "pr_public_surface_failed",
               deliveryId,
               repository: payload.repository?.full_name,
               pullNumber: pr.number,
@@ -504,32 +486,60 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
   }
 }
 
-async function maybePublishPrIntelligenceComment(
+async function maybePublishPrPublicSurface(
   env: Env,
   installationId: number,
   repoFullName: string,
   pr: Awaited<ReturnType<typeof upsertPullRequestFromGitHub>>,
   repo: Awaited<ReturnType<typeof getRepository>>,
+  settings: Awaited<ReturnType<typeof getRepositorySettings>>,
+  advisory: Awaited<ReturnType<typeof buildPullRequestAdvisory>>,
+  webhook: { deliveryId: string; authorType?: string | undefined },
 ): Promise<void> {
-  const settings = await getRepositorySettings(env, repoFullName);
-  if (settings.commentMode === "off") return;
+  if (!hasVisiblePrSurface(settings)) return;
   const author = pr.authorLogin;
-  if (!author) return;
+  if (!author) {
+    await auditPrVisibilitySkip(env, repoFullName, pr.number, null, "missing_author", webhook.deliveryId);
+    return;
+  }
+  if (webhook.authorType === "Bot" || /\[bot\]$/i.test(author)) {
+    await auditPrVisibilitySkip(env, repoFullName, pr.number, author, "bot_author", webhook.deliveryId);
+    return;
+  }
+  if (!settings.includeMaintainerAuthors && pr.authorAssociation && ["OWNER", "MEMBER", "COLLABORATOR"].includes(pr.authorAssociation)) {
+    await auditPrVisibilitySkip(env, repoFullName, pr.number, author, "maintainer_author", webhook.deliveryId);
+    return;
+  }
 
-  const [contributorPullRequests, contributorIssues, repoIssues, repoPullRequests, github, cachedRepoStats, gittensorSnapshot] = await Promise.all([
+  const official = await fetchOfficialGittensorMiner(author);
+  if (official.status === "unavailable") {
+    await recordAuditEvent(env, {
+      eventType: "github_app.miner_detection_unavailable",
+      actor: author,
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "error",
+      detail: official.error,
+      metadata: { deliveryId: webhook.deliveryId },
+    });
+    return;
+  }
+  if (official.status === "not_found") {
+    await auditPrVisibilitySkip(env, repoFullName, pr.number, author, "not_official_gittensor_miner", webhook.deliveryId);
+    return;
+  }
+
+  const [contributorPullRequests, contributorIssues, repoIssues, repoPullRequests, github, cachedRepoStats] = await Promise.all([
     listContributorPullRequests(env, author),
     listContributorIssues(env, author),
     listIssues(env, repoFullName),
     listPullRequests(env, repoFullName),
     fetchPublicContributorProfile(author),
     listContributorRepoStats(env, author),
-    fetchGittensorContributorSnapshot(author),
   ]);
-  const repoStats = authoritativeContributorRepoStats(gittensorSnapshot, cachedRepoStats);
-  const detection = detectGittensorContributor(author, pr, contributorPullRequests, contributorIssues, repoStats);
-  if (!shouldPublishPrIntelligenceComment(settings, detection)) return;
+  const repoStats = authoritativeContributorRepoStats(official.snapshot, cachedRepoStats);
+  const detection = officialGittensorContributorDetection(official.snapshot, pr, contributorPullRequests, contributorIssues, repoStats);
 
-  const profile = buildContributorProfile(author, github, contributorPullRequests, contributorIssues, repoStats, gittensorSnapshot);
+  const profile = buildContributorProfile(author, github, contributorPullRequests, contributorIssues, repoStats, official.snapshot);
   const collisions = buildCollisionReport(repoFullName, repoIssues, repoPullRequests);
   const queueHealth = buildQueueHealth(repo, repoIssues, repoPullRequests, collisions);
   const preflight = buildPreflightResult(
@@ -546,17 +556,96 @@ async function maybePublishPrIntelligenceComment(
     repoIssues,
     repoPullRequests,
   );
-  const body = buildPublicPrIntelligenceComment({
-    repo,
-    pr,
-    profile,
-    detection,
-    queueHealth,
-    collisions,
-    preflight,
-    settings,
+  if (shouldPublishPrComment(settings)) {
+    const body = buildPublicPrIntelligenceComment({
+      repo,
+      pr,
+      profile,
+      detection,
+      queueHealth,
+      collisions,
+      preflight,
+      settings,
+    });
+    await createOrUpdatePrIntelligenceComment(env, installationId, repoFullName, pr.number, body);
+  }
+  if (shouldApplyPrLabel(settings)) {
+    await ensurePullRequestLabel(env, installationId, repoFullName, pr.number, settings.gittensorLabel, {
+      createMissingLabel: settings.createMissingLabel,
+    });
+  }
+  if (settings.checkRunMode === "enabled" && advisory.headSha) {
+    await createOrUpdateCheckRun(env, installationId, repoFullName, {
+      ...advisory,
+      conclusion: "success",
+      severity: "info",
+      title: "Gittensory context posted",
+      summary: "Gittensory posted public-safe contributor context.",
+      findings: [],
+    });
+  }
+  await recordAuditEvent(env, {
+    eventType: "github_app.pr_public_surface_published",
+    actor: author,
+    targetKey: `${repoFullName}#${pr.number}`,
+    outcome: "completed",
+    metadata: {
+      deliveryId: webhook.deliveryId,
+      publicSurface: settings.publicSurface,
+      label: shouldApplyPrLabel(settings) ? settings.gittensorLabel : null,
+      checkRunMode: settings.checkRunMode,
+    },
   });
-  await createOrUpdatePrIntelligenceComment(env, installationId, repoFullName, pr.number, body);
+}
+
+function hasVisiblePrSurface(settings: Awaited<ReturnType<typeof getRepositorySettings>>): boolean {
+  return settings.publicSurface !== "off" || settings.checkRunMode === "enabled";
+}
+
+function shouldPublishPrComment(settings: Awaited<ReturnType<typeof getRepositorySettings>>): boolean {
+  if (settings.commentMode === "off") return false;
+  return settings.publicSurface === "comment_and_label" || settings.publicSurface === "comment_only";
+}
+
+function shouldApplyPrLabel(settings: Awaited<ReturnType<typeof getRepositorySettings>>): boolean {
+  return settings.autoLabelEnabled && (settings.publicSurface === "comment_and_label" || settings.publicSurface === "label_only");
+}
+
+async function auditPrVisibilitySkip(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number,
+  author: string | null,
+  reason: string,
+  deliveryId: string,
+): Promise<void> {
+  await recordAuditEvent(env, {
+    eventType: "github_app.pr_visibility_skipped",
+    actor: author,
+    targetKey: `${repoFullName}#${pullNumber}`,
+    outcome: "completed",
+    detail: reason,
+    metadata: { deliveryId },
+  });
+}
+
+function officialGittensorContributorDetection(
+  snapshot: GittensorContributorSnapshot,
+  currentPr: Awaited<ReturnType<typeof upsertPullRequestFromGitHub>>,
+  pullRequests: Awaited<ReturnType<typeof listContributorPullRequests>>,
+  issues: Awaited<ReturnType<typeof listContributorIssues>>,
+  repoStats: Awaited<ReturnType<typeof listContributorRepoStats>>,
+) {
+  const cached = detectGittensorContributor(snapshot.githubUsername, currentPr, pullRequests, issues, repoStats);
+  return {
+    ...cached,
+    detected: true,
+    source: "official_gittensor_api" as const,
+    reason: "Official Gittensor API confirms this GitHub user.",
+    priorPullRequests: Math.max(cached.priorPullRequests, snapshot.totals.pullRequests),
+    priorMergedPullRequests: Math.max(cached.priorMergedPullRequests, snapshot.totals.mergedPullRequests),
+    priorIssues: Math.max(cached.priorIssues, snapshot.totals.openIssues + snapshot.totals.closedIssues),
+  };
 }
 
 function authoritativeContributorRepoStats(

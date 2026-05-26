@@ -287,13 +287,19 @@ describe("world-class backend signals", () => {
       state: "closed",
       mergedAt: "2026-05-01T00:00:00.000Z",
     };
-    const detection = detectGittensorContributor("oktofeesh1", currentPr, [currentPr, priorPr], []);
+    const detection = { ...detectGittensorContributor("oktofeesh1", currentPr, [currentPr, priorPr], []), source: "official_gittensor_api" as const };
     const settings = {
       repoFullName: repo.fullName,
       commentMode: "detected_contributors_only" as const,
       publicSignalLevel: "standard" as const,
-      checkRunMode: "enabled" as const,
-      checkRunDetailLevel: "standard" as const,
+      checkRunMode: "off" as const,
+      checkRunDetailLevel: "minimal" as const,
+      autoLabelEnabled: true,
+      gittensorLabel: "gittensor",
+      createMissingLabel: true,
+      publicSurface: "comment_and_label" as const,
+      includeMaintainerAuthors: false,
+      requireLinkedIssue: false,
       backfillEnabled: true,
       privateTrustEnabled: true,
     };
@@ -345,16 +351,25 @@ describe("world-class backend signals", () => {
       repoFullName: repo.fullName,
       commentMode: "off",
       publicSignalLevel: "minimal",
-      checkRunMode: "enabled",
+      checkRunMode: "off",
       checkRunDetailLevel: "minimal",
+      autoLabelEnabled: true,
+      gittensorLabel: "gittensor",
+      createMissingLabel: true,
+      publicSurface: "comment_and_label",
+      includeMaintainerAuthors: false,
+      requireLinkedIssue: false,
       backfillEnabled: true,
       privateTrustEnabled: true,
     };
     const undetected = detectGittensorContributor("newbie", currentPr, [currentPr], []);
+    const cachedDetected = detectGittensorContributor("oktofeesh1", currentPr, [currentPr, { ...currentPr, number: 10, mergedAt: "2026-05-01T00:00:00.000Z" }], []);
 
     expect(undetected.detected).toBe(false);
     expect(shouldPublishPrIntelligenceComment(settings, undetected)).toBe(false);
-    expect(shouldPublishPrIntelligenceComment({ ...settings, commentMode: "all_prs" }, undetected)).toBe(true);
+    expect(shouldPublishPrIntelligenceComment({ ...settings, commentMode: "all_prs" }, undetected)).toBe(false);
+    expect(shouldPublishPrIntelligenceComment({ ...settings, commentMode: "all_prs" }, cachedDetected)).toBe(false);
+    expect(shouldPublishPrIntelligenceComment({ ...settings, commentMode: "all_prs" }, { ...cachedDetected, source: "official_gittensor_api" })).toBe(true);
   });
 
   it("returns hold/caution opportunities for inactive and issue-discovery lanes", () => {
@@ -380,7 +395,7 @@ describe("world-class backend signals", () => {
 
   it("summarizes public comments at minimal signal level", () => {
     const currentPr: PullRequestRecord = { ...pullRequests[0]!, linkedIssues: [], body: "" };
-    const detection = detectGittensorContributor("newbie", currentPr, [], []);
+    const detection = { ...detectGittensorContributor("newbie", currentPr, [], []), detected: true, source: "official_gittensor_api" as const, reason: "Official Gittensor API confirms this GitHub user." };
     const collisions = buildCollisionReport(repo.fullName, issues, [currentPr]);
     const queueHealth = buildQueueHealth(repo, issues, [currentPr], collisions);
     const preflight = buildPreflightResult({ repoFullName: repo.fullName, title: currentPr.title, changedFiles: ["README.md"] }, repo, issues, [currentPr]);
@@ -389,15 +404,21 @@ describe("world-class backend signals", () => {
       repoFullName: repo.fullName,
       commentMode: "all_prs",
       publicSignalLevel: "minimal",
-      checkRunMode: "enabled",
-      checkRunDetailLevel: "standard",
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      autoLabelEnabled: true,
+      gittensorLabel: "gittensor",
+      createMissingLabel: true,
+      publicSurface: "comment_and_label",
+      includeMaintainerAuthors: false,
+      requireLinkedIssue: false,
       backfillEnabled: true,
       privateTrustEnabled: true,
     };
 
     const comment = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings });
 
-    expect(comment).toContain("Linked issues: None detected");
+    expect(comment).toContain("Linked issues: Not required by this repo setting");
     expect(comment).toContain("Public profile languages: not available");
     expect(comment).not.toMatch(/trust score|wallet|ranking/i);
   });

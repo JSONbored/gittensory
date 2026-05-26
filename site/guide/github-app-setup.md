@@ -23,15 +23,14 @@ Use a generated webhook secret and set the same value in Cloudflare as `GITHUB_W
 | Permission | Access | Why |
 | --- | --- | --- |
 | Metadata | Read | Required for repository identity and repository events. |
-| Checks | Write | Required to create and update the Gittensory check run. |
-| Pull requests | Read | Required for PR metadata, reviewability, and webhook events. |
-| Issues | Read | Required for issue linkage, issue-discovery context, and duplicate signals. |
+| Pull requests | Read | Required for PR metadata and webhook events. |
+| Issues | Write | Required to post the sticky PR comment and apply the maintainer-configured label. |
 
 Optional:
 
 | Permission | Access | Why |
 | --- | --- | --- |
-| Issues | Write | Only needed if public-safe sticky PR comments are enabled. |
+| Checks | Write | Only needed if minimal check runs are explicitly enabled. |
 | Contents | Read | Only needed if a future feature reads repository files directly through the App. |
 
 ## Required Events
@@ -43,6 +42,19 @@ Subscribe to:
 - Repository
 
 If GitHub shows `Installation target`, select it. Some installation-related events are not always shown as normal selectable event rows; Gittensory should not block health on event names that are hidden in the app UI.
+
+## Default Visibility
+
+Gittensory inspects PR webhooks quietly first. It publishes a public surface only when the PR author is confirmed through the official Gittensor API.
+
+Default visible behavior:
+
+- non-miner authors: no comment, no label, no check
+- bot authors: no comment, no label, no check
+- maintainer-associated authors: no public output unless `includeMaintainerAuthors=true`
+- confirmed miners: one sticky public-safe comment plus the configured label, defaulting to `gittensor`
+
+Check runs default to off. If enabled later, they stay minimal and do not include private reviewability, scoring, wallet, hotkey, or reward/risk context.
 
 ## Install Or Repair
 

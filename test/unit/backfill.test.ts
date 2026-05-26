@@ -285,6 +285,51 @@ describe("GitHub backfill", () => {
     expect(refreshed.installations).toEqual(expect.arrayContaining([expect.objectContaining({ installationId: 124, status: "healthy" })]));
   });
 
+  it("requires Checks write only for repos with check runs enabled", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await seedRegisteredRepo(env);
+    await upsertInstallation(env, {
+      installation: {
+        id: 123,
+        account: { login: "JSONbored", id: 1, type: "User" },
+        repository_selection: "selected",
+        permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+        events: ["issues", "pull_request", "repository"],
+      },
+    });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      checkRunMode: "enabled",
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.endsWith("/app/installations/123")) {
+        return Response.json({
+          id: 123,
+          account: { login: "JSONbored", id: 1, type: "User" },
+          repository_selection: "selected",
+          permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+          events: ["issues", "pull_request", "repository"],
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const refreshed = await refreshInstallationHealth(env);
+
+    expect(refreshed.installations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          installationId: 123,
+          status: "needs_attention",
+          missingPermissions: ["checks"],
+          requiredPermissions: expect.objectContaining({ checks: "write" }),
+        }),
+      ]),
+    );
+  });
+
   it("refreshes installation health from live GitHub App metadata", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await seedRegisteredRepo(env);
@@ -333,7 +378,7 @@ describe("GitHub backfill", () => {
           id: 123,
           account: { login: "JSONbored", id: 1, type: "User" },
           repository_selection: "selected",
-          permissions: { checks: "write", metadata: "read", pull_requests: "read", issues: "read" },
+          permissions: { metadata: "read", pull_requests: "read", issues: "write" },
           events: ["issues", "pull_request", "repository"],
         });
       }
@@ -346,7 +391,7 @@ describe("GitHub backfill", () => {
         expect.objectContaining({
           installationId: 123,
           status: "healthy",
-          errorSummary: undefined,
+          missingPermissions: [],
         }),
       ]),
     );
@@ -360,7 +405,7 @@ describe("GitHub backfill", () => {
         id: 123,
         account: { login: "JSONbored", id: 1, type: "User" },
         repository_selection: "selected",
-        permissions: { checks: "write", metadata: "read", pull_requests: "read", issues: "read" },
+        permissions: { metadata: "read", pull_requests: "read", issues: "write" },
         events: ["issues", "pull_request", "repository"],
       },
     });

@@ -147,57 +147,27 @@ export type GittensorContributorSnapshot = {
 
 export async function fetchGittensorContributorSnapshot(login: string): Promise<GittensorContributorSnapshot | null> {
   try {
+    const detection = await fetchOfficialGittensorMiner(login);
+    return detection.status === "confirmed" ? detection.snapshot : null;
+  } catch {
+    return null;
+  }
+}
+
+export type OfficialGittensorMinerDetection =
+  | { status: "confirmed"; snapshot: GittensorContributorSnapshot }
+  | { status: "not_found" }
+  | { status: "unavailable"; error: string };
+
+export async function fetchOfficialGittensorMiner(login: string): Promise<OfficialGittensorMinerDetection> {
+  try {
     const miners = await fetchJson<GittensorMinerSummaryResponse[]>(`${GITTENSOR_API_BASE}/miners`);
     const normalizedLogin = login.toLowerCase();
     const miner = miners.find((candidate) => candidate.githubUsername?.toLowerCase() === normalizedLogin || candidate.githubId === login);
-    if (!miner?.githubId || !miner.githubUsername) return null;
-
-    const [detailResult, pullRequestsResult, issuesResult] = await Promise.allSettled([
-      fetchJson<GittensorMinerDetailResponse>(`${GITTENSOR_API_BASE}/miners/${encodeURIComponent(miner.githubId)}`),
-      fetchJson<GittensorPullRequestResponse[]>(`${GITTENSOR_API_BASE}/miners/${encodeURIComponent(miner.githubId)}/prs`),
-      fetchJson<GittensorMinerIssuesResponse>(`${GITTENSOR_MIRROR_API_BASE}/miners/${encodeURIComponent(miner.githubId)}/issues`),
-    ]);
-    const detail = detailResult.status === "fulfilled" ? detailResult.value : {};
-    const pullRequests = pullRequestsResult.status === "fulfilled" ? pullRequestsResult.value : [];
-    const issues = issuesResult.status === "fulfilled" ? issuesResult.value.issues ?? [] : [];
-    const source = { ...miner, ...detail };
-
-    return {
-      source: "gittensor_api",
-      githubId: miner.githubId,
-      githubUsername: miner.githubUsername,
-      uid: source.uid,
-      hotkey: source.hotkey,
-      failedReason: source.failedReason,
-      evaluatedAt: source.evaluatedAt,
-      updatedAt: source.updatedAt,
-      isEligible: Boolean(source.isEligible),
-      credibility: asNumber(source.credibility),
-      eligibleRepoCount: asNumber(source.eligibleRepoCount),
-      issueDiscoveryScore: asNumber(source.issueDiscoveryScore),
-      issueTokenScore: asNumber(source.issueTokenScore),
-      issueCredibility: asNumber(source.issueCredibility, 1),
-      isIssueEligible: Boolean(source.isIssueEligible),
-      issueEligibleRepoCount: asNumber(source.issueEligibleRepoCount),
-      alphaPerDay: asNumber(source.alphaPerDay),
-      taoPerDay: asNumber(source.taoPerDay),
-      usdPerDay: asNumber(source.usdPerDay),
-      totals: {
-        pullRequests: asNumber(source.totalPrs),
-        mergedPullRequests: asNumber(source.totalMergedPrs),
-        openPullRequests: asNumber(source.totalOpenPrs),
-        closedPullRequests: asNumber(source.totalClosedPrs),
-        openIssues: asNumber(source.totalOpenIssues),
-        closedIssues: asNumber(source.totalClosedIssues),
-        solvedIssues: asNumber(source.totalSolvedIssues),
-        validSolvedIssues: asNumber(source.totalValidSolvedIssues),
-      },
-      repositories: (detail.repositories ?? []).map(toRepositoryEvaluation).filter((repo) => repo.pullRequests + repo.openIssues + repo.closedIssues > 0),
-      pullRequests: pullRequests.map(toPullRequest).filter((pr) => pr.repoFullName && pr.number > 0),
-      issueLabels: issues.flatMap((issue) => (issue.labels ?? []).flatMap((label) => (label.name ? [label.name] : []))),
-    };
-  } catch {
-    return null;
+    if (!miner?.githubId || !miner.githubUsername) return { status: "not_found" };
+    return { status: "confirmed", snapshot: await buildGittensorContributorSnapshot(miner) };
+  } catch (error) {
+    return { status: "unavailable", error: error instanceof Error ? error.message : "unknown Gittensor API error" };
   }
 }
 
@@ -215,6 +185,53 @@ export function contributorRepoStatsFromGittensor(snapshot: GittensorContributor
     dominantLabels: [],
     lastActivityAt: snapshot.updatedAt ?? snapshot.evaluatedAt,
   }));
+}
+
+async function buildGittensorContributorSnapshot(miner: GittensorMinerSummaryResponse): Promise<GittensorContributorSnapshot> {
+  const [detailResult, pullRequestsResult, issuesResult] = await Promise.allSettled([
+    fetchJson<GittensorMinerDetailResponse>(`${GITTENSOR_API_BASE}/miners/${encodeURIComponent(miner.githubId ?? "")}`),
+    fetchJson<GittensorPullRequestResponse[]>(`${GITTENSOR_API_BASE}/miners/${encodeURIComponent(miner.githubId ?? "")}/prs`),
+    fetchJson<GittensorMinerIssuesResponse>(`${GITTENSOR_MIRROR_API_BASE}/miners/${encodeURIComponent(miner.githubId ?? "")}/issues`),
+  ]);
+  const detail = detailResult.status === "fulfilled" ? detailResult.value : {};
+  const pullRequests = pullRequestsResult.status === "fulfilled" ? pullRequestsResult.value : [];
+  const issues = issuesResult.status === "fulfilled" ? issuesResult.value.issues ?? [] : [];
+  const source = { ...miner, ...detail };
+
+  return {
+    source: "gittensor_api",
+    githubId: miner.githubId ?? "",
+    githubUsername: miner.githubUsername ?? "",
+    uid: source.uid,
+    hotkey: source.hotkey,
+    failedReason: source.failedReason,
+    evaluatedAt: source.evaluatedAt,
+    updatedAt: source.updatedAt,
+    isEligible: Boolean(source.isEligible),
+    credibility: asNumber(source.credibility),
+    eligibleRepoCount: asNumber(source.eligibleRepoCount),
+    issueDiscoveryScore: asNumber(source.issueDiscoveryScore),
+    issueTokenScore: asNumber(source.issueTokenScore),
+    issueCredibility: asNumber(source.issueCredibility, 1),
+    isIssueEligible: Boolean(source.isIssueEligible),
+    issueEligibleRepoCount: asNumber(source.issueEligibleRepoCount),
+    alphaPerDay: asNumber(source.alphaPerDay),
+    taoPerDay: asNumber(source.taoPerDay),
+    usdPerDay: asNumber(source.usdPerDay),
+    totals: {
+      pullRequests: asNumber(source.totalPrs),
+      mergedPullRequests: asNumber(source.totalMergedPrs),
+      openPullRequests: asNumber(source.totalOpenPrs),
+      closedPullRequests: asNumber(source.totalClosedPrs),
+      openIssues: asNumber(source.totalOpenIssues),
+      closedIssues: asNumber(source.totalClosedIssues),
+      solvedIssues: asNumber(source.totalSolvedIssues),
+      validSolvedIssues: asNumber(source.totalValidSolvedIssues),
+    },
+    repositories: (detail.repositories ?? []).map(toRepositoryEvaluation).filter((repo) => repo.pullRequests + repo.openIssues + repo.closedIssues > 0),
+    pullRequests: pullRequests.map(toPullRequest).filter((pr) => pr.repoFullName && pr.number > 0),
+    issueLabels: issues.flatMap((issue) => (issue.labels ?? []).flatMap((label) => (label.name ? [label.name] : []))),
+  };
 }
 
 async function fetchJson<T>(url: string): Promise<T> {

@@ -486,8 +486,9 @@ describe("api routes", () => {
     expect(installationHealth.status).toBe(200);
     await expect(installationHealth.json()).resolves.toMatchObject({
       installationId: 123,
-      requiredPermissions: { checks: "write", metadata: "read", pull_requests: "read", issues: "read" },
-      permissionRemediation: expect.arrayContaining([expect.objectContaining({ permission: "checks", ok: true })]),
+      requiredPermissions: { metadata: "read", pull_requests: "read", issues: "write" },
+      optionalPermissions: { checks: "write" },
+      permissionRemediation: expect.arrayContaining([expect.objectContaining({ permission: "issues", ok: true })]),
       repairSteps: ["No repair needed."],
     });
 
@@ -1357,7 +1358,7 @@ async function seedSignalData(env: Env): Promise<void> {
       id: 123,
       account: { login: "entrius", id: 1, type: "Organization" },
       repository_selection: "selected",
-      permissions: { checks: "write", metadata: "read", pull_requests: "read" },
+      permissions: { metadata: "read", pull_requests: "read", issues: "write" },
       events: ["issues", "pull_request", "repository"],
     },
   });
@@ -1502,7 +1503,7 @@ async function seedSignalData(env: Env): Promise<void> {
     status: "healthy",
     missingPermissions: [],
     missingEvents: [],
-    permissions: { checks: "write", metadata: "read", pull_requests: "read", issues: "read" },
+    permissions: { metadata: "read", pull_requests: "read", issues: "write" },
     events: ["issues", "pull_request", "repository"],
     checkedAt: "2026-05-23T00:00:00.000Z",
   });

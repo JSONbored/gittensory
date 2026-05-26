@@ -28,7 +28,7 @@ export function buildRepositoryAdvisory(repo: RepositoryRecord | null, fullName:
 export function buildPullRequestAdvisory(
   repo: RepositoryRecord | null,
   pr: PullRequestRecord | null,
-  context: { otherOpenPullRequests?: PullRequestRecord[]; reviewabilityText?: string } = {},
+  context: { otherOpenPullRequests?: PullRequestRecord[]; requireLinkedIssue?: boolean } = {},
 ): Advisory {
   const repoFullName = pr?.repoFullName ?? repo?.fullName ?? "unknown/unknown";
   const targetKey = pr ? `${repoFullName}#${pr.number}` : `${repoFullName}#unknown`;
@@ -53,15 +53,7 @@ export function buildPullRequestAdvisory(
       action: "Re-deliver the webhook or wait for the next sync.",
     });
   } else {
-    addPullRequestFindings(repo, pr, findings, context.otherOpenPullRequests ?? []);
-  }
-  if (context.reviewabilityText) {
-    findings.push({
-      code: "private_reviewability_context",
-      severity: "info",
-      title: "Private reviewability context",
-      detail: context.reviewabilityText,
-    });
+    addPullRequestFindings(repo, pr, findings, context.otherOpenPullRequests ?? [], Boolean(context.requireLinkedIssue));
   }
   return advisory("pull_request", targetKey, repoFullName, findings, "Pull request advisory generated.", pr?.number, undefined, pr?.headSha ?? undefined);
 }
@@ -94,15 +86,10 @@ export function buildIssueAdvisory(repo: RepositoryRecord | null, issue: IssueRe
 }
 
 export function formatCheckRunOutput(advisoryResult: Advisory): { title: string; summary: string; text: string } {
-  const sections = advisoryResult.findings.map((finding) => {
-    const publicText = finding.publicText ?? finding.detail;
-    const action = finding.action ? `\nAction: ${finding.action}` : "";
-    return `### ${finding.title}\n${publicText}${action}`;
-  });
   return {
-    title: advisoryResult.title,
-    summary: advisoryResult.summary,
-    text: sections.length > 0 ? sections.join("\n\n") : "No advisory findings.",
+    title: advisoryResult.conclusion === "success" ? "Gittensory context checked" : "Gittensory context posted",
+    summary: "Gittensory public check output is intentionally minimal. Detailed maintainer context is available only through private API/MCP surfaces.",
+    text: "No detailed findings are published in check runs.",
   };
 }
 
@@ -159,6 +146,7 @@ function addPullRequestFindings(
   pr: PullRequestRecord,
   findings: AdvisoryFinding[],
   otherOpenPullRequests: PullRequestRecord[],
+  requireLinkedIssue: boolean,
 ): void {
   if (pr.state !== "open") {
     findings.push({
@@ -168,7 +156,7 @@ function addPullRequestFindings(
       detail: `The pull request state is ${pr.state}.`,
     });
   }
-  if (pr.linkedIssues.length === 0) {
+  if (pr.linkedIssues.length === 0 && requireLinkedIssue) {
     findings.push({
       code: "missing_linked_issue",
       severity: "warning",
@@ -261,7 +249,7 @@ function advisory(
 ): Advisory {
   const severity = highestSeverity(findings);
   const conclusion = conclusionForSeverity(severity, findings);
-  const title = conclusion === "success" ? "Gittensory advisory passed" : "Gittensory advisory needs review";
+  const title = conclusion === "success" ? "Gittensory advisory passed" : "Gittensory advisory available";
   return {
     id: crypto.randomUUID(),
     targetType,

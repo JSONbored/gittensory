@@ -4,7 +4,7 @@ Gittensory is a backend-only intelligence layer for Gittensor registered reposit
 
 It helps miners and contributors make better decisions before they open work, and it helps maintainers review Gittensor-driven PRs with less noise. The product is the signal: role-aware contributor context, official Gittensor stats, local MCP preflight, queue health, collision risk, reviewability, and repo configuration quality.
 
-Gittensory is not a Gittensor frontend, not a public leaderboard, and not an auto-label/auto-close bot.
+Gittensory is not a Gittensor frontend, not a public leaderboard, and not an auto-close or auto-merge bot.
 
 ## What It Does
 
@@ -12,14 +12,14 @@ Gittensory is not a Gittensor frontend, not a public leaderboard, and not an aut
 - Analyzes local branches through the MCP wrapper without uploading source contents.
 - Explains private reward/risk context: score blockers, open PR pressure, lane fit, duplicate risk, credibility assumptions, and maintainer friction.
 - Generates public-safe PR packets that help contributors write cleaner submissions.
-- Gives maintainers private PR reviewability packets and advisory check runs.
+- Gives maintainers private PR reviewability packets through the API/MCP, while the GitHub App stays public-safe.
 - Tracks repository intelligence: lane correctness, registry changes, queue health, label/config quality, collisions, bounties, and sync fidelity.
 
 ## Surfaces
 
 - Worker API: Cloudflare Workers + Hono + D1 + Queues.
 - MCP package: `@jsonbored/gittensory-mcp`, a local stdio wrapper for coding agents.
-- GitHub App: check runs and optional sanitized sticky PR comments.
+- GitHub App: quiet PR inspection, public-safe sticky comments, and maintainer-configured labels only for officially confirmed Gittensor miners.
 - Docs site: VitePress under `site/`, deployed at `https://gittensory.aethereal.dev/`.
 
 ## MCP Install
@@ -128,13 +128,12 @@ Internal job routes are protected by `INTERNAL_JOB_TOKEN`.
 Required repository permissions:
 
 - Metadata: read
-- Checks: write
 - Pull requests: read
-- Issues: read
+- Issues: write
 
 Optional repository permission:
 
-- Issues: write, only when public-safe sticky PR comments are enabled.
+- Checks: write, only when minimal check runs are explicitly enabled.
 
 Required events:
 
@@ -143,6 +142,8 @@ Required events:
 - Repository
 
 If GitHub shows `Installation target`, select it. Gittensory should not block install health on event names that GitHub does not show in the app UI.
+
+Default GitHub App behavior is low-noise: non-miner, bot, and maintainer-associated PR authors produce no public output. Confirmed Gittensor miners get one sticky public-safe PR comment and the configured label, defaulting to `gittensor`. Private reviewability, scoring, wallet, hotkey, and reward/risk context never appears in public GitHub comments or checks.
 
 ## Docs
 

@@ -4,16 +4,15 @@ Gittensory is meant to make Gittensor-driven contribution flow less noisy.
 
 ## GitHub App Surface
 
-The GitHub App creates the detailed maintainer surface:
+The GitHub App is designed to stay quiet unless a PR author is an officially confirmed Gittensor miner.
 
-- Gittensory check runs on PRs
-- reviewability context
-- linked issue and duplicate signals
-- contributor role context
-- queue and repo-lane context
-- optional public-safe sticky PR comments
+Default visible output for confirmed miner PRs:
 
-The check run is the canonical detailed report. Public comments are opt-in and sanitized.
+- one sticky public-safe PR comment
+- one maintainer-configured label, defaulting to `gittensor`
+- no public output for bots, non-miners, or maintainer-associated authors unless explicitly enabled
+
+Private reviewability context, queue risk, score blockers, and reward/risk reasoning stay in the API/MCP. GitHub checks default to off; if a maintainer enables them later, they remain minimal and do not carry detailed findings.
 
 ## Reviewability Actions
 
@@ -30,9 +29,7 @@ The point is not to shame contributors. The point is to identify the lowest-fric
 
 ## Public Comments
 
-Public comments stay off by default.
-
-When enabled, comments can include:
+Confirmed miner comments can include:
 
 - contribution context
 - PR hygiene

@@ -577,10 +577,12 @@ export async function refreshContributorActivity(
 }
 
 export const REQUIRED_INSTALLATION_PERMISSIONS: Record<string, string> = {
-  checks: "write",
   metadata: "read",
   pull_requests: "read",
-  issues: "read",
+  issues: "write",
+};
+export const OPTIONAL_CHECK_RUN_PERMISSION: Record<string, string> = {
+  checks: "write",
 };
 
 export const REQUIRED_INSTALLATION_EVENTS = ["issues", "pull_request", "repository"] as const;
@@ -589,12 +591,17 @@ export const OPTIONAL_VISIBLE_INSTALLATION_EVENTS = ["installation_target"] as c
 export function enrichInstallationHealth(health: InstallationHealthRecord) {
   const missingPermissions = new Set(health.missingPermissions);
   const missingEvents = new Set(health.missingEvents);
+  const requiredPermissions = {
+    ...REQUIRED_INSTALLATION_PERMISSIONS,
+    ...(missingPermissions.has("checks") ? OPTIONAL_CHECK_RUN_PERMISSION : {}),
+  };
   return {
     ...health,
-    requiredPermissions: REQUIRED_INSTALLATION_PERMISSIONS,
+    requiredPermissions,
+    optionalPermissions: OPTIONAL_CHECK_RUN_PERMISSION,
     requiredEvents: [...REQUIRED_INSTALLATION_EVENTS],
     optionalVisibleEvents: [...OPTIONAL_VISIBLE_INSTALLATION_EVENTS],
-    permissionRemediation: Object.entries(REQUIRED_INSTALLATION_PERMISSIONS).map(([permission, access]) => ({
+    permissionRemediation: Object.entries(requiredPermissions).map(([permission, access]) => ({
       permission,
       requiredAccess: access,
       currentAccess: health.permissions[permission] ?? "missing",
@@ -625,7 +632,13 @@ export async function refreshInstallationHealth(env: Env) {
     const { installation: currentInstallation, errorSummary } = await refreshStoredInstallation(env, installation);
     const installedRepos = repositories.filter((repo) => repo.installationId === currentInstallation.id && repo.isInstalled);
     const registeredInstalled = installedRepos.filter((repo) => repo.isRegistered);
-    const missingPermissions = Object.entries(REQUIRED_INSTALLATION_PERMISSIONS)
+    const installedSettings = await Promise.all(installedRepos.map((repo) => getRepositorySettings(env, repo.fullName)));
+    const requiresChecks = installedSettings.some((settings) => settings.checkRunMode === "enabled");
+    const requiredPermissions = {
+      ...REQUIRED_INSTALLATION_PERMISSIONS,
+      ...(requiresChecks ? OPTIONAL_CHECK_RUN_PERMISSION : {}),
+    };
+    const missingPermissions = Object.entries(requiredPermissions)
       .filter(([permission, expected]) => !permissionSatisfies(currentInstallation.permissions[permission], expected))
       .map(([permission]) => permission);
     const missingEvents = REQUIRED_INSTALLATION_EVENTS.filter((event) => !currentInstallation.events.includes(event));

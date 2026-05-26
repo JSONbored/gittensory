@@ -120,6 +120,7 @@ export type GitHubPullRequestPayload = {
   updated_at?: string | null;
   user?: {
     login?: string;
+    type?: string;
   };
   author_association?: string;
   head?: {
@@ -267,8 +268,14 @@ export type RepositorySettings = {
   repoFullName: string;
   commentMode: "off" | "detected_contributors_only" | "all_prs";
   publicSignalLevel: "minimal" | "standard";
-  checkRunMode: "enabled";
+  checkRunMode: "off" | "enabled";
   checkRunDetailLevel: "minimal" | "standard" | "deep";
+  autoLabelEnabled: boolean;
+  gittensorLabel: string;
+  createMissingLabel: boolean;
+  publicSurface: "off" | "comment_and_label" | "comment_only" | "label_only";
+  includeMaintainerAuthors: boolean;
+  requireLinkedIssue: boolean;
   backfillEnabled: boolean;
   privateTrustEnabled: boolean;
   createdAt?: string | null | undefined;
