@@ -49,3 +49,9 @@
 
 
 
+### Fixes
+
+- Add explicit favicon metadata
+
+
+
