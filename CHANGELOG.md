@@ -51,6 +51,8 @@
 
 - Add deterministic base-agent orchestrator (#14)
 
+- Detect stale installs and API compatibility in doctor and status
+
 
 
 ### Fixes
