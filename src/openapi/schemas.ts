@@ -1241,6 +1241,77 @@ export const RegistryChangeReportSchema = z
   })
   .openapi("RegistryChangeReport");
 
+export const AgentActionSchema = z
+  .object({
+    id: z.string(),
+    runId: z.string(),
+    actionType: z.enum([
+      "choose_next_work",
+      "cleanup_existing_prs",
+      "preflight_branch",
+      "explain_score_blockers",
+      "prepare_pr_packet",
+      "check_duplicate_risk",
+      "monitor_existing_pr",
+      "explain_repo_fit",
+    ]),
+    targetRepoFullName: z.string().nullable().optional(),
+    targetPullNumber: z.number().nullable().optional(),
+    targetIssueNumber: z.number().nullable().optional(),
+    status: z.enum(["recommended", "ready", "blocked", "watch", "needs_input"]),
+    recommendation: z.string(),
+    why: z.array(z.string()),
+    scoreabilityImpact: z.string().nullable().optional(),
+    riskImpact: z.string().nullable().optional(),
+    maintainerImpact: z.string().nullable().optional(),
+    blockedBy: z.array(z.string()),
+    rerunWhen: z.string().nullable().optional(),
+    publicSafeSummary: z.string(),
+    approvalRequired: z.boolean(),
+    safetyClass: z.enum(["private", "public_safe", "approval_required"]),
+    payload: z.record(z.unknown()),
+    createdAt: z.string().nullable().optional(),
+  })
+  .openapi("AgentAction");
+
+export const AgentRunSchema = z
+  .object({
+    id: z.string(),
+    objective: z.string(),
+    actorLogin: z.string(),
+    surface: z.enum(["mcp", "github_comment", "api"]),
+    mode: z.literal("copilot"),
+    status: z.enum(["queued", "running", "completed", "failed", "needs_snapshot_refresh"]),
+    dataQualityStatus: z.enum(["complete", "degraded", "blocked", "unknown"]),
+    errorSummary: z.string().nullable().optional(),
+    payload: z.record(z.unknown()),
+    createdAt: z.string().nullable().optional(),
+    updatedAt: z.string().nullable().optional(),
+  })
+  .openapi("AgentRun");
+
+export const AgentContextSnapshotSchema = z
+  .object({
+    id: z.string(),
+    runId: z.string(),
+    decisionPackVersion: z.string().nullable().optional(),
+    repoSignalSnapshotIds: z.array(z.string()),
+    scoringModelId: z.string().nullable().optional(),
+    freshnessWarnings: z.array(z.string()),
+    payload: z.record(z.unknown()),
+    createdAt: z.string().nullable().optional(),
+  })
+  .openapi("AgentContextSnapshot");
+
+export const AgentRunBundleSchema = z
+  .object({
+    run: AgentRunSchema,
+    actions: z.array(AgentActionSchema),
+    contextSnapshots: z.array(AgentContextSnapshotSchema),
+    summary: z.string(),
+  })
+  .openapi("AgentRunBundle");
+
 export const HealthSchema = z
   .object({
     status: z.literal("ok"),

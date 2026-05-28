@@ -1,10 +1,10 @@
 # Gittensory
 
-Gittensory is a backend-only intelligence layer for Gittensor registered repositories.
+Gittensory is the deterministic base-agent layer for Gittensor OSS contribution mining.
 
-It helps miners and contributors make better decisions before they open work, and it helps maintainers review Gittensor-driven PRs with less noise. The product is the signal: role-aware contributor context, official Gittensor stats, local MCP preflight, queue health, collision risk, reviewability, and repo configuration quality.
+It helps miners and contributors make better decisions before they open work, and it helps maintainers review Gittensor-driven PRs with less noise. The product is the signal: role-aware contributor context, official Gittensor stats, local MCP preflight, queue health, collision risk, reviewability, repo configuration quality, and copilot-only next-action planning.
 
-Gittensory is not a Gittensor frontend, not a public leaderboard, and not an auto-close or auto-merge bot.
+Gittensory is not a Gittensor frontend, not a public leaderboard, and not an autonomous PR bot. V1 ranks, explains, preflights, and drafts public-safe packets; it does not edit code, open PRs, post comments, close, merge, or label without an explicit user or maintainer-triggered flow.
 
 ## What It Does
 
@@ -14,12 +14,13 @@ Gittensory is not a Gittensor frontend, not a public leaderboard, and not an aut
 - Generates public-safe PR packets that help contributors write cleaner submissions.
 - Gives maintainers private PR reviewability packets through the API/MCP, while the GitHub App stays public-safe.
 - Tracks repository intelligence: lane correctness, registry changes, queue health, label/config quality, collisions, bounties, and sync fidelity.
+- Runs deterministic base-agent plans that rank next actions, explain blockers, prepare PR packets, and record auditable run/action snapshots.
 
 ## Surfaces
 
 - Worker API: Cloudflare Workers + Hono + D1 + Queues.
-- MCP package: `@jsonbored/gittensory-mcp`, a local stdio wrapper for coding agents.
-- GitHub App: quiet PR inspection, public-safe sticky comments, and maintainer-configured labels only for officially confirmed Gittensor miners.
+- MCP package: `@jsonbored/gittensory-mcp`, a local stdio wrapper for coding agents and the first-class base-agent surface.
+- GitHub App: quiet PR inspection, public-safe sticky comments, maintainer-configured labels, and explicit `@gittensory` commands on installed repos.
 - Docs site: VitePress under `site/`, deployed at `https://gittensory.aethereal.dev/`.
 
 ## MCP Install
@@ -31,6 +32,15 @@ npm install -g @jsonbored/gittensory-mcp
 gittensory-mcp login
 gittensory-mcp doctor
 gittensory-mcp --stdio
+```
+
+Base-agent CLI commands:
+
+```sh
+gittensory-mcp agent plan --login jsonbored --json
+gittensory-mcp agent packet --login jsonbored --json
+gittensory-mcp agent status <run-id> --json
+gittensory-mcp agent explain <run-id> --json
 ```
 
 Local checkout:
@@ -115,6 +125,12 @@ Protected endpoints use `Authorization: Bearer <GITTENSORY_API_TOKEN>` or a Gitt
 - `GET /v1/contributors/:login/profile`
 - `GET /v1/contributors/:login/decision-pack`
 - `GET /v1/contributors/:login/repos/:owner/:repo/decision`
+- `POST /v1/agent/runs`
+- `GET /v1/agent/runs/:id`
+- `POST /v1/agent/plan-next-work`
+- `POST /v1/agent/preflight-branch`
+- `POST /v1/agent/prepare-pr-packet`
+- `POST /v1/agent/explain-blockers`
 - `POST /v1/preflight/pr`
 - `POST /v1/preflight/local-diff`
 - `POST /v1/local/branch-analysis`
@@ -141,11 +157,12 @@ Required events:
 
 - Pull request
 - Issues
+- Issue comment
 - Repository
 
 If GitHub shows `Installation target`, select it. Gittensory should not block install health on event names that GitHub does not show in the app UI.
 
-Default GitHub App behavior is low-noise: non-miner, bot, and maintainer-associated PR authors produce no public output. Confirmed Gittensor miners get one sticky public-safe PR comment and the configured label, defaulting to `gittensor`. Private reviewability, scoring, wallet, hotkey, and reward/risk context never appears in public GitHub comments or checks.
+Default GitHub App behavior is low-noise: non-miner, bot, and maintainer-associated PR authors produce no public output. Confirmed Gittensor miners get one sticky public-safe PR comment and the configured label, defaulting to `gittensor`. Maintainers and authorized PR authors can explicitly invoke public-safe `@gittensory` commands. Private reviewability, scoring, wallet, hotkey, and reward/risk context never appears in public GitHub comments or checks.
 
 ## Docs
 

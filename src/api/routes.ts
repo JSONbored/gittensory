@@ -65,6 +65,14 @@ import { getLatestRegistrySnapshot, listLatestRegistrySnapshots, refreshRegistry
 import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
 import { buildScorePreview, makeScorePreviewRecord } from "../scoring/preview";
 import {
+  explainBlockersWithAgent,
+  getAgentRunBundle,
+  planNextWork,
+  preparePrPacketWithAgent,
+  preflightBranchWithAgent,
+  startAgentRun,
+} from "../services/agent-orchestrator";
+import {
   buildAndPersistContributorDecisionPack,
   loadContributorDecisionPack,
   loadFreshContributorDecisionPack,
@@ -201,6 +209,35 @@ const scorePreviewSchema = z.object({
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).max(20).optional(),
 });
+
+const agentSurfaceSchema = z.enum(["api", "mcp", "github_comment"]).default("api");
+
+const agentRunSchema = z
+  .object({
+    objective: z.string().min(1).max(500),
+    actorLogin: z.string().min(1),
+    surface: agentSurfaceSchema.optional(),
+    target: z
+      .object({
+        repoFullName: z.string().min(3).optional(),
+        pullNumber: z.number().int().positive().optional(),
+        issueNumber: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+const agentPlanSchema = z
+  .object({
+    login: z.string().min(1),
+    objective: z.string().min(1).max(500).optional(),
+    repoFullName: z.string().min(3).optional(),
+    surface: agentSurfaceSchema.optional(),
+  })
+  .strict();
+
+const agentExplainBlockersSchema = z.union([localBranchAnalysisSchema, agentPlanSchema]);
 
 const repositorySettingsSchema = z.object({
   commentMode: z.enum(["off", "detected_contributors_only", "all_prs"]).default("detected_contributors_only"),
@@ -682,6 +719,52 @@ export function createApp() {
     const response = { ...analysis, dataQuality: await loadRepoDataQuality(c.env, parsed.data.repoFullName) };
     await persistSignal(c.env, "local-branch-analysis", `${parsed.data.login}:${parsed.data.repoFullName}:${parsed.data.branchName ?? parsed.data.headRef ?? "local"}`, parsed.data.repoFullName, response as unknown as Record<string, JsonValue>, analysis.generatedAt);
     return c.json(response);
+  });
+
+  app.post("/v1/agent/runs", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = agentRunSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_agent_run_request", issues: parsed.error.issues }, 400);
+    const bundle = await startAgentRun(c.env, parsed.data);
+    return c.json(bundle, 202);
+  });
+
+  app.get("/v1/agent/runs/:id", async (c) => {
+    const bundle = await getAgentRunBundle(c.env, c.req.param("id"));
+    if (!bundle) return c.json({ error: "agent_run_not_found" }, 404);
+    return c.json(bundle);
+  });
+
+  app.post("/v1/agent/plan-next-work", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = agentPlanSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_agent_plan_request", issues: parsed.error.issues }, 400);
+    const bundle = await planNextWork(c.env, parsed.data);
+    return c.json(bundle, bundle.run.status === "needs_snapshot_refresh" ? 202 : 200);
+  });
+
+  app.post("/v1/agent/preflight-branch", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = localBranchAnalysisSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_agent_preflight_branch_request", issues: parsed.error.issues }, 400);
+    const bundle = await preflightBranchWithAgent(c.env, parsed.data);
+    return c.json(bundle);
+  });
+
+  app.post("/v1/agent/prepare-pr-packet", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = localBranchAnalysisSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_agent_prepare_pr_packet_request", issues: parsed.error.issues }, 400);
+    const bundle = await preparePrPacketWithAgent(c.env, parsed.data);
+    return c.json(bundle);
+  });
+
+  app.post("/v1/agent/explain-blockers", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = agentExplainBlockersSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_agent_explain_blockers_request", issues: parsed.error.issues }, 400);
+    const bundle = await explainBlockersWithAgent(c.env, parsed.data);
+    return c.json(bundle, bundle.run.status === "needs_snapshot_refresh" ? 202 : 200);
   });
 
   app.get("/v1/bounties", async (c) => c.json(await listBounties(c.env)));

@@ -198,6 +198,57 @@ describe("api route guards and error branches", () => {
     expect((await app.request("/v1/preflight/pr", { method: "POST", headers: apiHeaders(env), body: "{}" }, env)).status).toBe(400);
     expect((await app.request("/v1/preflight/local-diff", { method: "POST", headers: apiHeaders(env), body: "{}" }, env)).status).toBe(400);
     expect((await app.request("/v1/local/branch-analysis", { method: "POST", headers: apiHeaders(env), body: "{}" }, env)).status).toBe(400);
+    expect((await app.request("/v1/agent/runs/missing-run", { headers: apiHeaders(env) }, env)).status).toBe(404);
+    expect((await app.request("/v1/agent/runs", { method: "POST", headers: apiHeaders(env), body: "{}" }, env)).status).toBe(400);
+    expect((await app.request("/v1/agent/plan-next-work", { method: "POST", headers: apiHeaders(env), body: "{}" }, env)).status).toBe(400);
+    expect((await app.request("/v1/agent/preflight-branch", { method: "POST", headers: apiHeaders(env), body: "{}" }, env)).status).toBe(400);
+    expect((await app.request("/v1/agent/prepare-pr-packet", { method: "POST", headers: apiHeaders(env), body: "{}" }, env)).status).toBe(400);
+    expect((await app.request("/v1/agent/explain-blockers", { method: "POST", headers: apiHeaders(env), body: "{}" }, env)).status).toBe(400);
+    expect((await app.request("/openapi.json", { method: "OPTIONS" }, env)).status).toBe(204);
+
+    const agentRun = await app.request("/v1/agent/runs", {
+      method: "POST",
+      headers: apiHeaders(env),
+      body: JSON.stringify({ objective: "Plan next work", actorLogin: "oktofeesh1", surface: "api" }),
+    }, env);
+    expect(agentRun.status).toBe(202);
+    const agentRunJson = (await agentRun.json()) as { run: { id: string; status: string } };
+    expect(agentRunJson.run.status).toBe("queued");
+    const loadedAgentRun = await app.request(`/v1/agent/runs/${agentRunJson.run.id}`, { headers: apiHeaders(env) }, env);
+    expect(loadedAgentRun.status).toBe(200);
+
+    const agentPlan = await app.request("/v1/agent/plan-next-work", {
+      method: "POST",
+      headers: apiHeaders(env),
+      body: JSON.stringify({ login: "oktofeesh1", objective: "Pick next work", surface: "api" }),
+    }, env);
+    expect(agentPlan.status).toBe(202);
+    await expect(agentPlan.json()).resolves.toMatchObject({ run: { status: "needs_snapshot_refresh" } });
+
+    const agentBlockers = await app.request("/v1/agent/explain-blockers", {
+      method: "POST",
+      headers: apiHeaders(env),
+      body: JSON.stringify({ login: "oktofeesh1", repoFullName: "JSONbored/gittensory" }),
+    }, env);
+    expect(agentBlockers.status).toBe(202);
+    await expect(agentBlockers.json()).resolves.toMatchObject({ run: { status: "needs_snapshot_refresh" } });
+
+    const localAgentPayload = {
+      login: "oktofeesh1",
+      repoFullName: "JSONbored/gittensory",
+      baseRef: "origin/main",
+      headRef: "feature/base-agent",
+      branchName: "feature/base-agent",
+      changedFiles: [{ path: "src/services/agent-orchestrator.ts", additions: 20, deletions: 2, status: "modified" }],
+      validation: [{ command: "npm test", status: "passed", summary: "unit tests passed" }],
+      title: "Add base-agent planning",
+      body: "No issue: base-agent planning surface.",
+      localScorer: { mode: "metadata_only", sourceTokenScore: 40, totalTokenScore: 60 },
+    };
+    expect((await app.request("/v1/agent/preflight-branch", { method: "POST", headers: apiHeaders(env), body: JSON.stringify(localAgentPayload) }, env)).status).toBe(200);
+    expect((await app.request("/v1/agent/prepare-pr-packet", { method: "POST", headers: apiHeaders(env), body: JSON.stringify(localAgentPayload) }, env)).status).toBe(200);
+    expect((await app.request("/v1/agent/explain-blockers", { method: "POST", headers: apiHeaders(env), body: JSON.stringify(localAgentPayload) }, env)).status).toBe(200);
+
     expect((await app.request("/v1/scoring/preview", { method: "POST", headers: apiHeaders(env), body: "{}" }, env)).status).toBe(400);
     expect((await app.request("/v1/scoring/model", { headers: apiHeaders(env) }, env)).status).toBe(200);
     expect((await app.request("/v1/repos/nope/missing/issue-quality", { headers: apiHeaders(env) }, env)).status).toBe(404);

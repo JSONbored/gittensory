@@ -49,6 +49,8 @@
 
 - Refresh Gittensor-aligned homepage
 
+- Add deterministic base-agent orchestrator
+
 
 
 ### Fixes

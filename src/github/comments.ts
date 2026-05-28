@@ -2,6 +2,7 @@ import { Octokit } from "@octokit/core";
 import { createInstallationToken } from "./app";
 
 export const PR_INTELLIGENCE_COMMENT_MARKER = "<!-- gittensory-pr-intelligence -->";
+export const AGENT_COMMAND_COMMENT_MARKER = "<!-- gittensory-agent-command -->";
 
 type IssueComment = {
   id: number;
@@ -20,6 +21,27 @@ export async function createOrUpdatePrIntelligenceComment(
   pullNumber: number,
   body: string,
 ): Promise<{ id: number; html_url?: string } | null> {
+  return createOrUpdateIssueCommentWithMarker(env, installationId, repoFullName, pullNumber, body, PR_INTELLIGENCE_COMMENT_MARKER);
+}
+
+export async function createOrUpdateAgentCommandComment(
+  env: Env,
+  installationId: number,
+  repoFullName: string,
+  issueNumber: number,
+  body: string,
+): Promise<{ id: number; html_url?: string } | null> {
+  return createOrUpdateIssueCommentWithMarker(env, installationId, repoFullName, issueNumber, body, AGENT_COMMAND_COMMENT_MARKER);
+}
+
+async function createOrUpdateIssueCommentWithMarker(
+  env: Env,
+  installationId: number,
+  repoFullName: string,
+  issueNumber: number,
+  body: string,
+  marker: string,
+): Promise<{ id: number; html_url?: string } | null> {
   const [owner, repo] = repoFullName.split("/");
   if (!owner || !repo) throw new Error(`Invalid repository full name: ${repoFullName}`);
 
@@ -28,10 +50,10 @@ export async function createOrUpdatePrIntelligenceComment(
   const comments = await octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}/comments", {
     owner,
     repo,
-    issue_number: pullNumber,
+    issue_number: issueNumber,
     per_page: 100,
   });
-  const existing = (comments.data as IssueComment[]).find((comment) => comment.body?.includes(PR_INTELLIGENCE_COMMENT_MARKER));
+  const existing = (comments.data as IssueComment[]).find((comment) => comment.body?.includes(marker));
   if (existing) {
     const response = await octokit.request("PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}", {
       owner,
@@ -44,7 +66,7 @@ export async function createOrUpdatePrIntelligenceComment(
   const response = await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
     owner,
     repo,
-    issue_number: pullNumber,
+    issue_number: issueNumber,
     body,
   });
   return response.data as { id: number; html_url?: string };

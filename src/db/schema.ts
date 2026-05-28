@@ -405,6 +405,74 @@ export const signalSnapshots = sqliteTable("signal_snapshots", {
   generatedAt: text("generated_at").notNull().default("CURRENT_TIMESTAMP"),
 });
 
+export const agentRuns = sqliteTable(
+  "agent_runs",
+  {
+    id: text("id").primaryKey(),
+    objective: text("objective").notNull(),
+    actorLogin: text("actor_login").notNull(),
+    surface: text("surface").notNull(),
+    mode: text("mode").notNull().default("copilot"),
+    status: text("status").notNull().default("queued"),
+    dataQualityStatus: text("data_quality_status").notNull().default("unknown"),
+    errorSummary: text("error_summary"),
+    payloadJson: text("payload_json").notNull().default("{}"),
+    createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
+    updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    actorUpdated: index("agent_runs_actor_updated_idx").on(table.actorLogin, table.updatedAt),
+    statusUpdated: index("agent_runs_status_updated_idx").on(table.status, table.updatedAt),
+    surfaceUpdated: index("agent_runs_surface_updated_idx").on(table.surface, table.updatedAt),
+  }),
+);
+
+export const agentActions = sqliteTable(
+  "agent_actions",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    actionType: text("action_type").notNull(),
+    targetRepoFullName: text("target_repo_full_name"),
+    targetPullNumber: integer("target_pull_number"),
+    targetIssueNumber: integer("target_issue_number"),
+    status: text("status").notNull(),
+    recommendation: text("recommendation").notNull(),
+    whyJson: text("why_json").notNull().default("[]"),
+    scoreabilityImpact: text("scoreability_impact"),
+    riskImpact: text("risk_impact"),
+    maintainerImpact: text("maintainer_impact"),
+    blockedByJson: text("blocked_by_json").notNull().default("[]"),
+    rerunWhen: text("rerun_when"),
+    publicSafeSummary: text("public_safe_summary").notNull(),
+    approvalRequired: integer("approval_required", { mode: "boolean" }).notNull().default(true),
+    safetyClass: text("safety_class").notNull(),
+    payloadJson: text("payload_json").notNull().default("{}"),
+    createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    runAction: index("agent_actions_run_action_idx").on(table.runId, table.actionType),
+    targetRepo: index("agent_actions_target_repo_idx").on(table.targetRepoFullName, table.createdAt),
+  }),
+);
+
+export const agentContextSnapshots = sqliteTable(
+  "agent_context_snapshots",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    decisionPackVersion: text("decision_pack_version"),
+    repoSignalSnapshotIdsJson: text("repo_signal_snapshot_ids_json").notNull().default("[]"),
+    scoringModelId: text("scoring_model_id"),
+    freshnessWarningsJson: text("freshness_warnings_json").notNull().default("[]"),
+    payloadJson: text("payload_json").notNull().default("{}"),
+    createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    runCreated: index("agent_context_snapshots_run_created_idx").on(table.runId, table.createdAt),
+  }),
+);
+
 export const installationHealth = sqliteTable("installation_health", {
   installationId: integer("installation_id").primaryKey(),
   accountLogin: text("account_login").notNull(),

@@ -38,6 +38,17 @@ curl "$GITTENSORY_API_URL/openapi.json" \
 | `POST /v1/preflight/pr` | Planned PR metadata preflight. |
 | `POST /v1/preflight/local-diff` | Local-diff metadata preflight. |
 
+## Agent APIs
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/agent/runs` | Queue a copilot-only agent run and persist run/action context. |
+| `GET /v1/agent/runs/:id` | Fetch a persisted agent run, ranked actions, and context snapshots. |
+| `POST /v1/agent/plan-next-work` | Return deterministic next-action planning for a GitHub login. |
+| `POST /v1/agent/preflight-branch` | Run base-agent preflight against local branch metadata. |
+| `POST /v1/agent/prepare-pr-packet` | Prepare a public-safe PR packet from branch metadata. |
+| `POST /v1/agent/explain-blockers` | Explain scoreability, queue, role, duplicate, and reviewability blockers privately. |
+
 ## Ops APIs
 
 | Endpoint | Purpose |

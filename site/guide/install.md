@@ -39,6 +39,7 @@ If a client cannot find `gittensory-mcp`, use an absolute command path in that c
 From any GitHub repository:
 
 ```sh
+gittensory-mcp agent plan --login YOUR_GITHUB_LOGIN --json
 gittensory-mcp analyze-branch --login YOUR_GITHUB_LOGIN --json
 gittensory-mcp preflight --login YOUR_GITHUB_LOGIN --json
 ```

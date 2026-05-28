@@ -98,6 +98,7 @@ export function routeClassForPath(path: string): RateLimitClass {
   if (path.startsWith("/v1/auth/")) return "strict";
   if (
     path.includes("/branch-analysis") ||
+    path.includes("/v1/agent/") ||
     path.includes("/scoring/preview") ||
     path.includes("/decision-pack") ||
     path.includes("/internal/jobs/generate-signal-snapshots") ||

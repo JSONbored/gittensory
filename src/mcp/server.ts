@@ -28,6 +28,13 @@ import { fetchPublicContributorProfile } from "../github/public";
 import { listLatestRegistrySnapshots } from "../registry/sync";
 import { getOrCreateScoringModelSnapshot } from "../scoring/model";
 import { buildScorePreview, makeScorePreviewRecord } from "../scoring/preview";
+import {
+  explainBlockersWithAgent,
+  getAgentRunBundle,
+  planNextWork,
+  preparePrPacketWithAgent,
+  startAgentRun,
+} from "../services/agent-orchestrator";
 import { loadFreshContributorDecisionPack, repoDecisionFromPack } from "../services/decision-pack";
 import {
   buildBountyAdvisory,
@@ -156,6 +163,24 @@ const localBranchAnalysisShape = {
 
 const localBranchVariantsShape = {
   variants: z.array(z.object(localBranchAnalysisShape).strict()).min(1).max(10),
+};
+
+const agentRunShape = {
+  objective: z.string().min(1).max(500),
+  actorLogin: z.string().min(1),
+  targetRepoFullName: z.string().min(3).optional(),
+  targetPullNumber: z.number().int().positive().optional(),
+  targetIssueNumber: z.number().int().positive().optional(),
+};
+
+const agentRunIdShape = {
+  runId: z.string().min(1),
+};
+
+const agentPlanShape = {
+  login: z.string().min(1),
+  objective: z.string().min(1).max(500).optional(),
+  repoFullName: z.string().min(3).optional(),
 };
 
 const scorePreviewShape = {
@@ -382,6 +407,51 @@ export class GittensoryMcp {
         inputSchema: localBranchVariantsShape,
       },
       async (input) => this.toolResult(await this.compareLocalVariants(input.variants)),
+    );
+
+    server.registerTool(
+      "gittensory_agent_plan_next_work",
+      {
+        description: "Run the deterministic Gittensory base-agent planner and rank the next Gittensor OSS contribution actions.",
+        inputSchema: agentPlanShape,
+      },
+      async (input) => this.toolResult(await this.agentPlanNextWork(input)),
+    );
+
+    server.registerTool(
+      "gittensory_agent_start_run",
+      {
+        description: "Create a queued copilot-only Gittensory agent run. The agent plans and explains; it does not edit code or open PRs.",
+        inputSchema: agentRunShape,
+      },
+      async (input) => this.toolResult(await this.agentStartRun(input)),
+    );
+
+    server.registerTool(
+      "gittensory_agent_get_run",
+      {
+        description: "Fetch a persisted Gittensory agent run with ranked actions and context snapshots.",
+        inputSchema: agentRunIdShape,
+      },
+      async (input) => this.toolResult(await this.agentGetRun(input.runId)),
+    );
+
+    server.registerTool(
+      "gittensory_agent_explain_next_action",
+      {
+        description: "Explain the top deterministic next action and its scoreability/risk/maintainer impact.",
+        inputSchema: agentPlanShape,
+      },
+      async (input) => this.toolResult(await this.agentExplainNextAction(input)),
+    );
+
+    server.registerTool(
+      "gittensory_agent_prepare_pr_packet",
+      {
+        description: "Prepare a public-safe PR packet from local branch metadata. Source contents are not uploaded.",
+        inputSchema: localBranchAnalysisShape,
+      },
+      async (input) => this.toolResult(await this.agentPreparePrPacket(input)),
     );
 
     return server;
@@ -619,6 +689,59 @@ export class GittensoryMcp {
           dataQuality: analysis.dataQuality,
         })),
       },
+    };
+  }
+
+  private async agentPlanNextWork(input: z.infer<z.ZodObject<typeof agentPlanShape>>): Promise<ToolPayload> {
+    const bundle = await planNextWork(this.env, { ...input, surface: "mcp" });
+    return {
+      summary: `Gittensory base-agent plan for ${input.login}.`,
+      data: bundle as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async agentStartRun(input: z.infer<z.ZodObject<typeof agentRunShape>>): Promise<ToolPayload> {
+    const bundle = await startAgentRun(this.env, {
+      objective: input.objective,
+      actorLogin: input.actorLogin,
+      surface: "mcp",
+      target: {
+        repoFullName: input.targetRepoFullName,
+        pullNumber: input.targetPullNumber,
+        issueNumber: input.targetIssueNumber,
+      },
+    });
+    return {
+      summary: `Queued Gittensory base-agent run for ${input.actorLogin}.`,
+      data: bundle as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async agentGetRun(runId: string): Promise<ToolPayload> {
+    const bundle = await getAgentRunBundle(this.env, runId);
+    if (!bundle) throw new Error("Agent run not found.");
+    return {
+      summary: `Gittensory base-agent run ${runId}.`,
+      data: bundle as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async agentExplainNextAction(input: z.infer<z.ZodObject<typeof agentPlanShape>>): Promise<ToolPayload> {
+    const bundle = await explainBlockersWithAgent(this.env, { ...input, surface: "mcp" });
+    return {
+      summary: `Gittensory base-agent next-action explanation for ${input.login}.`,
+      data: {
+        ...bundle,
+        topAction: bundle.actions[0] ?? null,
+      } as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async agentPreparePrPacket(input: z.infer<z.ZodObject<typeof localBranchAnalysisShape>>): Promise<ToolPayload> {
+    const bundle = await preparePrPacketWithAgent(this.env, input, "mcp");
+    return {
+      summary: `Gittensory base-agent public-safe PR packet for ${input.repoFullName}.`,
+      data: bundle as unknown as Record<string, unknown>,
     };
   }
 

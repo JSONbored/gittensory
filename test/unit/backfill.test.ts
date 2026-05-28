@@ -304,7 +304,7 @@ describe("GitHub backfill", () => {
           account: { login: "JSONbored", id: 1, type: "User" },
           repository_selection: "selected",
           permissions: { checks: "write", metadata: "read", pull_requests: "read", issues: "write" },
-          events: ["issues", "pull_request", "repository"],
+          events: ["issues", "issue_comment", "pull_request", "repository"],
         });
       }
       return new Response("not found", { status: 404 });
@@ -314,7 +314,7 @@ describe("GitHub backfill", () => {
     expect(result.installations[0]).toMatchObject({
       status: "needs_attention",
       missingPermissions: ["pull_requests", "issues"],
-      missingEvents: ["issues", "repository"],
+      missingEvents: ["issues", "issue_comment", "repository"],
       repairSteps: expect.arrayContaining(["Update the GitHub App permissions and subscribed events."]),
     });
 
@@ -324,7 +324,7 @@ describe("GitHub backfill", () => {
         account: { login: "JSONbored", id: 1, type: "User" },
         repository_selection: "selected",
         permissions: { checks: "write", metadata: "read", pull_requests: "read", issues: "write" },
-        events: ["issues", "pull_request", "repository"],
+        events: ["issues", "issue_comment", "pull_request", "repository"],
       },
     });
     const refreshed = await refreshInstallationHealth(env);
@@ -340,7 +340,7 @@ describe("GitHub backfill", () => {
         account: { login: "JSONbored", id: 1, type: "User" },
         repository_selection: "selected",
         permissions: { metadata: "read", pull_requests: "read", issues: "write" },
-        events: ["issues", "pull_request", "repository"],
+        events: ["issues", "issue_comment", "pull_request", "repository"],
       },
     });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);
@@ -356,7 +356,7 @@ describe("GitHub backfill", () => {
           account: { login: "JSONbored", id: 1, type: "User" },
           repository_selection: "selected",
           permissions: { metadata: "read", pull_requests: "read", issues: "write" },
-          events: ["issues", "pull_request", "repository"],
+          events: ["issues", "issue_comment", "pull_request", "repository"],
         });
       }
       return new Response("not found", { status: 404 });
@@ -397,7 +397,7 @@ describe("GitHub backfill", () => {
           target_type: "User",
           repository_selection: "selected",
           permissions: { checks: "write", metadata: "read", pull_requests: "read", issues: "write" },
-          events: ["issues", "pull_request", "repository"],
+          events: ["issues", "issue_comment", "pull_request", "repository"],
         });
       }
       return new Response("not found", { status: 404 });
@@ -425,7 +425,7 @@ describe("GitHub backfill", () => {
           account: { login: "JSONbored", id: 1, type: "User" },
           repository_selection: "selected",
           permissions: { metadata: "read", pull_requests: "read", issues: "write" },
-          events: ["issues", "pull_request", "repository"],
+          events: ["issues", "issue_comment", "pull_request", "repository"],
         });
       }
       return new Response("not found", { status: 404 });
@@ -452,7 +452,7 @@ describe("GitHub backfill", () => {
         account: { login: "JSONbored", id: 1, type: "User" },
         repository_selection: "selected",
         permissions: { metadata: "read", pull_requests: "read", issues: "write" },
-        events: ["issues", "pull_request", "repository"],
+        events: ["issues", "issue_comment", "pull_request", "repository"],
       },
     });
     vi.stubGlobal("fetch", async () => new Response("installation unavailable", { status: 503 }));
@@ -1545,7 +1545,7 @@ describe("GitHub backfill", () => {
         account: { login: "JSONbored", id: 1, type: "User" },
         repository_selection: "selected",
         permissions: { metadata: "read", pull_requests: "read", issues: "write" },
-        events: ["issues", "pull_request", "repository"],
+        events: ["issues", "issue_comment", "pull_request", "repository"],
       },
     });
     await upsertRepositoryFromGitHub(
@@ -1593,7 +1593,7 @@ describe("GitHub backfill", () => {
           permissions: {},
           events: [],
           missingPermissions: ["metadata", "pull_requests", "issues"],
-          missingEvents: ["issues", "pull_request", "repository"],
+          missingEvents: ["issues", "issue_comment", "pull_request", "repository"],
         }),
       ]),
     );

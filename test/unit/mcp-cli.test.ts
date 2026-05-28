@@ -62,13 +62,36 @@ describe("gittensory-mcp CLI", () => {
       }),
     ) as { package: { name: string; version: string; latestStatus: string }; api: { status: string }; auth: { login: string } };
 
-    expect(status.package).toMatchObject({ name: "@jsonbored/gittensory-mcp", version: "0.1.4", latestStatus: "skipped" });
+    expect(status.package).toMatchObject({ name: "@jsonbored/gittensory-mcp", version: "0.2.0", latestStatus: "skipped" });
     expect(status.api.status).toBe("ok");
     expect(status.auth.login).toBe("JSONbored");
 
     const changelog = JSON.parse(run(["changelog", "--json"])) as { package: { version: string }; changelog: string };
-    expect(changelog.package.version).toBe("0.1.4");
+    expect(changelog.package.version).toBe("0.2.0");
     expect(changelog.changelog).toContain("# Changelog");
+  });
+
+  it("runs base-agent CLI commands against API fixtures", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    const url = await startFixtureServer();
+    const env = {
+      GITTENSORY_API_URL: url,
+      GITTENSORY_TOKEN: "session-token",
+      GITTENSORY_CONFIG_DIR: tempDir,
+    };
+
+    const plan = JSON.parse(await runAsync(["agent", "plan", "--login", "JSONbored", "--repo", "JSONbored/gittensory", "--json"], env)) as {
+      run: { id: string; status: string };
+      actions: Array<{ actionType: string }>;
+    };
+    expect(plan.run).toMatchObject({ id: "run-1", status: "completed" });
+    expect(plan.actions[0]).toMatchObject({ actionType: "choose_next_work" });
+
+    const statusPayload = JSON.parse(await runAsync(["agent", "status", "run-1", "--json"], env)) as { run: { id: string } };
+    expect(statusPayload.run.id).toBe("run-1");
+
+    const explain = JSON.parse(await runAsync(["agent", "explain", "run-1", "--json"], env)) as { topAction: { actionType: string } };
+    expect(explain.topAction.actionType).toBe("choose_next_work");
   });
 
   it("rejects unsupported client snippets", () => {
@@ -125,6 +148,14 @@ async function startFixtureServer() {
       response.end(JSON.stringify({ status: "authenticated", login: "JSONbored", expiresAt: "2026-06-02T00:00:00.000Z", scopes: ["read:user"] }));
       return;
     }
+    if (request.url === "/v1/agent/plan-next-work" && request.method === "POST") {
+      response.end(JSON.stringify(agentFixture()));
+      return;
+    }
+    if (request.url === "/v1/agent/runs/run-1" && request.method === "GET") {
+      response.end(JSON.stringify(agentFixture()));
+      return;
+    }
     response.statusCode = 404;
     response.end(JSON.stringify({ error: "not_found" }));
   });
@@ -132,4 +163,36 @@ async function startFixtureServer() {
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("fixture server did not bind a TCP port");
   return `http://127.0.0.1:${address.port}`;
+}
+
+function agentFixture() {
+  return {
+    run: {
+      id: "run-1",
+      objective: "plan",
+      actorLogin: "JSONbored",
+      surface: "mcp",
+      mode: "copilot",
+      status: "completed",
+      dataQualityStatus: "complete",
+      payload: {},
+    },
+    actions: [
+      {
+        id: "action-1",
+        runId: "run-1",
+        actionType: "choose_next_work",
+        status: "recommended",
+        recommendation: "Pick narrow work and run branch preflight.",
+        why: ["Fixture"],
+        blockedBy: [],
+        publicSafeSummary: "Fixture public summary.",
+        approvalRequired: true,
+        safetyClass: "private",
+        payload: {},
+      },
+    ],
+    contextSnapshots: [],
+    summary: "fixture",
+  };
 }

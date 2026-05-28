@@ -26,6 +26,19 @@ Private API/MCP surfaces can explain:
 
 The GitHub App stays low-noise. It does not close, merge, rewrite, or publicly judge contributor work.
 
+## Explicit Commands
+
+Installed repos can use public-safe mention commands when a maintainer or authorized PR author wants Gittensory context without enabling noisy checks:
+
+- `@gittensory help`
+- `@gittensory preflight`
+- `@gittensory blockers`
+- `@gittensory duplicate-check`
+- `@gittensory miner-context`
+- `@gittensory next-action`
+
+Maintainers can invoke commands on installed repos. PR authors can invoke commands on their own PRs only when official Gittensor miner detection succeeds. If miner detection is unavailable, Gittensory fails closed and avoids public output.
+
 ## Intake Health
 
 Repo owners can use Gittensory signals to inspect:

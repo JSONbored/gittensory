@@ -2,6 +2,9 @@ import { and, desc, eq, not, sql } from "drizzle-orm";
 import { getDb } from "./client";
 import {
   advisories,
+  agentActions,
+  agentContextSnapshots,
+  agentRuns,
   auditEvents,
   authSessions,
   bounties,
@@ -38,6 +41,15 @@ import {
 } from "./schema";
 import type {
   Advisory,
+  AgentActionRecord,
+  AgentActionStatus,
+  AgentActionType,
+  AgentContextSnapshotRecord,
+  AgentMode,
+  AgentRunRecord,
+  AgentRunStatus,
+  AgentSafetyClass,
+  AgentSurface,
   AuditEventRecord,
   AuthSessionRecord,
   BountyLifecycleEventRecord,
@@ -1354,6 +1366,101 @@ export async function listSignalSnapshots(env: Env, signalType: string, targetKe
   return rows.map(toSignalSnapshotRecord);
 }
 
+export async function createAgentRun(env: Env, run: AgentRunRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db.insert(agentRuns).values({
+    id: run.id,
+    objective: run.objective,
+    actorLogin: run.actorLogin,
+    surface: run.surface,
+    mode: run.mode,
+    status: run.status,
+    dataQualityStatus: run.dataQualityStatus,
+    errorSummary: run.errorSummary ?? null,
+    payloadJson: jsonString(run.payload),
+    createdAt: run.createdAt ?? nowIso(),
+    updatedAt: run.updatedAt ?? nowIso(),
+  });
+}
+
+export async function updateAgentRun(
+  env: Env,
+  runId: string,
+  patch: Partial<Pick<AgentRunRecord, "status" | "dataQualityStatus" | "errorSummary" | "payload">>,
+): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .update(agentRuns)
+    .set({
+      ...(patch.status ? { status: patch.status } : {}),
+      ...(patch.dataQualityStatus ? { dataQualityStatus: patch.dataQualityStatus } : {}),
+      ...(patch.errorSummary !== undefined ? { errorSummary: patch.errorSummary } : {}),
+      ...(patch.payload ? { payloadJson: jsonString(patch.payload) } : {}),
+      updatedAt: nowIso(),
+    })
+    .where(eq(agentRuns.id, runId));
+}
+
+export async function getAgentRun(env: Env, runId: string): Promise<AgentRunRecord | null> {
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId)).limit(1);
+  return row ? toAgentRunRecord(row) : null;
+}
+
+export async function listAgentActions(env: Env, runId: string): Promise<AgentActionRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(agentActions).where(eq(agentActions.runId, runId)).orderBy(agentActions.createdAt).limit(100);
+  return rows.map(toAgentActionRecord);
+}
+
+export async function replaceAgentActions(env: Env, runId: string, actions: AgentActionRecord[]): Promise<void> {
+  const db = getDb(env.DB);
+  await db.delete(agentActions).where(eq(agentActions.runId, runId));
+  for (const action of actions) {
+    await db.insert(agentActions).values({
+      id: action.id,
+      runId,
+      actionType: action.actionType,
+      targetRepoFullName: action.targetRepoFullName ?? null,
+      targetPullNumber: action.targetPullNumber ?? null,
+      targetIssueNumber: action.targetIssueNumber ?? null,
+      status: action.status,
+      recommendation: action.recommendation,
+      whyJson: jsonString(action.why),
+      scoreabilityImpact: action.scoreabilityImpact ?? null,
+      riskImpact: action.riskImpact ?? null,
+      maintainerImpact: action.maintainerImpact ?? null,
+      blockedByJson: jsonString(action.blockedBy),
+      rerunWhen: action.rerunWhen ?? null,
+      publicSafeSummary: action.publicSafeSummary,
+      approvalRequired: action.approvalRequired,
+      safetyClass: action.safetyClass,
+      payloadJson: jsonString(action.payload),
+      createdAt: action.createdAt ?? nowIso(),
+    });
+  }
+}
+
+export async function persistAgentContextSnapshot(env: Env, snapshot: AgentContextSnapshotRecord): Promise<void> {
+  const db = getDb(env.DB);
+  await db.insert(agentContextSnapshots).values({
+    id: snapshot.id,
+    runId: snapshot.runId,
+    decisionPackVersion: snapshot.decisionPackVersion ?? null,
+    repoSignalSnapshotIdsJson: jsonString(snapshot.repoSignalSnapshotIds),
+    scoringModelId: snapshot.scoringModelId ?? null,
+    freshnessWarningsJson: jsonString(snapshot.freshnessWarnings),
+    payloadJson: jsonString(snapshot.payload),
+    createdAt: snapshot.createdAt ?? nowIso(),
+  });
+}
+
+export async function listAgentContextSnapshots(env: Env, runId: string): Promise<AgentContextSnapshotRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(agentContextSnapshots).where(eq(agentContextSnapshots.runId, runId)).orderBy(desc(agentContextSnapshots.createdAt)).limit(50);
+  return rows.map(toAgentContextSnapshotRecord);
+}
+
 export async function upsertInstallationHealth(env: Env, health: InstallationHealthRecord): Promise<void> {
   const db = getDb(env.DB);
   await db
@@ -1861,6 +1968,59 @@ function toSignalSnapshotRecord(row: typeof signalSnapshots.$inferSelect): Signa
   };
 }
 
+function toAgentRunRecord(row: typeof agentRuns.$inferSelect): AgentRunRecord {
+  return {
+    id: row.id,
+    objective: row.objective,
+    actorLogin: row.actorLogin,
+    surface: parseAgentSurface(row.surface),
+    mode: parseAgentMode(row.mode),
+    status: parseAgentRunStatus(row.status),
+    dataQualityStatus: parseDataQualityStatus(row.dataQualityStatus),
+    errorSummary: row.errorSummary,
+    payload: parseJson<Record<string, JsonValue>>(row.payloadJson, {}),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function toAgentActionRecord(row: typeof agentActions.$inferSelect): AgentActionRecord {
+  return {
+    id: row.id,
+    runId: row.runId,
+    actionType: parseAgentActionType(row.actionType),
+    targetRepoFullName: row.targetRepoFullName,
+    targetPullNumber: row.targetPullNumber,
+    targetIssueNumber: row.targetIssueNumber,
+    status: parseAgentActionStatus(row.status),
+    recommendation: row.recommendation,
+    why: parseJson<string[]>(row.whyJson, []),
+    scoreabilityImpact: row.scoreabilityImpact,
+    riskImpact: row.riskImpact,
+    maintainerImpact: row.maintainerImpact,
+    blockedBy: parseJson<string[]>(row.blockedByJson, []),
+    rerunWhen: row.rerunWhen,
+    publicSafeSummary: row.publicSafeSummary,
+    approvalRequired: row.approvalRequired,
+    safetyClass: parseAgentSafetyClass(row.safetyClass),
+    payload: parseJson<Record<string, JsonValue>>(row.payloadJson, {}),
+    createdAt: row.createdAt,
+  };
+}
+
+function toAgentContextSnapshotRecord(row: typeof agentContextSnapshots.$inferSelect): AgentContextSnapshotRecord {
+  return {
+    id: row.id,
+    runId: row.runId,
+    decisionPackVersion: row.decisionPackVersion,
+    repoSignalSnapshotIds: parseJson<string[]>(row.repoSignalSnapshotIdsJson, []),
+    scoringModelId: row.scoringModelId,
+    freshnessWarnings: parseJson<string[]>(row.freshnessWarningsJson, []),
+    payload: parseJson<Record<string, JsonValue>>(row.payloadJson, {}),
+    createdAt: row.createdAt,
+  };
+}
+
 function toInstallationHealthRecord(row: typeof installationHealth.$inferSelect): InstallationHealthRecord {
   return {
     installationId: row.installationId,
@@ -1891,6 +2051,50 @@ function toAuthSessionRecord(row: typeof authSessions.$inferSelect): AuthSession
     lastSeenAt: row.lastSeenAt,
     metadata: parseJson<Record<string, never>>(row.metadataJson, {}),
   };
+}
+
+function parseAgentSurface(value: string): AgentSurface {
+  if (value === "mcp" || value === "github_comment") return value;
+  return "api";
+}
+
+function parseAgentMode(_value: string): AgentMode {
+  return "copilot";
+}
+
+function parseAgentRunStatus(value: string): AgentRunStatus {
+  if (value === "running" || value === "completed" || value === "failed" || value === "needs_snapshot_refresh") return value;
+  return "queued";
+}
+
+function parseDataQualityStatus(value: string): AgentRunRecord["dataQualityStatus"] {
+  if (value === "complete" || value === "degraded" || value === "blocked") return value;
+  return "unknown";
+}
+
+function parseAgentActionType(value: string): AgentActionType {
+  if (
+    value === "cleanup_existing_prs" ||
+    value === "preflight_branch" ||
+    value === "explain_score_blockers" ||
+    value === "prepare_pr_packet" ||
+    value === "check_duplicate_risk" ||
+    value === "monitor_existing_pr" ||
+    value === "explain_repo_fit"
+  ) {
+    return value;
+  }
+  return "choose_next_work";
+}
+
+function parseAgentActionStatus(value: string): AgentActionStatus {
+  if (value === "ready" || value === "blocked" || value === "watch" || value === "needs_input") return value;
+  return "recommended";
+}
+
+function parseAgentSafetyClass(value: string): AgentSafetyClass {
+  if (value === "public_safe" || value === "approval_required") return value;
+  return "private";
 }
 
 function parseCommentMode(value: string): RepositorySettings["commentMode"] {

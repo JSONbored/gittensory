@@ -9,7 +9,7 @@ import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadat
 
 const defaultApiUrl = "https://gittensory-api.zeronode.workers.dev";
 const packageName = "@jsonbored/gittensory-mcp";
-const packageVersion = "0.1.4";
+const packageVersion = "0.2.0";
 const changelogPath = new URL("../CHANGELOG.md", import.meta.url);
 const configPath =
   process.env.GITTENSORY_CONFIG_PATH ??
@@ -114,6 +114,24 @@ const currentBranchShape = {
 
 const currentBranchVariantsShape = {
   variants: z.array(z.object(currentBranchShape)).min(1).max(10),
+};
+
+const agentPlanShape = {
+  login: z.string().min(1),
+  objective: z.string().optional(),
+  repoFullName: z.string().min(3).optional(),
+};
+
+const agentRunShape = {
+  objective: z.string().min(1),
+  actorLogin: z.string().min(1),
+  targetRepoFullName: z.string().min(3).optional(),
+  targetPullNumber: z.number().int().positive().optional(),
+  targetIssueNumber: z.number().int().positive().optional(),
+};
+
+const agentRunIdShape = {
+  runId: z.string().min(1),
 };
 
 const cliArgs = process.argv.slice(2);
@@ -357,11 +375,76 @@ server.registerTool(
   },
 );
 
+server.registerTool(
+  "gittensory_agent_plan_next_work",
+  {
+    description: "Run the deterministic Gittensory base-agent planner for a GitHub login.",
+    inputSchema: agentPlanShape,
+  },
+  async (input) => toolResult(`Gittensory base-agent plan for ${input.login}.`, await apiPost("/v1/agent/plan-next-work", input)),
+);
+
+server.registerTool(
+  "gittensory_agent_start_run",
+  {
+    description: "Create a queued copilot-only Gittensory base-agent run.",
+    inputSchema: agentRunShape,
+  },
+  async (input) =>
+    toolResult(
+      `Queued Gittensory base-agent run for ${input.actorLogin}.`,
+      await apiPost("/v1/agent/runs", {
+        objective: input.objective,
+        actorLogin: input.actorLogin,
+        surface: "mcp",
+        target: stripUndefined({
+          repoFullName: input.targetRepoFullName,
+          pullNumber: input.targetPullNumber,
+          issueNumber: input.targetIssueNumber,
+        }),
+      }),
+    ),
+);
+
+server.registerTool(
+  "gittensory_agent_get_run",
+  {
+    description: "Fetch a persisted Gittensory base-agent run.",
+    inputSchema: agentRunIdShape,
+  },
+  async ({ runId }) => toolResult(`Gittensory base-agent run ${runId}.`, await apiGet(`/v1/agent/runs/${encodeURIComponent(runId)}`)),
+);
+
+server.registerTool(
+  "gittensory_agent_explain_next_action",
+  {
+    description: "Explain the next deterministic action and blocker context for a GitHub login.",
+    inputSchema: agentPlanShape,
+  },
+  async (input) => {
+    const result = await apiPost("/v1/agent/explain-blockers", input);
+    return toolResult(`Gittensory base-agent next-action explanation for ${input.login}.`, {
+      ...result,
+      topAction: result.actions?.[0] ?? null,
+    });
+  },
+);
+
+server.registerTool(
+  "gittensory_agent_prepare_pr_packet",
+  {
+    description: "Prepare a public-safe PR packet from current branch metadata. Sends metadata only.",
+    inputSchema: currentBranchShape,
+  },
+  async (input) => toolResult("Gittensory base-agent public-safe PR packet.", await agentPreparePrPacket(input)),
+);
+
 await server.connect(new StdioServerTransport());
 
 async function runCli(args) {
   const command = args[0];
   if (command === "--help" || command === "help") return printHelp();
+  if (command === "agent") return runAgentCli(args.slice(1));
   const options = parseOptions(args.slice(1));
   if (command === "login") return login(options);
   if (command === "logout") return logout(options);
@@ -410,6 +493,68 @@ async function runCli(args) {
   process.stdout.write(`Source upload: disabled\n`);
 }
 
+async function runAgentCli(args) {
+  const subcommand = args[0] ?? "help";
+  if (subcommand === "--help" || subcommand === "help") return printAgentHelp();
+  const options = parseOptions(args.slice(1));
+  if (subcommand === "plan") {
+    const login = options.login ?? process.env.GITTENSORY_LOGIN ?? process.env.GITHUB_LOGIN;
+    if (!login) throw new Error("Pass --login <github-login> or set GITTENSORY_LOGIN.");
+    const payload = await apiPost("/v1/agent/plan-next-work", stripUndefined({ login, repoFullName: options.repo, objective: options.objective, surface: "mcp" }));
+    return outputAgentPayload(payload, options, `Gittensory agent plan: ${payload.summary ?? payload.run?.status ?? "ready"}`);
+  }
+  if (subcommand === "status") {
+    const runId = args[1] && !args[1].startsWith("--") ? args[1] : options.runId;
+    if (!runId) throw new Error("Usage: gittensory-mcp agent status <run-id>");
+    const payload = await apiGet(`/v1/agent/runs/${encodeURIComponent(runId)}`);
+    return outputAgentPayload(payload, options, `Gittensory agent run ${runId}: ${payload.run?.status ?? "unknown"}`);
+  }
+  if (subcommand === "explain") {
+    const runId = args[1] && !args[1].startsWith("--") ? args[1] : options.runId;
+    if (!runId) throw new Error("Usage: gittensory-mcp agent explain <run-id>");
+    const payload = await apiGet(`/v1/agent/runs/${encodeURIComponent(runId)}`);
+    const topAction = payload.actions?.[0] ?? null;
+    return outputAgentPayload({ ...payload, topAction }, options, topAction ? `Top action: ${topAction.recommendation}` : "No top action is available yet.");
+  }
+  if (subcommand === "packet") {
+    const login = options.login ?? process.env.GITTENSORY_LOGIN ?? process.env.GITHUB_LOGIN;
+    if (!login) throw new Error("Pass --login <github-login> or set GITTENSORY_LOGIN.");
+    const payload = await agentPreparePrPacket({
+      login,
+      cwd: options.cwd,
+      repoFullName: options.repo,
+      baseRef: options.base,
+      title: options.title,
+      body: options.body,
+      labels: options.label,
+      linkedIssues: options.issue?.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0),
+      pendingMergedPrCount: optionalInteger(options.pendingMergedPrs),
+      pendingClosedPrCount: optionalInteger(options.pendingClosedPrs),
+      approvedPrCount: optionalInteger(options.approvedPrs),
+      expectedOpenPrCountAfterMerge: optionalInteger(options.expectedOpenPrs),
+      projectedCredibility: optionalNumber(options.projectedCredibility),
+      scenarioNotes: options.scenarioNote,
+      validation: validationFromOptions(options),
+      scorePreviewCommand: options.scorePreviewCommand,
+    });
+    return outputAgentPayload(payload, options, "Gittensory public-safe PR packet prepared.");
+  }
+  throw new Error(`Unknown agent command: ${subcommand}`);
+}
+
+function outputAgentPayload(payload, options, summary) {
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return;
+  }
+  process.stdout.write(`${summary}\n`);
+  const actions = payload.actions ?? [];
+  for (const action of actions.slice(0, 3)) {
+    process.stdout.write(`- ${action.actionType}: ${action.recommendation}\n`);
+    if (action.rerunWhen) process.stdout.write(`  rerun: ${action.rerunWhen}\n`);
+  }
+}
+
 function printHelp() {
   process.stdout.write(`Usage:
   gittensory-mcp --stdio
@@ -422,6 +567,10 @@ function printHelp() {
   gittensory-mcp init-client --print codex|claude|cursor [--json]
   gittensory-mcp analyze-branch --login <github-login> [--repo owner/repo] [--base origin/main] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--scenario-note "..."] [--validation "passed|npm test|summary"] [--json]
   gittensory-mcp preflight --login <github-login> [--repo owner/repo] [--base origin/main] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--validation "passed|npm test|summary"] [--json]
+  gittensory-mcp agent plan --login <github-login> [--repo owner/repo] [--json]
+  gittensory-mcp agent status <run-id> [--json]
+  gittensory-mcp agent explain <run-id> [--json]
+  gittensory-mcp agent packet --login <github-login> [--repo owner/repo] [--base origin/main] [--json]
 
 Environment:
   GITTENSORY_API_URL
@@ -431,6 +580,18 @@ Environment:
   GITTENSOR_SCORE_PREVIEW_CMD
   GITTENSOR_ROOT
   GITTENSORY_UPLOAD_SOURCE=false
+`);
+}
+
+function printAgentHelp() {
+  process.stdout.write(`Usage:
+  gittensory-mcp agent plan --login <github-login> [--repo owner/repo] [--objective "..."] [--json]
+  gittensory-mcp agent status <run-id> [--json]
+  gittensory-mcp agent explain <run-id> [--json]
+  gittensory-mcp agent packet --login <github-login> [--repo owner/repo] [--base origin/main] [--validation "passed|command|summary"] [--json]
+
+The agent is copilot-only: it ranks, explains, and drafts public-safe packets. It does not edit code, open PRs, or post comments from the local MCP wrapper.
+Source upload remains disabled.
 `);
 }
 
@@ -810,6 +971,12 @@ async function analyzeCurrentBranch(input) {
     },
     analysis,
   };
+}
+
+async function agentPreparePrPacket(input) {
+  const payload = buildBranchAnalysisPayload(input);
+  const { localScorerStatus: _localScorerStatus, ...body } = payload;
+  return apiPost("/v1/agent/prepare-pr-packet", body);
 }
 
 async function previewLocalScore(input) {

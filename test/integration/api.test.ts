@@ -346,6 +346,29 @@ describe("api routes", () => {
       decision: { repoFullName: "entrius/allways-ui", rewardUpside: expect.any(Object), roleContext: { role: "outside_contributor" } },
     });
 
+    const agentPlan = await app.request(
+      "/v1/agent/plan-next-work",
+      {
+        method: "POST",
+        headers: apiHeaders(env),
+        body: JSON.stringify({ login: "oktofeesh1", repoFullName: "entrius/allways-ui" }),
+      },
+      env,
+    );
+    expect(agentPlan.status).toBe(200);
+    const agentPlanPayload = (await agentPlan.json()) as {
+      run: { id: string; status: string; mode: string; surface: string };
+      actions: Array<{ actionType: string; publicSafeSummary: string; payload: Record<string, unknown> }>;
+    };
+    expect(agentPlanPayload.run).toMatchObject({ status: "completed", mode: "copilot", surface: "api" });
+    expect(agentPlanPayload.actions.length).toBeGreaterThan(0);
+    expect(agentPlanPayload.actions[0]?.publicSafeSummary).not.toMatch(/wallet|hotkey|reward estimate|payout|farming|raw trust score/i);
+    expect(agentPlanPayload.actions[0]?.payload).toHaveProperty("decision");
+
+    const fetchedAgentRun = await app.request(`/v1/agent/runs/${agentPlanPayload.run.id}`, { headers: apiHeaders(env) }, env);
+    expect(fetchedAgentRun.status).toBe(200);
+    await expect(fetchedAgentRun.json()).resolves.toMatchObject({ run: { id: agentPlanPayload.run.id }, actions: expect.any(Array) });
+
     const missingRepoDecisionSnapshot = await app.request("/v1/contributors/new-user/repos/entrius/allways-ui/decision", { headers: apiHeaders(env) }, env);
     expect(missingRepoDecisionSnapshot.status).toBe(202);
     await expect(missingRepoDecisionSnapshot.json()).resolves.toMatchObject({ status: "needs_snapshot_refresh", repoFullName: "entrius/allways-ui" });
@@ -428,6 +451,34 @@ describe("api routes", () => {
       scorePreview: { privateOnly: true },
       rewardRisk: { rewardUpside: { relevantLane: "direct_pr" } },
       prPacket: { titleSuggestion: "Fix dashboard cache refresh after reconnect" },
+    });
+
+    const agentPacket = await app.request(
+      "/v1/agent/prepare-pr-packet",
+      {
+        method: "POST",
+        headers: apiHeaders(env),
+        body: JSON.stringify({
+          login: "oktofeesh1",
+          repoFullName: "entrius/allways-ui",
+          baseRef: "origin/test",
+          headRef: "fix-cache",
+          branchName: "fix-cache-reconnect",
+          title: "Fix dashboard cache refresh after reconnect",
+          body: "Fixes #7",
+          changedFiles: [
+            { path: "src/cache.ts", additions: 42, deletions: 4, status: "modified" },
+            { path: "test/cache.test.ts", additions: 20, deletions: 0, status: "added" },
+          ],
+          validation: [{ command: "npm test -- cache", status: "passed", summary: "cache regression passed" }],
+        }),
+      },
+      env,
+    );
+    expect(agentPacket.status).toBe(200);
+    await expect(agentPacket.json()).resolves.toMatchObject({
+      run: { status: "completed" },
+      actions: [expect.objectContaining({ actionType: "prepare_pr_packet", safetyClass: "public_safe" })],
     });
     expect(JSON.stringify(localBranchPayload.prPacket)).not.toMatch(/reward|score|wallet|hotkey|farming|payout|ranking|trust score/i);
 
@@ -750,7 +801,7 @@ describe("api routes", () => {
       missingPermissions: ["issues"],
       missingEvents: [],
       permissions: { metadata: "read", pull_requests: "read" },
-      events: ["issues", "pull_request", "repository"],
+      events: ["issues", "issue_comment", "pull_request", "repository"],
       checkedAt: "2026-05-23T00:00:00.000Z",
     });
     await upsertRepoSyncSegment(env, {
@@ -948,6 +999,11 @@ describe("api routes", () => {
     expect(toolNames).toContain("gittensory_compare_local_variants");
     expect(toolNames).toContain("gittensory_explain_local_blockers");
     expect(toolNames).toContain("gittensory_prepare_pr_packet");
+    expect(toolNames).toContain("gittensory_agent_plan_next_work");
+    expect(toolNames).toContain("gittensory_agent_start_run");
+    expect(toolNames).toContain("gittensory_agent_get_run");
+    expect(toolNames).toContain("gittensory_agent_explain_next_action");
+    expect(toolNames).toContain("gittensory_agent_prepare_pr_packet");
     for (const removed of [
       "gittensory_get_contributor_fit",
       "gittensory_find_opportunities",
@@ -1049,6 +1105,7 @@ describe("api routes", () => {
       ["gittensory_get_contributor_profile", { login: "oktofeesh1" }],
       ["gittensory_get_decision_pack", { login: "oktofeesh1" }],
       ["gittensory_explain_repo_decision", { login: "oktofeesh1", owner: "entrius", repo: "allways-ui" }],
+      ["gittensory_agent_plan_next_work", { login: "oktofeesh1", repoFullName: "entrius/allways-ui" }],
       [
         "gittensory_preflight_pr",
         {
@@ -1203,9 +1260,68 @@ describe("api routes", () => {
         "gittensory_rank_local_next_actions",
         "gittensory_explain_local_blockers",
         "gittensory_compare_local_variants",
+        "gittensory_agent_plan_next_work",
+        "gittensory_agent_explain_next_action",
       ]);
       expect(text).not.toMatch(/farming|wallet|hotkey|guaranteed payout/i);
       if (!privateRewardTools.has(name)) expect(text).not.toMatch(/reward/i);
+    }
+
+    const agentStart = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "agent-start",
+          method: "tools/call",
+          params: {
+            name: "gittensory_agent_start_run",
+            arguments: {
+              actorLogin: "oktofeesh1",
+              objective: "Plan next Gittensor action",
+              repoFullName: "entrius/allways-ui",
+            },
+          },
+        }),
+      },
+      env,
+    );
+    expect(agentStart.status).toBe(200);
+    const agentStartPayload = (await mcpJson(agentStart)) as { result: { structuredContent: { run: { id: string; status: string } } } };
+    expect(agentStartPayload.result.structuredContent.run.status).toBe("queued");
+
+    for (const [name, args] of [
+      ["gittensory_agent_get_run", { runId: agentStartPayload.result.structuredContent.run.id }],
+      ["gittensory_agent_explain_next_action", { login: "oktofeesh1", repoFullName: "entrius/allways-ui" }],
+      [
+        "gittensory_agent_prepare_pr_packet",
+        {
+          login: "oktofeesh1",
+          repoFullName: "entrius/allways-ui",
+          branchName: "fix-cache",
+          changedFiles: [
+            { path: "src/cache.ts", additions: 8, deletions: 1, status: "modified" },
+            { path: "test/cache.test.ts", additions: 5, deletions: 0, status: "added" },
+          ],
+          linkedIssues: [7],
+          validation: [{ command: "npm test -- cache", status: "passed", summary: "cache tests passed" }],
+        },
+      ],
+    ] as const) {
+      const response = await app.request(
+        "/mcp",
+        {
+          method: "POST",
+          headers: mcpHeaders(env),
+          body: JSON.stringify({ jsonrpc: "2.0", id: `agent-${name}`, method: "tools/call", params: { name, arguments: args } }),
+        },
+        env,
+      );
+      expect(response.status).toBe(200);
+      const payload = (await mcpJson(response)) as { result?: { content?: Array<{ text: string }> } };
+      expect(payload.result?.content?.[0]?.text ?? "").not.toMatch(/wallet|hotkey|farming|guaranteed payout/i);
     }
 
     for (const [args, recommendation] of [
@@ -1920,7 +2036,7 @@ async function seedSignalData(env: Env): Promise<void> {
     missingPermissions: [],
     missingEvents: [],
     permissions: { metadata: "read", pull_requests: "read", issues: "write" },
-    events: ["issues", "pull_request", "repository"],
+    events: ["issues", "issue_comment", "pull_request", "repository"],
     checkedAt: "2026-05-23T00:00:00.000Z",
   });
   await upsertIssueFromGitHub(env, "entrius/allways-ui", {

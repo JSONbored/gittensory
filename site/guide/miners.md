@@ -1,6 +1,22 @@
 # For Miners
 
-Gittensory helps miners choose work with evidence: lane fit, score blockers, queue pressure, local diff quality, and realistic scenario projections.
+Gittensory helps miners choose work with evidence: lane fit, score blockers, queue pressure, local diff quality, realistic scenario projections, and deterministic base-agent next actions.
+
+## Agent Planning Flow
+
+Run this when you are deciding what to work on next:
+
+```sh
+gittensory-mcp agent plan --login YOUR_GITHUB_LOGIN --json
+```
+
+For a specific repo:
+
+```sh
+gittensory-mcp agent plan --login YOUR_GITHUB_LOGIN --repo owner/repo --json
+```
+
+The agent returns ranked actions with why they matter, what is blocked, how they affect scoreability, how they affect maintainer review load, and when to rerun. It is copilot-only: it does not edit code, open PRs, post comments, close, merge, or label.
 
 ## Branch Analysis Flow
 
@@ -47,11 +63,20 @@ gittensory-mcp preflight --login YOUR_GITHUB_LOGIN --json
 
 Use preflight when you need a quick answer on linked issues, tests, duplicate risk, lane fit, and maintainer review friction.
 
+## PR Packet
+
+```sh
+gittensory-mcp agent packet --login YOUR_GITHUB_LOGIN --repo owner/repo --json
+```
+
+This prepares a public-safe maintainer packet from metadata only. Private scoreability and reward/risk context stays out of the packet.
+
 ## When To Use Gittensory
 
 - before opening a PR
 - after PR approvals but before rerunning score projections
 - when deciding whether to clean up existing PRs first
 - when choosing between direct PR work and issue-discovery flow
+- when you want an agent to rank the next Gittensor action before you spend time coding
 
 Gittensory does not promise payouts. It explains scoreability, risk, and what actions make the work more likely to be reviewable and scoreable.

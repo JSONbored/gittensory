@@ -72,6 +72,11 @@ export type JobMessage =
   | {
       type: "repair-data-fidelity";
       requestedBy: "schedule" | "api" | "test";
+    }
+  | {
+      type: "run-agent";
+      requestedBy: "api" | "mcp" | "github_comment" | "test";
+      runId: string;
     };
 
 export type GitHubWebhookPayload = {
@@ -93,6 +98,7 @@ export type GitHubWebhookPayload = {
   repositories?: GitHubRepositoryPayload[];
   pull_request?: GitHubPullRequestPayload;
   issue?: GitHubIssuePayload;
+  comment?: GitHubIssueCommentPayload;
   label?: {
     name?: string;
   };
@@ -148,6 +154,19 @@ export type GitHubIssuePayload = {
   labels?: Array<{ name?: string }>;
   body?: string | null;
   pull_request?: unknown;
+};
+
+export type GitHubIssueCommentPayload = {
+  id: number;
+  body?: string | null;
+  html_url?: string | null;
+  user?: {
+    login?: string;
+    type?: string;
+  };
+  author_association?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export type RegistryRepoConfig = {
@@ -524,6 +543,68 @@ export type SignalSnapshotRecord = {
   repoFullName?: string | null | undefined;
   payload: Record<string, JsonValue>;
   generatedAt?: string | null | undefined;
+};
+
+export type AgentSurface = "mcp" | "github_comment" | "api";
+export type AgentMode = "copilot";
+export type AgentRunStatus = "queued" | "running" | "completed" | "failed" | "needs_snapshot_refresh";
+export type AgentActionType =
+  | "choose_next_work"
+  | "cleanup_existing_prs"
+  | "preflight_branch"
+  | "explain_score_blockers"
+  | "prepare_pr_packet"
+  | "check_duplicate_risk"
+  | "monitor_existing_pr"
+  | "explain_repo_fit";
+export type AgentActionStatus = "recommended" | "ready" | "blocked" | "watch" | "needs_input";
+export type AgentSafetyClass = "private" | "public_safe" | "approval_required";
+
+export type AgentRunRecord = {
+  id: string;
+  objective: string;
+  actorLogin: string;
+  surface: AgentSurface;
+  mode: AgentMode;
+  status: AgentRunStatus;
+  dataQualityStatus: "complete" | "degraded" | "blocked" | "unknown";
+  errorSummary?: string | null | undefined;
+  payload: Record<string, JsonValue>;
+  createdAt?: string | null | undefined;
+  updatedAt?: string | null | undefined;
+};
+
+export type AgentActionRecord = {
+  id: string;
+  runId: string;
+  actionType: AgentActionType;
+  targetRepoFullName?: string | null | undefined;
+  targetPullNumber?: number | null | undefined;
+  targetIssueNumber?: number | null | undefined;
+  status: AgentActionStatus;
+  recommendation: string;
+  why: string[];
+  scoreabilityImpact?: string | null | undefined;
+  riskImpact?: string | null | undefined;
+  maintainerImpact?: string | null | undefined;
+  blockedBy: string[];
+  rerunWhen?: string | null | undefined;
+  publicSafeSummary: string;
+  approvalRequired: boolean;
+  safetyClass: AgentSafetyClass;
+  payload: Record<string, JsonValue>;
+  createdAt?: string | null | undefined;
+};
+
+export type AgentContextSnapshotRecord = {
+  id: string;
+  runId: string;
+  decisionPackVersion?: string | null | undefined;
+  repoSignalSnapshotIds: string[];
+  scoringModelId?: string | null | undefined;
+  freshnessWarnings: string[];
+  payload: Record<string, JsonValue>;
+  createdAt?: string | null | undefined;
 };
 
 export type InstallationRecord = {

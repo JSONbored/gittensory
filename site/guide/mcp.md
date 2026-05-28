@@ -1,6 +1,6 @@
 # MCP Clients
 
-The MCP package is the contributor-facing surface. Your coding agent can ask Gittensory what the current branch means in Gittensor terms before you open or update a PR.
+The MCP package is the contributor-facing surface and the first base-agent interface. Your coding agent can ask Gittensory what the current branch means in Gittensor terms, what to do next, and how to draft a public-safe packet before you open or update a PR.
 
 ## What Agents Can Ask
 
@@ -9,6 +9,7 @@ The MCP package is the contributor-facing surface. Your coding agent can ask Git
 - whether local work looks stale, broad, duplicate-prone, or missing validation evidence
 - what to clean up before opening more PRs
 - what public-safe PR packet should be included for a maintainer
+- which ranked next action has the best current scoreability/risk/reviewability tradeoff
 
 ::: warning Private score/reward-risk only
 Scoreability projections and reward/risk reasoning are private MCP/API output. Public GitHub comments stay sanitized.
@@ -68,6 +69,23 @@ args = ["--stdio"]
 - `gittensory_rank_local_next_actions`
 - `gittensory_explain_local_blockers`
 - `gittensory_prepare_pr_packet`
+- `gittensory_agent_plan_next_work`
+- `gittensory_agent_start_run`
+- `gittensory_agent_get_run`
+- `gittensory_agent_explain_next_action`
+- `gittensory_agent_prepare_pr_packet`
+
+## Base-Agent CLI
+
+```sh
+gittensory-mcp agent plan --login jsonbored --json
+gittensory-mcp agent plan --login jsonbored --repo we-promise/sure --json
+gittensory-mcp agent packet --login jsonbored --repo we-promise/sure --json
+gittensory-mcp agent status <run-id> --json
+gittensory-mcp agent explain <run-id> --json
+```
+
+Agent mode is copilot-only. It ranks and explains actions; it does not edit code, open PRs, post comments, close, merge, or label from the local MCP wrapper.
 
 ## Runtime Rules
 

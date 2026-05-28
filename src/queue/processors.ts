@@ -2,6 +2,7 @@ import {
   countOpenIssues,
   countOpenPullRequests,
   getLatestRepoGithubTotalsSnapshot,
+  getPullRequest,
   getRepository,
   getRepositorySettings,
   listAllIssues,
@@ -43,13 +44,19 @@ import {
 } from "../github/backfill";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot, fetchOfficialGittensorMiner, type GittensorContributorSnapshot } from "../gittensor/api";
 import { createOrUpdateCheckRun, getInstallationId } from "../github/app";
-import { createOrUpdatePrIntelligenceComment } from "../github/comments";
+import { createOrUpdateAgentCommandComment, createOrUpdatePrIntelligenceComment } from "../github/comments";
+import {
+  buildPublicAgentCommandComment,
+  isAuthorizedCommandActor,
+  parseGittensoryMentionCommand,
+} from "../github/commands";
 import { ensurePullRequestLabel } from "../github/labels";
 import { fetchPublicContributorProfile } from "../github/public";
 import { refreshRegistry } from "../registry/sync";
 import { buildIssueAdvisory, buildPullRequestAdvisory } from "../rules/advisory";
 import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
 import { buildAndPersistContributorDecisionPack } from "../services/decision-pack";
+import { executeAgentRun, explainBlockersWithAgent, planNextWork } from "../services/agent-orchestrator";
 import {
   buildBurdenForecast,
   buildCollisionEdges,
@@ -158,6 +165,9 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       return;
     case "repair-data-fidelity":
       await repairDataFidelity(env, message.requestedBy);
+      return;
+    case "run-agent":
+      await executeAgentRun(env, message.runId);
       return;
     case "github-webhook":
       await processGitHubWebhook(env, message.deliveryId, message.eventName, message.payload);
@@ -427,6 +437,19 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
     }
     if (payload.repository) await upsertRepositoryFromGitHub(env, payload.repository, installationId ?? undefined);
 
+    if (eventName === "issue_comment" && (await maybeProcessGittensoryMentionCommand(env, deliveryId, payload))) {
+      await recordWebhookEvent(env, {
+        deliveryId,
+        eventName,
+        action: payload.action,
+        installationId: payload.installation?.id,
+        repositoryFullName: payload.repository?.full_name,
+        payloadHash: "processed",
+        status: "processed",
+      });
+      return;
+    }
+
     if (payload.repository?.full_name && payload.pull_request) {
       const repoFullName = payload.repository.full_name;
       const pr = await upsertPullRequestFromGitHub(env, repoFullName, payload.pull_request);
@@ -597,6 +620,100 @@ async function maybePublishPrPublicSurface(
       checkRunMode: settings.checkRunMode,
     },
   });
+}
+
+async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string, payload: GitHubWebhookPayload): Promise<boolean> {
+  const command = parseGittensoryMentionCommand(payload.comment?.body);
+  if (!command) return false;
+  const repoFullName = payload.repository?.full_name;
+  const issue = payload.issue;
+  const installationId = getInstallationId(payload);
+  const commenter = payload.comment?.user?.login;
+  if (!repoFullName || !issue || !installationId || !commenter) {
+    await recordAuditEvent(env, {
+      eventType: "github_app.agent_command_skipped",
+      actor: commenter,
+      targetKey: repoFullName,
+      outcome: "completed",
+      detail: "missing_repo_issue_installation_or_actor",
+      metadata: { deliveryId, command: command.name },
+    });
+    return true;
+  }
+  if (payload.comment?.user?.type === "Bot" || /\[bot\]$/i.test(commenter)) {
+    await recordAuditEvent(env, {
+      eventType: "github_app.agent_command_skipped",
+      actor: commenter,
+      targetKey: `${repoFullName}#${issue.number}`,
+      outcome: "completed",
+      detail: "bot_author",
+      metadata: { deliveryId, command: command.name },
+    });
+    return true;
+  }
+  if (!issue.pull_request) {
+    await recordAuditEvent(env, {
+      eventType: "github_app.agent_command_skipped",
+      actor: commenter,
+      targetKey: `${repoFullName}#${issue.number}`,
+      outcome: "completed",
+      detail: "not_a_pull_request_thread",
+      metadata: { deliveryId, command: command.name },
+    });
+    return true;
+  }
+
+  const [repo, cachedPullRequest] = await Promise.all([getRepository(env, repoFullName), getPullRequest(env, repoFullName, issue.number)]);
+  const pullRequestAuthor = cachedPullRequest?.authorLogin ?? issue.user?.login ?? null;
+  const official = pullRequestAuthor ? await fetchOfficialGittensorMiner(pullRequestAuthor) : undefined;
+  const authorization = isAuthorizedCommandActor({
+    commenterLogin: commenter,
+    commenterAssociation: payload.comment?.author_association ?? issue.author_association,
+    pullRequestAuthorLogin: pullRequestAuthor,
+    officialAuthorDetection: official,
+  });
+  if (!authorization.authorized) {
+    await recordAuditEvent(env, {
+      eventType: "github_app.agent_command_skipped",
+      actor: commenter,
+      targetKey: `${repoFullName}#${issue.number}`,
+      outcome: authorization.reason === "miner_detection_unavailable" ? "error" : "completed",
+      detail: authorization.reason,
+      metadata: { deliveryId, command: command.name },
+    });
+    return true;
+  }
+
+  const login = pullRequestAuthor ?? commenter;
+  const bundle =
+    command.name === "help" || command.name === "miner-context"
+      ? null
+      : command.name === "blockers"
+        ? await explainBlockersWithAgent(env, { login, repoFullName, surface: "github_comment" })
+        : await planNextWork(env, {
+            login,
+            repoFullName,
+            surface: "github_comment",
+            objective: `Respond to @gittensory ${command.name} for ${repoFullName}#${issue.number}.`,
+          });
+  const body = buildPublicAgentCommandComment({
+    command,
+    repo,
+    issue,
+    pullRequest: cachedPullRequest,
+    actorKind: authorization.actorKind === "maintainer" ? "maintainer" : "author",
+    officialMiner: official?.status === "confirmed" ? official.snapshot : null,
+    bundle,
+  });
+  await createOrUpdateAgentCommandComment(env, installationId, repoFullName, issue.number, body);
+  await recordAuditEvent(env, {
+    eventType: "github_app.agent_command_replied",
+    actor: commenter,
+    targetKey: `${repoFullName}#${issue.number}`,
+    outcome: "completed",
+    metadata: { deliveryId, command: command.name, actorKind: authorization.actorKind, runId: bundle?.run.id ?? null },
+  });
+  return true;
 }
 
 function hasVisiblePrSurface(settings: Awaited<ReturnType<typeof getRepositorySettings>>): boolean {

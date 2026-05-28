@@ -20,6 +20,12 @@ describe("OpenAPI contract", () => {
     expect(spec.paths["/v1/preflight/pr"]).toBeDefined();
     expect(spec.paths["/v1/preflight/local-diff"]).toBeDefined();
     expect(spec.paths["/v1/local/branch-analysis"]).toBeDefined();
+    expect(spec.paths["/v1/agent/runs"]).toBeDefined();
+    expect(spec.paths["/v1/agent/runs/{id}"]).toBeDefined();
+    expect(spec.paths["/v1/agent/plan-next-work"]).toBeDefined();
+    expect(spec.paths["/v1/agent/preflight-branch"]).toBeDefined();
+    expect(spec.paths["/v1/agent/prepare-pr-packet"]).toBeDefined();
+    expect(spec.paths["/v1/agent/explain-blockers"]).toBeDefined();
     expect(spec.paths["/v1/scoring/model"]).toBeDefined();
     expect(spec.paths["/v1/scoring/preview"]).toBeDefined();
     expect(spec.paths["/v1/bounties/{id}/advisory"]).toBeDefined();
@@ -62,6 +68,8 @@ describe("OpenAPI contract", () => {
     expect(spec.components?.schemas?.PullRequestMaintainerPacket).toBeDefined();
     expect(spec.components?.schemas?.PullRequestReviewability).toBeDefined();
     expect(spec.components?.schemas?.LocalBranchAnalysis).toBeDefined();
+    expect(spec.components?.schemas?.AgentRunBundle).toBeDefined();
+    expect(spec.components?.schemas?.AgentAction).toBeDefined();
     expect(JSON.stringify(spec.components?.schemas?.ScorePreviewResult)).toContain("scenarioPreviews");
     expect(JSON.stringify(spec.components?.schemas?.LocalBranchAnalysis)).toContain("baseFreshness");
     expect(JSON.stringify(spec.components?.schemas?.LocalBranchAnalysis)).toContain("recommendedRerunCondition");

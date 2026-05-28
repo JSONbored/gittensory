@@ -3,6 +3,12 @@
 ## Unreleased
 
 
+### Features
+
+- Add deterministic base-agent orchestrator
+
+
+
 ### Fixes
 
 - Create GitHub releases for MCP tag publishes

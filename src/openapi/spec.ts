@@ -2,6 +2,10 @@ import { OpenApiGeneratorV3, OpenAPIRegistry } from "@asteasolutions/zod-to-open
 import { z } from "zod";
 import {
   AdvisorySchema,
+  AgentActionSchema,
+  AgentContextSnapshotSchema,
+  AgentRunBundleSchema,
+  AgentRunSchema,
   BountyAdvisorySchema,
   BountySchema,
   BurdenForecastSchema,
@@ -95,6 +99,10 @@ export function buildOpenApiSpec() {
   registry.register("Bounty", BountySchema);
   registry.register("BountyAdvisory", BountyAdvisorySchema);
   registry.register("RepositorySettings", RepositorySettingsSchema);
+  registry.register("AgentRun", AgentRunSchema);
+  registry.register("AgentAction", AgentActionSchema);
+  registry.register("AgentContextSnapshot", AgentContextSnapshotSchema);
+  registry.register("AgentRunBundle", AgentRunBundleSchema);
   registry.register("RepoSyncState", RepoSyncStateSchema);
   registry.register("RepoSyncSegment", RepoSyncSegmentSchema);
   registry.register("GitHubRateLimitObservation", GitHubRateLimitObservationSchema);
@@ -299,6 +307,35 @@ export function buildOpenApiSpec() {
       401: { description: "Unauthorized" },
     },
   });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/agent/runs",
+    responses: {
+      202: { description: "Copilot-only agent run queued", content: { "application/json": { schema: AgentRunBundleSchema } } },
+      400: { description: "Invalid agent run request" },
+      401: { description: "Unauthorized" },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/agent/runs/{id}",
+    responses: {
+      200: { description: "Persisted agent run bundle", content: { "application/json": { schema: AgentRunBundleSchema } } },
+      404: { description: "Agent run not found" },
+    },
+  });
+  for (const path of ["/v1/agent/plan-next-work", "/v1/agent/preflight-branch", "/v1/agent/prepare-pr-packet", "/v1/agent/explain-blockers"]) {
+    registry.registerPath({
+      method: "post",
+      path,
+      responses: {
+        200: { description: "Agent run completed with deterministic ranked actions", content: { "application/json": { schema: AgentRunBundleSchema } } },
+        202: { description: "Agent run needs snapshot refresh", content: { "application/json": { schema: AgentRunBundleSchema } } },
+        400: { description: "Invalid agent request" },
+        401: { description: "Unauthorized" },
+      },
+    });
+  }
   registry.registerPath({
     method: "get",
     path: "/v1/bounties",

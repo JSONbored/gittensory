@@ -585,7 +585,7 @@ export const OPTIONAL_CHECK_RUN_PERMISSION: Record<string, string> = {
   checks: "write",
 };
 
-export const REQUIRED_INSTALLATION_EVENTS = ["issues", "pull_request", "repository"] as const;
+export const REQUIRED_INSTALLATION_EVENTS = ["issues", "issue_comment", "pull_request", "repository"] as const;
 export const OPTIONAL_VISIBLE_INSTALLATION_EVENTS = ["installation_target"] as const;
 
 export function enrichInstallationHealth(health: InstallationHealthRecord) {

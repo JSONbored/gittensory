@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "type": "module",
-  "description": "GitHub-native advisory backend for Gittensor registered repositories.",
+  "description": "Deterministic base-agent backend for Gittensor OSS contribution mining.",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

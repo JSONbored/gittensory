@@ -1,9 +1,9 @@
 {
   "name": "@jsonbored/gittensory-mcp",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "license": "AGPL-3.0-only",
   "type": "module",
-  "description": "Local stdio MCP wrapper for Gittensory contributor intelligence.",
+  "description": "Local stdio MCP wrapper for the Gittensory Gittensor base-agent.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JSONbored/gittensory.git",
@@ -19,7 +19,8 @@
     "model-context-protocol",
     "github",
     "contributors",
-    "preflight"
+    "preflight",
+    "agent"
   ],
   "publishConfig": {
     "access": "public"
