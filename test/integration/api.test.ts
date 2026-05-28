@@ -1556,31 +1556,47 @@ describe("api routes", () => {
         login: "stale-user",
         generatedAt: "2026-01-01T00:00:00.000Z",
         stale: false,
+        freshness: "fresh",
+        rebuildEnqueued: false,
         scoringModelSnapshotId: "scoring-1",
         profile: {},
         outcomeHistory: {},
         roleContexts: [],
-        repoDecisions: [],
-        topActions: [],
+        repoDecisions: [{ repoFullName: "owner/repo", recommendation: "pursue" }],
+        topActions: [{ actionKind: "open_new_direct_pr", repoFullName: "owner/repo", priorityScore: 50 }],
         cleanupFirst: [],
-        pursueRepos: [],
+        pursueRepos: [{ repoFullName: "owner/repo", recommendation: "pursue" }],
         avoidRepos: [],
         maintainerLaneRepos: [],
         scoreBlockers: [],
         dataQuality: { signalFidelity: { status: "degraded" } },
         summary: "stale",
-        nextActions: [],
+        nextActions: ["pick a narrow change"],
       } as never,
       generatedAt: "2026-01-01T00:00:00.000Z",
     });
     const staleDecisionPack = await app.request("/v1/contributors/stale-user/decision-pack", { headers: apiHeaders(env) }, env);
-    expect(staleDecisionPack.status).toBe(202);
-    await expect(staleDecisionPack.json()).resolves.toMatchObject({
-      status: "needs_snapshot_refresh",
-      reason: "stale_snapshot",
-      staleSnapshot: { generatedAt: "2026-01-01T00:00:00.000Z" },
+    expect(staleDecisionPack.status).toBe(200);
+    const staleBody = (await staleDecisionPack.json()) as {
+      status: string;
+      freshness: string;
+      rebuildEnqueued: boolean;
+      stale: boolean;
+      generatedAt: string;
+      topActions: unknown[];
+      repoDecisions: unknown[];
+      dataQuality: { signalFidelity: { status: string } };
+    };
+    expect(staleBody).toMatchObject({
+      status: "ready",
+      freshness: "rebuilding",
+      rebuildEnqueued: true,
+      stale: true,
+      generatedAt: "2026-01-01T00:00:00.000Z",
       dataQuality: { signalFidelity: { status: "degraded" } },
     });
+    expect(staleBody.topActions.length).toBeGreaterThan(0);
+    expect(staleBody.repoDecisions.length).toBeGreaterThan(0);
 
     await persistSignalSnapshot(env, {
       id: "fresh-empty-pack",

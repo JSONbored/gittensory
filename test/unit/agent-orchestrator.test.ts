@@ -88,8 +88,11 @@ describe("agent orchestrator", () => {
       updatedAt: nowIso(),
     };
     await createAgentRun(interruptedEnv, run);
-    const failed = await executeAgentRun(interruptedEnv, run.id);
-    expect(failed.run).toMatchObject({ status: "failed", errorSummary: "agent_run_failed" });
+    const tolerated = await executeAgentRun(interruptedEnv, run.id);
+    expect(tolerated.run).toMatchObject({
+      status: "needs_snapshot_refresh",
+      payload: expect.objectContaining({ snapshotRefreshEnqueued: false, freshness: "missing" }),
+    });
   });
 
   it("ranks decision-pack actions, persists context snapshots, and sanitizes public summaries", async () => {
@@ -111,6 +114,38 @@ describe("agent orchestrator", () => {
       scoringModelId: "scoring-1",
       freshnessWarnings: expect.arrayContaining(["we-promise/sure: partial signal coverage", "we-promise/sure: stale signal coverage"]),
     });
+  });
+
+  it("serves a stale decision pack as a completed run with degraded data quality and a freshness warning", async () => {
+    const sent: unknown[] = [];
+    const env = createTestEnv({
+      JOBS: {
+        async send(message: unknown) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    const stalePack = decisionPackFixture({ generatedAt: "2026-01-01T00:00:00.000Z" });
+    await persistSignalSnapshot(env, {
+      id: "stale-pack-orch",
+      signalType: CONTRIBUTOR_DECISION_PACK_SIGNAL,
+      targetKey: stalePack.login,
+      payload: stalePack as unknown as Record<string, JsonValue>,
+      generatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const bundle = await planNextWork(env, { login: "oktofeesh1", repoFullName: "we-promise/sure" });
+
+    expect(bundle.run).toMatchObject({
+      status: "completed",
+      dataQualityStatus: "degraded",
+      payload: expect.objectContaining({ freshness: "rebuilding", snapshotRefreshEnqueued: true, refreshReason: "stale_decision_pack" }),
+    });
+    expect(bundle.actions.length).toBeGreaterThan(0);
+    expect(bundle.contextSnapshots[0]?.freshnessWarnings ?? []).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^decision pack is stale.*background rebuild enqueued$/)]),
+    );
+    expect(sent).toContainEqual({ type: "build-contributor-decision-packs", requestedBy: "api", login: "oktofeesh1" });
   });
 
   it("attaches optional Workers AI summaries when enabled", async () => {

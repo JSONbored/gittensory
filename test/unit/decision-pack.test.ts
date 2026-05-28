@@ -3,6 +3,7 @@ import { persistSignalSnapshot } from "../../src/db/repositories";
 import {
   __decisionPackInternals,
   loadContributorDecisionPack,
+  loadContributorDecisionPackForServing,
   loadFreshContributorDecisionPack,
   repoDecisionFromPack,
   type ContributorDecisionPack,
@@ -126,7 +127,7 @@ describe("decision-pack service", () => {
     });
 
     const loaded = await loadContributorDecisionPack(env, "jsonbored");
-    expect(loaded).toMatchObject({ source: "snapshot", snapshotAgeSeconds: expect.any(Number), stale: expect.any(Boolean) });
+    expect(loaded).toMatchObject({ source: "snapshot", snapshotAgeSeconds: expect.any(Number), stale: expect.any(Boolean), freshness: "stale", rebuildEnqueued: false });
     expect(repoDecisionFromPack(loaded!, "jsonbored/AWESOME-CLAUDE")).toMatchObject({ recommendation: "maintainer_lane" });
     expect(repoDecisionFromPack(loaded!, "missing/repo")).toBeNull();
     await expect(loadFreshContributorDecisionPack(env, "jsonbored", 1)).resolves.toBeNull();
@@ -163,6 +164,110 @@ describe("decision-pack service", () => {
       }),
     ).toMatchObject({ generatedAt: "2026-05-25T00:00:00.000Z", source: "snapshot" });
     expect(__decisionPackInternals.snapshotAgeMs("not-a-date")).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it("serves fresh, stale, and missing decision packs with explicit freshness and rebuild signals", async () => {
+    const sends: Array<Record<string, unknown>> = [];
+    const env = createTestEnv({
+      JOBS: {
+        async send(message: Record<string, unknown>) {
+          sends.push(message);
+        },
+      } as unknown as Queue,
+    });
+
+    const missing = await loadContributorDecisionPackForServing(env, "ghost-user");
+    expect(missing).toMatchObject({
+      kind: "needs_refresh",
+      refresh: { freshness: "missing", reason: "missing_snapshot", rebuildEnqueued: true, enqueued: true },
+    });
+    expect(sends.at(-1)).toMatchObject({ type: "build-contributor-decision-packs", login: "ghost-user" });
+
+    const stalePackPayload = {
+      status: "ready",
+      source: "computed",
+      login: "stale-user",
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      stale: false,
+      freshness: "fresh",
+      rebuildEnqueued: false,
+      scoringModelSnapshotId: "scoring-1",
+      profile: {},
+      outcomeHistory: {},
+      roleContexts: [],
+      repoDecisions: [{ repoFullName: "owner/repo", recommendation: "pursue" }],
+      topActions: [{ actionKind: "open_new_direct_pr", repoFullName: "owner/repo", priorityScore: 50 }],
+      cleanupFirst: [],
+      pursueRepos: [{ repoFullName: "owner/repo", recommendation: "pursue" }],
+      avoidRepos: [],
+      maintainerLaneRepos: [],
+      scoreBlockers: [],
+      dataQuality: { signalFidelity: { status: "complete", partialRepos: [], cappedRepos: [], staleRepos: [], rateLimitedRepos: [] } },
+      summary: "stale fixture",
+      nextActions: ["pick a narrow change"],
+    } as unknown as ContributorDecisionPack;
+
+    await persistSignalSnapshot(env, {
+      id: "stale-serving",
+      signalType: "contributor-decision-pack",
+      targetKey: "stale-user",
+      payload: stalePackPayload as unknown as Record<string, never>,
+      generatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const stale = await loadContributorDecisionPackForServing(env, "stale-user");
+    expect(stale.kind).toBe("ready");
+    if (stale.kind === "ready") {
+      expect(stale.pack.freshness).toBe("rebuilding");
+      expect(stale.pack.rebuildEnqueued).toBe(true);
+      expect(stale.pack.stale).toBe(true);
+      expect(stale.pack.topActions.length).toBeGreaterThan(0);
+      expect(stale.pack.repoDecisions.length).toBeGreaterThan(0);
+    }
+    expect(sends.filter((s) => s.login === "stale-user")).toHaveLength(1);
+
+    const staleNoEnqueue = await loadContributorDecisionPackForServing(env, "stale-user", { enqueueRebuild: false });
+    expect(staleNoEnqueue.kind).toBe("ready");
+    if (staleNoEnqueue.kind === "ready") {
+      expect(staleNoEnqueue.pack.freshness).toBe("stale");
+      expect(staleNoEnqueue.pack.rebuildEnqueued).toBe(false);
+    }
+    expect(sends.filter((s) => s.login === "stale-user")).toHaveLength(1);
+
+    await persistSignalSnapshot(env, {
+      id: "fresh-serving",
+      signalType: "contributor-decision-pack",
+      targetKey: "fresh-user",
+      payload: {
+        ...stalePackPayload,
+        login: "fresh-user",
+        generatedAt: new Date(Date.now() - 60_000).toISOString(),
+      } as unknown as Record<string, never>,
+      generatedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    const sendsBefore = sends.length;
+    const fresh = await loadContributorDecisionPackForServing(env, "fresh-user");
+    expect(fresh.kind).toBe("ready");
+    if (fresh.kind === "ready") {
+      expect(fresh.pack.freshness).toBe("fresh");
+      expect(fresh.pack.rebuildEnqueued).toBe(false);
+      expect(fresh.pack.stale).toBe(false);
+    }
+    expect(sends.length).toBe(sendsBefore);
+
+    const enqueueErrorEnv = createTestEnv({
+      JOBS: {
+        async send() {
+          throw new Error("queue down");
+        },
+      } as unknown as Queue,
+    });
+    const missingNoEnqueue = await loadContributorDecisionPackForServing(enqueueErrorEnv, "any-user");
+    expect(missingNoEnqueue).toMatchObject({
+      kind: "needs_refresh",
+      refresh: { freshness: "missing", rebuildEnqueued: false, enqueued: false },
+    });
   });
 
   it("builds a snapshot-style decision pack with maintainer, cleanup, pursue, watch, and avoid lanes", () => {

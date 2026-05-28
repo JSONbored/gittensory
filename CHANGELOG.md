@@ -51,6 +51,8 @@
 
 - Add deterministic base-agent orchestrator (#14)
 
+- Serve stale decision packs with freshness marker and background rebuild
+
 
 
 ### Fixes

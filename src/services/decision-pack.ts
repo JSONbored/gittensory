@@ -34,6 +34,7 @@ export const DECISION_PACK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 export type DecisionRecommendation = "pursue" | "cleanup_first" | "maintainer_lane" | "avoid_for_now" | "watch";
 export type DecisionActionKind = "cleanup_existing_prs" | "land_existing_prs" | "open_new_direct_pr" | "file_issue_discovery" | "maintainer_lane_improve_repo" | "maintainer_cut_readiness";
+export type DecisionPackFreshness = "fresh" | "stale" | "rebuilding" | "missing";
 
 export type ContributorDecisionPack = {
   status: "ready";
@@ -42,6 +43,8 @@ export type ContributorDecisionPack = {
   generatedAt: string;
   snapshotAgeSeconds?: number | undefined;
   stale: boolean;
+  freshness: DecisionPackFreshness;
+  rebuildEnqueued: boolean;
   scoringModelSnapshotId: string;
   profile: {
     login: string;
@@ -72,6 +75,8 @@ export type DecisionPackRefreshNeeded = {
   login: string;
   generatedAt: string;
   reason: "missing_snapshot" | "stale_snapshot";
+  freshness: Extract<DecisionPackFreshness, "missing" | "rebuilding">;
+  rebuildEnqueued: boolean;
   enqueued: boolean;
   staleSnapshot?: {
     generatedAt: string;
@@ -79,6 +84,10 @@ export type DecisionPackRefreshNeeded = {
   };
   dataQuality?: ContributorDecisionPack["dataQuality"] | undefined;
 };
+
+export type ContributorDecisionPackServing =
+  | { kind: "ready"; pack: ContributorDecisionPack }
+  | { kind: "needs_refresh"; refresh: DecisionPackRefreshNeeded };
 
 export type RepoDecision = {
   repoFullName: string;
@@ -131,6 +140,54 @@ export async function loadFreshContributorDecisionPack(env: Env, login: string, 
   const pack = await loadContributorDecisionPack(env, login);
   if (!pack) return null;
   return pack.stale || snapshotAgeMs(pack.generatedAt) > maxAgeMs ? null : pack;
+}
+
+export async function loadContributorDecisionPackForServing(
+  env: Env,
+  login: string,
+  options: { maxAgeMs?: number; enqueueRebuild?: boolean } = {},
+): Promise<ContributorDecisionPackServing> {
+  const maxAgeMs = options.maxAgeMs ?? DECISION_PACK_MAX_AGE_MS;
+  const enqueueRebuild = options.enqueueRebuild ?? true;
+  const cached = await loadContributorDecisionPack(env, login);
+  if (!cached) {
+    const rebuildEnqueued = enqueueRebuild ? await tryEnqueueDecisionPackRebuild(env, login) : false;
+    return {
+      kind: "needs_refresh",
+      refresh: {
+        status: "needs_snapshot_refresh",
+        login,
+        generatedAt: nowIso(),
+        reason: "missing_snapshot",
+        freshness: "missing",
+        rebuildEnqueued,
+        enqueued: rebuildEnqueued,
+      },
+    };
+  }
+  const stale = cached.stale || snapshotAgeMs(cached.generatedAt) > maxAgeMs;
+  if (!stale) {
+    return { kind: "ready", pack: { ...cached, freshness: "fresh", rebuildEnqueued: false } };
+  }
+  const rebuildEnqueued = enqueueRebuild ? await tryEnqueueDecisionPackRebuild(env, login) : false;
+  return {
+    kind: "ready",
+    pack: {
+      ...cached,
+      stale: true,
+      freshness: rebuildEnqueued ? "rebuilding" : "stale",
+      rebuildEnqueued,
+    },
+  };
+}
+
+async function tryEnqueueDecisionPackRebuild(env: Env, login: string): Promise<boolean> {
+  try {
+    await env.JOBS.send({ type: "build-contributor-decision-packs", requestedBy: "api", login });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function buildAndPersistContributorDecisionPack(env: Env, login: string): Promise<ContributorDecisionPack> {
@@ -267,6 +324,8 @@ function buildContributorDecisionPack(args: {
     login: args.login,
     generatedAt: nowIso(),
     stale: false,
+    freshness: "fresh",
+    rebuildEnqueued: false,
     scoringModelSnapshotId: args.scoringModelSnapshotId,
     profile: {
       login: args.profile.login,
@@ -433,13 +492,16 @@ function withSnapshotMetadata(snapshot: SignalSnapshotRecord): ContributorDecisi
   const payload = snapshot.payload as unknown as ContributorDecisionPack;
   const generatedAt = snapshot.generatedAt ?? payload.generatedAt ?? nowIso();
   const ageSeconds = Math.max(0, Math.floor(snapshotAgeMs(generatedAt) / 1000));
+  const stale = snapshotAgeMs(generatedAt) > DECISION_PACK_MAX_AGE_MS;
   return {
     ...payload,
     status: "ready",
     source: "snapshot",
     generatedAt,
     snapshotAgeSeconds: ageSeconds,
-    stale: snapshotAgeMs(generatedAt) > DECISION_PACK_MAX_AGE_MS,
+    stale,
+    freshness: stale ? "stale" : "fresh",
+    rebuildEnqueued: false,
   };
 }
 

@@ -74,8 +74,7 @@ import {
 } from "../services/agent-orchestrator";
 import {
   buildAndPersistContributorDecisionPack,
-  loadContributorDecisionPack,
-  loadFreshContributorDecisionPack,
+  loadContributorDecisionPackForServing,
   repoDecisionFromPack,
 } from "../services/decision-pack";
 import {
@@ -629,46 +628,32 @@ export function createApp() {
 
   app.get("/v1/contributors/:login/decision-pack", async (c) => {
     const login = c.req.param("login");
-    const pack = await loadFreshContributorDecisionPack(c.env, login);
-    if (pack) return c.json(pack);
-    const stalePack = await loadContributorDecisionPack(c.env, login);
-    await c.env.JOBS.send({ type: "build-contributor-decision-packs", requestedBy: "api", login });
-    return c.json(
-      {
-        status: "needs_snapshot_refresh",
-        login,
-        generatedAt: nowIso(),
-        reason: stalePack ? "stale_snapshot" : "missing_snapshot",
-        enqueued: true,
-        ...(stalePack ? { staleSnapshot: { generatedAt: stalePack.generatedAt, ageSeconds: Math.max(0, Math.floor((Date.now() - Date.parse(stalePack.generatedAt)) / 1000)) } } : {}),
-        ...(stalePack?.dataQuality ? { dataQuality: stalePack.dataQuality } : {}),
-      },
-      202,
-    );
+    const serving = await loadContributorDecisionPackForServing(c.env, login);
+    if (serving.kind === "ready") return c.json(serving.pack);
+    return c.json(serving.refresh, 202);
   });
 
   app.get("/v1/contributors/:login/repos/:owner/:repo/decision", async (c) => {
     const login = c.req.param("login");
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
-    const pack = await loadFreshContributorDecisionPack(c.env, login);
-    if (!pack) {
-      const stalePack = await loadContributorDecisionPack(c.env, login);
-      await c.env.JOBS.send({ type: "build-contributor-decision-packs", requestedBy: "api", login });
-      return c.json(
-        {
-          status: "needs_snapshot_refresh",
-          login,
-          repoFullName: fullName,
-          generatedAt: nowIso(),
-          reason: stalePack ? "stale_snapshot" : "missing_snapshot",
-          enqueued: true,
-        },
-        202,
-      );
+    const serving = await loadContributorDecisionPackForServing(c.env, login);
+    if (serving.kind === "needs_refresh") {
+      return c.json({ ...serving.refresh, repoFullName: fullName }, 202);
     }
+    const pack = serving.pack;
     const decision = repoDecisionFromPack(pack, fullName);
     if (!decision) return c.json({ error: "repo_decision_not_found", login, repoFullName: fullName }, 404);
-    return c.json({ status: "ready", login, repoFullName: fullName, generatedAt: pack.generatedAt, source: pack.source, decision, dataQuality: pack.dataQuality });
+    return c.json({
+      status: "ready",
+      login,
+      repoFullName: fullName,
+      generatedAt: pack.generatedAt,
+      source: pack.source,
+      freshness: pack.freshness,
+      rebuildEnqueued: pack.rebuildEnqueued,
+      decision,
+      dataQuality: pack.dataQuality,
+    });
   });
 
   app.post("/v1/preflight/pr", async (c) => {

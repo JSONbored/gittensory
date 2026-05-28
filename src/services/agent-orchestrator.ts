@@ -20,7 +20,7 @@ import {
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
 import { fetchPublicContributorProfile } from "../github/public";
 import { getOrCreateScoringModelSnapshot } from "../scoring/model";
-import { loadFreshContributorDecisionPack, repoDecisionFromPack, type ContributorDecisionPack, type DecisionAction, type RepoDecision } from "./decision-pack";
+import { loadContributorDecisionPackForServing, repoDecisionFromPack, type ContributorDecisionPack, type DecisionAction, type RepoDecision } from "./decision-pack";
 import { summarizeAgentBundleWithAi } from "./ai-summaries";
 import { buildContributorFit, buildContributorOutcomeHistory, buildContributorProfile, buildContributorScoringProfile } from "../signals/engine";
 import { buildLocalBranchAnalysis, type LocalBranchAnalysis, type LocalBranchAnalysisInput } from "../signals/local-branch";
@@ -203,16 +203,22 @@ async function attachPrivateAiSummary(env: Env, bundle: AgentRunBundle): Promise
 async function executeDecisionPackRun(env: Env, run: AgentRunRecord, kind: string): Promise<AgentRunBundle> {
   const login = String(run.payload.login ?? run.actorLogin);
   const repoFullName = typeof run.payload.repoFullName === "string" ? run.payload.repoFullName : undefined;
-  const pack = await loadFreshContributorDecisionPack(env, login);
-  if (!pack) {
-    await env.JOBS.send({ type: "build-contributor-decision-packs", requestedBy: "api", login });
+  const serving = await loadContributorDecisionPackForServing(env, login);
+  if (serving.kind === "needs_refresh") {
     await updateAgentRun(env, run.id, {
       status: "needs_snapshot_refresh",
       dataQualityStatus: "unknown",
-      payload: { ...run.payload, snapshotRefreshEnqueued: true, refreshReason: "missing_or_stale_decision_pack" },
+      payload: {
+        ...run.payload,
+        snapshotRefreshEnqueued: serving.refresh.rebuildEnqueued,
+        refreshReason: "missing_decision_pack",
+        freshness: serving.refresh.freshness,
+      },
     });
     return (await getAgentRunBundle(env, run.id))!;
   }
+  const pack = serving.pack;
+  const isStale = pack.freshness !== "fresh";
   const decisions = repoFullName ? pack.repoDecisions.filter((decision) => sameRepo(decision.repoFullName, repoFullName)) : pack.repoDecisions;
   const actions =
     kind === "explain_blockers"
@@ -221,10 +227,18 @@ async function executeDecisionPackRun(env: Env, run: AgentRunRecord, kind: strin
   const contexts = [contextSnapshotFromPack(run.id, pack, decisions)];
   await replaceAgentActions(env, run.id, actions);
   await persistAgentContextSnapshot(env, contexts[0]!);
+  const dataQualityStatus = isStale ? "degraded" : pack.dataQuality.signalFidelity.status;
   await updateAgentRun(env, run.id, {
     status: "completed",
-    dataQualityStatus: pack.dataQuality.signalFidelity.status,
-    payload: { ...run.payload, generatedAt: pack.generatedAt, actionCount: actions.length },
+    dataQualityStatus,
+    payload: {
+      ...run.payload,
+      generatedAt: pack.generatedAt,
+      actionCount: actions.length,
+      freshness: pack.freshness,
+      snapshotRefreshEnqueued: pack.rebuildEnqueued,
+      ...(isStale ? { refreshReason: "stale_decision_pack" } : {}),
+    },
   });
   return (await getAgentRunBundle(env, run.id))!;
 }
@@ -486,7 +500,16 @@ function actionRecord(args: {
 
 function contextSnapshotFromPack(runId: string, pack: ContributorDecisionPack, decisions: RepoDecision[]): AgentContextSnapshotRecord {
   const fidelity = pack.dataQuality.signalFidelity;
+  const ageSeconds = pack.snapshotAgeSeconds ?? null;
+  const ageNote = ageSeconds !== null ? ` (age ${ageSeconds}s)` : "";
+  const freshnessWarning =
+    pack.freshness === "rebuilding"
+      ? `decision pack is stale${ageNote}; background rebuild enqueued`
+      : pack.freshness === "stale"
+        ? `decision pack is stale${ageNote}; rebuild not enqueued`
+        : null;
   const warnings = [
+    ...(freshnessWarning ? [freshnessWarning] : []),
     ...fidelity.partialRepos.map((repo) => `${repo}: partial signal coverage`),
     ...fidelity.cappedRepos.map((repo) => `${repo}: capped signal coverage`),
     ...fidelity.staleRepos.map((repo) => `${repo}: stale signal coverage`),
