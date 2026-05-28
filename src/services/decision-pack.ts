@@ -8,6 +8,7 @@ import {
   listRepoSyncStates,
   listSignalSnapshots,
   persistSignalSnapshot,
+  recordAuditEvent,
   upsertContributorEvidence,
   upsertContributorScoringProfile,
 } from "../db/repositories";
@@ -74,15 +75,9 @@ export type DecisionPackRefreshNeeded = {
   status: "needs_snapshot_refresh";
   login: string;
   generatedAt: string;
-  reason: "missing_snapshot" | "stale_snapshot";
-  freshness: Extract<DecisionPackFreshness, "missing" | "rebuilding">;
+  reason: "missing_snapshot";
+  freshness: Extract<DecisionPackFreshness, "missing">;
   rebuildEnqueued: boolean;
-  enqueued: boolean;
-  staleSnapshot?: {
-    generatedAt: string;
-    ageSeconds: number;
-  };
-  dataQuality?: ContributorDecisionPack["dataQuality"] | undefined;
 };
 
 export type ContributorDecisionPackServing =
@@ -136,12 +131,6 @@ export async function loadContributorDecisionPack(env: Env, login: string): Prom
   return withSnapshotMetadata(latest);
 }
 
-export async function loadFreshContributorDecisionPack(env: Env, login: string, maxAgeMs = DECISION_PACK_MAX_AGE_MS): Promise<ContributorDecisionPack | null> {
-  const pack = await loadContributorDecisionPack(env, login);
-  if (!pack) return null;
-  return pack.stale || snapshotAgeMs(pack.generatedAt) > maxAgeMs ? null : pack;
-}
-
 export async function loadContributorDecisionPackForServing(
   env: Env,
   login: string,
@@ -161,7 +150,6 @@ export async function loadContributorDecisionPackForServing(
         reason: "missing_snapshot",
         freshness: "missing",
         rebuildEnqueued,
-        enqueued: rebuildEnqueued,
       },
     };
   }
@@ -185,7 +173,13 @@ async function tryEnqueueDecisionPackRebuild(env: Env, login: string): Promise<b
   try {
     await env.JOBS.send({ type: "build-contributor-decision-packs", requestedBy: "api", login });
     return true;
-  } catch {
+  } catch (error) {
+    await recordAuditEvent(env, {
+      eventType: "decision_pack.rebuild_enqueue_failed",
+      actor: login,
+      outcome: "error",
+      detail: error instanceof Error ? error.message : String(error),
+    }).catch(() => undefined);
     return false;
   }
 }

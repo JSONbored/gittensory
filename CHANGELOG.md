@@ -75,5 +75,7 @@
 
 - Ignore stale beta api origins
 
+- Audit and surface queue-unavailable on decision-pack rebuild failures
+
 
 

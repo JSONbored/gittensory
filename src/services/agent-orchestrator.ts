@@ -210,8 +210,8 @@ async function executeDecisionPackRun(env: Env, run: AgentRunRecord, kind: strin
       dataQualityStatus: "unknown",
       payload: {
         ...run.payload,
-        snapshotRefreshEnqueued: serving.refresh.rebuildEnqueued,
-        refreshReason: "missing_decision_pack",
+        rebuildEnqueued: serving.refresh.rebuildEnqueued,
+        refreshReason: serving.refresh.rebuildEnqueued ? "missing_decision_pack" : "queue_unavailable",
         freshness: serving.refresh.freshness,
       },
     });
@@ -236,8 +236,10 @@ async function executeDecisionPackRun(env: Env, run: AgentRunRecord, kind: strin
       generatedAt: pack.generatedAt,
       actionCount: actions.length,
       freshness: pack.freshness,
-      snapshotRefreshEnqueued: pack.rebuildEnqueued,
-      ...(isStale ? { refreshReason: "stale_decision_pack" } : {}),
+      rebuildEnqueued: pack.rebuildEnqueued,
+      ...(isStale
+        ? { refreshReason: pack.rebuildEnqueued ? "stale_decision_pack" : "stale_decision_pack_queue_unavailable" }
+        : {}),
     },
   });
   return (await getAgentRunBundle(env, run.id))!;

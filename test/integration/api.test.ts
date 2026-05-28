@@ -311,7 +311,13 @@ describe("api routes", () => {
 
     const missingDecisionPack = await app.request("/v1/contributors/oktofeesh1/decision-pack", { headers: apiHeaders(env) }, env);
     expect(missingDecisionPack.status).toBe(202);
-    await expect(missingDecisionPack.json()).resolves.toMatchObject({ status: "needs_snapshot_refresh", login: "oktofeesh1", enqueued: true });
+    await expect(missingDecisionPack.json()).resolves.toMatchObject({
+      status: "needs_snapshot_refresh",
+      login: "oktofeesh1",
+      reason: "missing_snapshot",
+      freshness: "missing",
+      rebuildEnqueued: true,
+    });
 
     const builtDecisionPack = await app.request(
       "/v1/internal/jobs/build-contributor-decision-packs/run",
@@ -371,7 +377,12 @@ describe("api routes", () => {
 
     const missingRepoDecisionSnapshot = await app.request("/v1/contributors/new-user/repos/entrius/allways-ui/decision", { headers: apiHeaders(env) }, env);
     expect(missingRepoDecisionSnapshot.status).toBe(202);
-    await expect(missingRepoDecisionSnapshot.json()).resolves.toMatchObject({ status: "needs_snapshot_refresh", repoFullName: "entrius/allways-ui" });
+    await expect(missingRepoDecisionSnapshot.json()).resolves.toMatchObject({
+      status: "needs_snapshot_refresh",
+      repoFullName: "entrius/allways-ui",
+      freshness: "missing",
+      rebuildEnqueued: true,
+    });
 
     for (const path of [
       "/v1/contributors/oktofeesh1/opportunities",
@@ -1080,7 +1091,7 @@ describe("api routes", () => {
       expect(response.status).toBe(200);
       const payload = (await mcpJson(response)) as { result: { structuredContent: Record<string, unknown> } };
       if (name === "gittensory_get_contributor_profile") expect(payload.result.structuredContent).toMatchObject({ login: "unknown-user" });
-      else expect(payload.result.structuredContent).toMatchObject({ status: "needs_snapshot_refresh", enqueued: true });
+      else expect(payload.result.structuredContent).toMatchObject({ status: "needs_snapshot_refresh", freshness: "missing", rebuildEnqueued: true });
     }
 
     const missingRepoDecision = await app.request(
@@ -1597,6 +1608,17 @@ describe("api routes", () => {
     });
     expect(staleBody.topActions.length).toBeGreaterThan(0);
     expect(staleBody.repoDecisions.length).toBeGreaterThan(0);
+
+    const staleRepoDecision = await app.request("/v1/contributors/stale-user/repos/owner/repo/decision", { headers: apiHeaders(env) }, env);
+    expect(staleRepoDecision.status).toBe(200);
+    await expect(staleRepoDecision.json()).resolves.toMatchObject({
+      status: "ready",
+      login: "stale-user",
+      repoFullName: "owner/repo",
+      freshness: "rebuilding",
+      rebuildEnqueued: true,
+      decision: { repoFullName: "owner/repo", recommendation: "pursue" },
+    });
 
     await persistSignalSnapshot(env, {
       id: "fresh-empty-pack",

@@ -1,10 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { persistSignalSnapshot } from "../../src/db/repositories";
 import {
   __decisionPackInternals,
   loadContributorDecisionPack,
   loadContributorDecisionPackForServing,
-  loadFreshContributorDecisionPack,
   repoDecisionFromPack,
   type ContributorDecisionPack,
   type RepoDecision,
@@ -130,8 +129,6 @@ describe("decision-pack service", () => {
     expect(loaded).toMatchObject({ source: "snapshot", snapshotAgeSeconds: expect.any(Number), stale: expect.any(Boolean), freshness: "stale", rebuildEnqueued: false });
     expect(repoDecisionFromPack(loaded!, "jsonbored/AWESOME-CLAUDE")).toMatchObject({ recommendation: "maintainer_lane" });
     expect(repoDecisionFromPack(loaded!, "missing/repo")).toBeNull();
-    await expect(loadFreshContributorDecisionPack(env, "jsonbored", 1)).resolves.toBeNull();
-    await expect(loadFreshContributorDecisionPack(env, "missing", 1)).resolves.toBeNull();
 
     expect(__decisionPackInternals.sanitizeOfficialStats({ gittensor: null } as any)).toBeNull();
     expect(__decisionPackInternals.sanitizeOfficialStats({ gittensor: { hotkey: "secret", totalMergedPrs: 5 } } as any)).toEqual({ totalMergedPrs: 5 });
@@ -179,8 +176,9 @@ describe("decision-pack service", () => {
     const missing = await loadContributorDecisionPackForServing(env, "ghost-user");
     expect(missing).toMatchObject({
       kind: "needs_refresh",
-      refresh: { freshness: "missing", reason: "missing_snapshot", rebuildEnqueued: true, enqueued: true },
+      refresh: { freshness: "missing", reason: "missing_snapshot", rebuildEnqueued: true },
     });
+    expect(missing.kind === "needs_refresh" && "enqueued" in missing.refresh).toBe(false);
     expect(sends.at(-1)).toMatchObject({ type: "build-contributor-decision-packs", login: "ghost-user" });
 
     const stalePackPayload = {
@@ -266,8 +264,60 @@ describe("decision-pack service", () => {
     const missingNoEnqueue = await loadContributorDecisionPackForServing(enqueueErrorEnv, "any-user");
     expect(missingNoEnqueue).toMatchObject({
       kind: "needs_refresh",
-      refresh: { freshness: "missing", rebuildEnqueued: false, enqueued: false },
+      refresh: { freshness: "missing", rebuildEnqueued: false },
     });
+  });
+
+  it("does not call broad contributor or repo listers on the serving path", async () => {
+    const env = createTestEnv();
+    const broadListers = await import("../../src/db/repositories");
+    const spies = [
+      vi.spyOn(broadListers, "listContributorPullRequests"),
+      vi.spyOn(broadListers, "listContributorIssues"),
+      vi.spyOn(broadListers, "listContributorRepoStats"),
+      vi.spyOn(broadListers, "listRepositories"),
+      vi.spyOn(broadListers, "listRepoSyncStates"),
+      vi.spyOn(broadListers, "listRepoSyncSegments"),
+      vi.spyOn(broadListers, "listLatestRepoGithubTotalsSnapshots"),
+    ];
+
+    await loadContributorDecisionPackForServing(env, "ghost-user");
+
+    await persistSignalSnapshot(env, {
+      id: "perf-stale-pack",
+      signalType: "contributor-decision-pack",
+      targetKey: "perf-user",
+      payload: {
+        status: "ready",
+        source: "computed",
+        login: "perf-user",
+        generatedAt: "2026-01-01T00:00:00.000Z",
+        stale: false,
+        freshness: "fresh",
+        rebuildEnqueued: false,
+        scoringModelSnapshotId: "scoring-1",
+        profile: {},
+        outcomeHistory: {},
+        roleContexts: [],
+        repoDecisions: [],
+        topActions: [],
+        cleanupFirst: [],
+        pursueRepos: [],
+        avoidRepos: [],
+        maintainerLaneRepos: [],
+        scoreBlockers: [],
+        dataQuality: { signalFidelity: { status: "degraded" } },
+        summary: "stale",
+        nextActions: [],
+      } as unknown as Record<string, never>,
+      generatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    await loadContributorDecisionPackForServing(env, "perf-user");
+
+    for (const spy of spies) {
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    }
   });
 
   it("builds a snapshot-style decision pack with maintainer, cleanup, pursue, watch, and avoid lanes", () => {

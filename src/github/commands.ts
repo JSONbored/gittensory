@@ -112,9 +112,12 @@ function actionSections(bundle: AgentRunBundle | null | undefined): string[] {
     return ["**Next step**", "", "- No public-safe action is available from the current cached context."];
   }
   const top = actions[0]!;
+  const freshness = typeof bundle?.run.payload?.freshness === "string" ? (bundle.run.payload.freshness as string) : "fresh";
+  const stalePreface = freshness !== "fresh" ? ["_Decision snapshot is stale; a background rebuild has been requested._", ""] : [];
   return [
     "**Recommended public-safe next step**",
     "",
+    ...stalePreface,
     `- ${top.publicSafeSummary}`,
     ...(top.blockedBy.length > 0 ? ["", "**Public readiness blockers**", "", ...top.blockedBy.slice(0, 4).map((item) => `- ${sanitizePublicComment(item)}`)] : []),
     ...(top.rerunWhen ? ["", "**Rerun when**", "", `- ${sanitizePublicComment(top.rerunWhen)}`] : []),

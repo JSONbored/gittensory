@@ -992,12 +992,9 @@ export const DecisionPackRefreshNeededSchema = z
     login: z.string(),
     repoFullName: z.string().optional(),
     generatedAt: z.string(),
-    reason: z.enum(["missing_snapshot", "stale_snapshot"]),
-    freshness: z.enum(["missing", "rebuilding"]),
+    reason: z.enum(["missing_snapshot"]),
+    freshness: z.enum(["missing"]),
     rebuildEnqueued: z.boolean(),
-    enqueued: z.boolean(),
-    staleSnapshot: z.object({ generatedAt: z.string(), ageSeconds: z.number() }).optional(),
-    dataQuality: z.record(z.unknown()).optional(),
   })
   .openapi("DecisionPackRefreshNeeded");
 

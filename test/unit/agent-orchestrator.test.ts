@@ -91,8 +91,18 @@ describe("agent orchestrator", () => {
     const tolerated = await executeAgentRun(interruptedEnv, run.id);
     expect(tolerated.run).toMatchObject({
       status: "needs_snapshot_refresh",
-      payload: expect.objectContaining({ snapshotRefreshEnqueued: false, freshness: "missing" }),
+      payload: expect.objectContaining({
+        rebuildEnqueued: false,
+        refreshReason: "queue_unavailable",
+        freshness: "missing",
+      }),
     });
+    const auditRows = ((await interruptedEnv.DB.prepare("SELECT event_type, actor, outcome FROM audit_events").all()) as { results: Array<{ event_type: string; actor: string | null; outcome: string | null }> }).results;
+    expect(auditRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event_type: "decision_pack.rebuild_enqueue_failed", actor: "oktofeesh1", outcome: "error" }),
+      ]),
+    );
   });
 
   it("ranks decision-pack actions, persists context snapshots, and sanitizes public summaries", async () => {
@@ -125,7 +135,22 @@ describe("agent orchestrator", () => {
         },
       } as unknown as Queue,
     });
-    const stalePack = decisionPackFixture({ generatedAt: "2026-01-01T00:00:00.000Z" });
+    const stalePack = decisionPackFixture({
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      dataQuality: {
+        signalFidelity: {
+          status: "complete",
+          repoCount: 1,
+          completeRepos: 1,
+          degradedRepos: 0,
+          blockedRepos: 0,
+          partialRepos: [],
+          cappedRepos: [],
+          staleRepos: [],
+          rateLimitedRepos: [],
+        },
+      } as unknown as ContributorDecisionPack["dataQuality"],
+    });
     await persistSignalSnapshot(env, {
       id: "stale-pack-orch",
       signalType: CONTRIBUTOR_DECISION_PACK_SIGNAL,
@@ -139,7 +164,7 @@ describe("agent orchestrator", () => {
     expect(bundle.run).toMatchObject({
       status: "completed",
       dataQualityStatus: "degraded",
-      payload: expect.objectContaining({ freshness: "rebuilding", snapshotRefreshEnqueued: true, refreshReason: "stale_decision_pack" }),
+      payload: expect.objectContaining({ freshness: "rebuilding", rebuildEnqueued: true, refreshReason: "stale_decision_pack" }),
     });
     expect(bundle.actions.length).toBeGreaterThan(0);
     expect(bundle.contextSnapshots[0]?.freshnessWarnings ?? []).toEqual(
