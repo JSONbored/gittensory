@@ -100,6 +100,59 @@ describe("GitHub mention commands", () => {
     expect(sanitizePublicComment("wallet hotkey payout")).not.toMatch(/wallet|hotkey|payout/i);
   });
 
+  it("renders command-specific sections for preflight, blockers, duplicate-check, and next-action", () => {
+    const bundle = sampleBundle();
+
+    const preflight = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory preflight")!,
+      repo: null,
+      issue: { number: 10, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "author",
+      bundle,
+    });
+    expect(preflight).toContain("### Gittensory preflight");
+    expect(preflight).toContain("**Preflight summary**");
+    expect(preflight).toContain("Run local branch preflight first.");
+
+    const blockers = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory blockers")!,
+      repo: null,
+      issue: { number: 11, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "maintainer",
+      bundle: blockerBundle(),
+    });
+    expect(blockers).toContain("### Gittensory readiness blockers");
+    expect(blockers).toContain("**Readiness blockers**");
+    expect(blockers).toContain("open pull request pressure");
+
+    const duplicateCheck = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory duplicate-check")!,
+      repo: null,
+      issue: { number: 12, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "maintainer",
+      bundle: duplicateBundle(),
+    });
+    expect(duplicateCheck).toContain("### Gittensory duplicate & WIP check");
+    expect(duplicateCheck).toContain("**Duplicate & WIP caution**");
+    expect(duplicateCheck).toContain("possible overlap with existing work");
+    expect(duplicateCheck).not.toMatch(/\blikely_duplicate\b/i);
+
+    const nextAction = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory next-action")!,
+      repo: null,
+      issue: { number: 13, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "author",
+      bundle,
+    });
+    expect(nextAction).toContain("### Gittensory next step");
+    expect(nextAction).toContain("**Recommended next step**");
+    expect(nextAction).toContain("After tests pass.");
+  });
+
   it("renders help, miner-context fallback, refresh, and empty-action responses", () => {
     const help = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory help")!,
@@ -153,7 +206,7 @@ describe("GitHub mention commands", () => {
         summary: "refresh",
       },
     });
-    expect(refresh).toContain("refreshing the contributor decision snapshot");
+    expect(refresh).toContain("**Blocker snapshot refresh**");
 
     const empty = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory next-action")!,
@@ -177,7 +230,8 @@ describe("GitHub mention commands", () => {
         summary: "empty",
       },
     });
-    expect(empty).toContain("No public-safe action is available");
+    expect(empty).toContain("**Recommended next step**");
+    expect(empty).toContain("No public-safe context is available");
 
     const noBundle = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory preflight")!,
@@ -186,7 +240,8 @@ describe("GitHub mention commands", () => {
       pullRequest: null,
       actorKind: "author",
     });
-    expect(noBundle).toContain("No public-safe action is available");
+    expect(noBundle).toContain("**Preflight summary**");
+    expect(noBundle).toContain("No public-safe context is available");
 
     const withPrFallbackScope = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory next-action")!,
@@ -229,6 +284,104 @@ describe("GitHub mention commands", () => {
     expect(withPrFallbackScope).toContain("After tests pass.");
   });
 });
+
+function sampleBundle() {
+  return {
+    run: {
+      id: "run-action",
+      objective: "action",
+      actorLogin: "oktofeesh1",
+      surface: "github_comment" as const,
+      mode: "copilot" as const,
+      status: "completed" as const,
+      dataQualityStatus: "complete" as const,
+      payload: {},
+    },
+    actions: [
+      {
+        id: "action",
+        runId: "run-action",
+        actionType: "choose_next_work" as const,
+        status: "recommended" as const,
+        recommendation: "recommendation",
+        why: [],
+        blockedBy: [],
+        publicSafeSummary: "Run local branch preflight first.",
+        rerunWhen: "After tests pass.",
+        approvalRequired: true,
+        safetyClass: "private" as const,
+        payload: {},
+      },
+    ],
+    contextSnapshots: [],
+    summary: "done",
+  };
+}
+
+function blockerBundle() {
+  return {
+    run: {
+      id: "run-blockers",
+      objective: "blockers",
+      actorLogin: "maintainer",
+      surface: "github_comment" as const,
+      mode: "copilot" as const,
+      status: "completed" as const,
+      dataQualityStatus: "complete" as const,
+      payload: {},
+    },
+    actions: [
+      {
+        id: "blocker-action",
+        runId: "run-blockers",
+        actionType: "explain_score_blockers" as const,
+        status: "blocked" as const,
+        recommendation: "Resolve blockers",
+        why: ["open_pr_pressure: 5 open PR(s) create review-pressure risk."],
+        blockedBy: ["open_pr_pressure"],
+        publicSafeSummary: "Resolve queue pressure before opening more work.",
+        approvalRequired: true,
+        safetyClass: "private" as const,
+        payload: {},
+      },
+    ],
+    contextSnapshots: [],
+    summary: "blockers",
+  };
+}
+
+function duplicateBundle() {
+  return {
+    run: {
+      id: "run-duplicate",
+      objective: "duplicate-check",
+      actorLogin: "maintainer",
+      surface: "github_comment" as const,
+      mode: "copilot" as const,
+      status: "completed" as const,
+      dataQualityStatus: "complete" as const,
+      payload: {},
+    },
+    actions: [
+      {
+        id: "duplicate-action",
+        runId: "run-duplicate",
+        actionType: "check_duplicate_risk" as const,
+        status: "watch" as const,
+        recommendation: "Compare overlap",
+        why: ["likely_duplicate cluster detected against an active PR."],
+        blockedBy: ["likely_duplicate"],
+        riskImpact: "High-risk duplicate/WIP collision cluster.",
+        publicSafeSummary: "Compare against linked issues and active PRs before detailed review.",
+        approvalRequired: true,
+        safetyClass: "private" as const,
+        payload: {},
+      },
+    ],
+    contextSnapshots: [],
+    summary: "duplicate",
+  };
+}
 
 function minerSnapshot() {
   return {
