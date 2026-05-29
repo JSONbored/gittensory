@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildLocalBranchAnalysis } from "../../src/signals/local-branch";
-import type { ContributorOutcomeHistory, ContributorProfile, ContributorScoringProfile } from "../../src/signals/engine";
+import type { ContributorOutcomeHistory, ContributorProfile, ContributorScoringProfile, IssueQualityReport } from "../../src/signals/engine";
 import type { RepositoryRecord, ScoringModelSnapshotRecord } from "../../src/types";
 
 describe("local branch analysis", () => {
@@ -112,6 +112,51 @@ describe("local branch analysis", () => {
     expect(analysis.branchQualityBlockers.join(" ")).not.toMatch(/test/i);
     expect(analysis.recommendedRerunCondition).toMatch(/pending PRs merge\/close|open PR count/i);
     expect(analysis.nextActions[0]?.whyThisHelps.join(" ")).toMatch(/waiting for pending PRs/i);
+  });
+
+  it("threads issue-quality warnings into local preflight and public-safe next steps", () => {
+    const issueQuality: IssueQualityReport = {
+      repoFullName: repo.fullName,
+      generatedAt: new Date().toISOString(),
+      lane: { repoFullName: repo.fullName, lane: "direct_pr", issueDiscoveryShare: 0, directPrShare: 0.04, summary: "Direct PR lane", contributorGuidance: "", maintainerGuidance: "" },
+      issues: [
+        {
+          number: 7,
+          title: "Cache refresh fails",
+          status: "do_not_use",
+          score: 0,
+          reasons: [],
+          warnings: ["1 merged PR(s) already reference this issue."],
+        },
+      ],
+      summary: "1 open issue evaluated.",
+    };
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        body: "Fixes #7",
+        changedFiles: [
+          { path: "src/cache.ts", additions: 12, deletions: 1, status: "modified" },
+          { path: "src/cache.test.ts", additions: 20, deletions: 0, status: "added" },
+        ],
+        validation: [{ command: "npm test -- cache", status: "passed" }],
+      },
+      repo,
+      issues: [{ repoFullName: repo.fullName, number: 7, title: "Cache refresh fails", state: "open", labels: ["bug"], linkedPrs: [] }],
+      pullRequests: [],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+      issueQuality,
+    });
+
+    expect(analysis.preflight.status).toBe("needs_work");
+    expect(analysis.preflight.findings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "issue_quality_do_not_use" })]));
+    expect(analysis.branchQualityBlockers).toEqual(expect.arrayContaining(["Linked issue is already covered or duplicate-prone"]));
+    expect(analysis.prPacket.markdown).toContain("Confirm the linked issue is still actionable");
+    expect(JSON.stringify(analysis.prPacket)).not.toMatch(/reward|score|wallet|hotkey|farming|payout|ranking|trust score/i);
   });
 
   it("derives observed pending PR scenarios from cached GitHub PR state", () => {

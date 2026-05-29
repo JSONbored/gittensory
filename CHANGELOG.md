@@ -71,11 +71,13 @@
 
 - Harden local scorer adapter setup (#27)
 
-- Add lifecycle watcher signals
-
 - Derive observed pending PR scenarios (#57)
 
 - Wire burden forecast through intelligence + MCP with freshness (#61)
+
+- Add lifecycle watcher signals
+
+- Wire issue quality reports through snapshot + REST + MCP + opportunities (#56)
 
 
 
@@ -108,6 +110,20 @@
 - Block snake case private PR packet signals
 
 - Bound signal freshness listings
+
+- Avoid matching miner IDs as GitHub logins
+
+- Verify sticky comment bot author
+
+- Warn on check-run fetch failures
+
+- Keep blocker details public-safe
+
+- Keep public commands repo-scoped
+
+- Restrict GitHub OAuth sessions to admins
+
+- Restrict session access to private advisory data
 
 
 

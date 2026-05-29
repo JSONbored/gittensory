@@ -26,6 +26,7 @@ import {
   HealthSchema,
   InstallationHealthSchema,
   IssueQualityReportSchema,
+  IssueQualityResponseSchema,
   LabelAuditSchema,
   LaneAdviceSchema,
   LocalBranchAnalysisSchema,
@@ -119,6 +120,7 @@ export function buildOpenApiSpec() {
   registry.register("ScoringModelSnapshot", ScoringModelSnapshotSchema);
   registry.register("ScorePreview", ScorePreviewSchema);
   registry.register("IssueQualityReport", IssueQualityReportSchema);
+  registry.register("IssueQualityResponse", IssueQualityResponseSchema);
   registry.register("BurdenForecast", BurdenForecastSchema);
   registry.register("ContributorScoringProfile", ContributorScoringProfileSchema);
   registry.register("ContributorStrategy", ContributorStrategySchema);
@@ -223,6 +225,14 @@ export function buildOpenApiSpec() {
     path: "/v1/repos/{owner}/{repo}/intelligence",
     responses: {
       200: { description: "Canonical repository intelligence bundle", content: { "application/json": { schema: RepoIntelligenceSchema } } },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/repos/{owner}/{repo}/issue-quality",
+    responses: {
+      200: { description: "Cached or computed issue quality report for the repo", content: { "application/json": { schema: IssueQualityResponseSchema } } },
+      404: { description: "Repo is unknown or has no issue-quality coverage yet" },
     },
   });
   registry.registerPath({

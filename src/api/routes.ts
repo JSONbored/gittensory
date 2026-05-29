@@ -3,7 +3,7 @@ import { cors } from "hono/cors";
 import { z } from "zod";
 import { createSessionFromGitHubToken, pollGitHubDeviceFlow, startGitHubDeviceFlow } from "../auth/github-oauth";
 import { enforceRateLimit, routeClassForPath } from "../auth/rate-limit";
-import { authenticateInternalToken, authenticatePrivateToken, authenticateSessionToken, extractBearerToken, revokeSession } from "../auth/security";
+import { authenticateInternalToken, authenticatePrivateToken, authenticateSessionToken, extractBearerToken, revokeSession, type AuthIdentity } from "../auth/security";
 import { normalizeGittBountySnapshot } from "../bounties/ingest";
 import {
   countOpenIssues,
@@ -81,6 +81,7 @@ import {
   loadContributorDecisionPackForServing,
   repoDecisionFromPack,
 } from "../services/decision-pack";
+import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import {
   buildBountyAdvisory,
@@ -393,6 +394,10 @@ export function createApp() {
     const body = await c.req.json().catch(() => null);
     const parsed = scorePreviewSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_scoring_preview_request", issues: parsed.error.issues }, 400);
+    if (parsed.data.contributorLogin) {
+      const unauthorized = await requireContributorAccess(c, parsed.data.contributorLogin);
+      if (unauthorized) return unauthorized;
+    }
     const [repo, snapshot, evidence] = await Promise.all([
       getRepository(c.env, parsed.data.repoFullName),
       getOrCreateScoringModelSnapshot(c.env),
@@ -577,6 +582,13 @@ export function createApp() {
     return c.json(await buildRepoIntelligenceResponse(c.env, fullName));
   });
 
+  app.get("/v1/repos/:owner/:repo/issue-quality", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const response = await buildIssueQualityResponse(c.env, fullName);
+    if (!response) return c.json({ error: "issue_quality_not_found", repoFullName: fullName }, 404);
+    return c.json(response);
+  });
+
   app.get("/v1/repos/:owner/:repo/registration-readiness", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     return c.json(await buildRegistrationReadinessResponse(c.env, fullName));
@@ -629,6 +641,8 @@ export function createApp() {
   });
 
   app.get("/v1/repos/:owner/:repo/pulls/:number/maintainer-packet", async (c) => {
+    const unauthorized = await requireStaticProtectedApiToken(c);
+    if (unauthorized) return unauthorized;
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     const number = Number(c.req.param("number"));
     if (!Number.isFinite(number)) return c.json({ error: "invalid_pull_number" }, 400);
@@ -699,6 +713,8 @@ export function createApp() {
 
   app.get("/v1/contributors/:login/decision-pack", async (c) => {
     const login = c.req.param("login");
+    const unauthorized = await requireContributorAccess(c, login);
+    if (unauthorized) return unauthorized;
     const serving = await loadContributorDecisionPackForServing(c.env, login);
     if (serving.kind === "ready") return c.json(serving.pack);
     return c.json(serving.refresh, 202);
@@ -706,6 +722,8 @@ export function createApp() {
 
   app.get("/v1/contributors/:login/repos/:owner/:repo/decision", async (c) => {
     const login = c.req.param("login");
+    const unauthorized = await requireContributorAccess(c, login);
+    if (unauthorized) return unauthorized;
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     const serving = await loadContributorDecisionPackForServing(c.env, login);
     if (serving.kind === "needs_refresh") {
@@ -731,29 +749,37 @@ export function createApp() {
     const body = await c.req.json().catch(() => null);
     const parsed = preflightSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_preflight_request", issues: parsed.error.issues }, 400);
-    const repo = await getRepository(c.env, parsed.data.repoFullName);
-    const issues = await listIssues(c.env, parsed.data.repoFullName);
-    const pullRequests = await listPullRequests(c.env, parsed.data.repoFullName);
-    const bounties = await listBountiesByRepo(c.env, parsed.data.repoFullName);
-    return c.json(buildPreflightResult(parsed.data, repo, issues, pullRequests, bounties));
+    const [repo, issues, pullRequests, bounties, issueQuality] = await Promise.all([
+      getRepository(c.env, parsed.data.repoFullName),
+      listIssues(c.env, parsed.data.repoFullName),
+      listPullRequests(c.env, parsed.data.repoFullName),
+      listBountiesByRepo(c.env, parsed.data.repoFullName),
+      loadOrComputeIssueQualityResponse(c.env, parsed.data.repoFullName),
+    ]);
+    return c.json(buildPreflightResult(parsed.data, repo, issues, pullRequests, bounties, issueQuality?.report));
   });
 
   app.post("/v1/preflight/local-diff", async (c) => {
     const body = await c.req.json().catch(() => null);
     const parsed = localDiffPreflightSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_local_diff_preflight_request", issues: parsed.error.issues }, 400);
-    const repo = await getRepository(c.env, parsed.data.repoFullName);
-    const issues = await listIssues(c.env, parsed.data.repoFullName);
-    const pullRequests = await listPullRequests(c.env, parsed.data.repoFullName);
-    const bounties = await listBountiesByRepo(c.env, parsed.data.repoFullName);
-    return c.json(buildLocalDiffPreflightResult(parsed.data, repo, issues, pullRequests, bounties));
+    const [repo, issues, pullRequests, bounties, issueQuality] = await Promise.all([
+      getRepository(c.env, parsed.data.repoFullName),
+      listIssues(c.env, parsed.data.repoFullName),
+      listPullRequests(c.env, parsed.data.repoFullName),
+      listBountiesByRepo(c.env, parsed.data.repoFullName),
+      loadOrComputeIssueQualityResponse(c.env, parsed.data.repoFullName),
+    ]);
+    return c.json(buildLocalDiffPreflightResult(parsed.data, repo, issues, pullRequests, bounties, issueQuality?.report));
   });
 
   app.post("/v1/local/branch-analysis", async (c) => {
     const body = await c.req.json().catch(() => null);
     const parsed = localBranchAnalysisSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_local_branch_analysis_request", issues: parsed.error.issues }, 400);
-    const [context, repo, issues, pullRequests, recentMergedPullRequests, bounties, snapshot] = await Promise.all([
+    const unauthorized = await requireContributorAccess(c, parsed.data.login);
+    if (unauthorized) return unauthorized;
+    const [context, repo, issues, pullRequests, recentMergedPullRequests, bounties, snapshot, issueQuality] = await Promise.all([
       loadContributorFastContext(c.env, parsed.data.login),
       getRepository(c.env, parsed.data.repoFullName),
       listIssues(c.env, parsed.data.repoFullName),
@@ -761,6 +787,7 @@ export function createApp() {
       listRecentMergedPullRequests(c.env, parsed.data.repoFullName),
       listBountiesByRepo(c.env, parsed.data.repoFullName),
       getOrCreateScoringModelSnapshot(c.env),
+      loadOrComputeIssueQualityResponse(c.env, parsed.data.repoFullName),
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: parsed.data.login, fit, scoringSnapshot: snapshot });
@@ -777,6 +804,7 @@ export function createApp() {
       outcomeHistory: context.outcomeHistory,
       scoringSnapshot: snapshot,
       scoringProfile,
+      issueQuality: issueQuality?.report,
     });
     const response = { ...analysis, dataQuality: await loadRepoDataQuality(c.env, parsed.data.repoFullName) };
     await persistSignal(c.env, "local-branch-analysis", `${parsed.data.login}:${parsed.data.repoFullName}:${parsed.data.branchName ?? parsed.data.headRef ?? "local"}`, parsed.data.repoFullName, response as unknown as Record<string, JsonValue>, analysis.generatedAt);
@@ -787,6 +815,8 @@ export function createApp() {
     const body = await c.req.json().catch(() => null);
     const parsed = agentRunSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_agent_run_request", issues: parsed.error.issues }, 400);
+    const unauthorized = await requireContributorAccess(c, parsed.data.actorLogin);
+    if (unauthorized) return unauthorized;
     const bundle = await startAgentRun(c.env, parsed.data);
     return c.json(bundle, 202);
   });
@@ -794,6 +824,8 @@ export function createApp() {
   app.get("/v1/agent/runs/:id", async (c) => {
     const bundle = await getAgentRunBundle(c.env, c.req.param("id"));
     if (!bundle) return c.json({ error: "agent_run_not_found" }, 404);
+    const unauthorized = await requireContributorAccess(c, bundle.run.actorLogin);
+    if (unauthorized) return unauthorized;
     return c.json(bundle);
   });
 
@@ -801,6 +833,8 @@ export function createApp() {
     const body = await c.req.json().catch(() => null);
     const parsed = agentPlanSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_agent_plan_request", issues: parsed.error.issues }, 400);
+    const unauthorized = await requireContributorAccess(c, parsed.data.login);
+    if (unauthorized) return unauthorized;
     const bundle = await planNextWork(c.env, parsed.data);
     return c.json(bundle, bundle.run.status === "needs_snapshot_refresh" ? 202 : 200);
   });
@@ -809,6 +843,8 @@ export function createApp() {
     const body = await c.req.json().catch(() => null);
     const parsed = localBranchAnalysisSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_agent_preflight_branch_request", issues: parsed.error.issues }, 400);
+    const unauthorized = await requireContributorAccess(c, parsed.data.login);
+    if (unauthorized) return unauthorized;
     const bundle = await preflightBranchWithAgent(c.env, parsed.data);
     return c.json(bundle);
   });
@@ -817,6 +853,8 @@ export function createApp() {
     const body = await c.req.json().catch(() => null);
     const parsed = localBranchAnalysisSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_agent_prepare_pr_packet_request", issues: parsed.error.issues }, 400);
+    const unauthorized = await requireContributorAccess(c, parsed.data.login);
+    if (unauthorized) return unauthorized;
     const bundle = await preparePrPacketWithAgent(c.env, parsed.data);
     return c.json(bundle);
   });
@@ -825,6 +863,8 @@ export function createApp() {
     const body = await c.req.json().catch(() => null);
     const parsed = agentExplainBlockersSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_agent_explain_blockers_request", issues: parsed.error.issues }, 400);
+    const unauthorized = await requireContributorAccess(c, parsed.data.login);
+    if (unauthorized) return unauthorized;
     const bundle = await explainBlockersWithAgent(c.env, parsed.data);
     return c.json(bundle, bundle.run.status === "needs_snapshot_refresh" ? 202 : 200);
   });
@@ -1160,6 +1200,10 @@ function withDataQualityWarning(dataQuality: DataQuality, warning: string): Data
   };
 }
 
+async function buildIssueQualityResponse(env: Env, fullName: string) {
+  return loadOrComputeIssueQualityResponse(env, fullName);
+}
+
 async function buildRegistrationReadinessResponse(env: Env, fullName: string) {
   const intelligence = await buildRepoIntelligenceResponse(env, fullName);
   const settings = await getRepositorySettings(env, fullName);
@@ -1377,6 +1421,30 @@ function contributorEvidenceFromProfile(profile: {
       credibilityAssumption: profile.evidence.credibilityAssumption,
     },
   };
+}
+
+type ProtectedRouteContext = {
+  env: Env;
+  req: { header: (name: string) => string | undefined | null };
+  json: (object: { error: string }, status?: number) => Response;
+};
+
+async function authenticateRequestIdentity(c: ProtectedRouteContext): Promise<AuthIdentity | null> {
+  return authenticatePrivateToken(c.env, extractBearerToken(c.req.header("authorization")));
+}
+
+async function requireStaticProtectedApiToken(c: ProtectedRouteContext): Promise<Response | null> {
+  const identity = await authenticateRequestIdentity(c);
+  if (!identity) return c.json({ error: "unauthorized" }, 401);
+  if (identity.kind === "session") return c.json({ error: "static_token_required" }, 403);
+  return null;
+}
+
+async function requireContributorAccess(c: ProtectedRouteContext, login: string): Promise<Response | null> {
+  const identity = await authenticateRequestIdentity(c);
+  if (!identity) return c.json({ error: "unauthorized" }, 401);
+  if (identity.kind === "session" && identity.actor.toLowerCase() !== login.toLowerCase()) return c.json({ error: "forbidden_contributor" }, 403);
+  return null;
 }
 
 function requiresApiToken(path: string): boolean {

@@ -1,4 +1,4 @@
-import { createSessionForGitHubUser } from "./security";
+import { createSessionForGitHubUser, isAuthorizedGitHubSessionLogin } from "./security";
 import { recordAuditEvent } from "../db/repositories";
 import type { JsonValue } from "../types";
 
@@ -101,6 +101,15 @@ export async function createSessionFromGitHubToken(
       detail: user.message ?? "github_user_validation_failed",
     });
     throw new Error("github_user_validation_failed");
+  }
+  if (!isAuthorizedGitHubSessionLogin(env, user.login)) {
+    await recordAuditEvent(env, {
+      eventType: "auth.github_session",
+      actor: user.login,
+      outcome: "denied",
+      detail: "github_user_not_authorized",
+    });
+    throw new Error("github_user_not_authorized");
   }
   const scopes = Array.isArray(metadata.scopes) ? metadata.scopes.filter((scope): scope is string => typeof scope === "string") : [];
   const githubUser = user.id === undefined ? { login: user.login } : { login: user.login, id: user.id };

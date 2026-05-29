@@ -10,6 +10,7 @@ import {
   type ContributorOutcomeHistory,
   type ContributorProfile,
   type ContributorScoringProfile,
+  type IssueQualityReport,
   type LocalDiffPreflightResult,
   type RoleContext,
 } from "./engine";
@@ -161,6 +162,7 @@ export function buildLocalBranchAnalysis(args: {
   outcomeHistory: ContributorOutcomeHistory;
   scoringSnapshot: ScoringModelSnapshotRecord;
   scoringProfile?: ContributorScoringProfile | null | undefined;
+  issueQuality?: IssueQualityReport | null | undefined;
 }): LocalBranchAnalysis {
   const changedFiles = args.input.changedFiles ?? [];
   const changedPaths = changedFiles.map((file) => file.path);
@@ -186,6 +188,7 @@ export function buildLocalBranchAnalysis(args: {
     args.issues,
     args.pullRequests,
     args.bounties ?? [],
+    args.issueQuality,
   );
   const roleContext = buildRoleContext({
     login: args.input.login,

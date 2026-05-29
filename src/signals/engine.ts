@@ -1074,11 +1074,15 @@ export function buildContributorOpportunities(
   issues: IssueRecord[],
   pullRequests: PullRequestRecord[],
   bounties: BountyRecord[] = [],
+  issueQualityByRepo?: Map<string, IssueQualityReport>,
 ): ContributorOpportunity[] {
   const opportunities: ContributorOpportunity[] = [];
   const touchedRepos = new Set(profile.registeredRepoActivity.reposTouched);
   const labelHistory = new Set(profile.registeredRepoActivity.dominantLabels);
   const bountyByIssue = indexBountiesByIssue(bounties);
+  const qualityByKey = issueQualityByRepo
+    ? new Map(Array.from(issueQualityByRepo.entries()).map(([key, value]) => [key.toLowerCase(), value]))
+    : null;
 
   for (const repo of repositories.filter((candidate) => candidate.isRegistered)) {
     const lane = buildLaneAdvice(repo, repo.fullName);
@@ -1087,13 +1091,29 @@ export function buildContributorOpportunities(
     const linkedIssueNumbers = new Set(repoPullRequests.flatMap((pr) => pr.linkedIssues));
     const availableIssues = repoIssues.filter((issue) => issue.linkedPrs.length === 0 && !linkedIssueNumbers.has(issue.number));
     const queuePenalty = Math.min(20, repoPullRequests.length * 2);
-    for (const issue of availableIssues.slice(0, 5)) {
+    const qualityReport = qualityByKey?.get(repo.fullName.toLowerCase());
+    const qualityByIssue = qualityReport
+      ? new Map(qualityReport.issues.map((entry) => [entry.number, entry]))
+      : null;
+    const rankable = qualityByIssue
+      ? availableIssues.filter((issue) => qualityByIssue.get(issue.number)?.status !== "do_not_use")
+      : availableIssues;
+    for (const issue of rankable.slice(0, 5)) {
+      const quality = qualityByIssue?.get(issue.number);
       const bounty = bountyByIssue.get(bountyIssueKey(repo.fullName, issue.number)) ?? null;
       const bountyLifecycle = bounty ? classifyBountyLifecycle(bounty, issue) : null;
       // Never steer contributors toward completed, cancelled, or otherwise historical bounty work.
       if (bountyLifecycle && isHistoricalBountyLifecycle(bountyLifecycle)) continue;
       const bountyPenalty = bountyLifecycle === "stale" || bountyLifecycle === "ambiguous" ? 30 : 0;
       const labelFit = issue.labels.filter((label) => labelHistory.has(label)).length;
+      const qualityAdjustment =
+        quality?.status === "ready"
+          ? 10
+          : quality?.status === "needs_proof"
+            ? -8
+            : quality?.status === "hold"
+              ? -15
+              : 0;
       const score = clamp(
         50 +
           (touchedRepos.has(repo.fullName) ? 20 : 0) +
@@ -1102,16 +1122,18 @@ export function buildContributorOpportunities(
           (lane.lane === "direct_pr" ? 5 : 0) -
           queuePenalty -
           bountyPenalty -
-          (lane.lane === "inactive" || lane.lane === "unknown" ? 35 : 0),
+          (lane.lane === "inactive" || lane.lane === "unknown" ? 35 : 0) +
+          qualityAdjustment,
         0,
         100,
       );
       const baseFit = score >= 70 ? "good" : score >= 40 ? "caution" : "hold";
+      const downgradeToCaution = (bountyPenalty > 0 || quality?.status === "needs_proof") && baseFit === "good";
       opportunities.push({
         repoFullName: repo.fullName,
         issueNumber: issue.number,
         title: issue.title,
-        fit: bountyPenalty > 0 && baseFit === "good" ? "caution" : baseFit,
+        fit: downgradeToCaution ? "caution" : baseFit,
         score,
         lane: lane.lane,
         reasons: [
@@ -1119,6 +1141,7 @@ export function buildContributorOpportunities(
           ...(touchedRepos.has(repo.fullName) ? ["Contributor has prior activity in this registered repo."] : []),
           ...(labelFit > 0 ? [`Issue labels overlap contributor history: ${issue.labels.filter((label) => labelHistory.has(label)).join(", ")}.`] : []),
           ...(bountyLifecycle === "active" ? ["An active bounty is attached as contribution context (not guaranteed payout)."] : []),
+          ...(quality?.status === "ready" ? ["Issue quality report rates this issue as ready."] : []),
         ],
         warnings: [
           ...(repoPullRequests.length >= 8 ? ["This repo has a busy open PR queue."] : []),
@@ -1126,6 +1149,8 @@ export function buildContributorOpportunities(
           ...(lane.lane === "unknown" || lane.lane === "inactive" ? ["Gittensory cannot recommend this as a strong contribution target right now."] : []),
           ...(bountyLifecycle === "stale" ? ["Attached bounty context looks stale; confirm it is still active before acting."] : []),
           ...(bountyLifecycle === "ambiguous" ? ["Attached bounty state is ambiguous; verify it before acting."] : []),
+          ...(quality?.status === "needs_proof" ? ["Issue quality report flags this issue as needing more proof before acting."] : []),
+          ...(quality?.status === "hold" ? ["Issue quality report rates this issue as hold; consider skipping."] : []),
         ],
       });
     }
@@ -1142,8 +1167,9 @@ export function buildContributorFit(
   repoSyncStates: RepoSyncStateRecord[],
   repoStats: ContributorRepoStatRecord[],
   bounties: BountyRecord[] = [],
+  issueQualityByRepo?: Map<string, IssueQualityReport>,
 ): ContributorFit {
-  const opportunities = buildContributorOpportunities(profile, repositories, issues, pullRequests, bounties);
+  const opportunities = buildContributorOpportunities(profile, repositories, issues, pullRequests, bounties, issueQualityByRepo);
   const languageSet = new Set(profile.github.topLanguages.map((language) => language.toLowerCase()));
   const syncByRepo = new Map(repoSyncStates.map((state) => [state.repoFullName, state]));
   const languageFit = repositories
@@ -1567,6 +1593,7 @@ export function buildPreflightResult(
   issues: IssueRecord[],
   pullRequests: PullRequestRecord[],
   bounties: BountyRecord[] = [],
+  issueQuality?: IssueQualityReport | null | undefined,
 ): PreflightResult {
   const lane = buildLaneAdvice(repo, input.repoFullName);
   const linkedIssues = [...new Set([...(input.linkedIssues ?? []), ...extractLinkedIssueNumbers(input.body ?? "")])].sort((left, right) => left - right);
@@ -1625,6 +1652,7 @@ export function buildPreflightResult(
       });
     }
   }
+  findings.push(...issueQualityFindings(linkedIssues, issueQuality));
   const changedFiles = input.changedFiles ?? [];
   const tests = input.tests ?? [];
   if (changedFiles.some((file) => isCodeFile(file)) && tests.length === 0 && !changedFiles.some((file) => isTestFile(file))) {
@@ -1656,6 +1684,7 @@ export function buildLocalDiffPreflightResult(
   issues: IssueRecord[],
   pullRequests: PullRequestRecord[],
   bounties: BountyRecord[] = [],
+  issueQuality?: IssueQualityReport | null | undefined,
 ): LocalDiffPreflightResult {
   const changedFiles = [...new Set([...(input.changedFiles ?? []), ...(input.testFiles ?? [])])];
   const linkedFromCommit = extractLinkedIssueNumbers([input.commitMessage, input.body, input.title].filter(Boolean).join("\n"));
@@ -1670,6 +1699,7 @@ export function buildLocalDiffPreflightResult(
     issues,
     pullRequests,
     bounties,
+    issueQuality,
   );
   const codeFileCount = changedFiles.filter(isCodeFile).length;
   const testFileCount = changedFiles.filter(isTestFile).length;
@@ -1911,29 +1941,35 @@ export function buildIssueQualityReport(
   pullRequests: PullRequestRecord[],
   fullName: string,
   bounties: BountyRecord[] = [],
+  prebuiltCollisions?: CollisionReport,
+  recentMergedPullRequests: RecentMergedPullRequestRecord[] = [],
 ): IssueQualityReport {
   const lane = buildLaneAdvice(repo, fullName);
-  const collisions = buildCollisionReport(fullName, issues, pullRequests);
+  const collisions = prebuiltCollisions ?? buildCollisionReport(fullName, issues, pullRequests, recentMergedPullRequests);
   const bountyByIssue = indexBountiesByIssue(bounties);
   const reports = issues
     .filter((issue) => issue.state === "open")
     .slice(0, 100)
     .map((issue) => {
-      const linkedPrs = pullRequests.filter((pr) => pr.linkedIssues.includes(issue.number));
+      const linkedPrs = pullRequests.filter((pr) => pr.linkedIssues.includes(issue.number) || issue.linkedPrs.includes(pr.number));
+      const linkedMergedPrs = recentMergedPullRequests.filter((pr) => pr.linkedIssues.includes(issue.number) || issue.linkedPrs.includes(pr.number));
       const issueCollisions = collisions.clusters.filter((cluster) => cluster.items.some((item) => item.type === "issue" && item.number === issue.number));
       const age = daysSince(issue.updatedAt ?? issue.createdAt);
       const bodyLength = issue.body?.trim().length ?? 0;
       const bounty = bountyByIssue.get(bountyIssueKey(fullName, issue.number)) ?? null;
       const bountyLifecycle = bounty ? classifyBountyLifecycle(bounty, issue) : null;
+      const linkedWorkCount = linkedPrs.length + linkedMergedPrs.length + issue.linkedPrs.length;
       const reasons = [
         ...(bodyLength >= 200 ? ["Issue has enough body detail to evaluate."] : []),
         ...(issue.labels.length > 0 ? [`Labels: ${issue.labels.join(", ")}.`] : []),
-        ...(linkedPrs.length === 0 ? ["No active PR is linked in cached metadata."] : []),
+        ...(linkedWorkCount === 0 ? ["No active PR is linked in cached metadata."] : []),
         ...(bountyLifecycle === "active" ? ["Active bounty context is attached (contribution context, not guaranteed payout)."] : []),
       ];
       const warnings = [
         ...(bodyLength < 80 ? ["Issue body is thin; contributor may need more proof before acting."] : []),
         ...(linkedPrs.length > 0 ? [`${linkedPrs.length} active PR(s) already reference this issue.`] : []),
+        ...(linkedMergedPrs.length > 0 ? [`${linkedMergedPrs.length} merged PR(s) already reference this issue.`] : []),
+        ...(issue.linkedPrs.length > 0 && linkedPrs.length === 0 && linkedMergedPrs.length === 0 ? [`Cached issue metadata already references PR(s): ${issue.linkedPrs.map((number) => `#${number}`).join(", ")}.`] : []),
         ...(issueCollisions.length > 0 ? ["Potential duplicate or overlapping issue/PR context exists."] : []),
         ...(age > 90 ? ["Issue is stale in cached metadata."] : []),
         ...(lane.lane === "direct_pr" ? ["Repo is direct-PR first; issue filing is not the primary Gittensor lane."] : []),
@@ -1947,7 +1983,7 @@ export function buildIssueQualityReport(
       const bountyBlocks = bountyLifecycle === "completed" || bountyLifecycle === "cancelled" || bountyLifecycle === "historical";
       const bountyCaution = bountyLifecycle === "stale" || bountyLifecycle === "ambiguous";
       const status: IssueQualityReport["issues"][number]["status"] =
-        linkedPrs.length > 0 || issueCollisions.some((cluster) => cluster.risk === "high") || bountyBlocks
+        linkedWorkCount > 0 || issueCollisions.some((cluster) => cluster.risk === "high") || bountyBlocks
           ? "do_not_use"
           : warnings.some((warning) => /thin|stale|direct-PR/i.test(warning)) || bountyCaution
             ? "needs_proof"
@@ -1964,6 +2000,47 @@ export function buildIssueQualityReport(
     issues: reports,
     summary: `${reports.length} open issue(s) evaluated; ${reports.filter((report) => report.status === "ready").length} look ready from cached metadata.`,
   };
+}
+
+function issueQualityFindings(linkedIssues: number[], issueQuality: IssueQualityReport | null | undefined): SignalFinding[] {
+  if (!issueQuality || linkedIssues.length === 0) return [];
+  const byIssue = new Map(issueQuality.issues.map((issue) => [issue.number, issue]));
+  return linkedIssues.flatMap((issueNumber) => {
+    const quality = byIssue.get(issueNumber);
+    if (!quality || quality.status === "ready") return [];
+    const detail = quality.warnings[0] ?? `Issue quality report marks #${issueNumber} as ${quality.status}.`;
+    if (quality.status === "do_not_use") {
+      return [
+        {
+          code: "issue_quality_do_not_use",
+          severity: "warning" as const,
+          title: "Linked issue is already covered or duplicate-prone",
+          detail,
+          action: "Confirm the linked issue is still actionable before posting public PR context.",
+        },
+      ];
+    }
+    if (quality.status === "needs_proof") {
+      return [
+        {
+          code: "issue_quality_needs_proof",
+          severity: "warning" as const,
+          title: "Linked issue needs stronger proof",
+          detail,
+          action: "Add concrete reproduction, scope, or maintainer context before proceeding.",
+        },
+      ];
+    }
+    return [
+      {
+        code: "issue_quality_hold",
+        severity: "warning" as const,
+        title: "Linked issue is on hold",
+        detail,
+        action: "Choose a clearer candidate or wait for maintainer context.",
+      },
+    ];
+  });
 }
 
 export function buildBurdenForecast(
