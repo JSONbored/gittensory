@@ -787,7 +787,9 @@ export class GittensoryMcp {
         repo,
         issues,
         pullRequests,
+        contributorPullRequests: context.contributorPullRequests,
         recentMergedPullRequests,
+        repositories: context.repositories,
         profile: context.profile,
         outcomeHistory: context.outcomeHistory,
         scoringSnapshot: snapshot,
@@ -830,6 +832,7 @@ export class GittensoryMcp {
     });
     return {
       profile,
+      contributorPullRequests,
       repositories,
       syncStates,
       repoStats,
