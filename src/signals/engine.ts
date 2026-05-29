@@ -1063,10 +1063,14 @@ export function buildContributorOpportunities(
   repositories: RepositoryRecord[],
   issues: IssueRecord[],
   pullRequests: PullRequestRecord[],
+  issueQualityByRepo?: Map<string, IssueQualityReport>,
 ): ContributorOpportunity[] {
   const opportunities: ContributorOpportunity[] = [];
   const touchedRepos = new Set(profile.registeredRepoActivity.reposTouched);
   const labelHistory = new Set(profile.registeredRepoActivity.dominantLabels);
+  const qualityByKey = issueQualityByRepo
+    ? new Map(Array.from(issueQualityByRepo.entries()).map(([key, value]) => [key.toLowerCase(), value]))
+    : null;
 
   for (const repo of repositories.filter((candidate) => candidate.isRegistered)) {
     const lane = buildLaneAdvice(repo, repo.fullName);
@@ -1075,8 +1079,22 @@ export function buildContributorOpportunities(
     const linkedIssueNumbers = new Set(repoPullRequests.flatMap((pr) => pr.linkedIssues));
     const availableIssues = repoIssues.filter((issue) => issue.linkedPrs.length === 0 && !linkedIssueNumbers.has(issue.number));
     const queuePenalty = Math.min(20, repoPullRequests.length * 2);
+    const qualityReport = qualityByKey?.get(repo.fullName.toLowerCase());
+    const qualityByIssue = qualityReport
+      ? new Map(qualityReport.issues.map((entry) => [entry.number, entry]))
+      : null;
     for (const issue of availableIssues.slice(0, 5)) {
+      const quality = qualityByIssue?.get(issue.number);
+      if (quality && quality.status === "do_not_use") continue;
       const labelFit = issue.labels.filter((label) => labelHistory.has(label)).length;
+      const qualityAdjustment =
+        quality?.status === "ready"
+          ? 10
+          : quality?.status === "needs_proof"
+            ? -8
+            : quality?.status === "hold"
+              ? -15
+              : 0;
       const score = clamp(
         50 +
           (touchedRepos.has(repo.fullName) ? 20 : 0) +
@@ -1084,26 +1102,31 @@ export function buildContributorOpportunities(
           (lane.lane === "split" ? 8 : 0) +
           (lane.lane === "direct_pr" ? 5 : 0) -
           queuePenalty -
-          (lane.lane === "inactive" || lane.lane === "unknown" ? 35 : 0),
+          (lane.lane === "inactive" || lane.lane === "unknown" ? 35 : 0) +
+          qualityAdjustment,
         0,
         100,
       );
+      const downgradeToCaution = quality?.status === "needs_proof" && score >= 70;
       opportunities.push({
         repoFullName: repo.fullName,
         issueNumber: issue.number,
         title: issue.title,
-        fit: score >= 70 ? "good" : score >= 40 ? "caution" : "hold",
+        fit: downgradeToCaution ? "caution" : score >= 70 ? "good" : score >= 40 ? "caution" : "hold",
         score,
         lane: lane.lane,
         reasons: [
           lane.summary,
           ...(touchedRepos.has(repo.fullName) ? ["Contributor has prior activity in this registered repo."] : []),
           ...(labelFit > 0 ? [`Issue labels overlap contributor history: ${issue.labels.filter((label) => labelHistory.has(label)).join(", ")}.`] : []),
+          ...(quality?.status === "ready" ? ["Issue quality report rates this issue as ready."] : []),
         ],
         warnings: [
           ...(repoPullRequests.length >= 8 ? ["This repo has a busy open PR queue."] : []),
           ...(lane.lane === "issue_discovery" ? ["This repo is not a direct-PR-first lane."] : []),
           ...(lane.lane === "unknown" || lane.lane === "inactive" ? ["Gittensory cannot recommend this as a strong contribution target right now."] : []),
+          ...(quality?.status === "needs_proof" ? ["Issue quality report flags this issue as needing more proof before acting."] : []),
+          ...(quality?.status === "hold" ? ["Issue quality report rates this issue as hold; consider skipping."] : []),
         ],
       });
     }

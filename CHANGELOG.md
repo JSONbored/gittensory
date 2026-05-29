@@ -53,7 +53,21 @@
 
 - Add deterministic base-agent orchestrator (#14)
 
-- Detect stale installs and API compatibility in doctor and status
+- Add settings preview diagnostics (#31)
+
+- Make next-action recommendations repo-specific (#30)
+
+- Detect stale installs and API compatibility in doctor and status (#28)
+
+- Add command-specific @gittensory responses (#25)
+
+- Serve stale decision packs with freshness marker and background rebuild (#26)
+
+- Persist issue-quality snapshots and serve them via REST
+
+- Add gittensory_get_issue_quality tool
+
+- Weight contributor opportunities by cached issue quality
 
 
 
@@ -77,12 +91,5 @@
 
 - Ignore stale beta api origins
 
-- Restore actionKind guards and add split-lane copy
 
 
-
-### Tests
-
-- Tighten and extend decision-pack regression coverage
-
-- Cover review-requested branches and tier sanitization
