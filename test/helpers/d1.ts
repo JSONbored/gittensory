@@ -65,6 +65,7 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
     GITTENSORY_MCP_TOKEN: "test-mcp-token",
     GITHUB_WEBHOOK_SECRET: "test-webhook-secret",
     GITHUB_APP_PRIVATE_KEY: "test-private-key",
+    ADMIN_GITHUB_LOGINS: "jsonbored",
     ...overrides,
   };
 }

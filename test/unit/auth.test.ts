@@ -158,7 +158,7 @@ describe("private-beta auth and rate limiting", () => {
   });
 
   it("polls GitHub device flow and creates a session only after authorization", async () => {
-    const env = createTestEnv({ GITHUB_OAUTH_CLIENT_ID: "client-id" });
+    const env = createTestEnv({ GITHUB_OAUTH_CLIENT_ID: "client-id", ADMIN_GITHUB_LOGINS: "jsonbored,scopefree" });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url.includes("access_token")) return Response.json({ error: "authorization_pending", error_description: "waiting" });
@@ -212,7 +212,17 @@ describe("private-beta auth and rate limiting", () => {
     await expect(createSessionFromGitHubToken(env, "bad-token")).rejects.toThrow(/github_user_validation_failed/);
 
     vi.stubGlobal("fetch", async () => Response.json({ login: "no-id-user" }));
-    await expect(createSessionFromGitHubToken(env, "valid-token")).resolves.toMatchObject({ login: "no-id-user", scopes: [] });
+    await expect(createSessionFromGitHubToken(createTestEnv({ ADMIN_GITHUB_LOGINS: "no-id-user" }), "valid-token")).resolves.toMatchObject({ login: "no-id-user", scopes: [] });
+  });
+
+  it("requires GitHub OAuth sessions to come from configured admin logins", async () => {
+    vi.stubGlobal("fetch", async () => Response.json({ login: "external-attacker", id: 99 }));
+    await expect(createSessionFromGitHubToken(createTestEnv(), "attacker-token")).rejects.toThrow(/github_user_not_authorized/);
+    await expect(createSessionFromGitHubToken(createTestEnv({ ADMIN_GITHUB_LOGINS: "" }), "attacker-token")).rejects.toThrow(/github_user_not_authorized/);
+
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "jsonbored" });
+    const { token } = await createSessionForGitHubUser(env, { login: "external-attacker", id: 99 });
+    await expect(authenticatePrivateToken(env, token)).resolves.toBeNull();
   });
 });
 
