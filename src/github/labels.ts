@@ -31,13 +31,15 @@ export async function ensurePullRequestLabel(
 
   let created = false;
   if (options.createMissingLabel) {
-    const repoLabels = await octokit.request("GET /repos/{owner}/{repo}/labels", {
+    const labelLookup = await octokit.request("GET /repos/{owner}/{repo}/labels/{name}", {
       owner,
       repo,
-      per_page: 100,
+      name: labelName,
+    }).catch((error: { status?: number }) => {
+      if (error.status === 404) return null;
+      throw error;
     });
-    const labelExists = (repoLabels.data as GitHubLabel[]).some((label) => label.name?.toLowerCase() === labelName.toLowerCase());
-    if (!labelExists) {
+    if (!labelLookup) {
       await octokit.request("POST /repos/{owner}/{repo}/labels", {
         owner,
         repo,

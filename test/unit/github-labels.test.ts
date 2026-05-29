@@ -38,7 +38,7 @@ describe("GitHub PR labels", () => {
       calls.push(`${method} ${url}`);
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.includes("/issues/4/labels") && method === "GET") return Response.json([]);
-      if (url.includes("/repos/JSONbored/gittensory/labels") && method === "GET") return Response.json([{ name: "gittensor" }]);
+      if (url.includes("/labels/gittensor") && method === "GET") return Response.json({ name: "gittensor" });
       if (url.includes("/issues/4/labels") && method === "POST") return Response.json([{ name: "gittensor" }]);
       return new Response("unexpected", { status: 500 });
     });
@@ -59,7 +59,7 @@ describe("GitHub PR labels", () => {
       calls.push(`${method} ${url}`);
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.includes("/issues/4/labels") && method === "GET") return Response.json([]);
-      if (url.includes("/repos/JSONbored/gittensory/labels") && method === "GET") return Response.json([]);
+      if (url.includes("/labels/gittensor") && method === "GET") return new Response("not found", { status: 404 });
       if (url.includes("/repos/JSONbored/gittensory/labels") && method === "POST") {
         const body = JSON.parse(String(init?.body ?? "{}")) as { name?: string; color?: string };
         expect(body).toMatchObject({ name: "gittensor", color: "7ee787" });
