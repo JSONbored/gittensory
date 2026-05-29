@@ -57,7 +57,7 @@
     "github-actionlint": "^1.7.12",
     "node-addon-api": "^8.5.0",
     "node-gyp": "^12.1.0",
-    "typescript": "^5.9.3",
+    "typescript": "^6.0.3",
     "vitepress": "^2.0.0-alpha.17",
     "vitest": "^4.1.7",
     "vue": "^3.5.33",
