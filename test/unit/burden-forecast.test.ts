@@ -15,7 +15,7 @@ describe("burden forecast builder", () => {
 
   it("stays bounded on a ragflow/sure-style large queue and emits critical findings", () => {
     const repo = repoFixture("ragflow/ragflow");
-    const stalePr = pr(repo.fullName, 999, "stale", { updatedAt: "2025-01-01T00:00:00.000Z" });
+    const stalePr = pr(repo.fullName, 999, "stale", { updatedAt: daysAgo(31) });
     const open = Array.from({ length: 120 }, (_, index) => pr(repo.fullName, index + 1, `open ${index}`, { linkedIssues: [], updatedAt: new Date().toISOString() }));
     const forecast = buildBurdenForecast(repo, [], [stalePr, ...open], buildCollisionReport(repo.fullName, [], [stalePr, ...open]), 30);
     expect(forecast.level).toBe("critical");
@@ -25,18 +25,19 @@ describe("burden forecast builder", () => {
 
   it("counts the duplicate cluster trend when multiple PRs reference the same issue", () => {
     const repo = repoFixture("owner/duplicates");
-    const issueRecord = issue(repo.fullName, 42, "Login flow broken");
-    const a = pr(repo.fullName, 1, "Fix login flow", { linkedIssues: [42] });
-    const b = pr(repo.fullName, 2, "Alternative login fix", { linkedIssues: [42] });
+    const issueRecord = issue(repo.fullName, 42, "Auth failure after reconnect");
+    const a = pr(repo.fullName, 1, "Token refresh", { linkedIssues: [42] });
+    const b = pr(repo.fullName, 2, "Session restore", { linkedIssues: [42] });
     const collisions = buildCollisionReport(repo.fullName, [issueRecord], [a, b]);
     const forecast = buildBurdenForecast(repo, [issueRecord], [a, b], collisions, 7);
-    expect(collisions.summary.clusterCount).toBeGreaterThan(0);
-    expect(forecast.forecast.duplicateTrend).toBe(collisions.summary.clusterCount);
+    expect(collisions.summary.clusterCount).toBe(4);
+    expect(collisions.clusters.some((cluster) => cluster.items.map((item) => `${item.type}:${item.number}`).sort().join("|") === "issue:42|pull_request:1|pull_request:2")).toBe(true);
+    expect(forecast.forecast.duplicateTrend).toBe(4);
   });
 
   it("surfaces a stale PR trend in the forecast findings", () => {
     const repo = repoFixture("owner/stale");
-    const stalePrs = Array.from({ length: 4 }, (_, index) => pr(repo.fullName, index + 1, `stale ${index}`, { updatedAt: "2025-01-01T00:00:00.000Z", linkedIssues: [] }));
+    const stalePrs = Array.from({ length: 4 }, (_, index) => pr(repo.fullName, index + 1, `stale ${index}`, { updatedAt: daysAgo(31), linkedIssues: [] }));
     const forecast = buildBurdenForecast(repo, [], stalePrs, buildCollisionReport(repo.fullName, [], stalePrs), 30);
     expect(forecast.forecast.stalePullRequests).toBe(4);
     expect(forecast.findings.find((f) => f.code === "stale_review_load")?.detail).toContain("4 open PR(s)");
@@ -73,10 +74,11 @@ describe("loadOrComputeBurdenForecastResponse", () => {
   it("surfaces freshness:stale when the cached forecast is older than the max age", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "old", full_name: "owner/old", private: false, owner: { login: "owner" }, default_branch: "main" });
+    const generatedAt = new Date(Date.now() - BURDEN_FORECAST_MAX_AGE_MS - 60_000).toISOString();
     await upsertBurdenForecast(env, {
       repoFullName: "owner/old",
       payload: { repoFullName: "owner/old", level: "high", summary: "stale fixture" } as unknown as Record<string, JsonValue>,
-      generatedAt: "2025-01-01T00:00:00.000Z",
+      generatedAt,
     });
     const response = await loadOrComputeBurdenForecastResponse(env, "owner/old");
     expect(response).toMatchObject({
@@ -84,7 +86,8 @@ describe("loadOrComputeBurdenForecastResponse", () => {
       source: "snapshot",
       freshness: "stale",
     });
-    expect(response?.ageSeconds).toBeGreaterThan(BURDEN_FORECAST_MAX_AGE_MS / 1000);
+    expect(response?.ageSeconds).toBeGreaterThanOrEqual(Math.floor((BURDEN_FORECAST_MAX_AGE_MS + 50_000) / 1000));
+    expect(response?.ageSeconds).toBeLessThan(Math.floor((BURDEN_FORECAST_MAX_AGE_MS + 120_000) / 1000));
   });
 
   it("falls back to a computed forecast when no snapshot exists but the repo is known", async () => {
@@ -121,6 +124,26 @@ describe("loadOrComputeBurdenForecastResponse", () => {
     }
   });
 
+  it("uses only the bounded per-repo listers when computing a missing forecast", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "computed-perf", full_name: "owner/computed-perf", private: false, owner: { login: "owner" }, default_branch: "main" });
+    const repositoriesModule = await import("../../src/db/repositories");
+    const spies = [
+      vi.spyOn(repositoriesModule, "listIssueSignalSample"),
+      vi.spyOn(repositoriesModule, "listOpenPullRequests"),
+      vi.spyOn(repositoriesModule, "listRecentMergedPullRequests"),
+    ];
+
+    const response = await loadOrComputeBurdenForecastResponse(env, "owner/computed-perf");
+
+    expect(response).toMatchObject({ source: "computed", report: { repoFullName: "owner/computed-perf" } });
+    for (const spy of spies) {
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(env, "owner/computed-perf");
+      spy.mockRestore();
+    }
+  });
+
   it("getBurdenForecast round-trips through upsert", async () => {
     const env = createTestEnv();
     await upsertBurdenForecast(env, {
@@ -152,6 +175,10 @@ function repoFixture(fullName: string): RepositoryRecord {
       raw: {},
     },
   } as RepositoryRecord;
+}
+
+function daysAgo(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
 }
 
 function issue(repoFullName: string, number: number, title: string, overrides: Partial<IssueRecord> = {}): IssueRecord {

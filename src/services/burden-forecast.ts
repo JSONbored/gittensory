@@ -5,7 +5,7 @@ import {
   listOpenPullRequests,
   listRecentMergedPullRequests,
 } from "../db/repositories";
-import { buildBurdenForecast, buildCollisionReport } from "../signals/engine";
+import { buildBurdenForecast, buildCollisionReport, type BurdenForecast } from "../signals/engine";
 
 export const BURDEN_FORECAST_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
@@ -18,7 +18,7 @@ export type BurdenForecastResponse = {
   generatedAt: string;
   ageSeconds: number;
   freshness: BurdenForecastFreshness;
-  report: Record<string, unknown>;
+  report: BurdenForecast;
 };
 
 export async function loadOrComputeBurdenForecastResponse(env: Env, fullName: string): Promise<BurdenForecastResponse | null> {
@@ -32,7 +32,7 @@ export async function loadOrComputeBurdenForecastResponse(env: Env, fullName: st
       generatedAt: cached.generatedAt,
       ageSeconds: Math.max(0, Math.floor(ageMs / 1000)),
       freshness: ageMs > BURDEN_FORECAST_MAX_AGE_MS ? "stale" : "fresh",
-      report: cached.payload,
+      report: cached.payload as unknown as BurdenForecast,
     };
   }
   const repo = await getRepository(env, fullName);
@@ -51,7 +51,7 @@ export async function loadOrComputeBurdenForecastResponse(env: Env, fullName: st
     generatedAt: report.generatedAt,
     ageSeconds: 0,
     freshness: "fresh",
-    report: report as unknown as Record<string, unknown>,
+    report,
   };
 }
 

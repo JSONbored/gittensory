@@ -21,6 +21,7 @@ import {
   upsertRepositorySettings,
 } from "../../src/db/repositories";
 import { createApp } from "../../src/api/routes";
+import { BURDEN_FORECAST_MAX_AGE_MS } from "../../src/services/burden-forecast";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
 import { createTestEnv } from "../helpers/d1";
@@ -722,10 +723,11 @@ describe("api routes", () => {
         generatedAt: "2026-05-25T00:00:00.000Z",
       });
     }
+    const staleForecastGeneratedAt = new Date(Date.now() - BURDEN_FORECAST_MAX_AGE_MS - 60_000).toISOString();
     await upsertBurdenForecast(env, {
       repoFullName: "entrius/allways-ui",
       payload: { repoFullName: "entrius/allways-ui", level: "medium", summary: "intelligence fixture" } as unknown as Record<string, JsonValue>,
-      generatedAt: "2026-05-25T00:00:00.000Z",
+      generatedAt: staleForecastGeneratedAt,
     });
     const snapshotIntelligence = await app.request("/v1/repos/entrius/allways-ui/intelligence", { headers: apiHeaders(env) }, env);
     expect(snapshotIntelligence.status).toBe(200);
@@ -733,7 +735,25 @@ describe("api routes", () => {
     expect(snapshotIntelligenceBody).toMatchObject({ source: "snapshot", queueHealth: { signals: { openPullRequests: 2 } } });
     expect(snapshotIntelligenceBody.burdenForecast).toMatchObject({ level: "medium" });
     expect(snapshotIntelligenceBody.burdenForecastFreshness).toMatchObject({ source: "snapshot", freshness: "stale" });
-    expect(snapshotIntelligenceBody.burdenForecastFreshness?.ageSeconds).toBeGreaterThan(0);
+    expect(snapshotIntelligenceBody.burdenForecastFreshness?.ageSeconds).toBeGreaterThanOrEqual(Math.floor((BURDEN_FORECAST_MAX_AGE_MS + 50_000) / 1000));
+    expect(snapshotIntelligenceBody.burdenForecastFreshness?.ageSeconds).toBeLessThan(Math.floor((BURDEN_FORECAST_MAX_AGE_MS + 120_000) / 1000));
+
+    await upsertRepositoryFromGitHub(env, { name: "uncached-burden", full_name: "entrius/uncached-burden", private: false, owner: { login: "entrius" }, default_branch: "main" });
+    const computedIntelligence = await app.request("/v1/repos/entrius/uncached-burden/intelligence", { headers: apiHeaders(env) }, env);
+    expect(computedIntelligence.status).toBe(200);
+    await expect(computedIntelligence.json()).resolves.toMatchObject({
+      source: "computed",
+      burdenForecast: { repoFullName: "entrius/uncached-burden", level: "low" },
+      burdenForecastFreshness: { source: "computed", freshness: "fresh", ageSeconds: 0 },
+    });
+
+    const degradedForecastEnv = withBurdenForecastReadFailure(env);
+    const degradedIntelligence = await app.request("/v1/repos/entrius/allways-ui/intelligence", { headers: apiHeaders(env) }, degradedForecastEnv);
+    expect(degradedIntelligence.status).toBe(200);
+    const degradedBody = (await degradedIntelligence.json()) as Record<string, unknown> & { dataQuality: { status: string; warnings: string[] }; burdenForecast?: unknown };
+    expect(degradedBody.burdenForecast).toBeUndefined();
+    expect(degradedBody.dataQuality.status).toBe("degraded");
+    expect(degradedBody.dataQuality.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/Burden forecast unavailable/i)]));
 
     for (const path of [
       "/v1/repos/entrius/allways-ui/issue-quality",
@@ -1273,6 +1293,51 @@ describe("api routes", () => {
       repoFullName: "entrius/allways-ui",
       payload: { repoFullName: "entrius/allways-ui", level: "low", summary: "mcp fixture", forecast: { projectedReviewLoad: 0, queueGrowthRisk: 0, stalePullRequests: 0, duplicateTrend: 0, reviewablePullRequests: 0 }, findings: [] } as unknown as Record<string, JsonValue>,
       generatedAt: new Date(Date.now() - 1000).toISOString(),
+    });
+
+    const cachedBurdenForecast = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({ jsonrpc: "2.0", id: "cached-burden", method: "tools/call", params: { name: "gittensory_get_burden_forecast", arguments: { owner: "entrius", repo: "allways-ui" } } }),
+      },
+      env,
+    );
+    expect(cachedBurdenForecast.status).toBe(200);
+    await expect(mcpJson(cachedBurdenForecast)).resolves.toMatchObject({
+      result: {
+        structuredContent: {
+          status: "ready",
+          source: "snapshot",
+          repoFullName: "entrius/allways-ui",
+          freshness: "fresh",
+          report: { level: "low" },
+        },
+      },
+    });
+
+    await upsertRepositoryFromGitHub(env, { name: "mcp-computed-burden", full_name: "entrius/mcp-computed-burden", private: false, owner: { login: "entrius" }, default_branch: "main" });
+    const computedBurdenForecast = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({ jsonrpc: "2.0", id: "computed-burden", method: "tools/call", params: { name: "gittensory_get_burden_forecast", arguments: { owner: "entrius", repo: "mcp-computed-burden" } } }),
+      },
+      env,
+    );
+    expect(computedBurdenForecast.status).toBe(200);
+    await expect(mcpJson(computedBurdenForecast)).resolves.toMatchObject({
+      result: {
+        structuredContent: {
+          status: "ready",
+          source: "computed",
+          repoFullName: "entrius/mcp-computed-burden",
+          freshness: "fresh",
+          report: { repoFullName: "entrius/mcp-computed-burden", level: "low" },
+        },
+      },
     });
 
     for (const [name, args] of [
@@ -2091,6 +2156,22 @@ function apiHeaders(env: Env): Record<string, string> {
   return {
     authorization: `Bearer ${env.GITTENSORY_API_TOKEN}`,
     "content-type": "application/json",
+  };
+}
+
+function withBurdenForecastReadFailure(env: Env): Env {
+  const db = env.DB as unknown as { prepare: (sql: string) => unknown; batch: (statements: unknown[]) => Promise<unknown[]> };
+  return {
+    ...env,
+    DB: {
+      prepare(sql: string) {
+        if (/burden_forecasts/i.test(sql)) throw new Error("forecast table unavailable");
+        return db.prepare(sql);
+      },
+      batch(statements: unknown[]) {
+        return db.batch(statements);
+      },
+    } as unknown as D1Database,
   };
 }
 
