@@ -53,7 +53,29 @@
 
 - Add deterministic base-agent orchestrator (#14)
 
-- Detect stale installs and API compatibility in doctor and status
+- Add settings preview diagnostics (#31)
+
+- Make next-action recommendations repo-specific (#30)
+
+- Detect stale installs and API compatibility in doctor and status (#28)
+
+- Add command-specific @gittensory responses (#25)
+
+- Serve stale decision packs with freshness marker and background rebuild (#26)
+
+- Add signal freshness SLOs (#54)
+
+- Generate public-safe pr packets (#53)
+
+- Cache official miner detection (#50)
+
+- Harden local scorer adapter setup (#27)
+
+- Add lifecycle watcher signals
+
+- Derive observed pending PR scenarios (#57)
+
+- Wire burden forecast through intelligence + MCP with freshness (#61)
 
 
 
@@ -77,12 +99,15 @@
 
 - Ignore stale beta api origins
 
-- Restore actionKind guards and add split-lane copy
+- Isolate release write token
+
+- Bound official miner cache payload
+
+- Keep repo root out of API payloads
+
+- Block snake case private PR packet signals
+
+- Bound signal freshness listings
 
 
 
-### Tests
-
-- Tighten and extend decision-pack regression coverage
-
-- Cover review-requested branches and tier sanitization

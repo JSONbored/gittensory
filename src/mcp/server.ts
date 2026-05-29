@@ -7,6 +7,7 @@ import {
   countOpenIssues,
   countOpenPullRequests,
   getBounty,
+  listBountiesByRepo,
   getContributorEvidence,
   getLatestRepoGithubTotalsSnapshot,
   getIssue,
@@ -592,26 +593,28 @@ export class GittensoryMcp {
   }
 
   private async preflightPr(input: z.infer<z.ZodObject<typeof preflightShape>>): Promise<ToolPayload> {
-    const [repo, issues, pullRequests] = await Promise.all([
+    const [repo, issues, pullRequests, bounties] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
+      listBountiesByRepo(this.env, input.repoFullName),
     ]);
     return {
       summary: `Gittensory PR preflight for ${input.repoFullName}.`,
-      data: buildPreflightResult(input, repo, issues, pullRequests) as unknown as Record<string, unknown>,
+      data: buildPreflightResult(input, repo, issues, pullRequests, bounties) as unknown as Record<string, unknown>,
     };
   }
 
   private async preflightLocalDiff(input: z.infer<z.ZodObject<typeof localDiffPreflightShape>>): Promise<ToolPayload> {
-    const [repo, issues, pullRequests] = await Promise.all([
+    const [repo, issues, pullRequests, bounties] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
+      listBountiesByRepo(this.env, input.repoFullName),
     ]);
     return {
       summary: `Gittensory local diff preflight for ${input.repoFullName}.`,
-      data: buildLocalDiffPreflightResult(input, repo, issues, pullRequests) as unknown as Record<string, unknown>,
+      data: buildLocalDiffPreflightResult(input, repo, issues, pullRequests, bounties) as unknown as Record<string, unknown>,
     };
   }
 
@@ -629,12 +632,13 @@ export class GittensoryMcp {
   }
 
   private async explainReviewRisk(input: z.infer<z.ZodObject<typeof preflightShape>>): Promise<ToolPayload> {
-    const [repo, issues, pullRequests] = await Promise.all([
+    const [repo, issues, pullRequests, bounties] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
+      listBountiesByRepo(this.env, input.repoFullName),
     ]);
-    const preflight = buildPreflightResult(input, repo, issues, pullRequests);
+    const preflight = buildPreflightResult(input, repo, issues, pullRequests, bounties);
     const roleContext = input.contributorLogin
       ? buildRoleContext({ login: input.contributorLogin, repo, repoFullName: input.repoFullName, pullRequests, issues })
       : null;
@@ -768,12 +772,13 @@ export class GittensoryMcp {
   }
 
   private async analyzeLocalBranch(input: z.infer<z.ZodObject<typeof localBranchAnalysisShape>>) {
-    const [context, repo, issues, pullRequests, recentMergedPullRequests, snapshot] = await Promise.all([
+    const [context, repo, issues, pullRequests, recentMergedPullRequests, bounties, snapshot] = await Promise.all([
       this.loadContributorFastContext(input.login),
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
       listRecentMergedPullRequests(this.env, input.repoFullName),
+      listBountiesByRepo(this.env, input.repoFullName),
       getOrCreateScoringModelSnapshot(this.env),
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
@@ -786,6 +791,7 @@ export class GittensoryMcp {
         pullRequests,
         contributorPullRequests: context.contributorPullRequests,
         recentMergedPullRequests,
+        bounties,
         repositories: context.repositories,
         profile: context.profile,
         outcomeHistory: context.outcomeHistory,
@@ -799,10 +805,14 @@ export class GittensoryMcp {
   private async getBountyAdvisory(id: string): Promise<ToolPayload> {
     const bounty = await getBounty(this.env, id);
     if (!bounty) throw new Error("Bounty not found.");
-    const [repo, issue] = await Promise.all([getRepository(this.env, bounty.repoFullName), getIssue(this.env, bounty.repoFullName, bounty.issueNumber)]);
+    const [repo, issue, pullRequests] = await Promise.all([
+      getRepository(this.env, bounty.repoFullName),
+      getIssue(this.env, bounty.repoFullName, bounty.issueNumber),
+      listPullRequests(this.env, bounty.repoFullName),
+    ]);
     return {
       summary: `Gittensory bounty advisory for ${id}.`,
-      data: buildBountyAdvisory(bounty, repo, issue) as unknown as Record<string, unknown>,
+      data: buildBountyAdvisory(bounty, repo, issue, pullRequests) as unknown as Record<string, unknown>,
     };
   }
 

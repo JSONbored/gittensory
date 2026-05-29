@@ -8,6 +8,8 @@ import {
   getRepositorySettings,
   listAllIssues,
   listAllPullRequests,
+  listBounties,
+  listBountiesByRepo,
   listContributorIssues,
   listContributorPullRequests,
   listContributorRepoStats,
@@ -58,7 +60,7 @@ import { fetchPublicContributorProfile } from "../github/public";
 import { refreshRegistry } from "../registry/sync";
 import { buildIssueAdvisory, buildPullRequestAdvisory } from "../rules/advisory";
 import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
-import { buildAndPersistContributorDecisionPack } from "../services/decision-pack";
+import { buildAndPersistContributorDecisionPack, loadDecisionPackSharedInputs } from "../services/decision-pack";
 import { executeAgentRun, explainBlockersWithAgent, planNextWork } from "../services/agent-orchestrator";
 import {
   buildFreshnessSloReport,
@@ -188,7 +190,9 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
 
 async function buildContributorDecisionPacks(env: Env, login?: string): Promise<void> {
   const logins = login ? [login] : await discoverContributorLogins(env);
-  for (const contributorLogin of logins) await buildAndPersistContributorDecisionPack(env, contributorLogin);
+  // Load the login-independent full-table datasets once, then reuse across every login instead of re-scanning per contributor.
+  const shared = await loadDecisionPackSharedInputs(env);
+  for (const contributorLogin of logins) await buildAndPersistContributorDecisionPack(env, contributorLogin, shared);
 }
 
 async function fanOutRepoSignalSnapshotJobs(env: Env, requestedBy: "schedule" | "api" | "test"): Promise<void> {
@@ -275,11 +279,12 @@ async function discoverContributorLogins(env: Env): Promise<string[]> {
 }
 
 async function buildContributorEvidence(env: Env, login?: string): Promise<void> {
-  const [allPullRequests, allIssues, repositories, syncStates, snapshot] = await Promise.all([
+  const [allPullRequests, allIssues, repositories, syncStates, allBounties, snapshot] = await Promise.all([
     listAllPullRequests(env),
     listAllIssues(env),
     listRepositories(env),
     listRepoSyncStates(env),
+    listBounties(env),
     getOrCreateScoringModelSnapshot(env),
   ]);
   const logins = login ? [login] : [...new Set([...allPullRequests, ...allIssues].flatMap((record) => (record.authorLogin ? [record.authorLogin] : [])))].slice(0, 500);
@@ -293,7 +298,7 @@ async function buildContributorEvidence(env: Env, login?: string): Promise<void>
     ]);
     const repoStats = authoritativeContributorRepoStats(gittensorSnapshot, cachedRepoStats);
     const profile = buildContributorProfile(contributorLogin, github, contributorPullRequests, contributorIssues, repoStats, gittensorSnapshot);
-    const fit = buildContributorFit(profile, repositories, allIssues, allPullRequests, syncStates, repoStats);
+    const fit = buildContributorFit(profile, repositories, allIssues, allPullRequests, syncStates, repoStats, allBounties);
     const scoringProfile = buildContributorScoringProfile({ login: contributorLogin, fit, scoringSnapshot: snapshot });
     const outcomeHistory = buildContributorOutcomeHistory({ login: contributorLogin, profile, repositories, pullRequests: allPullRequests, issues: allIssues, repoStats });
     const strategy = buildContributorStrategy({ login: contributorLogin, fit, scoringProfile, scoringSnapshot: snapshot, outcomeHistory });
@@ -574,11 +579,12 @@ async function maybePublishPrPublicSurface(
     minerStatus: "confirmed",
   });
 
-  const [contributorPullRequests, contributorIssues, repoIssues, repoPullRequests, github, cachedRepoStats] = await Promise.all([
+  const [contributorPullRequests, contributorIssues, repoIssues, repoPullRequests, repoBounties, github, cachedRepoStats] = await Promise.all([
     listContributorPullRequests(env, author),
     listContributorIssues(env, author),
     listIssues(env, repoFullName),
     listPullRequests(env, repoFullName),
+    listBountiesByRepo(env, repoFullName),
     fetchPublicContributorProfile(author),
     listContributorRepoStats(env, author),
   ]);
@@ -601,6 +607,7 @@ async function maybePublishPrPublicSurface(
     repo,
     repoIssues,
     repoPullRequests,
+    repoBounties,
   );
   if (decision.willComment) {
     const body = buildPublicPrIntelligenceComment({

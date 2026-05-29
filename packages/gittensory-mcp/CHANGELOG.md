@@ -7,7 +7,21 @@
 
 - Detect stale installs and API compatibility in doctor and status (#28)
 
-- Generate public-safe pr packets
+- Generate public-safe pr packets (#53)
+
+- Harden local scorer adapter setup (#27)
+
+- Add lifecycle watcher signals
+
+
+
+### Fixes
+
+- Isolate release write token
+
+- Keep repo root out of API payloads
+
+- Block snake case private PR packet signals
 
 
 ## mcp-v0.2.0 - 2026-05-28
