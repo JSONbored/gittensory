@@ -1569,6 +1569,7 @@ export function buildPreflightResult(
   repo: RepositoryRecord | null,
   issues: IssueRecord[],
   pullRequests: PullRequestRecord[],
+  issueQuality?: IssueQualityReport | null | undefined,
 ): PreflightResult {
   const lane = buildLaneAdvice(repo, input.repoFullName);
   const linkedIssues = [...new Set([...(input.linkedIssues ?? []), ...extractLinkedIssueNumbers(input.body ?? "")])].sort((left, right) => left - right);
@@ -1603,6 +1604,7 @@ export function buildPreflightResult(
       action: "Check active issues and PRs before submitting.",
     });
   }
+  findings.push(...issueQualityFindings(linkedIssues, issueQuality));
   const changedFiles = input.changedFiles ?? [];
   const tests = input.tests ?? [];
   if (changedFiles.some((file) => isCodeFile(file)) && tests.length === 0 && !changedFiles.some((file) => isTestFile(file))) {
@@ -1633,6 +1635,7 @@ export function buildLocalDiffPreflightResult(
   repo: RepositoryRecord | null,
   issues: IssueRecord[],
   pullRequests: PullRequestRecord[],
+  issueQuality?: IssueQualityReport | null | undefined,
 ): LocalDiffPreflightResult {
   const changedFiles = [...new Set([...(input.changedFiles ?? []), ...(input.testFiles ?? [])])];
   const linkedFromCommit = extractLinkedIssueNumbers([input.commitMessage, input.body, input.title].filter(Boolean).join("\n"));
@@ -1646,6 +1649,7 @@ export function buildLocalDiffPreflightResult(
     repo,
     issues,
     pullRequests,
+    issueQuality,
   );
   const codeFileCount = changedFiles.filter(isCodeFile).length;
   const testFileCount = changedFiles.filter(isTestFile).length;
@@ -1887,32 +1891,37 @@ export function buildIssueQualityReport(
   pullRequests: PullRequestRecord[],
   fullName: string,
   prebuiltCollisions?: CollisionReport,
+  recentMergedPullRequests: RecentMergedPullRequestRecord[] = [],
 ): IssueQualityReport {
   const lane = buildLaneAdvice(repo, fullName);
-  const collisions = prebuiltCollisions ?? buildCollisionReport(fullName, issues, pullRequests);
+  const collisions = prebuiltCollisions ?? buildCollisionReport(fullName, issues, pullRequests, recentMergedPullRequests);
   const reports = issues
     .filter((issue) => issue.state === "open")
     .slice(0, 100)
     .map((issue) => {
-      const linkedPrs = pullRequests.filter((pr) => pr.linkedIssues.includes(issue.number));
+      const linkedPrs = pullRequests.filter((pr) => pr.linkedIssues.includes(issue.number) || issue.linkedPrs.includes(pr.number));
+      const linkedMergedPrs = recentMergedPullRequests.filter((pr) => pr.linkedIssues.includes(issue.number) || issue.linkedPrs.includes(pr.number));
       const issueCollisions = collisions.clusters.filter((cluster) => cluster.items.some((item) => item.type === "issue" && item.number === issue.number));
       const age = daysSince(issue.updatedAt ?? issue.createdAt);
       const bodyLength = issue.body?.trim().length ?? 0;
+      const linkedWorkCount = linkedPrs.length + linkedMergedPrs.length + issue.linkedPrs.length;
       const reasons = [
         ...(bodyLength >= 200 ? ["Issue has enough body detail to evaluate."] : []),
         ...(issue.labels.length > 0 ? [`Labels: ${issue.labels.join(", ")}.`] : []),
-        ...(linkedPrs.length === 0 ? ["No active PR is linked in cached metadata."] : []),
+        ...(linkedWorkCount === 0 ? ["No active PR is linked in cached metadata."] : []),
       ];
       const warnings = [
         ...(bodyLength < 80 ? ["Issue body is thin; contributor may need more proof before acting."] : []),
         ...(linkedPrs.length > 0 ? [`${linkedPrs.length} active PR(s) already reference this issue.`] : []),
+        ...(linkedMergedPrs.length > 0 ? [`${linkedMergedPrs.length} merged PR(s) already reference this issue.`] : []),
+        ...(issue.linkedPrs.length > 0 && linkedPrs.length === 0 && linkedMergedPrs.length === 0 ? [`Cached issue metadata already references PR(s): ${issue.linkedPrs.map((number) => `#${number}`).join(", ")}.`] : []),
         ...(issueCollisions.length > 0 ? ["Potential duplicate or overlapping issue/PR context exists."] : []),
         ...(age > 90 ? ["Issue is stale in cached metadata."] : []),
         ...(lane.lane === "direct_pr" ? ["Repo is direct-PR first; issue filing is not the primary Gittensor lane."] : []),
       ];
       const score = clamp(100 - warnings.length * 18 + reasons.length * 5 - (age > 180 ? 15 : 0), 0, 100);
       const status: IssueQualityReport["issues"][number]["status"] =
-        linkedPrs.length > 0 || issueCollisions.some((cluster) => cluster.risk === "high")
+        linkedWorkCount > 0 || issueCollisions.some((cluster) => cluster.risk === "high")
           ? "do_not_use"
           : warnings.some((warning) => /thin|stale|direct-PR/i.test(warning))
             ? "needs_proof"
@@ -1929,6 +1938,47 @@ export function buildIssueQualityReport(
     issues: reports,
     summary: `${reports.length} open issue(s) evaluated; ${reports.filter((report) => report.status === "ready").length} look ready from cached metadata.`,
   };
+}
+
+function issueQualityFindings(linkedIssues: number[], issueQuality: IssueQualityReport | null | undefined): SignalFinding[] {
+  if (!issueQuality || linkedIssues.length === 0) return [];
+  const byIssue = new Map(issueQuality.issues.map((issue) => [issue.number, issue]));
+  return linkedIssues.flatMap((issueNumber) => {
+    const quality = byIssue.get(issueNumber);
+    if (!quality || quality.status === "ready") return [];
+    const detail = quality.warnings[0] ?? `Issue quality report marks #${issueNumber} as ${quality.status}.`;
+    if (quality.status === "do_not_use") {
+      return [
+        {
+          code: "issue_quality_do_not_use",
+          severity: "warning" as const,
+          title: "Linked issue is already covered or duplicate-prone",
+          detail,
+          action: "Confirm the linked issue is still actionable before posting public PR context.",
+        },
+      ];
+    }
+    if (quality.status === "needs_proof") {
+      return [
+        {
+          code: "issue_quality_needs_proof",
+          severity: "warning" as const,
+          title: "Linked issue needs stronger proof",
+          detail,
+          action: "Add concrete reproduction, scope, or maintainer context before proceeding.",
+        },
+      ];
+    }
+    return [
+      {
+        code: "issue_quality_hold",
+        severity: "warning" as const,
+        title: "Linked issue is on hold",
+        detail,
+        action: "Choose a clearer candidate or wait for maintainer context.",
+      },
+    ];
+  });
 }
 
 export function buildBurdenForecast(

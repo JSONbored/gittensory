@@ -592,26 +592,28 @@ export class GittensoryMcp {
   }
 
   private async preflightPr(input: z.infer<z.ZodObject<typeof preflightShape>>): Promise<ToolPayload> {
-    const [repo, issues, pullRequests] = await Promise.all([
+    const [repo, issues, pullRequests, issueQuality] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
+      loadOrComputeIssueQualityResponse(this.env, input.repoFullName),
     ]);
     return {
       summary: `Gittensory PR preflight for ${input.repoFullName}.`,
-      data: buildPreflightResult(input, repo, issues, pullRequests) as unknown as Record<string, unknown>,
+      data: buildPreflightResult(input, repo, issues, pullRequests, issueQuality?.report) as unknown as Record<string, unknown>,
     };
   }
 
   private async preflightLocalDiff(input: z.infer<z.ZodObject<typeof localDiffPreflightShape>>): Promise<ToolPayload> {
-    const [repo, issues, pullRequests] = await Promise.all([
+    const [repo, issues, pullRequests, issueQuality] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
+      loadOrComputeIssueQualityResponse(this.env, input.repoFullName),
     ]);
     return {
       summary: `Gittensory local diff preflight for ${input.repoFullName}.`,
-      data: buildLocalDiffPreflightResult(input, repo, issues, pullRequests) as unknown as Record<string, unknown>,
+      data: buildLocalDiffPreflightResult(input, repo, issues, pullRequests, issueQuality?.report) as unknown as Record<string, unknown>,
     };
   }
 
@@ -768,13 +770,14 @@ export class GittensoryMcp {
   }
 
   private async analyzeLocalBranch(input: z.infer<z.ZodObject<typeof localBranchAnalysisShape>>) {
-    const [context, repo, issues, pullRequests, recentMergedPullRequests, snapshot] = await Promise.all([
+    const [context, repo, issues, pullRequests, recentMergedPullRequests, snapshot, issueQuality] = await Promise.all([
       this.loadContributorFastContext(input.login),
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
       listRecentMergedPullRequests(this.env, input.repoFullName),
       getOrCreateScoringModelSnapshot(this.env),
+      loadOrComputeIssueQualityResponse(this.env, input.repoFullName),
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: input.login, fit, scoringSnapshot: snapshot });
@@ -789,6 +792,7 @@ export class GittensoryMcp {
         outcomeHistory: context.outcomeHistory,
         scoringSnapshot: snapshot,
         scoringProfile,
+        issueQuality: issueQuality?.report,
       }),
       dataQuality: await this.loadRepoDataQuality(input.repoFullName),
     };

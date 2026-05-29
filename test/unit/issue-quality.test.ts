@@ -6,7 +6,7 @@ import {
   type ContributorProfile,
   type IssueQualityReport,
 } from "../../src/signals/engine";
-import type { IssueRecord, PullRequestRecord, RegistryRepoConfig, RepositoryRecord } from "../../src/types";
+import type { IssueRecord, PullRequestRecord, RecentMergedPullRequestRecord, RegistryRepoConfig, RepositoryRecord } from "../../src/types";
 
 describe("issue quality reports", () => {
   it("downgrades issue filing in direct-PR-only repos to needs_proof", () => {
@@ -63,6 +63,29 @@ describe("issue quality reports", () => {
     const report = buildIssueQualityReport(repo, [issue(repo.fullName, 5, "Already worked on", { body: "x".repeat(220) })], [linkedPr], repo.fullName);
     expect(report.issues[0]?.status).toBe("do_not_use");
     expect(report.issues[0]?.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/already reference this issue/i)]));
+  });
+
+  it("marks issues as do_not_use when cached issue or merged PR metadata already links work", () => {
+    const repo = issueDiscoveryRepo("owner/solved-later");
+    const report = buildIssueQualityReport(
+      repo,
+      [
+        issue(repo.fullName, 5, "Issue body links a PR", { body: "x".repeat(220), linkedPrs: [100] }),
+        issue(repo.fullName, 6, "Recently merged work", { body: "x".repeat(220) }),
+      ],
+      [],
+      repo.fullName,
+      undefined,
+      [recentMergedPr(repo.fullName, 101, "Fixes #6", { linkedIssues: [6] })],
+    );
+    expect(report.issues.find((entry) => entry.number === 5)).toMatchObject({
+      status: "do_not_use",
+      warnings: expect.arrayContaining([expect.stringMatching(/already references PR/i)]),
+    });
+    expect(report.issues.find((entry) => entry.number === 6)).toMatchObject({
+      status: "do_not_use",
+      warnings: expect.arrayContaining([expect.stringMatching(/merged PR/i)]),
+    });
   });
 
   it("surfaces duplicate-prone context via collision detection on both issues", () => {
@@ -293,6 +316,22 @@ function pr(repoFullName: string, number: number, title: string, overrides: Part
     updatedAt: now(),
     ...overrides,
   } as PullRequestRecord;
+}
+
+function recentMergedPr(repoFullName: string, number: number, title: string, overrides: Partial<RecentMergedPullRequestRecord> = {}): RecentMergedPullRequestRecord {
+  return {
+    repoFullName,
+    number,
+    title,
+    authorLogin: "dev",
+    htmlUrl: `https://github.com/${repoFullName}/pull/${number}`,
+    mergedAt: now(),
+    labels: [],
+    linkedIssues: [],
+    changedFiles: [],
+    payload: {},
+    ...overrides,
+  };
 }
 
 function sampleProfile(overrides: Partial<ContributorProfile["registeredRepoActivity"]> = {}): ContributorProfile {
