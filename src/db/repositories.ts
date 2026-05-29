@@ -1414,6 +1414,38 @@ export async function listSignalSnapshots(env: Env, signalType: string, targetKe
   return rows.map(toSignalSnapshotRecord);
 }
 
+export async function listLatestSignalSnapshotsByTarget(env: Env): Promise<SignalSnapshotRecord[]> {
+  const { results } = await env.DB.prepare(
+    `
+      SELECT id, signal_type, target_key, repo_full_name, payload_json, generated_at
+      FROM (
+        SELECT
+          id,
+          signal_type,
+          target_key,
+          repo_full_name,
+          payload_json,
+          generated_at,
+          row_number() OVER (
+            PARTITION BY signal_type, target_key
+            ORDER BY generated_at DESC, id DESC
+          ) AS snapshot_rank
+        FROM signal_snapshots
+      )
+      WHERE snapshot_rank = 1
+      ORDER BY signal_type, target_key
+    `,
+  ).all<{ id: string; signal_type: string; target_key: string; repo_full_name: string | null; payload_json: string; generated_at: string }>();
+  return results.map((row) => ({
+    id: row.id,
+    signalType: row.signal_type,
+    targetKey: row.target_key,
+    repoFullName: row.repo_full_name,
+    payload: parseJson<Record<string, never>>(row.payload_json, {}),
+    generatedAt: row.generated_at,
+  }));
+}
+
 export async function createAgentRun(env: Env, run: AgentRunRecord): Promise<void> {
   const db = getDb(env.DB);
   await db.insert(agentRuns).values({

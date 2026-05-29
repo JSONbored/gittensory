@@ -9,6 +9,7 @@ import {
   listPullRequests,
   listRepoSyncStates,
   listSignalSnapshots,
+  persistSignalSnapshot,
   upsertRepoSyncSegment,
   upsertInstallation,
   upsertPullRequestFromGitHub,
@@ -273,7 +274,67 @@ describe("queue processors", () => {
       metadata_json: string;
     }>();
     expect(audit?.outcome).toBe("completed");
-    expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ repairCount: 0, signalRefreshCount: 2 });
+    expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ repairCount: 0, signalRefreshCount: 2, freshnessSlo: { status: "fresh", repairRecommended: false } });
+    const sloAudit = await env.DB.prepare("select detail, outcome, metadata_json from audit_events where event_type = ?").bind("signals.freshness_slo").first<{
+      detail: string;
+      outcome: string;
+      metadata_json: string;
+    }>();
+    expect(sloAudit).toMatchObject({ detail: "fresh", outcome: "completed" });
+    expect(JSON.parse(sloAudit?.metadata_json ?? "{}")).toMatchObject({ status: "fresh", affectedAreas: [] });
+    expect(sloAudit?.metadata_json).not.toMatch(/JSONbored|we-promise|github|token|secret/i);
+  });
+
+  it("queues signal repair and emits alertable audit state when freshness SLOs breach", async () => {
+    const sent: Array<{ message: import("../../src/types").JobMessage; options?: QueueSendOptions }> = [];
+    const env = createTestEnv({
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage, options?: QueueSendOptions) {
+          sent.push(options ? { message, options } : { message });
+        },
+      } as unknown as Queue,
+    });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0, label_multipliers: {}, trusted_label_pipeline: false } },
+        { kind: "raw-github", url: "fixture://registry" },
+        "2026-05-25T00:00:00.000Z",
+      ),
+    );
+    await upsertRepoSyncSegment(env, completeSegment("JSONbored/gittensory", "labels"));
+    await upsertRepoSyncSegment(env, completeSegment("JSONbored/gittensory", "open_issues"));
+    await upsertRepoSyncSegment(env, completeSegment("JSONbored/gittensory", "open_pull_requests"));
+    await persistSignalSnapshot(env, {
+      id: "stale-queue-health",
+      signalType: "queue-health",
+      targetKey: "JSONbored/gittensory",
+      repoFullName: "JSONbored/gittensory",
+      payload: {},
+      generatedAt: new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString(),
+    });
+
+    await processJob(env, { type: "repair-data-fidelity", requestedBy: "api" });
+
+    expect(sent).toEqual([{ message: expect.objectContaining({ type: "generate-signal-snapshots", repoFullName: "JSONbored/gittensory" }) }]);
+    const repairAudit = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("sync.fidelity_repair").first<{
+      outcome: string;
+      metadata_json: string;
+    }>();
+    expect(repairAudit?.outcome).toBe("queued");
+    expect(JSON.parse(repairAudit?.metadata_json ?? "{}")).toMatchObject({
+      repairCount: 0,
+      signalRefreshCount: 1,
+      freshnessSlo: { status: "degraded", repairRecommended: true, affectedAreas: ["signal_snapshot"], launchBlockingCount: 0 },
+    });
+    const sloAudit = await env.DB.prepare("select detail, outcome, metadata_json from audit_events where event_type = ?").bind("signals.freshness_slo").first<{
+      detail: string;
+      outcome: string;
+      metadata_json: string;
+    }>();
+    expect(sloAudit).toMatchObject({ detail: "degraded", outcome: "queued" });
+    expect(JSON.parse(sloAudit?.metadata_json ?? "{}")).toMatchObject({ status: "degraded", affectedAreas: ["signal_snapshot"], launchBlockingCount: 0 });
+    expect(sloAudit?.metadata_json).not.toMatch(/JSONbored|gittensory|token|secret/i);
   });
 
   it("fans out signal snapshot generation instead of doing all repo work inline", async () => {

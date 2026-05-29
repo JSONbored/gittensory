@@ -12,6 +12,7 @@ import {
   listContributorRepoStats,
   listIssues,
   listIssueSignalSample,
+  listLatestSignalSnapshotsByTarget,
   listOtherOpenPullRequests,
   listOpenPullRequests,
   listPullRequests,
@@ -57,6 +58,10 @@ import { buildIssueAdvisory, buildPullRequestAdvisory } from "../rules/advisory"
 import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
 import { buildAndPersistContributorDecisionPack } from "../services/decision-pack";
 import { executeAgentRun, explainBlockersWithAgent, planNextWork } from "../services/agent-orchestrator";
+import {
+  buildFreshnessSloReport,
+  freshnessAuditMetadata,
+} from "../signals/data-quality";
 import {
   buildBurdenForecast,
   buildCollisionEdges,
@@ -202,7 +207,7 @@ async function fanOutRepoSignalSnapshotJobs(env: Env, requestedBy: "schedule" | 
 }
 
 async function repairDataFidelity(env: Env, requestedBy: "schedule" | "api" | "test"): Promise<void> {
-  const [repositories, segments] = await Promise.all([listRepositories(env), listRepoSyncSegments(env)]);
+  const [repositories, segments, signalSnapshots] = await Promise.all([listRepositories(env), listRepoSyncSegments(env), listLatestSignalSnapshotsByTarget(env)]);
   const requiredSegments = new Set(["labels", "open_issues", "open_pull_requests"]);
   const segmentsByRepo = new Map<string, Set<string>>();
   for (const segment of segments) {
@@ -213,6 +218,7 @@ async function repairDataFidelity(env: Env, requestedBy: "schedule" | "api" | "t
     }
   }
   const registeredRepos = repositories.filter((repo) => repo.isRegistered);
+  const freshnessSlo = buildFreshnessSloReport({ repoCount: registeredRepos.length, segments, signalSnapshots });
   const repairs = [];
   const signalRefreshes = [];
   for (const repo of registeredRepos) {
@@ -247,8 +253,14 @@ async function repairDataFidelity(env: Env, requestedBy: "schedule" | "api" | "t
   ]);
   await recordAuditEvent(env, {
     eventType: "sync.fidelity_repair",
-    outcome: repairs.length > 0 ? "queued" : "completed",
-    metadata: { requestedBy, repairCount: repairs.length, signalRefreshCount: signalRefreshes.length, repairs: repairs.slice(0, 25) },
+    outcome: repairs.length > 0 || freshnessSlo.repairRecommended ? "queued" : "completed",
+    metadata: { requestedBy, repairCount: repairs.length, signalRefreshCount: signalRefreshes.length, repairs: repairs.slice(0, 25), freshnessSlo: freshnessAuditMetadata(freshnessSlo) },
+  });
+  await recordAuditEvent(env, {
+    eventType: "signals.freshness_slo",
+    outcome: freshnessSlo.repairRecommended ? "queued" : "completed",
+    detail: freshnessSlo.status,
+    metadata: { requestedBy, ...freshnessAuditMetadata(freshnessSlo) },
   });
 }
 
