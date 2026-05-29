@@ -538,12 +538,13 @@ function mapDecisionAction(kind: DecisionAction["actionKind"]): AgentActionType 
 }
 
 function recommendationText(action: DecisionAction, decision: RepoDecision): string {
-  if (action.nextActions[0]) return action.nextActions[0];
   if (action.actionKind === "cleanup_existing_prs") return `${decision.repoFullName}: clean up existing PR pressure before opening new work.`;
   if (action.actionKind === "land_existing_prs") return `${decision.repoFullName}: focus on landing or closing already-open PRs.`;
   if (action.actionKind === "file_issue_discovery") return `${decision.repoFullName}: only file an actionable, non-duplicate issue-discovery report.`;
-  if (decision.recommendation === "maintainer_lane") return `${decision.repoFullName}: treat as maintainer-lane repo health work, not outside-contributor work.`;
-  return `${decision.repoFullName}: pick narrow work and run branch preflight before opening a PR.`;
+  if (action.actionKind === "maintainer_lane_improve_repo" || action.actionKind === "maintainer_cut_readiness") {
+    return `${decision.repoFullName}: maintainer-lane repo health work, not outside-contributor evidence.`;
+  }
+  return action.nextActions[0] ?? `${decision.repoFullName}: pick narrow work and run branch preflight before opening a PR.`;
 }
 
 function maintainerImpactFor(decision: RepoDecision): string {

@@ -242,7 +242,7 @@ function buildContributorDecisionPack(args: {
   const syncByRepo = new Map(args.syncStates.map((state) => [state.repoFullName.toLowerCase(), state]));
   const totalsByRepo = new Map(args.totals.map((total) => [total.repoFullName.toLowerCase(), total]));
   const outcomeByRepo = new Map(args.outcomeHistory.repoOutcomes.map((outcome) => [outcome.repoFullName.toLowerCase(), outcome]));
-  const languageSet = new Set((args.profile.github.topLanguages ?? []).map((language) => language.toLowerCase()));
+  const languageSet = new Set((args.profile.github?.topLanguages ?? []).map((language) => language.toLowerCase()));
   const labelHistory = new Set(args.profile.registeredRepoActivity?.dominantLabels ?? []);
   const roleContexts = registeredRepositories.map((repo) =>
     buildRoleContext({
@@ -344,8 +344,9 @@ function buildRepoDecision(args: {
     language: syncLanguage,
     match: Boolean(syncLanguage && args.languageSet?.has(syncLanguage.toLowerCase())),
   };
-  const labelFit = args.labelHistory
-    ? Object.keys(args.repo.registryConfig?.labelMultipliers ?? {}).filter((label) => args.labelHistory!.has(label))
+  const labelHistory = args.labelHistory;
+  const labelFit = labelHistory
+    ? Object.keys(args.repo.registryConfig?.labelMultipliers ?? {}).filter((label) => labelHistory.has(label))
     : [];
   const copyContext: RepoCopyContext = {
     repoFullName: args.repo.fullName,
@@ -355,7 +356,6 @@ function buildRepoDecision(args: {
     outcome: args.outcome,
     languageMatch,
     labelFit,
-    roleContext: args.roleContext,
   };
   return {
     repoFullName: args.repo.fullName,
@@ -450,11 +450,10 @@ type RepoCopyContext = {
   outcome: ContributorOutcomeHistory["repoOutcomes"][number] | undefined;
   languageMatch: LanguageMatch;
   labelFit: string[];
-  roleContext: RoleContext;
 };
 
 function whyThisHelpsFor(recommendation: DecisionRecommendation, context: RepoCopyContext): string[] {
-  const { repoFullName, queue, rewardUpside, outcome, languageMatch, labelFit, lane } = context;
+  const { repoFullName, rewardUpside, outcome, languageMatch, labelFit, lane } = context;
   const labelPhrase = labelFit.length > 0 ? ` Label overlap with your history: ${labelFit.slice(0, 3).join(", ")}.` : "";
   const languagePhrase = languageMatch.match && languageMatch.language ? ` Primary language ${languageMatch.language} matches your top languages.` : "";
   if (recommendation === "cleanup_first") {
@@ -467,6 +466,9 @@ function whyThisHelpsFor(recommendation: DecisionRecommendation, context: RepoCo
   if (recommendation === "pursue") {
     const merged = outcome?.mergedPullRequests ?? 0;
     const historyPhrase = merged > 0 ? ` You have ${merged} merged PR(s) in this repo already.` : "";
+    if (lane === "split") {
+      return [`${repoFullName}: split lane (direct PR ${round(rewardUpside.directPrShare)}, issue-discovery ${round(rewardUpside.issueDiscoveryShare)}); both lanes are useful here.${languagePhrase}${labelPhrase}${historyPhrase}`];
+    }
     return [`${repoFullName}: direct PR lane share ${round(rewardUpside.directPrShare)} with no hard personal blocker.${languagePhrase}${labelPhrase}${historyPhrase}`];
   }
   if (recommendation === "watch") {
@@ -493,6 +495,11 @@ function nextActionsFor(recommendation: DecisionRecommendation, context: RepoCop
     ];
   }
   if (recommendation === "pursue") {
+    if (lane === "split") {
+      return [
+        `${repoFullName}: split lane — choose direct PR${languageHint}${labelHint} OR file an actionable issue-discovery report; queue has ${queue.openPullRequests} open PR(s) and ${queue.openIssues} open issue(s).`,
+      ];
+    }
     return [
       `${repoFullName}: pick one narrow change${languageHint}${labelHint}; run tests + branch preflight before opening the PR. Queue has ${queue.openPullRequests} open PR(s).`,
     ];
@@ -516,6 +523,9 @@ function publicNextActionsFor(recommendation: DecisionRecommendation, context: R
     return [`${repoFullName}: as repo owner, improve intake health, label clarity, and queue hygiene.`];
   }
   if (recommendation === "pursue") {
+    if (lane === "split") {
+      return [`${repoFullName}: split lane — direct PR or actionable issue report${languageHint}${labelHint}; use Gittensory preflight before posting public PR context.`];
+    }
     return [`${repoFullName}: pick a narrow change${languageHint}${labelHint}; use Gittensory preflight before posting public PR context.`];
   }
   if (recommendation === "watch" || lane === "issue_discovery") {
