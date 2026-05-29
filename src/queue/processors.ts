@@ -25,6 +25,7 @@ import {
   markInstallationDeleted,
   persistAdvisory,
   recordAuditEvent,
+  listSignalSnapshots,
   persistSignalSnapshot,
   recordWebhookEvent,
   replaceCollisionEdges,
@@ -76,6 +77,7 @@ import {
   buildContributorStrategy,
   buildContributorIntakeHealth,
   buildIssueQualityReport,
+  type IssueQualityReport,
   buildLabelAudit,
   buildMaintainerCutReadiness,
   buildMaintainerLaneReport,
@@ -284,6 +286,7 @@ async function buildContributorEvidence(env: Env, login?: string): Promise<void>
     getOrCreateScoringModelSnapshot(env),
   ]);
   const logins = login ? [login] : [...new Set([...allPullRequests, ...allIssues].flatMap((record) => (record.authorLogin ? [record.authorLogin] : [])))].slice(0, 500);
+  const issueQualityByRepo = await loadIssueQualityByRepo(env, repositories);
   for (const contributorLogin of logins) {
     const [github, contributorPullRequests, contributorIssues, cachedRepoStats, gittensorSnapshot] = await Promise.all([
       fetchPublicContributorProfile(contributorLogin),
@@ -294,7 +297,7 @@ async function buildContributorEvidence(env: Env, login?: string): Promise<void>
     ]);
     const repoStats = authoritativeContributorRepoStats(gittensorSnapshot, cachedRepoStats);
     const profile = buildContributorProfile(contributorLogin, github, contributorPullRequests, contributorIssues, repoStats, gittensorSnapshot);
-    const fit = buildContributorFit(profile, repositories, allIssues, allPullRequests, syncStates, repoStats);
+    const fit = buildContributorFit(profile, repositories, allIssues, allPullRequests, syncStates, repoStats, issueQualityByRepo);
     const scoringProfile = buildContributorScoringProfile({ login: contributorLogin, fit, scoringSnapshot: snapshot });
     const outcomeHistory = buildContributorOutcomeHistory({ login: contributorLogin, profile, repositories, pullRequests: allPullRequests, issues: allIssues, repoStats });
     const strategy = buildContributorStrategy({ login: contributorLogin, fit, scoringProfile, scoringSnapshot: snapshot, outcomeHistory });
@@ -371,7 +374,7 @@ export async function generateSignalSnapshots(env: Env, repoFullName?: string): 
     const maintainerLane = buildMaintainerLaneReport(repo, issues, pullRequests, repo.fullName, collisions, queueCounts);
     const maintainerCutReadiness = buildMaintainerCutReadiness(repo, issues, pullRequests, repo.fullName, queueCounts, collisions);
     const contributorIntakeHealth = buildContributorIntakeHealth(repo, issues, pullRequests, repo.fullName, collisions, queueCounts);
-    const issueQuality = buildIssueQualityReport(repo, issues, pullRequests, repo.fullName);
+    const issueQuality = buildIssueQualityReport(repo, issues, pullRequests, repo.fullName, collisions);
     await replaceCollisionEdges(env, repo.fullName, buildCollisionEdges(collisions));
     const generatedAt = new Date().toISOString();
     await persistSignalSnapshot(env, {
@@ -431,6 +434,17 @@ export async function generateSignalSnapshots(env: Env, repoFullName?: string): 
       generatedAt,
     });
   }
+}
+
+async function loadIssueQualityByRepo(env: Env, repositories: Array<{ fullName: string; isRegistered: boolean }>): Promise<Map<string, IssueQualityReport>> {
+  const map = new Map<string, IssueQualityReport>();
+  await Promise.all(
+    repositories.filter((repo) => repo.isRegistered).map(async (repo) => {
+      const latest = (await listSignalSnapshots(env, "issue-quality", repo.fullName))[0];
+      if (latest) map.set(repo.fullName, latest.payload as unknown as IssueQualityReport);
+    }),
+  );
+  return map;
 }
 
 async function loadOpenQueueCounts(env: Env, repoFullName: string): Promise<{ openIssues: number; openPullRequests: number }> {

@@ -1083,9 +1083,11 @@ export function buildContributorOpportunities(
     const qualityByIssue = qualityReport
       ? new Map(qualityReport.issues.map((entry) => [entry.number, entry]))
       : null;
-    for (const issue of availableIssues.slice(0, 5)) {
+    const rankable = qualityByIssue
+      ? availableIssues.filter((issue) => qualityByIssue.get(issue.number)?.status !== "do_not_use")
+      : availableIssues;
+    for (const issue of rankable.slice(0, 5)) {
       const quality = qualityByIssue?.get(issue.number);
-      if (quality && quality.status === "do_not_use") continue;
       const labelFit = issue.labels.filter((label) => labelHistory.has(label)).length;
       const qualityAdjustment =
         quality?.status === "ready"
@@ -1142,8 +1144,9 @@ export function buildContributorFit(
   pullRequests: PullRequestRecord[],
   repoSyncStates: RepoSyncStateRecord[],
   repoStats: ContributorRepoStatRecord[],
+  issueQualityByRepo?: Map<string, IssueQualityReport>,
 ): ContributorFit {
-  const opportunities = buildContributorOpportunities(profile, repositories, issues, pullRequests);
+  const opportunities = buildContributorOpportunities(profile, repositories, issues, pullRequests, issueQualityByRepo);
   const languageSet = new Set(profile.github.topLanguages.map((language) => language.toLowerCase()));
   const syncByRepo = new Map(repoSyncStates.map((state) => [state.repoFullName, state]));
   const languageFit = repositories
@@ -1883,9 +1886,10 @@ export function buildIssueQualityReport(
   issues: IssueRecord[],
   pullRequests: PullRequestRecord[],
   fullName: string,
+  prebuiltCollisions?: CollisionReport,
 ): IssueQualityReport {
   const lane = buildLaneAdvice(repo, fullName);
-  const collisions = buildCollisionReport(fullName, issues, pullRequests);
+  const collisions = prebuiltCollisions ?? buildCollisionReport(fullName, issues, pullRequests);
   const reports = issues
     .filter((issue) => issue.state === "open")
     .slice(0, 100)
