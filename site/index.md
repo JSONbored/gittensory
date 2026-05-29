@@ -42,12 +42,12 @@ features:
   </div>
 </section>
 
-Prefer a full setup first? Start with [install](/guide/install), run `gittensory-mcp login`, then add `gittensory-mcp --stdio` to Codex, Claude, or Cursor.
+Prefer a full setup first? Start with [install](/guide/install), run `gittensory-mcp login`, then add `gittensory-mcp --stdio` to your MCP client.
 
 ## Pick A Path
 
 - [Install the MCP package](/guide/install): get the CLI, authenticate with GitHub Device Flow, and verify local setup with `doctor`.
-- [Connect an MCP client](/guide/mcp): print Codex, Claude Desktop, or Cursor config without mutating local files.
+- [Connect an MCP client](/guide/mcp): print Codex, Claude Desktop, or generic MCP host config without mutating local files.
 - [Check miner work](/guide/miners): run agent planning, branch analysis, scenario projections, and preflight before opening a PR.
 - [Set up the GitHub App](/guide/github-app-setup): give maintainers confirmed-miner comments and labels without noisy checks.
 - [Review maintainer behavior](/guide/maintainers): understand quiet-by-default PR visibility and public-safe output boundaries.
