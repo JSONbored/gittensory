@@ -2,6 +2,7 @@ import {
   countOpenIssues,
   countOpenPullRequests,
   getLatestRepoGithubTotalsSnapshot,
+  getFreshOfficialMinerDetection,
   getPullRequest,
   getRepository,
   getRepositorySettings,
@@ -27,6 +28,7 @@ import {
   persistSignalSnapshot,
   recordWebhookEvent,
   replaceCollisionEdges,
+  upsertOfficialMinerDetection,
   upsertBurdenForecast,
   upsertContributorEvidence,
   upsertContributorScoringProfile,
@@ -43,7 +45,7 @@ import {
   refreshContributorActivity,
   refreshInstallationHealth,
 } from "../github/backfill";
-import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot, fetchOfficialGittensorMiner, type GittensorContributorSnapshot } from "../gittensor/api";
+import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot, fetchOfficialGittensorMiner, type GittensorContributorSnapshot, type OfficialGittensorMinerDetection } from "../gittensor/api";
 import { createOrUpdateCheckRun, getInstallationId } from "../github/app";
 import { createOrUpdateAgentCommandComment, createOrUpdatePrIntelligenceComment } from "../github/comments";
 import {
@@ -84,6 +86,9 @@ import {
 import { decidePublicSurface } from "../signals/settings-preview";
 import type { ContributorEvidenceRecord, GitHubWebhookPayload, JobMessage, JsonValue } from "../types";
 import { errorMessage } from "../utils/json";
+
+const OFFICIAL_MINER_DETECTION_TTL_MS = 5 * 60 * 1000;
+const OFFICIAL_MINER_DETECTION_UNAVAILABLE_TTL_MS = 60 * 1000;
 
 export async function processJob(env: Env, message: JobMessage): Promise<void> {
   switch (message.type) {
@@ -549,16 +554,12 @@ async function maybePublishPrPublicSurface(
   }
   if (!author) return;
 
-  const official = await fetchOfficialGittensorMiner(author);
+  const official = await getCachedOfficialMinerDetection(env, author, {
+    targetKey: `${repoFullName}#${pr.number}`,
+    deliveryId: webhook.deliveryId,
+  });
   if (official.status === "unavailable") {
-    await recordAuditEvent(env, {
-      eventType: "github_app.miner_detection_unavailable",
-      actor: author,
-      targetKey: `${repoFullName}#${pr.number}`,
-      outcome: "error",
-      detail: official.error,
-      metadata: { deliveryId: webhook.deliveryId },
-    });
+    await auditPrVisibilitySkip(env, repoFullName, pr.number, author, "miner_detection_unavailable", webhook.deliveryId);
     return;
   }
   if (official.status !== "confirmed") {
@@ -686,7 +687,9 @@ async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string
 
   const [repo, cachedPullRequest] = await Promise.all([getRepository(env, repoFullName), getPullRequest(env, repoFullName, issue.number)]);
   const pullRequestAuthor = cachedPullRequest?.authorLogin ?? issue.user?.login ?? null;
-  const official = pullRequestAuthor ? await fetchOfficialGittensorMiner(pullRequestAuthor) : undefined;
+  const official = pullRequestAuthor
+    ? await getCachedOfficialMinerDetection(env, pullRequestAuthor, { targetKey: `${repoFullName}#${issue.number}`, deliveryId })
+    : undefined;
   const authorization = isAuthorizedCommandActor({
     commenterLogin: commenter,
     commenterAssociation: payload.comment?.author_association ?? issue.author_association,
@@ -753,6 +756,28 @@ async function auditPrVisibilitySkip(
     detail: reason,
     metadata: { deliveryId },
   });
+}
+
+async function getCachedOfficialMinerDetection(env: Env, login: string, context: { targetKey: string; deliveryId: string }): Promise<OfficialGittensorMinerDetection> {
+  const cached = await getFreshOfficialMinerDetection(env, login);
+  if (cached) {
+    await auditMinerDetectionCache(env, "github_app.miner_detection_cache_hit", login, context, cached.status);
+    if (cached.status === "unavailable") await auditMinerDetectionUnavailable(env, login, context, cached.error);
+    return cached;
+  }
+  await auditMinerDetectionCache(env, "github_app.miner_detection_cache_miss", login, context, "miss");
+  const detection = await fetchOfficialGittensorMiner(login);
+  await upsertOfficialMinerDetection(env, login, detection, detection.status === "unavailable" ? OFFICIAL_MINER_DETECTION_UNAVAILABLE_TTL_MS : OFFICIAL_MINER_DETECTION_TTL_MS);
+  if (detection.status === "unavailable") await auditMinerDetectionUnavailable(env, login, context, detection.error);
+  return detection;
+}
+
+async function auditMinerDetectionUnavailable(env: Env, actor: string, context: { targetKey: string; deliveryId: string }, detail: string): Promise<void> {
+  await recordAuditEvent(env, { eventType: "github_app.miner_detection_unavailable", actor, targetKey: context.targetKey, outcome: "error", detail, metadata: { deliveryId: context.deliveryId } });
+}
+
+async function auditMinerDetectionCache(env: Env, eventType: "github_app.miner_detection_cache_hit" | "github_app.miner_detection_cache_miss", actor: string, context: { targetKey: string; deliveryId: string }, detail: string): Promise<void> {
+  await recordAuditEvent(env, { eventType, actor, targetKey: context.targetKey, outcome: "completed", detail, metadata: { deliveryId: context.deliveryId } });
 }
 
 function officialGittensorContributorDetection(

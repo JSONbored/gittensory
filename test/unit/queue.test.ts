@@ -766,7 +766,7 @@ describe("queue processors", () => {
       const method = init?.method ?? "GET";
       if (url === "https://api.gittensor.io/miners") {
         calls.minerList += 1;
-        return Response.json([{ githubUsername: "oktofeesh1", githubId: "123", totalPrs: 1, totalMergedPrs: 1, isEligible: true, credibility: 1 }]);
+        return Response.json([{ githubUsername: "oktofeesh1", githubId: "123", hotkey: "must-not-cache", totalPrs: 1, totalMergedPrs: 1, isEligible: true, credibility: 1 }]);
       }
       if (url === "https://api.gittensor.io/miners/123") return Response.json({ repositories: [] });
       if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
@@ -914,7 +914,7 @@ describe("queue processors", () => {
     ]);
   });
 
-  it("supports label-only public surfaces for confirmed miners", async () => {
+  it("uses cached confirmed miner detection for label-only public surfaces", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
       env,
@@ -932,23 +932,26 @@ describe("queue processors", () => {
       createMissingLabel: false,
       checkRunMode: "off",
     });
-    const calls = { comments: 0, labels: 0 };
+    const calls = { comments: 0, labels: 0, minerList: 0 };
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       const method = init?.method ?? "GET";
-      if (url === "https://api.gittensor.io/miners") return Response.json([{ githubUsername: "oktofeesh1", githubId: "123", totalPrs: 1, totalMergedPrs: 1, isEligible: true, credibility: 1 }]);
+      if (url === "https://api.gittensor.io/miners") {
+        calls.minerList += 1;
+        return Response.json([{ githubUsername: "oktofeesh1", githubId: "123", totalPrs: 1, totalMergedPrs: 1, isEligible: true, credibility: 1 }]);
+      }
       if (url === "https://api.gittensor.io/miners/123") return Response.json({ repositories: [] });
       if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
       if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
       if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1" });
       if (url.includes("/users/oktofeesh1/repos")) return Response.json([]);
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-      if (url.includes("/issues/45/comments")) {
+      if (url.includes("/comments")) {
         calls.comments += 1;
         return Response.json([]);
       }
-      if (url.includes("/issues/45/labels") && method === "GET") return Response.json([]);
-      if (url.includes("/issues/45/labels") && method === "POST") {
+      if (url.includes("/labels") && method === "GET") return Response.json([]);
+      if (url.includes("/labels") && method === "POST") {
         calls.labels += 1;
         return Response.json([{ name: "gittensor" }]);
       }
@@ -966,8 +969,107 @@ describe("queue processors", () => {
         pull_request: { number: 45, title: "Miner label-only work", state: "open", user: { login: "oktofeesh1" }, labels: [], body: "Fixes #1" },
       },
     });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "label-only-cached",
+      eventName: "pull_request",
+      payload: {
+        action: "synchronize",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } },
+        pull_request: { number: 46, title: "Miner label-only follow-up", state: "open", user: { login: "oktofeesh1" }, labels: [], body: "Fixes #1" },
+      },
+    });
 
-    expect(calls).toEqual({ comments: 0, labels: 1 });
+    expect(calls).toEqual({ comments: 0, labels: 2, minerList: 1 });
+    const cacheAudit = await env.DB.prepare("select event_type, detail from audit_events where actor = ? order by created_at")
+      .bind("oktofeesh1")
+      .all<{ event_type: string; detail: string | null }>();
+    expect(cacheAudit.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event_type: "github_app.miner_detection_cache_miss", detail: "miss" }),
+        expect.objectContaining({ event_type: "github_app.miner_detection_cache_hit", detail: "confirmed" }),
+      ]),
+    );
+    const cached = await env.DB.prepare("select status from official_miner_detections where login = ?").bind("oktofeesh1").first<{ status: string }>();
+    expect(cached?.status).toBe("confirmed");
+    const snapshot = await env.DB.prepare("select snapshot_json from official_miner_detections where login = ?").bind("oktofeesh1").first<{ snapshot_json: string }>();
+    expect(snapshot?.snapshot_json).not.toContain("must-not-cache");
+  });
+
+  it("keeps GitHub-history-only contributors quiet through not_found cache hits and expiry", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 9,
+      title: "Historical merged work",
+      state: "closed",
+      merged_at: "2026-05-22T00:00:00.000Z",
+      user: { login: "newbie" },
+      author_association: "NONE",
+      labels: [{ name: "feature" }],
+      body: "Previously merged.",
+    });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_and_label",
+      autoLabelEnabled: true,
+      checkRunMode: "off",
+    });
+    const calls = { minerList: 0, publicOutput: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === "https://api.gittensor.io/miners") {
+        calls.minerList += 1;
+        return Response.json([]);
+      }
+      if (url.includes("/access_tokens") || url.includes("/comments") || url.includes("/labels")) {
+        calls.publicOutput += 1;
+        return Response.json({});
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const basePayload = {
+      action: "opened",
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+      repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } },
+    };
+
+    for (const number of [47, 48]) {
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: `not-found-cache-${number}`,
+        eventName: "pull_request",
+        payload: {
+          ...basePayload,
+          pull_request: { number, title: "Contributor work", state: "open", user: { login: "newbie" }, labels: [], body: "Fixes #1" },
+        },
+      });
+    }
+    await env.DB.prepare("update official_miner_detections set expires_at = ? where login = ?").bind("2000-01-01T00:00:00.000Z", "newbie").run();
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "not-found-cache-expired",
+      eventName: "pull_request",
+      payload: {
+        ...basePayload,
+        pull_request: { number: 49, title: "Contributor follow-up", state: "open", user: { login: "newbie" }, labels: [], body: "Fixes #1" },
+      },
+    });
+
+    expect(calls).toEqual({ minerList: 2, publicOutput: 0 });
+    const audit = await env.DB.prepare("select event_type, detail from audit_events where actor = ? order by created_at")
+      .bind("newbie")
+      .all<{ event_type: string; detail: string | null }>();
+    expect(audit.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event_type: "github_app.miner_detection_cache_miss", detail: "miss" }),
+        expect.objectContaining({ event_type: "github_app.miner_detection_cache_hit", detail: "not_found" }),
+        expect.objectContaining({ event_type: "github_app.pr_visibility_skipped", detail: "not_official_gittensor_miner" }),
+      ]),
+    );
+    const cached = await env.DB.prepare("select status from official_miner_detections where login = ?").bind("newbie").first<{ status: string }>();
+    expect(cached?.status).toBe("not_found");
   });
 
   it("fails closed when official miner detection is unavailable", async () => {
@@ -987,17 +1089,116 @@ describe("queue processors", () => {
       },
     };
 
-    vi.stubGlobal("fetch", async () => new Response("gittensor unavailable", { status: 503 }));
+    const calls = { minerList: 0 };
+    vi.stubGlobal("fetch", async () => {
+      calls.minerList += 1;
+      return new Response("gittensor unavailable", { status: 503 });
+    });
 
     await expect(processJob(env, { type: "github-webhook", deliveryId: "miner-unavailable", eventName: "pull_request", payload })).resolves.toBeUndefined();
+    await expect(
+      processJob(env, {
+        type: "github-webhook",
+        deliveryId: "miner-unavailable-cached",
+        eventName: "pull_request",
+        payload: { ...payload, pull_request: { ...payload.pull_request, number: 11 } },
+      }),
+    ).resolves.toBeUndefined();
+    expect(calls.minerList).toBe(1);
     const audit = await env.DB.prepare("select event_type, outcome, detail from audit_events where target_key = ?")
       .bind("JSONbored/gittensory#10")
       .all<{ event_type: string; outcome: string; detail: string }>();
     expect(audit.results).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ event_type: "github_app.miner_detection_cache_miss", outcome: "completed", detail: "miss" }),
         expect.objectContaining({ event_type: "github_app.miner_detection_unavailable", outcome: "error", detail: expect.stringContaining("Gittensor API failed") }),
+        expect.objectContaining({ event_type: "github_app.pr_visibility_skipped", outcome: "completed", detail: "miner_detection_unavailable" }),
       ]),
     );
+    const cachedAudit = await env.DB.prepare("select event_type, outcome, detail from audit_events where target_key = ?")
+      .bind("JSONbored/gittensory#11")
+      .all<{ event_type: string; outcome: string; detail: string }>();
+    expect(cachedAudit.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event_type: "github_app.miner_detection_cache_hit", outcome: "completed", detail: "unavailable" }),
+        expect.objectContaining({ event_type: "github_app.miner_detection_unavailable", outcome: "error", detail: expect.stringContaining("Gittensor API failed") }),
+        expect.objectContaining({ event_type: "github_app.pr_visibility_skipped", outcome: "completed", detail: "miner_detection_unavailable" }),
+      ]),
+    );
+    const cached = await env.DB.prepare("select status from official_miner_detections where login = ?").bind("oktofeesh1").first<{ status: string }>();
+    expect(cached?.status).toBe("unavailable");
+  });
+
+  it("recovers confirmed miners after the unavailable cache window expires", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "detected_contributors_only",
+      publicSurface: "label_only",
+      autoLabelEnabled: true,
+      createMissingLabel: false,
+      checkRunMode: "off",
+    });
+    let officialSource: "down" | "confirmed" = "down";
+    const calls = { minerList: 0, labels: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        calls.minerList += 1;
+        if (officialSource === "down") return new Response("gittensor unavailable", { status: 503 });
+        return Response.json([{ githubUsername: "oktofeesh1", githubId: "123", hotkey: "must-not-cache", totalPrs: 1, totalMergedPrs: 1, isEligible: true, credibility: 1 }]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") return Response.json({ repositories: [] });
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1" });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/labels") && method === "GET") return Response.json([]);
+      if (url.includes("/labels") && method === "POST") {
+        calls.labels += 1;
+        return Response.json([{ name: "gittensor" }]);
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const basePayload = {
+      action: "opened",
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+      repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } },
+    };
+
+    for (const number of [12, 13]) {
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: `miner-unavailable-recovery-${number}`,
+        eventName: "pull_request",
+        payload: {
+          ...basePayload,
+          pull_request: { number, title: "Miner recovery", state: "open", user: { login: "oktofeesh1" }, labels: [], body: "Fixes #1" },
+        },
+      });
+    }
+    expect(calls).toEqual({ minerList: 1, labels: 0 });
+    await env.DB.prepare("update official_miner_detections set expires_at = ? where login = ?").bind("2000-01-01T00:00:00.000Z", "oktofeesh1").run();
+    officialSource = "confirmed";
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "miner-unavailable-recovered",
+      eventName: "pull_request",
+      payload: {
+        ...basePayload,
+        pull_request: { number: 14, title: "Miner recovery confirmed", state: "open", user: { login: "oktofeesh1" }, labels: [], body: "Fixes #1" },
+      },
+    });
+
+    expect(calls).toEqual({ minerList: 2, labels: 1 });
+    const cached = await env.DB.prepare("select status, snapshot_json from official_miner_detections where login = ?")
+      .bind("oktofeesh1")
+      .first<{ status: string; snapshot_json: string }>();
+    expect(cached?.status).toBe("confirmed");
+    expect(cached?.snapshot_json).not.toMatch(/hotkey|wallet|coldkey|must-not-cache/i);
   });
 
   it("responds to authorized @gittensory mention commands with one public-safe comment", async () => {
@@ -1107,11 +1308,17 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ commentsCreated: 4, token: 4, minerList: 4 });
+    expect(calls).toEqual({ commentsCreated: 4, token: 4, minerList: 1 });
     const audit = await env.DB.prepare("select event_type, detail from audit_events where target_key = ? order by created_at")
       .bind("JSONbored/gittensory#77")
       .all<{ event_type: string; detail: string | null }>();
-    expect(audit.results).toEqual(expect.arrayContaining([expect.objectContaining({ event_type: "github_app.agent_command_replied" })]));
+    expect(audit.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event_type: "github_app.agent_command_replied" }),
+        expect.objectContaining({ event_type: "github_app.miner_detection_cache_miss", detail: "miss" }),
+        expect.objectContaining({ event_type: "github_app.miner_detection_cache_hit", detail: "confirmed" }),
+      ]),
+    );
   });
 
   it("skips unauthorized, bot, and non-PR @gittensory mention commands without public output", async () => {
