@@ -99,6 +99,7 @@ import {
   buildRegistryChangeReport,
 } from "../signals/engine";
 import { attachDataQuality, buildCoreSignalFidelity, buildFreshnessSloReport, buildRepoDataQuality, buildSignalFidelity } from "../signals/data-quality";
+import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildPullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis } from "../signals/local-branch";
 import { buildRepoSettingsPreview } from "../signals/settings-preview";
@@ -695,6 +696,11 @@ export function createApp() {
     const serving = await loadContributorDecisionPackForServing(c.env, login);
     if (serving.kind === "ready") return c.json(serving.pack);
     return c.json(serving.refresh, 202);
+  });
+
+  app.get("/v1/contributors/:login/open-pr-monitor", async (c) => {
+    const login = c.req.param("login");
+    return c.json(await buildContributorOpenPrMonitor(c.env, login));
   });
 
   app.get("/v1/contributors/:login/repos/:owner/:repo/decision", async (c) => {

@@ -25,6 +25,7 @@ export type ScorePreviewInput = {
   expectedOpenPrCountAfterMerge?: number | undefined;
   projectedCredibility?: number | undefined;
   scenarioNotes?: string[] | undefined;
+  pendingScenarioObserved?: boolean | undefined;
 };
 
 export type ScoreGateBlocker = {
@@ -49,7 +50,7 @@ export type ScoreGateDelta = {
 
 export type ScoreScenarioPreview = {
   name: "current" | "cleanGates" | "afterPendingMerges" | "linkedIssueFixed" | "bestReasonableCase";
-  source: "current_data" | "user_supplied" | "gittensory_projection";
+  source: "current_data" | "user_supplied" | "gittensory_projection" | "github_observed";
   assumptions: string[];
   scoreEstimate: ScorePreviewResult["scoreEstimate"];
   gates: ScorePreviewResult["gates"];
@@ -303,7 +304,11 @@ function buildScenarioPreviews(
     ], repo),
     scenario(
       "afterPendingMerges",
-      pendingCount > 0 || input.expectedOpenPrCountAfterMerge !== undefined || input.projectedCredibility !== undefined ? "user_supplied" : "gittensory_projection",
+      input.pendingScenarioObserved
+        ? "github_observed"
+        : pendingCount > 0 || input.expectedOpenPrCountAfterMerge !== undefined || input.projectedCredibility !== undefined
+          ? "user_supplied"
+          : "gittensory_projection",
       afterPendingInput,
       computeScoreCore(afterPendingInput, repo, snapshot, contributorEvidence),
       [
