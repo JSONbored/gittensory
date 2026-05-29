@@ -730,6 +730,16 @@ describe("api routes", () => {
       ["maintainer-lane", { repoFullName: "entrius/allways-ui" }],
       ["maintainer-cut-readiness", { repoFullName: "entrius/allways-ui" }],
       ["contributor-intake-health", { repoFullName: "entrius/allways-ui" }],
+      [
+        "issue-quality",
+        {
+          repoFullName: "entrius/allways-ui",
+          generatedAt: "2026-05-25T00:00:00.000Z",
+          lane: { lane: "direct_pr" },
+          issues: [{ number: 7, title: "fixture", status: "ready", score: 80, reasons: [], warnings: [] }],
+          summary: "fixture",
+        },
+      ],
     ] as const) {
       await persistSignalSnapshot(env, {
         id: `snapshot-${signalType}`,
@@ -772,8 +782,21 @@ describe("api routes", () => {
     expect(degradedBody.dataQuality.status).toBe("degraded");
     expect(degradedBody.dataQuality.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/Burden forecast unavailable/i)]));
 
+    const issueQuality = await app.request("/v1/repos/entrius/allways-ui/issue-quality", { headers: apiHeaders(env) }, env);
+    expect(issueQuality.status).toBe(200);
+    await expect(issueQuality.json()).resolves.toMatchObject({
+      status: "ready",
+      source: "snapshot",
+      repoFullName: "entrius/allways-ui",
+      report: { repoFullName: "entrius/allways-ui", issues: expect.any(Array) },
+    });
+
+    await upsertRepositoryFromGitHub(env, { name: "uncached", full_name: "entrius/uncached", private: false, owner: { login: "entrius" }, default_branch: "main" });
+    const computedIssueQuality = await app.request("/v1/repos/entrius/uncached/issue-quality", { headers: apiHeaders(env) }, env);
+    expect(computedIssueQuality.status).toBe(200);
+    await expect(computedIssueQuality.json()).resolves.toMatchObject({ status: "ready", source: "computed", repoFullName: "entrius/uncached" });
+
     for (const path of [
-      "/v1/repos/entrius/allways-ui/issue-quality",
       "/v1/repos/entrius/allways-ui/burden-forecast",
       "/v1/repos/entrius/allways-ui/pulls/12/scoring-preview",
       "/v1/contributors/oktofeesh1/scoring-profile",
@@ -1214,6 +1237,7 @@ describe("api routes", () => {
     const toolsPayload = (await mcpJson(toolsList)) as { result: { tools: Array<{ name: string }> } };
     const toolNames = toolsPayload.result.tools.map((tool) => tool.name);
     expect(toolNames).toContain("gittensory_get_repo_context");
+    expect(toolNames).toContain("gittensory_get_issue_quality");
     expect(toolNames).toContain("gittensory_get_burden_forecast");
     expect(toolNames).toContain("gittensory_get_contributor_profile");
     expect(toolNames).toContain("gittensory_get_decision_pack");
@@ -1295,6 +1319,18 @@ describe("api routes", () => {
     const noTotalsPayload = (await mcpJson(noTotalsContext)) as { result: { structuredContent: { queueHealth: { signals: { openIssues: number; openPullRequests: number } } } } };
     expect(noTotalsPayload.result.structuredContent.queueHealth.signals).toMatchObject({ openIssues: 0, openPullRequests: 0 });
 
+    const missingIssueQuality = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({ jsonrpc: "2.0", id: "missing-issue-quality", method: "tools/call", params: { name: "gittensory_get_issue_quality", arguments: { owner: "ghost", repo: "missing" } } }),
+      },
+      env,
+    );
+    expect(missingIssueQuality.status).toBe(200);
+    await expect(mcpJson(missingIssueQuality)).resolves.toMatchObject({ result: { structuredContent: { status: "not_found", repoFullName: "ghost/missing" } } });
+
     for (const [name, args] of [
       ["gittensory_get_decision_pack", { login: "needs-snapshot" }],
       ["gittensory_explain_repo_decision", { login: "needs-snapshot", owner: "entrius", repo: "allways-ui" }],
@@ -1331,6 +1367,21 @@ describe("api routes", () => {
     );
     expect(missingRepoDecision.status).toBe(200);
     await expect(mcpJson(missingRepoDecision)).resolves.toMatchObject({ result: { structuredContent: { status: "not_found", decision: null } } });
+
+    await persistSignalSnapshot(env, {
+      id: "mcp-issue-quality",
+      signalType: "issue-quality",
+      targetKey: "entrius/allways-ui",
+      repoFullName: "entrius/allways-ui",
+      payload: {
+        repoFullName: "entrius/allways-ui",
+        generatedAt: "2026-05-25T00:00:00.000Z",
+        lane: { lane: "direct_pr" },
+        issues: [{ number: 7, title: "fixture", status: "ready", score: 80, reasons: [], warnings: [] }],
+        summary: "fixture",
+      } as unknown as Record<string, never>,
+      generatedAt: "2026-05-25T00:00:00.000Z",
+    });
 
     const missingBurdenForecast = await app.request(
       "/mcp",
@@ -1397,6 +1448,7 @@ describe("api routes", () => {
 
     for (const [name, args] of [
       ["gittensory_get_repo_context", { owner: "entrius", repo: "allways-ui" }],
+      ["gittensory_get_issue_quality", { owner: "entrius", repo: "allways-ui" }],
       ["gittensory_get_burden_forecast", { owner: "entrius", repo: "allways-ui" }],
       ["gittensory_get_contributor_profile", { login: "oktofeesh1" }],
       ["gittensory_get_decision_pack", { login: "oktofeesh1" }],

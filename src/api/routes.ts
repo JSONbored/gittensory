@@ -78,6 +78,7 @@ import {
   loadContributorDecisionPackForServing,
   repoDecisionFromPack,
 } from "../services/decision-pack";
+import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import {
   buildBountyAdvisory,
@@ -574,6 +575,13 @@ export function createApp() {
     return c.json(await buildRepoIntelligenceResponse(c.env, fullName));
   });
 
+  app.get("/v1/repos/:owner/:repo/issue-quality", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const response = await buildIssueQualityResponse(c.env, fullName);
+    if (!response) return c.json({ error: "issue_quality_not_found", repoFullName: fullName }, 404);
+    return c.json(response);
+  });
+
   app.get("/v1/repos/:owner/:repo/registration-readiness", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     return c.json(await buildRegistrationReadinessResponse(c.env, fullName));
@@ -728,33 +736,40 @@ export function createApp() {
     const body = await c.req.json().catch(() => null);
     const parsed = preflightSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_preflight_request", issues: parsed.error.issues }, 400);
-    const repo = await getRepository(c.env, parsed.data.repoFullName);
-    const issues = await listIssues(c.env, parsed.data.repoFullName);
-    const pullRequests = await listPullRequests(c.env, parsed.data.repoFullName);
-    return c.json(buildPreflightResult(parsed.data, repo, issues, pullRequests));
+    const [repo, issues, pullRequests, issueQuality] = await Promise.all([
+      getRepository(c.env, parsed.data.repoFullName),
+      listIssues(c.env, parsed.data.repoFullName),
+      listPullRequests(c.env, parsed.data.repoFullName),
+      loadOrComputeIssueQualityResponse(c.env, parsed.data.repoFullName),
+    ]);
+    return c.json(buildPreflightResult(parsed.data, repo, issues, pullRequests, issueQuality?.report));
   });
 
   app.post("/v1/preflight/local-diff", async (c) => {
     const body = await c.req.json().catch(() => null);
     const parsed = localDiffPreflightSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_local_diff_preflight_request", issues: parsed.error.issues }, 400);
-    const repo = await getRepository(c.env, parsed.data.repoFullName);
-    const issues = await listIssues(c.env, parsed.data.repoFullName);
-    const pullRequests = await listPullRequests(c.env, parsed.data.repoFullName);
-    return c.json(buildLocalDiffPreflightResult(parsed.data, repo, issues, pullRequests));
+    const [repo, issues, pullRequests, issueQuality] = await Promise.all([
+      getRepository(c.env, parsed.data.repoFullName),
+      listIssues(c.env, parsed.data.repoFullName),
+      listPullRequests(c.env, parsed.data.repoFullName),
+      loadOrComputeIssueQualityResponse(c.env, parsed.data.repoFullName),
+    ]);
+    return c.json(buildLocalDiffPreflightResult(parsed.data, repo, issues, pullRequests, issueQuality?.report));
   });
 
   app.post("/v1/local/branch-analysis", async (c) => {
     const body = await c.req.json().catch(() => null);
     const parsed = localBranchAnalysisSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_local_branch_analysis_request", issues: parsed.error.issues }, 400);
-    const [context, repo, issues, pullRequests, recentMergedPullRequests, snapshot] = await Promise.all([
+    const [context, repo, issues, pullRequests, recentMergedPullRequests, snapshot, issueQuality] = await Promise.all([
       loadContributorFastContext(c.env, parsed.data.login),
       getRepository(c.env, parsed.data.repoFullName),
       listIssues(c.env, parsed.data.repoFullName),
       listPullRequests(c.env, parsed.data.repoFullName),
       listRecentMergedPullRequests(c.env, parsed.data.repoFullName),
       getOrCreateScoringModelSnapshot(c.env),
+      loadOrComputeIssueQualityResponse(c.env, parsed.data.repoFullName),
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: parsed.data.login, fit, scoringSnapshot: snapshot });
@@ -770,6 +785,7 @@ export function createApp() {
       outcomeHistory: context.outcomeHistory,
       scoringSnapshot: snapshot,
       scoringProfile,
+      issueQuality: issueQuality?.report,
     });
     const response = { ...analysis, dataQuality: await loadRepoDataQuality(c.env, parsed.data.repoFullName) };
     await persistSignal(c.env, "local-branch-analysis", `${parsed.data.login}:${parsed.data.repoFullName}:${parsed.data.branchName ?? parsed.data.headRef ?? "local"}`, parsed.data.repoFullName, response as unknown as Record<string, JsonValue>, analysis.generatedAt);
@@ -1127,6 +1143,10 @@ function withDataQualityWarning(dataQuality: DataQuality, warning: string): Data
     partial: true,
     warnings: [...new Set([...dataQuality.warnings, warning])],
   };
+}
+
+async function buildIssueQualityResponse(env: Env, fullName: string) {
+  return loadOrComputeIssueQualityResponse(env, fullName);
 }
 
 async function buildRegistrationReadinessResponse(env: Env, fullName: string) {
