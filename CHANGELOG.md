@@ -51,6 +51,8 @@
 
 - Add deterministic base-agent orchestrator (#14)
 
+- Make next-action recommendations repo-specific
+
 
 
 ### Fixes
