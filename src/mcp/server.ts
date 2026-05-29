@@ -36,6 +36,8 @@ import {
   startAgentRun,
 } from "../services/agent-orchestrator";
 import { loadContributorDecisionPackForServing, repoDecisionFromPack } from "../services/decision-pack";
+import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
+import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import {
   buildBountyAdvisory,
   buildCollisionReport,
@@ -249,6 +251,15 @@ export class GittensoryMcp {
     );
 
     server.registerTool(
+      "gittensory_get_burden_forecast",
+      {
+        description: "Return the cached or freshly-computed maintainer burden forecast for a repo, including projected review load, queue growth risk, stale PR signals, and a freshness marker.",
+        inputSchema: ownerRepoShape,
+      },
+      async (input) => this.toolResult(await this.getBurdenForecast(input)),
+    );
+
+    server.registerTool(
       "gittensory_get_contributor_profile",
       {
         description: "Return an evidence-backed Gittensory contributor profile for a GitHub login.",
@@ -300,6 +311,15 @@ export class GittensoryMcp {
         inputSchema: {},
       },
       async () => this.toolResult(await this.getRegistryChanges()),
+    );
+
+    server.registerTool(
+      "gittensory_get_issue_quality",
+      {
+        description: "Return the cached or freshly-computed issue-quality report for a repo, ranking which open issues are actionable, need proof, are stale/duplicate-prone, or already solved.",
+        inputSchema: ownerRepoShape,
+      },
+      async (input) => this.toolResult(await this.getIssueQuality(input)),
     );
 
     server.registerTool(
@@ -497,6 +517,42 @@ export class GittensoryMcp {
     };
   }
 
+  private async getBurdenForecast(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    const response = await loadOrComputeBurdenForecastResponse(this.env, fullName);
+    if (!response) {
+      return {
+        summary: `Gittensory has no cached burden forecast for ${fullName}.`,
+        data: { status: "not_found", repoFullName: fullName },
+      };
+    }
+    return {
+      summary:
+        response.source === "snapshot"
+          ? `Gittensory burden forecast for ${fullName} (cached, ${response.freshness}).`
+          : `Gittensory burden forecast for ${fullName} (computed from cached metadata).`,
+      data: response as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getIssueQuality(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    const response = await loadOrComputeIssueQualityResponse(this.env, fullName);
+    if (!response) {
+      return {
+        summary: `Gittensory has no cached issue quality for ${fullName}.`,
+        data: { status: "not_found", repoFullName: fullName },
+      };
+    }
+    return {
+      summary:
+        response.source === "snapshot"
+          ? `Gittensory issue quality for ${fullName} (cached).`
+          : `Gittensory issue quality for ${fullName} (computed from cached metadata).`,
+      data: response as unknown as Record<string, unknown>,
+    };
+  }
+
   private async loadOpenQueueCounts(fullName: string): Promise<{ openIssues: number; openPullRequests: number }> {
     const [totals, openIssues, openPullRequests] = await Promise.all([
       getLatestRepoGithubTotalsSnapshot(this.env, fullName),
@@ -576,30 +632,33 @@ export class GittensoryMcp {
   }
 
   private async preflightPr(input: z.infer<z.ZodObject<typeof preflightShape>>): Promise<ToolPayload> {
-    const [repo, issues, pullRequests] = await Promise.all([
+    const [repo, issues, pullRequests, issueQuality] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
+      loadOrComputeIssueQualityResponse(this.env, input.repoFullName),
     ]);
     return {
       summary: `Gittensory PR preflight for ${input.repoFullName}.`,
-      data: buildPreflightResult(input, repo, issues, pullRequests) as unknown as Record<string, unknown>,
+      data: buildPreflightResult(input, repo, issues, pullRequests, issueQuality?.report) as unknown as Record<string, unknown>,
     };
   }
 
   private async preflightLocalDiff(input: z.infer<z.ZodObject<typeof localDiffPreflightShape>>): Promise<ToolPayload> {
-    const [repo, issues, pullRequests] = await Promise.all([
+    const [repo, issues, pullRequests, issueQuality] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
+      loadOrComputeIssueQualityResponse(this.env, input.repoFullName),
     ]);
     return {
       summary: `Gittensory local diff preflight for ${input.repoFullName}.`,
-      data: buildLocalDiffPreflightResult(input, repo, issues, pullRequests) as unknown as Record<string, unknown>,
+      data: buildLocalDiffPreflightResult(input, repo, issues, pullRequests, issueQuality?.report) as unknown as Record<string, unknown>,
     };
   }
 
   private async previewScore(input: z.infer<z.ZodObject<typeof scorePreviewShape>>): Promise<ToolPayload> {
+    if (input.contributorLogin) this.requireContributorAccess(input.contributorLogin);
     const [repo, snapshot, evidence] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       getOrCreateScoringModelSnapshot(this.env),
@@ -613,6 +672,7 @@ export class GittensoryMcp {
   }
 
   private async explainReviewRisk(input: z.infer<z.ZodObject<typeof preflightShape>>): Promise<ToolPayload> {
+    if (input.contributorLogin) this.requireContributorAccess(input.contributorLogin);
     const [repo, issues, pullRequests] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
@@ -728,6 +788,7 @@ export class GittensoryMcp {
   private async agentGetRun(runId: string): Promise<ToolPayload> {
     const bundle = await getAgentRunBundle(this.env, runId);
     if (!bundle) throw new Error("Agent run not found.");
+    this.requireContributorAccess(bundle.run.actorLogin);
     return {
       summary: `Gittensory base-agent run ${runId}.`,
       data: bundle as unknown as Record<string, unknown>,
@@ -747,6 +808,7 @@ export class GittensoryMcp {
   }
 
   private async agentPreparePrPacket(input: z.infer<z.ZodObject<typeof localBranchAnalysisShape>>): Promise<ToolPayload> {
+    this.requireContributorAccess(input.login);
     const bundle = await preparePrPacketWithAgent(this.env, input, "mcp");
     return {
       summary: `Gittensory base-agent public-safe PR packet for ${input.repoFullName}.`,
@@ -756,13 +818,14 @@ export class GittensoryMcp {
 
   private async analyzeLocalBranch(input: z.infer<z.ZodObject<typeof localBranchAnalysisShape>>) {
     this.requireContributorAccess(input.login);
-    const [context, repo, issues, pullRequests, recentMergedPullRequests, snapshot] = await Promise.all([
+    const [context, repo, issues, pullRequests, recentMergedPullRequests, snapshot, issueQuality] = await Promise.all([
       this.loadContributorFastContext(input.login),
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
       listRecentMergedPullRequests(this.env, input.repoFullName),
       getOrCreateScoringModelSnapshot(this.env),
+      loadOrComputeIssueQualityResponse(this.env, input.repoFullName),
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: input.login, fit, scoringSnapshot: snapshot });
@@ -772,11 +835,14 @@ export class GittensoryMcp {
         repo,
         issues,
         pullRequests,
+        contributorPullRequests: context.contributorPullRequests,
         recentMergedPullRequests,
+        repositories: context.repositories,
         profile: context.profile,
         outcomeHistory: context.outcomeHistory,
         scoringSnapshot: snapshot,
         scoringProfile,
+        issueQuality: issueQuality?.report,
       }),
       dataQuality: await this.loadRepoDataQuality(input.repoFullName),
     };
@@ -814,6 +880,7 @@ export class GittensoryMcp {
     });
     return {
       profile,
+      contributorPullRequests,
       repositories,
       syncStates,
       repoStats,
