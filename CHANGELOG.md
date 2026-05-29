@@ -53,8 +53,6 @@
 
 - Add deterministic base-agent orchestrator (#14)
 
-- Serve stale decision packs with freshness marker and background rebuild
-
 
 
 ### Fixes
@@ -76,10 +74,4 @@
 - Recover public repo detail gaps
 
 - Ignore stale beta api origins
-
-- Audit and surface queue-unavailable on decision-pack rebuild failures
-
-- Debounce stale-pack rebuild enqueues via audit log
-
-
 

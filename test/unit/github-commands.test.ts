@@ -73,7 +73,7 @@ describe("GitHub mention commands", () => {
           mode: "copilot",
           status: "completed",
           dataQualityStatus: "complete",
-          payload: {},
+          payload: { freshness: "rebuilding", rebuildEnqueued: true },
         },
         actions: [
           {
@@ -96,6 +96,8 @@ describe("GitHub mention commands", () => {
     });
     expect(body).toContain("<!-- gittensory-agent-command -->");
     expect(body).toContain("Scope: this repository#12");
+    expect(body).not.toContain("Decision snapshot is stale");
+    expect(body).not.toContain("background rebuild");
     expect(body).not.toMatch(/wallet|hotkey|coldkey|estimated score|reward estimate|payout|farming|raw trust score/i);
     expect(sanitizePublicComment("wallet hotkey payout")).not.toMatch(/wallet|hotkey|payout/i);
   });

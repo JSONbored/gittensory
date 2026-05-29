@@ -34,6 +34,7 @@ import { nowIso } from "../utils/json";
 export const CONTRIBUTOR_DECISION_PACK_SIGNAL = "contributor-decision-pack";
 export const DECISION_PACK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 export const DECISION_PACK_REBUILD_DEBOUNCE_MS = 15 * 1000;
+const pendingDecisionPackRebuilds = new Map<string, Promise<boolean>>();
 
 export type DecisionRecommendation = "pursue" | "cleanup_first" | "maintainer_lane" | "avoid_for_now" | "watch";
 export type DecisionActionKind = "cleanup_existing_prs" | "land_existing_prs" | "open_new_direct_pr" | "file_issue_discovery" | "maintainer_lane_improve_repo" | "maintainer_cut_readiness";
@@ -172,10 +173,22 @@ export async function loadContributorDecisionPackForServing(
 }
 
 async function tryEnqueueDecisionPackRebuild(env: Env, login: string): Promise<boolean> {
+  const pending = pendingDecisionPackRebuilds.get(login);
+  if (pending) return pending;
   const sinceIso = new Date(Date.now() - DECISION_PACK_REBUILD_DEBOUNCE_MS).toISOString();
   if (await hasRecentAuditEvent(env, login, "decision_pack.rebuild_enqueued", sinceIso)) {
     return true;
   }
+  const existing = pendingDecisionPackRebuilds.get(login);
+  if (existing) return existing;
+  const rebuild = enqueueDecisionPackRebuild(env, login).finally(() => {
+    pendingDecisionPackRebuilds.delete(login);
+  });
+  pendingDecisionPackRebuilds.set(login, rebuild);
+  return rebuild;
+}
+
+async function enqueueDecisionPackRebuild(env: Env, login: string): Promise<boolean> {
   try {
     await env.JOBS.send({ type: "build-contributor-decision-packs", requestedBy: "api", login });
     await recordAuditEvent(env, {
@@ -406,11 +419,13 @@ function buildRepoDecision(args: {
 
 function scoreBlockersFor(repoFullName: string, lane: string, roleContext: RoleContext, outcome: ContributorOutcomeHistory["repoOutcomes"][number] | undefined): ScoreBlocker[] {
   const blockers: ScoreBlocker[] = [];
+  const openPullRequests = outcome?.openPullRequests ?? 0;
+  const closedPullRequestRate = outcome?.closedPullRequestRate ?? 0;
   if (roleContext.maintainerLane) blockers.push({ code: "maintainer_lane", repoFullName, severity: "info", detail: "Maintainer-lane activity is separate from normal outside-contributor reward evidence." });
   if (lane === "inactive" || lane === "unknown") blockers.push({ code: "inactive_or_unknown_lane", repoFullName, severity: "critical", detail: "The repo lane is inactive or unknown in the current registry snapshot." });
   if (lane === "issue_discovery") blockers.push({ code: "issue_discovery_only", repoFullName, severity: "warning", detail: "This repo is issue-discovery-only; direct PR reward/risk reasoning is not applicable." });
-  if ((outcome?.openPullRequests ?? 0) >= 5) blockers.push({ code: "open_pr_pressure", repoFullName, severity: "critical", detail: `${outcome?.openPullRequests ?? 0} open PR(s) create scoreability and review-pressure risk.` });
-  if ((outcome?.closedPullRequestRate ?? 0) >= 0.35) blockers.push({ code: "closed_pr_credibility", repoFullName, severity: "warning", detail: `Closed PR rate is ${Math.round((outcome?.closedPullRequestRate ?? 0) * 100)}%.` });
+  if (openPullRequests >= 5) blockers.push({ code: "open_pr_pressure", repoFullName, severity: "critical", detail: `${openPullRequests} open PR(s) create scoreability and review-pressure risk.` });
+  if (closedPullRequestRate >= 0.35) blockers.push({ code: "closed_pr_credibility", repoFullName, severity: "warning", detail: `Closed PR rate is ${Math.round(closedPullRequestRate * 100)}%.` });
   if (outcome && !outcome.maintainerLane && outcome.credibility > 0 && outcome.credibility < 0.8) blockers.push({ code: "low_credibility", repoFullName, severity: "warning", detail: `Official repo credibility is ${round(outcome.credibility)}.` });
   return blockers;
 }

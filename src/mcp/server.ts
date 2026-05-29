@@ -60,6 +60,12 @@ type ToolPayload = {
   data: Record<string, unknown>;
 };
 
+function decisionPackSummary(login: string, freshness: string, rebuildEnqueued: boolean): string {
+  if (freshness === "fresh") return `Gittensory decision pack for ${login}.`;
+  if (rebuildEnqueued) return `Gittensory decision pack for ${login} (stale; background rebuild enqueued).`;
+  return `Gittensory decision pack for ${login} (stale; rebuild not enqueued).`;
+}
+
 const ownerRepoShape = {
   owner: z.string().min(1),
   repo: z.string().min(1),
@@ -511,11 +517,8 @@ export class GittensoryMcp {
   private async getDecisionPack(login: string): Promise<ToolPayload> {
     const serving = await loadContributorDecisionPackForServing(this.env, login);
     if (serving.kind === "ready") {
-      const stale = serving.pack.freshness !== "fresh";
       return {
-        summary: stale
-          ? `Gittensory decision pack for ${login} (stale; background rebuild enqueued).`
-          : `Gittensory decision pack for ${login}.`,
+        summary: decisionPackSummary(login, serving.pack.freshness, serving.pack.rebuildEnqueued),
         data: serving.pack as unknown as Record<string, unknown>,
       };
     }

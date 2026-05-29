@@ -1620,6 +1620,81 @@ describe("api routes", () => {
       decision: { repoFullName: "owner/repo", recommendation: "pursue" },
     });
 
+    const staleMcpQueued = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "stale-mcp-queued",
+          method: "tools/call",
+          params: { name: "gittensory_get_decision_pack", arguments: { login: "stale-user" } },
+        }),
+      },
+      env,
+    );
+    expect(staleMcpQueued.status).toBe(200);
+    const staleMcpQueuedPayload = (await mcpJson(staleMcpQueued)) as { result: { structuredContent: { freshness: string; rebuildEnqueued: boolean }; content: Array<{ text: string }> } };
+    expect(staleMcpQueuedPayload.result.structuredContent).toMatchObject({ freshness: "rebuilding", rebuildEnqueued: true });
+    expect(staleMcpQueuedPayload.result.content[0]?.text).toContain("background rebuild enqueued");
+
+    const queueDownEnv = createTestEnv({
+      JOBS: {
+        async send() {
+          throw new Error("queue offline");
+        },
+      } as unknown as Queue,
+    });
+    await persistSignalSnapshot(queueDownEnv, {
+      id: "stale-mcp-queue-down",
+      signalType: "contributor-decision-pack",
+      targetKey: "mcp-stale-user",
+      payload: {
+        status: "ready",
+        source: "computed",
+        login: "mcp-stale-user",
+        generatedAt: "2026-01-01T00:00:00.000Z",
+        stale: false,
+        freshness: "fresh",
+        rebuildEnqueued: false,
+        scoringModelSnapshotId: "scoring-1",
+        profile: {},
+        outcomeHistory: {},
+        roleContexts: [],
+        repoDecisions: [{ repoFullName: "owner/repo", recommendation: "pursue" }],
+        topActions: [{ actionKind: "open_new_direct_pr", repoFullName: "owner/repo", priorityScore: 50 }],
+        cleanupFirst: [],
+        pursueRepos: [{ repoFullName: "owner/repo", recommendation: "pursue" }],
+        avoidRepos: [],
+        maintainerLaneRepos: [],
+        scoreBlockers: [],
+        dataQuality: { signalFidelity: { status: "complete" } },
+        summary: "stale",
+        nextActions: ["pick a narrow change"],
+      } as never,
+      generatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const staleMcp = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(queueDownEnv),
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "stale-mcp-queue-down",
+          method: "tools/call",
+          params: { name: "gittensory_get_decision_pack", arguments: { login: "mcp-stale-user" } },
+        }),
+      },
+      queueDownEnv,
+    );
+    expect(staleMcp.status).toBe(200);
+    const staleMcpPayload = (await mcpJson(staleMcp)) as { result: { structuredContent: { freshness: string; rebuildEnqueued: boolean }; content: Array<{ text: string }> } };
+    expect(staleMcpPayload.result.structuredContent).toMatchObject({ freshness: "stale", rebuildEnqueued: false });
+    expect(staleMcpPayload.result.content[0]?.text).toContain("rebuild not enqueued");
+    expect(staleMcpPayload.result.content[0]?.text).not.toContain("background rebuild enqueued");
+
     await persistSignalSnapshot(env, {
       id: "fresh-empty-pack",
       signalType: "contributor-decision-pack",

@@ -322,10 +322,20 @@ describe("decision-pack service", () => {
 
   it("debounces repeated stale-pack rebuild requests via the audit log", async () => {
     const sends: Array<Record<string, unknown>> = [];
+    let releaseSend!: () => void;
+    let markSendStarted!: () => void;
+    const sendStarted = new Promise<void>((resolve) => {
+      markSendStarted = resolve;
+    });
+    const sendReleased = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
     const env = createTestEnv({
       JOBS: {
         async send(message: Record<string, unknown>) {
           sends.push(message);
+          markSendStarted();
+          await sendReleased;
         },
       } as unknown as Queue,
     });
@@ -359,14 +369,23 @@ describe("decision-pack service", () => {
       generatedAt: "2026-01-01T00:00:00.000Z",
     });
 
-    for (let i = 0; i < 5; i++) {
-      const result = await loadContributorDecisionPackForServing(env, "hot-user");
+    const first = loadContributorDecisionPackForServing(env, "hot-user");
+    const racing = Array.from({ length: 3 }, () => loadContributorDecisionPackForServing(env, "hot-user"));
+    await sendStarted;
+    const joined = Array.from({ length: 2 }, () => loadContributorDecisionPackForServing(env, "hot-user"));
+    releaseSend();
+    const results = await Promise.all([first, ...racing, ...joined]);
+    for (const result of results) {
       expect(result.kind).toBe("ready");
       if (result.kind === "ready") {
         expect(result.pack.freshness).toBe("rebuilding");
         expect(result.pack.rebuildEnqueued).toBe(true);
       }
     }
+    expect(sends.filter((s) => s.login === "hot-user")).toHaveLength(1);
+
+    const afterAuditDebounce = await loadContributorDecisionPackForServing(env, "hot-user");
+    expect(afterAuditDebounce).toMatchObject({ kind: "ready", pack: { freshness: "rebuilding", rebuildEnqueued: true } });
     expect(sends.filter((s) => s.login === "hot-user")).toHaveLength(1);
   });
 
@@ -393,6 +412,14 @@ describe("decision-pack service", () => {
     expect(noOutcomeBlockers.map((b) => b.code)).not.toContain("open_pr_pressure");
     expect(noOutcomeBlockers.map((b) => b.code)).not.toContain("closed_pr_credibility");
     expect(noOutcomeBlockers.map((b) => b.code)).not.toContain("low_credibility");
+
+    const belowThresholdBlockers = __decisionPackInternals.scoreBlockersFor(
+      "owner/healthy",
+      "direct_pr",
+      { maintainerLane: false } as any,
+      { openPullRequests: 1, closedPullRequestRate: 0.1, credibility: 1, maintainerLane: false } as any,
+    );
+    expect(belowThresholdBlockers.map((b) => b.code)).not.toEqual(expect.arrayContaining(["open_pr_pressure", "closed_pr_credibility", "low_credibility"]));
 
     const fellbackToNow = __decisionPackInternals.withSnapshotMetadata({
       id: "snap-both-null",
