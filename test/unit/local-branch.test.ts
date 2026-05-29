@@ -114,6 +114,72 @@ describe("local branch analysis", () => {
     expect(analysis.nextActions[0]?.whyThisHelps.join(" ")).toMatch(/waiting for pending PRs/i);
   });
 
+  it("auto-detects merge-ready open PRs from cached reviews when pending counts are omitted", () => {
+    const pressuredHistory: ContributorOutcomeHistory = {
+      ...outcomeHistory,
+      totals: { ...outcomeHistory.totals, openPullRequests: 3, credibility: 1 },
+      repoOutcomes: [
+        {
+          ...outcomeHistory.repoOutcomes[0]!,
+          openPullRequests: 3,
+          credibility: 1,
+        },
+      ],
+    };
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        branchName: "fix-queue",
+        changedFiles: [{ path: "src/cache.ts", additions: 20, deletions: 2, status: "modified" }],
+        localScorer: { mode: "external_command", sourceTokenScore: 48, totalTokenScore: 70, sourceLines: 40 },
+      },
+      repo,
+      issues: [],
+      pullRequests: [
+        {
+          repoFullName: repo.fullName,
+          number: 201,
+          title: "Approved queue fix",
+          state: "open",
+          authorLogin: "oktofeesh1",
+          labels: [],
+          linkedIssues: [7],
+          createdAt: "2026-05-25T00:00:00.000Z",
+          updatedAt: "2026-05-27T00:00:00.000Z",
+        },
+        {
+          repoFullName: repo.fullName,
+          number: 202,
+          title: "Draft experiment",
+          state: "open",
+          authorLogin: "oktofeesh1",
+          labels: ["draft"],
+          linkedIssues: [],
+          createdAt: "2026-05-25T00:00:00.000Z",
+          updatedAt: "2026-05-27T00:00:00.000Z",
+        },
+      ],
+      pullRequestReviews: [
+        { id: "r-201", repoFullName: repo.fullName, pullNumber: 201, state: "APPROVED", payload: {} },
+      ],
+      pullRequestChecks: [],
+      profile,
+      outcomeHistory: pressuredHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    expect(analysis.detectedPendingScenario).toMatchObject({
+      source: "github_observed",
+      pendingMergedPrCount: 1,
+      pendingClosedPrCount: 0,
+    });
+    expect(analysis.detectedPendingScenario?.classified.find((entry) => entry.number === 202)?.classification).toBe("draft");
+    expect(analysis.scenarioScorePreview.afterPendingMerges?.source).toBe("github_observed");
+    expect(analysis.scenarioScorePreview.afterPendingMerges?.effectiveEstimatedScore).toBeGreaterThan(0);
+  });
+
   it("classifies stale base state and treats passed validation as test evidence", () => {
     const analysis = buildLocalBranchAnalysis({
       input: {

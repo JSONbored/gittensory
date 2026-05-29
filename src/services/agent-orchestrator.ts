@@ -23,6 +23,7 @@ import { getOrCreateScoringModelSnapshot } from "../scoring/model";
 import { loadContributorDecisionPackForServing, repoDecisionFromPack, type ContributorDecisionPack, type DecisionAction, type RepoDecision } from "./decision-pack";
 import { summarizeAgentBundleWithAi } from "./ai-summaries";
 import { buildContributorFit, buildContributorOutcomeHistory, buildContributorProfile, buildContributorScoringProfile } from "../signals/engine";
+import { loadContributorRepoOpenPrSignalRecords } from "../scoring/pending-pr-scenarios";
 import { buildLocalBranchAnalysis, type LocalBranchAnalysis, type LocalBranchAnalysisInput } from "../signals/local-branch";
 import type {
   AgentActionRecord,
@@ -300,11 +301,13 @@ async function analyzeLocalBranch(env: Env, input: LocalBranchAnalysisInput): Pr
   const outcomeHistory = buildContributorOutcomeHistory({ login: input.login, profile, repositories, pullRequests: contributorPullRequests, issues: contributorIssues, repoStats });
   const fit = buildContributorFit(profile, repositories, [], [], syncStates, repoStats);
   const scoringProfile = buildContributorScoringProfile({ login: input.login, fit, scoringSnapshot });
+  const openPrSignals = await loadContributorRepoOpenPrSignalRecords(env, input.repoFullName, input.login, pullRequests);
   return buildLocalBranchAnalysis({
     input,
     repo,
     issues,
     pullRequests,
+    ...openPrSignals,
     recentMergedPullRequests,
     profile,
     outcomeHistory,

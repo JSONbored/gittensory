@@ -830,7 +830,7 @@ const ScoreGateDeltaSchema = z.object({
 
 const ScoreScenarioPreviewSchema = z.object({
   name: z.enum(["current", "cleanGates", "afterPendingMerges", "linkedIssueFixed", "bestReasonableCase"]),
-  source: z.enum(["current_data", "user_supplied", "gittensory_projection"]),
+  source: z.enum(["current_data", "user_supplied", "gittensory_projection", "github_observed"]),
   assumptions: z.array(z.string()),
   scoreEstimate: ScoreEstimateSchema,
   gates: ScoreGatesSchema,
@@ -1274,6 +1274,25 @@ export const LocalBranchAnalysisSchema = z
       publicSafeWarnings: z.array(z.string()),
     }),
     nextActions: z.array(RewardRiskActionSchema),
+    detectedPendingScenario: z
+      .object({
+        source: z.enum(["github_observed", "user_supplied"]),
+        pendingMergedPrCount: z.number().int().min(0),
+        pendingClosedPrCount: z.number().int().min(0),
+        approvedPrCount: z.number().int().min(0),
+        expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
+        scenarioNotes: z.array(z.string()),
+        classified: z.array(
+          z.object({
+            repoFullName: z.string(),
+            number: z.number().int(),
+            title: z.string(),
+            classification: z.enum(["merge_ready", "stale_likely_close", "draft", "blocked", "maintainer_lane", "open_other"]),
+            reasons: z.array(z.string()),
+          }),
+        ),
+      })
+      .optional(),
     summary: z.string(),
   })
   .openapi("LocalBranchAnalysis");

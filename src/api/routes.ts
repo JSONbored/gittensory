@@ -100,6 +100,7 @@ import {
 } from "../signals/engine";
 import { attachDataQuality, buildCoreSignalFidelity, buildFreshnessSloReport, buildRepoDataQuality, buildSignalFidelity } from "../signals/data-quality";
 import { buildPullRequestReviewability } from "../signals/reward-risk";
+import { loadContributorRepoOpenPrSignalRecords } from "../scoring/pending-pr-scenarios";
 import { buildLocalBranchAnalysis } from "../signals/local-branch";
 import { buildRepoSettingsPreview } from "../signals/settings-preview";
 import type { ContributorEvidenceRecord, JobMessage, JsonValue, RepoSyncSegmentRecord } from "../types";
@@ -752,6 +753,12 @@ export function createApp() {
       listRecentMergedPullRequests(c.env, parsed.data.repoFullName),
       getOrCreateScoringModelSnapshot(c.env),
     ]);
+    const openPrSignals = await loadContributorRepoOpenPrSignalRecords(
+      c.env,
+      parsed.data.repoFullName,
+      parsed.data.login,
+      pullRequests,
+    );
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: parsed.data.login, fit, scoringSnapshot: snapshot });
     const analysis = buildLocalBranchAnalysis({
@@ -759,6 +766,7 @@ export function createApp() {
       repo,
       issues,
       pullRequests,
+      ...openPrSignals,
       recentMergedPullRequests,
       profile: context.profile,
       outcomeHistory: context.outcomeHistory,

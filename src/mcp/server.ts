@@ -51,6 +51,7 @@ import {
   buildRegistryChangeReport,
   buildRoleContext,
 } from "../signals/engine";
+import { loadContributorRepoOpenPrSignalRecords } from "../scoring/pending-pr-scenarios";
 import { buildLocalBranchAnalysis } from "../signals/local-branch";
 import { buildRepoDataQuality } from "../signals/data-quality";
 
@@ -748,6 +749,7 @@ export class GittensoryMcp {
       listRecentMergedPullRequests(this.env, input.repoFullName),
       getOrCreateScoringModelSnapshot(this.env),
     ]);
+    const openPrSignals = await loadContributorRepoOpenPrSignalRecords(this.env, input.repoFullName, input.login, pullRequests);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: input.login, fit, scoringSnapshot: snapshot });
     return {
@@ -756,6 +758,7 @@ export class GittensoryMcp {
         repo,
         issues,
         pullRequests,
+        ...openPrSignals,
         recentMergedPullRequests,
         profile: context.profile,
         outcomeHistory: context.outcomeHistory,

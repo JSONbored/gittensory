@@ -1,6 +1,19 @@
 import type { ScorePreviewInput, ScorePreviewResult } from "../scoring/preview";
 import { buildScorePreview } from "../scoring/preview";
-import type { IssueRecord, PullRequestRecord, RecentMergedPullRequestRecord, RepositoryRecord, ScoringModelSnapshotRecord } from "../types";
+import {
+  applyPendingPrDetectionToScoreInput,
+  detectPendingPrScenario,
+  type PendingPrScenarioDetection,
+} from "../scoring/pending-pr-scenarios";
+import type {
+  CheckSummaryRecord,
+  IssueRecord,
+  PullRequestRecord,
+  PullRequestReviewRecord,
+  RecentMergedPullRequestRecord,
+  RepositoryRecord,
+  ScoringModelSnapshotRecord,
+} from "../types";
 import { nowIso } from "../utils/json";
 import {
   buildLaneAdvice,
@@ -98,6 +111,7 @@ export type LocalBranchAnalysis = {
     gateDeltas: ScorePreviewResult["gateDeltas"];
     blockedBy: ScorePreviewResult["blockedBy"];
   };
+  detectedPendingScenario?: PendingPrScenarioDetection | undefined;
   rewardRisk: RepoRewardRisk;
   scoreBlockers: string[];
   branchQualityBlockers: string[];
@@ -140,6 +154,8 @@ export function buildLocalBranchAnalysis(args: {
   repo: RepositoryRecord | null;
   issues: IssueRecord[];
   pullRequests: PullRequestRecord[];
+  pullRequestReviews?: PullRequestReviewRecord[] | undefined;
+  pullRequestChecks?: CheckSummaryRecord[] | undefined;
   recentMergedPullRequests?: RecentMergedPullRequestRecord[] | undefined;
   profile: ContributorProfile;
   outcomeHistory: ContributorOutcomeHistory;
@@ -180,16 +196,32 @@ export function buildLocalBranchAnalysis(args: {
   });
   const lane = buildLaneAdvice(args.repo, args.input.repoFullName);
   const repoOutcome = args.outcomeHistory.repoOutcomes.find((outcome) => sameRepo(outcome.repoFullName, args.input.repoFullName));
-  const scoreInput = buildLocalScoreInput({
-    input: args.input,
-    changedFiles,
-    changedLineCount,
-    testFiles,
-    linkedIssueCount: preflight.linkedIssues.length,
-    roleContext,
-    outcomeHistory: args.outcomeHistory,
-    repoOutcome,
-  });
+  const reviewsByPullNumber = indexReviewsByPullNumber(args.pullRequestReviews ?? [], args.input.repoFullName);
+  const checksByPullNumber = indexChecksByPullNumber(args.pullRequestChecks ?? [], args.input.repoFullName);
+  const detectedPendingScenario =
+    detectPendingPrScenario({
+      login: args.input.login,
+      repoFullName: args.input.repoFullName,
+      pullRequests: args.pullRequests,
+      roleContext,
+      openPrCount: repoOutcome?.openPullRequests ?? args.outcomeHistory.totals.openPullRequests,
+      reviewsByPullNumber,
+      checksByPullNumber,
+      userSupplied: args.input,
+    }) ?? undefined;
+  const scoreInput = applyPendingPrDetectionToScoreInput(
+    buildLocalScoreInput({
+      input: args.input,
+      changedFiles,
+      changedLineCount,
+      testFiles,
+      linkedIssueCount: preflight.linkedIssues.length,
+      roleContext,
+      outcomeHistory: args.outcomeHistory,
+      repoOutcome,
+    }),
+    detectedPendingScenario ?? null,
+  );
   const scorePreview = buildScorePreview({
     input: scoreInput,
     repo: args.repo,
@@ -260,6 +292,7 @@ export function buildLocalBranchAnalysis(args: {
     preflight,
     scorePreview,
     scenarioScorePreview,
+    ...(detectedPendingScenario ? { detectedPendingScenario } : {}),
     rewardRisk,
     scoreBlockers: [...new Set(scoreBlockers)],
     branchQualityBlockers,
@@ -625,6 +658,28 @@ function isCodeFile(file: string): boolean {
 
 function sameRepo(left: string, right: string): boolean {
   return left.toLowerCase() === right.toLowerCase();
+}
+
+function indexReviewsByPullNumber(records: PullRequestReviewRecord[], repoFullName: string): Map<number, PullRequestReviewRecord[]> {
+  const map = new Map<number, PullRequestReviewRecord[]>();
+  for (const record of records) {
+    if (record.repoFullName !== repoFullName) continue;
+    const current = map.get(record.pullNumber) ?? [];
+    current.push(record);
+    map.set(record.pullNumber, current);
+  }
+  return map;
+}
+
+function indexChecksByPullNumber(records: CheckSummaryRecord[], repoFullName: string): Map<number, CheckSummaryRecord[]> {
+  const map = new Map<number, CheckSummaryRecord[]>();
+  for (const record of records) {
+    if (record.repoFullName !== repoFullName || record.pullNumber === undefined || record.pullNumber === null) continue;
+    const current = map.get(record.pullNumber) ?? [];
+    current.push(record);
+    map.set(record.pullNumber, current);
+  }
+  return map;
 }
 
 function nonNegative(value: number | undefined): number {
