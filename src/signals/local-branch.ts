@@ -15,6 +15,7 @@ import {
   type RoleContext,
 } from "./engine";
 import { buildRepoRewardRisk, type RepoRewardRisk, type RewardRiskAction } from "./reward-risk";
+import { buildFocusManifestGuidance, parseFocusManifest, type FocusManifestGuidance } from "./focus-manifest";
 
 export type LocalBranchChangedFile = {
   path: string;
@@ -68,6 +69,7 @@ export type LocalBranchAnalysisInput = {
   expectedOpenPrCountAfterMerge?: number | undefined;
   projectedCredibility?: number | undefined;
   scenarioNotes?: string[] | undefined;
+  focusManifest?: unknown;
 };
 
 type ObservedPullRequestScenarios = {
@@ -145,6 +147,7 @@ export type LocalBranchAnalysis = {
     reasons: string[];
     risks: string[];
   };
+  manifestGuidance: FocusManifestGuidance;
   prPacket: {
     titleSuggestion: string;
     markdown: string;
@@ -258,7 +261,25 @@ export function buildLocalBranchAnalysis(args: {
     issues: args.issues,
     pullRequests: args.pullRequests,
   });
-  const localFindings = buildLocalFindings(args.input, changedFiles, preflight, scorePreview, baseFreshness, githubBranchStatus);
+  const manifest = parseFocusManifest(args.input.focusManifest);
+  const manifestGuidance = buildFocusManifestGuidance({
+    manifest,
+    changedPaths,
+    labels: args.input.labels,
+    linkedIssueCount: preflight.linkedIssues.length,
+    testFileCount: testFiles.length,
+    passedValidationCount: validationSummary.passed,
+  });
+  const localFindings = [
+    ...buildLocalFindings(args.input, changedFiles, preflight, scorePreview, baseFreshness, githubBranchStatus),
+    ...manifestGuidance.findings.map((finding) => ({
+      code: finding.code,
+      severity: finding.severity,
+      title: finding.title,
+      detail: finding.detail,
+      action: finding.action,
+    })),
+  ];
   const branchQualityBlockers = branchQualityBlockersFor(preflight, localFindings);
   const accountStateBlockers = accountStateBlockersFor(scorePreview);
   const currentScenario = scorePreview.scenarioPreviews.find((scenario) => scenario.name === "current") ?? scorePreview.scenarioPreviews[0]!;
@@ -284,6 +305,7 @@ export function buildLocalBranchAnalysis(args: {
     baseFreshness,
     githubBranchStatus,
     recommendedRerunCondition,
+    manifestGuidance,
   });
   const scoreBlockers = [
     ...rewardRisk.scoreBlockers,
@@ -319,6 +341,7 @@ export function buildLocalBranchAnalysis(args: {
       reasons: recommendation.reasons,
       risks: recommendation.risks,
     },
+    manifestGuidance,
     prPacket,
     nextActions: withSituationalAction(rewardRisk.actions, branchQualityBlockers, accountStateBlockers, scorePreview).slice(0, 6),
     summary: `${args.input.repoFullName}: local branch analysis is ${preflight.status}; ${rewardRisk.actions[0]?.actionKind ?? "no ranked action"} is the top private next action.`,
@@ -756,6 +779,7 @@ function buildPublicSafePrPacket(args: {
   baseFreshness: LocalBranchAnalysis["baseFreshness"];
   githubBranchStatus: GitHubBranchStatus;
   recommendedRerunCondition: string;
+  manifestGuidance: FocusManifestGuidance;
 }): LocalBranchAnalysis["prPacket"] {
   const topPaths = args.changedFiles.slice(0, 8).map(changedFileSummary);
   const publicSafeWarnings = [
@@ -767,9 +791,14 @@ function buildPublicSafePrPacket(args: {
       .filter((finding) => finding.code !== "score_preview_warning" && finding.severity === "warning")
       .flatMap((finding) => (finding.action ? [finding.action] : [finding.title])),
   ].filter(isPublicSafeText);
-  const nextSteps = [...publicSafeWarnings, args.baseFreshness.recommendation, args.recommendedRerunCondition, "Keep source upload disabled; this packet is based on local git metadata only."].filter(
-    (line): line is string => Boolean(line && isPublicSafeText(line)),
-  );
+  const nextSteps = [
+    ...publicSafeWarnings,
+    ...args.manifestGuidance.publicNextSteps,
+    args.baseFreshness.recommendation,
+    args.recommendedRerunCondition,
+    "Keep source upload disabled; this packet is based on local git metadata only.",
+  ].filter((line): line is string => Boolean(line && isPublicSafeText(line)));
+  const manifestFocus = manifestFocusLines(args.manifestGuidance);
   const validationLines =
     args.validationSummary.commands.length > 0
       ? args.validationSummary.commands.map((entry) => `- ${entry.status}: ${entry.command}${entry.durationMs !== undefined ? ` [${entry.durationMs}ms]` : ""}${entry.summary ? ` (${entry.summary})` : ""}`)
@@ -785,6 +814,7 @@ function buildPublicSafePrPacket(args: {
       },
       { heading: "Branch Freshness", lines: branchFreshnessLines(args.baseFreshness) },
       { heading: "GitHub Status", lines: githubStatusLines(args.githubBranchStatus) },
+      ...(manifestFocus.length > 0 ? [{ heading: "Maintainer Focus", lines: manifestFocus }] : []),
       { heading: "Overlap/WIP Check", lines: overlapCautionLines(args.preflight.collisions) },
       {
         heading: "Changed Paths",
@@ -817,6 +847,12 @@ function branchFreshnessLines(freshness: LocalBranchAnalysis["baseFreshness"]): 
 function githubStatusLines(status: GitHubBranchStatus): string[] {
   if (status.status === "no_pr") return ["- No open GitHub PR was matched to this branch."];
   return [`- PR #${status.pullNumber}: ${status.status.replace(/_/g, " ")}.`, ...status.notes.map((note) => `- ${note}`)].filter(isPublicSafeText);
+}
+
+function manifestFocusLines(guidance: FocusManifestGuidance): string[] {
+  if (!guidance.present) return [];
+  const lines = guidance.publicNextSteps.map((step) => `- ${step}`).filter(isPublicSafeText);
+  return [...new Set(lines)].slice(0, 6);
 }
 
 function overlapCautionLines(collisions: LocalDiffPreflightResult["collisions"]): string[] {
