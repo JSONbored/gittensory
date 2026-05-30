@@ -64,6 +64,13 @@ import { buildAndPersistContributorDecisionPack, loadDecisionPackSharedInputs } 
 import { executeAgentRun, explainBlockersWithAgent, planNextWork } from "../services/agent-orchestrator";
 import { loadIssueQualityReportMap } from "../services/issue-quality";
 import {
+  buildUpstreamRulesetSnapshot,
+  detectAndPersistUpstreamDrift,
+  fileUpstreamDriftIssues,
+  refreshUpstreamDrift,
+  refreshUpstreamSourceSnapshots,
+} from "../upstream/ruleset";
+import {
   buildFreshnessSloReport,
   freshnessAuditMetadata,
 } from "../signals/data-quality";
@@ -165,6 +172,21 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       return;
     case "refresh-scoring-model":
       await refreshScoringModelSnapshot(env);
+      return;
+    case "refresh-upstream-sources":
+      await refreshUpstreamSourceSnapshots(env);
+      return;
+    case "build-upstream-ruleset":
+      await buildUpstreamRulesetSnapshot(env);
+      return;
+    case "detect-upstream-drift":
+      await detectAndPersistUpstreamDrift(env);
+      return;
+    case "refresh-upstream-drift":
+      await refreshUpstreamDrift(env);
+      return;
+    case "file-upstream-drift-issues":
+      await fileUpstreamDriftIssues(env);
       return;
     case "build-contributor-evidence":
       await buildContributorEvidence(env, message.login);

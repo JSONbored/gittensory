@@ -43,6 +43,8 @@ import {
   listSignalSnapshots,
   listPullRequests,
   listRepositories,
+  getLatestUpstreamRulesetSnapshot,
+  listUpstreamDriftReports,
   persistBountyLifecycleEvent,
   persistScorePreview,
   persistSignalSnapshot,
@@ -107,6 +109,7 @@ import { attachDataQuality, buildCoreSignalFidelity, buildFreshnessSloReport, bu
 import { buildPullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis } from "../signals/local-branch";
 import { buildRepoSettingsPreview } from "../signals/settings-preview";
+import { fileUpstreamDriftIssues, loadUpstreamStatus, refreshUpstreamDrift } from "../upstream/ruleset";
 import type { BountyLifecycleEventRecord, ContributorEvidenceRecord, DataQuality, JobMessage, JsonValue, RepoSyncSegmentRecord } from "../types";
 import { errorMessage, nowIso } from "../utils/json";
 
@@ -392,6 +395,22 @@ export function createApp() {
 
   app.get("/v1/scoring/model", async (c) => c.json(await getOrCreateScoringModelSnapshot(c.env)));
 
+  app.get("/v1/upstream/status", async (c) => c.json(await loadUpstreamStatus(c.env)));
+
+  app.get("/v1/upstream/ruleset", async (c) => {
+    const ruleset = await getLatestUpstreamRulesetSnapshot(c.env);
+    if (!ruleset) return c.json({ error: "upstream_ruleset_not_found" }, 404);
+    return c.json(ruleset);
+  });
+
+  app.get("/v1/upstream/drift", async (c) =>
+    c.json({
+      generatedAt: nowIso(),
+      upstreamDrift: await loadUpstreamStatus(c.env),
+      reports: await listUpstreamDriftReports(c.env, 50),
+    }),
+  );
+
   app.post("/v1/scoring/preview", async (c) => {
     const body = await c.req.json().catch(() => null);
     const parsed = scorePreviewSchema.safeParse(body);
@@ -412,7 +431,7 @@ export function createApp() {
   });
 
   app.get("/v1/sync/status", async (c) => {
-    const [snapshot, scoringSnapshot, repositories, segments, totals, detailStates, installations, rateLimits, signalSnapshots, bounties] = await Promise.all([
+    const [snapshot, scoringSnapshot, repositories, segments, totals, detailStates, installations, rateLimits, signalSnapshots, bounties, upstreamDrift] = await Promise.all([
       getLatestRegistrySnapshot(c.env),
       getLatestScoringModelSnapshot(c.env),
       listRepoSyncStates(c.env),
@@ -423,6 +442,7 @@ export function createApp() {
       listLatestGitHubRateLimitObservations(c.env, 20),
       listLatestSignalSnapshotsByTarget(c.env),
       listBounties(c.env),
+      loadUpstreamStatus(c.env),
     ]);
     const repoCount = snapshot?.repoCount ?? repositories.length;
     const coreSignalFidelity = buildCoreSignalFidelity(repoCount, repositories, segments, totals, detailStates);
@@ -432,6 +452,7 @@ export function createApp() {
       signalFidelity: buildSignalFidelity(repoCount, repositories, segments),
       freshnessSlo,
       coreSignalFidelity,
+      upstreamDrift,
       historyCoverage: coreSignalFidelity.historyCoverage,
       refreshingRepos: coreSignalFidelity.refreshingRepos,
       waitingForRateLimitRepos: coreSignalFidelity.waitingForRateLimitRepos,
@@ -445,7 +466,7 @@ export function createApp() {
   });
 
   app.get("/v1/readiness", async (c) => {
-    const [snapshot, scoringSnapshot, syncStates, syncSegments, totals, detailStates, installations, installationHealth, rateLimits, signalSnapshots, bounties] = await Promise.all([
+    const [snapshot, scoringSnapshot, syncStates, syncSegments, totals, detailStates, installations, installationHealth, rateLimits, signalSnapshots, bounties, upstreamDrift] = await Promise.all([
       getLatestRegistrySnapshot(c.env),
       getLatestScoringModelSnapshot(c.env),
       listRepoSyncStates(c.env),
@@ -457,6 +478,7 @@ export function createApp() {
       listLatestGitHubRateLimitObservations(c.env, 20),
       listLatestSignalSnapshotsByTarget(c.env),
       listBounties(c.env),
+      loadUpstreamStatus(c.env),
     ]);
     const repoCount = snapshot?.repoCount ?? syncStates.length;
     const signalFidelity = buildSignalFidelity(repoCount, syncStates, syncSegments);
@@ -483,8 +505,14 @@ export function createApp() {
       ...(signalFidelity.rateLimitedRepos.length > 0 ? [`${signalFidelity.rateLimitedRepos.length} repo sync(s) encountered GitHub rate limiting.`] : []),
       ...(signalFidelity.staleRepos.length > 0 ? [`${signalFidelity.staleRepos.length} repo sync(s) are stale.`] : []),
       ...(freshnessSlo.status !== "fresh" ? [`Freshness SLO is ${freshnessSlo.status}; ${freshnessSlo.warnings.length} stale, missing, or blocked signal source(s) need repair.`] : []),
+      ...(upstreamDrift.status === "drift_detected"
+        ? [`Upstream Gittensor ruleset drift detected (${upstreamDrift.highestSeverity ?? "unknown"}): ${Array.isArray(upstreamDrift.affectedAreas) ? upstreamDrift.affectedAreas.join(", ") : "unknown"}.`]
+        : []),
+      ...(upstreamDrift.status === "stale" ? ["Upstream Gittensor ruleset snapshot is stale."] : []),
+      ...(upstreamDrift.status === "unavailable" ? ["Upstream Gittensor ruleset snapshot is unavailable."] : []),
       ...(installationHealth.some((health) => health.status !== "healthy") ? ["One or more GitHub App installations need attention."] : []),
     ];
+    const upstreamLaunchBlocking = upstreamDrift.status === "unavailable" || upstreamDrift.highestSeverity === "high" || upstreamDrift.highestSeverity === "blocking";
     const ready = Boolean(snapshot) && Boolean(c.env.INTERNAL_JOB_TOKEN) && Boolean(c.env.GITTENSORY_API_TOKEN);
     const readyForPublicReview = snapshot
       ? snapshot.repoCount > 0 &&
@@ -494,7 +522,8 @@ export function createApp() {
         missingSyncCount === 0 &&
         failingSyncs.length === 0 &&
         coreSignalFidelity.status === "complete" &&
-        freshnessSlo.launchBlockingCount === 0
+        freshnessSlo.launchBlockingCount === 0 &&
+        !upstreamLaunchBlocking
       : false;
     return c.json({
       status: ready ? "ready" : "needs_attention",
@@ -504,6 +533,7 @@ export function createApp() {
       signalFidelity,
       freshnessSlo,
       coreSignalFidelity,
+      upstreamDrift,
       historyCoverage: coreSignalFidelity.historyCoverage,
       partialRepos: signalFidelity.partialRepos,
       cappedRepos: signalFidelity.cappedRepos,
@@ -991,6 +1021,22 @@ export function createApp() {
   app.post("/v1/internal/jobs/refresh-scoring-model/run", async (c) => {
     return c.json(await refreshScoringModelSnapshot(c.env));
   });
+
+  app.post("/v1/internal/jobs/refresh-upstream-drift", async (c) => {
+    const message: JobMessage = { type: "refresh-upstream-drift", requestedBy: "api" };
+    await c.env.JOBS.send(message);
+    return c.json({ ok: true, status: "queued" }, 202);
+  });
+
+  app.post("/v1/internal/jobs/refresh-upstream-drift/run", async (c) => c.json(await refreshUpstreamDrift(c.env)));
+
+  app.post("/v1/internal/jobs/file-upstream-drift-issues", async (c) => {
+    const message: JobMessage = { type: "file-upstream-drift-issues", requestedBy: "api" };
+    await c.env.JOBS.send(message);
+    return c.json({ ok: true, status: "queued" }, 202);
+  });
+
+  app.post("/v1/internal/jobs/file-upstream-drift-issues/run", async (c) => c.json(await fileUpstreamDriftIssues(c.env)));
 
   app.post("/v1/internal/jobs/build-contributor-evidence", async (c) => {
     const body = await c.req.json().catch(() => ({}));
