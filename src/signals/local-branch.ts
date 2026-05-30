@@ -437,15 +437,7 @@ function observedPullRequestNotes(scenarios: Omit<ObservedPullRequestScenarios, 
 }
 
 function buildGitHubBranchStatus(input: LocalBranchAnalysisInput, pullRequests: PullRequestRecord[], checkSummaries: CheckSummaryRecord[]): GitHubBranchStatus {
-  const branchKeys = new Set([input.headRef, input.branchName].filter((value): value is string => Boolean(value)).map((value) => value.toLowerCase()));
-  const inputBaseRef = normalizeRefForMatch(input.baseRef);
-  const match = pullRequests.find(
-    (pr) =>
-      pr.state === "open" &&
-      sameLogin(pr.authorLogin, input.login) &&
-      sameBaseRef(inputBaseRef, pr.baseRef) &&
-      (Boolean(input.headSha && pr.headSha === input.headSha) || Boolean(pr.headRef && branchKeys.has(pr.headRef.toLowerCase()))),
-  );
+  const match = findCurrentBranchPullRequest(input, pullRequests);
   if (!match) return { source: "cached_github_data", status: "no_pr", notes: ["No open GitHub PR was matched to the current branch metadata."] };
   const reviewDecision = (match.reviewDecision ?? "").toLowerCase();
   const mergeableState = (match.mergeableState ?? "").toLowerCase();
@@ -475,6 +467,18 @@ function buildGitHubBranchStatus(input: LocalBranchAnalysisInput, pullRequests: 
     mergeableState: match.mergeableState,
     notes: githubBranchStatusNotes(status, match),
   };
+}
+
+export function findCurrentBranchPullRequest(input: LocalBranchAnalysisInput, pullRequests: PullRequestRecord[]): PullRequestRecord | undefined {
+  const branchKeys = new Set([input.headRef, input.branchName].filter((value): value is string => Boolean(value)).map((value) => value.toLowerCase()));
+  const inputBaseRef = normalizeRefForMatch(input.baseRef);
+  return pullRequests.find(
+    (pr) =>
+      pr.state === "open" &&
+      sameLogin(pr.authorLogin, input.login) &&
+      sameBaseRef(inputBaseRef, pr.baseRef) &&
+      (Boolean(input.headSha && pr.headSha === input.headSha) || Boolean(pr.headRef && branchKeys.has(pr.headRef.toLowerCase()))),
+  );
 }
 
 function githubBranchStatusNotes(status: GitHubBranchStatus["status"], pr: PullRequestRecord): string[] {

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildLocalBranchAnalysis } from "../../src/signals/local-branch";
+import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../../src/signals/local-branch";
 import type { ContributorOutcomeHistory, ContributorProfile, ContributorScoringProfile, IssueQualityReport } from "../../src/signals/engine";
 import type { RepositoryRecord, ScoringModelSnapshotRecord } from "../../src/types";
 
@@ -569,6 +569,78 @@ describe("local branch analysis", () => {
     });
 
     expect(analysis.githubBranchStatus).toMatchObject({ status: "approved", pullNumber: 31 });
+  });
+
+  it("selects only the current branch PR before status checks are loaded", () => {
+    const pullRequests = [
+      {
+        repoFullName: repo.fullName,
+        number: 40,
+        title: "Closed old branch",
+        state: "closed",
+        authorLogin: "oktofeesh1",
+        headRef: "fix-cache",
+        baseRef: "main",
+        labels: [],
+        linkedIssues: [],
+      },
+      {
+        repoFullName: repo.fullName,
+        number: 41,
+        title: "Wrong contributor",
+        state: "open",
+        authorLogin: "other",
+        headRef: "fix-cache",
+        baseRef: "main",
+        labels: [],
+        linkedIssues: [],
+      },
+      {
+        repoFullName: repo.fullName,
+        number: 42,
+        title: "Current branch",
+        state: "open",
+        authorLogin: "oktofeesh1",
+        headRef: "fix-cache",
+        baseRef: "main",
+        labels: [],
+        linkedIssues: [],
+      },
+      {
+        repoFullName: repo.fullName,
+        number: 43,
+        title: "Other base",
+        state: "open",
+        authorLogin: "oktofeesh1",
+        headRef: "fix-cache",
+        baseRef: "release/1.0",
+        labels: [],
+        linkedIssues: [],
+      },
+    ];
+
+    expect(
+      findCurrentBranchPullRequest(
+        {
+          login: "oktofeesh1",
+          repoFullName: repo.fullName,
+          baseRef: "refs/remotes/origin/main",
+          branchName: "fix-cache",
+        },
+        pullRequests,
+      ),
+    ).toMatchObject({ number: 42 });
+    expect(
+      findCurrentBranchPullRequest(
+        {
+          login: "oktofeesh1",
+          repoFullName: repo.fullName,
+          baseRef: "main",
+          branchName: "missing-branch",
+        },
+        pullRequests,
+      ),
+    ).toBeUndefined();
   });
 
   it("falls back cleanly when no current-branch PR or complete status is cached", () => {
