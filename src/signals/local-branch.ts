@@ -1,6 +1,6 @@
 import type { ScorePreviewInput, ScorePreviewResult } from "../scoring/preview";
 import { buildScorePreview } from "../scoring/preview";
-import type { IssueRecord, PullRequestRecord, RecentMergedPullRequestRecord, RepositoryRecord, ScoringModelSnapshotRecord } from "../types";
+import type { CheckSummaryRecord, IssueRecord, PullRequestRecord, RecentMergedPullRequestRecord, RepositoryRecord, ScoringModelSnapshotRecord } from "../types";
 import { nowIso } from "../utils/json";
 import {
   buildLaneAdvice,
@@ -168,6 +168,7 @@ export function buildLocalBranchAnalysis(args: {
   contributorPullRequests?: PullRequestRecord[] | undefined;
   recentMergedPullRequests?: RecentMergedPullRequestRecord[] | undefined;
   repositories?: RepositoryRecord[] | undefined;
+  checkSummaries?: CheckSummaryRecord[] | undefined;
   profile: ContributorProfile;
   outcomeHistory: ContributorOutcomeHistory;
   scoringSnapshot: ScoringModelSnapshotRecord;
@@ -215,7 +216,7 @@ export function buildLocalBranchAnalysis(args: {
     pullRequests: args.contributorPullRequests ?? args.pullRequests,
     repositories: args.repositories,
   });
-  const githubBranchStatus = buildGitHubBranchStatus(args.input, args.pullRequests);
+  const githubBranchStatus = buildGitHubBranchStatus(args.input, args.pullRequests, args.checkSummaries ?? []);
   const scoreInput = buildLocalScoreInput({
     input: args.input,
     changedFiles,
@@ -433,23 +434,31 @@ function observedPullRequestNotes(scenarios: Omit<ObservedPullRequestScenarios, 
   ];
 }
 
-function buildGitHubBranchStatus(input: LocalBranchAnalysisInput, pullRequests: PullRequestRecord[]): GitHubBranchStatus {
+function buildGitHubBranchStatus(input: LocalBranchAnalysisInput, pullRequests: PullRequestRecord[], checkSummaries: CheckSummaryRecord[]): GitHubBranchStatus {
   const branchKeys = new Set([input.headRef, input.branchName].filter((value): value is string => Boolean(value)).map((value) => value.toLowerCase()));
+  const inputBaseRef = normalizeRefForMatch(input.baseRef);
   const match = pullRequests.find(
     (pr) =>
       pr.state === "open" &&
-      (Boolean(input.headSha && pr.headSha === input.headSha) || Boolean(pr.headRef && branchKeys.has(pr.headRef.toLowerCase()) && sameLogin(pr.authorLogin, input.login))),
+      sameLogin(pr.authorLogin, input.login) &&
+      sameBaseRef(inputBaseRef, pr.baseRef) &&
+      (Boolean(input.headSha && pr.headSha === input.headSha) || Boolean(pr.headRef && branchKeys.has(pr.headRef.toLowerCase()))),
   );
   if (!match) return { source: "cached_github_data", status: "no_pr", notes: ["No open GitHub PR was matched to the current branch metadata."] };
   const reviewDecision = (match.reviewDecision ?? "").toLowerCase();
   const mergeableState = (match.mergeableState ?? "").toLowerCase();
+  const matchedChecks = matchingCheckSummaries(match, checkSummaries);
   const status =
     reviewDecision === "changes_requested"
       ? "needs_author"
+      : mergeableState === "behind"
+        ? "needs_author"
       : match.isDraft
         ? "pending_review"
-        : ["dirty", "blocked", "conflicting", "unstable"].includes(mergeableState)
+        : ["dirty", "blocked", "conflicting", "unstable"].includes(mergeableState) || hasFailingCheck(matchedChecks)
           ? "failing_checks"
+          : hasPendingCheck(matchedChecks)
+            ? "pending_review"
           : mergeableState === "unknown"
             ? "unknown"
             : reviewDecision === "approved" || isApprovedOrMergeableOpenPr(match)
@@ -468,11 +477,43 @@ function buildGitHubBranchStatus(input: LocalBranchAnalysisInput, pullRequests: 
 
 function githubBranchStatusNotes(status: GitHubBranchStatus["status"], pr: PullRequestRecord): string[] {
   if (status === "approved") return [`PR #${pr.number} is approved or mergeable in cached GitHub metadata.`];
+  if (status === "needs_author" && (pr.mergeableState ?? "").toLowerCase() === "behind") return [`PR #${pr.number} is behind its base branch in cached GitHub metadata.`];
   if (status === "needs_author") return [`PR #${pr.number} has requested changes in cached GitHub metadata.`];
   if (status === "failing_checks") return [`PR #${pr.number} has failing, blocked, or conflicting GitHub status metadata.`];
   if (status === "pending_review" && pr.isDraft) return [`PR #${pr.number} is still a draft in cached GitHub metadata.`];
   if (status === "unknown") return [`PR #${pr.number} has incomplete GitHub status metadata; refresh checks before relying on it.`];
   return [`PR #${pr.number} is open but not yet approved or clearly blocked in cached GitHub metadata.`];
+}
+
+function normalizeRefForMatch(ref: string | null | undefined): string | undefined {
+  const value = ref?.trim().toLowerCase();
+  if (!value) return undefined;
+  return value.replace(/^refs\/heads\//, "").replace(/^refs\/remotes\/[^/]+\//, "").replace(/^(origin|upstream)\//, "");
+}
+
+function sameBaseRef(inputBaseRef: string | undefined, prBaseRef: string | null | undefined): boolean {
+  if (!inputBaseRef) return true;
+  return normalizeRefForMatch(prBaseRef) === inputBaseRef;
+}
+
+function matchingCheckSummaries(pr: PullRequestRecord, checkSummaries: CheckSummaryRecord[]): CheckSummaryRecord[] {
+  return checkSummaries.filter(
+    (check) =>
+      (check.pullNumber !== undefined && check.pullNumber !== null && check.pullNumber === pr.number) ||
+      (check.pullNumber === undefined || check.pullNumber === null ? Boolean(pr.headSha && check.headSha === pr.headSha) : false),
+  );
+}
+
+function hasFailingCheck(checks: CheckSummaryRecord[]): boolean {
+  return checks.some((check) => ["failure", "failed", "timed_out", "cancelled", "action_required", "startup_failure"].includes((check.conclusion ?? check.status).toLowerCase()));
+}
+
+function hasPendingCheck(checks: CheckSummaryRecord[]): boolean {
+  return checks.some((check) => {
+    const status = check.status.toLowerCase();
+    const conclusion = check.conclusion?.toLowerCase();
+    return !conclusion && !["completed", "success"].includes(status);
+  });
 }
 
 function isMaintainerAuthoredPr(pr: PullRequestRecord, repo: RepositoryRecord | undefined, login: string): boolean {

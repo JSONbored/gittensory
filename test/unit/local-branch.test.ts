@@ -360,14 +360,16 @@ describe("local branch analysis", () => {
         login: "oktofeesh1",
         repoFullName: repo.fullName,
         branchName: "fix-cache",
+        headSha: "shared-sha",
         changedFiles: [{ path: "src/cache.ts", additions: 12, deletions: 1, status: "modified" }],
         validation: [{ command: "npm test -- cache", status: "passed" }],
       },
       repo,
       issues: [],
       pullRequests: [
+        { ...basePr, number: 19, title: "Wrong contributor same SHA", authorLogin: "other", headSha: "shared-sha", reviewDecision: "APPROVED", mergeableState: "CLEAN" },
         { ...basePr, number: 20, title: "Wrong contributor same branch", authorLogin: "other", reviewDecision: "APPROVED", mergeableState: "CLEAN" },
-        { ...basePr, number: 21, title: "Needs author", authorLogin: "oktofeesh1", reviewDecision: "CHANGES_REQUESTED", mergeableState: "CLEAN" },
+        { ...basePr, number: 21, title: "Needs author", authorLogin: "oktofeesh1", headSha: "shared-sha", reviewDecision: "CHANGES_REQUESTED", mergeableState: "CLEAN" },
       ],
       profile,
       outcomeHistory,
@@ -397,6 +399,175 @@ describe("local branch analysis", () => {
 
     expect(draft.githubBranchStatus).toMatchObject({ status: "pending_review", pullNumber: 22 });
     expect(draft.githubBranchStatus.notes.join(" ")).toMatch(/draft/i);
+  });
+
+  it("requires base-ref matches and check summaries before approving current-branch status", () => {
+    const basePr = {
+      repoFullName: repo.fullName,
+      state: "open",
+      authorLogin: "oktofeesh1",
+      authorAssociation: "CONTRIBUTOR",
+      headSha: "shared-sha",
+      headRef: "fix-cache",
+      reviewDecision: "APPROVED",
+      mergeableState: "CLEAN",
+      labels: ["bug"],
+      linkedIssues: [7],
+    };
+    const failingChecks = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        baseRef: "origin/main",
+        branchName: "fix-cache",
+        headSha: "shared-sha",
+        changedFiles: [{ path: "src/cache.ts", additions: 12, deletions: 1, status: "modified" }],
+        validation: [{ command: "npm test -- cache", status: "passed" }],
+      },
+      repo,
+      issues: [],
+      pullRequests: [
+        { ...basePr, number: 23, title: "Release branch status", baseRef: "release/1.0" },
+        { ...basePr, number: 24, title: "Main branch status", baseRef: "main" },
+      ],
+      checkSummaries: [
+        {
+          id: "check-24",
+          repoFullName: repo.fullName,
+          pullNumber: 24,
+          headSha: "shared-sha",
+          name: "validate",
+          status: "completed",
+          conclusion: "failure",
+          payload: {},
+        },
+      ],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    expect(failingChecks.githubBranchStatus).toMatchObject({ status: "failing_checks", pullNumber: 24 });
+    expect(failingChecks.localFindings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "github_status_needs_work" })]));
+
+    const pendingChecks = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        baseRef: "origin/main",
+        branchName: "fix-cache",
+        headSha: "shared-sha",
+        changedFiles: [{ path: "src/cache.ts", additions: 12, deletions: 1, status: "modified" }],
+        validation: [{ command: "npm test -- cache", status: "passed" }],
+      },
+      repo,
+      issues: [],
+      pullRequests: [{ ...basePr, number: 26, title: "Main branch status", baseRef: "main" }],
+      checkSummaries: [
+        {
+          id: "check-26",
+          repoFullName: repo.fullName,
+          pullNumber: 26,
+          headSha: "shared-sha",
+          name: "validate",
+          status: "in_progress",
+          payload: {},
+        },
+      ],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    expect(pendingChecks.githubBranchStatus).toMatchObject({ status: "pending_review", pullNumber: 26 });
+
+    const behind = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        baseRef: "refs/remotes/origin/main",
+        branchName: "fix-cache",
+        changedFiles: [{ path: "src/cache.ts", additions: 12, deletions: 1, status: "modified" }],
+        validation: [{ command: "npm test -- cache", status: "passed" }],
+      },
+      repo,
+      issues: [],
+      pullRequests: [{ ...basePr, number: 25, title: "Behind branch", baseRef: "refs/heads/main", headSha: undefined, mergeableState: "BEHIND" }],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    expect(behind.githubBranchStatus).toMatchObject({ status: "needs_author", pullNumber: 25 });
+    expect(behind.githubBranchStatus.notes.join(" ")).toMatch(/behind/i);
+  });
+
+  it("does not apply another open PR's check summary just because the head SHA matches", () => {
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        baseRef: "main",
+        branchName: "shared-head",
+        headSha: "shared-sha",
+        changedFiles: [{ path: "src/checks.ts", additions: 10, deletions: 0, status: "modified" }],
+      },
+      repo,
+      issues: [],
+      pullRequests: [
+        {
+          repoFullName: repo.fullName,
+          number: 31,
+          title: "Current branch",
+          state: "open",
+          authorLogin: "oktofeesh1",
+          authorAssociation: "CONTRIBUTOR",
+          headSha: "shared-sha",
+          headRef: "shared-head",
+          baseRef: "main",
+          reviewDecision: "APPROVED",
+          mergeableState: "CLEAN",
+          labels: [],
+          linkedIssues: [],
+        },
+        {
+          repoFullName: repo.fullName,
+          number: 32,
+          title: "Other base with same SHA",
+          state: "open",
+          authorLogin: "oktofeesh1",
+          authorAssociation: "CONTRIBUTOR",
+          headSha: "shared-sha",
+          headRef: "shared-head",
+          baseRef: "release/1.0",
+          reviewDecision: "APPROVED",
+          mergeableState: "CLEAN",
+          labels: [],
+          linkedIssues: [],
+        },
+      ],
+      checkSummaries: [
+        {
+          id: "check-32",
+          repoFullName: repo.fullName,
+          pullNumber: 32,
+          headSha: "shared-sha",
+          name: "validate",
+          status: "completed",
+          conclusion: "failure",
+          payload: {},
+        },
+      ],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    expect(analysis.githubBranchStatus).toMatchObject({ status: "approved", pullNumber: 31 });
   });
 
   it("falls back cleanly when no current-branch PR or complete status is cached", () => {
