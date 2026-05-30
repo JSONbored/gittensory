@@ -82,6 +82,7 @@ import {
 } from "../services/decision-pack";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
+import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
 import {
   buildBountyAdvisory,
   buildBurdenForecast,
@@ -727,6 +728,13 @@ export function createApp() {
     return c.json(reviewability);
   });
 
+  app.get("/v1/repos/:owner/:repo/outcome-patterns", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const response = await buildRepoOutcomePatternsResponse(c.env, fullName);
+    if (!response) return c.json({ error: "repo_outcome_patterns_not_found", repoFullName: fullName }, 404);
+    return c.json(response);
+  });
+
   app.get("/v1/contributors/:login/profile", async (c) => {
     const login = c.req.param("login");
     const [github, pullRequests, issues, cachedRepoStats, gittensorSnapshot] = await Promise.all([
@@ -1221,6 +1229,13 @@ function withDataQualityWarning(dataQuality: DataQuality, warning: string): Data
 
 async function buildIssueQualityResponse(env: Env, fullName: string) {
   return loadOrComputeIssueQualityResponse(env, fullName);
+}
+
+async function buildRepoOutcomePatternsResponse(env: Env, fullName: string) {
+  const response = await loadOrComputeRepoOutcomePatternsResponse(env, fullName);
+  if (!response) return null;
+  const dataQuality = await loadRepoDataQuality(env, fullName);
+  return attachDataQuality(response as unknown as Record<string, unknown>, dataQuality);
 }
 
 async function buildRegistrationReadinessResponse(env: Env, fullName: string) {

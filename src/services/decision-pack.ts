@@ -26,10 +26,13 @@ import {
   type ContributorOutcomeHistory,
   type ContributorProfile,
   type IssueQualityReport,
+  type OutcomePattern,
+  type RepoOutcomePatterns,
   type RoleContext,
 } from "../signals/engine";
 import { buildSignalFidelity } from "../signals/data-quality";
 import { loadIssueQualityReportMap } from "./issue-quality";
+import { loadRepoOutcomePatternsMap } from "./repo-outcome-patterns";
 import type { ContributorRepoStatRecord, JsonValue, RepositoryRecord, RepoGithubTotalsSnapshotRecord, RepoSyncSegmentRecord, RepoSyncStateRecord, SignalSnapshotRecord } from "../types";
 import { nowIso } from "../utils/json";
 
@@ -116,11 +119,20 @@ export type RepoDecision = {
   languageMatch: LanguageMatch;
   labelFit: string[];
   scoreBlockers: ScoreBlocker[];
+  repoOutcomePatterns?: RepoOutcomeSummary | undefined;
   riskReasons: string[];
   whyThisHelps: string[];
   nextActions: string[];
   publicNextActions: string[];
   issueQuality?: IssueQualitySummary | undefined;
+};
+
+export type RepoOutcomeSummary = {
+  summary: string;
+  outsideContributorMergeRate: number;
+  sampleSize: number;
+  successPatterns: OutcomePattern[];
+  riskPatterns: OutcomePattern[];
 };
 
 export type DecisionAction = {
@@ -253,7 +265,10 @@ export async function buildAndPersistContributorDecisionPack(env: Env, login: st
     getOrCreateScoringModelSnapshot(env),
   ]);
   const repoStats = authoritativeContributorRepoStats(gittensorSnapshot, cachedRepoStats);
-  const issueQualityByRepo = await loadIssueQualityReportMap(env, repositories);
+  const [issueQualityByRepo, repoOutcomePatternsByRepo] = await Promise.all([
+    loadIssueQualityReportMap(env, repositories),
+    loadRepoOutcomePatternsMap(env, repositories),
+  ]);
   const profile = buildContributorProfile(login, github, contributorPullRequests, contributorIssues, repoStats, gittensorSnapshot);
   const outcomeHistory = buildContributorOutcomeHistory({
     login,
@@ -278,6 +293,7 @@ export async function buildAndPersistContributorDecisionPack(env: Env, login: st
     contributorPullRequests,
     contributorIssues,
     issueQualityByRepo,
+    repoOutcomePatternsByRepo,
   });
 
   await upsertContributorEvidence(env, {
@@ -327,6 +343,7 @@ function buildContributorDecisionPack(args: {
   contributorPullRequests: Parameters<typeof buildRoleContext>[0]["pullRequests"];
   contributorIssues: Parameters<typeof buildRoleContext>[0]["issues"];
   issueQualityByRepo?: Map<string, IssueQualityReport> | undefined;
+  repoOutcomePatternsByRepo?: Map<string, RepoOutcomePatterns> | undefined;
 }): ContributorDecisionPack {
   const registeredRepositories = args.repositories.filter((repo) => repo.isRegistered);
   const syncByRepo = new Map(args.syncStates.map((state) => [state.repoFullName.toLowerCase(), state]));
@@ -360,6 +377,7 @@ function buildContributorDecisionPack(args: {
         languageSet,
         labelHistory,
         issueQuality: issueQualityByRepo.get(key),
+        repoOutcomePatterns: args.repoOutcomePatternsByRepo?.get(key),
       });
     })
     .sort((left, right) => right.priorityScore - left.priorityScore || left.repoFullName.localeCompare(right.repoFullName));
@@ -409,6 +427,7 @@ function buildRepoDecision(args: {
   languageSet?: Set<string> | undefined;
   labelHistory?: Set<string> | undefined;
   issueQuality?: IssueQualityReport | undefined;
+  repoOutcomePatterns?: RepoOutcomePatterns | undefined;
 }): RepoDecision {
   const lane = buildLaneAdvice(args.repo, args.repo.fullName);
   const config = args.repo.registryConfig;
@@ -458,6 +477,9 @@ function buildRepoDecision(args: {
     labelFit,
     issueQuality,
   };
+  const repoOutcomePatterns = summarizeRepoOutcomePatterns(args.repoOutcomePatterns);
+  const outcomeRiskLines = args.roleContext.maintainerLane ? [] : (repoOutcomePatterns?.riskPatterns ?? []).slice(0, 2).map((pattern) => pattern.detail);
+  const outcomeSuccessLines = recommendation === "pursue" ? (repoOutcomePatterns?.successPatterns ?? []).slice(0, 1).map((pattern) => pattern.detail) : [];
   return {
     repoFullName: args.repo.fullName,
     recommendation,
@@ -470,11 +492,24 @@ function buildRepoDecision(args: {
     languageMatch,
     labelFit,
     scoreBlockers: blockers,
-    riskReasons,
-    whyThisHelps: whyThisHelpsFor(recommendation, copyContext),
+    repoOutcomePatterns,
+    riskReasons: [...new Set([...riskReasons, ...outcomeRiskLines])],
+    whyThisHelps: [...new Set([...whyThisHelpsFor(recommendation, copyContext), ...outcomeSuccessLines])],
     nextActions: nextActionsFor(recommendation, copyContext),
     publicNextActions: publicNextActionsFor(recommendation, copyContext),
     issueQuality,
+  };
+}
+
+function summarizeRepoOutcomePatterns(patterns: RepoOutcomePatterns | undefined): RepoOutcomeSummary | undefined {
+  if (!patterns) return undefined;
+  if (patterns.sampleSize < 1 && patterns.successPatterns.length === 0 && patterns.riskPatterns.length === 0) return undefined;
+  return {
+    summary: patterns.summary,
+    outsideContributorMergeRate: patterns.outsideContributorMergeRate,
+    sampleSize: patterns.sampleSize,
+    successPatterns: patterns.successPatterns.slice(0, 3),
+    riskPatterns: patterns.riskPatterns.slice(0, 3),
   };
 }
 
