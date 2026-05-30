@@ -25,7 +25,7 @@ export async function loadOrComputeIssueQualityResponse(env: Env, fullName: stri
   const repo = await getRepository(env, fullName);
   if (!repo) return null;
   const [issues, pullRequests, recentMergedPullRequests] = await Promise.all([listIssueSignalSample(env, fullName), listOpenPullRequests(env, fullName), listRecentMergedPullRequests(env, fullName)]);
-  const report = buildIssueQualityReport(repo, issues, pullRequests, fullName, undefined, recentMergedPullRequests);
+  const report = buildIssueQualityReport(repo, issues, pullRequests, fullName, [], undefined, recentMergedPullRequests);
   return {
     status: "ready",
     source: "computed",
