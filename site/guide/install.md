@@ -1,6 +1,6 @@
 # Install
 
-Start here when you want Gittensory available from Codex, Claude Desktop, Cursor, or another stdio MCP client.
+Start here when you want Gittensory available from Codex, Claude Desktop, or another stdio MCP client.
 
 ## 3-Step Quick Start
 
@@ -29,7 +29,7 @@ Print a client snippet without editing local config files:
 ```sh
 gittensory-mcp init-client --print codex
 gittensory-mcp init-client --print claude
-gittensory-mcp init-client --print cursor
+gittensory-mcp init-client --print mcp
 ```
 
 If a client cannot find `gittensory-mcp`, use an absolute command path in that client’s MCP config.

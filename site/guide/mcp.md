@@ -22,7 +22,7 @@ Scoreability projections and reward/risk reasoning are private MCP/API output. P
 ```sh
 gittensory-mcp init-client --print codex
 gittensory-mcp init-client --print claude
-gittensory-mcp init-client --print cursor
+gittensory-mcp init-client --print mcp
 ```
 
 These commands print config only. They do not mutate your local client files.
@@ -35,20 +35,7 @@ command = "gittensory-mcp"
 args = ["--stdio"]
 ```
 
-## Claude Desktop
-
-```json
-{
-  "mcpServers": {
-    "gittensory": {
-      "command": "gittensory-mcp",
-      "args": ["--stdio"]
-    }
-  }
-}
-```
-
-## Cursor
+## Claude Desktop and other JSON MCP hosts
 
 ```json
 {

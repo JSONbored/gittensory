@@ -25,7 +25,7 @@ Gittensory is not a Gittensor frontend, not a public leaderboard, and not an aut
 
 ## AI Posture
 
-Gittensory's core decisions are deterministic. MCP users normally bring their own AI harness through Codex, Claude, Cursor, or another MCP client, while Gittensory supplies the structured Gittensor context those agents need.
+Gittensory's core decisions are deterministic. MCP users normally bring their own AI harness through Codex, Claude, or another stdio MCP client, while Gittensory supplies the structured Gittensor context those agents need.
 
 Cloudflare Workers AI is optional and disabled by default. When enabled, it can rewrite compact deterministic signal bundles into clearer prose, but it never receives source contents and all public output still passes through Gittensory's sanitizer.
 
@@ -66,7 +66,7 @@ Print client snippets:
 ```sh
 gittensory-mcp init-client --print codex
 gittensory-mcp init-client --print claude
-gittensory-mcp init-client --print cursor
+gittensory-mcp init-client --print mcp
 ```
 
 Generic stdio command:

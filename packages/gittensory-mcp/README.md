@@ -35,7 +35,7 @@ gittensory-mcp changelog
 gittensory-mcp doctor
 gittensory-mcp init-client --print codex
 gittensory-mcp init-client --print claude
-gittensory-mcp init-client --print cursor
+gittensory-mcp init-client --print mcp
 gittensory-mcp analyze-branch --login jsonbored --json
 gittensory-mcp preflight --login jsonbored --json
 gittensory-mcp agent plan --login jsonbored --json
