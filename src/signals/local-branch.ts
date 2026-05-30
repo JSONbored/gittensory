@@ -438,21 +438,23 @@ function buildGitHubBranchStatus(input: LocalBranchAnalysisInput, pullRequests: 
   const match = pullRequests.find(
     (pr) =>
       pr.state === "open" &&
-      (Boolean(input.headSha && pr.headSha === input.headSha) || Boolean(pr.headRef && branchKeys.has(pr.headRef.toLowerCase()))),
+      (Boolean(input.headSha && pr.headSha === input.headSha) || Boolean(pr.headRef && branchKeys.has(pr.headRef.toLowerCase()) && sameLogin(pr.authorLogin, input.login))),
   );
   if (!match) return { source: "cached_github_data", status: "no_pr", notes: ["No open GitHub PR was matched to the current branch metadata."] };
   const reviewDecision = (match.reviewDecision ?? "").toLowerCase();
   const mergeableState = (match.mergeableState ?? "").toLowerCase();
   const status =
-    reviewDecision === "approved" || isApprovedOrMergeableOpenPr(match)
-      ? "approved"
-      : reviewDecision === "changes_requested"
-        ? "needs_author"
+    reviewDecision === "changes_requested"
+      ? "needs_author"
+      : match.isDraft
+        ? "pending_review"
         : ["dirty", "blocked", "conflicting", "unstable"].includes(mergeableState)
           ? "failing_checks"
           : mergeableState === "unknown"
             ? "unknown"
-            : "pending_review";
+            : reviewDecision === "approved" || isApprovedOrMergeableOpenPr(match)
+              ? "approved"
+              : "pending_review";
   return {
     source: "cached_github_data",
     status,
@@ -468,6 +470,7 @@ function githubBranchStatusNotes(status: GitHubBranchStatus["status"], pr: PullR
   if (status === "approved") return [`PR #${pr.number} is approved or mergeable in cached GitHub metadata.`];
   if (status === "needs_author") return [`PR #${pr.number} has requested changes in cached GitHub metadata.`];
   if (status === "failing_checks") return [`PR #${pr.number} has failing, blocked, or conflicting GitHub status metadata.`];
+  if (status === "pending_review" && pr.isDraft) return [`PR #${pr.number} is still a draft in cached GitHub metadata.`];
   if (status === "unknown") return [`PR #${pr.number} has incomplete GitHub status metadata; refresh checks before relying on it.`];
   return [`PR #${pr.number} is open but not yet approved or clearly blocked in cached GitHub metadata.`];
 }

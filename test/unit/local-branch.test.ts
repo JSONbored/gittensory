@@ -346,6 +346,59 @@ describe("local branch analysis", () => {
     expect(analysis.scenarioScorePreview.afterApprovedPrsMerge?.gates.credibilityObserved).toBeGreaterThanOrEqual(0.8);
   });
 
+  it("prioritizes requested changes, draft state, and contributor ownership for current-branch status", () => {
+    const basePr = {
+      repoFullName: repo.fullName,
+      state: "open",
+      authorAssociation: "CONTRIBUTOR",
+      headRef: "fix-cache",
+      labels: ["bug"],
+      linkedIssues: [7],
+    };
+    const changesRequested = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        branchName: "fix-cache",
+        changedFiles: [{ path: "src/cache.ts", additions: 12, deletions: 1, status: "modified" }],
+        validation: [{ command: "npm test -- cache", status: "passed" }],
+      },
+      repo,
+      issues: [],
+      pullRequests: [
+        { ...basePr, number: 20, title: "Wrong contributor same branch", authorLogin: "other", reviewDecision: "APPROVED", mergeableState: "CLEAN" },
+        { ...basePr, number: 21, title: "Needs author", authorLogin: "oktofeesh1", reviewDecision: "CHANGES_REQUESTED", mergeableState: "CLEAN" },
+      ],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    expect(changesRequested.githubBranchStatus).toMatchObject({ status: "needs_author", pullNumber: 21 });
+    expect(changesRequested.localFindings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "github_status_needs_work" })]));
+
+    const draft = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        branchName: "draft-cache",
+        changedFiles: [{ path: "src/cache.ts", additions: 12, deletions: 1, status: "modified" }],
+        validation: [{ command: "npm test -- cache", status: "passed" }],
+      },
+      repo,
+      issues: [],
+      pullRequests: [{ ...basePr, number: 22, title: "Draft clean branch", authorLogin: "oktofeesh1", headRef: "draft-cache", reviewDecision: "APPROVED", mergeableState: "CLEAN", isDraft: true }],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    expect(draft.githubBranchStatus).toMatchObject({ status: "pending_review", pullNumber: 22 });
+    expect(draft.githubBranchStatus.notes.join(" ")).toMatch(/draft/i);
+  });
+
   it("falls back cleanly when no current-branch PR or complete status is cached", () => {
     const noPr = buildLocalBranchAnalysis({
       input: {
