@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { DurableObject } from "cloudflare:workers";
 import { recordAuditEvent } from "../db/repositories";
-import { hashToken } from "./security";
+import { extractBearerToken, hashToken } from "./security";
 
 export type RateLimitClass = "strict" | "normal" | "expensive";
 
@@ -110,7 +110,7 @@ export function routeClassForPath(path: string): RateLimitClass {
 }
 
 async function rateLimitKey(c: Context<{ Bindings: Env }>, routeClass: RateLimitClass): Promise<string> {
-  const token = c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
+  const token = extractBearerToken(c.req.header("authorization"));
   const ip = c.req.header("cf-connecting-ip") ?? c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown-ip";
   const pathGroup = c.req.path.replace(/\/\d+(?=\/|$)/g, "/:number").replace(/\/[^/]+\/[^/]+\/pulls\//, "/:owner/:repo/pulls/");
   const identity = token ? `token:${await hashToken(token)}` : `ip:${await hashToken(ip)}`;
@@ -118,7 +118,7 @@ async function rateLimitKey(c: Context<{ Bindings: Env }>, routeClass: RateLimit
 }
 
 async function actorHint(c: Context<{ Bindings: Env }>): Promise<string> {
-  const token = c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
+  const token = extractBearerToken(c.req.header("authorization"));
   if (!token) return "anonymous";
   return `token:${(await hashToken(token)).slice(0, 16)}`;
 }

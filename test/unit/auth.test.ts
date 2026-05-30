@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSessionFromGitHubToken, pollGitHubDeviceFlow, startGitHubDeviceFlow } from "../../src/auth/github-oauth";
 import { enforceRateLimit, RateLimiter, routeClassForPath } from "../../src/auth/rate-limit";
-import { authenticatePrivateToken, createSessionForGitHubUser, revokeSession } from "../../src/auth/security";
+import { authenticatePrivateToken, createSessionForGitHubUser, extractBearerToken, hashToken, revokeSession } from "../../src/auth/security";
 import { createTestEnv } from "../helpers/d1";
 
 describe("private-beta auth and rate limiting", () => {
@@ -66,6 +66,13 @@ describe("private-beta auth and rate limiting", () => {
     expect(routeClassForPath("/v1/internal/jobs/generate-signal-snapshots")).toBe("expensive");
     expect(routeClassForPath("/v1/internal/jobs/build-contributor-decision-packs")).toBe("expensive");
     expect(routeClassForPath("/v1/repos")).toBe("normal");
+  });
+
+  it("hashes trimmed bearer tokens for rate-limit identity", async () => {
+    const padded = extractBearerToken("Bearer  session-token  ");
+    const plain = extractBearerToken("Bearer session-token");
+    expect(padded).toBe(plain);
+    expect(await hashToken(padded!)).toEqual(await hashToken(plain!));
   });
 
   it("enforces route limits with session and IP keys plus retry headers", async () => {
