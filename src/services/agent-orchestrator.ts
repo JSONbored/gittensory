@@ -305,7 +305,7 @@ async function analyzeLocalBranch(env: Env, input: LocalBranchAnalysisInput): Pr
     ]);
   const repoStats = contributorRepoStatsFromGittensor(gittensorSnapshot).length > 0 ? contributorRepoStatsFromGittensor(gittensorSnapshot) : cachedRepoStats;
   const profile = buildContributorProfile(input.login, github, contributorPullRequests, contributorIssues, repoStats, gittensorSnapshot);
-  const outcomeHistory = buildContributorOutcomeHistory({ login: input.login, profile, repositories, pullRequests: contributorPullRequests, issues: contributorIssues, repoStats });
+  const outcomeHistory = buildContributorOutcomeHistory({ login: input.login, profile, repositories, pullRequests: contributorPullRequests, issues: contributorIssues, repoStats, cachedRepoStats });
   const fit = buildContributorFit(profile, repositories, [], [], syncStates, repoStats);
   const scoringProfile = buildContributorScoringProfile({ login: input.login, fit, scoringSnapshot });
   const checkSummaries = await loadCheckSummariesForPullRequests(env, input.repoFullName, pullRequests);

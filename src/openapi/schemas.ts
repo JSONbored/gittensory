@@ -913,6 +913,7 @@ export const IssueQualityReportSchema = z
       z.object({
         number: z.number(),
         title: z.string(),
+        lifecycle: z.enum(["open", "closed_not_solved", "solved", "valid_solved", "stale", "duplicate", "invalid"]).optional(),
         status: z.enum(["ready", "needs_proof", "hold", "do_not_use"]),
         score: z.number(),
         reasons: z.array(z.string()),
@@ -970,11 +971,58 @@ export const RoleContextSchema = z
   })
   .openapi("RoleContext");
 
+const ContributorOutcomeCountsSchema = z.object({
+  pullRequests: z.number(),
+  mergedPullRequests: z.number(),
+  openPullRequests: z.number(),
+  closedPullRequests: z.number(),
+  issues: z.number(),
+  openIssues: z.number(),
+  closedIssues: z.number(),
+  solvedIssues: z.number(),
+  validSolvedIssues: z.number(),
+});
+
+const ContributorOutcomeTotalsSchema = ContributorOutcomeCountsSchema.extend({
+  closedPullRequestRate: z.number(),
+  credibility: z.number(),
+  issueCredibility: z.number(),
+});
+
+const ContributorReconciliationReportSchema = z.object({
+  login: z.string(),
+  generatedAt: z.string(),
+  source: z.enum(["gittensor_api", "github_cache"]),
+  officialAuthoritative: z.boolean(),
+  totals: z.object({
+    official: ContributorOutcomeTotalsSchema.optional(),
+    cached: ContributorOutcomeTotalsSchema,
+    effective: ContributorOutcomeTotalsSchema,
+  }),
+  repos: z.array(
+    z.object({
+      repoFullName: z.string(),
+      maintainerLane: z.boolean(),
+      official: ContributorOutcomeCountsSchema.optional(),
+      cached: ContributorOutcomeCountsSchema,
+      effective: ContributorOutcomeCountsSchema,
+      discrepancyReasons: z.array(z.string()),
+      freshness: z.object({
+        officialUpdatedAt: z.string().optional(),
+        cachedLastActivityAt: z.string().optional(),
+      }),
+    }),
+  ),
+  findings: z.array(FindingSchema),
+  summary: z.string(),
+});
+
 export const ContributorOutcomeHistorySchema = z
   .object({
     login: z.string(),
     generatedAt: z.string(),
     source: z.enum(["gittensor_api", "github_cache"]),
+    reconciliation: ContributorReconciliationReportSchema.optional(),
     totals: z.record(z.number()),
     repoOutcomes: z.array(z.record(z.unknown())),
     successPatterns: z.array(z.record(z.unknown())),

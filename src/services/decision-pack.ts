@@ -295,6 +295,7 @@ export async function buildAndPersistContributorDecisionPack(env: Env, login: st
     pullRequests: contributorPullRequests,
     issues: contributorIssues,
     repoStats,
+    cachedRepoStats,
   });
   const fit = buildContributorFit(profile, repositories, allIssues, allPullRequests, syncStates, repoStats, bounties, issueQualityByRepo);
   const scoringProfile = buildContributorScoringProfile({ login, fit, scoringSnapshot });
