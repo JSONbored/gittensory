@@ -976,6 +976,60 @@ describe("decision-pack service", () => {
     expect(packA.repoDecisions.map((d) => d.nextActions)).toEqual(packB.repoDecisions.map((d) => d.nextActions));
     expect(packA.topActions.map((a) => `${a.actionKind}:${a.repoFullName}`)).toEqual(packB.topActions.map((a) => `${a.actionKind}:${a.repoFullName}`));
   });
+
+  it("threads a maintainer focus manifest into RepoDecision without leaking maintainer-private notes", async () => {
+    const { parseFocusManifest } = await import("../../src/signals/focus-manifest");
+    const manifest = parseFocusManifest({
+      source: "repo_file",
+      wantedPaths: ["src/"],
+      blockedPaths: ["migrations/"],
+      preferredLabels: ["bug"],
+      linkedIssuePolicy: "required",
+      issueDiscoveryPolicy: "discouraged",
+      maintainerNotes: ["Internal: ping @owner before touching the queue processor."],
+      publicNotes: ["Prefer small, focused PRs."],
+    });
+    const decision = __decisionPackInternals.buildRepoDecision({
+      repo: repoWithLabels("owner/manifested", 0.04, 0, { bug: 1 }),
+      roleContext: { maintainerLane: false } as any,
+      outcome: { mergedPullRequests: 1, openPullRequests: 0, closedPullRequestRate: 0, credibility: 1 } as any,
+      syncState: { primaryLanguage: "TypeScript" } as any,
+      languageSet: new Set(["typescript"]),
+      labelHistory: new Set(["bug"]),
+      focusManifest: manifest,
+    });
+    expect(decision.manifestSummary).toMatchObject({
+      present: true,
+      source: "repo_file",
+      linkedIssuePolicy: "required",
+      issueDiscoveryPolicy: "discouraged",
+      wantedPathCount: 1,
+      blockedPathCount: 1,
+      preferredLabels: ["bug"],
+      publicNotes: ["Prefer small, focused PRs."],
+    });
+    expect(decision.riskReasons.join(" ")).toMatch(/maintainer focus manifest blocks/i);
+    expect(decision.whyThisHelps.join(" ")).toMatch(/wanted path/i);
+    expect(decision.publicNextActions.join(" ")).toMatch(/maintainer requires linked issues/i);
+    expect(decision.publicNextActions.join(" ")).toMatch(/Prefer small, focused PRs/);
+    // Privacy boundary: maintainer-private notes must not appear anywhere on RepoDecision.
+    const decisionJson = JSON.stringify(decision);
+    expect(decisionJson).not.toMatch(/ping @owner/);
+    expect(decisionJson).not.toMatch(/Internal:/);
+    expect(noStructuralCountLeak(decision.publicNextActions)).toBe(true);
+  });
+
+  it("omits manifestSummary when no manifest is configured", () => {
+    const decision = __decisionPackInternals.buildRepoDecision({
+      repo: repoWithLabels("owner/no-manifest", 0.04, 0, { bug: 1 }),
+      roleContext: { maintainerLane: false } as any,
+      outcome: { mergedPullRequests: 1, openPullRequests: 0, closedPullRequestRate: 0, credibility: 1 } as any,
+      syncState: { primaryLanguage: "TypeScript" } as any,
+      languageSet: new Set(["typescript"]),
+      labelHistory: new Set(["bug"]),
+    });
+    expect(decision.manifestSummary).toBeUndefined();
+  });
 });
 
 function noStructuralCountLeak(lines: string[]): boolean {
