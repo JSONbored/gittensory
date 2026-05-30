@@ -107,7 +107,7 @@ import {
 } from "../signals/engine";
 import { attachDataQuality, buildCoreSignalFidelity, buildFreshnessSloReport, buildRepoDataQuality, buildSignalFidelity } from "../signals/data-quality";
 import { buildPullRequestReviewability } from "../signals/reward-risk";
-import { buildLocalBranchAnalysis } from "../signals/local-branch";
+import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { buildRepoSettingsPreview } from "../signals/settings-preview";
 import { fileUpstreamDriftIssues, loadUpstreamStatus, refreshUpstreamDrift } from "../upstream/ruleset";
 import type { BountyLifecycleEventRecord, ContributorEvidenceRecord, DataQuality, JobMessage, JsonValue, RepoSyncSegmentRecord } from "../types";
@@ -823,7 +823,7 @@ export function createApp() {
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: parsed.data.login, fit, scoringSnapshot: snapshot });
-    const checkSummaries = await loadCheckSummariesForPullRequests(c.env, parsed.data.repoFullName, pullRequests);
+    const checkSummaries = await loadCheckSummariesForPullRequests(c.env, parsed.data.repoFullName, parsed.data, pullRequests);
     const analysis = buildLocalBranchAnalysis({
       input: parsed.data,
       repo,
@@ -1394,9 +1394,9 @@ async function loadContributorFastContext(env: Env, login: string) {
   };
 }
 
-async function loadCheckSummariesForPullRequests(env: Env, repoFullName: string, pullRequests: Array<{ number: number; state?: string | null | undefined }>) {
-  const openPulls = pullRequests.filter((pr) => pr.state === "open");
-  return (await Promise.all(openPulls.map((pr) => listCheckSummaries(env, repoFullName, pr.number)))).flat();
+async function loadCheckSummariesForPullRequests(env: Env, repoFullName: string, input: Parameters<typeof findCurrentBranchPullRequest>[0], pullRequests: Parameters<typeof findCurrentBranchPullRequest>[1]) {
+  const currentPullRequest = findCurrentBranchPullRequest(input, pullRequests);
+  return currentPullRequest ? listCheckSummaries(env, repoFullName, currentPullRequest.number) : [];
 }
 
 async function loadRepoDataQuality(env: Env, fullName: string) {

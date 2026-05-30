@@ -55,7 +55,7 @@ import {
   buildRegistryChangeReport,
   buildRoleContext,
 } from "../signals/engine";
-import { buildLocalBranchAnalysis } from "../signals/local-branch";
+import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { buildRepoDataQuality } from "../signals/data-quality";
 import { loadUpstreamStatus } from "../upstream/ruleset";
 
@@ -864,7 +864,7 @@ export class GittensoryMcp {
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: input.login, fit, scoringSnapshot: snapshot });
-    const checkSummaries = await this.loadCheckSummariesForPullRequests(input.repoFullName, pullRequests);
+    const checkSummaries = await this.loadCheckSummariesForPullRequests(input.repoFullName, input, pullRequests);
     return {
       ...buildLocalBranchAnalysis({
         input,
@@ -886,9 +886,9 @@ export class GittensoryMcp {
     };
   }
 
-  private async loadCheckSummariesForPullRequests(repoFullName: string, pullRequests: Array<{ number: number; state?: string | null | undefined }>) {
-    const openPulls = pullRequests.filter((pr) => pr.state === "open");
-    return (await Promise.all(openPulls.map((pr) => listCheckSummaries(this.env, repoFullName, pr.number)))).flat();
+  private async loadCheckSummariesForPullRequests(repoFullName: string, input: Parameters<typeof findCurrentBranchPullRequest>[0], pullRequests: Parameters<typeof findCurrentBranchPullRequest>[1]) {
+    const currentPullRequest = findCurrentBranchPullRequest(input, pullRequests);
+    return currentPullRequest ? listCheckSummaries(this.env, repoFullName, currentPullRequest.number) : [];
   }
 
   private async getBountyAdvisory(id: string): Promise<ToolPayload> {
