@@ -56,7 +56,7 @@ describe("scoring model and previews", () => {
     vi.unstubAllGlobals();
   });
 
-  it("parses known upstream numeric constants and detects the current density model", () => {
+  it("parses known upstream numeric constants and prefers the saturation model when upstream exposes it", () => {
     const parsed = parsePythonNumberConstants(`
 OSS_EMISSION_SHARE = 0.90
 MAX_CODE_DENSITY_MULTIPLIER = 1.15
@@ -66,7 +66,7 @@ IGNORED = "not numeric"
     expect(parsed).toMatchObject({ OSS_EMISSION_SHARE: 0.9, MAX_CODE_DENSITY_MULTIPLIER: 1.15, MIN_TOKEN_SCORE_FOR_BASE_SCORE: 5 });
     expect(parsed).not.toHaveProperty("IGNORED");
     expect(detectActiveModel(parsed)).toBe("current_density_model");
-    expect(detectActiveModel({ SRC_TOK_SATURATION_SCALE: 58 })).toBe("pending_saturation_model");
+    expect(detectActiveModel({ MAX_CODE_DENSITY_MULTIPLIER: 1.15, SRC_TOK_SATURATION_SCALE: 58 })).toBe("pending_saturation_model");
     expect(detectActiveModel({})).toBe("unknown");
   });
 
@@ -257,6 +257,7 @@ MAX_CODE_DENSITY_MULTIPLIER = 1.15
         projectedCredibility: 0.5,
         observedApprovedPrCount: 1,
         observedStalePrCount: 1,
+        observedClosedPrCount: 1,
         observedDraftPrCount: 1,
         observedBlockedPrCount: 1,
         observedMaintainerPrCount: 1,
@@ -265,10 +266,13 @@ MAX_CODE_DENSITY_MULTIPLIER = 1.15
     const userSupplied = preview.scenarioPreviews.find((scenario) => scenario.name === "afterPendingMerges");
     const approved = preview.scenarioPreviews.find((scenario) => scenario.name === "afterApprovedPrsMerge");
     const stale = preview.scenarioPreviews.find((scenario) => scenario.name === "afterStalePrsClose");
+    const bestReasonable = preview.scenarioPreviews.find((scenario) => scenario.name === "bestReasonableCase");
 
     expect(userSupplied).toMatchObject({ source: "user_supplied", gates: { openPrCount: 4, credibilityObserved: 0.5 } });
     expect(approved).toMatchObject({ source: "github_observed", gates: { openPrCount: 4, credibilityObserved: 0.8 } });
     expect(stale).toMatchObject({ source: "github_observed", gates: { openPrCount: 4, credibilityObserved: 0.2 } });
+    expect(stale?.assumptions.join(" ")).toMatch(/already-closed PR.*excluded/);
+    expect(bestReasonable?.gates.openPrCount).toBe(2);
     expect(approved?.assumptions.join(" ")).toMatch(/draft PR.*excluded|blocked PR.*excluded|maintainer-lane PR.*outside-contributor/);
     expect(preview.effectiveEstimatedScore).toBe(0);
     expect(preview.underlyingPotentialScore).toBeGreaterThan(0);
