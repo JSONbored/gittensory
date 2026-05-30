@@ -56,6 +56,7 @@ import {
   buildRoleContext,
 } from "../signals/engine";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
+import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildRepoDataQuality } from "../signals/data-quality";
 import { loadUpstreamStatus } from "../upstream/ruleset";
 
@@ -853,7 +854,7 @@ export class GittensoryMcp {
 
   private async analyzeLocalBranch(input: z.infer<z.ZodObject<typeof localBranchAnalysisShape>>) {
     this.requireContributorAccess(input.login);
-    const [context, repo, issues, pullRequests, recentMergedPullRequests, bounties, snapshot, issueQuality] = await Promise.all([
+    const [context, repo, issues, pullRequests, recentMergedPullRequests, bounties, snapshot, issueQuality, repoManifest] = await Promise.all([
       this.loadContributorFastContext(input.login),
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
@@ -862,13 +863,18 @@ export class GittensoryMcp {
       listBountiesByRepo(this.env, input.repoFullName),
       getOrCreateScoringModelSnapshot(this.env),
       loadOrComputeIssueQualityResponse(this.env, input.repoFullName),
+      loadRepoFocusManifest(this.env, input.repoFullName),
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: input.login, fit, scoringSnapshot: snapshot });
     const checkSummaries = await this.loadCheckSummariesForPullRequests(input.repoFullName, input, pullRequests);
+    // Caller-supplied focusManifest wins; otherwise fall back to the repo-owned manifest when present.
+    const analysisInput = input.focusManifest !== undefined || !repoManifest.present
+      ? input
+      : { ...input, focusManifest: repoManifest as unknown };
     return {
       ...buildLocalBranchAnalysis({
-        input,
+        input: analysisInput,
         repo,
         issues,
         pullRequests,
