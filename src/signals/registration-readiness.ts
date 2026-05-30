@@ -18,7 +18,7 @@ export type LaneReadiness = {
 };
 
 export type TestCoverageHealth = {
-  status: "gate_ready" | "gate_partial" | "gate_unknown";
+  status: "gate_ready" | "gate_unknown";
   trustedLabelPipelineReady: boolean;
   checkRunMode: RepositorySettings["checkRunMode"];
   requiredGate: string[];
@@ -90,18 +90,14 @@ function resolveIssuePolicy(lane: LaneAdvice, settings: RepositorySettings): Iss
 
 function buildTestCoverageHealth(labelAudit: LabelAudit, settings: RepositorySettings): TestCoverageHealth {
   const trustedLabelPipelineReady = labelAudit.trustedPipelineReady;
-  const checkRunEnabled = settings.checkRunMode === "enabled";
-  const status: TestCoverageHealth["status"] = trustedLabelPipelineReady && checkRunEnabled ? "gate_ready" : trustedLabelPipelineReady || checkRunEnabled ? "gate_partial" : "gate_unknown";
-  const warnings = [
-    ...(checkRunEnabled ? [] : ["Check runs are disabled, so Gittensory cannot surface a per-PR quality gate to maintainers."]),
-    ...(trustedLabelPipelineReady ? [] : ["No trusted label pipeline is verified; trusted-label scoring should stay off until labels are validated."]),
-  ];
+  const status: TestCoverageHealth["status"] = trustedLabelPipelineReady ? "gate_ready" : "gate_unknown";
+  const warnings = trustedLabelPipelineReady ? [] : ["No trusted label pipeline is verified; trusted-label scoring should stay off until labels are validated."];
   return {
     status,
     trustedLabelPipelineReady,
     checkRunMode: settings.checkRunMode,
     requiredGate: COVERAGE_GATE,
-    note: "Gittensory enforces its own coverage gate in CI; remote contributor repos must preserve an equivalent test gate before trusted-label or maintainer-cut promotion. Remote CI introspection is not enabled in this signal yet.",
+    note: "Gittensory enforces its own coverage gate in CI; remote contributor repos must preserve an equivalent test gate before trusted-label or maintainer-cut promotion. Check runs intentionally default off; their state is informational here and is not a readiness warning.",
     warnings,
   };
 }
@@ -255,10 +251,13 @@ export function buildGittensorConfigRecommendation(input: GittensorConfigRecomme
   const { repoFullName, repo, settings, lane, configQuality, contributorIntakeHealth, maintainerCutReadiness } = input;
   const current = repo?.registryConfig ?? null;
   const shouldEnableIssueDiscovery = contributorIntakeHealth.level === "healthy" && configQuality.level === "excellent";
+  // Direct-PR-first posture: only allocate an issue-discovery slice when intake is healthy and config is excellent.
   const recommendedIssueDiscoveryShare = shouldEnableIssueDiscovery ? 0.1 : 0;
-  const currentAllocation = current?.emissionShare ?? 0;
-  const directPrShare = Math.max(0, currentAllocation - recommendedIssueDiscoveryShare);
-  const recommendedMaintainerCut = maintainerCutReadiness.ready ? Math.max(current?.maintainerCut ?? 0, 0.02) : current?.maintainerCut ?? 0;
+  // issueDiscoveryShare and directPrShare are repo-config semantics for the in-repo split between issue-discovery and direct-PR flow.
+  // emissionShare is assigned externally and is intentionally not subtracted from here.
+  const directPrShare = 1 - recommendedIssueDiscoveryShare;
+  // Target a 30% maintainer cut when readiness is met; otherwise leave the configured value untouched.
+  const recommendedMaintainerCut = maintainerCutReadiness.ready ? Math.max(current?.maintainerCut ?? 0, 0.3) : current?.maintainerCut ?? 0;
 
   return {
     repoFullName,

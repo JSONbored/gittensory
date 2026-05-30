@@ -60,6 +60,14 @@ import { buildIssueAdvisory, buildPullRequestAdvisory } from "../rules/advisory"
 import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
 import { buildAndPersistContributorDecisionPack } from "../services/decision-pack";
 import { executeAgentRun, explainBlockersWithAgent, planNextWork } from "../services/agent-orchestrator";
+import { loadIssueQualityReportMap } from "../services/issue-quality";
+import {
+  buildUpstreamRulesetSnapshot,
+  detectAndPersistUpstreamDrift,
+  fileUpstreamDriftIssues,
+  refreshUpstreamDrift,
+  refreshUpstreamSourceSnapshots,
+} from "../upstream/ruleset";
 import {
   buildFreshnessSloReport,
   freshnessAuditMetadata,
@@ -75,6 +83,7 @@ import {
   buildContributorScoringProfile,
   buildContributorStrategy,
   buildContributorIntakeHealth,
+  buildIssueQualityReport,
   buildLabelAudit,
   buildMaintainerCutReadiness,
   buildMaintainerLaneReport,
@@ -161,6 +170,21 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       return;
     case "refresh-scoring-model":
       await refreshScoringModelSnapshot(env);
+      return;
+    case "refresh-upstream-sources":
+      await refreshUpstreamSourceSnapshots(env);
+      return;
+    case "build-upstream-ruleset":
+      await buildUpstreamRulesetSnapshot(env);
+      return;
+    case "detect-upstream-drift":
+      await detectAndPersistUpstreamDrift(env);
+      return;
+    case "refresh-upstream-drift":
+      await refreshUpstreamDrift(env);
+      return;
+    case "file-upstream-drift-issues":
+      await fileUpstreamDriftIssues(env);
       return;
     case "build-contributor-evidence":
       await buildContributorEvidence(env, message.login);
@@ -283,6 +307,7 @@ async function buildContributorEvidence(env: Env, login?: string): Promise<void>
     getOrCreateScoringModelSnapshot(env),
   ]);
   const logins = login ? [login] : [...new Set([...allPullRequests, ...allIssues].flatMap((record) => (record.authorLogin ? [record.authorLogin] : [])))].slice(0, 500);
+  const issueQualityByRepo = await loadIssueQualityReportMap(env, repositories);
   for (const contributorLogin of logins) {
     const [github, contributorPullRequests, contributorIssues, cachedRepoStats, gittensorSnapshot] = await Promise.all([
       fetchPublicContributorProfile(contributorLogin),
@@ -293,9 +318,9 @@ async function buildContributorEvidence(env: Env, login?: string): Promise<void>
     ]);
     const repoStats = authoritativeContributorRepoStats(gittensorSnapshot, cachedRepoStats);
     const profile = buildContributorProfile(contributorLogin, github, contributorPullRequests, contributorIssues, repoStats, gittensorSnapshot);
-    const fit = buildContributorFit(profile, repositories, allIssues, allPullRequests, syncStates, repoStats);
+    const fit = buildContributorFit(profile, repositories, allIssues, allPullRequests, syncStates, repoStats, issueQualityByRepo);
     const scoringProfile = buildContributorScoringProfile({ login: contributorLogin, fit, scoringSnapshot: snapshot });
-    const outcomeHistory = buildContributorOutcomeHistory({ login: contributorLogin, profile, repositories, pullRequests: allPullRequests, issues: allIssues, repoStats });
+    const outcomeHistory = buildContributorOutcomeHistory({ login: contributorLogin, profile, repositories, pullRequests: allPullRequests, issues: allIssues, repoStats, cachedRepoStats });
     const strategy = buildContributorStrategy({ login: contributorLogin, fit, scoringProfile, scoringSnapshot: snapshot, outcomeHistory });
     const evidence: ContributorEvidenceRecord = {
       login: contributorLogin,
@@ -370,6 +395,7 @@ export async function generateSignalSnapshots(env: Env, repoFullName?: string): 
     const maintainerLane = buildMaintainerLaneReport(repo, issues, pullRequests, repo.fullName, collisions, queueCounts);
     const maintainerCutReadiness = buildMaintainerCutReadiness(repo, issues, pullRequests, repo.fullName, queueCounts, collisions);
     const contributorIntakeHealth = buildContributorIntakeHealth(repo, issues, pullRequests, repo.fullName, collisions, queueCounts);
+    const issueQuality = buildIssueQualityReport(repo, issues, pullRequests, repo.fullName, collisions, recentMergedPullRequests);
     await replaceCollisionEdges(env, repo.fullName, buildCollisionEdges(collisions));
     const generatedAt = new Date().toISOString();
     await persistSignalSnapshot(env, {
@@ -418,6 +444,14 @@ export async function generateSignalSnapshots(env: Env, repoFullName?: string): 
       targetKey: repo.fullName,
       repoFullName: repo.fullName,
       payload: contributorIntakeHealth as unknown as Record<string, never>,
+      generatedAt,
+    });
+    await persistSignalSnapshot(env, {
+      id: crypto.randomUUID(),
+      signalType: "issue-quality",
+      targetKey: repo.fullName,
+      repoFullName: repo.fullName,
+      payload: issueQuality as unknown as Record<string, never>,
       generatedAt,
     });
   }
@@ -767,9 +801,9 @@ async function getCachedOfficialMinerDetection(env: Env, login: string, context:
   }
   await auditMinerDetectionCache(env, "github_app.miner_detection_cache_miss", login, context, "miss");
   const detection = await fetchOfficialGittensorMiner(login);
-  await upsertOfficialMinerDetection(env, login, detection, detection.status === "unavailable" ? OFFICIAL_MINER_DETECTION_UNAVAILABLE_TTL_MS : OFFICIAL_MINER_DETECTION_TTL_MS);
-  if (detection.status === "unavailable") await auditMinerDetectionUnavailable(env, login, context, detection.error);
-  return detection;
+  const cacheableDetection = await upsertOfficialMinerDetection(env, login, detection, detection.status === "unavailable" ? OFFICIAL_MINER_DETECTION_UNAVAILABLE_TTL_MS : OFFICIAL_MINER_DETECTION_TTL_MS);
+  if (cacheableDetection.status === "unavailable") await auditMinerDetectionUnavailable(env, login, context, cacheableDetection.error);
+  return cacheableDetection;
 }
 
 async function auditMinerDetectionUnavailable(env: Env, actor: string, context: { targetKey: string; deliveryId: string }, detail: string): Promise<void> {

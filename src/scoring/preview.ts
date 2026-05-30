@@ -22,9 +22,16 @@ export type ScorePreviewInput = {
   pendingMergedPrCount?: number | undefined;
   pendingClosedPrCount?: number | undefined;
   approvedPrCount?: number | undefined;
+  observedApprovedPrCount?: number | undefined;
+  observedStalePrCount?: number | undefined;
+  observedClosedPrCount?: number | undefined;
+  observedDraftPrCount?: number | undefined;
+  observedBlockedPrCount?: number | undefined;
+  observedMaintainerPrCount?: number | undefined;
   expectedOpenPrCountAfterMerge?: number | undefined;
   projectedCredibility?: number | undefined;
   scenarioNotes?: string[] | undefined;
+  observedScenarioNotes?: string[] | undefined;
 };
 
 export type ScoreGateBlocker = {
@@ -48,8 +55,8 @@ export type ScoreGateDelta = {
 };
 
 export type ScoreScenarioPreview = {
-  name: "current" | "cleanGates" | "afterPendingMerges" | "linkedIssueFixed" | "bestReasonableCase";
-  source: "current_data" | "user_supplied" | "gittensory_projection";
+  name: "current" | "cleanGates" | "afterPendingMerges" | "afterApprovedPrsMerge" | "afterStalePrsClose" | "linkedIssueFixed" | "bestReasonableCase";
+  source: "current_data" | "user_supplied" | "github_observed" | "gittensory_projection";
   assumptions: string[];
   scoreEstimate: ScorePreviewResult["scoreEstimate"];
   gates: ScorePreviewResult["gates"];
@@ -202,14 +209,22 @@ function computeScoreCore(
   const fixedBaseScore = input.fixedBaseScore ?? config?.fixedBaseScore ?? undefined;
   const rawDensity = sourceTokenScore / sourceLines;
   const densityMultiplier = clamp(rawDensity || 0, 0, constant(constants, "MAX_CODE_DENSITY_MULTIPLIER", 1.15));
-  const baseTokenGatePassed = sourceTokenScore >= constant(constants, "MIN_TOKEN_SCORE_FOR_BASE_SCORE", 5);
-  const contributionBonus =
+  const densityTokenGatePassed = sourceTokenScore >= constant(constants, "MIN_TOKEN_SCORE_FOR_BASE_SCORE", 5);
+  const baseTokenGatePassed = snapshot.activeModel === "pending_saturation_model" ? sourceTokenScore > 0 : densityTokenGatePassed;
+  const densityContributionBonus =
     clamp(totalTokenScore / constant(constants, "CONTRIBUTION_SCORE_FOR_FULL_BONUS", 1500), 0, 1) *
     constant(constants, "MAX_CONTRIBUTION_BONUS", 25);
+  const saturationContributionBonusValue = saturationContributionBonus(totalTokenScore, constants);
+  const saturationBaseScore = saturationScore(sourceTokenScore, totalTokenScore, constants);
+  const densityBaseScore =
+    (densityTokenGatePassed ? constant(constants, "MERGED_PR_BASE_SCORE", 25) * densityMultiplier : 0) + densityContributionBonus;
   const baseScore =
     fixedBaseScore !== undefined
       ? fixedBaseScore
-      : (baseTokenGatePassed ? constant(constants, "MERGED_PR_BASE_SCORE", 25) * densityMultiplier : 0) + contributionBonus;
+      : snapshot.activeModel === "pending_saturation_model"
+        ? saturationBaseScore
+        : densityBaseScore;
+  const activeContributionBonus = snapshot.activeModel === "pending_saturation_model" ? saturationContributionBonusValue : densityContributionBonus;
   const labelMultiplier = selectLabelMultiplier(input.labels ?? [], config?.labelMultipliers ?? {}, config?.defaultLabelMultiplier ?? 1);
   const issueMultiplier = selectIssueMultiplier(input.linkedIssueMode ?? "none", constants);
   const credibilityObserved = clamp(input.credibility ?? inferCredibility(contributorEvidence), 0, 1);
@@ -225,10 +240,7 @@ function computeScoreCore(
   );
   const openPrMultiplier = openPrCount <= openPrThreshold ? 1 : 0;
   const estimatedMergedScore = roundScore(baseScore * labelMultiplier * issueMultiplier * credibilityMultiplier * reviewPenaltyMultiplier * openPrMultiplier);
-  const pendingSaturationScore = roundScore(
-    constant(constants, "MERGED_PR_BASE_SCORE", 25) * (1 - Math.exp(-sourceTokenScore / constant(constants, "SRC_TOK_SATURATION_SCALE", 58))) +
-      clamp(totalTokenScore / constant(constants, "CONTRIBUTION_SCORE_FOR_FULL_BONUS", 1500), 0, 1) * 5,
-  );
+  const pendingSaturationScore = roundScore(saturationBaseScore);
   return {
     laneMath: {
       repoEmissionShare: emissionShare,
@@ -241,7 +253,7 @@ function computeScoreCore(
     scoreEstimate: {
       baseScore: roundScore(baseScore),
       densityMultiplier: roundScore(densityMultiplier),
-      contributionBonus: roundScore(contributionBonus),
+      contributionBonus: roundScore(activeContributionBonus),
       labelMultiplier,
       issueMultiplier,
       credibilityMultiplier: roundScore(credibilityMultiplier),
@@ -268,15 +280,30 @@ function buildScenarioPreviews(
   contributorEvidence: ContributorEvidenceRecord | null | undefined,
   current: ScoreCore,
 ): ScoreScenarioPreview[] {
-  const pendingCount = nonNegative(input.pendingMergedPrCount) + nonNegative(input.pendingClosedPrCount) + nonNegative(input.approvedPrCount);
+  const userPendingCount = nonNegative(input.pendingMergedPrCount) + nonNegative(input.pendingClosedPrCount) + nonNegative(input.approvedPrCount);
+  const observedApprovedCount = nonNegative(input.observedApprovedPrCount);
+  const observedStaleCloseCount = nonNegative(input.observedStalePrCount);
+  const observedClosedCount = nonNegative(input.observedClosedPrCount);
+  const combinedPendingCount = userPendingCount + observedApprovedCount + observedStaleCloseCount;
   const expectedOpenPrCountAfterMerge =
-    input.expectedOpenPrCountAfterMerge !== undefined ? nonNegative(input.expectedOpenPrCountAfterMerge) : Math.max(0, current.gates.openPrCount - pendingCount);
+    input.expectedOpenPrCountAfterMerge !== undefined ? nonNegative(input.expectedOpenPrCountAfterMerge) : Math.max(0, current.gates.openPrCount - userPendingCount);
   const projectedCredibility =
     input.projectedCredibility !== undefined
       ? clamp(input.projectedCredibility, 0, 1)
-      : pendingCount > 0
+      : userPendingCount > 0
         ? Math.max(current.gates.credibilityObserved, current.gates.credibilityFloor)
         : current.gates.credibilityObserved;
+  const observedApprovalCredibility = observedApprovedCount > 0 ? Math.max(current.gates.credibilityObserved, current.gates.credibilityFloor) : current.gates.credibilityObserved;
+  const afterApprovedInput = {
+    ...input,
+    openPrCount: Math.max(0, current.gates.openPrCount - observedApprovedCount),
+    credibility: observedApprovalCredibility,
+  };
+  const afterStaleInput = {
+    ...input,
+    openPrCount: Math.max(0, current.gates.openPrCount - observedStaleCloseCount),
+    credibility: current.gates.credibilityObserved,
+  };
   const cleanGatesInput = {
     ...input,
     openPrCount: Math.min(current.gates.openPrCount, current.gates.openPrThreshold),
@@ -293,8 +320,11 @@ function buildScenarioPreviews(
   };
   const bestReasonableInput = {
     ...linkedIssueInput,
-    openPrCount: Math.min(expectedOpenPrCountAfterMerge, current.gates.openPrThreshold),
-    credibility: Math.max(projectedCredibility, current.gates.credibilityFloor),
+    openPrCount: Math.min(
+      input.expectedOpenPrCountAfterMerge !== undefined ? expectedOpenPrCountAfterMerge : Math.max(0, current.gates.openPrCount - combinedPendingCount),
+      current.gates.openPrThreshold,
+    ),
+    credibility: Math.max(projectedCredibility, observedApprovalCredibility, current.gates.credibilityFloor),
   };
   return [
     scenario("current", "current_data", input, current, ["Current cached/account state and supplied local diff metadata."], repo),
@@ -303,19 +333,48 @@ function buildScenarioPreviews(
     ], repo),
     scenario(
       "afterPendingMerges",
-      pendingCount > 0 || input.expectedOpenPrCountAfterMerge !== undefined || input.projectedCredibility !== undefined ? "user_supplied" : "gittensory_projection",
+      userPendingCount > 0 || input.expectedOpenPrCountAfterMerge !== undefined || input.projectedCredibility !== undefined ? "user_supplied" : "gittensory_projection",
       afterPendingInput,
       computeScoreCore(afterPendingInput, repo, snapshot, contributorEvidence),
       [
-        pendingCount > 0
-          ? `${pendingCount} supplied pending approved/merged/closed PR(s) are treated as no longer open for this scenario.`
+        userPendingCount > 0
+          ? `${userPendingCount} user-supplied pending approved/merged/closed PR(s) are treated as no longer open for this scenario.`
           : "No pending merge/close count was supplied; this scenario preserves current open PR pressure.",
         ...(input.projectedCredibility !== undefined
           ? [`Projected credibility is user-supplied as ${roundScore(projectedCredibility)}.`]
-          : pendingCount > 0
-            ? [`Projected credibility is raised to the current floor ${current.gates.credibilityFloor} because pending merges were supplied.`]
+          : userPendingCount > 0
+            ? [`Projected credibility is raised to the current floor ${current.gates.credibilityFloor} because pending merges were supplied by the caller.`]
             : []),
         ...(input.scenarioNotes ?? []),
+      ],
+      repo,
+    ),
+    scenario(
+      "afterApprovedPrsMerge",
+      "github_observed",
+      afterApprovedInput,
+      computeScoreCore(afterApprovedInput, repo, snapshot, contributorEvidence),
+      [
+        observedApprovedCount > 0
+          ? `${observedApprovedCount} GitHub-observed approved or mergeable open PR(s) are treated as no longer open if they merge.`
+          : "No GitHub-observed approved or mergeable open PRs were available for this scenario.",
+        ...(observedApprovedCount > 0 ? [`Projected credibility is raised to the current floor ${current.gates.credibilityFloor} after observed mergeable work lands.`] : []),
+        ...observedScenarioNotes(input),
+      ],
+      repo,
+    ),
+    scenario(
+      "afterStalePrsClose",
+      "github_observed",
+      afterStaleInput,
+      computeScoreCore(afterStaleInput, repo, snapshot, contributorEvidence),
+      [
+        observedStaleCloseCount > 0
+          ? `${observedStaleCloseCount} GitHub-observed stale open PR(s) are treated as no longer open if they close or withdraw.`
+          : "No GitHub-observed stale open PRs were available for this scenario.",
+        ...(observedClosedCount > 0 ? [`${observedClosedCount} GitHub-observed already-closed PR(s) are excluded because they no longer contribute to open PR pressure.`] : []),
+        "Credibility is not increased in this scenario because stale cleanup is not the same as merged work.",
+        ...observedScenarioNotes(input),
       ],
       repo,
     ),
@@ -327,7 +386,17 @@ function buildScenarioPreviews(
     scenario("bestReasonableCase", "gittensory_projection", bestReasonableInput, computeScoreCore(bestReasonableInput, repo, snapshot, contributorEvidence), [
       "Combines plausible near-term gate cleanup: open PR pressure at threshold or below, credibility at floor or above, and linked-issue context where applicable.",
       ...(input.scenarioNotes ?? []),
+      ...observedScenarioNotes(input),
     ], repo),
+  ];
+}
+
+function observedScenarioNotes(input: ScorePreviewInput): string[] {
+  return [
+    ...(nonNegative(input.observedDraftPrCount) > 0 ? [`${nonNegative(input.observedDraftPrCount)} draft PR(s) were excluded from likely-to-land projections.`] : []),
+    ...(nonNegative(input.observedBlockedPrCount) > 0 ? [`${nonNegative(input.observedBlockedPrCount)} blocked PR(s) were excluded from likely-to-land projections.`] : []),
+    ...(nonNegative(input.observedMaintainerPrCount) > 0 ? [`${nonNegative(input.observedMaintainerPrCount)} maintainer-lane PR(s) were kept out of outside-contributor projections.`] : []),
+    ...(input.observedScenarioNotes ?? []),
   ];
 }
 
@@ -479,6 +548,19 @@ function inferCredibility(evidence?: ContributorEvidenceRecord | null): number {
 function constant(constants: Record<string, number>, key: string, fallback: number): number {
   const value = constants[key];
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function saturationScore(sourceTokenScore: number, totalTokenScore: number, constants: Record<string, number>): number {
+  const scale = Math.max(constant(constants, "SRC_TOK_SATURATION_SCALE", 58), 1);
+  return (
+    constant(constants, "MERGED_PR_BASE_SCORE", 25) * (1 - Math.exp(-sourceTokenScore / scale)) +
+    saturationContributionBonus(totalTokenScore, constants)
+  );
+}
+
+function saturationContributionBonus(totalTokenScore: number, constants: Record<string, number>): number {
+  const contributionBonusCap = Math.min(constant(constants, "MAX_CONTRIBUTION_BONUS", 5), 5);
+  return clamp(totalTokenScore / constant(constants, "CONTRIBUTION_SCORE_FOR_FULL_BONUS", 1500), 0, 1) * contributionBonusCap;
 }
 
 function nonNegative(value: number | undefined): number {

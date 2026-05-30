@@ -10,6 +10,7 @@ describe("OpenAPI contract", () => {
     expect(spec.paths["/v1/readiness"]).toBeDefined();
     expect(spec.paths["/v1/sync/status"]).toBeDefined();
     expect(spec.paths["/v1/repos/{owner}/{repo}/intelligence"]).toBeDefined();
+    expect(spec.paths["/v1/repos/{owner}/{repo}/issue-quality"]).toBeDefined();
     expect(spec.paths["/v1/repos/{owner}/{repo}/registration-readiness"]).toBeDefined();
     expect(spec.paths["/v1/repos/{owner}/{repo}/gittensor-config-recommendation"]).toBeDefined();
     expect(spec.paths["/v1/repos/{owner}/{repo}/pulls/{number}/maintainer-packet"]).toBeDefined();
@@ -28,6 +29,9 @@ describe("OpenAPI contract", () => {
     expect(spec.paths["/v1/agent/explain-blockers"]).toBeDefined();
     expect(spec.paths["/v1/scoring/model"]).toBeDefined();
     expect(spec.paths["/v1/scoring/preview"]).toBeDefined();
+    expect(spec.paths["/v1/upstream/status"]).toBeDefined();
+    expect(spec.paths["/v1/upstream/ruleset"]).toBeDefined();
+    expect(spec.paths["/v1/upstream/drift"]).toBeDefined();
     expect(spec.paths["/v1/bounties/{id}/advisory"]).toBeDefined();
     expect(spec.paths["/v1/repos/{owner}/{repo}/settings-preview"]).toBeDefined();
     expect(spec.paths["/v1/auth/github/device/start"]).toBeDefined();
@@ -47,7 +51,6 @@ describe("OpenAPI contract", () => {
       "/v1/repos/{owner}/{repo}/collisions",
       "/v1/repos/{owner}/{repo}/config-quality",
       "/v1/repos/{owner}/{repo}/labels/audit",
-      "/v1/repos/{owner}/{repo}/issue-quality",
       "/v1/repos/{owner}/{repo}/burden-forecast",
       "/v1/repos/{owner}/{repo}/registry-drift",
       "/v1/repos/{owner}/{repo}/maintainer-lane",
@@ -72,7 +75,12 @@ describe("OpenAPI contract", () => {
     expect(spec.components?.schemas?.RepoSettingsPreview).toBeDefined();
     expect(spec.components?.schemas?.AgentRunBundle).toBeDefined();
     expect(spec.components?.schemas?.AgentAction).toBeDefined();
+    expect(spec.components?.schemas?.UpstreamStatus).toBeDefined();
+    expect(spec.components?.schemas?.UpstreamRulesetSnapshot).toBeDefined();
+    expect(spec.components?.schemas?.UpstreamDriftReport).toBeDefined();
     expect(JSON.stringify(spec.components?.schemas?.ScorePreviewResult)).toContain("scenarioPreviews");
+    expect(JSON.stringify(spec.components?.schemas?.RepoIntelligence)).toContain("burdenForecastFreshness");
+    expect(JSON.stringify(spec.components?.schemas?.ContributorOutcomeHistory)).toContain("reconciliation");
     expect(JSON.stringify(spec.components?.schemas?.LocalBranchAnalysis)).toContain("baseFreshness");
     expect(JSON.stringify(spec.components?.schemas?.LocalBranchAnalysis)).toContain("recommendedRerunCondition");
   });

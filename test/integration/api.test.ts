@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   upsertBounty,
+  upsertBurdenForecast,
   upsertCheckSummary,
   upsertInstallation,
   upsertInstallationHealth,
@@ -10,6 +11,8 @@ import {
   upsertRecentMergedPullRequest,
   persistRepoGithubTotalsSnapshot,
   persistSignalSnapshot,
+  listLatestSignalSnapshotsByTarget,
+  persistUpstreamRulesetSnapshot,
   upsertRepoLabel,
   upsertRepoSyncSegment,
   upsertRepoSyncState,
@@ -20,9 +23,11 @@ import {
   upsertRepositorySettings,
 } from "../../src/db/repositories";
 import { createApp } from "../../src/api/routes";
+import { BURDEN_FORECAST_MAX_AGE_MS } from "../../src/services/burden-forecast";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
 import { createTestEnv } from "../helpers/d1";
+import type { JsonValue } from "../../src/types";
 
 describe("api routes", () => {
   afterEach(() => {
@@ -87,6 +92,36 @@ describe("api routes", () => {
 
     const legacyPerRepoDrift = await app.request("/v1/repos/owner/changed/registry-drift", { headers: apiHeaders(env) }, env);
     expect(legacyPerRepoDrift.status).toBe(404);
+  });
+
+  it("serves upstream ruleset status, ruleset snapshots, and drift reports through private APIs", async () => {
+    const app = createApp();
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    vi.stubGlobal("fetch", upstreamContractFetch());
+
+    const missing = await app.request("/v1/upstream/status", { headers: apiHeaders(env) }, env);
+    expect(missing.status).toBe(200);
+    await expect(missing.json()).resolves.toMatchObject({ status: "unavailable" });
+
+    const refresh = await app.request(
+      "/v1/internal/jobs/refresh-upstream-drift/run",
+      { method: "POST", headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}` } },
+      env,
+    );
+    expect(refresh.status).toBe(200);
+    await expect(refresh.json()).resolves.toMatchObject({ ruleset: { activeModel: "pending_saturation_model", registryRepoCount: 1 }, drift: null });
+
+    const status = await app.request("/v1/upstream/status", { headers: apiHeaders(env) }, env);
+    expect(status.status).toBe(200);
+    await expect(status.json()).resolves.toMatchObject({ status: "current", activeModel: "pending_saturation_model" });
+
+    const ruleset = await app.request("/v1/upstream/ruleset", { headers: apiHeaders(env) }, env);
+    expect(ruleset.status).toBe(200);
+    await expect(ruleset.json()).resolves.toMatchObject({ commitSha: "api-commit", registryRepoCount: 1 });
+
+    const drift = await app.request("/v1/upstream/drift", { headers: apiHeaders(env) }, env);
+    expect(drift.status).toBe(200);
+    await expect(drift.json()).resolves.toMatchObject({ upstreamDrift: { status: "current" }, reports: [] });
   });
 
   it("queues signed GitHub webhooks and rejects invalid signatures", async () => {
@@ -577,6 +612,22 @@ describe("api routes", () => {
     );
     expect(localBranchWithLocalTarget.status).toBe(200);
 
+    const oversizedLocalBranch = await app.request(
+      "/v1/local/branch-analysis",
+      {
+        method: "POST",
+        headers: apiHeaders(env),
+        body: JSON.stringify({
+          login: "oktofeesh1",
+          repoFullName: "entrius/allways-ui",
+          branchName: "a".repeat(257),
+          changedFiles: [{ path: "src/cache.ts", additions: 1, deletions: 0 }],
+        }),
+      },
+      env,
+    );
+    expect(oversizedLocalBranch.status).toBe(400);
+
     const sourceContentRejected = await app.request(
       "/v1/local/branch-analysis",
       {
@@ -710,6 +761,16 @@ describe("api routes", () => {
       ["maintainer-lane", { repoFullName: "entrius/allways-ui" }],
       ["maintainer-cut-readiness", { repoFullName: "entrius/allways-ui" }],
       ["contributor-intake-health", { repoFullName: "entrius/allways-ui" }],
+      [
+        "issue-quality",
+        {
+          repoFullName: "entrius/allways-ui",
+          generatedAt: "2026-05-25T00:00:00.000Z",
+          lane: { lane: "direct_pr" },
+          issues: [{ number: 7, title: "fixture", status: "ready", score: 80, reasons: [], warnings: [] }],
+          summary: "fixture",
+        },
+      ],
     ] as const) {
       await persistSignalSnapshot(env, {
         id: `snapshot-${signalType}`,
@@ -720,12 +781,53 @@ describe("api routes", () => {
         generatedAt: "2026-05-25T00:00:00.000Z",
       });
     }
+    const staleForecastGeneratedAt = new Date(Date.now() - BURDEN_FORECAST_MAX_AGE_MS - 60_000).toISOString();
+    await upsertBurdenForecast(env, {
+      repoFullName: "entrius/allways-ui",
+      payload: { repoFullName: "entrius/allways-ui", level: "medium", summary: "intelligence fixture" } as unknown as Record<string, JsonValue>,
+      generatedAt: staleForecastGeneratedAt,
+    });
     const snapshotIntelligence = await app.request("/v1/repos/entrius/allways-ui/intelligence", { headers: apiHeaders(env) }, env);
     expect(snapshotIntelligence.status).toBe(200);
-    await expect(snapshotIntelligence.json()).resolves.toMatchObject({ source: "snapshot", queueHealth: { signals: { openPullRequests: 2 } } });
+    const snapshotIntelligenceBody = (await snapshotIntelligence.json()) as Record<string, unknown> & { burdenForecast?: Record<string, unknown>; burdenForecastFreshness?: { freshness: string; source: string; ageSeconds: number } };
+    expect(snapshotIntelligenceBody).toMatchObject({ source: "snapshot", queueHealth: { signals: { openPullRequests: 2 } } });
+    expect(snapshotIntelligenceBody.burdenForecast).toMatchObject({ level: "medium" });
+    expect(snapshotIntelligenceBody.burdenForecastFreshness).toMatchObject({ source: "snapshot", freshness: "stale" });
+    expect(snapshotIntelligenceBody.burdenForecastFreshness?.ageSeconds).toBeGreaterThanOrEqual(Math.floor((BURDEN_FORECAST_MAX_AGE_MS + 50_000) / 1000));
+    expect(snapshotIntelligenceBody.burdenForecastFreshness?.ageSeconds).toBeLessThan(Math.floor((BURDEN_FORECAST_MAX_AGE_MS + 120_000) / 1000));
+
+    await upsertRepositoryFromGitHub(env, { name: "uncached-burden", full_name: "entrius/uncached-burden", private: false, owner: { login: "entrius" }, default_branch: "main" });
+    const computedIntelligence = await app.request("/v1/repos/entrius/uncached-burden/intelligence", { headers: apiHeaders(env) }, env);
+    expect(computedIntelligence.status).toBe(200);
+    await expect(computedIntelligence.json()).resolves.toMatchObject({
+      source: "computed",
+      burdenForecast: { repoFullName: "entrius/uncached-burden", level: "low" },
+      burdenForecastFreshness: { source: "computed", freshness: "fresh", ageSeconds: 0 },
+    });
+
+    const degradedForecastEnv = withBurdenForecastReadFailure(env);
+    const degradedIntelligence = await app.request("/v1/repos/entrius/allways-ui/intelligence", { headers: apiHeaders(env) }, degradedForecastEnv);
+    expect(degradedIntelligence.status).toBe(200);
+    const degradedBody = (await degradedIntelligence.json()) as Record<string, unknown> & { dataQuality: { status: string; warnings: string[] }; burdenForecast?: unknown };
+    expect(degradedBody.burdenForecast).toBeUndefined();
+    expect(degradedBody.dataQuality.status).toBe("degraded");
+    expect(degradedBody.dataQuality.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/Burden forecast unavailable/i)]));
+
+    const issueQuality = await app.request("/v1/repos/entrius/allways-ui/issue-quality", { headers: apiHeaders(env) }, env);
+    expect(issueQuality.status).toBe(200);
+    await expect(issueQuality.json()).resolves.toMatchObject({
+      status: "ready",
+      source: "snapshot",
+      repoFullName: "entrius/allways-ui",
+      report: { repoFullName: "entrius/allways-ui", issues: expect.any(Array) },
+    });
+
+    await upsertRepositoryFromGitHub(env, { name: "uncached", full_name: "entrius/uncached", private: false, owner: { login: "entrius" }, default_branch: "main" });
+    const computedIssueQuality = await app.request("/v1/repos/entrius/uncached/issue-quality", { headers: apiHeaders(env) }, env);
+    expect(computedIssueQuality.status).toBe(200);
+    await expect(computedIssueQuality.json()).resolves.toMatchObject({ status: "ready", source: "computed", repoFullName: "entrius/uncached" });
 
     for (const path of [
-      "/v1/repos/entrius/allways-ui/issue-quality",
       "/v1/repos/entrius/allways-ui/burden-forecast",
       "/v1/repos/entrius/allways-ui/pulls/12/scoring-preview",
       "/v1/contributors/oktofeesh1/scoring-profile",
@@ -932,6 +1034,44 @@ describe("api routes", () => {
     expect(payload.warnings).toEqual(expect.arrayContaining([expect.stringContaining("Freshness SLO is degraded")]));
   });
 
+  it("bounds freshness snapshot listings and excludes private local branch targets", async () => {
+    const env = createTestEnv();
+    const nowMs = Date.now();
+    await persistSignalSnapshot(env, {
+      id: "private-local-branch",
+      signalType: "local-branch-analysis",
+      targetKey: `attacker:victim/repo:${"a".repeat(200)}`,
+      repoFullName: "victim/repo",
+      payload: { private: true },
+      generatedAt: new Date(nowMs - 60 * 1000).toISOString(),
+    });
+    await persistSignalSnapshot(env, {
+      id: "oversized-public-target",
+      signalType: "queue-health",
+      targetKey: `owner/repo-${"b".repeat(260)}`,
+      repoFullName: "owner/repo",
+      payload: { ignored: true },
+      generatedAt: new Date(nowMs - 60 * 1000).toISOString(),
+    });
+    for (let index = 0; index < 220; index += 1) {
+      await persistSignalSnapshot(env, {
+        id: `public-target-${index}`,
+        signalType: "queue-health",
+        targetKey: `owner/repo-${index}`,
+        repoFullName: `owner/repo-${index}`,
+        payload: { large: "x".repeat(100) },
+        generatedAt: new Date(nowMs - index * 1000).toISOString(),
+      });
+    }
+
+    const snapshots = await listLatestSignalSnapshotsByTarget(env);
+
+    expect(snapshots).toHaveLength(200);
+    expect(snapshots.some((snapshot) => snapshot.signalType === "local-branch-analysis")).toBe(false);
+    expect(snapshots.some((snapshot) => snapshot.id === "oversized-public-target")).toBe(false);
+    expect(snapshots.every((snapshot) => Object.keys(snapshot.payload).length === 0)).toBe(true);
+  });
+
   it("exposes capped and rate-limited sync segments in readiness and sync status", async () => {
     const app = createApp();
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
@@ -1031,7 +1171,7 @@ describe("api routes", () => {
       fetchedCount: 2,
       expectedCount: 2,
       pageCount: 1,
-      completedAt: "2026-05-23T00:00:00.000Z",
+      completedAt: new Date().toISOString(),
       warnings: [],
     });
     const refreshingReadiness = await app.request("/v1/readiness", { headers: apiHeaders(refreshingEnv) }, refreshingEnv);
@@ -1128,6 +1268,8 @@ describe("api routes", () => {
     const toolsPayload = (await mcpJson(toolsList)) as { result: { tools: Array<{ name: string }> } };
     const toolNames = toolsPayload.result.tools.map((tool) => tool.name);
     expect(toolNames).toContain("gittensory_get_repo_context");
+    expect(toolNames).toContain("gittensory_get_issue_quality");
+    expect(toolNames).toContain("gittensory_get_burden_forecast");
     expect(toolNames).toContain("gittensory_get_contributor_profile");
     expect(toolNames).toContain("gittensory_get_decision_pack");
     expect(toolNames).toContain("gittensory_explain_repo_decision");
@@ -1135,6 +1277,7 @@ describe("api routes", () => {
     expect(toolNames).toContain("gittensory_preflight_local_diff");
     expect(toolNames).toContain("gittensory_preview_local_pr_score");
     expect(toolNames).toContain("gittensory_get_registry_changes");
+    expect(toolNames).toContain("gittensory_get_upstream_drift");
     expect(toolNames).toContain("gittensory_explain_review_risk");
     expect(toolNames).toContain("gittensory_compare_pr_variants");
     expect(toolNames).toContain("gittensory_local_status");
@@ -1208,6 +1351,18 @@ describe("api routes", () => {
     const noTotalsPayload = (await mcpJson(noTotalsContext)) as { result: { structuredContent: { queueHealth: { signals: { openIssues: number; openPullRequests: number } } } } };
     expect(noTotalsPayload.result.structuredContent.queueHealth.signals).toMatchObject({ openIssues: 0, openPullRequests: 0 });
 
+    const missingIssueQuality = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({ jsonrpc: "2.0", id: "missing-issue-quality", method: "tools/call", params: { name: "gittensory_get_issue_quality", arguments: { owner: "ghost", repo: "missing" } } }),
+      },
+      env,
+    );
+    expect(missingIssueQuality.status).toBe(200);
+    await expect(mcpJson(missingIssueQuality)).resolves.toMatchObject({ result: { structuredContent: { status: "not_found", repoFullName: "ghost/missing" } } });
+
     for (const [name, args] of [
       ["gittensory_get_decision_pack", { login: "needs-snapshot" }],
       ["gittensory_explain_repo_decision", { login: "needs-snapshot", owner: "entrius", repo: "allways-ui" }],
@@ -1245,8 +1400,88 @@ describe("api routes", () => {
     expect(missingRepoDecision.status).toBe(200);
     await expect(mcpJson(missingRepoDecision)).resolves.toMatchObject({ result: { structuredContent: { status: "not_found", decision: null } } });
 
+    await persistSignalSnapshot(env, {
+      id: "mcp-issue-quality",
+      signalType: "issue-quality",
+      targetKey: "entrius/allways-ui",
+      repoFullName: "entrius/allways-ui",
+      payload: {
+        repoFullName: "entrius/allways-ui",
+        generatedAt: "2026-05-25T00:00:00.000Z",
+        lane: { lane: "direct_pr" },
+        issues: [{ number: 7, title: "fixture", status: "ready", score: 80, reasons: [], warnings: [] }],
+        summary: "fixture",
+      } as unknown as Record<string, never>,
+      generatedAt: "2026-05-25T00:00:00.000Z",
+    });
+
+    const missingBurdenForecast = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({ jsonrpc: "2.0", id: "missing-burden", method: "tools/call", params: { name: "gittensory_get_burden_forecast", arguments: { owner: "ghost", repo: "nothing" } } }),
+      },
+      env,
+    );
+    expect(missingBurdenForecast.status).toBe(200);
+    await expect(mcpJson(missingBurdenForecast)).resolves.toMatchObject({ result: { structuredContent: { status: "not_found", repoFullName: "ghost/nothing" } } });
+
+    await upsertBurdenForecast(env, {
+      repoFullName: "entrius/allways-ui",
+      payload: { repoFullName: "entrius/allways-ui", level: "low", summary: "mcp fixture", forecast: { projectedReviewLoad: 0, queueGrowthRisk: 0, stalePullRequests: 0, duplicateTrend: 0, reviewablePullRequests: 0 }, findings: [] } as unknown as Record<string, JsonValue>,
+      generatedAt: new Date(Date.now() - 1000).toISOString(),
+    });
+
+    const cachedBurdenForecast = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({ jsonrpc: "2.0", id: "cached-burden", method: "tools/call", params: { name: "gittensory_get_burden_forecast", arguments: { owner: "entrius", repo: "allways-ui" } } }),
+      },
+      env,
+    );
+    expect(cachedBurdenForecast.status).toBe(200);
+    await expect(mcpJson(cachedBurdenForecast)).resolves.toMatchObject({
+      result: {
+        structuredContent: {
+          status: "ready",
+          source: "snapshot",
+          repoFullName: "entrius/allways-ui",
+          freshness: "fresh",
+          report: { level: "low" },
+        },
+      },
+    });
+
+    await upsertRepositoryFromGitHub(env, { name: "mcp-computed-burden", full_name: "entrius/mcp-computed-burden", private: false, owner: { login: "entrius" }, default_branch: "main" });
+    const computedBurdenForecast = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({ jsonrpc: "2.0", id: "computed-burden", method: "tools/call", params: { name: "gittensory_get_burden_forecast", arguments: { owner: "entrius", repo: "mcp-computed-burden" } } }),
+      },
+      env,
+    );
+    expect(computedBurdenForecast.status).toBe(200);
+    await expect(mcpJson(computedBurdenForecast)).resolves.toMatchObject({
+      result: {
+        structuredContent: {
+          status: "ready",
+          source: "computed",
+          repoFullName: "entrius/mcp-computed-burden",
+          freshness: "fresh",
+          report: { repoFullName: "entrius/mcp-computed-burden", level: "low" },
+        },
+      },
+    });
+
     for (const [name, args] of [
       ["gittensory_get_repo_context", { owner: "entrius", repo: "allways-ui" }],
+      ["gittensory_get_issue_quality", { owner: "entrius", repo: "allways-ui" }],
+      ["gittensory_get_burden_forecast", { owner: "entrius", repo: "allways-ui" }],
       ["gittensory_get_contributor_profile", { login: "oktofeesh1" }],
       ["gittensory_get_decision_pack", { login: "oktofeesh1" }],
       ["gittensory_explain_repo_decision", { login: "oktofeesh1", owner: "entrius", repo: "allways-ui" }],
@@ -1261,6 +1496,7 @@ describe("api routes", () => {
         },
       ],
       ["gittensory_get_registry_changes", {}],
+      ["gittensory_get_upstream_drift", {}],
       [
         "gittensory_preview_local_pr_score",
         {
@@ -1993,7 +2229,7 @@ describe("api routes", () => {
     const excellentRecommendation = await app.request("/v1/repos/owner/excellent/gittensor-config-recommendation", { headers: apiHeaders(env) }, env);
     expect(excellentRecommendation.status).toBe(200);
     await expect(excellentRecommendation.json()).resolves.toMatchObject({
-      recommended: { participationMode: "split", issueDiscoveryShare: 0.1, maintainerCut: 0.02 },
+      recommended: { participationMode: "split", issueDiscoveryShare: 0.1, maintainerCut: 0.3 },
       reasons: expect.arrayContaining(["Config and intake signals are strong enough to consider a small issue-discovery slice.", "Maintainer cut can be considered because config and queue signals are clean."]),
     });
     const issueOnlyReadiness = await app.request("/v1/repos/owner/issue-only/registration-readiness", { headers: apiHeaders(env) }, env);
@@ -2060,6 +2296,53 @@ function apiHeaders(env: Env): Record<string, string> {
   return {
     authorization: `Bearer ${env.GITTENSORY_API_TOKEN}`,
     "content-type": "application/json",
+  };
+}
+
+function upstreamContractFetch() {
+  const files: Record<string, string> = {
+    "gittensor/constants.py": "SRC_TOK_SATURATION_SCALE = 58\nMAX_CODE_DENSITY_MULTIPLIER = 1.15\n",
+    "gittensor/validator/weights/master_repositories.json": JSON.stringify({
+      "JSONbored/gittensory": {
+        emission_share: 0.01,
+        issue_discovery_share: 0,
+        maintainer_cut: 0.3,
+        label_multipliers: { feature: 1.5 },
+        trusted_label_pipeline: true,
+      },
+    }),
+    "gittensor/validator/weights/programming_languages.json": JSON.stringify({ TypeScript: 1 }),
+    "gittensor/validator/oss_contributions/mirror/scoring.py": "score = 1 - exp(-x)\nsolved_by_pr = True\n",
+    "gittensor/validator/issue_discovery/scan.py": "branch eligibility required\n",
+    "gittensor/utils/mirror/models.py": "solved_by_pr: int\n",
+  };
+  return async (input: RequestInfo | URL): Promise<Response> => {
+    const url = input.toString();
+    if (url.includes("/commits/")) return Response.json({ sha: "api-commit" });
+    const path = Object.keys(files).find((candidate) => url.includes(`/contents/${candidate}`));
+    if (!path) return new Response("not found", { status: 404 });
+    return Response.json({
+      content: Buffer.from(files[path]!, "utf8").toString("base64"),
+      encoding: "base64",
+      sha: `api-${path}`,
+      download_url: `https://raw.githubusercontent.com/entrius/gittensor/test/${path}`,
+    });
+  };
+}
+
+function withBurdenForecastReadFailure(env: Env): Env {
+  const db = env.DB as unknown as { prepare: (sql: string) => unknown; batch: (statements: unknown[]) => Promise<unknown[]> };
+  return {
+    ...env,
+    DB: {
+      prepare(sql: string) {
+        if (/burden_forecasts/i.test(sql)) throw new Error("forecast table unavailable");
+        return db.prepare(sql);
+      },
+      batch(statements: unknown[]) {
+        return db.batch(statements);
+      },
+    } as unknown as D1Database,
   };
 }
 
@@ -2132,6 +2415,9 @@ async function mcpJson(response: Response): Promise<unknown> {
 }
 
 async function seedSignalData(env: Env): Promise<void> {
+  const freshAt = new Date().toISOString();
+  const previousFreshAt = new Date(Date.now() - 60_000).toISOString();
+
   await upsertInstallation(env, {
     installation: {
       id: 123,
@@ -2152,7 +2438,7 @@ async function seedSignalData(env: Env): Promise<void> {
     missingEvents: [],
     permissions: { metadata: "read", pull_requests: "read", issues: "write" },
     events: ["issues", "pull_request", "repository"],
-    checkedAt: "2026-05-23T00:00:00.000Z",
+    checkedAt: freshAt,
   });
   const snapshot = normalizeRegistryPayload(
     {
@@ -2165,7 +2451,7 @@ async function seedSignalData(env: Env): Promise<void> {
       },
     },
     { kind: "raw-github", url: "https://example.test/master_repositories.json" },
-    "2026-05-23T00:00:00.000Z",
+    freshAt,
   );
   await persistRegistrySnapshot(
     env,
@@ -2180,10 +2466,46 @@ async function seedSignalData(env: Env): Promise<void> {
         },
       },
       { kind: "raw-github", url: "https://example.test/old_master_repositories.json" },
-      "2026-05-22T00:00:00.000Z",
+      previousFreshAt,
     ),
   );
   await persistRegistrySnapshot(env, snapshot);
+  await persistUpstreamRulesetSnapshot(env, {
+    id: "upstream-ruleset-seed",
+    sourceRepo: "entrius/gittensor",
+    sourceRef: "test",
+    commitSha: "seed-commit",
+    sourceSnapshotIds: [],
+    activeModel: "pending_saturation_model",
+    registryRepoCount: 1,
+    totalEmissionShare: 0.01107,
+    semanticHash: "seed-semantic-hash",
+    payload: {
+      registry: {
+        repoCount: 1,
+        totalEmissionShare: 0.01107,
+        repositories: [
+          {
+            repo: "entrius/allways-ui",
+            emissionShare: 0.01107,
+            issueDiscoveryShare: 0,
+            maintainerCut: 0,
+            labelMultipliers: { bug: 1.1, enhancement: 1, feature: 1.25, refactor: 0.5 },
+            trustedLabelPipeline: true,
+            defaultLabelMultiplier: null,
+            eligibilityMode: null,
+          },
+        ],
+      },
+      scoring: { activeModel: "pending_saturation_model", constants: { SRC_TOK_SATURATION_SCALE: 58 }, semanticFlags: { usesExponentialSaturation: true } },
+      issueDiscovery: { branchEligibilityRequired: false },
+      mirrorLinkage: { solvedByPrRequired: true },
+      languageWeights: { count: 1, weights: { TypeScript: 1 }, contentHash: "seed-languages" },
+      sourceSnapshots: [],
+    },
+    warnings: [],
+    generatedAt: freshAt,
+  });
   await upsertRepositoryFromGitHub(env, {
     name: "allways-ui",
     full_name: "entrius/allways-ui",
@@ -2195,7 +2517,7 @@ async function seedSignalData(env: Env): Promise<void> {
     id: "scoring-1",
     sourceKind: "test",
     sourceUrl: "fixture://scoring",
-    fetchedAt: "2026-05-23T00:00:00.000Z",
+    fetchedAt: freshAt,
     activeModel: "current_density_model",
     constants: {
       OSS_EMISSION_SHARE: 0.9,
@@ -2240,7 +2562,7 @@ async function seedSignalData(env: Env): Promise<void> {
     closedUnmergedPullRequestsTotal: 0,
     labelsTotal: 2,
     sourceKind: "github",
-    fetchedAt: "2026-05-23T00:00:00.000Z",
+    fetchedAt: freshAt,
     payload: {},
   });
   await Promise.all(
@@ -2263,7 +2585,7 @@ async function seedSignalData(env: Env): Promise<void> {
         fetchedCount: record.fetchedCount,
         expectedCount: record.expectedCount,
         pageCount: 1,
-        completedAt: "2026-05-23T00:00:00.000Z",
+        completedAt: freshAt,
         warnings: [],
       }),
     ),
@@ -2297,7 +2619,7 @@ async function seedSignalData(env: Env): Promise<void> {
     missingEvents: [],
     permissions: { metadata: "read", pull_requests: "read", issues: "write" },
     events: ["issues", "issue_comment", "pull_request", "repository"],
-    checkedAt: "2026-05-23T00:00:00.000Z",
+    checkedAt: freshAt,
   });
   await upsertIssueFromGitHub(env, "entrius/allways-ui", {
     number: 7,
@@ -2333,10 +2655,10 @@ async function seedSignalData(env: Env): Promise<void> {
     repoFullName: "entrius/allways-ui",
     pullNumber: 12,
     status: "complete",
-    filesSyncedAt: "2026-05-23T00:00:00.000Z",
-    reviewsSyncedAt: "2026-05-23T00:00:00.000Z",
-    checksSyncedAt: "2026-05-23T00:00:00.000Z",
-    lastSyncedAt: "2026-05-23T00:00:00.000Z",
+    filesSyncedAt: freshAt,
+    reviewsSyncedAt: freshAt,
+    checksSyncedAt: freshAt,
+    lastSyncedAt: freshAt,
   });
   await upsertPullRequestFile(env, {
     repoFullName: "entrius/allways-ui",
@@ -2381,10 +2703,10 @@ async function seedSignalData(env: Env): Promise<void> {
     repoFullName: "entrius/allways-ui",
     pullNumber: 13,
     status: "complete",
-    filesSyncedAt: "2026-05-23T00:00:00.000Z",
-    reviewsSyncedAt: "2026-05-23T00:00:00.000Z",
-    checksSyncedAt: "2026-05-23T00:00:00.000Z",
-    lastSyncedAt: "2026-05-23T00:00:00.000Z",
+    filesSyncedAt: freshAt,
+    reviewsSyncedAt: freshAt,
+    checksSyncedAt: freshAt,
+    lastSyncedAt: freshAt,
   });
   await upsertRecentMergedPullRequest(env, {
     repoFullName: "entrius/allways-ui",

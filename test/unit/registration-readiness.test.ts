@@ -113,12 +113,9 @@ describe("buildRegistrationReadiness", () => {
     const report = buildRegistrationReadiness({ repoFullName: repo.fullName, repo, settings, installation: healthyInstall, ...signalsFor(repo, issues, [], [label("bug")]) });
 
     expect(report.testCoverageHealth.status).toBe("gate_unknown");
-    expect(report.testCoverageHealth.warnings).toEqual(
-      expect.arrayContaining([
-        "Check runs are disabled, so Gittensory cannot surface a per-PR quality gate to maintainers.",
-        "No trusted label pipeline is verified; trusted-label scoring should stay off until labels are validated.",
-      ]),
-    );
+    expect(report.testCoverageHealth.warnings).toEqual(["No trusted label pipeline is verified; trusted-label scoring should stay off until labels are validated."]);
+    // Disabled check runs are intentional repo policy and must not produce a readiness warning.
+    expect(report.warnings).not.toContain("Check runs are disabled, so Gittensory cannot surface a per-PR quality gate to maintainers.");
     expect(report.warnings).toContain('Configured registry label "feature" is missing from live GitHub labels.');
   });
 
@@ -143,12 +140,16 @@ describe("buildRegistrationReadiness", () => {
     expect(idReport).toMatchObject({ recommendedRegistrationMode: "issue_discovery", issuePolicy: "issue_discovery_enabled" });
   });
 
-  it("reports a partial test gate and all-PR GitHub App behavior", () => {
-    const repo = repoFor("octo/partial", configFor({ repo: "octo/partial" }));
+  it("keeps disabled check runs out of readiness warnings and reports all-PR GitHub App behavior", () => {
+    const repo = repoFor("octo/all-prs", configFor({ repo: "octo/all-prs" }));
     const settings = settingsFor(repo.fullName, { checkRunMode: "off", commentMode: "all_prs", publicSurface: "comment_and_label" });
     const report = buildRegistrationReadiness({ repoFullName: repo.fullName, repo, settings, installation: healthyInstall, ...signalsFor(repo, [], [], [label("bug")]) });
 
-    expect(report.testCoverageHealth.status).toBe("gate_partial");
+    // Check runs are intentionally off by default; that must not produce a readiness penalty.
+    expect(report.testCoverageHealth.status).toBe("gate_ready");
+    expect(report.testCoverageHealth.checkRunMode).toBe("off");
+    expect(report.testCoverageHealth.warnings).toEqual([]);
+    expect(report.warnings).not.toContain("Check runs are disabled, so Gittensory cannot surface a per-PR quality gate to maintainers.");
     expect(report.githubApp.quietByDefault).toBe(false);
     expect(report.githubApp.behavior).toContain("for all PRs");
   });
@@ -197,7 +198,7 @@ describe("buildGittensorConfigRecommendation", () => {
 
     expect(recommendation).toMatchObject({
       privateOnly: true,
-      recommended: { participationMode: "split", issueDiscoveryShare: 0.1, maintainerCut: 0.02 },
+      recommended: { participationMode: "split", issueDiscoveryShare: 0.1, directPrShare: 0.9, maintainerCut: 0.3 },
     });
     expect(recommendation.reasons).toEqual(
       expect.arrayContaining(["Config and intake signals are strong enough to consider a small issue-discovery slice.", "Maintainer cut can be considered because config and queue signals are clean."]),
