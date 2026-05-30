@@ -10,6 +10,7 @@ import {
   type ContributorOutcomeHistory,
   type ContributorProfile,
   type ContributorScoringProfile,
+  type IssueQualityReport,
   type LocalDiffPreflightResult,
   type RoleContext,
 } from "./engine";
@@ -160,6 +161,7 @@ export function buildLocalBranchAnalysis(args: {
   outcomeHistory: ContributorOutcomeHistory;
   scoringSnapshot: ScoringModelSnapshotRecord;
   scoringProfile?: ContributorScoringProfile | null | undefined;
+  issueQuality?: IssueQualityReport | null | undefined;
 }): LocalBranchAnalysis {
   const changedFiles = args.input.changedFiles ?? [];
   const changedPaths = changedFiles.map((file) => file.path);
@@ -184,6 +186,7 @@ export function buildLocalBranchAnalysis(args: {
     args.repo,
     args.issues,
     args.pullRequests,
+    args.issueQuality,
   );
   const roleContext = buildRoleContext({
     login: args.input.login,
@@ -719,7 +722,7 @@ function firstCommitTitle(messages: string[] | undefined): string | undefined {
 }
 
 function isPublicSafeText(text: string): boolean {
-  return !/\b(reward\w*|score\w*|wallet|hotkey|coldkey|mnemonic|farming|payout|ranking|raw[-\s]?trust|trust score|private[-\s]?reviewability|reviewability)\b|\/Users\/|\/home\/|\/tmp\/|[A-Z]:\\Users\\/i.test(text);
+  return !/\b(reward\w*|score\w*|wallet|hotkey|coldkey|mnemonic|farming|payout|ranking|raw[-_\s]?trust|trust[-_\s]?score|private[-_\s]?reviewability|reviewability)\b|\/Users\/|\/home\/|\/tmp\/|[A-Z]:\\Users\\/i.test(text);
 }
 
 function safeRepoPath(path: string): string {

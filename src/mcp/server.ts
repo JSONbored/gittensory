@@ -2,7 +2,7 @@ import { createMcpHandler } from "agents/mcp";
 import type { Context } from "hono";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authenticatePrivateToken, extractBearerToken } from "../auth/security";
+import { authenticatePrivateToken, extractBearerToken, type AuthIdentity } from "../auth/security";
 import {
   countOpenIssues,
   countOpenPullRequests,
@@ -36,6 +36,8 @@ import {
   startAgentRun,
 } from "../services/agent-orchestrator";
 import { loadContributorDecisionPackForServing, repoDecisionFromPack } from "../services/decision-pack";
+import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
+import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import {
   buildBountyAdvisory,
   buildCollisionReport,
@@ -220,14 +222,18 @@ const variantsShape = {
 
 export async function handleMcpRequest(c: AppContext): Promise<Response> {
   if (c.req.method === "OPTIONS") return new Response(null, { status: 204 });
-  if (!(await isAuthorizedMcpRequest(c))) return c.json({ error: "unauthorized" }, 401);
+  const identity = await authenticateMcpRequest(c);
+  if (!identity) return c.json({ error: "unauthorized" }, 401);
 
-  const server = new GittensoryMcp(c.env).createServer();
+  const server = new GittensoryMcp(c.env, identity).createServer();
   return createMcpHandler(server, { route: "/mcp", enableJsonResponse: true })(c.req.raw, c.env, getExecutionContext(c));
 }
 
 export class GittensoryMcp {
-  constructor(private readonly env: Env) {}
+  constructor(
+    private readonly env: Env,
+    private readonly identity: AuthIdentity = { kind: "static", actor: "mcp" },
+  ) {}
 
   createServer(): McpServer {
     const server = new McpServer({
@@ -242,6 +248,15 @@ export class GittensoryMcp {
         inputSchema: ownerRepoShape,
       },
       async (input) => this.toolResult(await this.getRepoContext(input)),
+    );
+
+    server.registerTool(
+      "gittensory_get_burden_forecast",
+      {
+        description: "Return the cached or freshly-computed maintainer burden forecast for a repo, including projected review load, queue growth risk, stale PR signals, and a freshness marker.",
+        inputSchema: ownerRepoShape,
+      },
+      async (input) => this.toolResult(await this.getBurdenForecast(input)),
     );
 
     server.registerTool(
@@ -296,6 +311,15 @@ export class GittensoryMcp {
         inputSchema: {},
       },
       async () => this.toolResult(await this.getRegistryChanges()),
+    );
+
+    server.registerTool(
+      "gittensory_get_issue_quality",
+      {
+        description: "Return the cached or freshly-computed issue-quality report for a repo, ranking which open issues are actionable, need proof, are stale/duplicate-prone, or already solved.",
+        inputSchema: ownerRepoShape,
+      },
+      async (input) => this.toolResult(await this.getIssueQuality(input)),
     );
 
     server.registerTool(
@@ -463,6 +487,12 @@ export class GittensoryMcp {
     return server;
   }
 
+  private requireContributorAccess(login: string): void {
+    if (this.identity.kind === "session" && this.identity.actor.toLowerCase() !== login.toLowerCase()) {
+      throw new Error("Forbidden: session can only access the authenticated GitHub login.");
+    }
+  }
+
   private async getRepoContext(input: { owner: string; repo: string }): Promise<ToolPayload> {
     const fullName = `${input.owner}/${input.repo}`;
     const [repo, issues, pullRequests, recentMergedPullRequests, queueCounts] = await Promise.all([
@@ -484,6 +514,42 @@ export class GittensoryMcp {
         configQuality: buildConfigQuality(repo, issues, pullRequests, fullName),
         dataQuality: await this.loadRepoDataQuality(fullName),
       },
+    };
+  }
+
+  private async getBurdenForecast(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    const response = await loadOrComputeBurdenForecastResponse(this.env, fullName);
+    if (!response) {
+      return {
+        summary: `Gittensory has no cached burden forecast for ${fullName}.`,
+        data: { status: "not_found", repoFullName: fullName },
+      };
+    }
+    return {
+      summary:
+        response.source === "snapshot"
+          ? `Gittensory burden forecast for ${fullName} (cached, ${response.freshness}).`
+          : `Gittensory burden forecast for ${fullName} (computed from cached metadata).`,
+      data: response as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getIssueQuality(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    const response = await loadOrComputeIssueQualityResponse(this.env, fullName);
+    if (!response) {
+      return {
+        summary: `Gittensory has no cached issue quality for ${fullName}.`,
+        data: { status: "not_found", repoFullName: fullName },
+      };
+    }
+    return {
+      summary:
+        response.source === "snapshot"
+          ? `Gittensory issue quality for ${fullName} (cached).`
+          : `Gittensory issue quality for ${fullName} (computed from cached metadata).`,
+      data: response as unknown as Record<string, unknown>,
     };
   }
 
@@ -515,6 +581,7 @@ export class GittensoryMcp {
   }
 
   private async getDecisionPack(login: string): Promise<ToolPayload> {
+    this.requireContributorAccess(login);
     const serving = await loadContributorDecisionPackForServing(this.env, login);
     if (serving.kind === "ready") {
       return {
@@ -529,6 +596,7 @@ export class GittensoryMcp {
   }
 
   private async explainRepoDecision(input: { login: string; owner: string; repo: string }): Promise<ToolPayload> {
+    this.requireContributorAccess(input.login);
     const fullName = `${input.owner}/${input.repo}`;
     const serving = await loadContributorDecisionPackForServing(this.env, input.login);
     if (serving.kind === "needs_refresh") {
@@ -564,30 +632,33 @@ export class GittensoryMcp {
   }
 
   private async preflightPr(input: z.infer<z.ZodObject<typeof preflightShape>>): Promise<ToolPayload> {
-    const [repo, issues, pullRequests] = await Promise.all([
+    const [repo, issues, pullRequests, issueQuality] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
+      loadOrComputeIssueQualityResponse(this.env, input.repoFullName),
     ]);
     return {
       summary: `Gittensory PR preflight for ${input.repoFullName}.`,
-      data: buildPreflightResult(input, repo, issues, pullRequests) as unknown as Record<string, unknown>,
+      data: buildPreflightResult(input, repo, issues, pullRequests, issueQuality?.report) as unknown as Record<string, unknown>,
     };
   }
 
   private async preflightLocalDiff(input: z.infer<z.ZodObject<typeof localDiffPreflightShape>>): Promise<ToolPayload> {
-    const [repo, issues, pullRequests] = await Promise.all([
+    const [repo, issues, pullRequests, issueQuality] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
+      loadOrComputeIssueQualityResponse(this.env, input.repoFullName),
     ]);
     return {
       summary: `Gittensory local diff preflight for ${input.repoFullName}.`,
-      data: buildLocalDiffPreflightResult(input, repo, issues, pullRequests) as unknown as Record<string, unknown>,
+      data: buildLocalDiffPreflightResult(input, repo, issues, pullRequests, issueQuality?.report) as unknown as Record<string, unknown>,
     };
   }
 
   private async previewScore(input: z.infer<z.ZodObject<typeof scorePreviewShape>>): Promise<ToolPayload> {
+    if (input.contributorLogin) this.requireContributorAccess(input.contributorLogin);
     const [repo, snapshot, evidence] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       getOrCreateScoringModelSnapshot(this.env),
@@ -601,6 +672,7 @@ export class GittensoryMcp {
   }
 
   private async explainReviewRisk(input: z.infer<z.ZodObject<typeof preflightShape>>): Promise<ToolPayload> {
+    if (input.contributorLogin) this.requireContributorAccess(input.contributorLogin);
     const [repo, issues, pullRequests] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
@@ -687,6 +759,7 @@ export class GittensoryMcp {
   }
 
   private async agentPlanNextWork(input: z.infer<z.ZodObject<typeof agentPlanShape>>): Promise<ToolPayload> {
+    this.requireContributorAccess(input.login);
     const bundle = await planNextWork(this.env, { ...input, surface: "mcp" });
     return {
       summary: `Gittensory base-agent plan for ${input.login}.`,
@@ -695,6 +768,7 @@ export class GittensoryMcp {
   }
 
   private async agentStartRun(input: z.infer<z.ZodObject<typeof agentRunShape>>): Promise<ToolPayload> {
+    this.requireContributorAccess(input.actorLogin);
     const bundle = await startAgentRun(this.env, {
       objective: input.objective,
       actorLogin: input.actorLogin,
@@ -714,6 +788,7 @@ export class GittensoryMcp {
   private async agentGetRun(runId: string): Promise<ToolPayload> {
     const bundle = await getAgentRunBundle(this.env, runId);
     if (!bundle) throw new Error("Agent run not found.");
+    this.requireContributorAccess(bundle.run.actorLogin);
     return {
       summary: `Gittensory base-agent run ${runId}.`,
       data: bundle as unknown as Record<string, unknown>,
@@ -721,6 +796,7 @@ export class GittensoryMcp {
   }
 
   private async agentExplainNextAction(input: z.infer<z.ZodObject<typeof agentPlanShape>>): Promise<ToolPayload> {
+    this.requireContributorAccess(input.login);
     const bundle = await explainBlockersWithAgent(this.env, { ...input, surface: "mcp" });
     return {
       summary: `Gittensory base-agent next-action explanation for ${input.login}.`,
@@ -732,6 +808,7 @@ export class GittensoryMcp {
   }
 
   private async agentPreparePrPacket(input: z.infer<z.ZodObject<typeof localBranchAnalysisShape>>): Promise<ToolPayload> {
+    this.requireContributorAccess(input.login);
     const bundle = await preparePrPacketWithAgent(this.env, input, "mcp");
     return {
       summary: `Gittensory base-agent public-safe PR packet for ${input.repoFullName}.`,
@@ -740,13 +817,15 @@ export class GittensoryMcp {
   }
 
   private async analyzeLocalBranch(input: z.infer<z.ZodObject<typeof localBranchAnalysisShape>>) {
-    const [context, repo, issues, pullRequests, recentMergedPullRequests, snapshot] = await Promise.all([
+    this.requireContributorAccess(input.login);
+    const [context, repo, issues, pullRequests, recentMergedPullRequests, snapshot, issueQuality] = await Promise.all([
       this.loadContributorFastContext(input.login),
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
       listPullRequests(this.env, input.repoFullName),
       listRecentMergedPullRequests(this.env, input.repoFullName),
       getOrCreateScoringModelSnapshot(this.env),
+      loadOrComputeIssueQualityResponse(this.env, input.repoFullName),
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: input.login, fit, scoringSnapshot: snapshot });
@@ -763,6 +842,7 @@ export class GittensoryMcp {
         outcomeHistory: context.outcomeHistory,
         scoringSnapshot: snapshot,
         scoringProfile,
+        issueQuality: issueQuality?.report,
       }),
       dataQuality: await this.loadRepoDataQuality(input.repoFullName),
     };
@@ -849,8 +929,8 @@ function authoritativeContributorRepoStats(
   return officialRepoStats.length > 0 ? officialRepoStats : cachedRepoStats;
 }
 
-async function isAuthorizedMcpRequest(c: AppContext): Promise<boolean> {
-  return Boolean(await authenticatePrivateToken(c.env, extractBearerToken(c.req.header("authorization"))));
+async function authenticateMcpRequest(c: AppContext): Promise<AuthIdentity | null> {
+  return authenticatePrivateToken(c.env, extractBearerToken(c.req.header("authorization")));
 }
 
 function getExecutionContext(c: AppContext): ExecutionContext<unknown> {

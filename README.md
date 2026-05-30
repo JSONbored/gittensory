@@ -100,12 +100,15 @@ wrangler secret put GITHUB_WEBHOOK_SECRET
 wrangler secret put GITHUB_APP_PRIVATE_KEY
 wrangler secret put GITHUB_PUBLIC_TOKEN
 wrangler secret put GITHUB_OAUTH_CLIENT_ID
+wrangler secret put ADMIN_GITHUB_LOGINS
 wrangler secret put GITTENSORY_API_TOKEN
 wrangler secret put GITTENSORY_MCP_TOKEN
 wrangler secret put INTERNAL_JOB_TOKEN
 ```
 
 `GITHUB_PUBLIC_TOKEN` is a server-side token used to raise public GitHub API rate limits during registered-repo backfill. It is not a contributor token.
+
+`ADMIN_GITHUB_LOGINS` is a comma- or whitespace-separated allowlist of GitHub logins that may exchange GitHub OAuth/device-flow credentials for Gittensory API sessions. Leave it unset to disable OAuth session issuance.
 
 The production API origin is `https://gittensory-api.aethereal.dev`. The `workers.dev` deployment URL is treated as an internal fallback, not the public integration target.
 

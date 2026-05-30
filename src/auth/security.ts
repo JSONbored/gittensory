@@ -55,8 +55,24 @@ export async function authenticateSessionToken(env: Env, token: string | undefin
   const session = await getAuthSessionByTokenHash(env, await hashToken(token));
   if (!session) return null;
   if (session.revokedAt || Date.parse(session.expiresAt) <= Date.now()) return null;
+  if (!isAuthorizedGitHubSessionLogin(env, session.login)) return null;
   await touchAuthSession(env, session.id);
   return { kind: "session", actor: session.login, session };
+}
+
+export function isAuthorizedGitHubSessionLogin(env: Env, login: string): boolean {
+  const allowedLogins = parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS);
+  if (allowedLogins.size === 0) return false;
+  return allowedLogins.has(login.toLowerCase());
+}
+
+function parseGitHubLoginList(value: string | undefined): Set<string> {
+  return new Set(
+    (value ?? "")
+      .split(/[\s,]+/)
+      .map((login) => login.trim().toLowerCase())
+      .filter(Boolean),
+  );
 }
 
 export async function createSessionForGitHubUser(
