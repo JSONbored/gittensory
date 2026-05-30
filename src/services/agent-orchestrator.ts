@@ -26,6 +26,7 @@ import { loadOrComputeIssueQualityResponse } from "./issue-quality";
 import { summarizeAgentBundleWithAi } from "./ai-summaries";
 import { buildContributorFit, buildContributorOutcomeHistory, buildContributorProfile, buildContributorScoringProfile } from "../signals/engine";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest, type LocalBranchAnalysis, type LocalBranchAnalysisInput } from "../signals/local-branch";
+import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import type {
   AgentActionRecord,
   AgentActionStatus,
@@ -284,7 +285,7 @@ async function executeLocalBranchRun(env: Env, run: AgentRunRecord, kind: string
 }
 
 async function analyzeLocalBranch(env: Env, input: LocalBranchAnalysisInput): Promise<LocalBranchAnalysis & { dataQuality?: { status: "complete" | "degraded" | "blocked" | "unknown"; warnings: string[] } }> {
-  const [github, contributorPullRequests, contributorIssues, repositories, syncStates, cachedRepoStats, gittensorSnapshot, repo, issues, pullRequests, recentMergedPullRequests, scoringSnapshot, issueQuality] =
+  const [github, contributorPullRequests, contributorIssues, repositories, syncStates, cachedRepoStats, gittensorSnapshot, repo, issues, pullRequests, recentMergedPullRequests, scoringSnapshot, issueQuality, repoManifest] =
     await Promise.all([
       fetchPublicContributorProfile(input.login),
       listContributorPullRequests(env, input.login),
@@ -299,6 +300,7 @@ async function analyzeLocalBranch(env: Env, input: LocalBranchAnalysisInput): Pr
       listRecentMergedPullRequests(env, input.repoFullName),
       getOrCreateScoringModelSnapshot(env),
       loadOrComputeIssueQualityResponse(env, input.repoFullName),
+      loadRepoFocusManifest(env, input.repoFullName),
     ]);
   const repoStats = contributorRepoStatsFromGittensor(gittensorSnapshot).length > 0 ? contributorRepoStatsFromGittensor(gittensorSnapshot) : cachedRepoStats;
   const profile = buildContributorProfile(input.login, github, contributorPullRequests, contributorIssues, repoStats, gittensorSnapshot);
@@ -306,8 +308,12 @@ async function analyzeLocalBranch(env: Env, input: LocalBranchAnalysisInput): Pr
   const fit = buildContributorFit(profile, repositories, [], [], syncStates, repoStats);
   const scoringProfile = buildContributorScoringProfile({ login: input.login, fit, scoringSnapshot });
   const checkSummaries = await loadCheckSummariesForPullRequests(env, input.repoFullName, input, pullRequests);
+  // Caller-supplied focusManifest wins; otherwise fall back to the repo-owned manifest when present.
+  const analysisInput = input.focusManifest !== undefined || !repoManifest.present
+    ? input
+    : { ...input, focusManifest: repoManifest as unknown };
   return buildLocalBranchAnalysis({
-    input,
+    input: analysisInput,
     repo,
     issues,
     pullRequests,
