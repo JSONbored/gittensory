@@ -261,6 +261,144 @@ describe("local branch analysis", () => {
     expect(analysis.scenarioScorePreview.afterApprovedPrsMerge?.gates.openPrCount).toBe(1);
   });
 
+  it("binds cached GitHub PR status to the current branch", () => {
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        branchName: "fix-cache",
+        headSha: "head-sha",
+        body: "Fixes #7",
+        changedFiles: [
+          { path: "src/cache.ts", additions: 12, deletions: 1, status: "modified" },
+          { path: "src/cache.test.ts", additions: 20, deletions: 0, status: "added" },
+        ],
+        validation: [{ command: "npm test -- cache", status: "passed" }],
+      },
+      repo,
+      issues: [{ repoFullName: repo.fullName, number: 7, title: "Cache edge", state: "open", labels: ["bug"], linkedPrs: [] }],
+      pullRequests: [
+        {
+          repoFullName: repo.fullName,
+          number: 14,
+          title: "Cache branch",
+          state: "open",
+          authorLogin: "oktofeesh1",
+          authorAssociation: "CONTRIBUTOR",
+          headSha: "head-sha",
+          headRef: "fix-cache",
+          mergeableState: "UNSTABLE",
+          labels: ["bug"],
+          linkedIssues: [7],
+        },
+      ],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    expect(analysis.githubBranchStatus).toMatchObject({ status: "failing_checks", pullNumber: 14 });
+    expect(analysis.branchQualityBlockers).toContain("GitHub checks need attention");
+    expect(analysis.prPacket.markdown).toContain("## GitHub Status");
+    expect(analysis.prPacket.markdown).toContain("PR #14");
+    expect(JSON.stringify(analysis.prPacket)).not.toMatch(/reward|score|wallet|hotkey|farming|payout|ranking|trust score/i);
+  });
+
+  it("feeds approved current-branch PRs into private pending scenarios", () => {
+    const approvedPr = {
+      repoFullName: repo.fullName,
+      number: 15,
+      title: "Approved cache branch",
+      state: "open",
+      authorLogin: "oktofeesh1",
+      authorAssociation: "CONTRIBUTOR",
+      headRef: "fix-cache-approved",
+      reviewDecision: "APPROVED",
+      labels: ["bug"],
+      linkedIssues: [7],
+    };
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        branchName: "fix-cache-approved",
+        body: "Fixes #7",
+        changedFiles: [
+          { path: "src/cache.ts", additions: 12, deletions: 1, status: "modified" },
+          { path: "src/cache.test.ts", additions: 20, deletions: 0, status: "added" },
+        ],
+        validation: [{ command: "npm test -- cache", status: "passed" }],
+      },
+      repo,
+      issues: [{ repoFullName: repo.fullName, number: 7, title: "Cache edge", state: "open", labels: ["bug"], linkedPrs: [] }],
+      pullRequests: [approvedPr],
+      contributorPullRequests: [approvedPr],
+      profile,
+      outcomeHistory: { ...outcomeHistory, totals: { ...outcomeHistory.totals, openPullRequests: 1, credibility: 0.2 } },
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    expect(analysis.githubBranchStatus).toMatchObject({ status: "approved", pullNumber: 15 });
+    expect(analysis.observedPullRequestScenarios.approvedOrMergeable).toBe(1);
+    expect(analysis.scenarioScorePreview.afterApprovedPrsMerge).toMatchObject({ source: "github_observed", gates: { openPrCount: 0 } });
+    expect(analysis.scenarioScorePreview.afterApprovedPrsMerge?.gates.credibilityObserved).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it("falls back cleanly when no current-branch PR or complete status is cached", () => {
+    const noPr = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        branchName: "local-only",
+        changedFiles: [{ path: "src/cache.ts", additions: 12, deletions: 1, status: "modified" }],
+        validation: [{ command: "npm test -- cache", status: "passed" }],
+      },
+      repo,
+      issues: [],
+      pullRequests: [],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+    expect(noPr.githubBranchStatus.status).toBe("no_pr");
+    expect(noPr.branchQualityBlockers.join(" ")).not.toMatch(/GitHub/i);
+
+    const unknown = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        branchName: "unknown-status",
+        changedFiles: [{ path: "src/cache.ts", additions: 12, deletions: 1, status: "modified" }],
+        validation: [{ command: "npm test -- cache", status: "passed" }],
+      },
+      repo,
+      issues: [],
+      pullRequests: [
+        {
+          repoFullName: repo.fullName,
+          number: 16,
+          title: "Unknown status",
+          state: "open",
+          authorLogin: "oktofeesh1",
+          authorAssociation: "CONTRIBUTOR",
+          headRef: "unknown-status",
+          mergeableState: "UNKNOWN",
+          labels: [],
+          linkedIssues: [],
+        },
+      ],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+    expect(unknown.githubBranchStatus).toMatchObject({ status: "unknown", pullNumber: 16 });
+    expect(unknown.localFindings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "github_status_unknown" })]));
+  });
+
   it("classifies stale base state and treats passed validation as test evidence", () => {
     const analysis = buildLocalBranchAnalysis({
       input: {

@@ -78,6 +78,16 @@ type ObservedPullRequestScenarios = {
   notes: string[];
 };
 
+type GitHubBranchStatus = {
+  source: "cached_github_data";
+  status: "approved" | "failing_checks" | "needs_author" | "blocked" | "pending_review" | "no_pr" | "unknown";
+  pullNumber?: number | undefined;
+  title?: string | undefined;
+  reviewDecision?: string | null | undefined;
+  mergeableState?: string | null | undefined;
+  notes: string[];
+};
+
 export type LocalBranchAnalysis = {
   login: string;
   repoFullName: string;
@@ -112,6 +122,7 @@ export type LocalBranchAnalysis = {
     blockedBy: ScorePreviewResult["blockedBy"];
   };
   observedPullRequestScenarios: ObservedPullRequestScenarios;
+  githubBranchStatus: GitHubBranchStatus;
   rewardRisk: RepoRewardRisk;
   scoreBlockers: string[];
   branchQualityBlockers: string[];
@@ -204,6 +215,7 @@ export function buildLocalBranchAnalysis(args: {
     pullRequests: args.contributorPullRequests ?? args.pullRequests,
     repositories: args.repositories,
   });
+  const githubBranchStatus = buildGitHubBranchStatus(args.input, args.pullRequests);
   const scoreInput = buildLocalScoreInput({
     input: args.input,
     changedFiles,
@@ -243,7 +255,7 @@ export function buildLocalBranchAnalysis(args: {
     issues: args.issues,
     pullRequests: args.pullRequests,
   });
-  const localFindings = buildLocalFindings(args.input, changedFiles, preflight, scorePreview, baseFreshness);
+  const localFindings = buildLocalFindings(args.input, changedFiles, preflight, scorePreview, baseFreshness, githubBranchStatus);
   const branchQualityBlockers = branchQualityBlockersFor(preflight, localFindings);
   const accountStateBlockers = accountStateBlockersFor(scorePreview);
   const currentScenario = scorePreview.scenarioPreviews.find((scenario) => scenario.name === "current") ?? scorePreview.scenarioPreviews[0]!;
@@ -267,6 +279,7 @@ export function buildLocalBranchAnalysis(args: {
     laneSummary: lane.summary,
     localFindings,
     baseFreshness,
+    githubBranchStatus,
     recommendedRerunCondition,
   });
   const scoreBlockers = [
@@ -288,6 +301,7 @@ export function buildLocalBranchAnalysis(args: {
     scorePreview,
     scenarioScorePreview,
     observedPullRequestScenarios,
+    githubBranchStatus,
     rewardRisk,
     scoreBlockers: [...new Set(scoreBlockers)],
     branchQualityBlockers,
@@ -419,6 +433,45 @@ function observedPullRequestNotes(scenarios: Omit<ObservedPullRequestScenarios, 
   ];
 }
 
+function buildGitHubBranchStatus(input: LocalBranchAnalysisInput, pullRequests: PullRequestRecord[]): GitHubBranchStatus {
+  const branchKeys = new Set([input.headRef, input.branchName].filter((value): value is string => Boolean(value)).map((value) => value.toLowerCase()));
+  const match = pullRequests.find(
+    (pr) =>
+      pr.state === "open" &&
+      (Boolean(input.headSha && pr.headSha === input.headSha) || Boolean(pr.headRef && branchKeys.has(pr.headRef.toLowerCase()))),
+  );
+  if (!match) return { source: "cached_github_data", status: "no_pr", notes: ["No open GitHub PR was matched to the current branch metadata."] };
+  const reviewDecision = (match.reviewDecision ?? "").toLowerCase();
+  const mergeableState = (match.mergeableState ?? "").toLowerCase();
+  const status =
+    reviewDecision === "approved" || isApprovedOrMergeableOpenPr(match)
+      ? "approved"
+      : reviewDecision === "changes_requested"
+        ? "needs_author"
+        : ["dirty", "blocked", "conflicting", "unstable"].includes(mergeableState)
+          ? "failing_checks"
+          : mergeableState === "unknown"
+            ? "unknown"
+            : "pending_review";
+  return {
+    source: "cached_github_data",
+    status,
+    pullNumber: match.number,
+    title: match.title,
+    reviewDecision: match.reviewDecision,
+    mergeableState: match.mergeableState,
+    notes: githubBranchStatusNotes(status, match),
+  };
+}
+
+function githubBranchStatusNotes(status: GitHubBranchStatus["status"], pr: PullRequestRecord): string[] {
+  if (status === "approved") return [`PR #${pr.number} is approved or mergeable in cached GitHub metadata.`];
+  if (status === "needs_author") return [`PR #${pr.number} has requested changes in cached GitHub metadata.`];
+  if (status === "failing_checks") return [`PR #${pr.number} has failing, blocked, or conflicting GitHub status metadata.`];
+  if (status === "unknown") return [`PR #${pr.number} has incomplete GitHub status metadata; refresh checks before relying on it.`];
+  return [`PR #${pr.number} is open but not yet approved or clearly blocked in cached GitHub metadata.`];
+}
+
 function isMaintainerAuthoredPr(pr: PullRequestRecord, repo: RepositoryRecord | undefined, login: string): boolean {
   return sameLogin(repo?.owner, login) || ["owner", "member", "collaborator"].includes((pr.authorAssociation ?? "").toLowerCase());
 }
@@ -446,6 +499,7 @@ function buildLocalFindings(
   preflight: LocalDiffPreflightResult,
   scorePreview: ScorePreviewResult,
   baseFreshness: LocalBranchAnalysis["baseFreshness"],
+  githubBranchStatus: GitHubBranchStatus,
 ): LocalBranchAnalysis["localFindings"] {
   const failedValidation = (input.validation ?? []).filter((entry) => entry.status === "failed");
   return [
@@ -498,6 +552,7 @@ function buildLocalFindings(
           },
         ]
       : []),
+    ...githubBranchFindings(githubBranchStatus),
     ...scorePreview.warnings.map((warning) => ({
       code: "score_preview_warning",
       severity: /not registered|no active|exceeds|credibility/i.test(warning) ? ("warning" as const) : ("info" as const),
@@ -512,6 +567,32 @@ function buildLocalFindings(
       action: finding.action,
     })),
   ];
+}
+
+function githubBranchFindings(status: GitHubBranchStatus): LocalBranchAnalysis["localFindings"] {
+  if (status.status === "failing_checks" || status.status === "needs_author") {
+    return [
+      {
+        code: "github_status_needs_work",
+        severity: "warning" as const,
+        title: status.status === "needs_author" ? "GitHub review needs author" : "GitHub checks need attention",
+        detail: status.notes.join(" "),
+        action: "Resolve GitHub review/check blockers before asking for maintainer review.",
+      },
+    ];
+  }
+  if (status.status === "unknown") {
+    return [
+      {
+        code: "github_status_unknown",
+        severity: "info" as const,
+        title: "GitHub status is incomplete",
+        detail: status.notes.join(" "),
+        action: "Refresh GitHub checks and reviews before final submission.",
+      },
+    ];
+  }
+  return [];
 }
 
 function buildBaseFreshness(
@@ -623,6 +704,7 @@ function buildPublicSafePrPacket(args: {
   laneSummary: string;
   localFindings: LocalBranchAnalysis["localFindings"];
   baseFreshness: LocalBranchAnalysis["baseFreshness"];
+  githubBranchStatus: GitHubBranchStatus;
   recommendedRerunCondition: string;
 }): LocalBranchAnalysis["prPacket"] {
   const topPaths = args.changedFiles.slice(0, 8).map(changedFileSummary);
@@ -652,6 +734,7 @@ function buildPublicSafePrPacket(args: {
         lines: args.preflight.linkedIssues.length > 0 ? args.preflight.linkedIssues.map((issue) => `- Closes #${issue}`) : ["- No linked issue detected; explain why this is a no-issue PR."],
       },
       { heading: "Branch Freshness", lines: branchFreshnessLines(args.baseFreshness) },
+      { heading: "GitHub Status", lines: githubStatusLines(args.githubBranchStatus) },
       { heading: "Overlap/WIP Check", lines: overlapCautionLines(args.preflight.collisions) },
       {
         heading: "Changed Paths",
@@ -679,6 +762,11 @@ function buildPublicSafePrPacket(args: {
 
 function branchFreshnessLines(freshness: LocalBranchAnalysis["baseFreshness"]): string[] {
   return [`- Base freshness: ${freshness.status}.`, ...freshness.warnings.filter(isPublicSafeText).map((warning) => `- ${warning}`), freshness.passedValidationCount > 0 ? `- Validation evidence supplied: ${freshness.passedValidationCount} passed command(s).` : "- No passed validation evidence was supplied."];
+}
+
+function githubStatusLines(status: GitHubBranchStatus): string[] {
+  if (status.status === "no_pr") return ["- No open GitHub PR was matched to this branch."];
+  return [`- PR #${status.pullNumber}: ${status.status.replace(/_/g, " ")}.`, ...status.notes.map((note) => `- ${note}`)].filter(isPublicSafeText);
 }
 
 function overlapCautionLines(collisions: LocalDiffPreflightResult["collisions"]): string[] {
