@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   upsertBounty,
   upsertBurdenForecast,
@@ -29,7 +29,15 @@ import { createTestEnv } from "../helpers/d1";
 import type { JsonValue } from "../../src/types";
 
 describe("api routes", () => {
+  // Freshness/readiness fixtures are dated relative to late May 2026; pin the clock so freshness SLO
+  // windows stay deterministic regardless of when CI runs (fixtures otherwise tip "stale" after 7 days).
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-28T00:00:00.000Z"));
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 

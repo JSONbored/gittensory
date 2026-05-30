@@ -2305,9 +2305,11 @@ export function classifyBountyLifecycle(bounty: BountyRecord, issue: IssueRecord
   const status = bounty.status.trim().toLowerCase();
   if (!status) return "unknown";
   if (/cancel|void|expired|withdrawn|rejected|abandon/.test(status)) return "cancelled";
-  if (/complete|paid|resolved|reward|award|fulfil|merged|claimed|done/.test(status)) return "completed";
+  // Only past-tense payout phrasing (rewarded/awarded) marks completion; a bounty that merely
+  // advertises a "reward"/"award" is an active offer, not already-completed work.
+  if (/complete|paid|resolved|rewarded|awarded|fulfil|merged|claimed|done/.test(status)) return "completed";
   if (/historical|archived|closed/.test(status)) return "historical";
-  const looksActive = /open|active|live|available|ready|funded|in[\s_-]?progress|todo|new/.test(status);
+  const looksActive = /open|active|live|available|ready|funded|reward|award|in[\s_-]?progress|todo|new/.test(status);
   if (!looksActive) return "ambiguous";
   // Active-looking status: reconcile against the linked issue and freshness so dead context is not treated as live.
   if (issue && issue.state !== "open") return "ambiguous";

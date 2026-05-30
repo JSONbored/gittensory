@@ -467,6 +467,12 @@ describe("world-class backend signals", () => {
     // An active-looking bounty on a closed issue is a conflicting signal, not a live opportunity.
     expect(classifyBountyLifecycle(active, closedIssue)).toBe("ambiguous");
 
+    // A bounty that advertises a reward/award is an active offer, not completed work; only past-tense payout phrasing completes it.
+    expect(classifyBountyLifecycle({ ...base, id: "reward-open", status: "Reward available" }, openIssue)).toBe("active");
+    expect(classifyBountyLifecycle({ ...base, id: "award-open", status: "Award open" }, openIssue)).toBe("active");
+    expect(classifyBountyLifecycle({ ...base, id: "rewarded", status: "Rewarded" }, openIssue)).toBe("completed");
+    expect(classifyBountyLifecycle({ ...base, id: "awarded", status: "Awarded to solver" }, openIssue)).toBe("completed");
+
     expect(buildBountyAdvisory(historical, repo, openIssue).findings.map((finding) => finding.code)).toContain("historical_bounty");
     expect(buildBountyAdvisory(completed, repo, openIssue).findings.map((finding) => finding.code)).toContain("completed_bounty");
     expect(buildBountyAdvisory(cancelled, repo, openIssue).findings.map((finding) => finding.code)).toContain("cancelled_bounty");
