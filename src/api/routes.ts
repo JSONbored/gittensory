@@ -147,8 +147,10 @@ const localBranchChangedFileSchema = z
 const localBranchValidationSchema = z
   .object({
     command: z.string().min(1).max(MAX_LOCAL_BRANCH_REF_CHARS),
-    status: z.enum(["passed", "failed", "not_run"]),
+    status: z.enum(["passed", "failed", "not_run", "skipped", "focused", "unknown"]),
     summary: z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS).optional(),
+    durationMs: z.number().int().min(0).optional(),
+    exitCode: z.number().int().min(0).optional(),
   })
   .strict();
 
@@ -791,6 +793,7 @@ export function createApp() {
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: parsed.data.login, fit, scoringSnapshot: snapshot });
+    const checkSummaries = await loadCheckSummariesForPullRequests(c.env, parsed.data.repoFullName, pullRequests);
     const analysis = buildLocalBranchAnalysis({
       input: parsed.data,
       repo,
@@ -800,6 +803,7 @@ export function createApp() {
       recentMergedPullRequests,
       bounties,
       repositories: context.repositories,
+      checkSummaries,
       profile: context.profile,
       outcomeHistory: context.outcomeHistory,
       scoringSnapshot: snapshot,
@@ -1341,6 +1345,11 @@ async function loadContributorFastContext(env: Env, login: string) {
     profile,
     outcomeHistory,
   };
+}
+
+async function loadCheckSummariesForPullRequests(env: Env, repoFullName: string, pullRequests: Array<{ number: number; state?: string | null | undefined }>) {
+  const openPulls = pullRequests.filter((pr) => pr.state === "open");
+  return (await Promise.all(openPulls.map((pr) => listCheckSummaries(env, repoFullName, pr.number)))).flat();
 }
 
 async function loadRepoDataQuality(env: Env, fullName: string) {
