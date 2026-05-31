@@ -767,7 +767,7 @@ async function refreshRepoGithubTotals(
   const query = `query GittensoryRepoTotals {
     rateLimit { remaining resetAt }
     repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {
-      issues(states: OPEN) { totalCount }
+      issues(states: OPEN, filter: {issueTypes: ISSUE}) { totalCount }
       openPullRequests: pullRequests(states: OPEN) { totalCount }
       mergedPullRequests: pullRequests(states: MERGED) { totalCount }
       closedPullRequests: pullRequests(states: CLOSED) { totalCount }
@@ -1068,9 +1068,10 @@ async function supplementOpenIssuesFromGraphQl(env: Env, repo: RepositoryRecord,
   for (;;) {
     const query = `query GittensoryOpenIssuesSupplement {
       repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {
-        issues(states: OPEN, first: 100${after}) {
+        issues(states: OPEN, filter: {issueTypes: ISSUE}, first: 100${after}) {
           pageInfo { hasNextPage endCursor }
           nodes {
+            __typename
             number
             title
             state
@@ -1089,6 +1090,7 @@ async function supplementOpenIssuesFromGraphQl(env: Env, repo: RepositoryRecord,
     const response = await githubGraphQl<GitHubOpenIssuesResponse>(env, query, token);
     const issues = response.data?.repository?.issues;
     for (const issue of issues?.nodes ?? []) {
+      if (issue?.__typename === "PullRequest") continue;
       if (!issue?.number || existingNumbers.has(issue.number)) continue;
       const payload: GitHubIssuePayload = {
         number: issue.number,

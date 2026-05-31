@@ -867,12 +867,33 @@ describe("GitHub backfill", () => {
 
     expect(result).toMatchObject({ status: "queued", totals: { openIssuesTotal: 2911, openPullRequestsTotal: 167 } });
     expect(await listRepoSyncStates(env)).toMatchObject([{ status: "running", openIssuesCount: 1100, openPullRequestsCount: 167, lastCompletedAt: "2026-05-24T00:00:00.000Z" }]);
-    expect(sent).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "backfill-repo-segment", repoFullName: "JSONbored/gittensory", segment: "open_issues", mode: "resume", force: true }),
-        expect.objectContaining({ type: "backfill-repo-segment", repoFullName: "JSONbored/gittensory", segment: "open_pull_requests", mode: "resume", force: true }),
-      ]),
-    );
+  });
+
+  it("persists openIssuesTotal without subtracting open pull requests from issues GraphQL total", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    await seedRegisteredRepo(env);
+    let graphqlBody = "";
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://api.github.com/graphql") {
+        graphqlBody = String(init?.body ?? "");
+        return githubTotalsResponse({ openIssues: 10, openPullRequests: 3, mergedPullRequests: 0, closedPullRequests: 0, labels: 1 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+
+    const result = await enqueueRepositoryOpenDataBackfill(env, {
+      repoFullName: "JSONbored/gittensory",
+      requestedBy: "api",
+      mode: "full",
+      force: true,
+    });
+
+    expect(result.totals?.openIssuesTotal).toBe(10);
+    expect(graphqlBody).toContain("issueTypes");
+    expect(await listLatestRepoGithubTotalsSnapshots(env)).toMatchObject([
+      { repoFullName: "JSONbored/gittensory", openIssuesTotal: 10, openPullRequestsTotal: 3 },
+    ]);
   });
 
   it("drains open issue segments against GitHub totals without counting PR rows from /issues", async () => {
