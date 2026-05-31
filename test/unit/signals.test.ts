@@ -440,8 +440,28 @@ describe("world-class backend signals", () => {
     };
     const linkedIssue: IssueRecord = { ...issues[0]!, linkedPrs: [12, 13] };
 
-    expect(buildBountyAdvisory(active, repo, null)).toMatchObject({ lifecycle: "active", fundingStatus: "funded", consensusRisk: "high" });
-    expect(buildBountyAdvisory(historical, null, linkedIssue)).toMatchObject({ lifecycle: "historical", fundingStatus: "target_only", consensusRisk: "medium" });
+    expect(buildBountyAdvisory(active, repo, null)).toMatchObject({ lifecycle: "active", fundingStatus: "funded", linkedPrs: [], consensusRisk: "high" });
+    expect(buildBountyAdvisory(historical, null, linkedIssue)).toMatchObject({ lifecycle: "historical", fundingStatus: "target_only", linkedPrs: [12, 13], consensusRisk: "medium" });
+  });
+
+  it("warns on stale and ambiguous bounty lifecycle context", () => {
+    const stale: BountyRecord = {
+      id: "bounty-stale",
+      repoFullName: repo.fullName,
+      issueNumber: 8,
+      status: "Open",
+      payload: { bounty_alpha: "1.0", linked_prs: [44] },
+      updatedAt: "2025-01-01T00:00:00.000Z",
+    };
+    const ambiguous: BountyRecord = { ...stale, id: "bounty-ambiguous", status: "Needs review", updatedAt: new Date().toISOString() };
+
+    const staleAdvisory = buildBountyAdvisory(stale, repo, null);
+    expect(staleAdvisory).toMatchObject({ lifecycle: "stale", linkedPrs: [44], consensusRisk: "high" });
+    expect(staleAdvisory.findings.map((finding) => finding.code)).toEqual(expect.arrayContaining(["stale_bounty_context", "bounty_linked_prs_detected"]));
+
+    const ambiguousAdvisory = buildBountyAdvisory(ambiguous, repo, null);
+    expect(ambiguousAdvisory).toMatchObject({ lifecycle: "ambiguous", consensusRisk: "medium" });
+    expect(ambiguousAdvisory.findings.map((finding) => finding.code)).toContain("ambiguous_bounty_state");
   });
 
   it("covers contributor fit and label audit warning boundaries", () => {

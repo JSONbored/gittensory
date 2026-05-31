@@ -433,8 +433,9 @@ export type BountyAdvisory = {
   repoFullName: string;
   issueNumber: number;
   status: string;
-  lifecycle: "active" | "historical" | "unknown";
+  lifecycle: "active" | "historical" | "stale" | "ambiguous" | "unknown";
   fundingStatus: "funded" | "target_only" | "unknown";
+  linkedPrs: number[];
   consensusRisk: "low" | "medium" | "high";
   findings: SignalFinding[];
 };
@@ -2544,10 +2545,11 @@ export function buildRegistryChangeReport(snapshots: RegistrySnapshot[]): Regist
 
 export function buildBountyAdvisory(bounty: BountyRecord, repo: RepositoryRecord | null, issue: IssueRecord | null): BountyAdvisory {
   const status = bounty.status.toLowerCase();
-  const lifecycle = status.includes("complete") || status.includes("cancel") || status.includes("closed") ? "historical" : status ? "active" : "unknown";
+  const lifecycle = classifyBountyLifecycle(status, bounty);
   const target = bounty.payload.target_bounty ?? bounty.payload.target_alpha;
   const amount = bounty.payload.bounty_amount ?? bounty.payload.bounty_alpha;
   const fundingStatus = amount && amount !== 0 && amount !== "0.0000" ? "funded" : target ? "target_only" : "unknown";
+  const linkedPrs = [...new Set(issue?.linkedPrs ?? extractBountyLinkedPrs(bounty))].sort((left, right) => left - right);
   const findings: SignalFinding[] = [];
   if (lifecycle === "historical") {
     findings.push({
@@ -2555,6 +2557,30 @@ export function buildBountyAdvisory(bounty: BountyRecord, repo: RepositoryRecord
       severity: "info",
       title: "Bounty is historical",
       detail: "This bounty is completed, cancelled, or otherwise not active in the local bounty cache.",
+    });
+  }
+  if (lifecycle === "stale") {
+    findings.push({
+      code: "stale_bounty_context",
+      severity: "warning",
+      title: "Bounty context is stale",
+      detail: "The bounty has not been refreshed recently; verify the source before treating it as an active opportunity.",
+    });
+  }
+  if (lifecycle === "ambiguous") {
+    findings.push({
+      code: "ambiguous_bounty_state",
+      severity: "warning",
+      title: "Bounty state is ambiguous",
+      detail: "The bounty status is not explicit enough to classify as active or historical.",
+    });
+  }
+  if (linkedPrs.length > 0) {
+    findings.push({
+      code: "bounty_linked_prs_detected",
+      severity: linkedPrs.length > 1 ? "warning" : "info",
+      title: "Linked PR context found",
+      detail: `Linked PR(s) discovered for this bounty: ${linkedPrs.map((number) => `#${number}`).join(", ")}.`,
     });
   }
   if (!repo?.isRegistered) {
@@ -2580,9 +2606,28 @@ export function buildBountyAdvisory(bounty: BountyRecord, repo: RepositoryRecord
     status: bounty.status,
     lifecycle,
     fundingStatus,
-    consensusRisk: issue && issue.linkedPrs.length > 1 ? "medium" : lifecycle === "active" && !issue ? "high" : "low",
+    linkedPrs,
+    consensusRisk: linkedPrs.length > 1 || lifecycle === "ambiguous" ? "medium" : (lifecycle === "active" || lifecycle === "stale") && !issue ? "high" : "low",
     findings,
   };
+}
+
+function classifyBountyLifecycle(status: string, bounty: BountyRecord): BountyAdvisory["lifecycle"] {
+  if (/complete|cancel|closed|paid|merged|resolved/.test(status)) return "historical";
+  if (/stale|expired|inactive/.test(status)) return "stale";
+  if (/active|open|funded|pending|claimed|in[_ -]?progress/.test(status)) {
+    const updatedAt = bounty.updatedAt ?? bounty.discoveredAt;
+    return daysSince(updatedAt) > 90 ? "stale" : "active";
+  }
+  if (status.trim().length === 0) return "unknown";
+  return "ambiguous";
+}
+
+function extractBountyLinkedPrs(bounty: BountyRecord): number[] {
+  return ["linked_prs", "linkedPullRequests", "linked_pr_numbers", "solver_prs"]
+    .flatMap((key) => bounty.payload[key])
+    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .filter((value): value is number => typeof value === "number" && Number.isInteger(value) && value > 0);
 }
 
 export function buildPublicPrIntelligenceComment(args: {
