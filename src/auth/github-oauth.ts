@@ -256,7 +256,8 @@ function parseOAuthStatePayload(encoded: string): GitHubWebOAuthState | null {
 }
 
 function oauthStateSecret(env: Env): string {
-  return env.GITHUB_OAUTH_CLIENT_SECRET ?? env.INTERNAL_JOB_TOKEN ?? env.GITTENSORY_API_TOKEN;
+  if (!env.GITHUB_OAUTH_CLIENT_SECRET) throw new Error("github_oauth_not_configured");
+  return env.GITHUB_OAUTH_CLIENT_SECRET;
 }
 
 async function hmacSha256(secret: string, value: string): Promise<string> {

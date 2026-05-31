@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { completeGitHubWebOAuth, createSessionFromGitHubToken, pollGitHubDeviceFlow, startGitHubDeviceFlow, startGitHubWebOAuth } from "../../src/auth/github-oauth";
 import { enforceRateLimit, RateLimiter, routeClassForPath } from "../../src/auth/rate-limit";
-import { authenticatePrivateToken, buildBrowserSessionCookie, createSessionForGitHubUser, isAuthorizedGitHubSessionLogin, revokeSession, timingSafeEqual } from "../../src/auth/security";
+import { authenticatePrivateToken, buildBrowserSessionCookie, createSessionForGitHubUser, extractCookieValue, isAuthorizedGitHubSessionLogin, revokeSession, timingSafeEqual } from "../../src/auth/security";
 import { createTestEnv } from "../helpers/d1";
 
 describe("private-beta auth and rate limiting", () => {
@@ -41,6 +41,7 @@ describe("private-beta auth and rate limiting", () => {
 
     const malformedUrlCookie = buildBrowserSessionCookie("token", "not-a-url");
     expect(malformedUrlCookie).toContain("Secure");
+    expect(extractCookieValue("gittensory_session=%E0%A4%A", "gittensory_session")).toBeUndefined();
   });
 
   it("enforces burst limits inside the Durable Object bucket", async () => {

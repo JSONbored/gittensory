@@ -26,7 +26,13 @@ export function extractCookieValue(header: string | null | undefined, name: stri
   const cookies = (header ?? "").split(";");
   for (const cookie of cookies) {
     const [rawKey, ...rawValue] = cookie.trim().split("=");
-    if (rawKey === name) return decodeURIComponent(rawValue.join("="));
+    if (rawKey === name) {
+      try {
+        return decodeURIComponent(rawValue.join("="));
+      } catch {
+        return undefined;
+      }
+    }
   }
   return undefined;
 }
