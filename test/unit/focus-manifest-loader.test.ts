@@ -134,4 +134,49 @@ describe("focus-manifest loader", () => {
   it("exposes a reasonable default max-age", () => {
     expect(REPO_FOCUS_MANIFEST_MAX_AGE_MS).toBeGreaterThan(60 * 1000);
   });
+
+  it("bypasses the cache when refresh is requested", async () => {
+    const env = createTestEnv();
+    let calls = 0;
+    const fetcher = async () => {
+      calls += 1;
+      return JSON.stringify({ wantedPaths: ["src/"] });
+    };
+    await loadRepoFocusManifest(env, "owner/refresh", { fetcher });
+    expect(calls).toBe(1);
+    await loadRepoFocusManifest(env, "owner/refresh", { fetcher, refresh: true });
+    expect(calls).toBe(2);
+  });
+
+  it("treats a cached snapshot with a missing or unparseable timestamp as stale", async () => {
+    const env = createTestEnv();
+    const { persistSignalSnapshot } = await import("../../src/db/repositories");
+    const { REPO_FOCUS_MANIFEST_SIGNAL } = await import("../../src/signals/focus-manifest-loader");
+    await persistSignalSnapshot(env, {
+      id: crypto.randomUUID(),
+      signalType: REPO_FOCUS_MANIFEST_SIGNAL,
+      targetKey: "owner/notime",
+      repoFullName: "owner/notime",
+      payload: { wantedPaths: ["old/"] },
+      generatedAt: "not-a-date",
+    });
+    await persistSignalSnapshot(env, {
+      id: crypto.randomUUID(),
+      signalType: REPO_FOCUS_MANIFEST_SIGNAL,
+      targetKey: "owner/emptytime",
+      repoFullName: "owner/emptytime",
+      payload: { wantedPaths: ["old/"] },
+      generatedAt: "",
+    });
+    let calls = 0;
+    const fetcher = async () => {
+      calls += 1;
+      return JSON.stringify({ wantedPaths: ["fresh/"] });
+    };
+    const unparseable = await loadRepoFocusManifest(env, "owner/notime", { fetcher });
+    expect(unparseable.wantedPaths).toEqual(["fresh/"]);
+    const emptyTime = await loadRepoFocusManifest(env, "owner/emptytime", { fetcher });
+    expect(emptyTime.wantedPaths).toEqual(["fresh/"]);
+    expect(calls).toBe(2);
+  });
 });
