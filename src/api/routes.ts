@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 import { z } from "zod";
 import { completeGitHubWebOAuth, createSessionFromGitHubToken, pollGitHubDeviceFlow, startGitHubDeviceFlow, startGitHubWebOAuth } from "../auth/github-oauth";
 import { enforceRateLimit, routeClassForPath } from "../auth/rate-limit";
@@ -320,21 +319,20 @@ const digestSubscriptionSchema = z
 
 export function createApp() {
   const app = new Hono<AppBindings>();
-  app.use(
-    "*",
-    cors({
-      origin: (origin, c) => {
-        if (!origin) return null;
-        const allowed = allowedCorsOrigins(c.env);
-        return allowed.has(origin) ? origin : null;
-      },
-      allowHeaders: ["authorization", "content-type", "mcp-session-id", "mcp-protocol-version"],
-      allowMethods: ["GET", "POST", "OPTIONS"],
-      exposeHeaders: ["x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "retry-after"],
-      credentials: true,
-      maxAge: 600,
-    }),
-  );
+  app.use("*", async (c, next) => {
+    const allowedOrigin = allowedCorsOrigin(c.env, c.req.header("origin"));
+    if (allowedOrigin) {
+      c.header("Access-Control-Allow-Origin", allowedOrigin);
+      c.header("Access-Control-Allow-Credentials", "true");
+      c.header("Access-Control-Allow-Headers", "authorization, content-type, mcp-session-id, mcp-protocol-version");
+      c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      c.header("Access-Control-Expose-Headers", "x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset, retry-after");
+      c.header("Access-Control-Max-Age", "600");
+      c.header("Vary", "Origin", { append: true });
+    }
+    if (c.req.method === "OPTIONS") return c.body(null, 204);
+    return next();
+  });
   app.use("*", async (c, next) => {
     if (c.req.method === "OPTIONS" || c.req.path === "/health" || c.req.path === "/v1/github/webhook") return next();
     const limited = await enforceRateLimit(c, routeClassForPath(c.req.path));
@@ -2070,10 +2068,7 @@ function requiresApiToken(path: string): boolean {
   return path.startsWith("/v1/");
 }
 
-function allowedCorsOrigins(env: Env): Set<string> {
-  const values = [
-    env.PUBLIC_API_ORIGIN,
-    env.PUBLIC_SITE_ORIGIN,
+const DEFAULT_CORS_ORIGINS = [
     "https://gittensory.aethereal.dev",
     "https://gittensory-ui.zeronode.workers.dev",
     "http://localhost:3000",
@@ -2082,6 +2077,23 @@ function allowedCorsOrigins(env: Env): Set<string> {
     "http://127.0.0.1:3000",
     "http://127.0.0.1:4173",
     "http://127.0.0.1:5173",
-  ];
-  return new Set(values.filter((value): value is string => Boolean(value)));
+  ] as const;
+
+function allowedCorsOrigin(env: Env, origin: string | undefined): string | null {
+  if (!origin) return null;
+  const allowed = new Set<string>(DEFAULT_CORS_ORIGINS);
+  for (const configured of [env.PUBLIC_API_ORIGIN, env.PUBLIC_SITE_ORIGIN]) {
+    const normalized = normalizeOrigin(configured);
+    if (normalized) allowed.add(normalized);
+  }
+  return [...allowed].find((allowedOrigin) => allowedOrigin === origin) ?? null;
+}
+
+function normalizeOrigin(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
 }
