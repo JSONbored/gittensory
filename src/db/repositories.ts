@@ -17,6 +17,7 @@ import {
   contributorRepoStats,
   contributorScoringProfiles,
   contributors,
+  digestSubscriptions,
   installationHealth,
   installations,
   issueQualityReports,
@@ -66,6 +67,7 @@ import type {
   ContributorRecord,
   ContributorRepoStatRecord,
   ContributorScoringProfileRecord,
+  DigestSubscriptionRecord,
   GitHubIssuePayload,
   GitHubPullRequestPayload,
   GitHubRateLimitObservationRecord,
@@ -873,6 +875,69 @@ export async function touchAuthSession(env: Env, sessionId: string): Promise<voi
 export async function revokeAuthSession(env: Env, sessionId: string): Promise<void> {
   const db = getDb(env.DB);
   await db.update(authSessions).set({ revokedAt: nowIso(), lastSeenAt: nowIso() }).where(eq(authSessions.id, sessionId));
+}
+
+export async function countActiveAuthSessions(env: Env): Promise<number> {
+  const db = getDb(env.DB);
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(authSessions)
+    .where(and(sql`${authSessions.revokedAt} is null`, gte(authSessions.expiresAt, nowIso())));
+  return Number(row?.count ?? 0);
+}
+
+export async function upsertDigestSubscription(
+  env: Env,
+  input: { login: string; email: string; source?: string; status?: DigestSubscriptionRecord["status"] },
+): Promise<DigestSubscriptionRecord> {
+  const db = getDb(env.DB);
+  const now = nowIso();
+  const record: DigestSubscriptionRecord = {
+    id: crypto.randomUUID(),
+    login: input.login,
+    email: input.email.toLowerCase(),
+    status: input.status ?? "active",
+    source: input.source ?? "app",
+    createdAt: now,
+    updatedAt: now,
+  };
+  await db
+    .insert(digestSubscriptions)
+    .values({
+      id: record.id,
+      login: record.login,
+      email: record.email,
+      status: record.status,
+      source: record.source,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    })
+    .onConflictDoUpdate({
+      target: [digestSubscriptions.login, digestSubscriptions.email],
+      set: {
+        status: record.status,
+        source: record.source,
+        updatedAt: now,
+      },
+    });
+  const [row] = await db
+    .select()
+    .from(digestSubscriptions)
+    .where(and(eq(digestSubscriptions.login, record.login), eq(digestSubscriptions.email, record.email)))
+    .limit(1);
+  return row ? toDigestSubscriptionRecord(row) : record;
+}
+
+export async function listDigestSubscriptionsForLogin(env: Env, login: string): Promise<DigestSubscriptionRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(digestSubscriptions).where(eq(digestSubscriptions.login, login)).orderBy(desc(digestSubscriptions.updatedAt)).limit(20);
+  return rows.map(toDigestSubscriptionRecord);
+}
+
+export async function countActiveDigestSubscriptions(env: Env): Promise<number> {
+  const db = getDb(env.DB);
+  const [row] = await db.select({ count: sql<number>`count(*)` }).from(digestSubscriptions).where(eq(digestSubscriptions.status, "active"));
+  return Number(row?.count ?? 0);
 }
 
 export async function recordAuditEvent(env: Env, event: AuditEventRecord): Promise<void> {
@@ -1752,6 +1817,12 @@ export async function getAgentRun(env: Env, runId: string): Promise<AgentRunReco
   return row ? toAgentRunRecord(row) : null;
 }
 
+export async function listAgentRunsForActor(env: Env, actorLogin: string, limit = 50): Promise<AgentRunRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(agentRuns).where(eq(agentRuns.actorLogin, actorLogin)).orderBy(desc(agentRuns.updatedAt)).limit(limit);
+  return rows.map(toAgentRunRecord);
+}
+
 export async function listAgentActions(env: Env, runId: string): Promise<AgentActionRecord[]> {
   const db = getDb(env.DB);
   const rows = await db.select().from(agentActions).where(eq(agentActions.runId, runId)).orderBy(agentActions.createdAt).limit(100);
@@ -2494,6 +2565,18 @@ function toAuthSessionRecord(row: typeof authSessions.$inferSelect): AuthSession
     createdAt: row.createdAt,
     lastSeenAt: row.lastSeenAt,
     metadata: parseJson<Record<string, never>>(row.metadataJson, {}),
+  };
+}
+
+function toDigestSubscriptionRecord(row: typeof digestSubscriptions.$inferSelect): DigestSubscriptionRecord {
+  return {
+    id: row.id,
+    login: row.login,
+    email: row.email,
+    status: row.status === "paused" ? "paused" : "active",
+    source: row.source,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
