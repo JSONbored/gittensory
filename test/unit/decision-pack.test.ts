@@ -1033,6 +1033,31 @@ describe("decision-pack service", () => {
     expect(noStructuralCountLeak(decision.publicNextActions)).toBe(true);
   });
 
+  it("covers the preferred linked-issue and encouraged issue-discovery manifest arms", async () => {
+    const { parseFocusManifest } = await import("../../src/signals/focus-manifest");
+    const manifest = parseFocusManifest({
+      source: "api_record",
+      wantedPaths: ["src/"],
+      preferredLabels: ["bug"],
+      linkedIssuePolicy: "preferred",
+      issueDiscoveryPolicy: "encouraged",
+    });
+    const decision = __decisionPackInternals.buildRepoDecision({
+      repo: repoWithLabels("owner/preferred", 0.04, 0, { bug: 1 }),
+      roleContext: { maintainerLane: false } as any,
+      outcome: { mergedPullRequests: 1, openPullRequests: 0, closedPullRequestRate: 0, credibility: 1 } as any,
+      syncState: { primaryLanguage: "TypeScript" } as any,
+      languageSet: new Set(["typescript"]),
+      labelHistory: new Set(["bug"]),
+      focusManifest: manifest,
+    });
+    expect(decision.manifestSummary?.linkedIssuePolicy).toBe("preferred");
+    expect(decision.publicNextActions.join(" ")).toMatch(/prefers linked issues/i);
+    expect(decision.publicNextActions.join(" ")).toMatch(/issue-discovery reports are welcomed/i);
+    expect(decision.publicNextActions.join(" ")).toMatch(/maintainer-preferred label/i);
+    expect(noStructuralCountLeak(decision.publicNextActions)).toBe(true);
+  });
+
   it("omits manifestSummary when no manifest is configured", () => {
     const decision = __decisionPackInternals.buildRepoDecision({
       repo: repoWithLabels("owner/no-manifest", 0.04, 0, { bug: 1 }),

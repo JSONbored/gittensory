@@ -75,6 +75,11 @@ describe("parseFocusManifest", () => {
     expect(manifest.warnings.join(" ")).toMatch(/exceeded 200 entries/);
   });
 
+  it("de-duplicates repeated entries within the list cap", () => {
+    const manifest = parseFocusManifest({ wantedPaths: ["src/", "src/", "lib/"] });
+    expect(manifest.wantedPaths).toEqual(["src/", "lib/"]);
+  });
+
   it("marks a manifest with no recognized fields as absent", () => {
     const manifest = parseFocusManifest({ unrelated: "value" });
     expect(manifest.present).toBe(false);
