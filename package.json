@@ -9,7 +9,7 @@
     "packages/*"
   ],
   "type": "module",
-  "description": "Deterministic base-agent backend for Gittensor OSS contribution mining.",
+  "description": "Deterministic base-agent platform for Gittensor OSS contribution intelligence.",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
