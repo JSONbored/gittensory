@@ -80,6 +80,7 @@ import {
   loadContributorDecisionPackForServing,
   repoDecisionFromPack,
 } from "../services/decision-pack";
+import { buildMcpCompatibilityMetadata } from "../services/mcp-compatibility";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import {
@@ -316,6 +317,7 @@ export function createApp() {
   });
 
   app.get("/health", (c) => c.json({ status: "ok", service: "gittensory-api", time: nowIso() }));
+  app.get("/v1/mcp/compatibility", (c) => c.json(buildMcpCompatibilityMetadata(nowIso())));
   app.get("/openapi.json", (c) => c.json(buildOpenApiSpec()));
   app.all("/mcp", handleMcpRequest);
 
@@ -1474,6 +1476,7 @@ async function requireContributorAccess(c: ProtectedRouteContext, login: string)
 
 function requiresApiToken(path: string): boolean {
   if (path === "/health") return false;
+  if (path === "/v1/mcp/compatibility") return false;
   if (path === "/mcp") return false;
   if (path.startsWith("/v1/auth/")) return false;
   if (path === "/v1/github/webhook") return false;

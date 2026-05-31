@@ -45,12 +45,47 @@ describe("api routes", () => {
     expect(health.status).toBe(200);
     await expect(health.json()).resolves.toMatchObject({ status: "ok", service: "gittensory-api" });
 
+    const compatibility = await app.request("/v1/mcp/compatibility", {}, env);
+    expect(compatibility.status).toBe(200);
+    const compatibilityPayload = await compatibility.json();
+    expect(compatibilityPayload).toMatchObject({
+      status: "ok",
+      service: "gittensory-api",
+      apiVersion: "0.1.0",
+      mcp: {
+        packageName: "@jsonbored/gittensory-mcp",
+        minimumSupportedVersion: "0.2.0",
+        latestRecommendedVersion: "0.2.0",
+        latestPackageVersion: "0.2.0",
+      },
+      compatibilityWarnings: [],
+      breakingChanges: [],
+    });
+    expect(JSON.stringify(compatibilityPayload)).not.toMatch(/token|admin|wallet|hotkey|raw trust|scoreability|private repo|local-path/i);
+
     const unauthenticatedSpec = await app.request("/openapi.json", {}, env);
     expect(unauthenticatedSpec.status).toBe(401);
 
     const spec = await app.request("/openapi.json", { headers: apiHeaders(env) }, env);
     expect(spec.status).toBe(200);
     await expect(spec.json()).resolves.toMatchObject({ info: { title: "Gittensory API" } });
+  });
+
+  it("rejects malformed public and private API requests before external work", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+
+    const poll = await app.request("/v1/auth/github/device/poll", { method: "POST", body: "{", headers: { "content-type": "application/json" } }, env);
+    expect(poll.status).toBe(400);
+    await expect(poll.json()).resolves.toMatchObject({ error: "device_code_required" });
+
+    const session = await app.request("/v1/auth/github/session", { method: "POST", body: "{", headers: { "content-type": "application/json" } }, env);
+    expect(session.status).toBe(400);
+    await expect(session.json()).resolves.toMatchObject({ error: "github_token_required" });
+
+    const preview = await app.request("/v1/scoring/preview", { method: "POST", body: "{", headers: apiHeaders(env) }, env);
+    expect(preview.status).toBe(400);
+    await expect(preview.json()).resolves.toMatchObject({ error: "invalid_scoring_preview_request" });
   });
 
   it("serves registry drift through the canonical registry change endpoint", async () => {
