@@ -1482,6 +1482,17 @@ function requiresApiToken(path: string): boolean {
 }
 
 function allowedCorsOrigins(env: Env): Set<string> {
-  const values = [env.PUBLIC_API_ORIGIN, "http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"];
+  const values = [
+    env.PUBLIC_API_ORIGIN,
+    env.PUBLIC_SITE_ORIGIN,
+    "https://gittensory.aethereal.dev",
+    "https://gittensory-ui.zeronode.workers.dev",
+    "http://localhost:3000",
+    "http://localhost:4173",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:4173",
+    "http://127.0.0.1:5173",
+  ];
   return new Set(values.filter((value): value is string => Boolean(value)));
 }

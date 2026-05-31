@@ -19,9 +19,9 @@ Gittensory is not a Gittensor frontend, not a public leaderboard, and not an aut
 ## Surfaces
 
 - Worker API: Cloudflare Workers + Hono + D1 + Queues.
+- Frontend Worker: Lovable/TanStack Start app under `apps/gittensory-ui`, deployed at `https://gittensory.aethereal.dev/`.
 - MCP package: `@jsonbored/gittensory-mcp`, a local stdio wrapper for coding agents and the first-class base-agent surface.
 - GitHub App: quiet PR inspection, public-safe sticky comments, maintainer-configured labels, and explicit `@gittensory` commands on installed repos.
-- Docs site: VitePress under `site/`, deployed at `https://gittensory.aethereal.dev/`.
 
 ## AI Posture
 
@@ -175,15 +175,17 @@ If GitHub shows `Installation target`, select it. Gittensory should not block in
 
 Default GitHub App behavior is low-noise: non-miner, bot, and maintainer-associated PR authors produce no public output. Confirmed Gittensor miners get one sticky public-safe PR comment and the configured label, defaulting to `gittensor`. Maintainers and authorized PR authors can explicitly invoke public-safe `@gittensory` commands. Private reviewability, scoring, wallet, hotkey, and reward/risk context never appears in public GitHub comments or checks.
 
-## Docs
+## Frontend
 
 ```sh
-npm run docs:dev
-npm run docs:build
-npm run docs:preview
+npm run ui:dev
+npm run ui:build
+npm run ui:preview
 ```
 
-The Pages workflow builds the docs on `main` for `https://gittensory.aethereal.dev/`, but deploys only when the repository variable `GITTENSORY_DOCS_DEPLOY` is set to `true`.
+The frontend is a TanStack Start app imported from the Lovable `gittensory-docs` project. It is deployed as the separate `gittensory-ui` Cloudflare Worker on `https://gittensory.aethereal.dev/`. The backend remains the `gittensory-api` Worker on `https://gittensory-api.aethereal.dev`.
+
+The UI Worker deploy workflow runs on `main` only when `GITTENSORY_UI_DEPLOY` is set to `true`, or when manually dispatched.
 
 ## Changelog And Releases
 
@@ -212,5 +214,4 @@ npm run test:ci
 
 - Public support: `SUPPORT.md`
 - Security policy: `SECURITY.md`
-- Privacy posture: `site/security/privacy.md`
-- Terms: `site/security/terms.md`
+- Privacy and terms: `apps/gittensory-ui/src/routes/docs.privacy-security.tsx`

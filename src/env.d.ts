@@ -5,6 +5,7 @@ declare global {
     RATE_LIMITER?: DurableObjectNamespace;
     AI?: Ai;
     PUBLIC_API_ORIGIN?: string;
+    PUBLIC_SITE_ORIGIN?: string;
     AI_SUMMARIES_ENABLED?: string;
     AI_PUBLIC_COMMENTS_ENABLED?: string;
     WORKERS_AI_SUMMARY_MODEL?: string;
