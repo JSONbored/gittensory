@@ -31,6 +31,13 @@ type NpmPackage = {
   versions: Record<string, { description?: string }>;
 };
 
+const DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+});
+
 function Changelog() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ["npm-full", "@jsonbored/gittensory-mcp"],
@@ -116,12 +123,7 @@ function Changelog() {
                     )}
                   </div>
                   <div className="mt-1 text-token-xs text-muted-foreground">
-                    Published{" "}
-                    {new Date(data?.time[v] ?? "").toLocaleDateString(undefined, {
-                      year: "numeric",
-                      month: "short",
-                      day: "numeric",
-                    })}
+                    Published {formatDate(data?.time[v])}
                   </div>
                 </div>
                 <a
@@ -187,4 +189,11 @@ function Changelog() {
       </div>
     </Section>
   );
+}
+
+function formatDate(value: string | undefined): string {
+  if (!value) return "unknown";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  return DATE_FORMATTER.format(date);
 }

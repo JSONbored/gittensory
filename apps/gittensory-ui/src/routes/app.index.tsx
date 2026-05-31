@@ -21,7 +21,7 @@ import { StatusPill } from "@/components/site/control-primitives";
 import { PageHeader } from "@/components/site/primitives";
 import { TrendChart } from "@/components/site/trend-chart";
 import { useSession } from "@/lib/api/session";
-import { mockAnalytics, mockRuns } from "@/lib/api/mock";
+import { useApiResource } from "@/lib/api/use-api-resource";
 import { describeApiStatus, pingHealth, useApiStatus } from "@/lib/api/status";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { cn } from "@/lib/utils";
@@ -63,16 +63,49 @@ const CARDS = [
   },
 ] as const;
 
+type OverviewMetric = {
+  label: string;
+  total: string | number;
+  delta: string;
+  values: number[];
+};
+
+type RecentRun = {
+  id: string;
+  kind: string;
+  repo: string;
+  source: string;
+  signal_fidelity: "ready" | "degraded" | "stale" | "blocked";
+  created_at: string;
+};
+
+type AppOverviewResponse = {
+  metrics: OverviewMetric[];
+  recentRuns: Array<{
+    run: {
+      id: string;
+      objective: string;
+      surface: string;
+      status: string;
+      dataQualityStatus?: string;
+      createdAt?: string | null;
+    };
+    actions?: Array<{ targetRepoFullName?: string | null; actionType?: string }>;
+  }>;
+};
+
 function AppOverview() {
   const { session } = useSession();
   const { status, connection } = useApiStatus();
+  const overview = useApiResource<AppOverviewResponse>("/v1/app/overview", "App overview");
   if (!session) return null;
 
   const live = connection === "online" && (status === "ok" || status === "degraded");
   const loading = status === "loading" || status === "idle";
-  const series = mockAnalytics.slice(0, 3);
-  const lastRun = mockRuns[0];
-  const recentRuns = mockRuns.slice(0, 4);
+  const series = overview.status === "ready" ? overview.data.metrics.slice(0, 3) : [];
+  const recentRuns =
+    overview.status === "ready" ? overview.data.recentRuns.slice(0, 4).map(mapOverviewRun) : [];
+  const lastRun = recentRuns[0];
 
   return (
     <div className="space-y-8">
@@ -80,12 +113,28 @@ function AppOverview() {
         eyebrow={
           <span className="inline-flex items-center gap-2">
             <span>Overview</span>
-            <StatusPill status="info">Preview</StatusPill>
-            <StatusPill status="ready">Service · ready</StatusPill>
+            <StatusPill
+              status={
+                overview.status === "ready"
+                  ? "ready"
+                  : overview.status === "error"
+                    ? "warn"
+                    : "info"
+              }
+            >
+              {overview.status === "ready"
+                ? "Live"
+                : overview.status === "error"
+                  ? "API issue"
+                  : "Loading"}
+            </StatusPill>
+            <StatusPill status={live ? "ready" : "warn"}>
+              Service · {describeApiStatus(status)}
+            </StatusPill>
           </span>
         }
         title={<>Welcome back, {session.login}</>}
-        description="The control panels below are populated with local mock data while the live API endpoints are wired up. Nothing here writes to GitHub or to the Gittensory backend."
+        description="Live control-panel metrics from the Gittensory API. Missing backend data renders as empty states instead of demo records."
       />
 
       <OnboardingChecklist />
@@ -97,6 +146,11 @@ function AppOverview() {
           aria-label="At-a-glance metrics"
           className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
         >
+          {overview.status === "error" && (
+            <div className="col-span-full rounded-token border border-warning/30 bg-warning/[0.04] p-4 text-token-sm text-warning">
+              App overview is unavailable right now ({overview.error}).
+            </div>
+          )}
           {series.length === 0 ? (
             <div className="col-span-full rounded-token border border-dashed border-border bg-transparent p-6 text-center text-token-sm text-muted-foreground">
               No metrics available yet. They’ll appear once the API returns data.
@@ -106,7 +160,7 @@ function AppOverview() {
               <SparkStat
                 key={m.label}
                 label={m.label}
-                value={m.total}
+                value={String(m.total)}
                 hint={m.delta}
                 values={m.values}
                 live={live}
@@ -146,6 +200,23 @@ function AppOverview() {
       </section>
     </div>
   );
+}
+
+function mapOverviewRun(bundle: AppOverviewResponse["recentRuns"][number]): RecentRun {
+  const status = bundle.run.dataQualityStatus ?? bundle.run.status;
+  return {
+    id: bundle.run.id,
+    kind: bundle.actions?.[0]?.actionType ?? bundle.run.objective,
+    repo: bundle.actions?.[0]?.targetRepoFullName ?? "no target",
+    source: bundle.run.surface,
+    signal_fidelity:
+      status === "complete" || status === "completed"
+        ? "ready"
+        : status === "blocked" || status === "failed"
+          ? "blocked"
+          : "degraded",
+    created_at: bundle.run.createdAt ?? new Date().toISOString(),
+  };
 }
 
 function QuickActions({ lastRunId }: { lastRunId?: string }) {
@@ -199,7 +270,7 @@ function QuickActions({ lastRunId }: { lastRunId?: string }) {
   );
 }
 
-function RecentActivity({ runs }: { runs: typeof mockRuns }) {
+function RecentActivity({ runs }: { runs: RecentRun[] }) {
   if (runs.length === 0) return null;
   const toneFor = (s: string) =>
     s === "ready" ? "bg-mint" : s === "degraded" || s === "stale" ? "bg-warning" : "bg-coral";

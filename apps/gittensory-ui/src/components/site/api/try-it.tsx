@@ -91,7 +91,11 @@ export function TryIt({ op, server }: { op: OpenApiOperation; server: string }) 
       const url = server.replace(/\/$/, "") + path + (qs ? `?${qs}` : "");
       const headers: Record<string, string> = { Accept: "application/json" };
       if (op.requiresAuth && token) headers.Authorization = `Bearer ${token}`;
-      const init: RequestInit = { method: op.method.toUpperCase(), headers };
+      const init: RequestInit = {
+        method: op.method.toUpperCase(),
+        headers,
+        credentials: "include",
+      };
       if (hasBody) {
         headers["Content-Type"] = "application/json";
         init.body = body;
@@ -295,8 +299,8 @@ export function TryIt({ op, server }: { op: OpenApiOperation; server: string }) 
 
       {op.requiresAuth && !token && (
         <Callout variant="safety">
-          <strong>No PATs.</strong> Use a Gittensory session token from{" "}
-          <code>gittensory-mcp login</code>. Stored only in this browser; clear anytime.
+          <strong>No PATs.</strong> Signed-in browsers use the HttpOnly session cookie. Paste a
+          Gittensory token from <code>gittensory-mcp login</code> only for manual bearer testing.
         </Callout>
       )}
 

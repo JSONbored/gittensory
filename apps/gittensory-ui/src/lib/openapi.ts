@@ -168,16 +168,7 @@ export const openapi: OpenApiSpec = build();
 
 function requiresAuthentication(path: string, op: RawOperation): boolean {
   if (Array.isArray(op.security)) return op.security.length > 0;
-  return (
-    path.startsWith("/v1/internal/") ||
-    path.startsWith("/v1/auth/logout") ||
-    path.startsWith("/v1/auth/session") ||
-    path.startsWith("/v1/local/branch-analysis") ||
-    path.startsWith("/v1/agent/") ||
-    path.includes("/decision-pack") ||
-    path.includes("/decision") ||
-    path.includes("/maintainer-packet")
-  );
+  return false;
 }
 
 function normalizeServers(servers: Array<{ url: string; description?: string }> | undefined) {

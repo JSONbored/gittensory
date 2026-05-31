@@ -16,8 +16,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { BoundaryBadge, StatusPill, type Status } from "@/components/site/control-primitives";
-import { mockRuns, type AgentRun } from "@/lib/api/mock";
+import {
+  BoundaryBadge,
+  StatusPill,
+  type Boundary,
+  type Status,
+} from "@/components/site/control-primitives";
 import { useApiResource } from "@/lib/api/use-api-resource";
 import { useSession } from "@/lib/api/session";
 import { EmptyState } from "@/components/site/state-views";
@@ -41,6 +45,20 @@ const KIND_FILTERS = [
 ] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
 type KindFilter = (typeof KIND_FILTERS)[number];
+
+interface AgentRun {
+  id: string;
+  source: "mcp" | "api" | "github-command";
+  kind: "plan-next-work" | "preflight-branch" | "prepare-pr-packet" | "explain-blockers";
+  repo: string;
+  ranked_actions: number;
+  ruleset_snapshot: string;
+  signal_fidelity: "ready" | "degraded" | "stale" | "blocked";
+  boundary: Boundary;
+  created_at: string;
+  summary?: string;
+  recommendations?: string[];
+}
 
 type AgentRunBundleResponse = {
   runs: AgentRunBundle[];
@@ -89,20 +107,18 @@ function AgentRuns() {
   const navigate = useNavigate({ from: Route.fullPath });
   const { session } = useSession();
   const actorLogin = session?.login?.trim();
-  const canUseLiveRuns = Boolean(
-    session?.token && !session.token.startsWith("demo_") && actorLogin,
-  );
+  const canUseLiveRuns = Boolean(actorLogin);
   const liveRuns = useApiResource<AgentRunBundleResponse>(
     `/v1/agent/runs?actorLogin=${encodeURIComponent(actorLogin ?? "")}&limit=100`,
     "Agent runs",
-    session?.token,
+    undefined,
     { enabled: canUseLiveRuns },
   );
   const runs = useMemo(
     () =>
       canUseLiveRuns && liveRuns.status === "ready"
         ? liveRuns.data.runs.map(mapAgentRunBundle)
-        : mockRuns,
+        : [],
     [canUseLiveRuns, liveRuns.data, liveRuns.status],
   );
   const status: StatusFilter = search.status ?? "all";
@@ -171,7 +187,7 @@ function AgentRuns() {
       ? "Live API"
       : canUseLiveRuns && liveRuns.status === "loading"
         ? "Loading live API"
-        : "Preview data";
+        : "No session";
 
   // Keyboard navigation: ←/→ to cycle through filtered runs while drawer is open.
   useEffect(() => {
@@ -214,7 +230,7 @@ function AgentRuns() {
 
       {canUseLiveRuns && liveRuns.status === "error" && liveRuns.error !== "disabled" && (
         <div className="rounded-token border border-warning/30 bg-warning/5 p-3 text-token-xs text-warning">
-          Live runs are unavailable right now ({liveRuns.error}). Showing preview data instead.
+          Live runs are unavailable right now ({liveRuns.error}).
         </div>
       )}
 

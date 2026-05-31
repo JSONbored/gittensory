@@ -5,18 +5,11 @@ import { AnimatePresence, motion } from "motion/react";
 
 import { StatusPill } from "@/components/site/control-primitives";
 import { Button } from "@/components/ui/button";
-import { StateBoundary, usePreviewDataState } from "@/components/site/state-views";
+import { StateBoundary } from "@/components/site/state-views";
 import { useSession } from "@/lib/api/session";
 import { getApiOrigin } from "@/lib/api/origin";
 import { apiFetch } from "@/lib/api/request";
 import { describeApiStatus, pingHealth, useApiStatus } from "@/lib/api/status";
-import {
-  mockAiSummaries,
-  mockBlockers,
-  mockNextActions,
-  mockProjections,
-  mockReviewability,
-} from "@/lib/api/mock";
 import { cn } from "@/lib/utils";
 
 const TOOLS = [
@@ -89,25 +82,22 @@ export function PlaygroundPanel({ defaultTool = "preflight-branch" }: { defaultT
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [liveResult, setLiveResult] = useState<unknown | null>(null);
-  const state = usePreviewDataState("API playground schema");
   const { status, connection } = useApiStatus();
   const { session } = useSession();
   const offline = connection === "offline";
   const apiBroken = status === "unreachable" || status === "timeout";
   const disabled = offline || apiBroken || busy;
-  const canUseLiveApi = !!session?.token && !session.token.startsWith("demo_");
+  const canUseLiveApi = !!session;
 
   useEffect(() => {
     saveHistory(history);
   }, [history]);
 
-  const previewResult = useMemo(
-    () => buildResult(tool, { repo, branch, scenario }),
-    [tool, repo, branch, scenario],
+  const result = useMemo(
+    () => liveResult ?? { status: "not_run", tool, repo, branch, scenario },
+    [branch, liveResult, repo, scenario, tool],
   );
-  const result = liveResult ?? previewResult;
-
-  const ai = mockAiSummaries[tool];
+  const ai = useMemo(() => summarizeResult(tool, result), [tool, result]);
   const showScenarios = tool === "preflight-branch" || tool === "plan-next-work";
 
   const recordRun = (entry: Omit<HistoryEntry, "id" | "createdAt">) => {
@@ -137,7 +127,6 @@ export function PlaygroundPanel({ defaultTool = "preflight-branch" }: { defaultT
           repo,
           branch,
           scenario,
-          token: session.token,
           login: session.login,
         });
         if (live.ok) {
@@ -152,9 +141,10 @@ export function PlaygroundPanel({ defaultTool = "preflight-branch" }: { defaultT
           return;
         }
       } else {
-        toast.success("Preview response generated", {
-          description: "Use GitHub sign-in for live API-backed playground runs.",
+        toast.error("Sign in required", {
+          description: "The playground only runs against the live API.",
         });
+        return;
       }
     } finally {
       setBusy(false);
@@ -212,10 +202,10 @@ export function PlaygroundPanel({ defaultTool = "preflight-branch" }: { defaultT
 
   return (
     <StateBoundary
-      isLoading={state.isLoading}
+      isLoading={false}
       isEmpty={false}
-      onRetry={state.retry}
-      onRefresh={state.refresh}
+      onRetry={() => void pingHealth(true)}
+      onRefresh={() => void pingHealth(true)}
       loadingTitle="Loading playground…"
       emptyTitle="No tools available"
       emptyDescription="Once MCP/API tool metadata is available, the playground controls will appear here."
@@ -271,7 +261,7 @@ export function PlaygroundPanel({ defaultTool = "preflight-branch" }: { defaultT
                   ? `${describeApiStatus(status)} — wait for recovery`
                   : canUseLiveApi
                     ? "Run live API request"
-                    : "Run preview"
+                    : "Sign in to run"
             }
           >
             {offline ? (
@@ -326,7 +316,7 @@ export function PlaygroundPanel({ defaultTool = "preflight-branch" }: { defaultT
                 {copied ? "Copied" : "Copy"}
               </button>
               <StatusPill status={liveResult ? "ready" : canUseLiveApi ? "info" : "warn"}>
-                {liveResult ? "live" : canUseLiveApi ? "ready" : "mock"}
+                {liveResult ? "live" : canUseLiveApi ? "ready" : "signed out"}
               </StatusPill>
             </div>
           </div>
@@ -386,11 +376,9 @@ export function PlaygroundPanel({ defaultTool = "preflight-branch" }: { defaultT
                   <div className="mb-2 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
                     gittensory · sticky comment
                   </div>
-                  <p className="text-foreground/90">
-                    Thanks for the PR. This branch links to issue #1204 and passes basic preflight.
-                    Maintainers can run <code className="font-mono">@gittensory blockers</code> for
-                    non-public context.
-                  </p>
+                  <pre className="whitespace-pre-wrap font-mono text-token-xs text-foreground/90">
+                    {formatPublicPreview(result)}
+                  </pre>
                 </div>
               ) : (
                 <pre className="mt-4 overflow-x-auto rounded-token border-hairline bg-background/60 p-3 font-mono text-token-xs text-foreground/90">
@@ -524,9 +512,25 @@ async function runLiveTool(args: {
   repo: string;
   branch: string;
   scenario: Scenario;
-  token: string;
   login: string;
 }) {
+  if (args.tool === "public-safe-comment") {
+    return apiFetch<unknown>(`${getApiOrigin().replace(/\/$/, "")}/v1/app/commands/preview`, {
+      method: "POST",
+      label: "Playground public summary",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "public-summary",
+        repoFullName: args.repo,
+        login: args.login,
+      }),
+      timeoutMs: 20_000,
+    });
+  }
   const endpoint =
     args.tool === "plan-next-work"
       ? "/v1/agent/plan-next-work"
@@ -554,10 +558,10 @@ async function runLiveTool(args: {
   return apiFetch<unknown>(`${getApiOrigin().replace(/\/$/, "")}${endpoint}`, {
     method: "POST",
     label: `Playground ${args.tool}`,
+    credentials: "include",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      Authorization: `Bearer ${args.token}`,
     },
     body: JSON.stringify(body),
     timeoutMs: 20_000,
@@ -579,31 +583,21 @@ function formatOutputForClipboard(tool: Tool, result: unknown): string {
   return `${header}\n${body}\n`.replace(/\r\n/g, "\n");
 }
 
-function buildResult(tool: Tool, ctx: { repo: string; branch: string; scenario: Scenario }) {
-  const base = { repo: ctx.repo, branch: ctx.branch, ruleset: "rs_2026_05_29_a1f3" };
-  switch (tool) {
-    case "plan-next-work":
-      return { ...base, scenario: ctx.scenario, ranked_actions: mockNextActions };
-    case "explain-blockers":
-      return { ...base, blockers: mockBlockers };
-    case "preflight-branch":
-      return {
-        ...base,
-        scenario: ctx.scenario,
-        scoreability: mockProjections,
-        warnings: ["needs_linked_issue"],
-        evidence: ["branch matches issue #1204", "tests detected"],
-      };
-    case "prepare-pr-packet":
-      return {
-        ...base,
-        packet: {
-          title: "Add coverage for queue-cap edge case",
-          body_public: "Linked-issue: #1204. Adds two unit tests and updates docs.",
-          labels: ["fixes:1204", "area:queue"],
-        },
-      };
-    default:
-      return { ...base, sample: mockReviewability.slice(0, 1) };
-  }
+function summarizeResult(tool: Tool, result: unknown): { summary: string; caveat: string } {
+  const size = JSON.stringify(result).length;
+  return {
+    summary: `${tool} is using the live API response currently shown below (${size} bytes).`,
+    caveat: "This summary is derived only from the structured response in this panel.",
+  };
+}
+
+function formatPublicPreview(result: unknown): string {
+  const record =
+    typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {};
+  const preview =
+    typeof record.preview === "object" && record.preview !== null
+      ? (record.preview as Record<string, unknown>)
+      : null;
+  const body = preview && typeof preview.body === "string" ? preview.body : null;
+  return body ?? JSON.stringify(result, null, 2);
 }

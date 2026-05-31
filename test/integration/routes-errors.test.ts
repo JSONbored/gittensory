@@ -41,7 +41,72 @@ describe("api route guards and error branches", () => {
 
     const logout = await app.request("/v1/auth/logout", { method: "POST", headers: authHeaders }, env);
     expect(logout.status).toBe(200);
-    expect((await app.request("/v1/auth/session", { headers: authHeaders }, env)).status).toBe(401);
+    const signedOut = await app.request("/v1/auth/session", { headers: authHeaders }, env);
+    expect(signedOut.status).toBe(200);
+    await expect(signedOut.json()).resolves.toMatchObject({ status: "signed_out" });
+  });
+
+  it("creates browser cookie sessions through GitHub web OAuth callback", async () => {
+    const app = createApp();
+    const env = createTestEnv({
+      GITHUB_OAUTH_CLIENT_ID: "client-id",
+      GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
+      ADMIN_GITHUB_LOGINS: "jsonbored",
+    });
+
+    const started = await app.request("/v1/auth/github/start?returnTo=https%3A%2F%2Fgittensory.aethereal.dev%2Fapp", {}, env);
+    expect(started.status).toBe(302);
+    const startCookie = started.headers.get("set-cookie") ?? "";
+    const location = new URL(started.headers.get("location") ?? "");
+    const state = location.searchParams.get("state") ?? "";
+    expect(startCookie).toContain("gittensory_oauth_state=");
+    expect(state).toBeTruthy();
+
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("access_token")) return Response.json({ access_token: "github-token", scope: "read:user" });
+      if (url === "https://api.github.com/user") return Response.json({ login: "jsonbored", id: 42 });
+      return Response.json({});
+    });
+
+    const callback = await app.request(`/v1/auth/github/callback?code=code&state=${encodeURIComponent(state)}`, { headers: { cookie: firstCookiePair(startCookie) } }, env);
+    expect(callback.status).toBe(302);
+    expect(callback.headers.get("location")).toBe("https://gittensory.aethereal.dev/app");
+    const callbackCookie = callback.headers.get("set-cookie") ?? "";
+    expect(callbackCookie).toContain("gittensory_session=");
+    expect(callbackCookie).toContain("HttpOnly");
+
+    const sessionCookie = firstCookiePair(callbackCookie, "gittensory_session");
+    const session = await app.request("/v1/auth/session", { headers: { cookie: sessionCookie } }, env);
+    expect(session.status).toBe(200);
+    await expect(session.json()).resolves.toMatchObject({
+      status: "authenticated",
+      login: "jsonbored",
+      roles: ["miner", "maintainer", "owner", "operator"],
+    });
+
+    const reposWithCookie = await app.request("/v1/repos", { headers: { cookie: sessionCookie } }, env);
+    expect(reposWithCookie.status).toBe(200);
+
+    const logout = await app.request("/v1/auth/logout", { method: "POST", headers: { cookie: sessionCookie } }, env);
+    expect(logout.status).toBe(200);
+    expect(logout.headers.get("set-cookie")).toContain("gittensory_session=");
+    const signedOut = await app.request("/v1/auth/session", { headers: { cookie: sessionCookie } }, env);
+    expect(signedOut.status).toBe(200);
+    await expect(signedOut.json()).resolves.toMatchObject({ status: "signed_out" });
+  });
+
+  it("rejects bad GitHub web OAuth callbacks without creating a browser session", async () => {
+    const app = createApp();
+    const env = createTestEnv({ GITHUB_OAUTH_CLIENT_ID: "client-id", GITHUB_OAUTH_CLIENT_SECRET: "client-secret" });
+    const invalid = await app.request("/v1/auth/github/callback?code=code&state=wrong", { headers: { cookie: "gittensory_oauth_state=other" } }, env);
+    expect(invalid.status).toBe(302);
+    expect(invalid.headers.get("location")).toContain("auth=error");
+    expect(invalid.headers.get("set-cookie")).toContain("gittensory_oauth_state=");
+
+    const denied = await app.request("/v1/auth/github/callback?error=access_denied", {}, env);
+    expect(denied.status).toBe(302);
+    expect(denied.headers.get("location")).toContain("access_denied");
   });
 
   it("limits GitHub-backed sessions to their own private contributor advisory data", async () => {
@@ -152,7 +217,9 @@ describe("api route guards and error branches", () => {
   it("keeps OAuth setup, CORS, and rate limits explicit", async () => {
     const app = createApp();
     const env = createTestEnv();
+    expect((await app.request("/openapi.json", {}, env)).status).toBe(200);
     expect((await app.request("/v1/auth/github/device/start", { method: "POST" }, env)).status).toBe(503);
+    expect((await app.request("/v1/auth/github/start", {}, env)).status).toBe(503);
     expect((await app.request("/v1/auth/github/device/poll", { method: "POST", body: "{}" }, env)).status).toBe(400);
     expect((await app.request("/v1/auth/github/device/poll", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ deviceCode: "device-code" }) }, env)).status).toBe(503);
     expect((await app.request("/v1/auth/github/session", { method: "POST", body: "{}" }, env)).status).toBe(400);
@@ -715,6 +782,12 @@ function internalHeaders(env: Env): Record<string, string> {
     authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}`,
     "content-type": "application/json",
   };
+}
+
+function firstCookiePair(header: string, name?: string): string {
+  const cookies = header.split(/,(?=\s*[^;,]+=)/).map((part) => part.trim());
+  const cookie = name ? cookies.find((part) => part.startsWith(`${name}=`)) : cookies[0];
+  return cookie?.split(";")[0] ?? "";
 }
 
 function denyAllRateLimiter() {

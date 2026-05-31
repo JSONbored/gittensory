@@ -1,12 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Chrome, Globe, Lock, Shield, GitPullRequestArrow } from "lucide-react";
+import { Download, Lock, Shield, GitPullRequestArrow } from "lucide-react";
 import { useState } from "react";
 import { motion } from "motion/react";
+import { toast } from "sonner";
 
 import { Section, Eyebrow, Callout } from "@/components/site/primitives";
 import { BoundaryBadge, StatusPill } from "@/components/site/control-primitives";
 import { Reveal } from "@/components/site/reveal";
-import { mockExtensionPanels } from "@/lib/api/mock";
+import { apiFetch } from "@/lib/api/request";
+import { getApiOrigin } from "@/lib/api/origin";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/extension")({
@@ -37,7 +39,7 @@ function ExtensionPage() {
       <Section className="relative pt-16 pb-12 sm:pt-24">
         <div className="grid items-start gap-10 lg:grid-cols-[1.05fr_1fr]">
           <div>
-            <Eyebrow>Roadmap · planned</Eyebrow>
+            <Eyebrow>Self-hosted package</Eyebrow>
             <h1 className="mt-5 text-token-2xl font-medium tracking-tight text-foreground text-foreground">
               Maintainer overlays on the GitHub you already use.
             </h1>
@@ -47,19 +49,19 @@ function ExtensionPage() {
               is injected into the page or shown to the PR author.
             </p>
             <div className="mt-6 flex flex-wrap gap-2">
-              <StoreButton store="chrome" />
-              <StoreButton store="firefox" />
               <a
-                href="mailto:hello@aethereal.dev?subject=Gittensory%20extension%20waitlist"
-                className="inline-flex items-center gap-2 rounded-token border border-border bg-transparent px-4 py-2 text-token-sm font-medium hover:border-foreground/30"
+                href="/downloads/gittensory-extension.zip"
+                className="inline-flex items-center gap-2 rounded-token border border-mint/40 bg-mint px-4 py-2 text-token-sm font-medium text-primary-foreground hover:brightness-110"
               >
-                Join the waitlist
+                <Download className="size-4" />
+                Download extension
               </a>
+              <ExtensionTokenButton />
             </div>
             <div className="mt-6 flex flex-wrap gap-2">
               <StatusPill status="info">Maintainer-only</StatusPill>
               <BoundaryBadge boundary="private-api" />
-              <StatusPill status="ready">Zero PII collected</StatusPill>
+              <StatusPill status="ready">Live API integration</StatusPill>
             </div>
           </div>
 
@@ -110,22 +112,79 @@ function ExtensionPage() {
   );
 }
 
-function StoreButton({ store }: { store: "chrome" | "firefox" }) {
-  const label = store === "chrome" ? "Add to Chrome" : "Add to Firefox";
-  const Icon = store === "chrome" ? Chrome : Globe;
+const EXTENSION_PANELS = [
+  {
+    label: "Reviewability",
+    badge: "live",
+    rows: [
+      { k: "endpoint", v: "/v1/extension/pull-context" },
+      { k: "auth", v: "extension session" },
+      { k: "boundary", v: "private" },
+    ],
+  },
+  {
+    label: "Contributor",
+    badge: "cached",
+    rows: [
+      { k: "profile", v: "backend" },
+      { k: "history", v: "read-only" },
+      { k: "public post", v: "never" },
+    ],
+  },
+  {
+    label: "Install",
+    badge: "manual",
+    rows: [
+      { k: "package", v: "Manifest V3" },
+      { k: "store", v: "out of scope" },
+      { k: "source", v: "bundled" },
+    ],
+  },
+] as const;
+
+function ExtensionTokenButton() {
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
   return (
-    <button
-      type="button"
-      disabled
-      title="Coming soon"
-      className="inline-flex cursor-not-allowed items-center gap-2 rounded-token border border-border bg-transparent px-4 py-2 text-token-sm font-medium text-muted-foreground"
-    >
-      <Icon className="size-4" />
-      {label}
-      <span className="rounded border border-border px-1.5 py-0.5 font-mono text-token-2xs uppercase tracking-wider">
-        soon
-      </span>
-    </button>
+    <div className="flex max-w-full flex-col gap-2">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          const result = await apiFetch<{ token: string }>(
+            `${getApiOrigin().replace(/\/$/, "")}/v1/auth/extension/session`,
+            {
+              method: "POST",
+              label: "Extension token",
+              credentials: "include",
+              headers: { Accept: "application/json" },
+            },
+          );
+          setBusy(false);
+          if (!result.ok) {
+            toast.error("Extension token not created", {
+              description:
+                result.status === 403
+                  ? "Sign in to the app first, then try again."
+                  : result.message,
+            });
+            return;
+          }
+          setToken(result.data.token);
+          await navigator.clipboard?.writeText(result.data.token).catch(() => undefined);
+          toast.success("Extension token created", { description: "Copied to clipboard." });
+        }}
+        className="inline-flex items-center gap-2 rounded-token border border-border bg-transparent px-4 py-2 text-token-sm font-medium hover:border-foreground/30 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {busy ? "Creating token…" : "Create extension token"}
+      </button>
+      {token && (
+        <code className="max-w-[320px] truncate rounded-token border border-border bg-background/60 px-2 py-1 font-mono text-token-2xs text-muted-foreground">
+          {token}
+        </code>
+      )}
+    </div>
   );
 }
 
@@ -187,7 +246,7 @@ function OverlayDemo() {
               </span>
             </div>
             <div className="mb-2 flex gap-1">
-              {mockExtensionPanels.map((p, i) => (
+              {EXTENSION_PANELS.map((p, i) => (
                 <button
                   key={p.label}
                   type="button"
@@ -211,14 +270,14 @@ function OverlayDemo() {
             >
               <div className="mb-2 flex items-center justify-between">
                 <span className="text-token-sm font-medium text-foreground">
-                  {mockExtensionPanels[active].label}
+                  {EXTENSION_PANELS[active].label}
                 </span>
                 <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
-                  {mockExtensionPanels[active].badge}
+                  {EXTENSION_PANELS[active].badge}
                 </span>
               </div>
               <dl className="space-y-1 text-[12px]">
-                {mockExtensionPanels[active].rows.map((r) => (
+                {EXTENSION_PANELS[active].rows.map((r) => (
                   <div key={r.k} className="flex items-baseline justify-between gap-2">
                     <dt className="font-mono text-muted-foreground">{r.k}</dt>
                     <dd className="font-mono text-foreground/90">{r.v}</dd>

@@ -1,16 +1,6 @@
 name: Deploy UI Worker
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "apps/gittensory-ui/**"
-      - "scripts/write-ui-openapi.ts"
-      - "src/openapi/**"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/ui-deploy.yml"
   workflow_dispatch:
 
 permissions:
@@ -38,7 +28,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies

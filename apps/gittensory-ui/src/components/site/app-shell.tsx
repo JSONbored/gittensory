@@ -308,80 +308,57 @@ function ApiStatusButton() {
 function SignedOut() {
   const { auth, signIn, signInPreview } = useSession();
   const isStarting = auth.status === "starting";
-  const isPending = auth.status === "pending";
   return (
     <div className="mx-auto max-w-md px-4 py-20 text-center">
       <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-mint/50 bg-mint/10 px-3 py-1 font-mono text-token-2xs uppercase tracking-wider text-foreground">
         <TerminalSquare className="size-3" />
-        Device flow · preview
+        GitHub OAuth
       </div>
       <h1 className="font-display text-token-2xl font-semibold tracking-tight">
         Sign in to Gittensory
       </h1>
       <p className="mt-2 text-token-sm text-muted-foreground">
-        Sign in with GitHub to use the live API-backed app surfaces. The mock session remains
-        available for local UI previews.
+        Sign in with GitHub to use the live API-backed app surfaces.
       </p>
       <div className="mt-6 rounded-token border border-border bg-transparent p-5 text-left">
         <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-          1. GitHub device flow
+          GitHub browser OAuth
         </div>
         <button
           type="button"
           onClick={() => void signIn()}
-          disabled={isStarting || isPending}
+          disabled={isStarting}
           className="mt-2 inline-flex min-w-0 w-full items-center justify-center gap-2 rounded-token bg-primary px-4 py-2 text-center text-token-xs font-semibold text-primary-foreground transition-all duration-150 hover:bg-primary/90 focus-ring motion-reduce:transition-none motion-reduce:active:scale-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isStarting || isPending ? (
+          {isStarting ? (
             <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" />
           ) : (
             <ExternalLink className="size-3.5" />
           )}
-          {isStarting
-            ? "Starting sign-in…"
-            : isPending
-              ? "Waiting for GitHub…"
-              : "Sign in with GitHub"}
+          {isStarting ? "Starting sign-in…" : "Sign in with GitHub"}
         </button>
-        {auth.status === "pending" && (
-          <div className="mt-3 rounded-token border-hairline bg-background/60 p-3">
-            <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-              Enter this code
-            </div>
-            <div className="mt-1 font-mono text-token-xl font-semibold text-foreground">
-              {auth.userCode}
-            </div>
-            <a
-              href={auth.verificationUri}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-2 inline-flex text-token-xs text-mint underline-offset-4 hover:underline"
-            >
-              Open GitHub verification
-            </a>
-            {auth.message && (
-              <p className="mt-2 text-token-2xs text-muted-foreground">{auth.message}</p>
-            )}
-          </div>
-        )}
         {auth.status === "error" && (
           <p className="mt-3 rounded-token border border-danger/40 bg-danger/10 px-3 py-2 text-token-xs text-danger">
             {auth.message}
           </p>
         )}
-        <div className="mt-4 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-          2. Or use a preview session
-        </div>
-        <button
-          type="button"
-          onClick={signInPreview}
-          className="mt-2 inline-flex min-w-0 w-full items-center justify-center rounded-token bg-primary px-4 py-2 text-center text-token-xs font-semibold text-primary-foreground transition-all duration-150 hover:bg-primary/90 focus-ring motion-reduce:transition-none motion-reduce:active:scale-100 active:scale-[0.98]"
-        >
-          Continue with mock session
-        </button>
+        {import.meta.env.DEV && (
+          <>
+            <div className="mt-4 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+              Local dev only
+            </div>
+            <button
+              type="button"
+              onClick={signInPreview}
+              className="mt-2 inline-flex min-w-0 w-full items-center justify-center rounded-token bg-primary px-4 py-2 text-center text-token-xs font-semibold text-primary-foreground transition-all duration-150 hover:bg-primary/90 focus-ring motion-reduce:transition-none motion-reduce:active:scale-100 active:scale-[0.98]"
+            >
+              Continue with local preview
+            </button>
+          </>
+        )}
         <p className="mt-3 text-token-2xs text-muted-foreground">
-          No GitHub PAT is collected by the browser. Gittensory stores only its own session token in
-          localStorage.
+          No GitHub PAT is collected by the browser. The app uses an HttpOnly Gittensory session
+          cookie issued after GitHub OAuth.
         </p>
       </div>
     </div>

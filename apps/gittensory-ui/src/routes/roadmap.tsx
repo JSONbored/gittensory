@@ -3,7 +3,6 @@ import { ArrowRight } from "lucide-react";
 
 import { Section, Eyebrow, Callout } from "@/components/site/primitives";
 import { Reveal } from "@/components/site/reveal";
-import { mockRoadmap } from "@/lib/api/mock";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/roadmap")({
@@ -33,8 +32,41 @@ const COLUMNS = [
 ] as const;
 
 const LAST_UPDATED = "2026-05-30";
+const LAST_UPDATED_LABEL = "May 30, 2026";
 
-// Titles that ship today with a frontend preview (mock-powered).
+const ROADMAP_ITEMS: Array<{
+  title: string;
+  status: (typeof COLUMNS)[number]["key"];
+  description: string;
+}> = [
+  {
+    title: "@gittensory GitHub command agent",
+    status: "shipping-soon",
+    description: "Quiet, opt-in @-commands maintainers can use inside PR threads.",
+  },
+  {
+    title: "Product usage analytics",
+    status: "shipping-soon",
+    description: "Weekly value report and operator dashboard.",
+  },
+  {
+    title: "Browser extension PR overlays",
+    status: "planned",
+    description: "Private maintainer overlays on github.com, never shown to PR authors.",
+  },
+  {
+    title: "PWA maintainer digest",
+    status: "planned",
+    description: "Mobile-friendly daily digest of reviewability and install health.",
+  },
+  {
+    title: "Optional AI summaries",
+    status: "exploring",
+    description: "Strictly over deterministic signals; never replaces evidence.",
+  },
+];
+
+// Titles with live or self-hosted surfaces in the imported frontend.
 const BUILT_TITLES = new Set<string>([
   "@gittensory GitHub command agent",
   "Product usage analytics",
@@ -54,7 +86,7 @@ const LINK_MAP: Record<string, { to: string; label: string }> = {
 function RoadmapPage() {
   const grouped = COLUMNS.map((c) => ({
     ...c,
-    items: mockRoadmap.filter((r) => r.status === c.key),
+    items: ROADMAP_ITEMS.filter((r) => r.status === c.key),
   }));
 
   return (
@@ -65,19 +97,12 @@ function RoadmapPage() {
           What&apos;s next for Gittensory
         </h1>
         <p className="mt-3 text-muted-foreground">
-          Each upcoming surface ships with a frontend preview today — the backend wiring lands in
-          subsequent releases. Click through to try the mock-powered flow.
+          Each surface below maps to either live API-backed app wiring, a self-hosted package, or a
+          clearly scoped future lane.
         </p>
         <div className="mt-4 inline-flex items-center gap-2 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
           <span className="size-1.5 rounded-full bg-mint" aria-hidden />
-          Last updated{" "}
-          <time dateTime={LAST_UPDATED}>
-            {new Date(LAST_UPDATED).toLocaleDateString(undefined, {
-              year: "numeric",
-              month: "short",
-              day: "numeric",
-            })}
-          </time>
+          Last updated <time dateTime={LAST_UPDATED}>{LAST_UPDATED_LABEL}</time>
         </div>
       </Reveal>
 

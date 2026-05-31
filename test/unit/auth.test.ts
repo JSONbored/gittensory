@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSessionFromGitHubToken, pollGitHubDeviceFlow, startGitHubDeviceFlow } from "../../src/auth/github-oauth";
+import { completeGitHubWebOAuth, createSessionFromGitHubToken, pollGitHubDeviceFlow, startGitHubDeviceFlow, startGitHubWebOAuth } from "../../src/auth/github-oauth";
 import { enforceRateLimit, RateLimiter, routeClassForPath } from "../../src/auth/rate-limit";
 import { authenticatePrivateToken, createSessionForGitHubUser, revokeSession } from "../../src/auth/security";
 import { createTestEnv } from "../helpers/d1";
@@ -157,6 +157,62 @@ describe("private-beta auth and rate limiting", () => {
       }),
     );
     await expect(startGitHubDeviceFlow(env)).resolves.not.toHaveProperty("interval");
+  });
+
+  it("starts and completes GitHub web OAuth with signed state", async () => {
+    const env = createTestEnv({
+      GITHUB_OAUTH_CLIENT_ID: "client-id",
+      GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
+      ADMIN_GITHUB_LOGINS: "jsonbored",
+    });
+    const started = await startGitHubWebOAuth(
+      env,
+      "https://gittensory-api.aethereal.dev/v1/auth/github/start",
+      "https://gittensory.aethereal.dev/app/workbench",
+    );
+    expect(started.returnTo).toBe("https://gittensory.aethereal.dev/app/workbench");
+    expect(started.authorizationUrl).toContain("https://github.com/login/oauth/authorize");
+    expect(started.authorizationUrl).toContain("client_id=client-id");
+    expect(started.authorizationUrl).toContain("redirect_uri=https%3A%2F%2Fgittensory-api.aethereal.dev%2Fv1%2Fauth%2Fgithub%2Fcallback");
+
+    await expect(
+      startGitHubWebOAuth(createTestEnv({ GITHUB_OAUTH_CLIENT_ID: "client-id" }), "https://gittensory-api.aethereal.dev/v1/auth/github/start", undefined),
+    ).rejects.toThrow(/not_configured/);
+
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("access_token")) return Response.json({ access_token: "gh-token", scope: "read:user" });
+      if (url === "https://api.github.com/user") return Response.json({ login: "jsonbored", id: 42 });
+      return Response.json({});
+    });
+    await expect(
+      completeGitHubWebOAuth(env, "https://gittensory-api.aethereal.dev/v1/auth/github/callback", {
+        code: "code",
+        state: started.state,
+        cookieState: started.state,
+      }),
+    ).resolves.toMatchObject({ login: "jsonbored", scopes: ["read:user"], returnTo: "https://gittensory.aethereal.dev/app/workbench" });
+
+    await expect(
+      completeGitHubWebOAuth(env, "https://gittensory-api.aethereal.dev/v1/auth/github/callback", {
+        code: "code",
+        state: started.state,
+        cookieState: "wrong-state",
+      }),
+    ).rejects.toThrow(/state_invalid/);
+
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("access_token")) return Response.json({ error: "bad_verification_code", error_description: "bad code" });
+      return Response.json({});
+    });
+    await expect(
+      completeGitHubWebOAuth(env, "https://gittensory-api.aethereal.dev/v1/auth/github/callback", {
+        code: "code",
+        state: started.state,
+        cookieState: started.state,
+      }),
+    ).rejects.toThrow(/bad code/);
   });
 
   it("polls GitHub device flow and creates a session only after authorization", async () => {

@@ -34,7 +34,7 @@ describe("api routes", () => {
     vi.unstubAllGlobals();
   });
 
-  it("serves health openly and keeps OpenAPI private", async () => {
+  it("serves health and OpenAPI openly", async () => {
     const app = createApp();
     const env = createTestEnv();
 
@@ -46,11 +46,8 @@ describe("api routes", () => {
     await expect(health.json()).resolves.toMatchObject({ status: "ok", service: "gittensory-api" });
 
     const unauthenticatedSpec = await app.request("/openapi.json", {}, env);
-    expect(unauthenticatedSpec.status).toBe(401);
-
-    const spec = await app.request("/openapi.json", { headers: apiHeaders(env) }, env);
-    expect(spec.status).toBe(200);
-    await expect(spec.json()).resolves.toMatchObject({ info: { title: "Gittensory API" } });
+    expect(unauthenticatedSpec.status).toBe(200);
+    await expect(unauthenticatedSpec.json()).resolves.toMatchObject({ info: { title: "Gittensory API" } });
   });
 
   it("serves registry drift through the canonical registry change endpoint", async () => {
@@ -1929,7 +1926,8 @@ describe("api routes", () => {
     const sessionRejected = await app.request("/v1/auth/github/session", { method: "POST", body: JSON.stringify({ githubToken: "bad" }) }, env);
     expect(sessionRejected.status).toBe(401);
     const unauthenticatedSession = await app.request("/v1/auth/session", {}, env);
-    expect(unauthenticatedSession.status).toBe(401);
+    expect(unauthenticatedSession.status).toBe(200);
+    await expect(unauthenticatedSession.json()).resolves.toMatchObject({ status: "signed_out" });
     const logout = await app.request("/v1/auth/logout", { method: "POST" }, env);
     await expect(logout.json()).resolves.toMatchObject({ ok: true, revoked: false });
 

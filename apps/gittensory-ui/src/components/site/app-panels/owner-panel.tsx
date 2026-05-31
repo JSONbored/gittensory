@@ -1,10 +1,9 @@
 import { useMemo, useState } from "react";
 
 import { DiffBlock, StatusPill, type Status } from "@/components/site/control-primitives";
-import { StateBoundary, usePreviewDataState } from "@/components/site/state-views";
+import { StateBoundary } from "@/components/site/state-views";
 import { Input } from "@/components/ui/input";
 import { useApiResource } from "@/lib/api/use-api-resource";
-import { mockRegistrationReadiness } from "@/lib/api/mock";
 
 const STATUS_MAP: Record<string, Status> = { ok: "ready", warn: "warn", blocked: "blocked" };
 
@@ -25,7 +24,6 @@ type ConfigRecommendation = {
 };
 
 export function OwnerPanel() {
-  const state = usePreviewDataState("Repository owner readiness");
   const [repo, setRepo] = useState("entrius/gittensor");
   const [owner, name] = repo.split("/");
   const repoPath =
@@ -70,31 +68,20 @@ export function OwnerPanel() {
     ];
     return steps.length > 0 ? steps : null;
   }, [readiness]);
-  const steps = liveSteps ?? mockRegistrationReadiness;
-  const removed =
-    config.status === "ready"
-      ? recordLines(config.data.current ?? {})
-      : ["intake: direct-pr", "maintainer_cut: 0"];
-  const added =
-    config.status === "ready"
-      ? recordLines(config.data.recommended)
-      : [
-          "intake: issue-discovery",
-          "maintainer_cut: 0.1",
-          "label_policy: { fixes: required }",
-          "ci_validation_summary: required",
-        ];
+  const steps = liveSteps ?? [];
+  const removed = config.status === "ready" ? recordLines(config.data.current ?? {}) : [];
+  const added = config.status === "ready" ? recordLines(config.data.recommended) : [];
   const refresh = () => {
-    state.refresh();
     void readiness.reload();
     void config.reload();
   };
 
   return (
     <StateBoundary
-      isLoading={state.isLoading}
-      isEmpty={steps.length === 0}
-      onRetry={state.retry}
+      isLoading={readiness.status === "loading" || config.status === "loading"}
+      isError={readiness.status === "error" && config.status === "error"}
+      isEmpty={steps.length === 0 && config.status !== "ready"}
+      onRetry={refresh}
       onRefresh={refresh}
       loadingTitle="Loading owner readiness…"
       emptyTitle="No readiness checks yet"
@@ -106,7 +93,7 @@ export function OwnerPanel() {
             <div>
               <h2 className="font-display text-token-lg font-semibold">Registration readiness</h2>
               <p className="mt-1 text-token-xs text-muted-foreground">
-                Live read-only API check with preview fallback.
+                Live read-only API check from cached repository intelligence.
               </p>
             </div>
             <div className="w-full sm:w-56">
@@ -122,7 +109,7 @@ export function OwnerPanel() {
           </div>
           {readiness.status === "error" && (
             <p className="mt-3 text-token-2xs text-muted-foreground">
-              Live readiness failed ({readiness.error}); showing preview data.
+              Live readiness failed ({readiness.error}).
             </p>
           )}
           <ul className="mt-4 divide-hairline">
@@ -148,7 +135,7 @@ export function OwnerPanel() {
           </p>
           {config.status === "error" && (
             <p className="mt-2 text-token-2xs text-muted-foreground">
-              Live recommendation failed ({config.error}); showing preview data.
+              Live recommendation failed ({config.error}).
             </p>
           )}
           <div className="mt-3">

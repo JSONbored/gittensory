@@ -46,7 +46,7 @@ function Workbench() {
       <PageHeader
         eyebrow="Workbench"
         title="Plan, preflight, and explain"
-        description="Drive ranked next actions, run agent tools, preview maintainer commands, and inspect digests — all preview-only with local mock data."
+        description="Drive ranked next actions, run agent tools, preview maintainer commands, and inspect digests from the live Gittensory API."
       />
       <Tabs
         value={value}

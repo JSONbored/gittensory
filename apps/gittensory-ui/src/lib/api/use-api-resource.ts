@@ -36,6 +36,7 @@ export function useApiResource<T>(
     const result = await apiFetch<T>(`${getApiOrigin().replace(/\/$/, "")}${path}`, {
       label,
       headers,
+      credentials: "include",
     });
     if (result.ok) {
       setState({ status: "ready", data: result.data, error: null });

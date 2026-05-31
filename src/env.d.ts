@@ -17,6 +17,7 @@ declare global {
     GITHUB_APP_ID: string;
     GITHUB_APP_SLUG: string;
     GITHUB_OAUTH_CLIENT_ID?: string;
+    GITHUB_OAUTH_CLIENT_SECRET?: string;
     GITTENSOR_UPSTREAM_REPO?: string;
     GITTENSOR_UPSTREAM_REF?: string;
     GITTENSOR_REGISTRY_URL: string;

@@ -7851,7 +7851,20 @@
         ]
       }
     },
-    "parameters": {}
+    "parameters": {},
+    "securitySchemes": {
+      "GittensoryBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Static API/MCP token or GitHub device-flow Gittensory session token."
+      },
+      "GittensorySessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "gittensory_session",
+        "description": "HttpOnly browser session cookie set by GitHub web OAuth."
+      }
+    }
   },
   "paths": {
     "/health": {
@@ -7883,7 +7896,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/registry/changes": {
@@ -7899,7 +7920,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/scoring/model": {
@@ -7915,7 +7944,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/upstream/status": {
@@ -7931,7 +7968,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/upstream/ruleset": {
@@ -7950,7 +7995,15 @@
           "404": {
             "description": "No upstream ruleset snapshot has been built yet"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/upstream/drift": {
@@ -7985,7 +8038,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/scoring/preview": {
@@ -8004,7 +8065,15 @@
           "400": {
             "description": "Invalid scoring preview input"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/sync/status": {
@@ -8020,7 +8089,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/readiness": {
@@ -8036,7 +8113,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/installations": {
@@ -8073,7 +8158,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/installations/{id}/health": {
@@ -8092,7 +8185,15 @@
           "404": {
             "description": "Installation health not found"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/repos": {
@@ -8111,7 +8212,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/repos/{owner}/{repo}": {
@@ -8130,7 +8239,15 @@
           "404": {
             "description": "Repository not found"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/repos/{owner}/{repo}/intelligence": {
@@ -8146,7 +8263,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/repos/{owner}/{repo}/issue-quality": {
@@ -8165,7 +8290,15 @@
           "404": {
             "description": "Repo is unknown or has no issue-quality coverage yet"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/repos/{owner}/{repo}/registration-readiness": {
@@ -8181,7 +8314,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/repos/{owner}/{repo}/gittensor-config-recommendation": {
@@ -8197,7 +8338,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/repos/{owner}/{repo}/settings": {
@@ -8213,7 +8362,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/repos/{owner}/{repo}/settings-preview": {
@@ -8232,7 +8389,15 @@
           "400": {
             "description": "Invalid settings preview request"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/repos/{owner}/{repo}/pulls/{number}/maintainer-packet": {
@@ -8248,7 +8413,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/repos/{owner}/{repo}/pulls/{number}/reviewability": {
@@ -8264,7 +8437,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/contributors/{login}/profile": {
@@ -8280,7 +8461,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/contributors/{login}/decision-pack": {
@@ -8306,7 +8495,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/contributors/{login}/repos/{owner}/{repo}/decision": {
@@ -8332,7 +8529,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/preflight/pr": {
@@ -8351,7 +8556,15 @@
           "400": {
             "description": "Invalid preflight input"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/preflight/local-diff": {
@@ -8370,7 +8583,15 @@
           "400": {
             "description": "Invalid local diff preflight input"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/local/branch-analysis": {
@@ -8392,7 +8613,15 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/agent/runs": {
@@ -8414,7 +8643,15 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       },
       "get": {
         "parameters": [
@@ -8468,7 +8705,15 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/agent/runs/{id}": {
@@ -8487,7 +8732,15 @@
           "404": {
             "description": "Agent run not found"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/agent/plan-next-work": {
@@ -8519,7 +8772,15 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/agent/preflight-branch": {
@@ -8551,7 +8812,15 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/agent/prepare-pr-packet": {
@@ -8583,7 +8852,15 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/agent/explain-blockers": {
@@ -8615,7 +8892,15 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/bounties": {
@@ -8634,7 +8919,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/bounties/{id}/advisory": {
@@ -8653,7 +8946,15 @@
           "404": {
             "description": "Bounty not found"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/github/webhook": {
@@ -8664,6 +8965,27 @@
           },
           "401": {
             "description": "Invalid webhook signature"
+          }
+        }
+      }
+    },
+    "/v1/auth/github/start": {
+      "get": {
+        "responses": {
+          "302": {
+            "description": "Redirects to GitHub web OAuth"
+          },
+          "503": {
+            "description": "GitHub OAuth app secret is not configured"
+          }
+        }
+      }
+    },
+    "/v1/auth/github/callback": {
+      "get": {
+        "responses": {
+          "302": {
+            "description": "Completes GitHub web OAuth and redirects to the app"
           }
         }
       }
@@ -8752,16 +9074,382 @@
         }
       }
     },
+    "/v1/auth/extension/session": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Auth request completed"
+          },
+          "201": {
+            "description": "Auth session created"
+          },
+          "400": {
+            "description": "Invalid auth request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/auth/session": {
       "get": {
         "responses": {
           "200": {
-            "description": "Current auth session"
+            "description": "Current auth session, or signed_out when no app session is present"
+          }
+        }
+      }
+    },
+    "/v1/app/overview": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app overview assembled from backend data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/miner-dashboard": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/maintainer-dashboard": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/operator-dashboard": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/commands": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/digest": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/commands/preview": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Live app mutation or preview response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/digest/subscriptions": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Live app mutation or preview response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/extension/pull-context": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "JSONbored"
+            },
+            "required": true,
+            "description": "Repository owner",
+            "name": "owner",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "gittensory"
+            },
+            "required": true,
+            "description": "Repository name",
+            "name": "repo",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "120"
+            },
+            "required": true,
+            "description": "Pull request number",
+            "name": "pullNumber",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Browser extension PR context overlay payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pull context query"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/jobs/refresh-registry": {
@@ -8773,7 +9461,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/jobs/backfill-registered-repos": {
@@ -8785,7 +9481,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/jobs/backfill-repo-segment": {
@@ -8800,7 +9504,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/jobs/backfill-pr-details": {
@@ -8815,7 +9527,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/jobs/refresh-scoring-model": {
@@ -8827,7 +9547,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/jobs/refresh-upstream-drift": {
@@ -8839,7 +9567,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/jobs/file-upstream-drift-issues": {
@@ -8851,7 +9587,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/jobs/build-contributor-evidence": {
@@ -8863,7 +9607,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/jobs/build-contributor-decision-packs": {
@@ -8875,7 +9627,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/jobs/build-burden-forecasts": {
@@ -8887,7 +9647,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/jobs/generate-signal-snapshots": {
@@ -8899,7 +9667,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/jobs/repair-data-fidelity": {
@@ -8911,7 +9687,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     },
     "/v1/internal/bounties/import": {
@@ -8923,7 +9707,15 @@
           "401": {
             "description": "Invalid internal token"
           }
-        }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
       }
     }
   },
