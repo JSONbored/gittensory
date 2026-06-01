@@ -9,7 +9,13 @@ type NotificationModelResponse = {
   notificationModel: {
     mode: "opt_in";
     defaultState: "disabled";
-    channels: Array<{ id: string; transport: "in_app" | "web_push"; defaultEnabled: boolean; requiresPermission?: boolean; purpose: string }>;
+    channels: Array<{
+      id: string;
+      transport: "in_app" | "web_push";
+      defaultEnabled: boolean;
+      requiresPermission?: boolean;
+      purpose: string;
+    }>;
     privacyGuards: string[];
     fallbackWhenUnavailable: string;
   };
@@ -29,7 +35,10 @@ export function NotificationReadinessCard() {
   const permission = typeof Notification === "undefined" ? "unsupported" : Notification.permission;
   const canAskPermission = permission !== "unsupported" && permission !== "granted";
   const pushChannel = useMemo(
-    () => model.status === "ready" ? model.data.notificationModel.channels.find((channel) => channel.id === "browser_push") : null,
+    () =>
+      model.status === "ready"
+        ? model.data.notificationModel.channels.find((channel) => channel.id === "browser_push")
+        : null,
     [model],
   );
 
@@ -48,20 +57,26 @@ export function NotificationReadinessCard() {
     <section className="rounded-token border border-border bg-transparent p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-display text-token-lg font-semibold">Notification readiness</h2>
-        <StatusPill status={optIn ? "ready" : "warn"}>{optIn ? "opt-in enabled" : "opt-in required"}</StatusPill>
+        <StatusPill status={optIn ? "ready" : "warn"}>
+          {optIn ? "opt-in enabled" : "opt-in required"}
+        </StatusPill>
       </div>
       {model.status === "ready" ? (
         <div className="mt-3 space-y-3 text-token-sm">
           <p className="text-muted-foreground">
-            Delivery mode is <strong>{model.data.notificationModel.mode}</strong> and defaults to <strong>{model.data.notificationModel.defaultState}</strong>.
+            Delivery mode is <strong>{model.data.notificationModel.mode}</strong> and defaults to{" "}
+            <strong>{model.data.notificationModel.defaultState}</strong>.
           </p>
           <ul className="space-y-1 text-foreground/90">
             {model.data.notificationModel.channels.map((channel) => (
-              <li key={channel.id}>· {channel.id}: {channel.purpose}</li>
+              <li key={channel.id}>
+                · {channel.id}: {channel.purpose}
+              </li>
             ))}
           </ul>
           <p className="text-token-xs text-muted-foreground">
-            Fallback: {model.data.notificationModel.fallbackWhenUnavailable}. Native app dependency: {model.data.pwa.nativeDependency ? "yes" : "no"}.
+            Fallback: {model.data.notificationModel.fallbackWhenUnavailable}. Native app dependency:{" "}
+            {model.data.pwa.nativeDependency ? "yes" : "no"}.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -95,7 +110,9 @@ export function NotificationReadinessCard() {
         </div>
       ) : (
         <p className="mt-3 text-token-sm text-muted-foreground">
-          {model.status === "loading" ? "Loading notification model…" : "Notification model unavailable."}
+          {model.status === "loading"
+            ? "Loading notification model…"
+            : "Notification model unavailable."}
         </p>
       )}
     </section>
