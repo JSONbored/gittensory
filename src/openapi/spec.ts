@@ -465,6 +465,7 @@ export function buildOpenApiSpec() {
     path: "/v1/github/webhook",
     responses: {
       202: { description: "Webhook queued" },
+      413: { description: "Webhook payload too large" },
       401: { description: "Invalid webhook signature" },
     },
   });

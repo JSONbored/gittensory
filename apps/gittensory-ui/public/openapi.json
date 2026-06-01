@@ -9219,6 +9219,9 @@
           },
           "401": {
             "description": "Invalid webhook signature"
+          },
+          "413": {
+            "description": "Webhook payload too large"
           }
         }
       }

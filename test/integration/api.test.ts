@@ -25,6 +25,7 @@ import {
   upsertRepositorySettings,
 } from "../../src/db/repositories";
 import { createApp } from "../../src/api/routes";
+import { MAX_GITHUB_WEBHOOK_BODY_BYTES } from "../../src/github/webhook";
 import { BURDEN_FORECAST_MAX_AGE_MS } from "../../src/services/burden-forecast";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
@@ -230,6 +231,124 @@ describe("api routes", () => {
     );
 
     expect(rejected.status).toBe(401);
+  });
+
+  it("rejects signed GitHub webhooks with invalid JSON", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    const body = "{";
+    const signature = await signWebhook(body, env.GITHUB_WEBHOOK_SECRET);
+
+    const rejected = await app.request(
+      "/v1/github/webhook",
+      {
+        method: "POST",
+        body,
+        headers: {
+          "x-github-delivery": "delivery-invalid-json",
+          "x-github-event": "pull_request",
+          "x-hub-signature-256": signature,
+        },
+      },
+      env,
+    );
+
+    expect(rejected.status).toBe(400);
+    await expect(rejected.json()).resolves.toMatchObject({ error: "invalid_json" });
+  });
+
+  it("rejects oversized GitHub webhook bodies before signature verification", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    const body = JSON.stringify({ action: "opened" });
+    const oversizedContentLength = String(MAX_GITHUB_WEBHOOK_BODY_BYTES + 1);
+
+    const rejected = await app.request(
+      "/v1/github/webhook",
+      {
+        method: "POST",
+        body,
+        headers: {
+          "content-length": oversizedContentLength,
+          "x-github-delivery": "delivery-large",
+          "x-github-event": "pull_request",
+          "x-hub-signature-256": "sha256=bad",
+        },
+      },
+      env,
+    );
+
+    expect(rejected.status).toBe(413);
+    await expect(rejected.json()).resolves.toMatchObject({ error: "webhook_body_too_large" });
+  });
+
+  it("rejects malformed GitHub webhook content length headers", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+
+    const rejected = await app.request(
+      "/v1/github/webhook",
+      {
+        method: "POST",
+        body: JSON.stringify({ action: "opened" }),
+        headers: {
+          "content-length": "not-a-number",
+          "x-github-delivery": "delivery-bad-length",
+          "x-github-event": "pull_request",
+          "x-hub-signature-256": "sha256=bad",
+        },
+      },
+      env,
+    );
+
+    expect(rejected.status).toBe(400);
+    await expect(rejected.json()).resolves.toMatchObject({ error: "invalid_content_length" });
+  });
+
+  it("rejects unsafe GitHub webhook content length values", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+
+    const rejected = await app.request(
+      "/v1/github/webhook",
+      {
+        method: "POST",
+        body: JSON.stringify({ action: "opened" }),
+        headers: {
+          "content-length": String(Number.MAX_SAFE_INTEGER + 1),
+          "x-github-delivery": "delivery-unsafe-length",
+          "x-github-event": "pull_request",
+          "x-hub-signature-256": "sha256=bad",
+        },
+      },
+      env,
+    );
+
+    expect(rejected.status).toBe(400);
+    await expect(rejected.json()).resolves.toMatchObject({ error: "invalid_content_length" });
+  });
+
+  it("rejects streamed oversized GitHub webhook bodies without content length", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+
+    const rejected = await app.request(
+      "/v1/github/webhook",
+      {
+        method: "POST",
+        body: oversizedWebhookBodyStream(),
+        duplex: "half",
+        headers: {
+          "x-github-delivery": "delivery-stream-large",
+          "x-github-event": "pull_request",
+          "x-hub-signature-256": "sha256=bad",
+        },
+      } as RequestInit,
+      env,
+    );
+
+    expect(rejected.status).toBe(413);
+    await expect(rejected.json()).resolves.toMatchObject({ error: "webhook_body_too_large" });
   });
 
   it("serves deterministic signal endpoints from cached registry and GitHub metadata", async () => {
@@ -2874,6 +2993,26 @@ async function signWebhook(body: string, secret: string): Promise<string> {
   ]);
   const signed = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
   return `sha256=${[...new Uint8Array(signed)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function oversizedWebhookBodyStream(): ReadableStream<Uint8Array> {
+  const fullChunk = new Uint8Array(1024 * 1024);
+  const targetBytes = MAX_GITHUB_WEBHOOK_BODY_BYTES + 1;
+  let sentBytes = 0;
+
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const remaining = targetBytes - sentBytes;
+      if (remaining <= 0) {
+        controller.close();
+        return;
+      }
+
+      const nextSize = Math.min(fullChunk.byteLength, remaining);
+      controller.enqueue(nextSize === fullChunk.byteLength ? fullChunk : new Uint8Array(nextSize));
+      sentBytes += nextSize;
+    },
+  });
 }
 
 function mcpHeaders(env: Env, sessionId?: string): Record<string, string> {
