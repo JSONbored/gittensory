@@ -6,6 +6,7 @@ import {
   getPullRequest,
   getRepository,
   getRepositorySettings,
+  listCheckSummaries,
   listAllIssues,
   listAllPullRequests,
   listBounties,
@@ -27,10 +28,12 @@ import {
   markInstallationDeleted,
   persistAdvisory,
   recordAuditEvent,
+  recordProductUsageEvent,
   persistSignalSnapshot,
   recordWebhookEvent,
   replaceCollisionEdges,
   upsertOfficialMinerDetection,
+  rollupProductUsageDaily,
   upsertBurdenForecast,
   upsertContributorEvidence,
   upsertContributorScoringProfile,
@@ -51,8 +54,13 @@ import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot, f
 import { createOrUpdateCheckRun, getInstallationId } from "../github/app";
 import { createOrUpdateAgentCommandComment, createOrUpdatePrIntelligenceComment } from "../github/comments";
 import {
+  buildMaintainerQueueDigest,
   buildPublicAgentCommandComment,
+  type GittensoryMentionCommandName,
   isAuthorizedCommandActor,
+  isMaintainerAssociation,
+  isMaintainerOnlyCommand,
+  isMaintainerQueueDigestCommand,
   parseGittensoryMentionCommand,
 } from "../github/commands";
 import { ensurePullRequestLabel } from "../github/labels";
@@ -61,8 +69,10 @@ import { refreshRegistry } from "../registry/sync";
 import { buildIssueAdvisory, buildPullRequestAdvisory } from "../rules/advisory";
 import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
 import { buildAndPersistContributorDecisionPack, loadDecisionPackSharedInputs } from "../services/decision-pack";
-import { executeAgentRun, explainBlockersWithAgent, planNextWork } from "../services/agent-orchestrator";
+import { executeAgentRun, explainBlockersWithAgent, planNextWork, preflightBranchWithAgent, preparePrPacketWithAgent } from "../services/agent-orchestrator";
 import { loadIssueQualityReportMap } from "../services/issue-quality";
+import { generateWeeklyValueReport } from "../services/weekly-value-report";
+import { REPO_OUTCOME_PATTERNS_SIGNAL, computeRepoOutcomePatterns } from "../services/repo-outcome-patterns";
 import {
   buildUpstreamRulesetSnapshot,
   detectAndPersistUpstreamDrift,
@@ -95,8 +105,10 @@ import {
   detectGittensorContributor,
 } from "../signals/engine";
 import { decidePublicSurface } from "../signals/settings-preview";
+import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import type { ContributorEvidenceRecord, GitHubWebhookPayload, JobMessage, JsonValue } from "../types";
-import { errorMessage } from "../utils/json";
+import { sha256Hex } from "../utils/crypto";
+import { errorMessage, nowIso } from "../utils/json";
 
 const OFFICIAL_MINER_DETECTION_TTL_MS = 5 * 60 * 1000;
 const OFFICIAL_MINER_DETECTION_UNAVAILABLE_TTL_MS = 60 * 1000;
@@ -202,6 +214,12 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       return;
     case "repair-data-fidelity":
       await repairDataFidelity(env, message.requestedBy);
+      return;
+    case "rollup-product-usage":
+      await rollupProductUsageDaily(env, { ...(message.day ? { day: message.day } : {}), ...(message.days === undefined ? {} : { days: message.days }) });
+      return;
+    case "generate-weekly-value-report":
+      await generateWeeklyValueReport(env, { variant: message.variant ?? "operator", ...(message.days === undefined ? {} : { days: message.days }) });
       return;
     case "run-agent":
       await executeAgentRun(env, message.runId);
@@ -460,6 +478,15 @@ export async function generateSignalSnapshots(env: Env, repoFullName?: string): 
       payload: issueQuality as unknown as Record<string, never>,
       generatedAt,
     });
+    const repoOutcomePatterns = await computeRepoOutcomePatterns(env, repo.fullName, repo);
+    await persistSignalSnapshot(env, {
+      id: crypto.randomUUID(),
+      signalType: REPO_OUTCOME_PATTERNS_SIGNAL,
+      targetKey: repo.fullName,
+      repoFullName: repo.fullName,
+      payload: repoOutcomePatterns as unknown as Record<string, never>,
+      generatedAt,
+    });
   }
 }
 
@@ -488,6 +515,20 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
     }
 
     await upsertInstallation(env, payload);
+    if (eventName === "installation" && (payload.action === "created" || payload.action === "added")) {
+      const installedRepos = payload.repositories?.map((repo) => repo.full_name).filter(Boolean) ?? (payload.repository?.full_name ? [payload.repository.full_name] : [undefined]);
+      await Promise.all(
+        installedRepos.slice(0, 50).map((repoFullName) =>
+          recordGithubProductUsage(env, "github_installation_created", {
+            actor: payload.installation?.account?.login,
+            repoFullName,
+            targetKey: payload.installation?.id ? `installation:${payload.installation.id}` : repoFullName,
+            outcome: "completed",
+            metadata: { action: payload.action, repoCount: installedRepos.filter(Boolean).length, truncatedRepos: Math.max(installedRepos.length - 50, 0) },
+          }),
+        ),
+      );
+    }
 
     const installationId = getInstallationId(payload);
     if (payload.repositories) {
@@ -684,6 +725,40 @@ async function maybePublishPrPublicSurface(
       checkRunMode: settings.checkRunMode,
     },
   });
+  await recordGithubProductUsage(env, "pr_public_surface_published", {
+    actor: author,
+    repoFullName,
+    targetKey: `${repoFullName}#${pr.number}`,
+    outcome: "completed",
+    metadata: {
+      publicSurface: settings.publicSurface,
+      labelApplied: decision.willLabel,
+      checkRunMode: settings.checkRunMode,
+    },
+  });
+}
+
+async function recordGithubProductUsage(
+  env: Env,
+  eventName: string,
+  event: {
+    actor?: string | null | undefined;
+    repoFullName?: string | null | undefined;
+    targetKey?: string | null | undefined;
+    outcome?: "success" | "denied" | "error" | "queued" | "completed" | "skipped";
+    metadata?: Record<string, unknown>;
+  },
+): Promise<void> {
+  await recordProductUsageEvent(env, {
+    surface: "github_app",
+    eventName,
+    actor: event.actor,
+    repoFullName: event.repoFullName,
+    targetKey: event.targetKey,
+    outcome: event.outcome,
+    clientName: "github_app",
+    metadata: event.metadata,
+  }).catch(() => undefined);
 }
 
 async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string, payload: GitHubWebhookPayload): Promise<boolean> {
@@ -693,6 +768,8 @@ async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string
   const issue = payload.issue;
   const installationId = getInstallationId(payload);
   const commenter = payload.comment?.user?.login;
+  const targetKey = repoFullName && issue ? `${repoFullName}#${issue.number}` : repoFullName;
+  const commenterAssociation = payload.comment?.author_association ?? issue?.author_association;
   if (!repoFullName || !issue || !installationId || !commenter) {
     await recordAuditEvent(env, {
       eventType: "github_app.agent_command_skipped",
@@ -701,6 +778,22 @@ async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string
       outcome: "completed",
       detail: "missing_repo_issue_installation_or_actor",
       metadata: { deliveryId, command: command.name },
+    });
+    await recordAgentCommandUsage(env, {
+      repoFullName,
+      targetKey,
+      actor: commenter,
+      command: command.name,
+      actorKind: "none",
+      outcome: "skipped",
+      detail: "missing_repo_issue_installation_or_actor",
+    });
+    await recordGithubProductUsage(env, "agent_command_skipped", {
+      actor: commenter,
+      repoFullName,
+      targetKey: repoFullName,
+      outcome: "skipped",
+      metadata: { command: command.name, reason: "missing_repo_issue_installation_or_actor" },
     });
     return true;
   }
@@ -713,6 +806,14 @@ async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string
       detail: "bot_author",
       metadata: { deliveryId, command: command.name },
     });
+    await recordAgentCommandUsage(env, { repoFullName, targetKey, actor: commenter, command: command.name, actorKind: "none", outcome: "skipped", detail: "bot_author" });
+    await recordGithubProductUsage(env, "agent_command_skipped", {
+      actor: commenter,
+      repoFullName,
+      targetKey: `${repoFullName}#${issue.number}`,
+      outcome: "skipped",
+      metadata: { command: command.name, reason: "bot_author" },
+    });
     return true;
   }
   if (!issue.pull_request) {
@@ -724,17 +825,55 @@ async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string
       detail: "not_a_pull_request_thread",
       metadata: { deliveryId, command: command.name },
     });
+    await recordAgentCommandUsage(env, { repoFullName, targetKey, actor: commenter, command: command.name, actorKind: "none", outcome: "skipped", detail: "not_a_pull_request_thread" });
+    await recordGithubProductUsage(env, "agent_command_skipped", {
+      actor: commenter,
+      repoFullName,
+      targetKey: `${repoFullName}#${issue.number}`,
+      outcome: "skipped",
+      metadata: { command: command.name, reason: "not_a_pull_request_thread" },
+    });
     return true;
   }
 
   const [repo, cachedPullRequest] = await Promise.all([getRepository(env, repoFullName), getPullRequest(env, repoFullName, issue.number)]);
   const pullRequestAuthor = cachedPullRequest?.authorLogin ?? issue.user?.login ?? null;
-  const official = pullRequestAuthor
+  const maintainerActor = isMaintainerAssociation(commenterAssociation);
+  if (isMaintainerOnlyCommand(command.name) && !maintainerActor) {
+    await recordAuditEvent(env, {
+      eventType: "github_app.agent_command_skipped",
+      actor: commenter,
+      targetKey: `${repoFullName}#${issue.number}`,
+      outcome: "denied",
+      detail: "maintainer_command_requires_maintainer",
+      metadata: { deliveryId, command: command.name },
+    });
+    await recordAgentCommandUsage(env, {
+      repoFullName,
+      targetKey: `${repoFullName}#${issue.number}`,
+      actor: commenter,
+      command: command.name,
+      actorKind: "none",
+      outcome: "skipped",
+      detail: "maintainer_command_requires_maintainer",
+      family: "maintainer_digest",
+    });
+    await recordGithubProductUsage(env, "agent_command_skipped", {
+      actor: commenter,
+      repoFullName,
+      targetKey: `${repoFullName}#${issue.number}`,
+      outcome: "denied",
+      metadata: { command: command.name, reason: "maintainer_command_requires_maintainer", family: "queue_digest" },
+    });
+    return true;
+  }
+  const official = pullRequestAuthor && (!maintainerActor || command.name === "miner-context")
     ? await getCachedOfficialMinerDetection(env, pullRequestAuthor, { targetKey: `${repoFullName}#${issue.number}`, deliveryId })
     : undefined;
   const authorization = isAuthorizedCommandActor({
+    commandName: command.name,
     commenterLogin: commenter,
-    commenterAssociation: payload.comment?.author_association ?? issue.author_association,
+    commenterAssociation,
     pullRequestAuthorLogin: pullRequestAuthor,
     officialAuthorDetection: official,
   });
@@ -747,21 +886,37 @@ async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string
       detail: authorization.reason,
       metadata: { deliveryId, command: command.name },
     });
+    await recordAgentCommandUsage(env, {
+      repoFullName,
+      targetKey,
+      actor: commenter,
+      command: command.name,
+      actorKind: authorization.actorKind,
+      outcome: authorization.reason === "miner_detection_unavailable" ? "error" : "skipped",
+      detail: authorization.reason,
+    });
+    await recordGithubProductUsage(env, "agent_command_skipped", {
+      actor: commenter,
+      repoFullName,
+      targetKey: `${repoFullName}#${issue.number}`,
+      outcome: authorization.reason === "miner_detection_unavailable" ? "error" : "skipped",
+      metadata: { command: command.name, reason: authorization.reason },
+    });
     return true;
   }
 
   const login = pullRequestAuthor ?? commenter;
-  const bundle =
-    command.name === "help" || command.name === "miner-context"
-      ? null
-      : command.name === "blockers"
-        ? await explainBlockersWithAgent(env, { login, repoFullName, surface: "github_comment" })
-        : await planNextWork(env, {
-            login,
-            repoFullName,
-            surface: "github_comment",
-            objective: `Respond to @gittensory ${command.name} for ${repoFullName}#${issue.number}.`,
-          });
+  const maintainerDigest = isMaintainerQueueDigestCommand(command.name)
+    ? await buildMaintainerQueueDigestForCommand(env, repo, repoFullName)
+    : null;
+  const bundle = maintainerDigest
+    ? null
+    : await buildMentionCommandBundle(env, command.name, {
+        login,
+        repoFullName,
+        issue,
+        pullRequest: cachedPullRequest,
+      });
   const body = buildPublicAgentCommandComment({
     command,
     repo,
@@ -770,6 +925,7 @@ async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string
     actorKind: authorization.actorKind === "maintainer" ? "maintainer" : "author",
     officialMiner: official?.status === "confirmed" ? official.snapshot : null,
     bundle,
+    maintainerDigest,
   });
   await createOrUpdateAgentCommandComment(env, installationId, repoFullName, issue.number, body);
   await recordAuditEvent(env, {
@@ -779,7 +935,198 @@ async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string
     outcome: "completed",
     metadata: { deliveryId, command: command.name, actorKind: authorization.actorKind, runId: bundle?.run.id ?? null },
   });
+  await recordAgentCommandUsage(env, {
+    repoFullName,
+    targetKey,
+    actor: commenter,
+    command: command.name,
+    actorKind: authorization.actorKind,
+    outcome: "replied",
+    detail: bundle?.run.status ?? (maintainerDigest ? "maintainer_digest" : "no_run"),
+    family: maintainerDigest ? "maintainer_digest" : "agent_command",
+    runId: bundle?.run.id ?? null,
+  });
+  await recordGithubProductUsage(env, "agent_command_replied", {
+    actor: commenter,
+    repoFullName,
+    targetKey: `${repoFullName}#${issue.number}`,
+    outcome: "completed",
+    metadata: { command: command.name, actorKind: authorization.actorKind, hasAgentRun: Boolean(bundle), family: maintainerDigest ? "queue_digest" : "agent_command" },
+  });
+  await recordAgentCommandFeedbackPrompt(env, {
+    deliveryId,
+    command: command.name,
+    actor: commenter,
+    targetKey: `${repoFullName}#${issue.number}`,
+    actorKind: authorization.actorKind === "maintainer" ? "maintainer" : "author",
+    family: maintainerDigest ? "maintainer_digest" : "agent_command",
+  });
   return true;
+}
+
+async function buildMentionCommandBundle(
+  env: Env,
+  commandName: GittensoryMentionCommandName,
+  context: {
+    login: string;
+    repoFullName: string;
+    issue: NonNullable<GitHubWebhookPayload["issue"]>;
+    pullRequest: Awaited<ReturnType<typeof getPullRequest>>;
+  },
+) {
+  if (commandName === "help" || commandName === "miner-context") return null;
+  if (commandName === "blockers") return explainBlockersWithAgent(env, { login: context.login, repoFullName: context.repoFullName, surface: "github_comment" });
+  if (commandName === "preflight" || commandName === "reviewability") return preflightBranchWithAgent(env, buildMentionBranchInput(context), "github_comment");
+  if (commandName === "packet") return preparePrPacketWithAgent(env, buildMentionBranchInput(context), "github_comment");
+  return planNextWork(env, {
+    login: context.login,
+    repoFullName: context.repoFullName,
+    surface: "github_comment",
+    objective: `Respond to @gittensory ${commandName} for ${context.repoFullName}#${context.issue.number}.`,
+  });
+}
+
+function buildMentionBranchInput(context: {
+  login: string;
+  repoFullName: string;
+  issue: NonNullable<GitHubWebhookPayload["issue"]>;
+  pullRequest: Awaited<ReturnType<typeof getPullRequest>>;
+}): LocalBranchAnalysisInput {
+  return {
+    login: context.login,
+    repoFullName: context.repoFullName,
+    branchName: `github-pr-${context.issue.number}`,
+    headRef: context.pullRequest?.headRef ?? undefined,
+    headSha: context.pullRequest?.headSha ?? undefined,
+    title: context.pullRequest?.title ?? context.issue.title,
+    body: context.pullRequest?.body ?? undefined,
+    labels: context.pullRequest?.labels ?? [],
+    linkedIssues: context.pullRequest?.linkedIssues ?? [],
+  };
+}
+
+async function recordAgentCommandUsage(
+  env: Env,
+  args: {
+    repoFullName?: string | null | undefined;
+    targetKey?: string | null | undefined;
+    actor?: string | null | undefined;
+    command: string;
+    actorKind: "maintainer" | "author" | "none";
+    outcome: "replied" | "skipped" | "error";
+    detail?: string | null | undefined;
+    family?: "agent_command" | "maintainer_digest" | undefined;
+    runId?: string | null | undefined;
+  },
+): Promise<void> {
+  try {
+    const actorHash = args.actor ? await sha256Hex(`github:${args.actor.toLowerCase()}`) : null;
+    await persistSignalSnapshot(env, {
+      id: crypto.randomUUID(),
+      signalType: "github-agent-command-usage",
+      targetKey: args.targetKey ?? args.repoFullName ?? "unknown",
+      repoFullName: args.repoFullName ?? null,
+      payload: {
+        command: args.command,
+        actorKind: args.actorKind,
+        actorHash,
+        outcome: args.outcome,
+        detail: args.detail ?? null,
+        family: args.family ?? "agent_command",
+        runId: args.runId ?? null,
+      },
+      generatedAt: nowIso(),
+    });
+  } catch (error) {
+    console.warn("Failed to record GitHub agent command usage", { command: args.command, outcome: args.outcome, error: errorMessage(error) });
+  }
+}
+
+async function buildMaintainerQueueDigestForCommand(
+  env: Env,
+  repo: Awaited<ReturnType<typeof getRepository>>,
+  repoFullName: string,
+): Promise<ReturnType<typeof buildMaintainerQueueDigest>> {
+  const [issues, pullRequests, recentMergedPullRequests] = await Promise.all([
+    listIssues(env, repoFullName),
+    listPullRequests(env, repoFullName),
+    listRecentMergedPullRequests(env, repoFullName),
+  ]);
+  const [confirmedMinerLogins, checkSummariesByPullNumber] = await Promise.all([
+    loadCachedConfirmedMinerLogins(env, pullRequests),
+    loadQueueCheckSummariesByPullNumber(env, repoFullName, pullRequests),
+  ]);
+  return buildMaintainerQueueDigest({
+    repo,
+    issues,
+    pullRequests,
+    recentMergedPullRequests,
+    confirmedMinerLogins,
+    checkSummariesByPullNumber,
+    controlPanelUrl: maintainerControlPanelUrl(env, repoFullName),
+  });
+}
+
+async function loadCachedConfirmedMinerLogins(env: Env, pullRequests: Awaited<ReturnType<typeof listPullRequests>>): Promise<string[]> {
+  const logins = [
+    ...new Set(
+      pullRequests
+        .filter((pr) => pr.state === "open")
+        .flatMap((pr) => (pr.authorLogin ? [pr.authorLogin] : []))
+        .map((login) => login.toLowerCase()),
+    ),
+  ].slice(0, 50);
+  const detections = await Promise.all(logins.map(async (login) => [login, await getFreshOfficialMinerDetection(env, login)] as const));
+  return detections.flatMap(([login, detection]) => (detection?.status === "confirmed" ? [login] : []));
+}
+
+async function loadQueueCheckSummariesByPullNumber(
+  env: Env,
+  repoFullName: string,
+  pullRequests: Awaited<ReturnType<typeof listPullRequests>>,
+): Promise<Record<number, Awaited<ReturnType<typeof listCheckSummaries>>>> {
+  const openPullRequests = pullRequests.filter((pr) => pr.state === "open").slice(0, 50);
+  const entries = await Promise.all(openPullRequests.map(async (pr) => [pr.number, await listCheckSummaries(env, repoFullName, pr.number)] as const));
+  return Object.fromEntries(entries);
+}
+
+function maintainerControlPanelUrl(env: Env, repoFullName: string): string | null {
+  const origin = env.PUBLIC_SITE_ORIGIN ?? "https://gittensory.aethereal.dev";
+  try {
+    const url = new URL("/app", origin);
+    url.searchParams.set("view", "maintainer");
+    url.searchParams.set("repo", repoFullName);
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function recordAgentCommandFeedbackPrompt(
+  env: Env,
+  args: {
+    deliveryId: string;
+    command: string;
+    actor: string;
+    targetKey: string;
+    actorKind: "maintainer" | "author";
+    family: "agent_command" | "maintainer_digest";
+  },
+): Promise<void> {
+  await recordAuditEvent(env, {
+    eventType: "github_app.agent_command_feedback_prompted",
+    actor: args.actor,
+    targetKey: args.targetKey,
+    outcome: "completed",
+    detail: args.command,
+    metadata: {
+      deliveryId: args.deliveryId,
+      command: args.command,
+      actorKind: args.actorKind,
+      family: args.family,
+      scoringImpact: "none",
+    },
+  });
 }
 
 async function auditPrVisibilitySkip(
@@ -797,6 +1144,13 @@ async function auditPrVisibilitySkip(
     outcome: "completed",
     detail: reason,
     metadata: { deliveryId },
+  });
+  await recordGithubProductUsage(env, "pr_visibility_skipped", {
+    actor: author,
+    repoFullName,
+    targetKey: `${repoFullName}#${pullNumber}`,
+    outcome: "skipped",
+    metadata: { reason },
   });
 }
 

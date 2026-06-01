@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSessionForGitHubUser } from "../../src/auth/security";
+import { createSessionForGitHubUser, hashToken } from "../../src/auth/security";
 import {
   upsertBounty,
   upsertBurdenForecast,
@@ -12,7 +12,9 @@ import {
   upsertRecentMergedPullRequest,
   persistRepoGithubTotalsSnapshot,
   persistSignalSnapshot,
+  recordProductUsageEvent,
   recordGitHubRateLimitObservation,
+  listProductUsageEvents,
   listLatestSignalSnapshotsByTarget,
   persistUpstreamRulesetSnapshot,
   upsertRepoLabel,
@@ -23,6 +25,7 @@ import {
   persistScoringModelSnapshot,
   upsertRepositoryFromGitHub,
   upsertRepositorySettings,
+  createAgentRun,
 } from "../../src/db/repositories";
 import { createApp } from "../../src/api/routes";
 import { BURDEN_FORECAST_MAX_AGE_MS } from "../../src/services/burden-forecast";
@@ -230,6 +233,156 @@ describe("api routes", () => {
     );
 
     expect(rejected.status).toBe(401);
+  });
+
+  it("rejects oversized webhook payloads and rate limits repeated invalid webhook traffic", async () => {
+    const counters = new Map<string, number>();
+    const app = createApp();
+    const env = createTestEnv({
+      GITHUB_WEBHOOK_MAX_BODY_BYTES: "1024",
+      RATE_LIMITER: {
+        idFromName(name: string) {
+          return name as unknown as DurableObjectId;
+        },
+        get(id: DurableObjectId) {
+          const key = String(id);
+          return {
+            async fetch() {
+              const count = (counters.get(key) ?? 0) + 1;
+              counters.set(key, count);
+              if (count <= 10) return Response.json({ allowed: true, limit: 10, remaining: 10 - count, resetAt: "2099-01-01T00:00:00.000Z" });
+              return Response.json({ allowed: false, limit: 10, remaining: 0, retryAfterSeconds: 60, resetAt: "2099-01-01T00:00:00.000Z" }, { status: 429 });
+            },
+          } as unknown as DurableObjectStub;
+        },
+      } as DurableObjectNamespace,
+    });
+    const oversizedBody = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "JSONbored/gittensory" },
+      blob: "x".repeat(3_000),
+    });
+    const tooLarge = await app.request(
+      "/v1/github/webhook",
+      {
+        method: "POST",
+        body: oversizedBody,
+        headers: {
+          "x-github-delivery": "oversized-1",
+          "x-github-event": "push",
+        },
+      },
+      env,
+    );
+    expect(tooLarge.status).toBe(413);
+    await expect(tooLarge.json()).resolves.toMatchObject({ error: "payload_too_large", maxBytes: 1024 });
+
+    const invalidBody = JSON.stringify({ action: "opened", repository: { full_name: "JSONbored/gittensory" } });
+    let sawUnauthorized = false;
+    let sawRateLimited = false;
+    for (let index = 0; index < 12; index += 1) {
+      const response = await app.request(
+        "/v1/github/webhook",
+        {
+          method: "POST",
+          body: invalidBody,
+          headers: {
+            "x-github-delivery": `invalid-${index}`,
+            "x-github-event": "push",
+            "x-hub-signature-256": "sha256=bad",
+          },
+        },
+        env,
+      );
+      if (response.status === 401) sawUnauthorized = true;
+      if (response.status === 429) {
+        sawRateLimited = true;
+        await expect(response.json()).resolves.toMatchObject({ error: "rate_limited", routeClass: "strict" });
+        break;
+      }
+    }
+    expect(sawUnauthorized).toBe(true);
+    expect(sawRateLimited).toBe(true);
+  });
+
+  it("rejects oversized webhook requests from content-length and signed invalid JSON payloads", async () => {
+    const app = createApp();
+    const env = createTestEnv({ GITHUB_WEBHOOK_MAX_BODY_BYTES: "1024" });
+
+    const contentLengthRejected = await app.request(
+      "/v1/github/webhook",
+      {
+        method: "POST",
+        body: "{}",
+        headers: {
+          "x-github-delivery": "oversized-content-length",
+          "x-github-event": "push",
+          "content-length": "2048",
+        },
+      },
+      env,
+    );
+    expect(contentLengthRejected.status).toBe(413);
+    await expect(contentLengthRejected.json()).resolves.toMatchObject({ error: "payload_too_large", maxBytes: 1024 });
+
+    const malformedBody = "{";
+    const malformedSignature = await signWebhook(malformedBody, env.GITHUB_WEBHOOK_SECRET);
+    const malformedJson = await app.request(
+      "/v1/github/webhook",
+      {
+        method: "POST",
+        body: malformedBody,
+        headers: {
+          "x-github-delivery": "invalid-json-signed",
+          "x-github-event": "push",
+          "x-hub-signature-256": malformedSignature,
+        },
+      },
+      env,
+    );
+    expect(malformedJson.status).toBe(400);
+    await expect(malformedJson.json()).resolves.toMatchObject({ error: "invalid_json" });
+  });
+
+  it("handles webhook size parsing fallbacks for invalid env/header values and empty request bodies", async () => {
+    const app = createApp();
+    const env = createTestEnv({
+      GITHUB_WEBHOOK_MAX_BODY_BYTES: "0",
+    });
+
+    const emptyBody = await app.request(
+      "/v1/github/webhook",
+      {
+        method: "POST",
+        headers: {
+          "x-github-delivery": "empty-body",
+          "x-github-event": "push",
+          "x-hub-signature-256": "sha256=bad",
+        },
+      },
+      env,
+    );
+    expect(emptyBody.status).toBe(401);
+    await expect(emptyBody.json()).resolves.toMatchObject({ error: "invalid_signature" });
+
+    const validBody = JSON.stringify({ action: "opened", repository: { full_name: "JSONbored/gittensory", name: "gittensory" } });
+    const validSignature = await signWebhook(validBody, env.GITHUB_WEBHOOK_SECRET);
+    const invalidLengthHeader = await app.request(
+      "/v1/github/webhook",
+      {
+        method: "POST",
+        body: validBody,
+        headers: {
+          "x-github-delivery": "invalid-content-length",
+          "x-github-event": "pull_request",
+          "x-hub-signature-256": validSignature,
+          "content-length": "not-a-number",
+        },
+      },
+      env,
+    );
+    expect(invalidLengthHeader.status).toBe(202);
+    await expect(invalidLengthHeader.json()).resolves.toMatchObject({ status: "queued", deliveryId: "invalid-content-length" });
   });
 
   it("serves deterministic signal endpoints from cached registry and GitHub metadata", async () => {
@@ -540,6 +693,99 @@ describe("api routes", () => {
 
     const invalidLocalDiff = await app.request("/v1/preflight/local-diff", { method: "POST", headers: apiHeaders(env), body: JSON.stringify({}) }, env);
     expect(invalidLocalDiff.status).toBe(400);
+
+    const queueIntelligence = await app.request(
+      "/v1/internal/queue-intelligence",
+      {
+        method: "POST",
+        headers: internalHeaders(env),
+        body: JSON.stringify({
+          pullRequests: [
+            {
+              number: 1,
+              author: "alice",
+              authorRole: "contributor",
+              isConfirmedMiner: true,
+              linkedIssue: { qualityScore: 0.9 },
+              checksStatus: "passing",
+              isStale: false,
+              additions: 50,
+              deletions: 10,
+              title: "Fix cache",
+              body: "Fixes #1",
+              duplicateCandidates: [],
+              createdAt: new Date(Date.now() - 5 * 86400000).toISOString(),
+              lastUpdatedAt: new Date(Date.now() - 3600000).toISOString(),
+            },
+            {
+              number: 2,
+              author: "bob",
+              authorRole: "maintainer",
+              isConfirmedMiner: false,
+              linkedIssue: null,
+              checksStatus: "failing",
+              isStale: true,
+              additions: 800,
+              deletions: 900,
+              title: "",
+              body: "",
+              duplicateCandidates: [5],
+              createdAt: new Date(Date.now() - 10 * 86400000).toISOString(),
+              lastUpdatedAt: new Date(Date.now() - 3 * 86400000).toISOString(),
+            },
+          ],
+          repoContext: { totalOpenPRs: 2, avgReviewTimeDays: 4, maintainerWorkload: 0.7 },
+        }),
+      },
+      env,
+    );
+    expect(queueIntelligence.status).toBe(200);
+    const queueIntelligencePayload = (await queueIntelligence.json()) as {
+      rankedPRs: Array<{ number: number; title: string; author: string; recommendation: string }>;
+      recommendations: Record<number, string>;
+    };
+    expect(queueIntelligencePayload.rankedPRs).toHaveLength(2);
+    expect(queueIntelligencePayload.rankedPRs[0]).toMatchObject({ number: 1 });
+    expect(queueIntelligencePayload.rankedPRs[1]).toMatchObject({ number: 2 });
+    expect(queueIntelligencePayload.recommendations).toMatchObject({ "1": "review_now", "2": "maintainer_lane" });
+
+    const invalidQueueIntelligence = await app.request(
+      "/v1/internal/queue-intelligence",
+      { method: "POST", headers: internalHeaders(env), body: JSON.stringify({ pullRequests: [{ number: 1 }] }) },
+      env,
+    );
+    expect(invalidQueueIntelligence.status).toBe(400);
+
+    const invalidRepoContext = await app.request(
+      "/v1/internal/queue-intelligence",
+      {
+        method: "POST",
+        headers: internalHeaders(env),
+        body: JSON.stringify({
+          pullRequests: [
+            {
+              number: 1,
+              author: "alice",
+              authorRole: "contributor",
+              isConfirmedMiner: true,
+              linkedIssue: { qualityScore: 0.9 },
+              checksStatus: "passing",
+              isStale: false,
+              additions: 50,
+              deletions: 10,
+              title: "Fix cache",
+              body: "Fixes #1",
+              duplicateCandidates: [],
+              createdAt: new Date(Date.now() - 5 * 86400000).toISOString(),
+              lastUpdatedAt: new Date(Date.now() - 3600000).toISOString(),
+            },
+          ],
+          repoContext: { totalOpenPRs: "invalid" },
+        }),
+      },
+      env,
+    );
+    expect(invalidRepoContext.status).toBe(200);
 
     const localBranchAnalysis = await app.request(
       "/v1/local/branch-analysis",
@@ -911,12 +1157,13 @@ describe("api routes", () => {
 
   it("serves live app dashboards, digest subscriptions, commands, and extension context", async () => {
     const app = createApp();
-    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "oktofeesh1,other" });
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "oktofeesh1,other", PRODUCT_USAGE_HASH_SALT: "usage-adoption-test-salt" });
     await seedSignalData(env);
     stubOktofeeshFetch();
 
     const { token: browserToken } = await createSessionForGitHubUser(env, { login: "oktofeesh1", id: 12345 });
     const cookieHeaders = { cookie: `gittensory_session=${browserToken}`, "content-type": "application/json" };
+    const internalHeaders = { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}`, "content-type": "application/json" };
 
     const overviewPreflight = await app.request("/v1/app/overview", { method: "OPTIONS", headers: { origin: "https://gittensory.aethereal.dev" } }, env);
     expect(overviewPreflight.status).toBe(204);
@@ -927,8 +1174,20 @@ describe("api routes", () => {
     expect(overview.status).toBe(200);
     await expect(overview.json()).resolves.toMatchObject({
       actor: { kind: "session", login: "oktofeesh1" },
+      roleSummary: {
+        roles: ["operator"],
+        onboarding: { status: "ready", primaryRole: "operator" },
+      },
       metrics: expect.arrayContaining([expect.objectContaining({ label: "Registered repos" })]),
       upstreamDrift: expect.any(Object),
+    });
+    const roleSummary = await app.request("/v1/app/roles", { headers: cookieHeaders }, env);
+    expect(roleSummary.status).toBe(200);
+    await expect(roleSummary.json()).resolves.toMatchObject({
+      login: "oktofeesh1",
+      roles: ["operator"],
+      roleCards: expect.arrayContaining([expect.objectContaining({ role: "operator", status: "active" })]),
+      publicSafe: true,
     });
 
     const emptyEnv = createTestEnv();
@@ -957,6 +1216,12 @@ describe("api routes", () => {
       signal: "warn",
       items: expect.arrayContaining([expect.objectContaining({ kind: "drift", meta: "watch" })]),
     });
+    const emptyMinerDashboard = await app.request("/v1/app/miner-dashboard?login=empty-user", { headers: apiHeaders(emptyEnv) }, emptyEnv);
+    expect(emptyMinerDashboard.status).toBe(200);
+    await expect(emptyMinerDashboard.json()).resolves.toMatchObject({
+      status: "needs_refresh",
+      mcp: { snapshot: null, lastRun: null },
+    });
 
     const missingMinerLogin = await app.request("/v1/app/miner-dashboard", { headers: apiHeaders(env) }, env);
     expect(missingMinerLogin.status).toBe(400);
@@ -964,6 +1229,70 @@ describe("api routes", () => {
     const { token: otherToken } = await createSessionForGitHubUser(env, { login: "other", id: 987 });
     const forbiddenMiner = await app.request("/v1/app/miner-dashboard?login=oktofeesh1", { headers: { cookie: `gittensory_session=${otherToken}` } }, env);
     expect(forbiddenMiner.status).toBe(403);
+
+    const unknownEnv = createTestEnv({ ADMIN_GITHUB_LOGINS: "jsonbored" });
+    const { token: unknownToken } = await createSessionForGitHubUser(unknownEnv, { login: "new-user", id: 2468 });
+    const unknownHeaders = { cookie: `gittensory_session=${unknownToken}`, "content-type": "application/json" };
+    const unknownSession = await app.request("/v1/auth/session", { headers: unknownHeaders }, unknownEnv);
+    expect(unknownSession.status).toBe(200);
+    const unknownSessionBody = await unknownSession.json();
+    expect(unknownSessionBody).toMatchObject({
+      status: "authenticated",
+      login: "new-user",
+      roles: [],
+      roleSummary: { onboarding: { status: "needs_setup" } },
+    });
+    expect(JSON.stringify(unknownSessionBody)).not.toMatch(/wallet|hotkey|raw trust|payout|reward estimate|farming|private reviewability|public score estimate|\/Users|github_pat|ghp_/i);
+    const unknownOverview = await app.request("/v1/app/overview", { headers: unknownHeaders }, unknownEnv);
+    expect(unknownOverview.status).toBe(200);
+    await expect(unknownOverview.json()).resolves.toMatchObject({ roleSummary: { roles: [], onboarding: { status: "needs_setup" } } });
+    expect((await app.request("/v1/app/operator-dashboard", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
+    expect((await app.request("/v1/app/analytics/daily-rollups", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
+    expect((await app.request("/v1/app/analytics/mcp-compatibility", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
+    expect((await app.request("/v1/app/analytics/weekly-value-report", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
+    expect((await app.request("/v1/contributors/new-user/decision-pack", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
+    expect((await app.request("/v1/auth/extension/session", { method: "POST", headers: unknownHeaders }, unknownEnv)).status).toBe(403);
+
+    const ownerEnv = createTestEnv({ ADMIN_GITHUB_LOGINS: "jsonbored" });
+    await upsertInstallation(ownerEnv, {
+      installation: {
+        id: 777,
+        account: { login: "repo-owner", id: 777, type: "User" },
+        repository_selection: "selected",
+        permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+        events: ["issues", "pull_request", "repository"],
+      },
+    });
+    await upsertRepositoryFromGitHub(ownerEnv, { name: "owned-repo", full_name: "repo-owner/owned-repo", private: false, default_branch: "main", owner: { login: "repo-owner" } }, 777);
+    const { token: ownerToken } = await createSessionForGitHubUser(ownerEnv, { login: "repo-owner", id: 777 });
+    const ownerHeaders = { cookie: `gittensory_session=${ownerToken}`, "content-type": "application/json" };
+    const ownerRoles = await app.request("/v1/app/roles", { headers: ownerHeaders }, ownerEnv);
+    expect(ownerRoles.status).toBe(200);
+    await expect(ownerRoles.json()).resolves.toMatchObject({
+      roles: ["maintainer", "owner"],
+      evidence: { ownedInstalledRepos: 1, accountInstallations: 1, operator: false },
+    });
+    expect((await app.request("/v1/app/maintainer-dashboard", { headers: ownerHeaders }, ownerEnv)).status).toBe(200);
+    expect((await app.request("/v1/app/notification-model", { headers: ownerHeaders }, ownerEnv)).status).toBe(200);
+    expect((await app.request("/v1/app/operator-dashboard", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
+    expect((await app.request("/v1/app/analytics/daily-rollups", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
+    expect((await app.request("/v1/app/analytics/mcp-compatibility", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
+    const ownerWeeklyReport = await app.request("/v1/app/analytics/weekly-value-report", { headers: ownerHeaders }, ownerEnv);
+    expect(ownerWeeklyReport.status).toBe(200);
+    const ownerWeeklyReportBody = await ownerWeeklyReport.json();
+    expect(ownerWeeklyReportBody).toMatchObject({ variant: "public", publicSafe: true });
+    expect(ownerWeeklyReportBody).not.toHaveProperty("operatorDetails");
+    expect((await app.request("/v1/app/analytics/weekly-value-report?variant=operator", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
+    const ownerExtensionSession = await app.request("/v1/auth/extension/session", { method: "POST", headers: ownerHeaders }, ownerEnv);
+    expect(ownerExtensionSession.status).toBe(201);
+    const ownerExtensionSessionBody = (await ownerExtensionSession.json()) as { token: string; login: string; scopes: string[] };
+    expect(ownerExtensionSessionBody).toMatchObject({ login: "repo-owner", scopes: ["extension:pull_context"] });
+    const ownerExtensionMissingPull = await app.request(
+      "/v1/extension/pull-context?owner=repo-owner&repo=owned-repo",
+      { headers: { authorization: `Bearer ${ownerExtensionSessionBody.token}` } },
+      ownerEnv,
+    );
+    expect(ownerExtensionMissingPull.status).toBe(400);
 
     const minerNeedsRefresh = await app.request("/v1/app/miner-dashboard?login=oktofeesh1", { headers: apiHeaders(env) }, env);
     expect(minerNeedsRefresh.status).toBe(200);
@@ -1009,10 +1338,10 @@ describe("api routes", () => {
         scoringModelSnapshotId: "scoring-1",
         repoDecisions: [{ recommendation: "fallback" }, { priorityScore: 250 }, {}],
         topActions: undefined,
-        cleanupFirst: undefined,
-        pursueRepos: undefined,
-        avoidRepos: undefined,
-        maintainerLaneRepos: undefined,
+        cleanupFirst: [{ repoFullName: "entrius/allways-ui", reason: "cached queue needs cleanup before new work" }],
+        pursueRepos: [{ repoFullName: "owner/stable", reason: "fresh low-risk queue" }],
+        avoidRepos: [{ repoFullName: "owner/removed", reason: "removed from registry" }],
+        maintainerLaneRepos: [{ repoFullName: "repo-owner/owned-repo", reason: "owner-maintained repo" }],
         scoreBlockers: ["legacy blocker", { code: "open_pr_pressure", detail: "Too many open PRs" }],
         dataQuality: { signalFidelity: { status: "degraded" } },
       } as never,
@@ -1024,8 +1353,63 @@ describe("api routes", () => {
       status: "ready",
       blockers: expect.arrayContaining([expect.objectContaining({ group: "scoreability" })]),
       projections: expect.arrayContaining([expect.objectContaining({ name: "fallback" }), expect.objectContaining({ name: "repo" })]),
-      repoFit: [],
+      repoFit: expect.arrayContaining([
+        expect.objectContaining({ repoFullName: "owner/stable", lane: "pursue" }),
+        expect.objectContaining({ repoFullName: "entrius/allways-ui", lane: "cleanup-first" }),
+        expect.objectContaining({ repoFullName: "repo-owner/owned-repo", lane: "maintainer-lane" }),
+        expect.objectContaining({ repoFullName: "owner/removed", lane: "avoid" }),
+      ]),
     });
+
+    await persistSignalSnapshot(env, {
+      id: "sparse-pack",
+      signalType: "contributor-decision-pack",
+      targetKey: "sparse-user",
+      payload: {
+        status: "ready",
+        source: "computed",
+        login: "sparse-user",
+        generatedAt: new Date().toISOString(),
+        stale: false,
+        freshness: "fresh",
+        rebuildEnqueued: false,
+        scoringModelSnapshotId: "scoring-1",
+        repoDecisions: [],
+      } as never,
+      generatedAt: new Date().toISOString(),
+    });
+    const sparseMiner = await app.request("/v1/app/miner-dashboard?login=sparse-user", { headers: apiHeaders(env) }, env);
+    expect(sparseMiner.status).toBe(200);
+    await expect(sparseMiner.json()).resolves.toMatchObject({
+      status: "ready",
+      nextActions: [],
+      blockers: [],
+      projections: [],
+      repoFit: [],
+      mcp: { snapshot: "scoring-1", lastRun: null },
+    });
+
+    await persistSignalSnapshot(env, {
+      id: "empty-fit-pack",
+      signalType: "contributor-decision-pack",
+      targetKey: "empty-fit-user",
+      payload: {
+        status: "ready",
+        source: "computed",
+        login: "empty-fit-user",
+        generatedAt: new Date().toISOString(),
+        stale: false,
+        freshness: "fresh",
+        rebuildEnqueued: false,
+        scoringModelSnapshotId: "scoring-1",
+        repoDecisions: [],
+        dataQuality: { signalFidelity: { status: "complete" } },
+      } as never,
+      generatedAt: new Date().toISOString(),
+    });
+    const minerWithEmptyFit = await app.request("/v1/app/miner-dashboard?login=empty-fit-user", { headers: apiHeaders(env) }, env);
+    expect(minerWithEmptyFit.status).toBe(200);
+    await expect(minerWithEmptyFit.json()).resolves.toMatchObject({ status: "ready", repoFit: [] });
 
     await recordGitHubRateLimitObservation(env, {
       id: "rate-limit-healthy",
@@ -1063,8 +1447,35 @@ describe("api routes", () => {
     await expect(operator.json()).resolves.toMatchObject({
       metrics: expect.arrayContaining([expect.objectContaining({ label: "Active sessions" }), expect.objectContaining({ label: "Digest subscriptions" })]),
       noiseReduction: expect.any(Array),
-      weeklyReport: expect.arrayContaining([expect.stringContaining("registered repos")]),
+      weeklyReport: expect.arrayContaining([expect.stringContaining("registered repo")]),
     });
+
+    const notificationModel = await app.request("/v1/app/notification-model", { headers: apiHeaders(env) }, env);
+    expect(notificationModel.status).toBe(200);
+    const notificationBody = (await notificationModel.json()) as Record<string, unknown>;
+    expect(notificationBody).toMatchObject({
+      notificationModel: {
+        mode: "opt_in",
+        defaultState: "disabled",
+        fallbackWhenUnavailable: "in_app_digest_only",
+        channels: expect.arrayContaining([
+          expect.objectContaining({ id: "in_app_digest", defaultEnabled: true }),
+          expect.objectContaining({ id: "browser_push", defaultEnabled: false, requiresPermission: true }),
+        ]),
+        privacyGuards: expect.arrayContaining([
+          expect.stringMatching(/wallets|hotkeys|payout\/reward/i),
+          expect.stringMatching(/authenticated browser session/i),
+        ]),
+      },
+      pwa: {
+        nativeDependency: false,
+        manifestPath: "/manifest.webmanifest",
+        serviceWorkerPath: "/sw.js",
+      },
+      mobileReadyRoutes: expect.arrayContaining(["/app/operator", "/app/maintainer"]),
+      nativeMobileFuture: expect.any(Array),
+    });
+    expect(JSON.stringify(notificationBody)).toMatch(/wallets|hotkeys|payout\/reward estimates|raw trust scores|farming language/i);
 
     const commands = await app.request("/v1/app/commands", { headers: apiHeaders(env) }, env);
     expect(commands.status).toBe(200);
@@ -1113,6 +1524,29 @@ describe("api routes", () => {
     await expect(privatePreviewWithoutTarget.json()).resolves.toMatchObject({
       preview: { body: expect.stringContaining("selected target") },
     });
+
+    const previewWithoutRepo = await app.request(
+      "/v1/app/commands/preview",
+      {
+        method: "POST",
+        headers: apiHeaders(env),
+        body: JSON.stringify({ command: "public-summary", pullNumber: 12 }),
+      },
+      env,
+    );
+    expect(previewWithoutRepo.status).toBe(200);
+
+    const telemetryDownPreviewEnv = withProductUsageInsertFailure(createTestEnv());
+    const telemetryDownPreview = await app.request(
+      "/v1/app/commands/preview",
+      {
+        method: "POST",
+        headers: apiHeaders(telemetryDownPreviewEnv),
+        body: JSON.stringify({ command: "public-summary", repoFullName: "entrius/allways-ui", pullNumber: 12 }),
+      },
+      telemetryDownPreviewEnv,
+    );
+    expect(telemetryDownPreview.status).toBe(200);
 
     expect((await app.request("/v1/app/commands/preview", { method: "POST", headers: apiHeaders(env), body: "{}" }, env)).status).toBe(400);
     expect((await app.request("/v1/app/commands/preview", { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ command: "unknown" }) }, env)).status).toBe(404);
@@ -1210,11 +1644,88 @@ describe("api routes", () => {
       metrics: expect.arrayContaining([expect.objectContaining({ label: "Install issues", delta: "needs attention" })]),
       rateLimits: expect.arrayContaining([expect.objectContaining({ id: "rate-limit-rest" })]),
     });
+    await createAgentRun(env, {
+      id: "completed-overview-run",
+      objective: "Show completed overview run",
+      actorLogin: "oktofeesh1",
+      surface: "api",
+      mode: "copilot",
+      status: "completed",
+      dataQualityStatus: "complete",
+      payload: { kind: "plan_next_work" },
+      createdAt: "2026-05-28T00:00:00.000Z",
+      updatedAt: "2026-05-28T00:05:00.000Z",
+    });
+    const overviewWithRuns = await app.request("/v1/app/overview", { headers: cookieHeaders }, env);
+    expect(overviewWithRuns.status).toBe(200);
+    await expect(overviewWithRuns.json()).resolves.toMatchObject({
+      metrics: expect.arrayContaining([expect.objectContaining({ label: "Agent runs", total: 1 })]),
+      recentRuns: expect.arrayContaining([expect.objectContaining({ run: expect.objectContaining({ id: "completed-overview-run", status: "completed" }) })]),
+    });
 
     const forbiddenRuns = await app.request("/v1/agent/runs?actorLogin=oktofeesh1", { headers: { cookie: `gittensory_session=${otherToken}` } }, env);
     expect(forbiddenRuns.status).toBe(403);
     const invalidLimitRuns = await app.request("/v1/agent/runs?actorLogin=oktofeesh1&limit=not-a-number", { headers: cookieHeaders }, env);
     expect(invalidLimitRuns.status).toBe(200);
+
+    const queuedAgentRun = await app.request(
+      "/v1/agent/runs",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ objective: "Plan work without a repo target", actorLogin: "oktofeesh1" }) },
+      env,
+    );
+    expect(queuedAgentRun.status).toBe(202);
+    const queuedPullAgentRun = await app.request(
+      "/v1/agent/runs",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ objective: "Plan PR work", actorLogin: "oktofeesh1", target: { repoFullName: "entrius/allways-ui", pullNumber: 12 } }) },
+      env,
+    );
+    expect(queuedPullAgentRun.status).toBe(202);
+    const queuedIssueAgentRun = await app.request(
+      "/v1/agent/runs",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ objective: "Plan issue work", actorLogin: "oktofeesh1", target: { repoFullName: "entrius/allways-ui", issueNumber: 1 } }) },
+      env,
+    );
+    expect(queuedIssueAgentRun.status).toBe(202);
+    const overviewWithQueuedRuns = await app.request("/v1/app/overview", { headers: cookieHeaders }, env);
+    expect(overviewWithQueuedRuns.status).toBe(200);
+    await expect(overviewWithQueuedRuns.json()).resolves.toMatchObject({
+      metrics: expect.arrayContaining([expect.objectContaining({ label: "Agent runs", total: 4 })]),
+      recentRuns: expect.arrayContaining([expect.objectContaining({ run: expect.objectContaining({ actorLogin: "oktofeesh1" }) })]),
+    });
+
+    const localAnalysis = await app.request(
+      "/v1/local/branch-analysis",
+      {
+        method: "POST",
+        headers: {
+          ...apiHeaders(env),
+          "x-gittensory-mcp-package": "@jsonbored/gittensory-mcp",
+          "x-gittensory-mcp-version": "0.3.0",
+          "x-gittensory-mcp-client": "gittensory-mcp-cli",
+        },
+        body: JSON.stringify({ login: "oktofeesh1", repoFullName: "entrius/allways-ui", branchName: "usage-spine" }),
+      },
+      env,
+    );
+    expect(localAnalysis.status).toBe(200);
+    const agentPreflight = await app.request(
+      "/v1/agent/preflight-branch",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ login: "oktofeesh1", repoFullName: "entrius/allways-ui" }) },
+      env,
+    );
+    expect(agentPreflight.status).toBe(200);
+    const agentPacket = await app.request(
+      "/v1/agent/prepare-pr-packet",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ login: "oktofeesh1", repoFullName: "entrius/allways-ui", headRef: "usage-spine" }) },
+      env,
+    );
+    expect(agentPacket.status).toBe(200);
+    const agentBlockers = await app.request(
+      "/v1/agent/explain-blockers",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ login: "oktofeesh1", repoFullName: "entrius/allways-ui", branchName: "usage-spine" }) },
+      env,
+    );
+    expect(agentBlockers.status).toBe(200);
 
     const staticExtensionSession = await app.request("/v1/auth/extension/session", { method: "POST", headers: apiHeaders(env) }, env);
     expect(staticExtensionSession.status).toBe(403);
@@ -1242,6 +1753,13 @@ describe("api routes", () => {
     const extensionOverview = await app.request("/v1/app/overview", { headers: { authorization: `Bearer ${extensionSessionBody.token}` } }, env);
     expect(extensionOverview.status).toBe(403);
     await expect(extensionOverview.json()).resolves.toMatchObject({ error: "insufficient_scope" });
+
+    const staticExtensionContext = await app.request("/v1/extension/pull-context?owner=entrius&repo=allways-ui&pullNumber=12", { headers: apiHeaders(env) }, env);
+    expect(staticExtensionContext.status).toBe(403);
+    await expect(staticExtensionContext.json()).resolves.toMatchObject({ error: "extension_session_required" });
+    const fullBrowserSessionExtensionContext = await app.request("/v1/extension/pull-context?owner=entrius&repo=allways-ui&pullNumber=12", { headers: cookieHeaders }, env);
+    expect(fullBrowserSessionExtensionContext.status).toBe(403);
+    await expect(fullBrowserSessionExtensionContext.json()).resolves.toMatchObject({ error: "extension_session_required" });
 
     const fallbackOriginEnv = createTestEnv({ ADMIN_GITHUB_LOGINS: "oktofeesh1" });
     delete (fallbackOriginEnv as Partial<Env>).PUBLIC_API_ORIGIN;
@@ -1285,6 +1803,226 @@ describe("api routes", () => {
       pullNumber: 99,
       panels: expect.arrayContaining([expect.objectContaining({ label: "Contributor", badge: "unknown" })]),
     });
+
+    const expiringExtensionSession = await app.request("/v1/auth/extension/session", { method: "POST", headers: cookieHeaders }, env);
+    expect(expiringExtensionSession.status).toBe(201);
+    const expiringExtensionSessionBody = (await expiringExtensionSession.json()) as { token: string };
+    await env.DB.prepare("update auth_sessions set expires_at = ? where token_hash = ?").bind("2020-01-01T00:00:00.000Z", await hashToken(expiringExtensionSessionBody.token)).run();
+    const expiredExtensionContext = await app.request(
+      "/v1/extension/pull-context?owner=entrius&repo=allways-ui&pullNumber=12",
+      { headers: { authorization: `Bearer ${expiringExtensionSessionBody.token}` } },
+      env,
+    );
+    expect(expiredExtensionContext.status).toBe(401);
+    await expect(expiredExtensionContext.json()).resolves.toMatchObject({ error: "unauthorized" });
+
+    const extensionLogout = await app.request("/v1/auth/logout", { method: "POST", headers: { authorization: `Bearer ${extensionSessionBody.token}` } }, env);
+    expect(extensionLogout.status).toBe(200);
+    await expect(extensionLogout.json()).resolves.toMatchObject({ ok: true, revoked: true });
+    const revokedExtensionContext = await app.request(
+      "/v1/extension/pull-context?owner=entrius&repo=allways-ui&pullNumber=12",
+      { headers: { authorization: `Bearer ${extensionSessionBody.token}` } },
+      env,
+    );
+    expect(revokedExtensionContext.status).toBe(401);
+    await expect(revokedExtensionContext.json()).resolves.toMatchObject({ error: "unauthorized" });
+
+    await recordProductUsageEvent(env, {
+      surface: "mcp",
+      eventName: "mcp_tool_called",
+      actor: "mcp-user",
+      sessionId: "mcp-session",
+      outcome: "success",
+      clientName: "gittensory-mcp",
+      clientVersion: "0.2.1",
+      metadata: {
+        toolName: "gittensory_local_status",
+        protocolVersion: "2025-03-26",
+        compatibilityStatus: "stale",
+        token: "github_pat_secret",
+        localPath: "/Users/example/private-repo",
+      },
+      occurredAt: "2026-05-28T00:00:00.000Z",
+    });
+    await recordProductUsageEvent(env, {
+      surface: "mcp",
+      eventName: "mcp_request",
+      actor: "old-mcp-user",
+      sessionId: "old-mcp-session",
+      outcome: "success",
+      clientName: "gittensory-mcp",
+      clientVersion: "0.1.0",
+      metadata: {
+        protocolVersion: "2024-11-05",
+        compatibilityStatus: "incompatible",
+      },
+      occurredAt: "2026-05-28T00:00:00.000Z",
+    });
+    await recordProductUsageEvent(env, {
+      surface: "mcp",
+      eventName: "mcp_request",
+      actor: "current-mcp-user",
+      sessionId: "current-mcp-session",
+      outcome: "success",
+      clientName: "gittensory-mcp",
+      clientVersion: "0.3.0",
+      metadata: {
+        protocolVersion: "2025-03-26",
+      },
+      occurredAt: "2026-05-28T00:00:00.000Z",
+    });
+
+    const productUsageEvents = await listProductUsageEvents(env, { limit: 20 });
+    expect(productUsageEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ surface: "control_panel", eventName: "command_previewed", outcome: "success" }),
+        expect.objectContaining({ surface: "control_panel", eventName: "digest_subscription_stored", outcome: "success" }),
+        expect.objectContaining({ surface: "browser_extension", eventName: "extension_session_created", outcome: "success" }),
+        expect.objectContaining({ surface: "browser_extension", eventName: "pull_context_viewed", outcome: "success" }),
+        expect.objectContaining({ surface: "mcp", eventName: "mcp_tool_called", clientVersion: "0.2.1", metadata: expect.objectContaining({ compatibilityStatus: "stale" }) }),
+      ]),
+    );
+    expect(JSON.stringify(productUsageEvents)).not.toMatch(/oktofeesh1|operator@example.com|gittensory_session|\/Users|github_pat|ghp_|source code|raw trust|wallet|hotkey|private-repo/i);
+
+    const usageRollupRun = await app.request(
+      "/v1/internal/jobs/rollup-product-usage/run",
+      { method: "POST", headers: internalHeaders, body: JSON.stringify({ day: "2026-05-28" }) },
+      env,
+    );
+    expect(usageRollupRun.status).toBe(200);
+    await expect(usageRollupRun.json()).resolves.toMatchObject({
+      rollups: [expect.objectContaining({ day: "2026-05-28", status: "partial", totalEvents: productUsageEvents.length })],
+    });
+
+    const dailyRollups = await app.request("/v1/app/analytics/daily-rollups?limit=3", { headers: apiHeaders(env) }, env);
+    expect(dailyRollups.status).toBe(200);
+    await expect(dailyRollups.json()).resolves.toMatchObject({
+      status: expect.objectContaining({ status: "partial", latestRollupDay: "2026-05-28" }),
+      rollups: [expect.objectContaining({ day: "2026-05-28", activation: expect.any(Object) })],
+    });
+    const fallbackLimitRollups = await app.request("/v1/app/analytics/daily-rollups?limit=invalid", { headers: apiHeaders(env) }, env);
+    expect(fallbackLimitRollups.status).toBe(200);
+    await expect(fallbackLimitRollups.json()).resolves.toMatchObject({
+      status: expect.objectContaining({ latestRollupDay: "2026-05-28" }),
+      rollups: [expect.objectContaining({ day: "2026-05-28" })],
+    });
+    const defaultLimitRollups = await app.request("/v1/app/analytics/daily-rollups", { headers: apiHeaders(env) }, env);
+    expect(defaultLimitRollups.status).toBe(200);
+    await expect(defaultLimitRollups.json()).resolves.toMatchObject({
+      status: expect.objectContaining({ latestRollupDay: "2026-05-28" }),
+      rollups: [expect.objectContaining({ day: "2026-05-28" })],
+    });
+
+    const usageOperator = await app.request("/v1/app/operator-dashboard", { headers: apiHeaders(env) }, env);
+    expect(usageOperator.status).toBe(200);
+    const usageOperatorBody = (await usageOperator.json()) as {
+      metrics: Array<{ label: string; value: string }>;
+      usageSummary: { totalEvents: number };
+      usageRollups: Array<{ day: string }>;
+      usageRollupStatus: { status: string };
+      mcpCompatibilityAdoption: {
+        totalEvents: number;
+        activeActors: number;
+        staleEvents: number;
+        incompatibleEvents: number;
+        byClientVersion: Array<{ key: string; count: number }>;
+        byProtocolVersion: Array<{ key: string; count: number }>;
+        byCompatibilityStatus: Array<{ status: string; count: number }>;
+      };
+      weeklyValueReport: {
+        variant: string;
+        summary: string[];
+        metrics: Array<{ id: string; value: number; visibility: string }>;
+        operatorDetails?: { daily: Array<{ day: string }>; topRouteClasses: Array<{ key: string; count: number }> };
+        warnings: string[];
+      };
+    };
+    expect(usageOperatorBody.metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Product events", value: String(productUsageEvents.length) }),
+        expect.objectContaining({ label: "Active users" }),
+        expect.objectContaining({ label: "Activation rollups", value: "partial" }),
+        expect.objectContaining({ label: "MCP stale clients", value: "2" }),
+      ]),
+    );
+    expect(usageOperatorBody.usageSummary.totalEvents).toBe(productUsageEvents.length);
+    expect(usageOperatorBody.usageRollups).toEqual([expect.objectContaining({ day: "2026-05-28" })]);
+    expect(usageOperatorBody.usageRollupStatus.status).toBe("partial");
+    expect(usageOperatorBody.mcpCompatibilityAdoption).toMatchObject({
+      totalEvents: 4,
+      activeActors: 4,
+      staleEvents: 1,
+      incompatibleEvents: 1,
+      byClientVersion: expect.arrayContaining([
+        { key: "0.1.0", count: 1 },
+        { key: "0.2.1", count: 1 },
+        { key: "0.3.0", count: 2 },
+      ]),
+      byProtocolVersion: expect.arrayContaining([
+        { key: "2024-11-05", count: 1 },
+        { key: "2025-03-26", count: 2 },
+      ]),
+      byCompatibilityStatus: expect.arrayContaining([
+        { status: "current", count: 2 },
+        { status: "incompatible", count: 1 },
+        { status: "stale", count: 1 },
+      ]),
+    });
+
+    const mcpCompatibility = await app.request("/v1/app/analytics/mcp-compatibility?days=7", { headers: apiHeaders(env) }, env);
+    expect(mcpCompatibility.status).toBe(200);
+    const mcpCompatibilityBody = await mcpCompatibility.json();
+    expect(mcpCompatibilityBody).toMatchObject({
+      adoption: expect.objectContaining({
+        minimumSupportedVersion: "0.2.0",
+        latestRecommendedVersion: "0.3.0",
+        staleEvents: 1,
+        incompatibleEvents: 1,
+        totalEvents: 4,
+      }),
+    });
+    expect(JSON.stringify(mcpCompatibilityBody)).not.toMatch(/github_pat|\/Users|private-repo|mcp-user|old-mcp-user|current-mcp-user/i);
+    await expect((await app.request("/v1/app/analytics/mcp-compatibility", { headers: apiHeaders(env) }, env)).json()).resolves.toMatchObject({ days: 7 });
+    await expect((await app.request("/v1/app/analytics/mcp-compatibility?days=invalid", { headers: apiHeaders(env) }, env)).json()).resolves.toMatchObject({ days: 7 });
+    await expect((await app.request("/v1/app/analytics/mcp-compatibility?days=999", { headers: apiHeaders(env) }, env)).json()).resolves.toMatchObject({ days: 90 });
+    await expect((await app.request("/v1/app/analytics/mcp-compatibility?days=-5", { headers: apiHeaders(env) }, env)).json()).resolves.toMatchObject({ days: 1 });
+
+    expect(usageOperatorBody.weeklyValueReport).toMatchObject({
+      variant: "operator",
+      summary: expect.arrayContaining([expect.stringContaining("active user"), expect.stringContaining("PR packet")]),
+      metrics: expect.arrayContaining([
+        expect.objectContaining({ id: "active_users", visibility: "public" }),
+        expect.objectContaining({ id: "product_events", value: productUsageEvents.length, visibility: "operator" }),
+      ]),
+      operatorDetails: expect.objectContaining({
+        daily: [expect.objectContaining({ day: "2026-05-28" })],
+        topRouteClasses: expect.any(Array),
+      }),
+    });
+
+    const publicWeeklyReport = await app.request("/v1/app/analytics/weekly-value-report?variant=public&days=999", { headers: apiHeaders(env) }, env);
+    expect(publicWeeklyReport.status).toBe(200);
+    const publicWeeklyReportBody = await publicWeeklyReport.json();
+    expect(publicWeeklyReportBody).toMatchObject({
+      variant: "public",
+      publicSafe: true,
+      period: expect.objectContaining({ days: 31 }),
+      metrics: expect.arrayContaining([expect.objectContaining({ id: "active_users", visibility: "public" })]),
+    });
+    expect(publicWeeklyReportBody).not.toHaveProperty("operatorDetails");
+    expect(JSON.stringify(publicWeeklyReportBody)).not.toMatch(/wallet|hotkey|raw trust|payout|reward estimate|farming|private reviewability|public score estimate|\/Users|github_pat|ghp_/i);
+
+    const defaultWeeklyReport = await app.request("/v1/app/analytics/weekly-value-report", { headers: apiHeaders(env) }, env);
+    expect(defaultWeeklyReport.status).toBe(200);
+    await expect(defaultWeeklyReport.json()).resolves.toMatchObject({ variant: "public", publicSafe: true });
+
+    const operatorWeeklyReport = await app.request("/v1/app/analytics/weekly-value-report?variant=operator&days=invalid", { headers: apiHeaders(env) }, env);
+    expect(operatorWeeklyReport.status).toBe(200);
+    await expect(operatorWeeklyReport.json()).resolves.toMatchObject({
+      variant: "operator",
+      period: expect.objectContaining({ days: 7 }),
+      operatorDetails: expect.any(Object),
+    });
   });
 
   it("covers live app auth, validation, and internal job queue edge routes", async () => {
@@ -1324,7 +2062,8 @@ describe("api routes", () => {
       login: "jsonbored",
       githubId: null,
       github_id: null,
-      roles: ["miner", "maintainer", "owner", "operator"],
+      roles: ["operator"],
+      roleSummary: { onboarding: { status: "ready", primaryRole: "operator" } },
     });
 
     for (const [path, error] of [
@@ -1426,6 +2165,65 @@ describe("api routes", () => {
     expect(githubCalls).toEqual([]);
     const mutatingCalls = calls.filter((call) => call.method !== "GET" && call.method !== "HEAD");
     expect(mutatingCalls).toEqual([]);
+  });
+
+  it("returns 404 for unknown repos and serves cached snapshot with freshness for known repos", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    await seedSignalData(env);
+
+    const unauthenticated = await app.request("/v1/repos/entrius/allways-ui/outcome-patterns", {}, env);
+    expect(unauthenticated.status).toBe(401);
+
+    const unknown = await app.request("/v1/repos/ghost/missing/outcome-patterns", { headers: apiHeaders(env) }, env);
+    expect(unknown.status).toBe(404);
+
+    // Known but uncached: falls back to compute (no snapshot exists yet).
+    const computed = await app.request("/v1/repos/entrius/allways-ui/outcome-patterns", { headers: apiHeaders(env) }, env);
+    expect(computed.status).toBe(200);
+    const computedBody = (await computed.json()) as {
+      source: string;
+      freshness: string;
+      patterns: { repoFullName: string; evidenceCompleteness: { status: string; pullRequestsAnalyzed: number } };
+      dataQuality: unknown;
+    };
+    expect(computedBody.source).toBe("computed");
+    expect(computedBody.freshness).toBe("fresh");
+    expect(computedBody.patterns.repoFullName).toBe("entrius/allways-ui");
+    expect(computedBody.patterns.evidenceCompleteness.status).toBeDefined();
+    expect(computedBody.dataQuality).toBeDefined();
+
+    // Persist a snapshot directly and re-fetch — the endpoint must serve from the snapshot.
+    await persistSignalSnapshot(env, {
+      id: crypto.randomUUID(),
+      signalType: "repo-outcome-patterns",
+      targetKey: "entrius/allways-ui",
+      repoFullName: "entrius/allways-ui",
+      payload: {
+        repoFullName: "entrius/allways-ui",
+        generatedAt: new Date(Date.now() - 60_000).toISOString(),
+        lane: "direct_pr",
+        primaryLanguage: "TypeScript",
+        sampleSize: 0,
+        totals: { analyzed: 0, merged: 0, closedUnmerged: 0, openActive: 0, openStale: 0, maintainerLanePullRequests: 0, outsideContributorPullRequests: 0 },
+        outsideContributorMergeRate: 0,
+        maintainerLaneMergeRate: 0,
+        dimensions: [],
+        successPatterns: [],
+        riskPatterns: [],
+        evidenceCompleteness: { pullRequestsAnalyzed: 0, withFileDetail: 0, withReviewDetail: 0, withCheckDetail: 0, filesCompletenessRatio: 0, reviewsCompletenessRatio: 0, checksCompletenessRatio: 0, fullyDecidedWithDetail: 0, status: "missing" },
+        findings: [],
+        summary: "fixture",
+      } as unknown as Record<string, never>,
+      generatedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const cached = await app.request("/v1/repos/entrius/allways-ui/outcome-patterns", { headers: apiHeaders(env) }, env);
+    expect(cached.status).toBe(200);
+    const cachedBody = (await cached.json()) as { source: string; freshness: string; patterns: { summary: string } };
+    expect(cachedBody.source).toBe("snapshot");
+    expect(cachedBody.freshness).toBe("fresh");
+    expect(cachedBody.patterns.summary).toBe("fixture");
+    expect(JSON.stringify(cachedBody)).not.toMatch(/wallet|hotkey|payout|reward estimate|farming/i);
   });
 
   it("reports ready status when required public-review dependencies are present", async () => {
@@ -1798,6 +2596,78 @@ describe("api routes", () => {
       env,
     );
     expect(unauthorized.status).toBe(401);
+    const { token: noRoleMcpToken } = await createSessionForGitHubUser(env, { login: "new-user", id: 222 });
+    const noRoleMcp = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${noRoleMcpToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "no-role", method: "tools/list" }),
+      },
+      env,
+    );
+    expect(noRoleMcp.status).toBe(401);
+
+    const { token: operatorMcpToken } = await createSessionForGitHubUser(env, { login: "jsonbored", id: 12345 });
+    const forbiddenContributorMcp = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: { ...mcpHeaders(env), authorization: `Bearer ${operatorMcpToken}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "wrong-login", method: "tools/call", params: { name: "gittensory_get_decision_pack", arguments: { login: "other-user" } } }),
+      },
+      env,
+    );
+    expect(forbiddenContributorMcp.status).toBe(200);
+    await expect(mcpJson(forbiddenContributorMcp)).resolves.toMatchObject({
+      result: {
+        isError: true,
+        content: [expect.objectContaining({ text: expect.stringContaining("authenticated GitHub login") })],
+      },
+    });
+
+    const malformedMcp = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: "not-json",
+      },
+      env,
+    );
+    expect(malformedMcp.status).toBeGreaterThanOrEqual(400);
+
+    const missingMethodMcp = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({ jsonrpc: "2.0", id: "missing-method", params: { name: "gittensory_get_repo_context" } }),
+      },
+      env,
+    );
+    expect(missingMethodMcp.status).toBeGreaterThanOrEqual(400);
+
+    const telemetryDownEnv = withProductUsageInsertFailure(createTestEnv());
+    const telemetryDownInitialize = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(telemetryDownEnv),
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "telemetry-down",
+          method: "initialize",
+          params: {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "gittensory-tests", version: "0.1.0" },
+          },
+        }),
+      },
+      telemetryDownEnv,
+    );
+    expect(telemetryDownInitialize.status).toBe(200);
 
     const tools = await app.request(
       "/mcp",
@@ -2424,6 +3294,54 @@ describe("api routes", () => {
     expect(missingBounty.status).toBe(200);
     const missingBountyPayload = await mcpJson(missingBounty);
     expect(JSON.stringify(missingBountyPayload)).toMatch(/Bounty not found|error|isError/i);
+
+    const missingAgentRun = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({ jsonrpc: "2.0", id: "missing-agent-run", method: "tools/call", params: { name: "gittensory_agent_get_run", arguments: { runId: "missing" } } }),
+      },
+      env,
+    );
+    expect(missingAgentRun.status).toBe(200);
+    expect(JSON.stringify(await mcpJson(missingAgentRun))).toMatch(/Agent run not found|error|isError/i);
+
+    const sessionEnv = createTestEnv({ ADMIN_GITHUB_LOGINS: "oktofeesh1" });
+    const { token: mcpSessionToken } = await createSessionForGitHubUser(sessionEnv, { login: "oktofeesh1", id: 12345 });
+    const forbiddenSessionTool = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: { ...mcpHeaders(sessionEnv), authorization: `Bearer ${mcpSessionToken}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "forbidden-session-tool", method: "tools/call", params: { name: "gittensory_get_decision_pack", arguments: { login: "other-user" } } }),
+      },
+      sessionEnv,
+    );
+    expect(forbiddenSessionTool.status).toBe(200);
+    expect(JSON.stringify(await mcpJson(forbiddenSessionTool))).toMatch(/Forbidden|session can only access/i);
+
+    const mcpUsageEvents = await listProductUsageEvents(env, { limit: 100 });
+    expect(mcpUsageEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ surface: "mcp", eventName: "mcp_request", outcome: "success", clientName: "gittensory-mcp-cli", clientVersion: "0.3.0" }),
+        expect.objectContaining({
+          surface: "mcp",
+          eventName: "mcp_tool_called",
+          outcome: "success",
+          clientName: "gittensory-mcp-cli",
+          clientVersion: "0.3.0",
+          metadata: expect.objectContaining({
+            toolName: "gittensory_get_bounty_advisory",
+            protocolVersion: "2025-03-26",
+            compatibilityStatus: "current",
+            minimumSupportedVersion: "0.2.0",
+            latestRecommendedVersion: "0.3.0",
+          }),
+        }),
+      ]),
+    );
+    expect(JSON.stringify(mcpUsageEvents)).not.toMatch(/oktofeesh1|\/Users|github_pat|ghp_|source code|wallet|hotkey|raw trust/i);
   }, 15_000);
 
   it("covers registration-readiness policy variants for repo-owner launch planning", async () => {
@@ -2822,7 +3740,7 @@ describe("api routes", () => {
     const excellentRecommendation = await app.request("/v1/repos/owner/excellent/gittensor-config-recommendation", { headers: apiHeaders(env) }, env);
     expect(excellentRecommendation.status).toBe(200);
     await expect(excellentRecommendation.json()).resolves.toMatchObject({
-      recommended: { participationMode: "split", issueDiscoveryShare: 0.1, maintainerCut: 0.02 },
+      recommended: { participationMode: "split", issueDiscoveryShare: 0.1, maintainerCut: 0.3 },
       reasons: expect.arrayContaining(["Config and intake signals are strong enough to consider a small issue-discovery slice.", "Maintainer cut can be considered because config and queue signals are clean."]),
     });
     const issueOnlyReadiness = await app.request("/v1/repos/owner/issue-only/registration-readiness", { headers: apiHeaders(env) }, env);
@@ -2881,7 +3799,34 @@ function mcpHeaders(env: Env, sessionId?: string): Record<string, string> {
     authorization: `Bearer ${env.GITTENSORY_MCP_TOKEN}`,
     accept: "application/json, text/event-stream",
     "content-type": "application/json",
+    "mcp-protocol-version": "2025-03-26",
+    "x-gittensory-mcp-package": "@jsonbored/gittensory-mcp",
+    "x-gittensory-mcp-version": "0.3.0",
+    "x-gittensory-mcp-client": "gittensory-mcp-cli",
     ...(sessionId ? { "mcp-session-id": sessionId } : {}),
+  };
+}
+
+function internalHeaders(env: Env): Record<string, string> {
+  return {
+    authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}`,
+    "content-type": "application/json",
+  };
+}
+
+function withProductUsageInsertFailure(env: Env): Env {
+  const db = env.DB as unknown as { prepare(sql: string): unknown; batch(statements: unknown[]): Promise<unknown> };
+  return {
+    ...env,
+    DB: {
+      prepare(sql: string) {
+        if (sql.includes("product_usage_events")) throw new Error("product usage insert failed");
+        return db.prepare.call(db, sql);
+      },
+      batch(statements: unknown[]) {
+        return db.batch.call(db, statements);
+      },
+    } as unknown as D1Database,
   };
 }
 

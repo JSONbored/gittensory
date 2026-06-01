@@ -1,5 +1,6 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
+import { analyzePRQueue, type AuthorRole, type ChecksStatus } from "../queue-intelligence";
 import { completeGitHubWebOAuth, createSessionFromGitHubToken, pollGitHubDeviceFlow, startGitHubDeviceFlow, startGitHubWebOAuth } from "../auth/github-oauth";
 import { enforceRateLimit, routeClassForPath } from "../auth/rate-limit";
 import {
@@ -27,7 +28,6 @@ import {
   countActiveAuthSessions,
   countActiveDigestSubscriptions,
   getBounty,
-  getFreshOfficialMinerDetection,
   getIssue,
   getInstallationHealth,
   getLatestRepoGithubTotalsSnapshot,
@@ -37,6 +37,7 @@ import {
   getRepositorySettings,
   recordAuditEvent,
   getContributorEvidence,
+  getProductUsageRollupStatus,
   listAllPullRequestDetailSyncStates,
   listCheckSummaries,
   listBounties,
@@ -53,6 +54,7 @@ import {
   listIssueSignalSample,
   listAgentRunsForActor,
   listDigestSubscriptionsForLogin,
+  listProductUsageDailyRollups,
   listOpenPullRequests,
   listPullRequestFiles,
   listPullRequestReviews,
@@ -69,6 +71,10 @@ import {
   persistBountyLifecycleEvent,
   persistScorePreview,
   persistSignalSnapshot,
+  recordProductUsageEvent,
+  rollupProductUsageDaily,
+  summarizeMcpCompatibilityAdoption,
+  summarizeProductUsageEvents,
   upsertDigestSubscription,
   upsertBounty,
   upsertContributorEvidence,
@@ -85,6 +91,7 @@ import {
 } from "../github/backfill";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
 import { fetchPublicContributorProfile } from "../github/public";
+import { GITTENSORY_MENTION_COMMAND_CATALOG } from "../github/commands";
 import { handleGitHubWebhook } from "../github/webhook";
 import { handleMcpRequest } from "../mcp/server";
 import { buildOpenApiSpec } from "../openapi/spec";
@@ -100,18 +107,25 @@ import {
   preflightBranchWithAgent,
   startAgentRun,
 } from "../services/agent-orchestrator";
+import { buildMcpClientTelemetry } from "../services/client-telemetry";
 import {
   buildAndPersistContributorDecisionPack,
   loadContributorDecisionPackForServing,
   repoDecisionFromPack,
 } from "../services/decision-pack";
 import {
+  buildStaticControlPanelRoleSummary,
+  loadControlPanelRoleSummary,
+} from "../services/control-panel-roles";
+import {
   buildMcpCompatibilityMetadata,
   LATEST_RECOMMENDED_MCP_VERSION,
   MINIMUM_SUPPORTED_MCP_VERSION,
 } from "../services/mcp-compatibility";
+import { buildWeeklyValueReport, generateWeeklyValueReport, loadWeeklyValueReport } from "../services/weekly-value-report";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
+import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
 import {
   buildBountyAdvisory,
   buildBurdenForecast,
@@ -133,14 +147,64 @@ import {
   buildRegistryChangeReport,
 } from "../signals/engine";
 import { attachDataQuality, buildCoreSignalFidelity, buildFreshnessSloReport, buildRepoDataQuality, buildSignalFidelity } from "../signals/data-quality";
+import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildPullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
+import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildRepoSettingsPreview } from "../signals/settings-preview";
+import { buildGittensorConfigRecommendation, buildRegistrationReadiness, type InstallationHealthSummary } from "../signals/registration-readiness";
 import { fileUpstreamDriftIssues, loadUpstreamStatus, refreshUpstreamDrift } from "../upstream/ruleset";
-import type { BountyLifecycleEventRecord, ContributorEvidenceRecord, DataQuality, InstallationHealthRecord, JobMessage, JsonValue, RegistrySnapshot, RepoSyncSegmentRecord, RepositoryRecord, ScoringModelSnapshotRecord } from "../types";
+import type {
+  BountyLifecycleEventRecord,
+  ControlPanelRoleName,
+  ContributorEvidenceRecord,
+  DataQuality,
+  InstallationHealthRecord,
+  JobMessage,
+  JsonValue,
+  ProductUsageOutcome,
+  ProductUsageSurface,
+  RepoSyncSegmentRecord,
+  RepositoryRecord,
+} from "../types";
 import { errorMessage, nowIso } from "../utils/json";
 
 type AppBindings = { Bindings: Env };
+type AppContext = Context<AppBindings>;
+
+async function recordRouteProductUsage(
+  c: AppContext,
+  event: {
+    surface: ProductUsageSurface;
+    eventName: string;
+    outcome?: ProductUsageOutcome;
+    identity?: AuthIdentity | null | undefined;
+    actor?: string | null | undefined;
+    sessionId?: string | null | undefined;
+    repoFullName?: string | null | undefined;
+    targetKey?: string | null | undefined;
+    latencyMs?: number | null | undefined;
+    clientName?: string | null | undefined;
+    clientVersion?: string | null | undefined;
+    metadata?: Record<string, unknown> | null | undefined;
+  },
+): Promise<void> {
+  const telemetry = buildMcpClientTelemetry(c.req.raw.headers, { requireGittensoryHeader: true });
+  await recordProductUsageEvent(c.env, {
+    surface: event.surface,
+    eventName: event.eventName,
+    route: c.req.path,
+    actor: event.actor ?? event.identity?.actor,
+    sessionId: event.sessionId ?? (event.identity?.kind === "session" ? event.identity.session.id : undefined),
+    repoFullName: event.repoFullName,
+    targetKey: event.targetKey,
+    outcome: event.outcome,
+    latencyMs: event.latencyMs,
+    clientName: event.clientName ?? telemetry?.clientName,
+    clientVersion: event.clientVersion ?? telemetry?.clientVersion,
+    metadata: telemetry ? Object.assign({}, event.metadata, telemetry.metadata) : event.metadata,
+  }).catch(() => undefined);
+}
 
 const MAX_LOCAL_BRANCH_REF_CHARS = 256;
 const MAX_LOCAL_BRANCH_TEXT_CHARS = 4000;
@@ -197,6 +261,17 @@ const localBranchScorerSchema = z
   })
   .strict();
 
+const linkedIssueContextSchema = z
+  .object({
+    status: z.enum(["raw", "plausible", "validated", "invalid", "unavailable"]).optional(),
+    source: z.enum(["user_supplied", "official_mirror", "github_cache", "issue_quality", "missing"]).optional(),
+    issueNumbers: z.array(z.number().int().positive()).max(50).optional(),
+    solvedByPullRequests: z.array(z.number().int().positive()).max(50).optional(),
+    reason: z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS).optional(),
+    warnings: z.array(z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS)).max(20).optional(),
+  })
+  .strict();
+
 const localBranchAnalysisSchema = z
   .object({
     login: z.string().min(1).max(MAX_LOCAL_BRANCH_REF_CHARS),
@@ -222,6 +297,9 @@ const localBranchAnalysisSchema = z
     expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
     projectedCredibility: z.number().min(0).max(1).optional(),
     scenarioNotes: z.array(z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS)).max(20).optional(),
+    pendingCommitCount: z.number().int().min(0).optional(),
+    ciStatusHints: z.array(z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS)).max(20).optional(),
+    focusManifest: z.record(z.unknown()).optional(),
   })
   .strict();
 
@@ -232,6 +310,7 @@ const scorePreviewSchema = z.object({
   contributorLogin: z.string().min(1).optional(),
   labels: z.array(z.string()).optional(),
   linkedIssueMode: z.enum(["none", "standard", "maintainer"]).default("none"),
+  linkedIssueContext: linkedIssueContextSchema.optional(),
   sourceTokenScore: z.number().min(0).optional(),
   totalTokenScore: z.number().min(0).optional(),
   sourceLines: z.number().min(0).optional(),
@@ -342,7 +421,7 @@ export function createApp() {
     return next();
   });
   app.use("*", async (c, next) => {
-    if (c.req.method === "OPTIONS" || c.req.path === "/health" || c.req.path === "/v1/github/webhook") return next();
+    if (c.req.method === "OPTIONS" || c.req.path === "/health") return next();
     const limited = await enforceRateLimit(c, routeClassForPath(c.req.path));
     if (limited) return limited;
     return next();
@@ -358,6 +437,7 @@ export function createApp() {
     if (!requiresApiToken(c.req.path)) return next();
     const identity = await authenticateRequestIdentity(c);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
+    if (identity.kind === "session" && !canSessionAccessPath(c.env, identity, c.req.path)) return c.json({ error: "insufficient_role" }, 403);
     if (isExtensionScopedSession(identity) && c.req.path !== EXTENSION_PULL_CONTEXT_PATH) return c.json({ error: "insufficient_scope" }, 403);
     return next();
   });
@@ -465,7 +545,15 @@ export function createApp() {
     const githubToken = typeof body?.githubToken === "string" ? body.githubToken : "";
     if (!githubToken) return c.json({ error: "github_token_required" }, 400);
     try {
-      return c.json(await createSessionFromGitHubToken(c.env, githubToken, { source: "github_token_exchange" }), 201);
+      const session = await createSessionFromGitHubToken(c.env, githubToken, { source: "github_token_exchange" });
+      await recordRouteProductUsage(c, {
+        surface: "api",
+        eventName: "auth_session_created",
+        actor: session.login,
+        outcome: "success",
+        metadata: { source: "github_token_exchange", scopeCount: session.scopes.length },
+      });
+      return c.json(session, 201);
     } catch (error) {
       return c.json({ error: errorMessage(error, "github_session_create_failed") }, 401);
     }
@@ -488,6 +576,8 @@ export function createApp() {
     const identity = await authenticateRequestIdentity(c);
     if (!identity || identity.kind !== "session") return c.json({ error: "browser_session_required" }, 403);
     if (isExtensionScopedSession(identity)) return c.json({ error: "browser_session_required" }, 403);
+    const roleSummary = await loadControlPanelRoleSummary(c.env, identity.actor);
+    if (!roleSummary.roles.some((role) => role === "maintainer" || role === "owner" || role === "operator")) return c.json({ error: "insufficient_role" }, 403);
     const githubUser = identity.session.githubUserId === undefined ? { login: identity.session.login } : { login: identity.session.login, id: identity.session.githubUserId };
     const { token, session } = await createSessionForGitHubUser(
       c.env,
@@ -500,6 +590,15 @@ export function createApp() {
         },
       },
     );
+    await recordRouteProductUsage(c, {
+      surface: "browser_extension",
+      eventName: "extension_session_created",
+      identity,
+      sessionId: session.id,
+      outcome: "success",
+      clientName: "browser_extension",
+      metadata: { scopeCount: session.scopes.length },
+    });
     return c.json(
       {
         token,
@@ -515,7 +614,7 @@ export function createApp() {
   app.get("/v1/app/overview", async (c) => {
     const identity = await authenticateRequestIdentity(c);
     const login = identity?.kind === "session" ? identity.actor : undefined;
-    const [repositories, installations, health, registry, scoring, upstreamDrift, rateLimits, runs] = await Promise.all([
+    const [repositories, installations, health, registry, scoring, upstreamDrift, rateLimits, runs, roleSummary] = await Promise.all([
       listRepositories(c.env),
       listInstallations(c.env),
       listInstallationHealth(c.env),
@@ -524,6 +623,7 @@ export function createApp() {
       loadUpstreamStatus(c.env),
       listLatestGitHubRateLimitObservations(c.env, 20),
       login ? listAgentRunsForActor(c.env, login, 8) : Promise.resolve([]),
+      identity ? getRoleSummaryForIdentity(c.env, identity) : Promise.resolve(null),
     ]);
     const runBundles = await Promise.all(runs.map((run) => getAgentRunBundle(c.env, run.id)));
     const installedRepos = repositories.filter((repo) => repo.isInstalled).length;
@@ -532,6 +632,7 @@ export function createApp() {
     return c.json({
       generatedAt: nowIso(),
       actor: identity ? { kind: identity.kind, login: login ?? identity.actor } : null,
+      roleSummary,
       metrics: [
         {
           label: "Registered repos",
@@ -568,6 +669,12 @@ export function createApp() {
       rateLimits,
       recentRuns: runBundles.filter((bundle): bundle is NonNullable<typeof bundle> => Boolean(bundle)),
     });
+  });
+
+  app.get("/v1/app/roles", async (c) => {
+    const identity = await authenticateRequestIdentity(c);
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    return c.json(await getRoleSummaryForIdentity(c.env, identity));
   });
 
   app.get("/v1/app/miner-dashboard", async (c) => {
@@ -617,6 +724,8 @@ export function createApp() {
   });
 
   app.get("/v1/app/maintainer-dashboard", async (c) => {
+    const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
+    if (forbidden) return forbidden;
     const [repositories, installations, health, rateLimits] = await Promise.all([
       listRepositories(c.env),
       listInstallations(c.env),
@@ -648,7 +757,24 @@ export function createApp() {
   });
 
   app.get("/v1/app/operator-dashboard", async (c) => {
-    const [repositories, installations, health, registry, scoring, upstreamDrift, activeSessions, digestSubscriptions, rateLimits] = await Promise.all([
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const usageSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const [
+      repositories,
+      installations,
+      health,
+      registry,
+      scoring,
+      upstreamDrift,
+      activeSessions,
+      digestSubscriptions,
+      rateLimits,
+      usageSummary,
+      usageRollups,
+      usageRollupStatus,
+      mcpCompatibilityAdoption,
+    ] = await Promise.all([
       listRepositories(c.env),
       listInstallations(c.env),
       listInstallationHealth(c.env),
@@ -658,7 +784,27 @@ export function createApp() {
       countActiveAuthSessions(c.env),
       countActiveDigestSubscriptions(c.env),
       listLatestGitHubRateLimitObservations(c.env, 20),
+      summarizeProductUsageEvents(c.env, usageSince),
+      listProductUsageDailyRollups(c.env, { limit: 14 }),
+      getProductUsageRollupStatus(c.env),
+      summarizeMcpCompatibilityAdoption(c.env, usageSince),
     ]);
+    const weeklyValueReport = buildWeeklyValueReport({
+      generatedAt: nowIso(),
+      variant: "operator",
+      days: 7,
+      repositories,
+      installations,
+      health,
+      registry,
+      scoring,
+      upstreamDrift,
+      usageSummary,
+      usageRollups,
+      usageRollupStatus,
+      activeSessions,
+      digestSubscriptions,
+    });
     const installedRepos = repositories.filter((repo) => repo.isInstalled).length;
     const registeredRepos = repositories.filter((repo) => repo.isRegistered).length;
     return c.json({
@@ -668,6 +814,10 @@ export function createApp() {
         { label: "Installations", value: String(installations.length), delta: `${installedRepos} installed repos` },
         { label: "Registered repos", value: String(registeredRepos), delta: registry ? `${registry.repoCount} in latest registry` : "registry missing" },
         { label: "Digest subscriptions", value: String(digestSubscriptions), delta: "store-only" },
+        { label: "Product events", value: String(usageSummary.totalEvents), delta: "last 7 days" },
+        { label: "Active users", value: String(usageSummary.activeActors), delta: "hashed, last 7 days" },
+        { label: "Activation rollups", value: usageRollupStatus.status, delta: usageRollupStatus.latestRollupDay ?? "not generated" },
+        { label: "MCP stale clients", value: String(mcpCompatibilityAdoption.staleEvents + mcpCompatibilityAdoption.incompatibleEvents), delta: `${mcpCompatibilityAdoption.totalEvents} MCP event(s)` },
         { label: "Install issues", value: String(health.filter((record) => record.status !== "healthy").length), delta: "current health cache" },
         { label: "Rate-limit events", value: String(rateLimits.length), delta: "latest observations" },
       ],
@@ -676,11 +826,84 @@ export function createApp() {
         { label: "Registered coverage", value: registeredRepos, spark: sparklineFromCounts(registeredRepos, Math.max(repositories.length, 1)) },
         { label: "Installed coverage", value: installedRepos, spark: sparklineFromCounts(installedRepos, Math.max(repositories.length, 1)) },
       ],
-      weeklyReport: buildOperatorWeeklyReport({ repositories, installations, health, registry, scoring, upstreamDrift }),
+      weeklyReport: weeklyValueReport.summary,
+      weeklyValueReport,
+      usageSummary,
+      usageRollups,
+      usageRollupStatus,
+      mcpCompatibilityAdoption,
       registry,
       scoringModel: scoring,
       upstreamDrift,
     });
+  });
+
+  app.get("/v1/app/notification-model", async (c) => {
+    const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
+    if (forbidden) return forbidden;
+    return c.json({
+      generatedAt: nowIso(),
+      notificationModel: {
+        mode: "opt_in",
+        defaultState: "disabled",
+        channels: [
+          {
+            id: "in_app_digest",
+            transport: "in_app",
+            defaultEnabled: true,
+            purpose: "Show control-panel digest and attention items after authenticated sign-in.",
+          },
+          {
+            id: "browser_push",
+            transport: "web_push",
+            defaultEnabled: false,
+            requiresPermission: true,
+            purpose: "Optional browser push alerts for install health and drift warnings.",
+          },
+        ],
+        privacyGuards: [
+          "Never include wallets, hotkeys, payout/reward estimates, raw trust scores, or farming language.",
+          "Require authenticated browser session before showing private maintainer/operator notification details.",
+          "Keep delivery opt-in and user-controlled on each device.",
+        ],
+        fallbackWhenUnavailable: "in_app_digest_only",
+      },
+      pwa: {
+        nativeDependency: false,
+        manifestPath: "/manifest.webmanifest",
+        serviceWorkerPath: "/sw.js",
+      },
+      mobileReadyRoutes: ["/app", "/app/runs", "/app/repos", "/app/maintainer", "/app/operator"],
+      nativeMobileFuture: [
+        "OS-level background sync for alerts when browser is closed.",
+        "Per-device biometric re-auth and secure lock-screen notification handling.",
+      ],
+    });
+  });
+
+  app.get("/v1/app/analytics/mcp-compatibility", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const days = Math.max(1, Math.min(90, Number(c.req.query("days") ?? 7) || 7));
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    return c.json({ generatedAt: nowIso(), days, adoption: await summarizeMcpCompatibilityAdoption(c.env, since) });
+  });
+
+  app.get("/v1/app/analytics/daily-rollups", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const limit = Math.max(1, Math.min(90, Number(c.req.query("limit") ?? 14) || 14));
+    const [rollups, status] = await Promise.all([listProductUsageDailyRollups(c.env, { limit }), getProductUsageRollupStatus(c.env)]);
+    return c.json({ generatedAt: nowIso(), status, rollups });
+  });
+
+  app.get("/v1/app/analytics/weekly-value-report", async (c) => {
+    const variant = c.req.query("variant") === "operator" ? "operator" : "public";
+    const allowedRoles: ControlPanelRoleName[] = variant === "operator" ? ["operator"] : ["miner", "maintainer", "owner", "operator"];
+    const forbidden = await requireAppRole(c, allowedRoles);
+    if (forbidden) return forbidden;
+    const days = Math.max(1, Math.min(31, Number(c.req.query("days") ?? 7) || 7));
+    return c.json(await loadWeeklyValueReport(c.env, { variant, days }));
   });
 
   app.get("/v1/app/commands", async (c) =>
@@ -696,15 +919,28 @@ export function createApp() {
     if (!parsed.success) return c.json({ error: "invalid_command_preview_request", issues: parsed.error.issues }, 400);
     const command = APP_COMMANDS.find((candidate) => candidate.command === parsed.data.command || candidate.id === parsed.data.command.replace(/^@gittensory\s+/, ""));
     if (!command) return c.json({ error: "command_not_found" }, 404);
+    const identity = await authenticateRequestIdentity(c).catch(() => null);
+    const preview = buildCommandPreview(command, parsed.data);
+    await recordRouteProductUsage(c, {
+      surface: "control_panel",
+      eventName: "command_previewed",
+      identity,
+      repoFullName: parsed.data.repoFullName,
+      targetKey: parsed.data.pullNumber ? `${parsed.data.repoFullName ?? "unknown"}#${parsed.data.pullNumber}` : parsed.data.repoFullName,
+      outcome: "success",
+      metadata: { command: command.id, audience: command.audience, boundary: command.boundary },
+    });
     return c.json({
       generatedAt: nowIso(),
       command,
       request: parsed.data,
-      preview: buildCommandPreview(command, parsed.data),
+      preview,
     });
   });
 
   app.get("/v1/app/digest", async (c) => {
+    const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
+    if (forbidden) return forbidden;
     const identity = await authenticateRequestIdentity(c);
     const login = identity?.kind === "session" ? identity.actor : null;
     const [repositories, health, upstreamDrift, rateLimits, subscriptions] = await Promise.all([
@@ -726,16 +962,27 @@ export function createApp() {
   });
 
   app.post("/v1/app/digest/subscriptions", async (c) => {
+    const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
+    if (forbidden) return forbidden;
     const identity = await authenticateRequestIdentity(c);
     if (!identity || identity.kind !== "session") return c.json({ error: "browser_session_required" }, 403);
     const body = await c.req.json().catch(() => null);
     const parsed = digestSubscriptionSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_digest_subscription_request", issues: parsed.error.issues }, 400);
     const subscription = await upsertDigestSubscription(c.env, { login: identity.actor, email: parsed.data.email, source: "app" });
+    await recordRouteProductUsage(c, {
+      surface: "control_panel",
+      eventName: "digest_subscription_stored",
+      identity,
+      outcome: "success",
+      metadata: { source: "app", deliveryMode: "store_only" },
+    });
     return c.json({ status: "stored", subscription, delivery: { mode: "store_only", emailDeliveryEnabled: false } }, 201);
   });
 
   app.get("/v1/extension/pull-context", async (c) => {
+    const identity = await authenticateRequestIdentity(c);
+    if (!identity || identity.kind !== "session" || !isExtensionScopedSession(identity)) return c.json({ error: "extension_session_required" }, 403);
     const owner = c.req.query("owner") ?? "";
     const repoName = c.req.query("repo") ?? "";
     const pullNumber = Number(c.req.query("pullNumber") ?? "");
@@ -766,6 +1013,16 @@ export function createApp() {
       pullNumber,
       profile: contributorContext?.profile,
       outcomeHistory: contributorContext?.outcomeHistory,
+    });
+    await recordRouteProductUsage(c, {
+      surface: "browser_extension",
+      eventName: "pull_context_viewed",
+      identity,
+      repoFullName: fullName,
+      targetKey: `${fullName}#${pullNumber}`,
+      outcome: "success",
+      clientName: "browser_extension",
+      metadata: { hasContributorContext: Boolean(contributorContext), hasCachedPullRequest: Boolean(pullRequest) },
     });
     return c.json({
       generatedAt: nowIso(),
@@ -1125,6 +1382,13 @@ export function createApp() {
     return c.json(reviewability);
   });
 
+  app.get("/v1/repos/:owner/:repo/outcome-patterns", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const response = await buildRepoOutcomePatternsResponse(c.env, fullName);
+    if (!response) return c.json({ error: "repo_outcome_patterns_not_found", repoFullName: fullName }, 404);
+    return c.json(response);
+  });
+
   app.get("/v1/contributors/:login/profile", async (c) => {
     const login = c.req.param("login");
     const [github, pullRequests, issues, cachedRepoStats, gittensorSnapshot] = await Promise.all([
@@ -1145,6 +1409,13 @@ export function createApp() {
     const serving = await loadContributorDecisionPackForServing(c.env, login);
     if (serving.kind === "ready") return c.json(serving.pack);
     return c.json(serving.refresh, 202);
+  });
+
+  app.get("/v1/contributors/:login/open-pr-monitor", async (c) => {
+    const login = c.req.param("login");
+    const unauthorized = await requireContributorAccess(c, login);
+    if (unauthorized) return unauthorized;
+    return c.json(await buildContributorOpenPrMonitor(c.env, login));
   });
 
   app.get("/v1/contributors/:login/repos/:owner/:repo/decision", async (c) => {
@@ -1206,7 +1477,7 @@ export function createApp() {
     if (!parsed.success) return c.json({ error: "invalid_local_branch_analysis_request", issues: parsed.error.issues }, 400);
     const unauthorized = await requireContributorAccess(c, parsed.data.login);
     if (unauthorized) return unauthorized;
-    const [context, repo, issues, pullRequests, recentMergedPullRequests, bounties, snapshot, issueQuality] = await Promise.all([
+    const [context, repo, issues, pullRequests, recentMergedPullRequests, bounties, snapshot, issueQuality, repoManifest] = await Promise.all([
       loadContributorFastContext(c.env, parsed.data.login),
       getRepository(c.env, parsed.data.repoFullName),
       listIssues(c.env, parsed.data.repoFullName),
@@ -1215,12 +1486,17 @@ export function createApp() {
       listBountiesByRepo(c.env, parsed.data.repoFullName),
       getOrCreateScoringModelSnapshot(c.env),
       loadOrComputeIssueQualityResponse(c.env, parsed.data.repoFullName),
+      loadRepoFocusManifest(c.env, parsed.data.repoFullName),
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: parsed.data.login, fit, scoringSnapshot: snapshot });
     const checkSummaries = await loadCheckSummariesForPullRequests(c.env, parsed.data.repoFullName, parsed.data, pullRequests);
+    // Caller-supplied focusManifest wins; otherwise fall back to the repo-owned manifest when present.
+    const analysisInput = parsed.data.focusManifest !== undefined || !repoManifest.present
+      ? parsed.data
+      : { ...parsed.data, focusManifest: repoManifest as unknown };
     const analysis = buildLocalBranchAnalysis({
-      input: parsed.data,
+      input: analysisInput,
       repo,
       issues,
       pullRequests,
@@ -1234,9 +1510,19 @@ export function createApp() {
       scoringSnapshot: snapshot,
       scoringProfile,
       issueQuality: issueQuality?.report,
+      gittensorSnapshot: context.gittensorSnapshot,
     });
     const response = { ...analysis, dataQuality: await loadRepoDataQuality(c.env, parsed.data.repoFullName) };
     await persistSignal(c.env, "local-branch-analysis", `${parsed.data.login}:${parsed.data.repoFullName}:${parsed.data.branchName ?? parsed.data.headRef ?? "local"}`, parsed.data.repoFullName, response as unknown as Record<string, JsonValue>, analysis.generatedAt);
+    await recordRouteProductUsage(c, {
+      surface: "api",
+      eventName: "local_branch_analysis_completed",
+      actor: parsed.data.login,
+      repoFullName: parsed.data.repoFullName,
+      targetKey: `${parsed.data.login}:${parsed.data.repoFullName}:${parsed.data.branchName ?? parsed.data.headRef ?? "local"}`,
+      outcome: "success",
+      metadata: { hasLocalScorer: Boolean(parsed.data.localScorer), changedFileCount: parsed.data.changedFiles?.length ?? 0, linkedIssueCount: parsed.data.linkedIssues?.length ?? 0 },
+    });
     return c.json(response);
   });
 
@@ -1247,6 +1533,17 @@ export function createApp() {
     const unauthorized = await requireContributorAccess(c, parsed.data.actorLogin);
     if (unauthorized) return unauthorized;
     const bundle = await startAgentRun(c.env, parsed.data);
+    await recordRouteProductUsage(c, {
+      surface: "api",
+      eventName: "agent_run_started",
+      actor: parsed.data.actorLogin,
+      repoFullName: parsed.data.target?.repoFullName,
+      targetKey: parsed.data.target?.repoFullName
+        ? `${parsed.data.target.repoFullName}${parsed.data.target.pullNumber ? `#${parsed.data.target.pullNumber}` : parsed.data.target.issueNumber ? `#${parsed.data.target.issueNumber}` : ""}`
+        : undefined,
+      outcome: "queued",
+      metadata: { surface: parsed.data.surface ?? "api", status: bundle.run.status },
+    });
     return c.json(bundle, 202);
   });
 
@@ -1277,6 +1574,15 @@ export function createApp() {
     const unauthorized = await requireContributorAccess(c, parsed.data.login);
     if (unauthorized) return unauthorized;
     const bundle = await planNextWork(c.env, parsed.data);
+    await recordRouteProductUsage(c, {
+      surface: "api",
+      eventName: "agent_plan_next_work_completed",
+      actor: parsed.data.login,
+      repoFullName: parsed.data.repoFullName,
+      targetKey: parsed.data.repoFullName,
+      outcome: bundle.run.status === "needs_snapshot_refresh" ? "queued" : "success",
+      metadata: { requestedSurface: parsed.data.surface ?? "api", status: bundle.run.status },
+    });
     return c.json(bundle, bundle.run.status === "needs_snapshot_refresh" ? 202 : 200);
   });
 
@@ -1287,6 +1593,15 @@ export function createApp() {
     const unauthorized = await requireContributorAccess(c, parsed.data.login);
     if (unauthorized) return unauthorized;
     const bundle = await preflightBranchWithAgent(c.env, parsed.data);
+    await recordRouteProductUsage(c, {
+      surface: "api",
+      eventName: "agent_preflight_branch_completed",
+      actor: parsed.data.login,
+      repoFullName: parsed.data.repoFullName,
+      targetKey: `${parsed.data.login}:${parsed.data.repoFullName}:${parsed.data.branchName ?? parsed.data.headRef ?? "local"}`,
+      outcome: bundle.run.status === "needs_snapshot_refresh" ? "queued" : "success",
+      metadata: { status: bundle.run.status },
+    });
     return c.json(bundle);
   });
 
@@ -1297,6 +1612,15 @@ export function createApp() {
     const unauthorized = await requireContributorAccess(c, parsed.data.login);
     if (unauthorized) return unauthorized;
     const bundle = await preparePrPacketWithAgent(c.env, parsed.data);
+    await recordRouteProductUsage(c, {
+      surface: "api",
+      eventName: "agent_pr_packet_completed",
+      actor: parsed.data.login,
+      repoFullName: parsed.data.repoFullName,
+      targetKey: `${parsed.data.login}:${parsed.data.repoFullName}:${parsed.data.branchName ?? parsed.data.headRef ?? "local"}`,
+      outcome: bundle.run.status === "needs_snapshot_refresh" ? "queued" : "success",
+      metadata: { status: bundle.run.status },
+    });
     return c.json(bundle);
   });
 
@@ -1307,6 +1631,15 @@ export function createApp() {
     const unauthorized = await requireContributorAccess(c, parsed.data.login);
     if (unauthorized) return unauthorized;
     const bundle = await explainBlockersWithAgent(c.env, parsed.data);
+    await recordRouteProductUsage(c, {
+      surface: "api",
+      eventName: "agent_blockers_completed",
+      actor: parsed.data.login,
+      repoFullName: "repoFullName" in parsed.data ? parsed.data.repoFullName : undefined,
+      targetKey: "repoFullName" in parsed.data ? parsed.data.repoFullName : undefined,
+      outcome: bundle.run.status === "needs_snapshot_refresh" ? "queued" : "success",
+      metadata: { requestedSurface: "surface" in parsed.data ? (parsed.data.surface ?? "api") : "api", status: bundle.run.status },
+    });
     return c.json(bundle, bundle.run.status === "needs_snapshot_refresh" ? 202 : 200);
   });
 
@@ -1499,6 +1832,24 @@ export function createApp() {
     return c.json({ ok: true, status: "queued", repoFullName }, 202);
   });
 
+  app.post("/v1/internal/jobs/rollup-product-usage", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const day = typeof body?.day === "string" ? body.day : undefined;
+    const days = Number.isFinite(Number(body?.days)) ? Math.max(1, Math.min(31, Math.round(Number(body.days)))) : undefined;
+    const message: JobMessage = { type: "rollup-product-usage", requestedBy: "api", ...(day ? { day } : {}), ...(days === undefined ? {} : { days }) };
+    await c.env.JOBS.send(message);
+    return c.json({ ok: true, status: "queued", day, days }, 202);
+  });
+
+  app.post("/v1/internal/jobs/generate-weekly-value-report", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const days = Number.isFinite(Number(body?.days)) ? Math.max(1, Math.min(31, Math.round(Number(body.days)))) : undefined;
+    const variant = body?.variant === "public" ? "public" : "operator";
+    const message: JobMessage = { type: "generate-weekly-value-report", requestedBy: "api", variant, ...(days === undefined ? {} : { days }) };
+    await c.env.JOBS.send(message);
+    return c.json({ ok: true, status: "queued", variant, days }, 202);
+  });
+
   app.post("/v1/internal/jobs/repair-data-fidelity", async (c) => {
     const message: JobMessage = { type: "repair-data-fidelity", requestedBy: "api" };
     await c.env.JOBS.send(message);
@@ -1510,6 +1861,20 @@ export function createApp() {
     const repoFullName = typeof body?.repoFullName === "string" ? body.repoFullName : undefined;
     await generateSignalSnapshots(c.env, repoFullName);
     return c.json({ ok: true, status: "completed", repoFullName });
+  });
+
+  app.post("/v1/internal/jobs/rollup-product-usage/run", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const day = typeof body?.day === "string" ? body.day : undefined;
+    const days = Number.isFinite(Number(body?.days)) ? Math.max(1, Math.min(31, Math.round(Number(body.days)))) : undefined;
+    return c.json(await rollupProductUsageDaily(c.env, { ...(day ? { day } : {}), ...(days === undefined ? {} : { days }) }));
+  });
+
+  app.post("/v1/internal/jobs/generate-weekly-value-report/run", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const days = Number.isFinite(Number(body?.days)) ? Math.max(1, Math.min(31, Math.round(Number(body.days)))) : undefined;
+    const variant = body?.variant === "public" ? "public" : "operator";
+    return c.json(await generateWeeklyValueReport(c.env, { variant, ...(days === undefined ? {} : { days }) }));
   });
 
   app.post("/v1/internal/jobs/refresh-installation-health/run", async (c) => {
@@ -1537,6 +1902,43 @@ export function createApp() {
     }
     await Promise.all(events.map((event) => persistBountyLifecycleEvent(c.env, event)));
     return c.json({ ok: true, imported: bounties.length, lifecycleEvents: events.length });
+  });
+
+  app.post("/v1/internal/queue-intelligence", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (!body || !Array.isArray(body.pullRequests)) {
+      return c.json({ error: "invalid_request", detail: "pullRequests array required" }, 400);
+    }
+    const prSchema = z.object({
+      number: z.number().int().positive(),
+      author: z.string(),
+      authorRole: z.enum(["first-time", "contributor", "maintainer"] as [AuthorRole, ...AuthorRole[]]),
+      isConfirmedMiner: z.boolean(),
+      linkedIssue: z.object({ qualityScore: z.number().min(0).max(1) }).nullable(),
+      checksStatus: z.enum(["passing", "failing", "pending"] as [ChecksStatus, ...ChecksStatus[]]),
+      isStale: z.boolean(),
+      additions: z.number().int().nonnegative(),
+      deletions: z.number().int().nonnegative(),
+      title: z.string(),
+      body: z.string(),
+      duplicateCandidates: z.array(z.number().int().positive()),
+      createdAt: z.string().datetime(),
+      lastUpdatedAt: z.string().datetime(),
+    });
+    const repoContextSchema = z.object({
+      totalOpenPRs: z.number().int().nonnegative(),
+      avgReviewTimeDays: z.number().nonnegative(),
+      maintainerWorkload: z.number().min(0).max(1),
+    });
+    const prsResult = z.array(prSchema).safeParse(body.pullRequests);
+    if (!prsResult.success) return c.json({ error: "invalid_request", issues: prsResult.error.issues }, 400);
+    const repoContext = repoContextSchema.safeParse(body.repoContext).success
+      ? repoContextSchema.parse(body.repoContext)
+      : { totalOpenPRs: 0, avgReviewTimeDays: 0, maintainerWorkload: 0 };
+    const result = await analyzePRQueue(prsResult.data, repoContext);
+    const recommendations: Record<number, string> = {};
+    for (const [num, rec] of result.recommendations) recommendations[num] = rec;
+    return c.json({ rankedPRs: result.rankedPRs, recommendations });
   });
 
   app.post("/v1/internal/repos/:owner/:repo/settings", async (c) => {
@@ -1607,6 +2009,56 @@ const APP_COMMANDS = [
     description: "Preview the public-safe summary that may be posted to a PR thread.",
     endpoint: "/v1/app/commands/preview",
   },
+  ...GITTENSORY_MENTION_COMMAND_CATALOG.filter(
+    (command) => !["help", "preflight", "blockers", "packet", "queue-summary", "review-now", "needs-author", "confirmed-miners", "duplicate-clusters"].includes(command.id),
+  ).map((command) => ({
+    id: command.id,
+    command: `@gittensory ${command.id}`,
+    audience: "public-safe",
+    boundary: "public",
+    description: command.description,
+    endpoint: "GitHub issue comment",
+  })),
+  {
+    id: "queue-summary",
+    command: "@gittensory queue-summary",
+    audience: "maintainer",
+    boundary: "public-safe",
+    description: "Post a maintainer-only queue digest from cached GitHub metadata.",
+    endpoint: "/v1/app/maintainer-dashboard",
+  },
+  {
+    id: "review-now",
+    command: "@gittensory review-now",
+    audience: "maintainer",
+    boundary: "public-safe",
+    description: "List cached PRs that look ready for maintainer review.",
+    endpoint: "/v1/app/maintainer-dashboard",
+  },
+  {
+    id: "needs-author",
+    command: "@gittensory needs-author",
+    audience: "maintainer",
+    boundary: "public-safe",
+    description: "List cached PRs that need author cleanup before detailed review.",
+    endpoint: "/v1/app/maintainer-dashboard",
+  },
+  {
+    id: "confirmed-miners",
+    command: "@gittensory confirmed-miners",
+    audience: "maintainer",
+    boundary: "public-safe",
+    description: "List open PRs whose authors are confirmed in the official-miner cache.",
+    endpoint: "/v1/app/maintainer-dashboard",
+  },
+  {
+    id: "duplicate-clusters",
+    command: "@gittensory duplicate-clusters",
+    audience: "maintainer",
+    boundary: "public-safe",
+    description: "List duplicate or WIP clusters visible from cached GitHub metadata.",
+    endpoint: "/v1/app/maintainer-dashboard",
+  },
 ] as const;
 
 function authRedirectWithError(env: Env, reason: string): string {
@@ -1618,24 +2070,21 @@ function authRedirectWithError(env: Env, reason: string): string {
 }
 
 async function buildSessionResponse(env: Env, identity: Extract<AuthIdentity, { kind: "session" }>) {
-  /* v8 ignore start -- Browser-session role shaping is covered through auth/session route tests; non-admin fallback is policy-defensive. */
-  const miner = await getFreshOfficialMinerDetection(env, identity.actor).catch(() => null);
-  const admin = isAuthorizedGitHubSessionLogin(env, identity.actor);
-  const roles = admin ? ["miner", "maintainer", "owner", "operator"] : ["miner"];
+  const roleSummary = await loadControlPanelRoleSummary(env, identity.actor);
   return {
     status: "authenticated",
     login: identity.session.login,
     githubId: identity.session.githubUserId ?? null,
     github_id: identity.session.githubUserId ?? null,
-    roles,
-    confirmedMiner: miner?.status === "confirmed",
-    confirmed_miner: miner?.status === "confirmed",
+    roles: roleSummary.roles,
+    roleSummary,
+    confirmedMiner: roleSummary.confirmedMiner,
+    confirmed_miner: roleSummary.confirmedMiner,
     expiresAt: identity.session.expiresAt,
     scopes: identity.session.scopes,
     createdAt: identity.session.createdAt,
     lastSeenAt: identity.session.lastSeenAt,
   };
-  /* v8 ignore stop */
 }
 
 function sparklineFromCounts(value: number, total: number): number[] {
@@ -1745,26 +2194,6 @@ function buildDigestItems(args: {
   return items;
 }
 
-function buildOperatorWeeklyReport(args: {
-  repositories: RepositoryRecord[];
-  installations: Awaited<ReturnType<typeof listInstallations>>;
-  health: InstallationHealthRecord[];
-  registry: RegistrySnapshot | null;
-  scoring: ScoringModelSnapshotRecord | null;
-  upstreamDrift: Awaited<ReturnType<typeof loadUpstreamStatus>>;
-}): string[] {
-  const registered = args.repositories.filter((repo) => repo.isRegistered).length;
-  const installed = args.repositories.filter((repo) => repo.isInstalled).length;
-  const unhealthy = args.health.filter((record) => record.status !== "healthy").length;
-  return [
-    `${registered} registered repos tracked; ${installed} have installation coverage in the local cache.`,
-    `${args.installations.length} GitHub App installation(s), ${unhealthy} needing attention.`,
-    args.registry ? `Latest registry snapshot has ${args.registry.repoCount} repos and ${args.registry.warnings.length} warning(s).` : "Registry snapshot is missing.",
-    args.scoring ? `Scoring model ${args.scoring.activeModel} is loaded from ${args.scoring.sourceKind}.` : "Scoring model snapshot is missing.",
-    `Upstream drift status is ${args.upstreamDrift.status}.`,
-  ];
-}
-
 async function buildRepoIntelligenceResponse(env: Env, fullName: string) {
   let burdenForecastError: unknown;
   const [repo, snapshots, dataQuality, burdenForecast] = await Promise.all([
@@ -1860,102 +2289,61 @@ async function buildIssueQualityResponse(env: Env, fullName: string) {
   return loadOrComputeIssueQualityResponse(env, fullName);
 }
 
+async function loadInstallationHealthSummary(env: Env, repo: RepositoryRecord | null): Promise<InstallationHealthSummary | null> {
+  /* v8 ignore start -- Installation health loading is route-level glue over covered signal helpers. */
+  const installationId = repo?.installationId ?? null;
+  if (installationId === null) return null;
+  const healthRecord = await getInstallationHealth(env, installationId);
+  if (!healthRecord) return null;
+  const enriched = enrichInstallationHealth(healthRecord);
+  return { status: enriched.status, missingPermissions: enriched.missingPermissions, missingEvents: enriched.missingEvents };
+  /* v8 ignore stop */
+}
+
+async function buildRepoOutcomePatternsResponse(env: Env, fullName: string) {
+  const response = await loadOrComputeRepoOutcomePatternsResponse(env, fullName);
+  if (!response) return null;
+  const dataQuality = await loadRepoDataQuality(env, fullName);
+  return attachDataQuality(response as unknown as Record<string, unknown>, dataQuality);
+}
+
 async function buildRegistrationReadinessResponse(env: Env, fullName: string) {
-  /* v8 ignore start -- Registration readiness branches are route-level response shaping over covered signal helpers. */
+  /* v8 ignore start -- Registration readiness route-level shaping over covered signal helpers. */
   const intelligence = await buildRepoIntelligenceResponse(env, fullName);
   const settings = await getRepositorySettings(env, fullName);
   const repo = intelligence.repo;
-  const configQuality = intelligence.configQuality as ReturnType<typeof buildConfigQuality>;
-  const maintainerCutReadiness = intelligence.maintainerCutReadiness as ReturnType<typeof buildMaintainerCutReadiness>;
-  const contributorIntakeHealth = intelligence.contributorIntakeHealth as ReturnType<typeof buildContributorIntakeHealth>;
-  const lane = buildLaneAdvice(repo, fullName);
-  const blockers = [
-    ...(!repo?.isRegistered ? ["Repository is not registered in the latest Gittensory registry snapshot."] : []),
-    ...(configQuality.level === "fragile" ? ["Repository config quality is fragile."] : []),
-    ...(contributorIntakeHealth.level === "blocked" ? ["Contributor intake health is blocked."] : []),
-  ];
-  const warnings = [
-    ...(configQuality.level === "needs_attention" ? ["Repository config quality needs attention before registration promotion."] : []),
-    ...(contributorIntakeHealth.level === "strained" ? ["Contributor intake is strained; expect more maintainer triage."] : []),
-    ...(settings.publicSurface === "off" ? ["GitHub App public surface is disabled; maintainers will not get comment/label assistance."] : []),
-  ];
-  const issuePolicy =
-    lane.lane === "issue_discovery"
-      ? "issue_discovery_enabled"
-      : lane.lane === "split"
-        ? "split_pr_and_issue_discovery_enabled"
-      : settings.requireLinkedIssue
-        ? "direct_pr_requires_linked_issue"
-        : "direct_pr_no_issue_required";
-  const ready = blockers.length === 0 && !["fragile", "needs_attention"].includes(configQuality.level);
-  return {
+  const installation = await loadInstallationHealthSummary(env, repo);
+  const report = buildRegistrationReadiness({
     repoFullName: fullName,
-    generatedAt: nowIso(),
-    ready,
-    recommendedRegistrationMode: lane.lane === "issue_discovery" ? "issue_discovery" : lane.lane === "split" ? "split" : "direct_pr",
-    issuePolicy,
-    labelPolicy: {
-      autoLabelEnabled: settings.autoLabelEnabled,
-      label: settings.gittensorLabel,
-      createMissingLabel: settings.createMissingLabel,
-      configuredRegistryLabels: configQuality.configuredLabels,
-      missingOrUnusedRegistryLabels: configQuality.notObservedConfiguredLabels,
-    },
-    maintainerCutReadiness,
-    contributorIntakeHealth,
-    docsCompleteness: {
-      status: "repo_docs_not_crawled",
-      requiredDocs: ["README", "CONTRIBUTING", "SECURITY", "SUPPORT"],
-      note: "Gittensory validates public repo docs from the local project during CI; remote repo-doc crawling is not enabled in this signal yet.",
-    },
-    blockers,
-    warnings,
-    dataQuality: intelligence.dataQuality,
-  };
+    repo,
+    settings,
+    lane: buildLaneAdvice(repo, fullName),
+    configQuality: intelligence.configQuality as ReturnType<typeof buildConfigQuality>,
+    labelAudit: intelligence.labelAudit as ReturnType<typeof buildLabelAudit>,
+    queueHealth: intelligence.queueHealth as ReturnType<typeof buildQueueHealth>,
+    maintainerCutReadiness: intelligence.maintainerCutReadiness as ReturnType<typeof buildMaintainerCutReadiness>,
+    contributorIntakeHealth: intelligence.contributorIntakeHealth as ReturnType<typeof buildContributorIntakeHealth>,
+    installation,
+  });
+  return { ...report, dataQuality: intelligence.dataQuality };
   /* v8 ignore stop */
 }
 
 async function buildGittensorConfigRecommendationResponse(env: Env, fullName: string) {
-  /* v8 ignore start -- Config recommendation branches shape advisory output over covered signal helpers. */
+  /* v8 ignore start -- Config recommendation route-level shaping over covered signal helpers. */
   const intelligence = await buildRepoIntelligenceResponse(env, fullName);
   const settings = await getRepositorySettings(env, fullName);
   const repo = intelligence.repo;
-  const lane = buildLaneAdvice(repo, fullName);
-  const configQuality = intelligence.configQuality as ReturnType<typeof buildConfigQuality>;
-  const contributorIntakeHealth = intelligence.contributorIntakeHealth as ReturnType<typeof buildContributorIntakeHealth>;
-  const maintainerCutReadiness = intelligence.maintainerCutReadiness as ReturnType<typeof buildMaintainerCutReadiness>;
-  const current = repo?.registryConfig ?? null;
-  const shouldEnableIssueDiscovery = contributorIntakeHealth.level === "healthy" && configQuality.level === "excellent";
-  const recommendedIssueDiscoveryShare = shouldEnableIssueDiscovery ? 0.1 : 0;
-  const currentAllocation = current?.emissionShare ?? 0;
-  const directPrShare = Math.max(0, currentAllocation - recommendedIssueDiscoveryShare);
-  const recommendedMaintainerCut = maintainerCutReadiness.ready ? Math.max(current?.maintainerCut ?? 0, 0.02) : current?.maintainerCut ?? 0;
-  return {
+  const recommendation = buildGittensorConfigRecommendation({
     repoFullName: fullName,
-    generatedAt: nowIso(),
-    privateOnly: true,
-    current,
-    recommended: {
-      participationMode: recommendedIssueDiscoveryShare > 0 ? "split" : "direct_pr",
-      issueDiscoveryShare: recommendedIssueDiscoveryShare,
-      directPrShare,
-      maintainerCut: recommendedMaintainerCut,
-      requireLinkedIssue: settings.requireLinkedIssue,
-      labelMultipliers: configQuality.configuredLabels.length > 0 ? "keep_current_and_prune_unused" : "start_without_trusted_label_multipliers",
-      publicSurface: settings.publicSurface,
-      confirmedMinerLabel: settings.gittensorLabel,
-    },
-    reasons: [
-      lane.lane === "issue_discovery" ? "The current registry lane already routes meaningful work through issue discovery." : "Direct-PR mode is the safest default until issue-discovery intake is intentionally staffed.",
-      shouldEnableIssueDiscovery ? "Config and intake signals are strong enough to consider a small issue-discovery slice." : "Issue discovery should stay disabled until config quality and intake health are excellent.",
-      maintainerCutReadiness.ready ? "Maintainer cut can be considered because config and queue signals are clean." : "Maintainer cut should stay unchanged until readiness blockers are cleared.",
-    ],
-    warnings: [
-      ...(configQuality.notObservedConfiguredLabels.length > 0 ? [`${configQuality.notObservedConfiguredLabels.length} configured label(s) have not been observed in cached repo activity.`] : []),
-      ...(contributorIntakeHealth.level === "strained" || contributorIntakeHealth.level === "blocked" ? [`Contributor intake is ${contributorIntakeHealth.level}; avoid increasing noisy lanes yet.`] : []),
-    ],
-    dataQuality: intelligence.dataQuality,
-  };
+    repo,
+    settings,
+    lane: buildLaneAdvice(repo, fullName),
+    configQuality: intelligence.configQuality as ReturnType<typeof buildConfigQuality>,
+    contributorIntakeHealth: intelligence.contributorIntakeHealth as ReturnType<typeof buildContributorIntakeHealth>,
+    maintainerCutReadiness: intelligence.maintainerCutReadiness as ReturnType<typeof buildMaintainerCutReadiness>,
+  });
+  return { ...recommendation, dataQuality: intelligence.dataQuality };
   /* v8 ignore stop */
 }
 
@@ -2102,11 +2490,31 @@ function isExtensionScopedSession(identity: AuthIdentity): boolean {
   return identity.kind === "session" && identity.session.scopes.includes(EXTENSION_PULL_CONTEXT_SCOPE);
 }
 
+function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: "session" }>, path: string): boolean {
+  if (isAuthorizedGitHubSessionLogin(env, identity.actor)) return true;
+  if (path.startsWith("/v1/app/")) return true;
+  if (path === EXTENSION_PULL_CONTEXT_PATH && isExtensionScopedSession(identity)) return true;
+  return false;
+}
+
 async function authenticateRequestIdentity(c: ProtectedRouteContext): Promise<AuthIdentity | null> {
   const bearer = await authenticatePrivateToken(c.env, extractBearerToken(c.req.header("authorization")));
   if (bearer) return bearer;
   const browserSessionToken = extractBrowserSessionToken(c.req.header("cookie"));
   return authenticateSessionToken(c.env, browserSessionToken);
+}
+
+async function getRoleSummaryForIdentity(env: Env, identity: AuthIdentity) {
+  if (identity.kind === "session") return loadControlPanelRoleSummary(env, identity.actor);
+  return buildStaticControlPanelRoleSummary(identity.actor);
+}
+
+async function requireAppRole(c: ProtectedRouteContext, allowedRoles: ControlPanelRoleName[]): Promise<Response | null> {
+  const identity = await authenticateRequestIdentity(c);
+  if (!identity) return c.json({ error: "unauthorized" }, 401);
+  if (identity.kind !== "session") return null;
+  const summary = await loadControlPanelRoleSummary(c.env, identity.actor);
+  return summary.roles.some((role) => allowedRoles.includes(role)) ? null : c.json({ error: "insufficient_role" }, 403);
 }
 
 async function requireStaticProtectedApiToken(c: ProtectedRouteContext): Promise<Response | null> {
