@@ -6,6 +6,7 @@ import {
   Stat,
   StatusPill,
 } from "@/components/site/control-primitives";
+import { NotificationReadinessCard } from "@/components/site/notification-readiness-card";
 import { StateBoundary } from "@/components/site/state-views";
 import { useApiResource } from "@/lib/api/use-api-resource";
 
@@ -123,6 +124,7 @@ function OperatorDashboard() {
               ) : null}
             </div>
           </section>
+          <NotificationReadinessCard />
         </div>
       ) : null}
     </StateBoundary>

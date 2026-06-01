@@ -1273,6 +1273,7 @@ describe("api routes", () => {
       evidence: { ownedInstalledRepos: 1, accountInstallations: 1, operator: false },
     });
     expect((await app.request("/v1/app/maintainer-dashboard", { headers: ownerHeaders }, ownerEnv)).status).toBe(200);
+    expect((await app.request("/v1/app/notification-model", { headers: ownerHeaders }, ownerEnv)).status).toBe(200);
     expect((await app.request("/v1/app/operator-dashboard", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
     expect((await app.request("/v1/app/analytics/daily-rollups", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
     expect((await app.request("/v1/app/analytics/mcp-compatibility", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
@@ -1448,6 +1449,33 @@ describe("api routes", () => {
       noiseReduction: expect.any(Array),
       weeklyReport: expect.arrayContaining([expect.stringContaining("registered repo")]),
     });
+
+    const notificationModel = await app.request("/v1/app/notification-model", { headers: apiHeaders(env) }, env);
+    expect(notificationModel.status).toBe(200);
+    const notificationBody = (await notificationModel.json()) as Record<string, unknown>;
+    expect(notificationBody).toMatchObject({
+      notificationModel: {
+        mode: "opt_in",
+        defaultState: "disabled",
+        fallbackWhenUnavailable: "in_app_digest_only",
+        channels: expect.arrayContaining([
+          expect.objectContaining({ id: "in_app_digest", defaultEnabled: true }),
+          expect.objectContaining({ id: "browser_push", defaultEnabled: false, requiresPermission: true }),
+        ]),
+        privacyGuards: expect.arrayContaining([
+          expect.stringMatching(/wallets|hotkeys|payout\/reward/i),
+          expect.stringMatching(/authenticated browser session/i),
+        ]),
+      },
+      pwa: {
+        nativeDependency: false,
+        manifestPath: "/manifest.webmanifest",
+        serviceWorkerPath: "/sw.js",
+      },
+      mobileReadyRoutes: expect.arrayContaining(["/app/operator", "/app/maintainer"]),
+      nativeMobileFuture: expect.any(Array),
+    });
+    expect(JSON.stringify(notificationBody)).toMatch(/wallets|hotkeys|payout\/reward estimates|raw trust scores|farming language/i);
 
     const commands = await app.request("/v1/app/commands", { headers: apiHeaders(env) }, env);
     expect(commands.status).toBe(200);

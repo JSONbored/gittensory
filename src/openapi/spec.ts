@@ -256,6 +256,45 @@ export function buildOpenApiSpec() {
   });
   registry.registerPath({
     method: "get",
+    path: "/v1/app/notification-model",
+    responses: {
+      200: {
+        description: "Opt-in notification model and PWA-readiness metadata for control-panel routes",
+        content: {
+          "application/json": {
+            schema: z.object({
+              generatedAt: z.string(),
+              notificationModel: z.object({
+                mode: z.literal("opt_in"),
+                defaultState: z.literal("disabled"),
+                channels: z.array(
+                  z.object({
+                    id: z.string(),
+                    transport: z.enum(["in_app", "web_push"]),
+                    defaultEnabled: z.boolean(),
+                    requiresPermission: z.boolean().optional(),
+                    purpose: z.string(),
+                  }),
+                ),
+                privacyGuards: z.array(z.string()),
+                fallbackWhenUnavailable: z.literal("in_app_digest_only"),
+              }),
+              pwa: z.object({
+                nativeDependency: z.boolean(),
+                manifestPath: z.string(),
+                serviceWorkerPath: z.string(),
+              }),
+              mobileReadyRoutes: z.array(z.string()),
+              nativeMobileFuture: z.array(z.string()),
+            }),
+          },
+        },
+      },
+      403: { description: "Role does not allow control-panel notification model access" },
+    },
+  });
+  registry.registerPath({
+    method: "get",
     path: "/v1/repos",
     responses: {
       200: { description: "Known repositories", content: { "application/json": { schema: RepositorySchema.array() } } },
