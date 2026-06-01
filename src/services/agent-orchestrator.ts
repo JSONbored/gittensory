@@ -276,6 +276,7 @@ async function executeLocalBranchRun(env: Env, run: AgentRunRecord, kind: string
     payload: {
       repoFullName: analysis.repoFullName,
       baseFreshness: analysis.baseFreshness as unknown as JsonValue,
+      branchEligibility: analysis.branchEligibility as unknown as JsonValue,
       scoreabilityStatus: analysis.scorePreview.scoreabilityStatus,
       dataQuality: (analysis.dataQuality ?? null) as unknown as JsonValue,
     },

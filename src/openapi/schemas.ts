@@ -977,6 +977,17 @@ const ScoreGatesSchema = z.object({
   credibilityObserved: z.number(),
 });
 
+const BranchEligibilitySchema = z.object({
+  required: z.boolean(),
+  status: z.enum(["eligible", "ineligible", "unknown", "not_required"]),
+  evidence: z.enum(["provided", "missing"]),
+  source: z.enum(["github_metadata", "local_metadata", "registry", "user_supplied", "missing"]),
+  reason: z.string().optional(),
+  checkedAt: z.string().optional(),
+  stale: z.boolean(),
+  warnings: z.array(z.string()),
+});
+
 const ScoreGateBlockerSchema = z.object({
   code: z.enum([
     "repo_not_registered",
@@ -988,6 +999,8 @@ const ScoreGateBlockerSchema = z.object({
     "metadata_only",
     "linked_issue_invalid",
     "linked_issue_unvalidated",
+    "branch_ineligible",
+    "branch_eligibility_missing",
   ]),
   severity: z.enum(["blocker", "reducer", "context"]),
   detail: z.string(),
@@ -1037,6 +1050,7 @@ export const ScorePreviewResultSchema = z
     scoreEstimate: ScoreEstimateSchema,
     linkedIssueMultiplier: LinkedIssueMultiplierDecisionSchema,
     gates: ScoreGatesSchema,
+    branchEligibility: BranchEligibilitySchema,
     effectiveEstimatedScore: z.number(),
     underlyingPotentialScore: z.number(),
     blockedBy: z.array(ScoreGateBlockerSchema),
@@ -1663,6 +1677,7 @@ export const LocalBranchAnalysisSchema = z
       mergeableState: z.string().nullable().optional(),
       notes: z.array(z.string()),
     }),
+    branchEligibility: BranchEligibilitySchema,
     rewardRisk: RepoRewardRiskSchema,
     scoreBlockers: z.array(z.string()),
     branchQualityBlockers: z.array(z.string()),

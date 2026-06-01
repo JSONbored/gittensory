@@ -5,6 +5,7 @@ import type {
   CollisionEdgeRecord,
   ContributorRepoStatRecord,
   IssueRecord,
+  JsonValue,
   PullRequestDetailSyncStateRecord,
   PullRequestFileRecord,
   PullRequestRecord,
@@ -3301,6 +3302,55 @@ export function buildPublicPrIntelligenceComment(args: {
 
 function containsPrivatePublicTerm(value: string): boolean {
   return /\b(reward|payout|farming|wallet|hotkey|trust score|raw trust|estimated score|scoreability|likely_duplicate|reviewability\s*\d|\/100)\b/i.test(value);
+}
+
+/**
+ * Builds the compact, source-free signal bundle that the optional AI rewrite layer (issue #151)
+ * may turn into clearer public prose. It carries only deterministic, public-safe structured
+ * signals — counts, levels, booleans, role context, and finding category titles. It deliberately
+ * excludes PR title/body, diffs, finding detail text, and any other source contents so the bundle
+ * can never leak repository source through the AI provider.
+ */
+export function buildPublicCommentSignalBundle(args: {
+  repo: RepositoryRecord | null;
+  pr: PullRequestRecord;
+  profile: ContributorProfile;
+  detection: ContributorDetection;
+  queueHealth: QueueHealth;
+  collisions: CollisionReport;
+  preflight: PreflightResult;
+  settings: RepositorySettings;
+}): Record<string, JsonValue> {
+  const roleContext = buildRoleContext({
+    login: args.pr.authorLogin ?? args.profile.login,
+    repo: args.repo,
+    repoFullName: args.pr.repoFullName,
+    pullRequests: [args.pr],
+    issues: [],
+    profile: args.profile,
+  });
+  const publicFindingTitles = args.preflight.findings
+    .filter((finding) => finding.severity !== "critical")
+    .filter((finding) => args.settings.requireLinkedIssue || finding.code !== "missing_linked_issue")
+    .filter((finding) => !containsPrivatePublicTerm([finding.code, finding.title].filter(Boolean).join(" ")))
+    .slice(0, args.settings.publicSignalLevel === "minimal" ? 2 : 5)
+    .map((finding) => finding.title);
+  return {
+    confirmedMiner: args.detection.source === "official_gittensor_api",
+    minerSignalDetected: args.detection.detected,
+    priorPullRequests: args.detection.priorPullRequests,
+    priorIssues: args.detection.priorIssues,
+    role: roleContext.role,
+    maintainerLane: roleContext.maintainerLane,
+    linkedIssueCount: args.pr.linkedIssues.length,
+    requireLinkedIssue: args.settings.requireLinkedIssue,
+    laneSummary: buildLaneAdvice(args.repo, args.pr.repoFullName).summary,
+    reviewBurden: args.preflight.reviewBurden,
+    collisionClusters: args.collisions.clusters.length,
+    queueLevel: args.queueHealth.level,
+    topLanguages: args.profile.github.topLanguages.slice(0, 6),
+    publicFindingTitles,
+  } as Record<string, JsonValue>;
 }
 
 function issueItem(issue: IssueRecord): CollisionItem {

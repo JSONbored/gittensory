@@ -278,6 +278,16 @@ const linkedIssueContextSchema = z
   })
   .strict();
 
+const branchEligibilitySchema = z
+  .object({
+    status: z.enum(["eligible", "ineligible", "unknown"]),
+    source: z.enum(["github_metadata", "local_metadata", "registry", "user_supplied"]).optional(),
+    reason: z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS).optional(),
+    checkedAt: z.string().max(MAX_LOCAL_BRANCH_REF_CHARS).optional(),
+    stale: z.boolean().optional(),
+  })
+  .strict();
+
 const localBranchAnalysisSchema = z
   .object({
     login: z.string().min(1).max(MAX_LOCAL_BRANCH_REF_CHARS),
@@ -306,6 +316,7 @@ const localBranchAnalysisSchema = z
     pendingCommitCount: z.number().int().min(0).optional(),
     ciStatusHints: z.array(z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS)).max(20).optional(),
     focusManifest: z.record(z.unknown()).optional(),
+    branchEligibility: branchEligibilitySchema.optional(),
   })
   .strict();
 
@@ -334,6 +345,7 @@ const scorePreviewSchema = z.object({
   expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).max(20).optional(),
+  branchEligibility: branchEligibilitySchema.optional(),
 });
 
 const agentSurfaceSchema = z.enum(["api", "mcp", "github_comment"]).default("api");

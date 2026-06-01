@@ -105,10 +105,12 @@ import {
   buildMaintainerCutReadiness,
   buildMaintainerLaneReport,
   buildPreflightResult,
+  buildPublicCommentSignalBundle,
   buildPublicPrIntelligenceComment,
   buildQueueHealth,
   detectGittensorContributor,
 } from "../signals/engine";
+import { rewritePublicPrIntelligenceComment } from "../services/ai-summaries";
 import { decidePublicSurface } from "../signals/settings-preview";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import type { ContributorEvidenceRecord, GitHubWebhookPayload, JobMessage, JsonValue } from "../types";
@@ -704,15 +706,15 @@ async function maybePublishPrPublicSurface(
     repoBounties,
   );
   if (decision.willComment) {
-    const body = buildPublicPrIntelligenceComment({
-      repo,
-      pr,
-      profile,
-      detection,
-      queueHealth,
-      collisions,
-      preflight,
-      settings,
+    const commentArgs = { repo, pr, profile, detection, queueHealth, collisions, preflight, settings };
+    const deterministicBody = buildPublicPrIntelligenceComment(commentArgs);
+    // Optional AI rewrite (issue #151): disabled by default, source-free bundle only, quota-limited,
+    // sanitizer-gated, and falls back to the deterministic body on any non-ok outcome.
+    const { body } = await rewritePublicPrIntelligenceComment(env, {
+      bundle: buildPublicCommentSignalBundle(commentArgs),
+      deterministicBody,
+      actor: author,
+      route: "github_app.pr_public_surface",
     });
     await createOrUpdatePrIntelligenceComment(env, installationId, repoFullName, pr.number, body);
   }
