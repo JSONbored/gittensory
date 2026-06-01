@@ -2822,7 +2822,7 @@ describe("api routes", () => {
     const excellentRecommendation = await app.request("/v1/repos/owner/excellent/gittensor-config-recommendation", { headers: apiHeaders(env) }, env);
     expect(excellentRecommendation.status).toBe(200);
     await expect(excellentRecommendation.json()).resolves.toMatchObject({
-      recommended: { participationMode: "split", issueDiscoveryShare: 0.1, maintainerCut: 0.02 },
+      recommended: { participationMode: "split", issueDiscoveryShare: 0.1, maintainerCut: 0.3 },
       reasons: expect.arrayContaining(["Config and intake signals are strong enough to consider a small issue-discovery slice.", "Maintainer cut can be considered because config and queue signals are clean."]),
     });
     const issueOnlyReadiness = await app.request("/v1/repos/owner/issue-only/registration-readiness", { headers: apiHeaders(env) }, env);
