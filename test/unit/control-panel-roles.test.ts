@@ -112,6 +112,30 @@ describe("control panel role summaries", () => {
     });
   });
 
+  it("includes installed maintainer repositories from cached PR evidence", () => {
+    const scope = buildControlPanelAccessScope({
+      login: "maintainer",
+      generatedAt: "2026-06-01T12:00:00.000Z",
+      confirmedMiner: false,
+      operator: false,
+      repositories: [repo("upstream/project", "upstream", 31), repo("victim-org/secret-repo", "victim-org", 99)],
+      installations: [installation(31, "upstream"), installation(99, "victim-org")],
+      pullRequests: [
+        pull("upstream/project", "maintainer", "MEMBER"),
+        pull("victim-org/secret-repo", "maintainer", "CONTRIBUTOR"),
+        pull("missing/repo", "maintainer", "MEMBER"),
+        pull("upstream/project", "other-user", "MEMBER"),
+      ],
+    });
+
+    expect(scope).toMatchObject({
+      operator: false,
+      repositoryFullNames: ["upstream/project"],
+      installationIds: [31],
+      accountLogins: [],
+    });
+  });
+
   it("keeps onboarding available when cached miner lookup fails", async () => {
     const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
     const originalPrepare = env.DB.prepare.bind(env.DB);

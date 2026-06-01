@@ -2554,6 +2554,201 @@
           "dataQuality"
         ]
       },
+      "RepoOutcomeEvidenceCompleteness": {
+        "type": "object",
+        "properties": {
+          "pullRequestsAnalyzed": {
+            "type": "number"
+          },
+          "withFileDetail": {
+            "type": "number"
+          },
+          "withReviewDetail": {
+            "type": "number"
+          },
+          "withCheckDetail": {
+            "type": "number"
+          },
+          "filesCompletenessRatio": {
+            "type": "number"
+          },
+          "reviewsCompletenessRatio": {
+            "type": "number"
+          },
+          "checksCompletenessRatio": {
+            "type": "number"
+          },
+          "fullyDecidedWithDetail": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial",
+              "missing"
+            ]
+          }
+        },
+        "required": [
+          "pullRequestsAnalyzed",
+          "withFileDetail",
+          "withReviewDetail",
+          "withCheckDetail",
+          "filesCompletenessRatio",
+          "reviewsCompletenessRatio",
+          "checksCompletenessRatio",
+          "fullyDecidedWithDetail",
+          "status"
+        ]
+      },
+      "RepoOutcomePatterns": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "lane": {
+            "type": "string",
+            "enum": [
+              "direct_pr",
+              "issue_discovery",
+              "split",
+              "inactive",
+              "unknown"
+            ]
+          },
+          "primaryLanguage": {
+            "type": "string",
+            "nullable": true
+          },
+          "sampleSize": {
+            "type": "number"
+          },
+          "totals": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "outsideContributorMergeRate": {
+            "type": "number"
+          },
+          "maintainerLaneMergeRate": {
+            "type": "number"
+          },
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "successPatterns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "riskPatterns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "evidenceCompleteness": {
+            "$ref": "#/components/schemas/RepoOutcomeEvidenceCompleteness"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoFullName",
+          "generatedAt",
+          "lane",
+          "primaryLanguage",
+          "sampleSize",
+          "totals",
+          "outsideContributorMergeRate",
+          "maintainerLaneMergeRate",
+          "dimensions",
+          "successPatterns",
+          "riskPatterns",
+          "evidenceCompleteness",
+          "findings",
+          "summary"
+        ]
+      },
+      "RepoOutcomePatternsResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "snapshot",
+              "computed"
+            ]
+          },
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "ageSeconds": {
+            "type": "number"
+          },
+          "freshness": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "stale"
+            ]
+          },
+          "patterns": {
+            "$ref": "#/components/schemas/RepoOutcomePatterns"
+          },
+          "dataQuality": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          }
+        },
+        "required": [
+          "status",
+          "source",
+          "repoFullName",
+          "generatedAt",
+          "ageSeconds",
+          "freshness",
+          "patterns"
+        ]
+      },
       "RegistrationReadiness": {
         "type": "object",
         "properties": {
@@ -5746,6 +5941,125 @@
               "risks"
             ]
           },
+          "manifestGuidance": {
+            "type": "object",
+            "properties": {
+              "present": {
+                "type": "boolean"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "repo_file",
+                  "api_record",
+                  "none"
+                ]
+              },
+              "linkedIssuePolicy": {
+                "type": "string",
+                "enum": [
+                  "required",
+                  "preferred",
+                  "optional"
+                ]
+              },
+              "issueDiscoveryPolicy": {
+                "type": "string",
+                "enum": [
+                  "encouraged",
+                  "neutral",
+                  "discouraged"
+                ]
+              },
+              "matchedWantedPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "matchedBlockedPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "preferredLabelHits": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "severity": {
+                      "type": "string",
+                      "enum": [
+                        "info",
+                        "warning",
+                        "critical"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "severity",
+                    "title",
+                    "detail"
+                  ]
+                }
+              },
+              "publicNextSteps": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maintainerNotes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "present",
+              "source",
+              "linkedIssuePolicy",
+              "issueDiscoveryPolicy",
+              "matchedWantedPaths",
+              "matchedBlockedPaths",
+              "preferredLabelHits",
+              "findings",
+              "publicNextSteps",
+              "maintainerNotes",
+              "warnings",
+              "summary"
+            ]
+          },
           "prPacket": {
             "type": "object",
             "properties": {
@@ -5885,6 +6199,7 @@
           "recommendedRerunCondition",
           "localFindings",
           "maintainerFit",
+          "manifestGuidance",
           "prPacket",
           "nextActions",
           "workspaceIntelligence",
@@ -9673,6 +9988,145 @@
         ]
       }
     },
+    "/v1/app/notification-model": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Opt-in notification model and PWA-readiness metadata for control-panel routes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "notificationModel": {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "opt_in"
+                          ]
+                        },
+                        "defaultState": {
+                          "type": "string",
+                          "enum": [
+                            "disabled"
+                          ]
+                        },
+                        "channels": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "transport": {
+                                "type": "string",
+                                "enum": [
+                                  "in_app",
+                                  "web_push"
+                                ]
+                              },
+                              "defaultEnabled": {
+                                "type": "boolean"
+                              },
+                              "requiresPermission": {
+                                "type": "boolean"
+                              },
+                              "purpose": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "transport",
+                              "defaultEnabled",
+                              "purpose"
+                            ]
+                          }
+                        },
+                        "privacyGuards": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "fallbackWhenUnavailable": {
+                          "type": "string",
+                          "enum": [
+                            "in_app_digest_only"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "defaultState",
+                        "channels",
+                        "privacyGuards",
+                        "fallbackWhenUnavailable"
+                      ]
+                    },
+                    "pwa": {
+                      "type": "object",
+                      "properties": {
+                        "nativeDependency": {
+                          "type": "boolean"
+                        },
+                        "manifestPath": {
+                          "type": "string"
+                        },
+                        "serviceWorkerPath": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "nativeDependency",
+                        "manifestPath",
+                        "serviceWorkerPath"
+                      ]
+                    },
+                    "mobileReadyRoutes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "nativeMobileFuture": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "notificationModel",
+                    "pwa",
+                    "mobileReadyRoutes",
+                    "nativeMobileFuture"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role does not allow control-panel notification model access"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/repos": {
       "get": {
         "responses": {
@@ -9766,6 +10220,33 @@
           },
           "404": {
             "description": "Repo is unknown or has no issue-quality coverage yet"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/repos/{owner}/{repo}/outcome-patterns": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Cached or freshly-computed per-repo accepted/rejected PR outcome patterns with freshness envelope and explicit evidence-completeness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoOutcomePatternsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Repo is unknown or has no outcome-pattern coverage yet"
           }
         },
         "security": [
@@ -10820,6 +11301,36 @@
         ]
       }
     },
+    "/v1/app/commands/usefulness": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/app/digest": {
       "get": {
         "responses": {
@@ -10850,7 +11361,143 @@
         ]
       }
     },
+    "/v1/app/analytics/daily-rollups": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/analytics/mcp-compatibility": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/analytics/weekly-value-report": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/app/commands/preview": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Live app mutation or preview response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/commands/feedback": {
       "post": {
         "responses": {
           "200": {
@@ -11220,6 +11867,26 @@
       }
     },
     "/v1/internal/jobs/generate-signal-snapshots": {
+      "post": {
+        "responses": {
+          "202": {
+            "description": "Internal job queued"
+          },
+          "401": {
+            "description": "Invalid internal token"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/internal/jobs/generate-weekly-value-report": {
       "post": {
         "responses": {
           "202": {

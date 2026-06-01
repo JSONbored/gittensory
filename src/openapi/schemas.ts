@@ -1186,6 +1186,52 @@ export const ContributorPatternReportSchema = z
   })
   .openapi("ContributorPatternReport");
 
+export const RepoOutcomeEvidenceCompletenessSchema = z
+  .object({
+    pullRequestsAnalyzed: z.number(),
+    withFileDetail: z.number(),
+    withReviewDetail: z.number(),
+    withCheckDetail: z.number(),
+    filesCompletenessRatio: z.number(),
+    reviewsCompletenessRatio: z.number(),
+    checksCompletenessRatio: z.number(),
+    fullyDecidedWithDetail: z.number(),
+    status: z.enum(["complete", "partial", "missing"]),
+  })
+  .openapi("RepoOutcomeEvidenceCompleteness");
+
+export const RepoOutcomePatternsSchema = z
+  .object({
+    repoFullName: z.string(),
+    generatedAt: z.string(),
+    lane: z.enum(["direct_pr", "issue_discovery", "split", "inactive", "unknown"]),
+    primaryLanguage: z.string().nullable(),
+    sampleSize: z.number(),
+    totals: z.record(z.number()),
+    outsideContributorMergeRate: z.number(),
+    maintainerLaneMergeRate: z.number(),
+    dimensions: z.array(z.record(z.unknown())),
+    successPatterns: z.array(z.record(z.unknown())),
+    riskPatterns: z.array(z.record(z.unknown())),
+    evidenceCompleteness: RepoOutcomeEvidenceCompletenessSchema,
+    findings: z.array(FindingSchema),
+    summary: z.string(),
+  })
+  .openapi("RepoOutcomePatterns");
+
+export const RepoOutcomePatternsResponseSchema = z
+  .object({
+    status: z.enum(["ready"]),
+    source: z.enum(["snapshot", "computed"]),
+    repoFullName: z.string(),
+    generatedAt: z.string(),
+    ageSeconds: z.number(),
+    freshness: z.enum(["fresh", "stale"]),
+    patterns: RepoOutcomePatternsSchema,
+    dataQuality: z.record(z.unknown()).optional(),
+  })
+  .openapi("RepoOutcomePatternsResponse");
+
 export const RepoFitRecommendationSchema = z
   .object({
     login: z.string(),
@@ -1604,6 +1650,20 @@ export const LocalBranchAnalysisSchema = z
       maintainerLane: z.boolean(),
       reasons: z.array(z.string()),
       risks: z.array(z.string()),
+    }),
+    manifestGuidance: z.object({
+      present: z.boolean(),
+      source: z.enum(["repo_file", "api_record", "none"]),
+      linkedIssuePolicy: z.enum(["required", "preferred", "optional"]),
+      issueDiscoveryPolicy: z.enum(["encouraged", "neutral", "discouraged"]),
+      matchedWantedPaths: z.array(z.string()),
+      matchedBlockedPaths: z.array(z.string()),
+      preferredLabelHits: z.array(z.string()),
+      findings: z.array(z.object({ code: z.string(), severity: z.enum(["info", "warning", "critical"]), title: z.string(), detail: z.string(), action: z.string().optional() })),
+      publicNextSteps: z.array(z.string()),
+      maintainerNotes: z.array(z.string()),
+      warnings: z.array(z.string()),
+      summary: z.string(),
     }),
     prPacket: z.object({
       titleSuggestion: z.string(),
