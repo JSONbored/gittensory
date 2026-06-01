@@ -1267,12 +1267,29 @@ describe("api routes", () => {
       env,
     );
     expect(extensionContext.status).toBe(200);
-    await expect(extensionContext.json()).resolves.toMatchObject({
+    const extensionPayload = (await extensionContext.json()) as {
+      repoFullName: string;
+      pullNumber: number;
+      reviewability: { repoFullName: string; pullNumber: number };
+      actions: Array<{ id: string; markdown?: string; blockers?: Array<{ detail: string }> }>;
+      panels: Array<{ label: string }>;
+    };
+    expect(extensionPayload).toMatchObject({
       repoFullName: "entrius/allways-ui",
       pullNumber: 12,
       reviewability: { repoFullName: "entrius/allways-ui", pullNumber: 12 },
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "copy_public_safe_packet", visibility: "public_safe" }),
+        expect.objectContaining({ id: "view_private_blockers", visibility: "private", requiresAuth: true }),
+      ]),
       panels: expect.arrayContaining([expect.objectContaining({ label: "Reviewability" }), expect.objectContaining({ label: "Boundary" })]),
     });
+    const packet = extensionPayload.actions.find((action) => action.id === "copy_public_safe_packet")?.markdown ?? "";
+    expect(packet).toContain("# Public-safe PR packet");
+    expect(packet).not.toMatch(/wallet|hotkey|coldkey|reward estimate|payout|farming|raw trust score|estimated score|score estimate|private reviewability/i);
+    const blockers = extensionPayload.actions.find((action) => action.id === "view_private_blockers")?.blockers ?? [];
+    expect(blockers.length).toBeGreaterThan(0);
+    expect(JSON.stringify(blockers)).not.toMatch(/wallet|hotkey|coldkey|payout|farming|guaranteed payout/i);
 
     const missingPullContext = await app.request(
       "/v1/extension/pull-context?owner=entrius&repo=allways-ui&pullNumber=99",
@@ -1283,6 +1300,7 @@ describe("api routes", () => {
     await expect(missingPullContext.json()).resolves.toMatchObject({
       repoFullName: "entrius/allways-ui",
       pullNumber: 99,
+      actions: expect.arrayContaining([expect.objectContaining({ id: "copy_public_safe_packet" }), expect.objectContaining({ id: "view_private_blockers" })]),
       panels: expect.arrayContaining([expect.objectContaining({ label: "Contributor", badge: "unknown" })]),
     });
   });

@@ -86,6 +86,7 @@ import {
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
 import { fetchPublicContributorProfile } from "../github/public";
 import { handleGitHubWebhook } from "../github/webhook";
+import { sanitizePublicComment } from "../github/commands";
 import { handleMcpRequest } from "../mcp/server";
 import { buildOpenApiSpec } from "../openapi/spec";
 import { generateSignalSnapshots } from "../queue/processors";
@@ -767,11 +768,44 @@ export function createApp() {
       profile: contributorContext?.profile,
       outcomeHistory: contributorContext?.outcomeHistory,
     });
+    const publicSafePacketMarkdown = buildExtensionPublicSafePacket({
+      repoFullName: fullName,
+      pullNumber,
+      reviewability,
+      contributor: contributor ?? "unknown",
+    });
+    const privateBlockers = buildExtensionPrivateBlockers(reviewability);
+    await recordAuditEvent(c.env, {
+      eventType: "extension.pull_context_view",
+      actor: contributor ?? "unknown",
+      route: c.req.path,
+      outcome: "success",
+      metadata: {
+        redacted: true,
+        hasPublicPacket: publicSafePacketMarkdown.length > 0,
+        blockerCount: privateBlockers.length,
+      },
+    });
     return c.json({
       generatedAt: nowIso(),
       repoFullName: fullName,
       pullNumber,
       reviewability,
+      actions: [
+        {
+          id: "copy_public_safe_packet",
+          label: "Copy public-safe packet",
+          visibility: "public_safe",
+          markdown: publicSafePacketMarkdown,
+        },
+        {
+          id: "view_private_blockers",
+          label: "View private blockers",
+          visibility: "private",
+          requiresAuth: true,
+          blockers: privateBlockers,
+        },
+      ],
       panels: [
         { label: "Reviewability", badge: reviewability.action, rows: [{ k: "action", v: reviewability.action }, { k: "score", v: String(reviewability.score) }] },
         { label: "Contributor", badge: contributor ?? "unknown", rows: [{ k: "author", v: contributor ?? "unknown" }, { k: "prs", v: String(contributorContext?.contributorPullRequests.length ?? 0) }] },
@@ -2163,4 +2197,43 @@ function normalizeOrigin(value: string | undefined): string | null {
   } catch {
     return null;
   }
+}
+
+function buildExtensionPublicSafePacket(args: { repoFullName: string; pullNumber: number; contributor: string; reviewability: { action: string; noiseSources: string[]; maintainerNextSteps: string[] } }): string {
+  const lines = [
+    "# Public-safe PR packet",
+    "",
+    "## Linked context",
+    `- Repository: ${args.repoFullName}`,
+    `- Pull request: #${args.pullNumber}`,
+    `- Contributor: ${args.contributor}`,
+    "",
+    "## Review readiness",
+    `- Current action: ${args.reviewability.action.replace(/_/g, " ")}`,
+    ...args.reviewability.maintainerNextSteps.slice(0, 4).map((step) => `- ${step}`),
+    "",
+    "## Queue caution",
+    ...(args.reviewability.noiseSources.length > 0
+      ? args.reviewability.noiseSources.slice(0, 4).map((source) => `- ${source}`)
+      : ["- No high-noise warning is visible from cached metadata."]),
+    "",
+    "## Safety",
+    "- Keep public comments limited to linked context, validation status, and maintainer-ready next steps.",
+  ];
+  const markdown = sanitizePublicComment(lines.join("\n"));
+  return ensureExtensionPublicSafeText(markdown);
+}
+
+function buildExtensionPrivateBlockers(reviewability: { noiseSources: string[]; maintainerNextSteps: string[]; privateSummary: string }) {
+  const items = [...reviewability.noiseSources.slice(0, 5), ...reviewability.maintainerNextSteps.slice(0, 3)];
+  if (items.length === 0) items.push("No private blocker detail is currently cached.");
+  return items.map((detail, index) => ({ id: `blocker-${index + 1}`, detail: sanitizePublicComment(detail) }));
+}
+
+function ensureExtensionPublicSafeText(text: string): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (/\b(wallet|hotkey|coldkey|raw trust score|trust score|estimated score|score estimate|reward estimate|payout|farming|private reviewability|reviewability\s*\d|\/100)\b/i.test(compact)) {
+    return "# Public-safe PR packet\n\n- Public-safe packet unavailable. Regenerate after private context is sanitized.";
+  }
+  return text;
 }
