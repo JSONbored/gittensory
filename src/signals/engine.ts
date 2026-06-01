@@ -1911,6 +1911,9 @@ export function buildIssueQualityReport(
         ...(linkedWorkCount === 0 ? ["No active PR is linked in cached metadata."] : []),
       ];
       const warnings = [
+        ...(isMaintainerAssociation(issue.authorAssociation)
+            ? ["Issue was opened by a maintainer-associated account."]
+            : []),
         ...(bodyLength < 80 ? ["Issue body is thin; contributor may need more proof before acting."] : []),
         ...(linkedPrs.length > 0 ? [`${linkedPrs.length} active PR(s) already reference this issue.`] : []),
         ...(linkedMergedPrs.length > 0 ? [`${linkedMergedPrs.length} merged PR(s) already reference this issue.`] : []),
@@ -1923,6 +1926,8 @@ export function buildIssueQualityReport(
       const status: IssueQualityReport["issues"][number]["status"] =
         linkedWorkCount > 0 || issueCollisions.some((cluster) => cluster.risk === "high")
           ? "do_not_use"
+          : isMaintainerAssociation(issue.authorAssociation)
+            ? "needs_proof"
           : warnings.some((warning) => /thin|stale|direct-PR/i.test(warning))
             ? "needs_proof"
             : score < 45
