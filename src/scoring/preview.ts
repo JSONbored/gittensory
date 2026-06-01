@@ -32,6 +32,7 @@ export type ScorePreviewInput = {
   expectedOpenPrCountAfterMerge?: number | undefined;
   projectedCredibility?: number | undefined;
   scenarioNotes?: string[] | undefined;
+  pendingScenarioObserved?: boolean | undefined;
   observedScenarioNotes?: string[] | undefined;
 };
 
@@ -368,7 +369,11 @@ function buildScenarioPreviews(
     ], repo),
     scenario(
       "afterPendingMerges",
-      userPendingCount > 0 || input.expectedOpenPrCountAfterMerge !== undefined || input.projectedCredibility !== undefined ? "user_supplied" : "gittensory_projection",
+      input.pendingScenarioObserved
+        ? "github_observed"
+        : userPendingCount > 0 || input.expectedOpenPrCountAfterMerge !== undefined || input.projectedCredibility !== undefined
+          ? "user_supplied"
+          : "gittensory_projection",
       afterPendingInput,
       computeScoreCore(afterPendingInput, repo, snapshot, contributorEvidence),
       [
