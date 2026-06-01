@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAgentCommandFeedbackMarker,
   buildMaintainerQueueDigest,
   buildPublicAgentCommandComment,
   isAuthorizedCommandActor,
   isMaintainerOnlyCommand,
+  parseAgentCommandFeedbackContext,
   parseGittensoryMentionCommand,
   sanitizePublicComment,
 } from "../../src/github/commands";
@@ -141,6 +143,28 @@ describe("GitHub mention commands", () => {
     expect(sanitizePublicComment("public score estimate private scoreability context score preview")).not.toMatch(/public score estimate|scoreability|score preview/i);
     expect(sanitizePublicComment("Command: @gittensory reviewability")).toContain("@gittensory reviewability");
     expect(sanitizePublicComment("private ranking, wallet, payout")).toBe("private context");
+  });
+
+  it("adds parseable aggregate-only feedback context without public leak terms", () => {
+    const body = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory preflight")!,
+      repo: { fullName: "owner/repo" } as any,
+      issue: { number: 12, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "author",
+      answerId: "answer_1234",
+      bundle: sampleBundle(),
+    });
+
+    expect(body).toContain(buildAgentCommandFeedbackMarker("answer_1234"));
+    expect(body).toContain("thumbs-up or thumbs-down reaction");
+    expect(parseAgentCommandFeedbackContext(body)).toEqual({ answerId: "answer_1234", command: "preflight" });
+    expect(parseAgentCommandFeedbackContext(null)).toBeNull();
+    expect(parseAgentCommandFeedbackContext("<!-- gittensory-agent-command-answer:answer_1234 -->")).toEqual({ answerId: "answer_1234", command: null });
+    expect(parseAgentCommandFeedbackContext("<!-- gittensory-agent-command-answer:answer_1234 -->\nCommand: `@gittensory UNKNOWN`")).toEqual({ answerId: "answer_1234", command: null });
+    expect(parseAgentCommandFeedbackContext("missing marker")).toBeNull();
+    expect(parseAgentCommandFeedbackContext("<!-- gittensory-agent-command-answer:bad<script> -->")).toBeNull();
+    expect(body).not.toMatch(/wallet|hotkey|raw trust score|payout|reward estimate|farming|private reviewability|public score estimate/i);
   });
 
   it("renders command-specific sections for preflight, blockers, duplicate-check, and next-action", () => {
@@ -471,6 +495,7 @@ describe("GitHub mention commands", () => {
     });
     expect(withPrFallbackScope).toContain("Scope: owner/from-pr#5");
     expect(withPrFallbackScope).toContain("After tests pass.");
+
   });
 
   it("covers blocker label fallbacks, rerun bullets, and duplicate-risk heuristics", () => {
@@ -533,6 +558,64 @@ describe("GitHub mention commands", () => {
     });
     expect(blockersWithDuplicateCodes.match(/Open pull request queue pressure/g)).toHaveLength(1);
 
+    const blockersFromStatus = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory blockers")!,
+      repo: null,
+      issue: { number: 25, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "maintainer",
+      bundle: {
+        run: completedRun("run-blockers-status"),
+        actions: [
+          {
+            id: "blocker-status",
+            runId: "run-blockers-status",
+            actionType: "monitor_existing_pr",
+            status: "blocked",
+            recommendation: "Wait for review capacity",
+            why: [],
+            blockedBy: ["open_pr_pressure", "open_pr_pressure"],
+            publicSafeSummary: "Reduce concurrent review load.",
+            approvalRequired: true,
+            safetyClass: "private",
+            payload: {},
+          },
+        ],
+        contextSnapshots: [],
+        summary: "blockers",
+      },
+    });
+    expect(blockersFromStatus.match(/Open pull request queue pressure/g)).toHaveLength(1);
+
+    const statusOnlyBlocker = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory blockers")!,
+      repo: null,
+      issue: { number: 26, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "maintainer",
+      bundle: {
+        run: completedRun("run-blockers-status-only"),
+        actions: [
+          {
+            id: "blocker-status-only",
+            runId: "run-blockers-status-only",
+            actionType: "monitor_existing_pr",
+            status: "blocked",
+            recommendation: "Wait",
+            why: [],
+            blockedBy: [],
+            publicSafeSummary: "Wait for maintainer review capacity.",
+            approvalRequired: true,
+            safetyClass: "private",
+            payload: {},
+          },
+        ],
+        contextSnapshots: [],
+        summary: "blockers",
+      },
+    });
+    expect(statusOnlyBlocker).toContain("Wait for maintainer review capacity.");
+
     const duplicateViaRecommendation = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory duplicate-check")!,
       repo: null,
@@ -563,6 +646,37 @@ describe("GitHub mention commands", () => {
     });
     expect(duplicateViaRecommendation).toContain("**Duplicate & WIP caution**");
     expect(duplicateViaRecommendation).toMatch(/overlap|WIP|Concurrent/i);
+
+    const duplicateWithInjectedWhy = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory duplicate-check")!,
+      repo: null,
+      issue: { number: 27, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "maintainer",
+      bundle: {
+        run: completedRun("run-duplicate-injection"),
+        actions: [
+          {
+            id: "duplicate-injection",
+            runId: "run-duplicate-injection",
+            actionType: "monitor_existing_pr",
+            status: "watch",
+            recommendation: "Compare duplicate risk",
+            why: ["PRs touching duplicate\n@octo-team/ [click](https://example.test) have high closure risk here."],
+            blockedBy: [],
+            riskImpact: "No extra risk",
+            publicSafeSummary: "Review linked issues before requesting detailed review.",
+            approvalRequired: true,
+            safetyClass: "private",
+            payload: {},
+          },
+        ],
+        contextSnapshots: [],
+        summary: "duplicate",
+      },
+    });
+    expect(duplicateWithInjectedWhy).toContain("PRs touching duplicate @​octo-team/ \\[click\\]\\(https://example.test\\)");
+    expect(duplicateWithInjectedWhy).not.toMatch(/\n@octo-team|@octo-team|[^\\]\[click\]\(https:\/\/example\.test\)/);
 
     const preflightWithRerun = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory preflight")!,
@@ -991,6 +1105,61 @@ describe("GitHub mention commands", () => {
     });
     expect(defensiveSummary).toContain("Use the authenticated maintainer dashboard and private API");
     expect(defensiveDigest.needsAuthorPullRequests.find((pr) => pr.number === 18)?.reasons).toContain("Maintainer-authored PR; review as repo stewardship.");
+  });
+
+  it("neutralizes attacker-controlled queue digest titles in public comments", () => {
+    const attackerTitle = "[x](http://e.test) ![i](http://e.test/i) @org/team <b>x</b>";
+    const digest = {
+      ...sampleMaintainerDigest(),
+      reviewNowPullRequests: [
+        {
+          number: 77,
+          title: attackerTitle,
+          authorLogin: "attacker",
+          linkedIssues: [7],
+          labels: [],
+          confirmedMiner: false,
+          ageDays: 0,
+          reasons: ["Linked issue is present."],
+          signals: [],
+        },
+      ],
+      duplicateClusters: [
+        {
+          id: "attacker-title",
+          risk: "high",
+          reason: "Likely_duplicate title cluster",
+          items: [{ type: "pull_request", number: 77, title: attackerTitle }],
+        },
+      ],
+    } satisfies ReturnType<typeof sampleMaintainerDigest>;
+
+    const reviewNow = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory review-now")!,
+      repo: { fullName: "owner/repo" } as any,
+      issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "maintainer",
+      maintainerDigest: digest,
+    });
+    const duplicateClusters = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory duplicate-clusters")!,
+      repo: { fullName: "owner/repo" } as any,
+      issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "maintainer",
+      maintainerDigest: digest,
+    });
+
+    for (const body of [reviewNow, duplicateClusters]) {
+      expect(body).not.toContain("[x](http://e.test)");
+      expect(body).not.toContain("![i](http://e.test/i)");
+      expect(body).not.toContain("@org/team");
+      expect(body).not.toContain("<b>x</b>");
+      expect(body).toContain("\\[x\\]");
+      expect(body).toContain("@\u200Borg/team");
+      expect(body).toContain("&lt;b&gt;x&lt;/b&gt;");
+    }
   });
 });
 

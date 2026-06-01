@@ -2554,6 +2554,201 @@
           "dataQuality"
         ]
       },
+      "RepoOutcomeEvidenceCompleteness": {
+        "type": "object",
+        "properties": {
+          "pullRequestsAnalyzed": {
+            "type": "number"
+          },
+          "withFileDetail": {
+            "type": "number"
+          },
+          "withReviewDetail": {
+            "type": "number"
+          },
+          "withCheckDetail": {
+            "type": "number"
+          },
+          "filesCompletenessRatio": {
+            "type": "number"
+          },
+          "reviewsCompletenessRatio": {
+            "type": "number"
+          },
+          "checksCompletenessRatio": {
+            "type": "number"
+          },
+          "fullyDecidedWithDetail": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial",
+              "missing"
+            ]
+          }
+        },
+        "required": [
+          "pullRequestsAnalyzed",
+          "withFileDetail",
+          "withReviewDetail",
+          "withCheckDetail",
+          "filesCompletenessRatio",
+          "reviewsCompletenessRatio",
+          "checksCompletenessRatio",
+          "fullyDecidedWithDetail",
+          "status"
+        ]
+      },
+      "RepoOutcomePatterns": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "lane": {
+            "type": "string",
+            "enum": [
+              "direct_pr",
+              "issue_discovery",
+              "split",
+              "inactive",
+              "unknown"
+            ]
+          },
+          "primaryLanguage": {
+            "type": "string",
+            "nullable": true
+          },
+          "sampleSize": {
+            "type": "number"
+          },
+          "totals": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "outsideContributorMergeRate": {
+            "type": "number"
+          },
+          "maintainerLaneMergeRate": {
+            "type": "number"
+          },
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "successPatterns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "riskPatterns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "evidenceCompleteness": {
+            "$ref": "#/components/schemas/RepoOutcomeEvidenceCompleteness"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoFullName",
+          "generatedAt",
+          "lane",
+          "primaryLanguage",
+          "sampleSize",
+          "totals",
+          "outsideContributorMergeRate",
+          "maintainerLaneMergeRate",
+          "dimensions",
+          "successPatterns",
+          "riskPatterns",
+          "evidenceCompleteness",
+          "findings",
+          "summary"
+        ]
+      },
+      "RepoOutcomePatternsResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "snapshot",
+              "computed"
+            ]
+          },
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "ageSeconds": {
+            "type": "number"
+          },
+          "freshness": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "stale"
+            ]
+          },
+          "patterns": {
+            "$ref": "#/components/schemas/RepoOutcomePatterns"
+          },
+          "dataQuality": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          }
+        },
+        "required": [
+          "status",
+          "source",
+          "repoFullName",
+          "generatedAt",
+          "ageSeconds",
+          "freshness",
+          "patterns"
+        ]
+      },
       "RegistrationReadiness": {
         "type": "object",
         "properties": {
@@ -3261,6 +3456,63 @@
               "credibilityObserved"
             ]
           },
+          "branchEligibility": {
+            "type": "object",
+            "properties": {
+              "required": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "eligible",
+                  "ineligible",
+                  "unknown",
+                  "not_required"
+                ]
+              },
+              "evidence": {
+                "type": "string",
+                "enum": [
+                  "provided",
+                  "missing"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "github_metadata",
+                  "local_metadata",
+                  "registry",
+                  "user_supplied",
+                  "missing"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "checkedAt": {
+                "type": "string"
+              },
+              "stale": {
+                "type": "boolean"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "required",
+              "status",
+              "evidence",
+              "source",
+              "stale",
+              "warnings"
+            ]
+          },
           "effectiveEstimatedScore": {
             "type": "number"
           },
@@ -3283,7 +3535,9 @@
                     "review_penalty",
                     "metadata_only",
                     "linked_issue_invalid",
-                    "linked_issue_unvalidated"
+                    "linked_issue_unvalidated",
+                    "branch_ineligible",
+                    "branch_eligibility_missing"
                   ]
                 },
                 "severity": {
@@ -3468,7 +3722,9 @@
                           "review_penalty",
                           "metadata_only",
                           "linked_issue_invalid",
-                          "linked_issue_unvalidated"
+                          "linked_issue_unvalidated",
+                          "branch_ineligible",
+                          "branch_eligibility_missing"
                         ]
                       },
                       "severity": {
@@ -3641,6 +3897,7 @@
           "scoreEstimate",
           "linkedIssueMultiplier",
           "gates",
+          "branchEligibility",
           "effectiveEstimatedScore",
           "underlyingPotentialScore",
           "blockedBy",
@@ -4396,7 +4653,9 @@
                             "review_penalty",
                             "metadata_only",
                             "linked_issue_invalid",
-                            "linked_issue_unvalidated"
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -4642,7 +4901,9 @@
                             "review_penalty",
                             "metadata_only",
                             "linked_issue_invalid",
-                            "linked_issue_unvalidated"
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -4888,7 +5149,9 @@
                             "review_penalty",
                             "metadata_only",
                             "linked_issue_invalid",
-                            "linked_issue_unvalidated"
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -5134,7 +5397,9 @@
                             "review_penalty",
                             "metadata_only",
                             "linked_issue_invalid",
-                            "linked_issue_unvalidated"
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -5380,7 +5645,9 @@
                             "review_penalty",
                             "metadata_only",
                             "linked_issue_invalid",
-                            "linked_issue_unvalidated"
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -5543,7 +5810,9 @@
                         "review_penalty",
                         "metadata_only",
                         "linked_issue_invalid",
-                        "linked_issue_unvalidated"
+                        "linked_issue_unvalidated",
+                        "branch_ineligible",
+                        "branch_eligibility_missing"
                       ]
                     },
                     "severity": {
@@ -5657,6 +5926,63 @@
               "source",
               "status",
               "notes"
+            ]
+          },
+          "branchEligibility": {
+            "type": "object",
+            "properties": {
+              "required": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "eligible",
+                  "ineligible",
+                  "unknown",
+                  "not_required"
+                ]
+              },
+              "evidence": {
+                "type": "string",
+                "enum": [
+                  "provided",
+                  "missing"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "github_metadata",
+                  "local_metadata",
+                  "registry",
+                  "user_supplied",
+                  "missing"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "checkedAt": {
+                "type": "string"
+              },
+              "stale": {
+                "type": "boolean"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "required",
+              "status",
+              "evidence",
+              "source",
+              "stale",
+              "warnings"
             ]
           },
           "rewardRisk": {
@@ -5834,12 +6160,6 @@
                   "type": "string"
                 }
               },
-              "maintainerNotes": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
               "warnings": {
                 "type": "array",
                 "items": {
@@ -5860,7 +6180,6 @@
               "preferredLabelHits",
               "findings",
               "publicNextSteps",
-              "maintainerNotes",
               "warnings",
               "summary"
             ]
@@ -5997,6 +6316,7 @@
           "scenarioScorePreview",
           "observedPullRequestScenarios",
           "githubBranchStatus",
+          "branchEligibility",
           "rewardRisk",
           "scoreBlockers",
           "branchQualityBlockers",
@@ -10037,6 +10357,33 @@
         ]
       }
     },
+    "/v1/repos/{owner}/{repo}/outcome-patterns": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Cached or freshly-computed per-repo accepted/rejected PR outcome patterns with freshness envelope and explicit evidence-completeness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoOutcomePatternsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Repo is unknown or has no outcome-pattern coverage yet"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/repos/{owner}/{repo}/registration-readiness": {
       "get": {
         "responses": {
@@ -11079,7 +11426,67 @@
         ]
       }
     },
+    "/v1/app/commands/usefulness": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/app/digest": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/analytics/daily-rollups": {
       "get": {
         "responses": {
           "200": {
@@ -11170,6 +11577,52 @@
       }
     },
     "/v1/app/commands/preview": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Live app mutation or preview response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/commands/feedback": {
       "post": {
         "responses": {
           "200": {

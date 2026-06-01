@@ -43,6 +43,7 @@ import { loadContributorDecisionPackForServing, repoDecisionFromPack } from "../
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import { buildMcpClientTelemetry } from "../services/client-telemetry";
+import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
 import {
   buildBountyAdvisory,
   buildCollisionReport,
@@ -114,6 +115,14 @@ const localDiffPreflightShape = {
   commitMessage: z.string().optional(),
 };
 
+const branchEligibilityShape = {
+  status: z.enum(["eligible", "ineligible", "unknown"]),
+  source: z.enum(["github_metadata", "local_metadata", "registry", "user_supplied"]).optional(),
+  reason: z.string().optional(),
+  checkedAt: z.string().optional(),
+  stale: z.boolean().optional(),
+};
+
 const localBranchAnalysisShape = {
   login: z.string().min(1),
   repoFullName: z.string().min(3),
@@ -165,6 +174,7 @@ const localBranchAnalysisShape = {
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).max(20).optional(),
   focusManifest: z.record(z.unknown()).optional(),
+  branchEligibility: z.object(branchEligibilityShape).strict().optional(),
   localScorer: z
     .object({
       mode: z.enum(["metadata_only", "external_command", "gittensor_root"]),
@@ -235,6 +245,7 @@ const scorePreviewShape = {
   expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).max(20).optional(),
+  branchEligibility: z.object(branchEligibilityShape).strict().optional(),
 };
 
 const variantsShape = {
@@ -324,6 +335,15 @@ export class GittensoryMcp {
         inputSchema: ownerRepoShape,
       },
       async (input) => this.toolResult(await this.getBurdenForecast(input)),
+    );
+
+    server.registerTool(
+      "gittensory_get_repo_outcome_patterns",
+      {
+        description: "Return cached or freshly-computed per-repo accepted/rejected PR outcome patterns: what maintainers actually merge or close, separated from maintainer-lane activity, with a freshness marker and explicit evidence-completeness.",
+        inputSchema: ownerRepoShape,
+      },
+      async (input) => this.toolResult(await this.getRepoOutcomePatterns(input)),
     );
 
     server.registerTool(
@@ -636,6 +656,24 @@ export class GittensoryMcp {
         response.source === "snapshot"
           ? `Gittensory issue quality for ${fullName} (cached).`
           : `Gittensory issue quality for ${fullName} (computed from cached metadata).`,
+      data: response as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getRepoOutcomePatterns(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    const response = await loadOrComputeRepoOutcomePatternsResponse(this.env, fullName);
+    if (!response) {
+      return {
+        summary: `Gittensory has no cached repo outcome patterns for ${fullName}.`,
+        data: { status: "not_found", repoFullName: fullName },
+      };
+    }
+    return {
+      summary:
+        response.source === "snapshot"
+          ? `Gittensory repo outcome patterns for ${fullName} (cached, ${response.freshness}).`
+          : `Gittensory repo outcome patterns for ${fullName} (computed from cached metadata).`,
       data: response as unknown as Record<string, unknown>,
     };
   }

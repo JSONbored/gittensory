@@ -28,6 +28,9 @@ import {
   countActiveAuthSessions,
   countActiveDigestSubscriptions,
   getBounty,
+  getAgentCommandAnswer,
+  getCommandUsefulnessSummary,
+  getFreshOfficialMinerDetection,
   getIssue,
   getInstallationHealth,
   getLatestRepoGithubTotalsSnapshot,
@@ -71,6 +74,7 @@ import {
   persistBountyLifecycleEvent,
   persistScorePreview,
   persistSignalSnapshot,
+  recordAgentCommandFeedback,
   recordProductUsageEvent,
   rollupProductUsageDaily,
   summarizeMcpCompatibilityAdoption,
@@ -115,6 +119,7 @@ import {
 } from "../services/decision-pack";
 import {
   buildStaticControlPanelRoleSummary,
+  loadControlPanelAccessScope,
   loadControlPanelRoleSummary,
 } from "../services/control-panel-roles";
 import {
@@ -125,6 +130,7 @@ import {
 import { buildWeeklyValueReport, generateWeeklyValueReport, loadWeeklyValueReport } from "../services/weekly-value-report";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
+import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
 import {
   buildBountyAdvisory,
   buildBurdenForecast,
@@ -149,6 +155,7 @@ import { attachDataQuality, buildCoreSignalFidelity, buildFreshnessSloReport, bu
 import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildPullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
+import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildRepoSettingsPreview } from "../signals/settings-preview";
 import { buildGittensorConfigRecommendation, buildRegistrationReadiness, type InstallationHealthSummary } from "../signals/registration-readiness";
@@ -256,7 +263,7 @@ const localBranchScorerSchema = z
     sourceLines: z.number().min(0).optional(),
     testTokenScore: z.number().min(0).optional(),
     nonCodeTokenScore: z.number().min(0).optional(),
-    warnings: z.array(z.string()).optional(),
+    warnings: z.array(z.string().max(MAX_LOCAL_SCORER_WARNING_CHARS)).max(MAX_LOCAL_SCORER_WARNING_COUNT).optional(),
   })
   .strict();
 
@@ -268,6 +275,16 @@ const linkedIssueContextSchema = z
     solvedByPullRequests: z.array(z.number().int().positive()).max(50).optional(),
     reason: z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS).optional(),
     warnings: z.array(z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS)).max(20).optional(),
+  })
+  .strict();
+
+const branchEligibilitySchema = z
+  .object({
+    status: z.enum(["eligible", "ineligible", "unknown"]),
+    source: z.enum(["github_metadata", "local_metadata", "registry", "user_supplied"]).optional(),
+    reason: z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS).optional(),
+    checkedAt: z.string().max(MAX_LOCAL_BRANCH_REF_CHARS).optional(),
+    stale: z.boolean().optional(),
   })
   .strict();
 
@@ -299,6 +316,7 @@ const localBranchAnalysisSchema = z
     pendingCommitCount: z.number().int().min(0).optional(),
     ciStatusHints: z.array(z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS)).max(20).optional(),
     focusManifest: z.record(z.unknown()).optional(),
+    branchEligibility: branchEligibilitySchema.optional(),
   })
   .strict();
 
@@ -327,6 +345,7 @@ const scorePreviewSchema = z.object({
   expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).max(20).optional(),
+  branchEligibility: branchEligibilitySchema.optional(),
 });
 
 const agentSurfaceSchema = z.enum(["api", "mcp", "github_comment"]).default("api");
@@ -394,6 +413,13 @@ const commandPreviewSchema = z
     repoFullName: z.string().min(3).max(MAX_LOCAL_BRANCH_REF_CHARS).optional(),
     pullNumber: z.number().int().positive().optional(),
     login: z.string().min(1).max(MAX_LOCAL_BRANCH_REF_CHARS).optional(),
+  })
+  .strict();
+
+const commandFeedbackSchema = z
+  .object({
+    answerId: z.string().min(8).max(120).regex(/^[A-Za-z0-9_.:-]+$/),
+    vote: z.enum(["useful", "not_useful"]),
   })
   .strict();
 
@@ -723,14 +749,29 @@ export function createApp() {
   });
 
   app.get("/v1/app/maintainer-dashboard", async (c) => {
-    const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
-    if (forbidden) return forbidden;
-    const [repositories, installations, health, rateLimits] = await Promise.all([
+    const identity = await authenticateRequestIdentity(c);
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const summary = await getRoleSummaryForIdentity(c.env, identity);
+    if (!summary.roles.some((role) => ["maintainer", "owner", "operator"].includes(role))) return c.json({ error: "insufficient_role" }, 403);
+
+    const [allRepositories, allInstallations, allHealth, allRateLimits] = await Promise.all([
       listRepositories(c.env),
       listInstallations(c.env),
       listInstallationHealth(c.env),
       listLatestGitHubRateLimitObservations(c.env, 20),
     ]);
+    const scope = identity.kind === "session" && !summary.roles.includes("operator") ? await loadControlPanelAccessScope(c.env, identity.actor) : null;
+    const scopedRepoNames = new Set(scope?.repositoryFullNames.map((repo) => repo.toLowerCase()) ?? []);
+    const scopedInstallationIds = new Set(scope?.installationIds ?? []);
+    const scopedAccountLogins = new Set(scope?.accountLogins.map((login) => login.toLowerCase()) ?? []);
+    const repositories = scope ? allRepositories.filter((repo) => scopedRepoNames.has(repo.fullName.toLowerCase())) : allRepositories;
+    const installations = scope
+      ? allInstallations.filter((installation) => scopedInstallationIds.has(installation.id) || scopedAccountLogins.has(installation.accountLogin.toLowerCase()))
+      : allInstallations;
+    const health = scope
+      ? allHealth.filter((record) => scopedInstallationIds.has(record.installationId) || scopedAccountLogins.has(record.accountLogin.toLowerCase()))
+      : allHealth;
+    const rateLimits = scope ? allRateLimits.filter((record) => record.repoFullName !== undefined && record.repoFullName !== null && scopedRepoNames.has(record.repoFullName.toLowerCase())) : allRateLimits;
     const openPullRequests = (
       await Promise.all(repositories.slice(0, 12).map((repo) => listOpenPullRequests(c.env, repo.fullName).then((rows) => rows.map((pull) => ({ repoFullName: repo.fullName, pull })))))
     ).flat();
@@ -773,6 +814,7 @@ export function createApp() {
       usageRollups,
       usageRollupStatus,
       mcpCompatibilityAdoption,
+      commandUsefulness,
     ] = await Promise.all([
       listRepositories(c.env),
       listInstallations(c.env),
@@ -787,6 +829,7 @@ export function createApp() {
       listProductUsageDailyRollups(c.env, { limit: 14 }),
       getProductUsageRollupStatus(c.env),
       summarizeMcpCompatibilityAdoption(c.env, usageSince),
+      getCommandUsefulnessSummary(c.env),
     ]);
     const weeklyValueReport = buildWeeklyValueReport({
       generatedAt: nowIso(),
@@ -817,6 +860,7 @@ export function createApp() {
         { label: "Active users", value: String(usageSummary.activeActors), delta: "hashed, last 7 days" },
         { label: "Activation rollups", value: usageRollupStatus.status, delta: usageRollupStatus.latestRollupDay ?? "not generated" },
         { label: "MCP stale clients", value: String(mcpCompatibilityAdoption.staleEvents + mcpCompatibilityAdoption.incompatibleEvents), delta: `${mcpCompatibilityAdoption.totalEvents} MCP event(s)` },
+        { label: "Command usefulness", value: `${commandUsefulness.totals.usefulCount}/${commandUsefulness.totals.feedbackCount}`, delta: usefulnessDelta(commandUsefulness.totals.usefulnessRate) },
         { label: "Install issues", value: String(health.filter((record) => record.status !== "healthy").length), delta: "current health cache" },
         { label: "Rate-limit events", value: String(rateLimits.length), delta: "latest observations" },
       ],
@@ -831,6 +875,7 @@ export function createApp() {
       usageRollups,
       usageRollupStatus,
       mcpCompatibilityAdoption,
+      commandUsefulness,
       registry,
       scoringModel: scoring,
       upstreamDrift,
@@ -934,6 +979,55 @@ export function createApp() {
       command,
       request: parsed.data,
       preview,
+    });
+  });
+
+  app.get("/v1/app/commands/usefulness", async (c) => {
+    const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
+    if (forbidden) return forbidden;
+    const days = Number(c.req.query("days") ?? 30);
+    return c.json(await getCommandUsefulnessSummary(c.env, { windowDays: clampInteger(days, 1, 180) }));
+  });
+
+  app.post("/v1/app/commands/feedback", async (c) => {
+    const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
+    if (forbidden) return forbidden;
+    const identity = await authenticateRequestIdentity(c);
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const body = await c.req.json().catch(() => null);
+    const parsed = commandFeedbackSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_command_feedback", issues: parsed.error.issues }, 400);
+    const answer = await getAgentCommandAnswer(c.env, parsed.data.answerId);
+    if (!answer) return c.json({ error: "command_answer_not_found" }, 404);
+    const actorLogin = identity.actor;
+    await recordAgentCommandFeedback(c.env, {
+      answerId: answer.id,
+      repoFullName: answer.repoFullName,
+      issueNumber: answer.issueNumber,
+      command: answer.command,
+      actorLogin,
+      vote: parsed.data.vote,
+      source: "app",
+      actorKind: "maintainer",
+      metadata: { surface: "app", identityKind: identity.kind },
+    });
+    await recordAuditEvent(c.env, {
+      eventType: "github_app.agent_command_feedback_recorded",
+      actor: actorLogin,
+      targetKey: `${answer.repoFullName}#${answer.issueNumber}`,
+      outcome: "completed",
+      metadata: { answerId: answer.id, command: answer.command, vote: parsed.data.vote, source: "app", identityKind: identity.kind },
+    });
+    return c.json({
+      ok: true,
+      generatedAt: nowIso(),
+      answer: {
+        id: answer.id,
+        repoFullName: answer.repoFullName,
+        issueNumber: answer.issueNumber,
+        command: answer.command,
+      },
+      vote: parsed.data.vote,
     });
   });
 
@@ -1379,6 +1473,13 @@ export function createApp() {
     });
     await persistSignal(c.env, "pr-reviewability", `${fullName}#${number}`, fullName, reviewability as unknown as Record<string, JsonValue>, reviewability.generatedAt);
     return c.json(reviewability);
+  });
+
+  app.get("/v1/repos/:owner/:repo/outcome-patterns", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const response = await buildRepoOutcomePatternsResponse(c.env, fullName);
+    if (!response) return c.json({ error: "repo_outcome_patterns_not_found", repoFullName: fullName }, 404);
+    return c.json(response);
   });
 
   app.get("/v1/contributors/:login/profile", async (c) => {
@@ -2144,6 +2245,15 @@ function buildCommandPreview(command: (typeof APP_COMMANDS)[number], request: z.
   };
 }
 
+function usefulnessDelta(rate: number | null): string {
+  return rate === null ? "no feedback yet" : `${Math.round(rate * 100)}% useful over 30 days`;
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
 function buildDigestItems(args: {
   repositories: RepositoryRecord[];
   health: InstallationHealthRecord[];
@@ -2290,6 +2400,13 @@ async function loadInstallationHealthSummary(env: Env, repo: RepositoryRecord | 
   const enriched = enrichInstallationHealth(healthRecord);
   return { status: enriched.status, missingPermissions: enriched.missingPermissions, missingEvents: enriched.missingEvents };
   /* v8 ignore stop */
+}
+
+async function buildRepoOutcomePatternsResponse(env: Env, fullName: string) {
+  const response = await loadOrComputeRepoOutcomePatternsResponse(env, fullName);
+  if (!response) return null;
+  const dataQuality = await loadRepoDataQuality(env, fullName);
+  return attachDataQuality(response as unknown as Record<string, unknown>, dataQuality);
 }
 
 async function buildRegistrationReadinessResponse(env: Env, fullName: string) {

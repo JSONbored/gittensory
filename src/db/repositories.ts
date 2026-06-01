@@ -18,6 +18,8 @@ import {
   contributorScoringProfiles,
   contributors,
   digestSubscriptions,
+  githubAgentCommandAnswers,
+  githubAgentCommandFeedback,
   installationHealth,
   installations,
   issueQualityReports,
@@ -52,6 +54,8 @@ import type {
   AgentActionRecord,
   AgentActionStatus,
   AgentActionType,
+  AgentCommandAnswerRecord,
+  AgentCommandFeedbackRecord,
   AgentContextSnapshotRecord,
   AgentMode,
   AgentRunRecord,
@@ -65,6 +69,7 @@ import type {
   BurdenForecastRecord,
   CheckSummaryRecord,
   CollisionEdgeRecord,
+  CommandUsefulnessSummary,
   ContributorEvidenceRecord,
   ContributorRecord,
   ContributorRepoStatRecord,
@@ -1080,6 +1085,132 @@ export async function summarizeProductUsageEvents(env: Env, sinceIso?: string): 
   };
 }
 
+export async function upsertAgentCommandAnswer(env: Env, answer: AgentCommandAnswerRecord): Promise<AgentCommandAnswerRecord> {
+  const now = answer.updatedAt ?? nowIso();
+  const createdAt = answer.createdAt ?? now;
+  const values = {
+    id: answer.id,
+    repoFullName: boundedString(answer.repoFullName, 200),
+    issueNumber: Math.max(0, Math.round(answer.issueNumber)),
+    command: boundedString(answer.command, 64),
+    requestCommentId: optionalNumber(answer.requestCommentId),
+    responseCommentId: optionalNumber(answer.responseCommentId),
+    responseUrl: answer.responseUrl ? boundedString(answer.responseUrl, 500) : null,
+    actorKind: answer.actorKind,
+    createdAt,
+    updatedAt: now,
+    metadataJson: jsonString(answer.metadata),
+  };
+  await getDb(env.DB)
+    .insert(githubAgentCommandAnswers)
+    .values(values)
+    .onConflictDoUpdate({
+      target: githubAgentCommandAnswers.id,
+      set: {
+        repoFullName: values.repoFullName,
+        issueNumber: values.issueNumber,
+        command: values.command,
+        requestCommentId: values.requestCommentId,
+        responseCommentId: values.responseCommentId,
+        responseUrl: values.responseUrl,
+        actorKind: values.actorKind,
+        updatedAt: values.updatedAt,
+        metadataJson: values.metadataJson,
+      },
+    });
+  return (await getAgentCommandAnswer(env, answer.id))!;
+}
+
+export async function getAgentCommandAnswer(env: Env, answerId: string): Promise<AgentCommandAnswerRecord | null> {
+  const [row] = await getDb(env.DB).select().from(githubAgentCommandAnswers).where(eq(githubAgentCommandAnswers.id, answerId)).limit(1);
+  return row ? toAgentCommandAnswer(row) : null;
+}
+
+export async function recordAgentCommandFeedback(env: Env, feedback: AgentCommandFeedbackRecord): Promise<void> {
+  const actorHash = await hashCommandFeedbackActor(feedback.repoFullName, feedback.actorLogin);
+  const now = feedback.updatedAt ?? nowIso();
+  const values = {
+    id: feedback.id ?? crypto.randomUUID(),
+    answerId: feedback.answerId,
+    repoFullName: boundedString(feedback.repoFullName, 200),
+    issueNumber: Math.max(0, Math.round(feedback.issueNumber)),
+    command: boundedString(feedback.command, 64),
+    actorHash,
+    vote: feedback.vote,
+    source: feedback.source,
+    actorKind: feedback.actorKind,
+    createdAt: feedback.createdAt ?? now,
+    updatedAt: now,
+    metadataJson: jsonString(feedback.metadata ?? {}),
+  };
+  await getDb(env.DB)
+    .insert(githubAgentCommandFeedback)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [githubAgentCommandFeedback.answerId, githubAgentCommandFeedback.actorHash],
+      set: {
+        vote: values.vote,
+        source: values.source,
+        actorKind: values.actorKind,
+        updatedAt: values.updatedAt,
+        metadataJson: values.metadataJson,
+      },
+    });
+}
+
+export async function getCommandUsefulnessSummary(env: Env, options: { windowDays?: number; now?: string } = {}): Promise<CommandUsefulnessSummary> {
+  const windowDays = clampInteger(options.windowDays ?? 30, 1, 180);
+  const now = options.now ?? nowIso();
+  const sinceIso = new Date(Date.parse(now) - windowDays * 24 * 60 * 60 * 1000).toISOString();
+  const rows = await getDb(env.DB)
+    .select({
+      command: githubAgentCommandFeedback.command,
+      feedbackCount: sql<number>`count(*)`,
+      usefulCount: sql<number>`coalesce(sum(case when ${githubAgentCommandFeedback.vote} = 'useful' then 1 else 0 end), 0)`,
+      notUsefulCount: sql<number>`coalesce(sum(case when ${githubAgentCommandFeedback.vote} = 'not_useful' then 1 else 0 end), 0)`,
+      answerCount: sql<number>`count(distinct ${githubAgentCommandFeedback.answerId})`,
+      latestFeedbackAt: sql<string | null>`max(${githubAgentCommandFeedback.updatedAt})`,
+    })
+    .from(githubAgentCommandFeedback)
+    .where(gte(githubAgentCommandFeedback.updatedAt, sinceIso))
+    .groupBy(githubAgentCommandFeedback.command);
+  const commands = rows
+    .map((row) => {
+      const feedbackCount = Number(row.feedbackCount);
+      const usefulCount = Number(row.usefulCount);
+      const notUsefulCount = Number(row.notUsefulCount);
+      return {
+        command: row.command,
+        feedbackCount,
+        usefulCount,
+        notUsefulCount,
+        answerCount: Number(row.answerCount),
+        usefulnessRate: usefulCount / feedbackCount,
+        latestFeedbackAt: row.latestFeedbackAt,
+      };
+    })
+    .sort((left, right) => right.feedbackCount - left.feedbackCount || left.command.localeCompare(right.command));
+  const totals = commands.reduce(
+    (acc, row) => ({
+      feedbackCount: acc.feedbackCount + row.feedbackCount,
+      usefulCount: acc.usefulCount + row.usefulCount,
+      notUsefulCount: acc.notUsefulCount + row.notUsefulCount,
+      answerCount: acc.answerCount + row.answerCount,
+      latestFeedbackAt: maxIso(acc.latestFeedbackAt, row.latestFeedbackAt),
+    }),
+    { feedbackCount: 0, usefulCount: 0, notUsefulCount: 0, answerCount: 0, latestFeedbackAt: null as string | null },
+  );
+  return {
+    windowDays,
+    generatedAt: now,
+    totals: {
+      ...totals,
+      usefulnessRate: totals.feedbackCount > 0 ? totals.usefulCount / totals.feedbackCount : null,
+    },
+    commands,
+  };
+}
+
 export async function summarizeMcpCompatibilityAdoption(
   env: Env,
   sinceIso?: string,
@@ -1313,6 +1444,21 @@ function toCacheableGittensorSnapshot(snapshot: Partial<GittensorContributorSnap
 
 function boundedString(value: unknown, maxLength: number): string {
   return String(value ?? "").slice(0, maxLength);
+}
+
+async function hashCommandFeedbackActor(repoFullName: string, actorLogin: string): Promise<string> {
+  return `sha256:${await sha256Hex(`gittensory-command-feedback:v1:${repoFullName.toLowerCase()}:${actorLogin.toLowerCase()}`)}`;
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function maxIso(left: string | null | undefined, right: string | null | undefined): string | null {
+  if (!left) return right ?? null;
+  if (!right) return left;
+  return right > left ? right : left;
 }
 
 function finiteNumber(value: unknown): number {
@@ -1688,6 +1834,12 @@ export async function listPullRequestFiles(env: Env, fullName: string, pullNumbe
   return rows.map(toPullRequestFileRecord);
 }
 
+export async function listRepoPullRequestFiles(env: Env, fullName: string): Promise<PullRequestFileRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(pullRequestFiles).where(eq(pullRequestFiles.repoFullName, fullName)).limit(2000);
+  return rows.map(toPullRequestFileRecord);
+}
+
 export async function upsertPullRequestReview(env: Env, review: PullRequestReviewRecord): Promise<void> {
   const db = getDb(env.DB);
   await db
@@ -1723,6 +1875,12 @@ export async function listPullRequestReviews(env: Env, fullName: string, pullNum
     .from(pullRequestReviews)
     .where(and(eq(pullRequestReviews.repoFullName, fullName), eq(pullRequestReviews.pullNumber, pullNumber)))
     .limit(500);
+  return rows.map(toPullRequestReviewRecord);
+}
+
+export async function listRepoPullRequestReviews(env: Env, fullName: string): Promise<PullRequestReviewRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select().from(pullRequestReviews).where(eq(pullRequestReviews.repoFullName, fullName)).limit(2000);
   return rows.map(toPullRequestReviewRecord);
 }
 
@@ -2970,18 +3128,41 @@ function boundedProductUsageField(value: unknown, maxLength: number): string | n
   return safe ? safe : null;
 }
 
-function buildProductUsageActorRedactor(actor: unknown): RegExp | null {
+type ProductUsageActorRedactor = {
+  pattern: RegExp;
+};
+
+function buildProductUsageActorRedactor(actor: unknown): ProductUsageActorRedactor | null {
   const normalized = typeof actor === "string" ? actor.trim() : "";
   if (!normalized || normalized.length > PRODUCT_USAGE_ACTOR_REDACTION_MAX_CHARS) return null;
-  return new RegExp(`(^|[^A-Za-z0-9])${escapeRegExp(normalized)}(?=$|[^A-Za-z0-9])`, "gi");
+  return { pattern: new RegExp(escapeRegExp(normalized), "gi") };
 }
 
-function redactProductUsageActor(value: string | null, actorRedactor: RegExp | null): string | null {
-  return value && actorRedactor ? value.replace(actorRedactor, "$1<redacted-actor>") : value;
+function redactProductUsageActor(value: string | null, actorRedactor: ProductUsageActorRedactor | null): string | null {
+  if (!value || !actorRedactor) return value;
+  return value.replace(actorRedactor.pattern, (match, offset: number, source: string) => {
+    const previous = offset > 0 ? source[offset - 1] : undefined;
+    const next = source[offset + match.length];
+    const hasLeftBoundary = isProductUsageActorTokenBoundary(previous) || isProductUsageCamelBoundaryBefore(previous, match);
+    const hasRightBoundary = isProductUsageActorTokenBoundary(next) || isProductUsageCamelBoundaryAfter(next);
+    return hasLeftBoundary && hasRightBoundary ? "<redacted-actor>" : match;
+  });
 }
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isProductUsageActorTokenBoundary(value: string | undefined): boolean {
+  return value === undefined || !/[A-Za-z0-9]/.test(value);
+}
+
+function isProductUsageCamelBoundaryBefore(previous: string | undefined, match: string): boolean {
+  return Boolean(previous && /[a-z0-9]/.test(previous) && /^[A-Z]/.test(match));
+}
+
+function isProductUsageCamelBoundaryAfter(next: string | undefined): boolean {
+  return Boolean(next && /[A-Z]/.test(next));
 }
 
 async function upsertProductUsageDailyRollup(env: Env, day: string, generatedAt: string): Promise<ProductUsageDailyRollupRecord> {
@@ -3252,7 +3433,7 @@ const PRODUCT_USAGE_LOCAL_PATH = /(?:\/Users|\/home|\/tmp)\/[^\s"',;)]*|[A-Za-z]
 const PRODUCT_USAGE_TOKEN_VALUE = /\b(?:ghp_|github_pat_|gts_|glpat-|sk-)[A-Za-z0-9_=-]{8,}/g;
 const PRODUCT_USAGE_BEARER_VALUE = /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi;
 
-function sanitizeProductUsageMetadata(value: Record<string, unknown> | null | undefined, actorRedactor: RegExp | null): Record<string, JsonValue> {
+function sanitizeProductUsageMetadata(value: Record<string, unknown> | null | undefined, actorRedactor: ProductUsageActorRedactor | null): Record<string, JsonValue> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const output: Record<string, JsonValue> = {};
   for (const [key, entryValue] of Object.entries(value).slice(0, PRODUCT_USAGE_METADATA_MAX_KEYS)) {
@@ -3265,7 +3446,7 @@ function sanitizeProductUsageMetadata(value: Record<string, unknown> | null | un
   return output;
 }
 
-function sanitizeProductUsageJson(value: unknown, depth: number, actorRedactor: RegExp | null): JsonValue | undefined {
+function sanitizeProductUsageJson(value: unknown, depth: number, actorRedactor: ProductUsageActorRedactor | null): JsonValue | undefined {
   if (value === undefined || typeof value === "function" || typeof value === "symbol") return undefined;
   if (value === null) return null;
   if (typeof value === "boolean") return value;
@@ -3298,6 +3479,22 @@ function sanitizeProductUsageString(value: string, maxLength: number): string {
     .replace(PRODUCT_USAGE_BEARER_VALUE, "Bearer <redacted-token>");
   if (PRODUCT_USAGE_SENSITIVE_VALUE.test(redacted)) return "<redacted>";
   return redacted.slice(0, maxLength);
+}
+
+function toAgentCommandAnswer(row: typeof githubAgentCommandAnswers.$inferSelect): AgentCommandAnswerRecord {
+  return {
+    id: row.id,
+    repoFullName: row.repoFullName,
+    issueNumber: row.issueNumber,
+    command: row.command,
+    requestCommentId: row.requestCommentId,
+    responseCommentId: row.responseCommentId,
+    responseUrl: row.responseUrl,
+    actorKind: row.actorKind === "maintainer" ? "maintainer" : "author",
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    metadata: parseJson<Record<string, JsonValue>>(row.metadataJson, {}),
+  };
 }
 
 function parseAgentSurface(value: string): AgentSurface {

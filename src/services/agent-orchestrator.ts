@@ -276,6 +276,7 @@ async function executeLocalBranchRun(env: Env, run: AgentRunRecord, kind: string
     payload: {
       repoFullName: analysis.repoFullName,
       baseFreshness: analysis.baseFreshness as unknown as JsonValue,
+      branchEligibility: analysis.branchEligibility as unknown as JsonValue,
       scoreabilityStatus: analysis.scorePreview.scoreabilityStatus,
       dataQuality: (analysis.dataQuality ?? null) as unknown as JsonValue,
     },
@@ -368,15 +369,13 @@ function buildOpenPrMonitorActions(run: AgentRunRecord, pack: ContributorDecisio
     "blocked",
   ]);
   return monitor.pullRequests
-    .filter((packet) => urgentClassifications.has(packet.classification))
+    .filter((packet) => urgentClassifications.has(packet.classification) && decisionByRepo.has(packet.repoFullName.toLowerCase()))
     .slice(0, 4)
     .map((packet, index) => {
-      const decision = decisionByRepo.get(packet.repoFullName.toLowerCase());
-      const actionType: AgentActionType =
-        packet.classification === "approved" || packet.classification === "reviewable" ? "monitor_existing_pr" : "cleanup_existing_prs";
+      const decision = decisionByRepo.get(packet.repoFullName.toLowerCase())!;
       return actionRecord({
         run,
-        actionType,
+        actionType: "cleanup_existing_prs",
         index,
         targetRepoFullName: packet.repoFullName,
         targetPullNumber: packet.number,
@@ -393,7 +392,7 @@ function buildOpenPrMonitorActions(run: AgentRunRecord, pack: ContributorDecisio
         publicSafeSummary: sanitizePublicSummary(`${packet.repoFullName}#${packet.number}: ${packet.summary}`),
         payload: {
           openPrPacket: packet as unknown as JsonValue,
-          decision: (decision ?? null) as unknown as JsonValue,
+          decision: decision as unknown as JsonValue,
         },
         safetyClass: "public_safe",
         approvalRequired: false,

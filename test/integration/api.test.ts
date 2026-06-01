@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionForGitHubUser, hashToken } from "../../src/auth/security";
 import {
   upsertBounty,
+  upsertAgentCommandAnswer,
   upsertBurdenForecast,
   upsertCheckSummary,
   upsertInstallation,
@@ -807,6 +808,7 @@ describe("api routes", () => {
           ],
           validation: [{ command: "npm test -- cache", status: "passed", summary: "cache regression passed" }],
           localScorer: { mode: "external_command", sourceTokenScore: 42, totalTokenScore: 66, sourceLines: 44, testTokenScore: 20 },
+          branchEligibility: { status: "eligible", source: "github_metadata", checkedAt: "2026-05-30T00:00:00.000Z" },
         }),
       },
       env,
@@ -820,6 +822,7 @@ describe("api routes", () => {
       repoFullName: "entrius/allways-ui",
       preflight: { localDiff: { testFileCount: 1, inferredLinkedIssues: [7] } },
       scorePreview: { privateOnly: true },
+      branchEligibility: { required: true, status: "eligible", evidence: "provided" },
       rewardRisk: { rewardUpside: { relevantLane: "direct_pr" } },
       prPacket: { titleSuggestion: "Fix dashboard cache refresh after reconnect" },
     });
@@ -1247,6 +1250,16 @@ describe("api routes", () => {
     expect(unknownOverview.status).toBe(200);
     await expect(unknownOverview.json()).resolves.toMatchObject({ roleSummary: { roles: [], onboarding: { status: "needs_setup" } } });
     expect((await app.request("/v1/app/operator-dashboard", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
+    expect((await app.request("/v1/app/commands/usefulness", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
+    expect(
+      (
+        await app.request("/v1/app/commands/feedback", {
+          method: "POST",
+          headers: unknownHeaders,
+          body: JSON.stringify({ answerId: "missing-answer", vote: "useful" }),
+        }, unknownEnv)
+      ).status,
+    ).toBe(403);
     expect((await app.request("/v1/app/analytics/daily-rollups", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
     expect((await app.request("/v1/app/analytics/mcp-compatibility", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
     expect((await app.request("/v1/app/analytics/weekly-value-report", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
@@ -1264,6 +1277,46 @@ describe("api routes", () => {
       },
     });
     await upsertRepositoryFromGitHub(ownerEnv, { name: "owned-repo", full_name: "repo-owner/owned-repo", private: false, default_branch: "main", owner: { login: "repo-owner" } }, 777);
+    await upsertInstallation(ownerEnv, {
+      installation: {
+        id: 888,
+        account: { login: "victim-org", id: 888, type: "Organization" },
+        repository_selection: "selected",
+        permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+        events: ["issues", "pull_request", "repository"],
+      },
+    });
+    await upsertRepositoryFromGitHub(ownerEnv, { name: "secret-repo", full_name: "victim-org/secret-repo", private: true, default_branch: "main", owner: { login: "victim-org" } }, 888);
+    await upsertInstallationHealth(ownerEnv, {
+      installationId: 888,
+      accountLogin: "victim-org",
+      repositorySelection: "selected",
+      installedReposCount: 1,
+      registeredInstalledCount: 1,
+      status: "needs_attention",
+      missingPermissions: ["checks"],
+      missingEvents: [],
+      permissions: { metadata: "read" },
+      events: ["pull_request"],
+      checkedAt: "2026-05-31T12:00:00.000Z",
+      errorSummary: "victim install needs privileged recovery",
+    });
+    await recordGitHubRateLimitObservation(ownerEnv, {
+      id: "victim-rate-limit",
+      repoFullName: "victim-org/secret-repo",
+      resource: "graphql",
+      path: "/graphql",
+      statusCode: 403,
+      remaining: 0,
+      observedAt: "2026-05-31T12:00:00.000Z",
+    });
+    await upsertPullRequestFromGitHub(ownerEnv, "victim-org/secret-repo", {
+      number: 42,
+      title: "Victim confidential release plan",
+      state: "open",
+      html_url: "https://github.com/victim-org/secret-repo/pull/42",
+      labels: [],
+    });
     const { token: ownerToken } = await createSessionForGitHubUser(ownerEnv, { login: "repo-owner", id: 777 });
     const ownerHeaders = { cookie: `gittensory_session=${ownerToken}`, "content-type": "application/json" };
     const ownerRoles = await app.request("/v1/app/roles", { headers: ownerHeaders }, ownerEnv);
@@ -1272,7 +1325,16 @@ describe("api routes", () => {
       roles: ["maintainer", "owner"],
       evidence: { ownedInstalledRepos: 1, accountInstallations: 1, operator: false },
     });
-    expect((await app.request("/v1/app/maintainer-dashboard", { headers: ownerHeaders }, ownerEnv)).status).toBe(200);
+    const ownerMaintainerDashboard = await app.request("/v1/app/maintainer-dashboard", { headers: ownerHeaders }, ownerEnv);
+    expect(ownerMaintainerDashboard.status).toBe(200);
+    const ownerMaintainerDashboardBody = (await ownerMaintainerDashboard.json()) as { installations: unknown[]; health: unknown[]; reviewability: unknown[]; metrics: unknown[] };
+    expect(ownerMaintainerDashboardBody.installations).toEqual([expect.objectContaining({ id: 777, accountLogin: "repo-owner" })]);
+    expect(ownerMaintainerDashboardBody.health).toEqual([]);
+    expect(ownerMaintainerDashboardBody.reviewability).toEqual([]);
+    expect(ownerMaintainerDashboardBody.metrics).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Rate-limit events", value: 0 })]));
+    expect(JSON.stringify(ownerMaintainerDashboardBody)).not.toContain("victim-org");
+    expect(JSON.stringify(ownerMaintainerDashboardBody)).not.toContain("Victim confidential release plan");
+    expect(JSON.stringify(ownerMaintainerDashboardBody)).not.toContain("victim install needs privileged recovery");
     expect((await app.request("/v1/app/notification-model", { headers: ownerHeaders }, ownerEnv)).status).toBe(200);
     expect((await app.request("/v1/app/operator-dashboard", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
     expect((await app.request("/v1/app/analytics/daily-rollups", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
@@ -1442,12 +1504,72 @@ describe("api routes", () => {
       settingsPreview: { added: expect.any(Array), removed: expect.any(Array) },
     });
 
+    await upsertAgentCommandAnswer(env, {
+      id: "api-answer-feedback",
+      repoFullName: "entrius/allways-ui",
+      issueNumber: 14,
+      command: "preflight",
+      requestCommentId: 100,
+      responseCommentId: 101,
+      responseUrl: "https://github.com/entrius/allways-ui/pull/14#issuecomment-101",
+      actorKind: "maintainer",
+      createdAt: "2026-05-28T00:00:00.000Z",
+      updatedAt: "2026-05-28T00:00:00.000Z",
+      metadata: {},
+    });
+    const unauthenticatedFeedback = await app.request(
+      "/v1/app/commands/feedback",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answerId: "api-answer-feedback", vote: "useful" }) },
+      env,
+    );
+    expect(unauthenticatedFeedback.status).toBe(401);
+    const invalidFeedback = await app.request(
+      "/v1/app/commands/feedback",
+      { method: "POST", headers: cookieHeaders, body: JSON.stringify({ answerId: "bad<script>", vote: "useful" }) },
+      env,
+    );
+    expect(invalidFeedback.status).toBe(400);
+    const missingFeedback = await app.request(
+      "/v1/app/commands/feedback",
+      { method: "POST", headers: cookieHeaders, body: JSON.stringify({ answerId: "missing-answer", vote: "useful" }) },
+      env,
+    );
+    expect(missingFeedback.status).toBe(404);
+    const firstFeedback = await app.request(
+      "/v1/app/commands/feedback",
+      { method: "POST", headers: cookieHeaders, body: JSON.stringify({ answerId: "api-answer-feedback", vote: "useful" }) },
+      env,
+    );
+    expect(firstFeedback.status).toBe(200);
+    const updatedFeedback = await app.request(
+      "/v1/app/commands/feedback",
+      { method: "POST", headers: cookieHeaders, body: JSON.stringify({ answerId: "api-answer-feedback", vote: "not_useful" }) },
+      env,
+    );
+    expect(updatedFeedback.status).toBe(200);
+    const unauthenticatedUsefulness = await app.request("/v1/app/commands/usefulness?days=14", {}, env);
+    expect(unauthenticatedUsefulness.status).toBe(401);
+    const usefulness = await app.request("/v1/app/commands/usefulness?days=14", { headers: apiHeaders(env) }, env);
+    expect(usefulness.status).toBe(200);
+    await expect(usefulness.json()).resolves.toMatchObject({
+      windowDays: 14,
+      totals: { feedbackCount: 1, usefulCount: 0, notUsefulCount: 1, usefulnessRate: 0 },
+      commands: [expect.objectContaining({ command: "preflight", feedbackCount: 1 })],
+    });
+    const clampedUsefulness = await app.request("/v1/app/commands/usefulness?days=not-a-number", { headers: apiHeaders(env) }, env);
+    expect(clampedUsefulness.status).toBe(200);
+    await expect(clampedUsefulness.json()).resolves.toMatchObject({ windowDays: 1 });
+    const defaultUsefulness = await app.request("/v1/app/commands/usefulness", { headers: apiHeaders(env) }, env);
+    expect(defaultUsefulness.status).toBe(200);
+    await expect(defaultUsefulness.json()).resolves.toMatchObject({ windowDays: 30 });
+
     const operator = await app.request("/v1/app/operator-dashboard", { headers: apiHeaders(env) }, env);
     expect(operator.status).toBe(200);
     await expect(operator.json()).resolves.toMatchObject({
-      metrics: expect.arrayContaining([expect.objectContaining({ label: "Active sessions" }), expect.objectContaining({ label: "Digest subscriptions" })]),
+      metrics: expect.arrayContaining([expect.objectContaining({ label: "Active sessions" }), expect.objectContaining({ label: "Digest subscriptions" }), expect.objectContaining({ label: "Command usefulness", value: "0/1" })]),
       noiseReduction: expect.any(Array),
       weeklyReport: expect.arrayContaining([expect.stringContaining("registered repo")]),
+      commandUsefulness: expect.objectContaining({ totals: expect.objectContaining({ feedbackCount: 1 }) }),
     });
 
     const notificationModel = await app.request("/v1/app/notification-model", { headers: apiHeaders(env) }, env);
@@ -2165,6 +2287,65 @@ describe("api routes", () => {
     expect(githubCalls).toEqual([]);
     const mutatingCalls = calls.filter((call) => call.method !== "GET" && call.method !== "HEAD");
     expect(mutatingCalls).toEqual([]);
+  });
+
+  it("returns 404 for unknown repos and serves cached snapshot with freshness for known repos", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    await seedSignalData(env);
+
+    const unauthenticated = await app.request("/v1/repos/entrius/allways-ui/outcome-patterns", {}, env);
+    expect(unauthenticated.status).toBe(401);
+
+    const unknown = await app.request("/v1/repos/ghost/missing/outcome-patterns", { headers: apiHeaders(env) }, env);
+    expect(unknown.status).toBe(404);
+
+    // Known but uncached: falls back to compute (no snapshot exists yet).
+    const computed = await app.request("/v1/repos/entrius/allways-ui/outcome-patterns", { headers: apiHeaders(env) }, env);
+    expect(computed.status).toBe(200);
+    const computedBody = (await computed.json()) as {
+      source: string;
+      freshness: string;
+      patterns: { repoFullName: string; evidenceCompleteness: { status: string; pullRequestsAnalyzed: number } };
+      dataQuality: unknown;
+    };
+    expect(computedBody.source).toBe("computed");
+    expect(computedBody.freshness).toBe("fresh");
+    expect(computedBody.patterns.repoFullName).toBe("entrius/allways-ui");
+    expect(computedBody.patterns.evidenceCompleteness.status).toBeDefined();
+    expect(computedBody.dataQuality).toBeDefined();
+
+    // Persist a snapshot directly and re-fetch — the endpoint must serve from the snapshot.
+    await persistSignalSnapshot(env, {
+      id: crypto.randomUUID(),
+      signalType: "repo-outcome-patterns",
+      targetKey: "entrius/allways-ui",
+      repoFullName: "entrius/allways-ui",
+      payload: {
+        repoFullName: "entrius/allways-ui",
+        generatedAt: new Date(Date.now() - 60_000).toISOString(),
+        lane: "direct_pr",
+        primaryLanguage: "TypeScript",
+        sampleSize: 0,
+        totals: { analyzed: 0, merged: 0, closedUnmerged: 0, openActive: 0, openStale: 0, maintainerLanePullRequests: 0, outsideContributorPullRequests: 0 },
+        outsideContributorMergeRate: 0,
+        maintainerLaneMergeRate: 0,
+        dimensions: [],
+        successPatterns: [],
+        riskPatterns: [],
+        evidenceCompleteness: { pullRequestsAnalyzed: 0, withFileDetail: 0, withReviewDetail: 0, withCheckDetail: 0, filesCompletenessRatio: 0, reviewsCompletenessRatio: 0, checksCompletenessRatio: 0, fullyDecidedWithDetail: 0, status: "missing" },
+        findings: [],
+        summary: "fixture",
+      } as unknown as Record<string, never>,
+      generatedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const cached = await app.request("/v1/repos/entrius/allways-ui/outcome-patterns", { headers: apiHeaders(env) }, env);
+    expect(cached.status).toBe(200);
+    const cachedBody = (await cached.json()) as { source: string; freshness: string; patterns: { summary: string } };
+    expect(cachedBody.source).toBe("snapshot");
+    expect(cachedBody.freshness).toBe("fresh");
+    expect(cachedBody.patterns.summary).toBe("fixture");
+    expect(JSON.stringify(cachedBody)).not.toMatch(/wallet|hotkey|payout|reward estimate|farming/i);
   });
 
   it("reports ready status when required public-review dependencies are present", async () => {

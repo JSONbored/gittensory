@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../../src/signals/local-branch";
+import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../../src/signals/local-scorer-diagnostics";
 import type { ContributorOutcomeHistory, ContributorProfile, ContributorScoringProfile, IssueQualityReport } from "../../src/signals/engine";
 import type { RepositoryRecord, ScoringModelSnapshotRecord } from "../../src/types";
 
@@ -60,6 +61,31 @@ describe("local branch analysis", () => {
     expect(analysis.prPacket.markdown).toContain("- passed: npm test -- cache");
     expect(analysis.prPacket.markdown).toContain("metadata only");
     expect(JSON.stringify(analysis.prPacket)).not.toMatch(/reward|score|wallet|hotkey|farming|payout|ranking|trust score/i);
+  });
+
+  it("bounds local scorer warnings before adding local findings", () => {
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        changedFiles: [{ path: "src/scorer.ts", additions: 10, deletions: 0, status: "modified" }],
+        localScorer: {
+          mode: "metadata_only",
+          warnings: Array.from({ length: MAX_LOCAL_SCORER_WARNING_COUNT + 5 }, (_, index) => `${index}: ${"w".repeat(MAX_LOCAL_SCORER_WARNING_CHARS + 25)}`),
+        },
+      },
+      repo,
+      issues: [],
+      pullRequests: [],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    const finding = analysis.localFindings.find((entry) => entry.code === "local_scorer_warning");
+    expect(finding?.detail.length).toBeLessThanOrEqual(MAX_LOCAL_SCORER_WARNING_COUNT * MAX_LOCAL_SCORER_WARNING_CHARS + (MAX_LOCAL_SCORER_WARNING_COUNT - 1));
+    expect(analysis.workspaceIntelligence.localScorerDiagnostics?.warnings).toHaveLength(MAX_LOCAL_SCORER_WARNING_COUNT);
   });
 
   it("projects a blocked local branch into a useful after-pending-merge scenario", () => {
@@ -200,6 +226,79 @@ describe("local branch analysis", () => {
 
     expect(analysis.scorePreview.linkedIssueMultiplier).toMatchObject({ status: "validated", source: "official_mirror", solvedByPullRequests: [144], appliedMultiplier: 1.33 });
     expect(JSON.stringify(analysis.prPacket)).not.toMatch(/multiplier|reward|score|wallet|hotkey|farming|payout|ranking|trust score/i);
+  });
+
+  it("separates branch eligibility from account blockers in local branch analysis", () => {
+    const commonInput = {
+      login: "oktofeesh1",
+      repoFullName: repo.fullName,
+      body: "Fixes #7",
+      changedFiles: [
+        { path: "src/cache.ts", additions: 24, deletions: 2, status: "modified" as const },
+        { path: "src/cache.test.ts", additions: 18, deletions: 0, status: "added" as const },
+      ],
+      validation: [{ command: "npm test -- cache", status: "passed" as const }],
+      localScorer: { mode: "external_command" as const, sourceTokenScore: 40, totalTokenScore: 70, sourceLines: 38, testTokenScore: 18 },
+    };
+    const commonArgs = {
+      repo,
+      issues: [{ repoFullName: repo.fullName, number: 7, title: "Cache refresh fails", state: "open" as const, labels: ["bug"], linkedPrs: [] }],
+      pullRequests: [],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+      gittensorSnapshot: {
+        issueMirrorAvailable: true,
+        issues: [{ repoFullName: repo.fullName, number: 7, state: "closed", solvedByPullRequest: 144, labels: ["bug"] }],
+      } as never,
+    };
+    const eligible = buildLocalBranchAnalysis({
+      input: {
+        ...commonInput,
+        branchEligibility: { status: "eligible", source: "github_metadata", checkedAt: "2026-05-30T00:00:00.000Z" },
+      },
+      ...commonArgs,
+    });
+    const ineligible = buildLocalBranchAnalysis({
+      input: {
+        ...commonInput,
+        branchEligibility: { status: "ineligible", source: "github_metadata", reason: "base branch is not eligible" },
+      },
+      ...commonArgs,
+    });
+    const missing = buildLocalBranchAnalysis({
+      input: commonInput,
+      ...commonArgs,
+    });
+    const stale = buildLocalBranchAnalysis({
+      input: {
+        ...commonInput,
+        branchEligibility: { status: "eligible", source: "local_metadata", stale: true, checkedAt: "2026-05-01T00:00:00.000Z" },
+      },
+      ...commonArgs,
+    });
+
+    expect(eligible.branchEligibility).toMatchObject({ status: "eligible", evidence: "provided" });
+    expect(eligible.scorePreview.scoreEstimate.issueMultiplier).toBe(1.33);
+    expect(eligible.branchQualityBlockers.join(" ")).not.toMatch(/eligibility/i);
+    expect(eligible.prPacket.markdown).toContain("Linked issue context was checked");
+    expect(ineligible.scorePreview.scoreEstimate.issueMultiplier).toBe(1);
+    expect(ineligible.localFindings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "branch_eligibility_ineligible" })]));
+    expect(ineligible.branchQualityBlockers).toEqual(expect.arrayContaining(["Branch eligibility blocks linked-issue assumptions"]));
+    expect(ineligible.accountStateBlockers.join(" ")).not.toMatch(/eligibility/i);
+    expect(ineligible.recommendedRerunCondition).toMatch(/eligibility/i);
+    expect(ineligible.prPacket.markdown).toContain("Linked issue context needs cleanup");
+    expect(missing.branchEligibility).toMatchObject({ status: "unknown", evidence: "missing" });
+    expect(missing.localFindings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "branch_eligibility_missing", severity: "info" })]));
+    expect(missing.branchQualityBlockers.join(" ")).not.toMatch(/Branch eligibility evidence missing/i);
+    expect(stale.localFindings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "branch_eligibility_stale", severity: "warning" })]));
+    expect(stale.recommendedRerunCondition).toMatch(/branch\/base eligibility metadata/i);
+    expect(stale.prPacket.markdown).toContain("Reconfirm linked issue and base branch metadata");
+    expect(stale.prPacket.markdown).not.toMatch(/eligibility|issue multiplier|scoreability/i);
+    expect(JSON.stringify({ eligible: eligible.prPacket, ineligible: ineligible.prPacket, missing: missing.prPacket, stale: stale.prPacket })).not.toMatch(
+      /eligibility|issue multiplier|scoreability|reward|score|wallet|hotkey|farming|payout|ranking|trust score/i,
+    );
   });
 
   it("surfaces mirror raw, invalid, and unavailable linkage fallbacks privately", () => {
@@ -1204,6 +1303,8 @@ describe("local branch analysis", () => {
     expect(analysis.prPacket.markdown).toContain("## Maintainer Focus");
     expect(analysis.prPacket.markdown).toContain("Prefer small, focused PRs.");
     expect(analysis.prPacket.markdown).not.toMatch(/ping @owner/);
+    expect(JSON.stringify(analysis.manifestGuidance)).not.toMatch(/ping @owner/);
+    expect(JSON.stringify(analysis)).not.toMatch(/ping @owner/);
     expect(JSON.stringify(analysis.prPacket)).not.toMatch(/ping @owner/);
     expect(JSON.stringify(analysis.prPacket)).not.toMatch(/reward|score|wallet|hotkey|farming|payout|ranking|trust score/i);
   });

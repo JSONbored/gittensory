@@ -46,9 +46,15 @@ type PublicAnswerCard = {
   safeDetails?: string[] | undefined;
 };
 
+export type AgentCommandFeedbackContext = {
+  answerId: string;
+  command: GittensoryMentionCommandName | null;
+};
+
 const COMMANDS = new Set<GittensoryMentionCommandName>(GITTENSORY_MENTION_COMMAND_CATALOG.map((command) => command.id));
 const MAINTAINER_QUEUE_DIGEST_COMMANDS = new Set<MaintainerQueueDigestCommandName>(MAINTAINER_QUEUE_DIGEST_COMMAND_CATALOG.map((command) => command.id));
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+const AGENT_COMMAND_FEEDBACK_MARKER = "gittensory-agent-command-answer";
 
 const COMMAND_TITLES = Object.fromEntries(GITTENSORY_MENTION_COMMAND_CATALOG.map((command) => [command.id, command.title])) as Record<GittensoryMentionCommandName, string>;
 
@@ -132,6 +138,20 @@ export function isMaintainerAssociation(association: string | null | undefined):
   return Boolean(association && MAINTAINER_ASSOCIATIONS.has(association));
 }
 
+export function buildAgentCommandFeedbackMarker(answerId: string): string {
+  return `<!-- ${AGENT_COMMAND_FEEDBACK_MARKER}:${sanitizeFeedbackAnswerId(answerId)} -->`;
+}
+
+export function parseAgentCommandFeedbackContext(body: string | null | undefined): AgentCommandFeedbackContext | null {
+  if (!body) return null;
+  const answerMatch = body.match(/<!--\s*gittensory-agent-command-answer:([A-Za-z0-9_.:-]{8,120})\s*-->/);
+  if (!answerMatch?.[1]) return null;
+  const commandMatch = body.match(/Command:\s*`@gittensory\s+([a-z-]+)`/i);
+  const requestedCommand = commandMatch?.[1]?.toLowerCase() as GittensoryMentionCommandName | undefined;
+  const command = requestedCommand && COMMANDS.has(requestedCommand) ? requestedCommand : null;
+  return { answerId: answerMatch[1], command };
+}
+
 export function isMaintainerQueueDigestCommand(command: GittensoryMentionCommandName): command is MaintainerQueueDigestCommandName {
   return MAINTAINER_QUEUE_DIGEST_COMMANDS.has(command as MaintainerQueueDigestCommandName);
 }
@@ -169,6 +189,7 @@ export function buildPublicAgentCommandComment(args: {
   issue: GitHubIssuePayload;
   pullRequest: PullRequestRecord | null;
   actorKind: "maintainer" | "author";
+  answerId?: string | null | undefined;
   officialMiner?: GittensorContributorSnapshot | null | undefined;
   bundle?: AgentRunBundle | null | undefined;
   maintainerDigest?: MaintainerQueueDigest | null | undefined;
@@ -190,6 +211,7 @@ export function buildPublicAgentCommandComment(args: {
     `Scope: ${repoFullName}#${args.issue.number}`,
     "",
     ...renderPublicAnswerCard(card),
+    ...feedbackPromptSections(args.answerId),
     "",
     "_Advisory context only. Public comments exclude non-public contributor signals and private planning internals._",
   ].join("\n");
@@ -375,6 +397,17 @@ function stripBulletPrefix(value: string): string {
 
 function stripEmphasis(value: string): string {
   return value.replace(/^\*\*/, "").replace(/\*\*$/, "").trim();
+}
+
+function feedbackPromptSections(answerId: string | null | undefined): string[] {
+  if (!answerId) return [];
+  return [
+    "",
+    buildAgentCommandFeedbackMarker(answerId),
+    "**Feedback**",
+    "",
+    "- Use a thumbs-up or thumbs-down reaction to mark whether this answer helped. Feedback is aggregate-only and never changes deterministic results.",
+  ];
 }
 
 function commandSections(
@@ -826,8 +859,22 @@ function normalizeLogin(value: string): string {
 }
 
 function shortText(value: string, maxLength: number): string {
-  const sanitized = publicBlockerDetail(value).replace(/\s+/g, " ").trim();
-  return sanitized.length > maxLength ? `${sanitized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...` : sanitized;
+  const sanitized = sanitizePublicComment(value)
+    .replace(/[\u0000-\u001F\u007F]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const safeText = neutralizePublicMarkdownText(sanitized);
+  return safeText.length > maxLength ? `${safeText.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...` : safeText;
+}
+
+function neutralizePublicMarkdownText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/([\\`*_{}[\]()#+\-.!|])/g, "\\$1")
+    .replace(/@(?=[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)?)/gi, "@\u200B")
+    .replace(/\bhttps?:\/\//gi, (match) => `${match.slice(0, -2)}\u200B//`);
 }
 
 function pickActions(
@@ -878,12 +925,23 @@ function publicBlockerLabel(code: string): string {
 }
 
 function publicBlockerDetail(value: string): string {
-  return sanitizePublicComment(
-    value
-      .replace(/\blikely_duplicate\b/gi, "possible overlap with existing work")
-      .replace(/\bcheck_duplicate_risk\b/gi, "duplicate-risk review")
-      .replace(/\bopen_pr_pressure\b/gi, "open pull request pressure"),
+  return sanitizePublicInlineDetail(
+    sanitizePublicComment(
+      value
+        .replace(/\blikely_duplicate\b/gi, "possible overlap with existing work")
+        .replace(/\bcheck_duplicate_risk\b/gi, "duplicate-risk review")
+        .replace(/\bopen_pr_pressure\b/gi, "open pull request pressure"),
+    ),
   );
+}
+
+function sanitizePublicInlineDetail(value: string): string {
+  return value
+    .replace(/[\u0000-\u001F\u007F]+/g, " ")
+    .replace(/@(?=[A-Za-z0-9_-])/g, "@\u200B")
+    .replace(/[\\`*_{}[\]()#+>|]/g, "\\$&")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function dedupeBulletLines(lines: string[]): string[] {
@@ -894,6 +952,10 @@ function dedupeBulletLines(lines: string[]): string[] {
     seen.add(line);
     return true;
   });
+}
+
+function sanitizeFeedbackAnswerId(answerId: string): string {
+  return answerId.replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 120);
 }
 
 export function sanitizePublicComment(value: string): string {
