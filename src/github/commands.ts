@@ -307,9 +307,12 @@ function dedupeBulletLines(lines: string[]): string[] {
 
 export function sanitizePublicComment(value: string): string {
   const sanitized = value
-    .replace(/\b(raw trust score|trust score|wallet|hotkey|coldkey|seed phrase|mnemonic)\b/gi, "private context")
-    .replace(/\b(estimated score|score estimate|reward estimate|payout|farming|reviewability)\b/gi, "private context")
-    .replace(/\b(private ranking|private rankings)\b/gi, "private context")
+    .replace(/\b(raw[-_\s]?trust(?:[-_\s]?scores?)?|trust[-_\s]?scores?|wallets?|hotkeys?|coldkeys?|seed phrases?|mnemonics?)\b/gi, "private context")
+    .replace(
+      /\b(estimated[-_\s]?scores?|score[-_\s]?estimates?|public[-_\s]?score[-_\s]?estimates?|reward\w*|payouts?|farming|private[-_\s]?reviewability|reviewability|private[-_\s]?scoreability|scoreability)\b/gi,
+      "private context",
+    )
+    .replace(/\b(private[-_\s]?rankings?|rankings?)\b/gi, "private context")
     .replace(/\blikely_duplicate\b/gi, "possible overlap with existing work");
   return sanitized.replace(/private context(?:,\s*private context)+/gi, "private context");
 }

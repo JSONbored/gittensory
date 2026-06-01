@@ -3,6 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { createInstallationToken, createOrUpdateCheckRun, getAppInstallation, getInstallationId } from "../../src/github/app";
 import type { Advisory } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
+import { expectPublicOutputSafe } from "../helpers/public-output";
 
 describe("GitHub check runs", () => {
   afterEach(() => {
@@ -26,7 +27,7 @@ describe("GitHub check runs", () => {
         expect(body.name).toBe("Gittensory");
         expect(body.conclusion).toBe("neutral");
         expect(body.output.title).toBe("Gittensory context posted");
-        expect(body.output.text).not.toMatch(/linked issue|reviewability|reward|farming|wallet|hotkey|trust score/i);
+        expectPublicOutputSafe(body.output);
         return Response.json({ id: 42, html_url: "https://github.com/checks/42" }, { status: 201 });
       }
       return new Response("not found", { status: 404 });
@@ -90,7 +91,7 @@ describe("GitHub check runs", () => {
         expect(body.name).toBe("Gittensory");
         expect(body.conclusion).toBe("success");
         expect(body.output.title).toBe("Gittensory context checked");
-        expect(body.output.text).not.toMatch(/reviewability|reward|farming|wallet|hotkey|trust score/i);
+        expectPublicOutputSafe(body.output);
         return Response.json({ id: 42, html_url: "https://github.com/checks/42" });
       }
       return new Response("not found", { status: 404 });

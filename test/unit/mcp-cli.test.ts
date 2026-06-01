@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { PUBLIC_FORBIDDEN_CONCEPT_CASES, expectPublicOutputSafe } from "../helpers/public-output";
 
 const bin = join(process.cwd(), "packages/gittensory-mcp/bin/gittensory-mcp.js");
 let server: Server | null = null;
@@ -366,7 +367,8 @@ describe("gittensory-mcp CLI", () => {
     expect(output).toContain("# Public-safe PR packet");
     expect(output).toContain("## Validation");
     expect(output).toContain("Closes #39");
-    expect(output).not.toMatch(/reward|score|wallet|hotkey|farming|payout|ranking|raw[-_\s]?trust|private[-_\s]?reviewability|reviewability|export const packet/i);
+    expectPublicOutputSafe(output);
+    expect(output).not.toMatch(/export const packet/i);
   });
 
   it("rejects unsafe server-provided packet markdown before non-json output", async () => {
@@ -381,7 +383,15 @@ describe("gittensory-mcp CLI", () => {
     git(tempDir, "commit", "-m", "initial commit");
     git(tempDir, "checkout", "-b", "codex/public-safe-pr-packets");
 
-    for (const unsafePhrase of ["score: 1.15", "reward estimate", "wallet address", "hotkey id", "raw-trust: 0.7", "private-reviewability: ready", "raw_trust: 0.7", "private_reviewability: ready", "trust_score: 0.4"]) {
+    for (const unsafePhrase of [
+      ...PUBLIC_FORBIDDEN_CONCEPT_CASES,
+      "score: 1.15",
+      "raw-trust: 0.7",
+      "private-reviewability: ready",
+      "raw_trust: 0.7",
+      "private_reviewability: ready",
+      "trust_score: 0.4",
+    ]) {
       if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
       server = null;
       const url = await startFixtureServer({ packetMarkdown: `# Public-safe PR packet\n\n- ${unsafePhrase}\n` });

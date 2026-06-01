@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildIssueAdvisory, buildPullRequestAdvisory, buildRepositoryAdvisory, formatCheckRunOutput } from "../../src/rules/advisory";
 import type { IssueRecord, PullRequestRecord, RepositoryRecord } from "../../src/types";
+import { expectPublicOutputSafe } from "../helpers/public-output";
 
 const repo: RepositoryRecord = {
   fullName: "JSONbored/gittensory",
@@ -126,7 +127,7 @@ describe("advisory rules", () => {
     const output = formatCheckRunOutput(advisory);
 
     expect(advisory.findings.map((finding) => finding.code)).not.toContain("private_reviewability_context");
-    expect(output.text).not.toMatch(/reviewability|likely_duplicate|needs_author|reward|farming|wallet|hotkey/i);
+    expectPublicOutputSafe(output);
     expect(output.title).toBe("Gittensory context checked");
   });
 

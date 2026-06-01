@@ -616,7 +616,10 @@ function summarizeRun(run: AgentRunRecord, actions: AgentActionRecord[]): string
 
 function sanitizePublicSummary(value: string): string {
   return value
-    .replace(/\b(reward|payout|farming|estimated score|raw trust score|wallet|hotkey|coldkey)\b/gi, "private signal")
+    .replace(
+      /\b(reward\w*|payouts?|farming|estimated[-_\s]?scores?|score[-_\s]?estimates?|public[-_\s]?score[-_\s]?estimates?|raw[-_\s]?trust(?:[-_\s]?scores?)?|trust[-_\s]?scores?|wallets?|hotkeys?|coldkeys?|private[-_\s]?reviewability|reviewability|private[-_\s]?scoreability|scoreability|private[-_\s]?rankings?|rankings?)\b/gi,
+      "private signal",
+    )
     .replace(/\s+/g, " ")
     .trim();
 }

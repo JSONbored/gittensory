@@ -5,6 +5,7 @@ import {
   parseGittensoryMentionCommand,
   sanitizePublicComment,
 } from "../../src/github/commands";
+import { expectPublicOutputSafe, expectPublicSanitizerCoversForbiddenConcepts } from "../helpers/public-output";
 
 describe("GitHub mention commands", () => {
   it("parses only explicit @gittensory commands", () => {
@@ -98,11 +99,10 @@ describe("GitHub mention commands", () => {
     expect(body).toContain("Scope: this repository#12");
     expect(body).not.toContain("Decision snapshot is stale");
     expect(body).not.toContain("background rebuild");
-    expect(body).not.toMatch(/wallet|hotkey|coldkey|estimated score|reward estimate|payout|farming|raw trust score|reviewability|private ranking/i);
+    expectPublicOutputSafe(body);
     expect(body).not.toMatch(/private context,\s*private context/i);
-    expect(sanitizePublicComment("wallet hotkey payout reviewability private ranking")).not.toMatch(
-      /wallet|hotkey|payout|reviewability|private ranking/i,
-    );
+    expectPublicSanitizerCoversForbiddenConcepts(sanitizePublicComment);
+    expectPublicOutputSafe(sanitizePublicComment("wallet hotkey payout reviewability private ranking"));
     expect(sanitizePublicComment("private ranking, wallet, payout")).toBe("private context");
   });
 

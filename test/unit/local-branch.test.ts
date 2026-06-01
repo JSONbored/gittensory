@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../../src/signals/local-branch";
 import type { ContributorOutcomeHistory, ContributorProfile, ContributorScoringProfile, IssueQualityReport } from "../../src/signals/engine";
 import type { RepositoryRecord, ScoringModelSnapshotRecord } from "../../src/types";
+import { expectPublicOutputSafe } from "../helpers/public-output";
 
 describe("local branch analysis", () => {
   it("combines local preflight, private score preview, reward/risk, and a public-safe PR packet", () => {
@@ -52,7 +53,7 @@ describe("local branch analysis", () => {
     expect(analysis.prPacket.markdown).toContain("- Closes #7");
     expect(analysis.prPacket.markdown).toContain("- passed: npm test -- cache");
     expect(analysis.prPacket.markdown).toContain("metadata only");
-    expect(JSON.stringify(analysis.prPacket)).not.toMatch(/reward|score|wallet|hotkey|farming|payout|ranking|trust score/i);
+    expectPublicOutputSafe(analysis.prPacket.markdown);
   });
 
   it("projects a blocked local branch into a useful after-pending-merge scenario", () => {

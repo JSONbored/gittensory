@@ -18,6 +18,7 @@ import { persistRegistrySnapshot } from "../../src/registry/sync";
 import type { AgentRunRecord, JsonValue } from "../../src/types";
 import { nowIso } from "../../src/utils/json";
 import { createTestEnv } from "../helpers/d1";
+import { expectPublicOutputSafe, expectPublicSanitizerCoversForbiddenConcepts } from "../helpers/public-output";
 
 describe("agent orchestrator", () => {
   afterEach(() => {
@@ -120,7 +121,7 @@ describe("agent orchestrator", () => {
       approvalRequired: true,
       safetyClass: "private",
     });
-    expect(bundle.actions[0]?.publicSafeSummary).not.toMatch(/reward|wallet|hotkey|raw trust score|estimated score/i);
+    expectPublicOutputSafe(bundle.actions[0]?.publicSafeSummary);
     expect(bundle.contextSnapshots[0]).toMatchObject({
       scoringModelId: "scoring-1",
       freshnessWarnings: expect.arrayContaining(["we-promise/sure: partial signal coverage", "we-promise/sure: stale signal coverage"]),
@@ -316,7 +317,7 @@ describe("agent orchestrator", () => {
     expect(__agentOrchestratorInternals.rerunWhenForDecision(criticalDecision)).toMatch(/blockers/);
     expect(__agentOrchestratorInternals.sameRepo("Owner/Repo", "owner/repo")).toBe(true);
     expect(__agentOrchestratorInternals.jsonPayload({ keep: "yes", drop: undefined })).toEqual({ keep: "yes" });
-    expect(__agentOrchestratorInternals.sanitizePublicSummary("reward payout wallet hotkey raw trust score")).not.toMatch(/reward|payout|wallet|hotkey|raw trust score/i);
+    expectPublicSanitizerCoversForbiddenConcepts(__agentOrchestratorInternals.sanitizePublicSummary);
 
     const watchAction = __agentOrchestratorInternals.actionFromDecisionAction(run, action("open_new_direct_pr", "owner/avoid", "avoid_for_now", 1), avoidDecision, 0);
     const blockedAction = __agentOrchestratorInternals.actionFromDecisionAction(run, action("open_new_direct_pr", "owner/critical", "pursue", 77), criticalDecision, 1);
