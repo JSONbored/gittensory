@@ -214,6 +214,39 @@ describe("buildRepoOutcomePatterns", () => {
     expect(result.findings.some((f) => f.code === "stale_open_prs")).toBe(true);
   });
 
+  it("falls back to createdAt when an open PR carries no updatedAt timestamp", () => {
+    const pullRequests = [
+      pr(1, { state: "open", updatedAt: null, createdAt: "2020-01-01T00:00:00.000Z" }),
+      pr(2, { state: "open", updatedAt: null, createdAt: "2020-01-01T00:00:00.000Z" }),
+      pr(3, { state: "open", updatedAt: null, createdAt: new Date().toISOString() }),
+    ];
+    const result = buildRepoOutcomePatterns({ repo: repo(), repoFullName: REPO, pullRequests });
+    expect(result.totals.openStale).toBe(2);
+    expect(result.totals.openActive).toBe(1);
+  });
+
+  it("marks the overall closure-risk pattern high-confidence with six or more decided PRs", () => {
+    const pullRequests = [closedPr(1), closedPr(2), closedPr(3), closedPr(4), closedPr(5), closedPr(6), mergedPr(7)];
+    const result = buildRepoOutcomePatterns({ repo: repo(), repoFullName: REPO, pullRequests });
+    const risk = result.riskPatterns.find((p) => p.title === "Outside contributor PRs rarely merge here");
+    expect(risk?.confidence).toBe("high");
+  });
+
+  it("buckets file-count-only PRs into small and medium size dimensions", () => {
+    // changedFiles arrive via recent-merged records, so changedLineCount stays 0 and file-count sizing applies.
+    const smallNumbers = [1, 2, 3];
+    const mediumNumbers = [4, 5, 6];
+    const recentMergedPullRequests: RecentMergedPullRequestRecord[] = [
+      ...smallNumbers.map((number) => ({ repoFullName: REPO, number, title: `PR ${number}`, authorLogin: "dev", mergedAt: "2026-05-01T00:00:00.000Z", labels: [], linkedIssues: [], changedFiles: ["a.ts", "b.ts"], payload: {} })),
+      ...mediumNumbers.map((number) => ({ repoFullName: REPO, number, title: `PR ${number}`, authorLogin: "dev", mergedAt: "2026-05-01T00:00:00.000Z", labels: [], linkedIssues: [], changedFiles: ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"], payload: {} })),
+    ];
+    const pullRequests = [...smallNumbers, ...mediumNumbers].map((number) => mergedPr(number));
+    const result = buildRepoOutcomePatterns({ repo: repo(), repoFullName: REPO, pullRequests, recentMergedPullRequests });
+    const sizeKeys = result.dimensions.filter((d) => d.dimension === "size").map((d) => d.key);
+    expect(sizeKeys).toContain("small");
+    expect(sizeKeys).toContain("medium");
+  });
+
   it("reports a low-sample finding when there are too few decided PRs", () => {
     const result = buildRepoOutcomePatterns({ repo: repo(), repoFullName: REPO, pullRequests: [mergedPr(1)] });
     expect(result.findings.some((f) => f.code === "low_outcome_sample")).toBe(true);

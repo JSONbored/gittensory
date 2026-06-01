@@ -3,9 +3,11 @@ import { persistSignalSnapshot, upsertRepositoryFromGitHub } from "../../src/db/
 import {
   REPO_OUTCOME_PATTERNS_MAX_AGE_MS,
   REPO_OUTCOME_PATTERNS_SIGNAL,
+  computeRepoOutcomePatterns,
   loadOrComputeRepoOutcomePatternsResponse,
   loadRepoOutcomePatternsMap,
 } from "../../src/services/repo-outcome-patterns";
+import type { SignalSnapshotRecord } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
 
 function snapshotPayload(repoFullName: string, summary: string) {
@@ -74,6 +76,62 @@ describe("loadOrComputeRepoOutcomePatternsResponse", () => {
     expect(response).toMatchObject({ status: "ready", source: "computed", freshness: "fresh", patterns: { repoFullName: "owner/uncached" } });
   });
 
+  it("uses the payload timestamp when the snapshot column carries no generatedAt", async () => {
+    const env = createTestEnv();
+    const generatedAt = new Date(Date.now() - 120_000).toISOString();
+    const repositoriesModule = await import("../../src/db/repositories");
+    const snapshot: SignalSnapshotRecord = {
+      id: "snap-payload-ts",
+      signalType: REPO_OUTCOME_PATTERNS_SIGNAL,
+      targetKey: "owner/payload-ts",
+      repoFullName: "owner/payload-ts",
+      generatedAt: null,
+      payload: { ...snapshotPayload("owner/payload-ts", "payload ts"), generatedAt } as unknown as SignalSnapshotRecord["payload"],
+    };
+    const spy = vi.spyOn(repositoriesModule, "listSignalSnapshots").mockResolvedValue([snapshot]);
+    const response = await loadOrComputeRepoOutcomePatternsResponse(env, "owner/payload-ts");
+    spy.mockRestore();
+    expect(response).toMatchObject({ source: "snapshot", freshness: "fresh", generatedAt });
+  });
+
+  it("defaults to the current time when neither the column nor the payload carry a timestamp", async () => {
+    const env = createTestEnv();
+    const payload = snapshotPayload("owner/no-ts", "no ts") as Record<string, unknown>;
+    delete payload.generatedAt;
+    const repositoriesModule = await import("../../src/db/repositories");
+    const snapshot: SignalSnapshotRecord = {
+      id: "snap-no-ts",
+      signalType: REPO_OUTCOME_PATTERNS_SIGNAL,
+      targetKey: "owner/no-ts",
+      repoFullName: "owner/no-ts",
+      generatedAt: null,
+      payload: payload as unknown as SignalSnapshotRecord["payload"],
+    };
+    const spy = vi.spyOn(repositoriesModule, "listSignalSnapshots").mockResolvedValue([snapshot]);
+    const response = await loadOrComputeRepoOutcomePatternsResponse(env, "owner/no-ts");
+    spy.mockRestore();
+    expect(response).toMatchObject({ source: "snapshot", freshness: "fresh" });
+    expect(typeof response?.generatedAt).toBe("string");
+    expect(response?.ageSeconds).toBeGreaterThanOrEqual(0);
+  });
+
+  it("treats an unparseable snapshot timestamp as stale rather than fresh", async () => {
+    const env = createTestEnv();
+    const repositoriesModule = await import("../../src/db/repositories");
+    const snapshot: SignalSnapshotRecord = {
+      id: "snap-bad-ts",
+      signalType: REPO_OUTCOME_PATTERNS_SIGNAL,
+      targetKey: "owner/bad-ts",
+      repoFullName: "owner/bad-ts",
+      generatedAt: "not-a-real-timestamp",
+      payload: snapshotPayload("owner/bad-ts", "bad ts") as unknown as SignalSnapshotRecord["payload"],
+    };
+    const spy = vi.spyOn(repositoriesModule, "listSignalSnapshots").mockResolvedValue([snapshot]);
+    const response = await loadOrComputeRepoOutcomePatternsResponse(env, "owner/bad-ts");
+    spy.mockRestore();
+    expect(response).toMatchObject({ source: "snapshot", freshness: "stale" });
+  });
+
   it("does not call broad request-time PR listers when a cached snapshot exists", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "perf", full_name: "owner/perf", private: false, owner: { login: "owner" }, default_branch: "main" });
@@ -98,6 +156,16 @@ describe("loadOrComputeRepoOutcomePatternsResponse", () => {
       expect(spy).not.toHaveBeenCalled();
       spy.mockRestore();
     }
+  });
+});
+
+describe("computeRepoOutcomePatterns", () => {
+  it("resolves the repository itself when no repo record is supplied", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "direct", full_name: "owner/direct", private: false, owner: { login: "owner" }, default_branch: "main" });
+    const patterns = await computeRepoOutcomePatterns(env, "owner/direct");
+    expect(patterns.repoFullName).toBe("owner/direct");
+    expect(patterns.totals.analyzed).toBe(0);
   });
 });
 
