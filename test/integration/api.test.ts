@@ -232,6 +232,76 @@ describe("api routes", () => {
     expect(rejected.status).toBe(401);
   });
 
+  it("rejects oversized webhook payloads and rate limits repeated invalid webhook traffic", async () => {
+    const counters = new Map<string, number>();
+    const app = createApp();
+    const env = createTestEnv({
+      GITHUB_WEBHOOK_MAX_BODY_BYTES: "1024",
+      RATE_LIMITER: {
+        idFromName(name: string) {
+          return name as unknown as DurableObjectId;
+        },
+        get(id: DurableObjectId) {
+          const key = String(id);
+          return {
+            async fetch() {
+              const count = (counters.get(key) ?? 0) + 1;
+              counters.set(key, count);
+              if (count <= 10) return Response.json({ allowed: true, limit: 10, remaining: 10 - count, resetAt: "2099-01-01T00:00:00.000Z" });
+              return Response.json({ allowed: false, limit: 10, remaining: 0, retryAfterSeconds: 60, resetAt: "2099-01-01T00:00:00.000Z" }, { status: 429 });
+            },
+          } as DurableObjectStub;
+        },
+      } as DurableObjectNamespace,
+    });
+    const oversizedBody = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "JSONbored/gittensory" },
+      blob: "x".repeat(3_000),
+    });
+    const tooLarge = await app.request(
+      "/v1/github/webhook",
+      {
+        method: "POST",
+        body: oversizedBody,
+        headers: {
+          "x-github-delivery": "oversized-1",
+          "x-github-event": "push",
+        },
+      },
+      env,
+    );
+    expect(tooLarge.status).toBe(413);
+    await expect(tooLarge.json()).resolves.toMatchObject({ error: "payload_too_large", maxBytes: 1024 });
+
+    const invalidBody = JSON.stringify({ action: "opened", repository: { full_name: "JSONbored/gittensory" } });
+    let sawUnauthorized = false;
+    let sawRateLimited = false;
+    for (let index = 0; index < 12; index += 1) {
+      const response = await app.request(
+        "/v1/github/webhook",
+        {
+          method: "POST",
+          body: invalidBody,
+          headers: {
+            "x-github-delivery": `invalid-${index}`,
+            "x-github-event": "push",
+            "x-hub-signature-256": "sha256=bad",
+          },
+        },
+        env,
+      );
+      if (response.status === 401) sawUnauthorized = true;
+      if (response.status === 429) {
+        sawRateLimited = true;
+        await expect(response.json()).resolves.toMatchObject({ error: "rate_limited", routeClass: "strict" });
+        break;
+      }
+    }
+    expect(sawUnauthorized).toBe(true);
+    expect(sawRateLimited).toBe(true);
+  });
+
   it("serves deterministic signal endpoints from cached registry and GitHub metadata", async () => {
     const app = createApp();
     const env = createTestEnv();
