@@ -501,6 +501,13 @@ describe("agent orchestrator", () => {
           rateLimitedRepos: ["owner/rate"],
         },
       },
+      evidenceGraph: {
+        version: 1,
+        generatedAt,
+        totals: { repositories: 1 },
+        sources: [],
+        repos: [{ repoFullName: readyDecision.repoFullName, source: "github_cache", freshness: "fresh" }],
+      } as any,
     }), [readyDecision]);
     expect(snapshot.freshnessWarnings).toEqual(
       expect.arrayContaining([
@@ -511,6 +518,7 @@ describe("agent orchestrator", () => {
         "owner/rate: rate limited signal coverage",
       ]),
     );
+    expect(snapshot.payload.evidenceGraph).toMatchObject({ selectedRepos: [expect.objectContaining({ repoFullName: readyDecision.repoFullName })] });
     expect(snapshot.payload.openPrMonitor).toBeNull();
 
     const staleSnapshot = __agentOrchestratorInternals.contextSnapshotFromPack("run-2", decisionPackFixture({

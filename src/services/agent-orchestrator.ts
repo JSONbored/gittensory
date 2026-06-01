@@ -610,6 +610,15 @@ function contextSnapshotFromPack(runId: string, pack: ContributorDecisionPack, d
       login: pack.login,
       source: pack.source,
       selectedRepos: decisions.map((decision) => decision.repoFullName),
+      evidenceGraph: (pack.evidenceGraph
+        ? {
+            version: pack.evidenceGraph.version,
+            generatedAt: pack.evidenceGraph.generatedAt,
+            totals: pack.evidenceGraph.totals,
+            sources: pack.evidenceGraph.sources,
+            selectedRepos: pack.evidenceGraph.repos.filter((repo) => decisions.some((decision) => decision.repoFullName.toLowerCase() === repo.repoFullName.toLowerCase())),
+          }
+        : null) as unknown as JsonValue,
       dataQuality: pack.dataQuality as unknown as JsonValue,
       openPrMonitor: (pack.openPrMonitor ?? null) as unknown as JsonValue,
     },
