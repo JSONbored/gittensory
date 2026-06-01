@@ -2237,3 +2237,10 @@ function ensureExtensionPublicSafeText(text: string): string {
   }
   return text;
 }
+
+export const __routesInternals = {
+  buildExtensionPublicSafePacket,
+  buildExtensionPrivateBlockers,
+  ensureExtensionPublicSafeText,
+  authenticateRequestIdentity,
+};

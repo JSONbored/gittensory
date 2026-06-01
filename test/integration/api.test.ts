@@ -1027,6 +1027,41 @@ describe("api routes", () => {
       repoFit: [],
     });
 
+    await persistSignalSnapshot(env, {
+      id: "lane-pack",
+      signalType: "contributor-decision-pack",
+      targetKey: "lane-user",
+      payload: {
+        status: "ready",
+        source: "computed",
+        login: "lane-user",
+        generatedAt: new Date().toISOString(),
+        stale: false,
+        freshness: "fresh",
+        rebuildEnqueued: false,
+        scoringModelSnapshotId: "scoring-1",
+        repoDecisions: [],
+        topActions: [],
+        pursueRepos: [{ repoFullName: "owner/pursue", recommendation: "watch" }],
+        cleanupFirst: [{ repoFullName: "owner/cleanup", recommendation: "cleanup_first" }],
+        maintainerLaneRepos: [{ repoFullName: "owner/maintainer", recommendation: "maintainer_lane" }],
+        avoidRepos: [{ repoFullName: "owner/avoid", recommendation: "avoid_for_now" }],
+        scoreBlockers: [],
+        dataQuality: { signalFidelity: { status: "ok" } },
+      } as never,
+      generatedAt: new Date().toISOString(),
+    });
+    const minerWithLaneBuckets = await app.request("/v1/app/miner-dashboard?login=lane-user", { headers: apiHeaders(env) }, env);
+    expect(minerWithLaneBuckets.status).toBe(200);
+    await expect(minerWithLaneBuckets.json()).resolves.toMatchObject({
+      repoFit: expect.arrayContaining([
+        expect.objectContaining({ repoFullName: "owner/pursue", lane: "pursue" }),
+        expect.objectContaining({ repoFullName: "owner/cleanup", lane: "cleanup-first" }),
+        expect.objectContaining({ repoFullName: "owner/maintainer", lane: "maintainer-lane" }),
+        expect.objectContaining({ repoFullName: "owner/avoid", lane: "avoid" }),
+      ]),
+    });
+
     await recordGitHubRateLimitObservation(env, {
       id: "rate-limit-healthy",
       repoFullName: "entrius/allways-ui",
