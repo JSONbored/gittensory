@@ -115,6 +115,14 @@ const localDiffPreflightShape = {
   commitMessage: z.string().optional(),
 };
 
+const branchEligibilityShape = {
+  status: z.enum(["eligible", "ineligible", "unknown"]),
+  source: z.enum(["github_metadata", "local_metadata", "registry", "user_supplied"]).optional(),
+  reason: z.string().optional(),
+  checkedAt: z.string().optional(),
+  stale: z.boolean().optional(),
+};
+
 const localBranchAnalysisShape = {
   login: z.string().min(1),
   repoFullName: z.string().min(3),
@@ -166,6 +174,7 @@ const localBranchAnalysisShape = {
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).max(20).optional(),
   focusManifest: z.record(z.unknown()).optional(),
+  branchEligibility: z.object(branchEligibilityShape).strict().optional(),
   localScorer: z
     .object({
       mode: z.enum(["metadata_only", "external_command", "gittensor_root"]),
@@ -236,6 +245,7 @@ const scorePreviewShape = {
   expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).max(20).optional(),
+  branchEligibility: z.object(branchEligibilityShape).strict().optional(),
 };
 
 const variantsShape = {

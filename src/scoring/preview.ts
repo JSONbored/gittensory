@@ -34,6 +34,26 @@ export type ScorePreviewInput = {
   scenarioNotes?: string[] | undefined;
   pendingScenarioObserved?: boolean | undefined;
   observedScenarioNotes?: string[] | undefined;
+  branchEligibility?: BranchEligibilityInput | undefined;
+};
+
+export type BranchEligibilityInput = {
+  status: "eligible" | "ineligible" | "unknown";
+  source?: "github_metadata" | "local_metadata" | "registry" | "user_supplied" | undefined;
+  reason?: string | undefined;
+  checkedAt?: string | undefined;
+  stale?: boolean | undefined;
+};
+
+export type BranchEligibilityResult = {
+  required: boolean;
+  status: "eligible" | "ineligible" | "unknown" | "not_required";
+  evidence: "provided" | "missing";
+  source: "github_metadata" | "local_metadata" | "registry" | "user_supplied" | "missing";
+  reason?: string | undefined;
+  checkedAt?: string | undefined;
+  stale: boolean;
+  warnings: string[];
 };
 
 export type LinkedIssueMultiplierStatus = "not_required" | "raw" | "plausible" | "validated" | "invalid" | "unavailable";
@@ -72,7 +92,9 @@ export type ScoreGateBlocker = {
     | "review_penalty"
     | "metadata_only"
     | "linked_issue_invalid"
-    | "linked_issue_unvalidated";
+    | "linked_issue_unvalidated"
+    | "branch_ineligible"
+    | "branch_eligibility_missing";
   severity: "blocker" | "reducer" | "context";
   detail: string;
 };
@@ -132,6 +154,7 @@ export type ScorePreviewResult = {
     credibilityFloor: number;
     credibilityObserved: number;
   };
+  branchEligibility: BranchEligibilityResult;
   effectiveEstimatedScore: number;
   underlyingPotentialScore: number;
   blockedBy: ScoreGateBlocker[];
@@ -152,14 +175,15 @@ export function buildScorePreview(args: {
   snapshot: ScoringModelSnapshotRecord;
   contributorEvidence?: ContributorEvidenceRecord | null | undefined;
 }): ScorePreviewResult {
+  const branchEligibility = normalizeBranchEligibility(args.input);
   const current = computeScoreCore(args.input, args.repo, args.snapshot, args.contributorEvidence);
   const scenarioPreviews = buildScenarioPreviews(args.input, args.repo, args.snapshot, args.contributorEvidence, current);
-  const blockedBy = blockedByFor(args.input, args.repo, current);
+  const blockedBy = blockedByFor(args.input, args.repo, current, branchEligibility);
   const gateDeltas = buildGateDeltas(current, scenarioPreviews);
   const effectiveEstimatedScore = current.scoreEstimate.estimatedMergedScore;
   const underlyingPotentialScore = current.scoreEstimate.pendingSaturationScore;
   const scoreabilityStatus = statusFor(args.repo, blockedBy, effectiveEstimatedScore, scenarioPreviews);
-  const warnings = warningsFor(args.input, args.repo, current);
+  const warnings = warningsFor(args.input, args.repo, current, branchEligibility);
   const actions = [
     ...(!current.gates.baseTokenGatePassed ? ["Increase meaningful source change size or scope clarity before relying on this preview."] : []),
     ...(current.scoreEstimate.openPrMultiplier === 0 ? ["Land or close existing open PRs before opening more concurrent work."] : []),
@@ -167,6 +191,10 @@ export function buildScorePreview(args: {
     ...(current.scoreEstimate.reviewPenaltyMultiplier < 1 ? ["Reduce review churn with tighter tests and clearer evidence."] : []),
     ...(current.scoreEstimate.labelMultiplier <= 1 && Object.keys(args.repo?.registryConfig?.labelMultipliers ?? {}).length > 0
       ? ["Check whether the change legitimately matches one of the repo's configured trusted labels."]
+      : []),
+    ...(branchEligibility.required && branchEligibility.status === "ineligible" ? ["Use an eligible branch or remove linked-issue assumptions before relying on this preview."] : []),
+    ...(branchEligibility.required && (branchEligibility.evidence === "missing" || branchEligibility.stale)
+      ? ["Refresh branch/base eligibility metadata before relying on linked-issue assumptions."]
       : []),
     ...(current.linkedIssueMultiplier.mode === "standard" && !current.linkedIssueMultiplier.eligible
       ? ["Validate linked issue context with solved-by-PR evidence before relying on the standard issue multiplier."]
@@ -183,6 +211,7 @@ export function buildScorePreview(args: {
     scoreEstimate: current.scoreEstimate,
     linkedIssueMultiplier: current.linkedIssueMultiplier,
     gates: current.gates,
+    branchEligibility,
     effectiveEstimatedScore,
     underlyingPotentialScore,
     blockedBy,
@@ -195,6 +224,7 @@ export function buildScorePreview(args: {
       "No future outcome or exact payout is guaranteed.",
       "Private API/MCP output only; public comments intentionally omit these details.",
       `Linked issue multiplier status: ${current.linkedIssueMultiplier.status}; ${current.linkedIssueMultiplier.reason}`,
+      ...branchEligibility.warnings,
       ...(args.input.scenarioNotes ?? []).map((note) => `User scenario note: ${note}`),
     ],
     recommendation: {
@@ -261,7 +291,8 @@ function computeScoreCore(
         : densityBaseScore;
   const activeContributionBonus = snapshot.activeModel === "pending_saturation_model" ? saturationContributionBonusValue : densityContributionBonus;
   const labelMultiplier = selectLabelMultiplier(input.labels ?? [], config?.labelMultipliers ?? {}, config?.defaultLabelMultiplier ?? 1);
-  const linkedIssueMultiplier = decideLinkedIssueMultiplier(input.linkedIssueMode ?? "none", input.linkedIssueContext, constants);
+  const branchEligibility = normalizeBranchEligibility(input);
+  const linkedIssueMultiplier = decideLinkedIssueMultiplier(input.linkedIssueMode ?? "none", input.linkedIssueContext, constants, branchEligibility);
   const issueMultiplier = linkedIssueMultiplier.appliedMultiplier;
   const credibilityObserved = clamp(input.credibility ?? inferCredibility(contributorEvidence), 0, 1);
   const credibilityFloor = constant(constants, "MIN_CREDIBILITY", 0.8);
@@ -461,7 +492,7 @@ function scenario(
   };
 }
 
-function blockedByFor(input: ScorePreviewInput, repo: RepositoryRecord | null, core: ScoreCore): ScoreGateBlocker[] {
+function blockedByFor(input: ScorePreviewInput, repo: RepositoryRecord | null, core: ScoreCore, branchEligibility = normalizeBranchEligibility(input)): ScoreGateBlocker[] {
   return [
     ...(!repo?.isRegistered
       ? [{ code: "repo_not_registered" as const, severity: "blocker" as const, detail: "Repository is not registered in the local Gittensory cache." }]
@@ -471,6 +502,27 @@ function blockedByFor(input: ScorePreviewInput, repo: RepositoryRecord | null, c
       : []),
     ...(input.metadataOnly
       ? [{ code: "metadata_only" as const, severity: "context" as const, detail: "Preview used metadata-only inputs, so token and density estimates are rough." }]
+      : []),
+    ...(branchEligibility.required && branchEligibility.status === "ineligible"
+      ? [
+          {
+            code: "branch_ineligible" as const,
+            severity: "reducer" as const,
+            detail: "Branch eligibility is confirmed ineligible; linked-issue multiplier assumptions are disabled.",
+          },
+        ]
+      : []),
+    ...(branchEligibility.required && branchEligibility.status === "unknown"
+      ? [
+          {
+            code: "branch_eligibility_missing" as const,
+            severity: "context" as const,
+            detail:
+              branchEligibility.evidence === "missing"
+                ? "Branch eligibility evidence is missing; refresh branch/base metadata before relying on linked-issue assumptions."
+                : "Branch eligibility is unknown; refresh branch/base metadata before relying on linked-issue assumptions.",
+          },
+        ]
       : []),
     ...(!core.gates.baseTokenGatePassed
       ? [{ code: "base_token_gate" as const, severity: "blocker" as const, detail: "Source token score does not pass the current base-score token gate." }]
@@ -561,8 +613,8 @@ function buildGateDeltas(current: ScoreCore, scenarios: ScoreScenarioPreview[]):
   ];
 }
 
-function warningsFor(input: ScorePreviewInput, repo: RepositoryRecord | null, core: ScoreCore): string[] {
-  return [...new Set([...blockedByFor(input, repo, core).map((blocker) => blocker.detail), ...core.linkedIssueMultiplier.warnings])];
+function warningsFor(input: ScorePreviewInput, repo: RepositoryRecord | null, core: ScoreCore, branchEligibility = normalizeBranchEligibility(input)): string[] {
+  return [...new Set([...blockedByFor(input, repo, core, branchEligibility).map((blocker) => blocker.detail), ...core.linkedIssueMultiplier.warnings])];
 }
 
 function statusFor(
@@ -596,6 +648,7 @@ function decideLinkedIssueMultiplier(
   mode: "none" | "standard" | "maintainer",
   context: LinkedIssueMultiplierContext | undefined,
   constants: Record<string, number>,
+  branchEligibility: BranchEligibilityResult,
 ): LinkedIssueMultiplierDecision {
   const baseMultiplier = selectIssueMultiplier(mode, constants);
   const issueNumbers = uniquePositiveInts(context?.issueNumbers ?? []);
@@ -631,8 +684,12 @@ function decideLinkedIssueMultiplier(
 
   const status = context?.status ?? (solvedByPullRequests.length > 0 ? "validated" : issueNumbers.length > 0 ? "raw" : "unavailable");
   const source = context?.source ?? (status === "unavailable" ? "missing" : "user_supplied");
-  const eligible = status === "validated";
-  const reason = context?.reason ?? linkedIssueReason(status, source, issueNumbers, solvedByPullRequests);
+  const branchEligible = !(branchEligibility.required && branchEligibility.status === "ineligible");
+  const eligible = status === "validated" && branchEligible;
+  const reason =
+    branchEligible || status !== "validated"
+      ? context?.reason ?? linkedIssueReason(status, source, issueNumbers, solvedByPullRequests)
+      : "Branch eligibility is confirmed ineligible; standard issue multiplier is not applied.";
   return {
     mode,
     status,
@@ -643,7 +700,7 @@ function decideLinkedIssueMultiplier(
     baseMultiplier,
     appliedMultiplier: eligible ? baseMultiplier : 1,
     reason,
-    warnings: [...new Set([...linkedIssueWarnings(status), ...(context?.warnings ?? [])])],
+    warnings: [...new Set([...linkedIssueWarnings(status), ...branchEligibility.warnings, ...(context?.warnings ?? [])])],
   };
 }
 
@@ -700,6 +757,50 @@ function selectIssueMultiplier(mode: "none" | "standard" | "maintainer", constan
   if (mode === "maintainer") return constant(constants, "MAINTAINER_ISSUE_MULTIPLIER", 1.66);
   if (mode === "standard") return constant(constants, "STANDARD_ISSUE_MULTIPLIER", 1.33);
   return 1;
+}
+
+function normalizeBranchEligibility(input: ScorePreviewInput): BranchEligibilityResult {
+  const required = input.linkedIssueMode === "standard";
+  const supplied = input.branchEligibility;
+  if (!required) {
+    return {
+      required: false,
+      status: "not_required",
+      evidence: supplied ? "provided" : "missing",
+      source: supplied ? supplied.source ?? "user_supplied" : "missing",
+      reason: supplied?.reason,
+      checkedAt: supplied?.checkedAt,
+      stale: Boolean(supplied?.stale),
+      warnings: [],
+    };
+  }
+  if (!supplied) {
+    return {
+      required: true,
+      status: "unknown",
+      evidence: "missing",
+      source: "missing",
+      stale: false,
+      warnings: ["Branch eligibility evidence is missing; refresh branch/base metadata before relying on linked-issue assumptions."],
+    };
+  }
+  const status = supplied.status ?? "unknown";
+  const stale = Boolean(supplied.stale);
+  const warnings = [
+    ...(status === "ineligible" ? ["Branch eligibility is confirmed ineligible; linked-issue multiplier assumptions are disabled."] : []),
+    ...(status === "unknown" ? ["Branch eligibility is unknown; refresh branch/base metadata before relying on linked-issue assumptions."] : []),
+    ...(stale ? ["Branch eligibility evidence is stale; refresh branch/base metadata before relying on linked-issue assumptions."] : []),
+  ];
+  return {
+    required: true,
+    status,
+    evidence: "provided",
+    source: supplied.source ?? "user_supplied",
+    reason: supplied.reason,
+    checkedAt: supplied.checkedAt,
+    stale,
+    warnings,
+  };
 }
 
 function inferCredibility(evidence?: ContributorEvidenceRecord | null): number {

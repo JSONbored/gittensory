@@ -808,6 +808,7 @@ describe("api routes", () => {
           ],
           validation: [{ command: "npm test -- cache", status: "passed", summary: "cache regression passed" }],
           localScorer: { mode: "external_command", sourceTokenScore: 42, totalTokenScore: 66, sourceLines: 44, testTokenScore: 20 },
+          branchEligibility: { status: "eligible", source: "github_metadata", checkedAt: "2026-05-30T00:00:00.000Z" },
         }),
       },
       env,
@@ -821,6 +822,7 @@ describe("api routes", () => {
       repoFullName: "entrius/allways-ui",
       preflight: { localDiff: { testFileCount: 1, inferredLinkedIssues: [7] } },
       scorePreview: { privateOnly: true },
+      branchEligibility: { required: true, status: "eligible", evidence: "provided" },
       rewardRisk: { rewardUpside: { relevantLane: "direct_pr" } },
       prPacket: { titleSuggestion: "Fix dashboard cache refresh after reconnect" },
     });

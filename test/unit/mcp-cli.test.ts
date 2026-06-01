@@ -481,6 +481,48 @@ describe("gittensory-mcp CLI", () => {
     expect(JSON.stringify(packet.validation)).not.toMatch(/C:\/Users|alice/i);
   });
 
+  it("sends branch eligibility metadata without local source contents", async () => {
+    tempDir = createPacketRepo();
+    mkdirSync(join(tempDir, "src"));
+    writeFileSync(join(tempDir, "src/eligible.ts"), "export const source = 'must stay local';\n");
+    git(tempDir, "add", "src/eligible.ts");
+    const requests: unknown[] = [];
+    const url = await startFixtureServer({ onPacketRequest: (body) => requests.push(body) });
+    await runAsync(
+      [
+        "agent",
+        "packet",
+        "--login",
+        "oktofeesh1",
+        "--cwd",
+        tempDir,
+        "--base",
+        "HEAD",
+        "--body",
+        "Fixes #90",
+        "--branch-eligibility",
+        "ineligible",
+        "--branch-eligibility-source",
+        "github_metadata",
+        "--branch-eligibility-reason",
+        "head branch is not eligible",
+        "--branch-eligibility-stale",
+        "false",
+        "--json",
+      ],
+      {
+        GITTENSORY_API_URL: url,
+        GITTENSORY_TOKEN: "session-token",
+        GITTENSORY_CONFIG_DIR: tempDir,
+      },
+    );
+
+    const packet = requests[0] as { branchEligibility: { status: string; source: string; reason: string; stale: boolean }; changedFiles: Array<{ path: string }> };
+    expect(packet.branchEligibility).toMatchObject({ status: "ineligible", source: "github_metadata", reason: "head branch is not eligible", stale: false });
+    expect(packet.changedFiles).toEqual(expect.arrayContaining([expect.objectContaining({ path: "src/eligible.ts" })]));
+    expect(JSON.stringify(packet)).not.toMatch(/must stay local|export const source/);
+  });
+
   it("classifies nonzero validation status phrases as failed", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
     git(tempDir, "init");

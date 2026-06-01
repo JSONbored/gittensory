@@ -3456,6 +3456,63 @@
               "credibilityObserved"
             ]
           },
+          "branchEligibility": {
+            "type": "object",
+            "properties": {
+              "required": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "eligible",
+                  "ineligible",
+                  "unknown",
+                  "not_required"
+                ]
+              },
+              "evidence": {
+                "type": "string",
+                "enum": [
+                  "provided",
+                  "missing"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "github_metadata",
+                  "local_metadata",
+                  "registry",
+                  "user_supplied",
+                  "missing"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "checkedAt": {
+                "type": "string"
+              },
+              "stale": {
+                "type": "boolean"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "required",
+              "status",
+              "evidence",
+              "source",
+              "stale",
+              "warnings"
+            ]
+          },
           "effectiveEstimatedScore": {
             "type": "number"
           },
@@ -3478,7 +3535,9 @@
                     "review_penalty",
                     "metadata_only",
                     "linked_issue_invalid",
-                    "linked_issue_unvalidated"
+                    "linked_issue_unvalidated",
+                    "branch_ineligible",
+                    "branch_eligibility_missing"
                   ]
                 },
                 "severity": {
@@ -3663,7 +3722,9 @@
                           "review_penalty",
                           "metadata_only",
                           "linked_issue_invalid",
-                          "linked_issue_unvalidated"
+                          "linked_issue_unvalidated",
+                          "branch_ineligible",
+                          "branch_eligibility_missing"
                         ]
                       },
                       "severity": {
@@ -3836,6 +3897,7 @@
           "scoreEstimate",
           "linkedIssueMultiplier",
           "gates",
+          "branchEligibility",
           "effectiveEstimatedScore",
           "underlyingPotentialScore",
           "blockedBy",
@@ -4591,7 +4653,9 @@
                             "review_penalty",
                             "metadata_only",
                             "linked_issue_invalid",
-                            "linked_issue_unvalidated"
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -4837,7 +4901,9 @@
                             "review_penalty",
                             "metadata_only",
                             "linked_issue_invalid",
-                            "linked_issue_unvalidated"
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -5083,7 +5149,9 @@
                             "review_penalty",
                             "metadata_only",
                             "linked_issue_invalid",
-                            "linked_issue_unvalidated"
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -5329,7 +5397,9 @@
                             "review_penalty",
                             "metadata_only",
                             "linked_issue_invalid",
-                            "linked_issue_unvalidated"
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -5575,7 +5645,9 @@
                             "review_penalty",
                             "metadata_only",
                             "linked_issue_invalid",
-                            "linked_issue_unvalidated"
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -5738,7 +5810,9 @@
                         "review_penalty",
                         "metadata_only",
                         "linked_issue_invalid",
-                        "linked_issue_unvalidated"
+                        "linked_issue_unvalidated",
+                        "branch_ineligible",
+                        "branch_eligibility_missing"
                       ]
                     },
                     "severity": {
@@ -5852,6 +5926,63 @@
               "source",
               "status",
               "notes"
+            ]
+          },
+          "branchEligibility": {
+            "type": "object",
+            "properties": {
+              "required": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "eligible",
+                  "ineligible",
+                  "unknown",
+                  "not_required"
+                ]
+              },
+              "evidence": {
+                "type": "string",
+                "enum": [
+                  "provided",
+                  "missing"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "github_metadata",
+                  "local_metadata",
+                  "registry",
+                  "user_supplied",
+                  "missing"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "checkedAt": {
+                "type": "string"
+              },
+              "stale": {
+                "type": "boolean"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "required",
+              "status",
+              "evidence",
+              "source",
+              "stale",
+              "warnings"
             ]
           },
           "rewardRisk": {
@@ -6192,6 +6323,7 @@
           "scenarioScorePreview",
           "observedPullRequestScenarios",
           "githubBranchStatus",
+          "branchEligibility",
           "rewardRisk",
           "scoreBlockers",
           "branchQualityBlockers",
