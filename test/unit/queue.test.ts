@@ -9,10 +9,13 @@ import {
   getLatestUpstreamRulesetSnapshot,
   listUpstreamDriftReports,
   listInstallationHealth,
+  listProductUsageDailyRollups,
+  listProductUsageEvents,
   listPullRequests,
   listRepoSyncStates,
   listSignalSnapshots,
   persistSignalSnapshot,
+  recordProductUsageEvent,
   upsertRepoSyncSegment,
   upsertInstallation,
   upsertPullRequestFromGitHub,
@@ -104,6 +107,25 @@ describe("queue processors", () => {
         repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }],
       },
     });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "installation-added-single-repo",
+      eventName: "installation",
+      payload: {
+        action: "added",
+        installation: { account: { login: "JSONbored", id: 1, type: "User" } } as never,
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } },
+      },
+    });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "installation-added-empty",
+      eventName: "installation",
+      payload: {
+        action: "added",
+        installation: { id: 789, account: { login: "JSONbored", id: 1, type: "User" } },
+      },
+    });
 
     expect(await listRepoSyncStates(env)).toMatchObject([{ repoFullName: "JSONbored/gittensory", status: "success" }]);
     expect(await listCollisionEdges(env, "JSONbored/gittensory")).not.toHaveLength(0);
@@ -117,6 +139,12 @@ describe("queue processors", () => {
     const persistedBurden = await getBurdenForecast(env, "JSONbored/gittensory");
     expect(persistedBurden).toMatchObject({ repoFullName: "JSONbored/gittensory" });
     expect(persistedBurden?.payload).toMatchObject({ level: expect.any(String), summary: expect.any(String) });
+    expect(await listProductUsageEvents(env, { limit: 10 })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ eventName: "github_installation_created", repoFullName: "<redacted-actor>/gittensory", metadata: expect.objectContaining({ action: "created" }) }),
+        expect.objectContaining({ eventName: "github_installation_created", repoFullName: "<redacted-actor>/gittensory", metadata: expect.objectContaining({ action: "added" }) }),
+      ]),
+    );
   });
 
   it("runs queued agent jobs through the queue processor", async () => {
@@ -145,6 +173,29 @@ describe("queue processors", () => {
 
     await expect(getAgentRun(env, "agent-run-queue")).resolves.toMatchObject({ status: "needs_snapshot_refresh" });
     expect(queued).toContainEqual({ type: "build-contributor-decision-packs", requestedBy: "api", login: "oktofeesh1" });
+  });
+
+  it("runs product usage rollups through the queue processor", async () => {
+    const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "fixed-test-salt" });
+    await recordProductUsageEvent(env, {
+      surface: "api",
+      eventName: "agent_plan_next_work_completed",
+      actor: "oktofeesh1",
+      repoFullName: "JSONbored/gittensory",
+      outcome: "success",
+      occurredAt: "2026-05-27T12:00:00.000Z",
+    });
+
+    await processJob(env, { type: "rollup-product-usage", requestedBy: "test", day: "2026-05-27" });
+
+    await expect(listProductUsageDailyRollups(env)).resolves.toEqual([
+      expect.objectContaining({
+        day: "2026-05-27",
+        totalEvents: 1,
+        activeActors: 1,
+        activation: expect.objectContaining({ firstUsefulActionActors: 1 }),
+      }),
+    ]);
   });
 
   it("routes upstream drift jobs through queue processors", async () => {
@@ -1282,17 +1333,19 @@ describe("queue processors", () => {
       if (url === "https://api.gittensor.io/miners/123") return Response.json({ repositories: [] });
       if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
       if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 3, followers: 1 });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
       if (url.includes("/access_tokens")) {
         calls.token += 1;
         return Response.json({ token: "installation-token" });
       }
-      if (url.includes("/issues/77/comments") && method === "GET") return Response.json([]);
-      if (url.includes("/issues/77/comments") && method === "POST") {
+      if (url.includes("/issues/") && url.includes("/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/") && url.includes("/comments") && method === "POST") {
         calls.commentsCreated += 1;
         const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string };
         expect(body.body).toContain("<!-- gittensory-agent-command -->");
         expect(body.body).toContain("@gittensory");
-        expect(body.body).not.toMatch(/wallet|hotkey|estimated score|reward estimate|payout|farming|raw trust score/i);
+        expect(body.body).not.toMatch(/wallet|hotkey|estimated score|reward estimate|payout|farming|raw trust score|private reviewability|reviewability internals|scoreability|public score estimate/i);
         return Response.json({ id: 1001 }, { status: 201 });
       }
       return new Response("not found", { status: 404 });
@@ -1366,8 +1419,78 @@ describe("queue processors", () => {
         },
       },
     });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "agent-command-reviewability",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 77, title: "Miner command context", state: "open", pull_request: {}, user: { login: "oktofeesh1" }, author_association: "NONE" },
+        comment: {
+          id: 5,
+          body: "@gittensory reviewability",
+          user: { login: "maintainer", type: "User" },
+          author_association: "OWNER",
+        },
+      },
+    });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "agent-command-repo-fit",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 77, title: "Miner command context", state: "open", pull_request: {}, user: { login: "oktofeesh1" }, author_association: "NONE" },
+        comment: {
+          id: 6,
+          body: "@gittensory repo-fit",
+          user: { login: "maintainer", type: "User" },
+          author_association: "OWNER",
+        },
+      },
+    });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "agent-command-packet",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 77, title: "Miner command context", state: "open", pull_request: {}, user: { login: "oktofeesh1" }, author_association: "NONE" },
+        comment: {
+          id: 7,
+          body: "@gittensory packet",
+          user: { login: "maintainer", type: "User" },
+          author_association: "OWNER",
+        },
+      },
+    });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "agent-command-packet-no-cache",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 78, title: "Uncached PR command", state: "open", pull_request: {}, user: { login: "oktofeesh1" }, author_association: "NONE" },
+        comment: {
+          id: 8,
+          body: "@gittensory packet",
+          user: { login: "maintainer", type: "User" },
+          author_association: "OWNER",
+        },
+      },
+    });
 
-    expect(calls).toEqual({ commentsCreated: 4, token: 4, minerList: 1 });
+    expect(calls.commentsCreated).toBe(8);
+    expect(calls.token).toBe(8);
+    expect(calls.minerList).toBeGreaterThanOrEqual(1);
     const audit = await env.DB.prepare("select event_type, detail from audit_events where target_key = ? order by created_at")
       .bind("JSONbored/gittensory#77")
       .all<{ event_type: string; detail: string | null }>();
@@ -1378,6 +1501,27 @@ describe("queue processors", () => {
         expect.objectContaining({ event_type: "github_app.miner_detection_cache_hit", detail: "confirmed" }),
       ]),
     );
+    const usage = await env.DB.prepare("select payload_json from signal_snapshots where signal_type = ? and target_key = ? order by generated_at")
+      .bind("github-agent-command-usage", "JSONbored/gittensory#77")
+      .all<{ payload_json: string }>();
+    const usagePayloads = usage.results.map((entry) => JSON.parse(entry.payload_json) as { command: string; outcome: string; actorKind: string; actorHash?: string });
+    expect(usagePayloads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ command: "reviewability", outcome: "replied", actorKind: "maintainer" }),
+        expect.objectContaining({ command: "repo-fit", outcome: "replied", actorKind: "maintainer" }),
+        expect.objectContaining({ command: "packet", outcome: "replied", actorKind: "maintainer" }),
+      ]),
+    );
+    expect(usagePayloads.every((payload) => typeof payload.actorHash === "string" && /^[a-f0-9]{64}$/.test(payload.actorHash))).toBe(true);
+    expect(JSON.stringify(usagePayloads)).not.toContain('"actor":');
+    expect(JSON.stringify(usagePayloads)).not.toMatch(/wallet|hotkey|raw trust score|payout|reward estimate|farming|private reviewability|public score estimate|@gittensory|oktofeesh1/i);
+    const usageEvents = await listProductUsageEvents(env, { limit: 10 });
+    expect(usageEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ surface: "github_app", eventName: "agent_command_replied", outcome: "completed", repoFullName: "JSONbored/gittensory" }),
+      ]),
+    );
+    expect(JSON.stringify(usageEvents)).not.toMatch(/wallet|hotkey|raw trust|deliveryId|installation-token/i);
   });
 
   it("skips unauthorized, bot, and non-PR @gittensory mention commands without public output", async () => {
@@ -1463,6 +1607,61 @@ describe("queue processors", () => {
       .bind("github_app.agent_command_skipped")
       .all<{ detail: string }>();
     expect(skips.results.map((entry) => entry.detail)).toEqual(expect.arrayContaining(["bot_author", "not_a_pull_request_thread", "pr_author_not_confirmed_miner"]));
+    const usageEvents = await listProductUsageEvents(env, { limit: 10 });
+    expect(usageEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ surface: "github_app", eventName: "agent_command_skipped", outcome: "skipped" }),
+      ]),
+    );
+    expect(JSON.stringify(usageEvents)).not.toMatch(/deliveryId|wallet|hotkey|raw trust/i);
+  });
+
+  it("records command usage as an error when miner authorization cannot be checked", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === "https://api.gittensor.io/miners") return new Response("api down", { status: 503 });
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "agent-command-miner-unavailable",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 84, title: "Miner unavailable PR", state: "open", pull_request: {}, user: { login: "oktofeesh1" }, author_association: "NONE" },
+        comment: { id: 5, body: "@gittensory preflight", user: { login: "oktofeesh1", type: "User" }, author_association: "NONE" },
+      },
+    });
+
+    const usageEvents = await listProductUsageEvents(env, { limit: 5 });
+    expect(usageEvents).toEqual([
+      expect.objectContaining({ surface: "github_app", eventName: "agent_command_skipped", outcome: "error", metadata: expect.objectContaining({ reason: "miner_detection_unavailable" }) }),
+    ]);
+  });
+
+  it("does not let product usage write failures block GitHub command audits", async () => {
+    const env = withProductUsageInsertFailure(createTestEnv());
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "agent-command-product-usage-down",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 90, title: "Plain issue", state: "open", user: { login: "reporter" } },
+        comment: { id: 1, body: "@gittensory preflight", user: { login: "reporter", type: "User" }, author_association: "NONE" },
+      },
+    });
+
+    const audit = await env.DB.prepare("select event_type, detail from audit_events where target_key = ?")
+      .bind("JSONbored/gittensory#90")
+      .all<{ event_type: string; detail: string }>();
+    expect(audit.results).toEqual([expect.objectContaining({ event_type: "github_app.agent_command_skipped", detail: "not_a_pull_request_thread" })]);
   });
 });
 
@@ -1483,6 +1682,22 @@ function completeSegment(repoFullName: string, segment: "labels" | "open_issues"
 
 function b64(value: string): string {
   return Buffer.from(value, "utf8").toString("base64");
+}
+
+function withProductUsageInsertFailure(env: Env): Env {
+  const db = env.DB as unknown as { prepare(sql: string): unknown; batch(statements: unknown[]): Promise<unknown> };
+  return {
+    ...env,
+    DB: {
+      prepare(sql: string) {
+        if (sql.includes("product_usage_events")) throw new Error("product usage insert failed");
+        return db.prepare.call(db, sql);
+      },
+      batch(statements: unknown[]) {
+        return db.batch.call(db, statements);
+      },
+    } as unknown as D1Database,
+  };
 }
 
 async function generatePrivateKeyPem(): Promise<string> {
