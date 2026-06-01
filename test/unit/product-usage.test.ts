@@ -47,6 +47,57 @@ describe("product usage events", () => {
     expect(JSON.stringify(row)).not.toMatch(/Oktofeesh1|gts_session_secret/i);
   });
 
+  it("redacts short actor names from persisted telemetry without corrupting unrelated words", async () => {
+    const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "fixed-test-salt" });
+
+    await recordProductUsageEvent(env, {
+      surface: "api",
+      eventName: "local_branch_analysis_completed",
+      actor: "ab",
+      repoFullName: "ab/private-tool",
+      targetKey: "ab:private-tool#139",
+      metadata: {
+        viewer: "ab",
+        note: "for ab, but cabin stays readable",
+        "ab": "owner key redacted too",
+      },
+    });
+
+    const [row] = await listProductUsageEvents(env);
+    expect(row).toBeDefined();
+    if (!row) throw new Error("expected product usage event");
+    expect(row.repoFullName).toBe("<redacted-actor>/private-tool");
+    expect(row.targetKey).toBe("<redacted-actor>:private-tool#139");
+    expect(row.metadata).toMatchObject({
+      viewer: "<redacted-actor>",
+      note: "for <redacted-actor>, but cabin stays readable",
+      "<redacted-actor>": "owner key redacted too",
+    });
+    expect(JSON.stringify(row)).not.toMatch(/"ab"|\bab\/|\bab:|for ab\b/i);
+  });
+
+  it("bounds actor redaction patterns while still covering long valid handles", async () => {
+    const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "fixed-test-salt" });
+    const actor = "a".repeat(200);
+
+    await recordProductUsageEvent(env, {
+      surface: "api",
+      eventName: "local_branch_analysis_completed",
+      actor,
+      repoFullName: `${actor}/private-tool`,
+      targetKey: `${actor}:private-tool#139`,
+      metadata: { viewer: actor },
+    });
+
+    const [row] = await listProductUsageEvents(env);
+    expect(row).toBeDefined();
+    if (!row) throw new Error("expected product usage event");
+    expect(row.repoFullName).toBe("<redacted-actor>/private-tool");
+    expect(row.targetKey).toBe("<redacted-actor>:private-tool#139");
+    expect(row.metadata).toMatchObject({ viewer: "<redacted-actor>" });
+    expect(JSON.stringify(row)).not.toContain(actor);
+  });
+
   it("redacts sensitive metadata before it reaches D1", async () => {
     const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "fixed-test-salt" });
 

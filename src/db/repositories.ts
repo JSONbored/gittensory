@@ -2972,12 +2972,12 @@ function boundedProductUsageField(value: unknown, maxLength: number): string | n
 
 function buildProductUsageActorRedactor(actor: unknown): RegExp | null {
   const normalized = typeof actor === "string" ? actor.trim() : "";
-  if (normalized.length < 4) return null;
-  return new RegExp(escapeRegExp(normalized), "gi");
+  if (!normalized || normalized.length > PRODUCT_USAGE_ACTOR_REDACTION_MAX_CHARS) return null;
+  return new RegExp(`(^|[^A-Za-z0-9])${escapeRegExp(normalized)}(?=$|[^A-Za-z0-9])`, "gi");
 }
 
 function redactProductUsageActor(value: string | null, actorRedactor: RegExp | null): string | null {
-  return value && actorRedactor ? value.replace(actorRedactor, "<redacted-actor>") : value;
+  return value && actorRedactor ? value.replace(actorRedactor, "$1<redacted-actor>") : value;
 }
 
 function escapeRegExp(value: string): string {
@@ -3229,6 +3229,7 @@ const PRODUCT_USAGE_METADATA_MAX_KEY_CHARS = 64;
 const PRODUCT_USAGE_METADATA_MAX_STRING_CHARS = 200;
 const PRODUCT_USAGE_ROLLUP_EVENT_SCAN_LIMIT = 5000;
 const MCP_COMPATIBILITY_ADOPTION_SCAN_LIMIT = 5000;
+const PRODUCT_USAGE_ACTOR_REDACTION_MAX_CHARS = 256;
 const PRODUCT_USAGE_USEFUL_ACTION_EVENTS = new Set([
   "command_previewed",
   "pull_context_viewed",
