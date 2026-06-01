@@ -859,7 +859,10 @@ function normalizeLogin(value: string): string {
 }
 
 function shortText(value: string, maxLength: number): string {
-  const sanitized = publicBlockerDetail(value).replace(/\s+/g, " ").trim();
+  const sanitized = sanitizePublicComment(value)
+    .replace(/[\u0000-\u001F\u007F]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   const safeText = neutralizePublicMarkdownText(sanitized);
   return safeText.length > maxLength ? `${safeText.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...` : safeText;
 }
