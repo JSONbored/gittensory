@@ -362,7 +362,7 @@ function buildOpenPrMonitorActions(run: AgentRunRecord, pack: ContributorDecisio
     "blocked",
   ]);
   return monitor.pullRequests
-    .filter((packet) => urgentClassifications.has(packet.classification))
+    .filter((packet) => urgentClassifications.has(packet.classification) && decisionByRepo.has(packet.repoFullName.toLowerCase()))
     .slice(0, 4)
     .map((packet, index) => {
       const decision = decisionByRepo.get(packet.repoFullName.toLowerCase());
