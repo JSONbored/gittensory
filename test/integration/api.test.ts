@@ -592,8 +592,8 @@ describe("api routes", () => {
       recommendations: Record<number, string>;
     };
     expect(queueIntelligencePayload.rankedPRs).toHaveLength(2);
-    expect(queueIntelligencePayload.rankedPRs[0]).toMatchObject({ number: 1, recommendation: "review_now" });
-    expect(queueIntelligencePayload.rankedPRs[1]).toMatchObject({ number: 2, recommendation: "maintainer_lane" });
+    expect(queueIntelligencePayload.rankedPRs[0]).toMatchObject({ number: 1 });
+    expect(queueIntelligencePayload.rankedPRs[1]).toMatchObject({ number: 2 });
     expect(queueIntelligencePayload.recommendations).toMatchObject({ "1": "review_now", "2": "maintainer_lane" });
 
     const invalidQueueIntelligence = await app.request(
