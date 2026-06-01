@@ -188,6 +188,24 @@ The frontend is a TanStack Start app imported from the Lovable `gittensory-docs`
 
 Cloudflare Workers Builds owns automatic frontend deployments from GitHub. The `.github/workflows/ui-deploy.yml` workflow is a manual validation fallback only.
 
+GitHub Pages and VitePress are retired. Do not add `site/`, `.vitepress`, `CNAME`, `gh-pages`, or Pages deployment workflows back to this repository.
+
+## Contributing
+
+Read `CONTRIBUTING.md` before opening an issue or PR. The contribution policy defines accepted areas, out-of-scope work, required PR contents, and the full validation gate.
+
+The normal PR gate is:
+
+```sh
+npm run test:ci
+```
+
+Coverage must stay at or above 97% for statements, branches, functions, and lines. Production smoke is available for release/maintainer validation:
+
+```sh
+npm run test:smoke:production
+```
+
 ## Changelog And Releases
 
 Normal feature/fix PRs do not edit changelogs. Keep PR titles Conventional Commit
@@ -213,6 +231,8 @@ npm run test:ci
 
 ## Support And Security
 
+- Contribution policy: `CONTRIBUTING.md`
+- Code of Conduct: `CODE_OF_CONDUCT.md`
 - Public support: `SUPPORT.md`
 - Security policy: `SECURITY.md`
 - Privacy and terms: `apps/gittensory-ui/src/routes/docs.privacy-security.tsx`
