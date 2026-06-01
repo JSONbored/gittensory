@@ -1300,6 +1300,7 @@ async function backfillRepository(env: Env, repo: RepositoryRecord, limits: Back
     warnings.push(...labels.warnings, ...issuePage.warnings, ...pullRequestPage.warnings, ...recentMergedPage.warnings);
 
     const issues = issuePage.items.filter((issue) => !issue.pull_request);
+    const openIssueCount = issues.length;
     const pullRequests = pullRequestPage.items;
     const recentMerged = recentMergedPage.items.filter((pr) => Boolean(pr.merged_at));
 
@@ -1378,7 +1379,7 @@ async function backfillRepository(env: Env, repo: RepositoryRecord, limits: Back
       primaryLanguage: metadata.language,
       defaultBranch: metadata.default_branch,
       isPrivate: metadata.private,
-      openIssuesCount: issuePage.fetchedCount,
+      openIssuesCount: openIssueCount,
       openPullRequestsCount: pullRequestPage.fetchedCount,
       recentMergedPullRequestsCount: recentMergedPage.fetchedCount,
       labelsSyncedAt: completedAt,
@@ -1397,7 +1398,7 @@ async function backfillRepository(env: Env, repo: RepositoryRecord, limits: Back
       fetchedAt: completedAt,
       primaryLanguage: metadata.language,
       defaultBranch: metadata.default_branch,
-      openIssuesCount: issuePage.fetchedCount,
+      openIssuesCount: openIssueCount,
       openPullRequestsCount: pullRequestPage.fetchedCount,
       recentMergedPullRequestsCount: recentMergedPage.fetchedCount,
       payload: {
@@ -1411,7 +1412,7 @@ async function backfillRepository(env: Env, repo: RepositoryRecord, limits: Back
     return {
       repoFullName: repo.fullName,
       status,
-      openIssues: issuePage.fetchedCount,
+      openIssues: openIssueCount,
       openPullRequests: pullRequestPage.fetchedCount,
       recentMergedPullRequests: recentMergedPage.fetchedCount,
       warnings,
