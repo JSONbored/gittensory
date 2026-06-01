@@ -1,58 +1,68 @@
-const match = location.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+import { parseGitHubPageTarget } from "./github-target.js";
+import { renderOverlayPanels } from "./overlay-safety.js";
 
-if (match) {
-  const [, owner, repo, pullNumber] = match;
-  mountOverlay({ owner, repo, pullNumber: Number(pullNumber) });
+const target = parseGitHubPageTarget(location.pathname);
+if (target?.kind === "pull") {
+  mountPullOverlay(target);
+} else if (target?.kind === "issue") {
+  mountIssueNotice(target);
 }
 
-function mountOverlay(target) {
+function mountPullOverlay(target) {
+  const container = createOverlayShell("Refresh Gittensory context");
+  document.body.appendChild(container);
+  const refresh = container.querySelector(".gittensory-overlay__refresh");
+  refresh?.addEventListener("click", () => loadPullContext(container, target));
+  void loadPullContext(container, target);
+}
+
+function mountIssueNotice(target) {
+  const container = createOverlayShell("Open related pull request");
+  const body = container.querySelector(".gittensory-overlay__body");
+  if (!body) return;
+  body.innerHTML = `
+    <section class="gittensory-overlay__panel">
+      <div class="gittensory-overlay__panel-head">
+        <strong>Issue page</strong>
+        <span>scaffold</span>
+      </div>
+      <p class="gittensory-overlay__notice">
+        Gittensory pull context is available on pull request pages for
+        <code>${escapeInline(target.owner)}/${escapeInline(target.repo)}</code>
+        issue #${target.issueNumber}. Open a linked pull request to load private reviewability context from the API.
+      </p>
+    </section>
+  `;
+  document.body.appendChild(container);
+}
+
+function createOverlayShell(refreshLabel) {
   const container = document.createElement("aside");
   container.className = "gittensory-overlay";
   container.innerHTML = `
     <div class="gittensory-overlay__header">
       <span class="gittensory-overlay__mark">G</span>
       <span>Gittensory</span>
-      <button type="button" class="gittensory-overlay__refresh" aria-label="Refresh Gittensory context">Refresh</button>
+      <button type="button" class="gittensory-overlay__refresh" aria-label="${refreshLabel}">Refresh</button>
     </div>
     <div class="gittensory-overlay__body">Loading private context...</div>
   `;
-  document.body.appendChild(container);
-  const refresh = container.querySelector(".gittensory-overlay__refresh");
-  refresh?.addEventListener("click", () => load(container, target));
-  void load(container, target);
+  return container;
 }
 
-async function load(container, target) {
+async function loadPullContext(container, target) {
   const body = container.querySelector(".gittensory-overlay__body");
   if (!body) return;
   body.textContent = "Loading private context...";
   const response = await chrome.runtime.sendMessage({ type: "gittensory:pull-context", ...target });
   if (!response?.ok) {
-    body.innerHTML = `<div class="gittensory-overlay__error">${escapeHtml(response?.error || "Context unavailable")}</div>`;
+    body.innerHTML = `<div class="gittensory-overlay__error">${escapeInline(response?.error || "Context unavailable")}</div>`;
     return;
   }
-  const panels = Array.isArray(response.payload?.panels) ? response.payload.panels : [];
-  body.innerHTML = panels
-    .map(
-      (panel) => `
-        <section class="gittensory-overlay__panel">
-          <div class="gittensory-overlay__panel-head">
-            <strong>${escapeHtml(panel.label || "Panel")}</strong>
-            <span>${escapeHtml(panel.badge || "live")}</span>
-          </div>
-          <dl>
-            ${(Array.isArray(panel.rows) ? panel.rows : [])
-              .map((row) => `<div><dt>${escapeHtml(row.k || "")}</dt><dd>${escapeHtml(row.v || "")}</dd></div>`)
-              .join("")}
-          </dl>
-        </section>
-      `,
-    )
-    .join("");
-  renderActions(body, response.payload?.actions);
+  body.innerHTML = renderOverlayPanels(response.payload?.panels);
 }
 
-function escapeHtml(value) {
+function escapeInline(value) {
   return String(value).replace(/[&<>"']/g, (char) => {
     switch (char) {
       case "&":

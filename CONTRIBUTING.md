@@ -151,6 +151,15 @@ Cloudflare/deploy:
   manual validation/fallback only.
 - Do not re-add GitHub Pages or static-site deployment workflows.
 
+Browser extension:
+
+- Source lives in `apps/gittensory-extension` as plain Manifest V3 JavaScript (no bundler).
+- Build with `npm run extension:build`; the zip is published under `apps/gittensory-ui/public/downloads/`.
+- Auth is extension-scoped `gts_*` tokens minted from the signed-in control panel (`POST /v1/auth/extension/session`), not GitHub PATs.
+- Keep `host_permissions` limited to GitHub and the configured Gittensory API origin; document any dev-only origin changes in the extension README.
+- The extension must not upload source or duplicate GitHub App intelligence; call `/v1/extension/pull-context` only.
+- Add `test/unit/extension-*.test.ts` coverage for URL detection, auth failures, and overlay redaction when behavior changes.
+
 MCP:
 
 - Preserve backwards compatibility where practical.

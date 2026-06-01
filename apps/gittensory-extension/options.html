@@ -64,7 +64,11 @@
   <body>
     <main>
       <h1>Gittensory extension</h1>
-      <p>Paste an extension session token from the Gittensory app. Session tokens stay in browser local storage, are never synced, and GitHub personal access tokens are rejected.</p>
+      <p>
+        Sign in to the Gittensory control panel with GitHub OAuth, then create an extension token on the
+        <a id="tokenPage" href="https://gittensory.aethereal.dev/extension" target="_blank" rel="noreferrer">browser extension page</a>.
+        Paste the scoped <code>gts_</code> token here. Session tokens stay in browser local storage, are never synced, and GitHub personal access tokens are rejected.
+      </p>
       <form id="settings">
         <label>
           API origin

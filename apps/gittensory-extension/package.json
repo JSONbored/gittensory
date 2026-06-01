@@ -1,0 +1,10 @@
+{
+  "name": "@jsonbored/gittensory-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Manifest V3 GitHub overlay for private Gittensory pull context.",
+  "scripts": {
+    "build": "node ../../scripts/build-extension.mjs"
+  }
+}

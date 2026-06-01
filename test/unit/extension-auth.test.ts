@@ -5,6 +5,7 @@ import * as extensionAuth from "../../apps/gittensory-extension/auth.js";
 
 const {
   EXTENSION_SESSION_EXPIRED_MESSAGE,
+  EXTENSION_SESSION_REQUIRED_MESSAGE,
   loadExtensionSession,
   logoutExtensionSession,
   requestPullContext,
@@ -69,6 +70,29 @@ describe("extension auth storage", () => {
     expect(storage.sync.dump()).toEqual({ apiOrigin: "https://api.gittensory.test" });
   });
 
+  it("fails fast when no extension session token is stored", async () => {
+    const storage = fakeExtensionStorage({ sync: { apiOrigin: "https://api.gittensory.test" } });
+    const fetchImpl = vi.fn();
+
+    await expect(requestPullContext({ owner: "JSONbored", repo: "gittensory", pullNumber: 148 }, { storage, fetchImpl })).rejects.toThrow(
+      EXTENSION_SESSION_REQUIRED_MESSAGE,
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("clears sessions when the API returns 401 unauthorized", async () => {
+    const storage = fakeExtensionStorage({
+      sync: { apiOrigin: "https://api.gittensory.test" },
+      local: { sessionToken: VALID_TOKEN, sessionExpiresAt: "2030-01-01T00:00:00.000Z" },
+    });
+    const fetchImpl = vi.fn(async () => jsonResponse(401, { error: "unauthorized" }));
+
+    await expect(requestPullContext({ owner: "JSONbored", repo: "gittensory", pullNumber: 148 }, { storage, fetchImpl })).rejects.toThrow(
+      EXTENSION_SESSION_EXPIRED_MESSAGE,
+    );
+    expect(storage.local.dump()).toEqual({});
+  });
+
   it("clears revoked or insufficient-scope sessions returned by the API", async () => {
     const storage = fakeExtensionStorage({
       sync: { apiOrigin: "https://api.gittensory.test" },
@@ -81,6 +105,19 @@ describe("extension auth storage", () => {
     expect(fetchImpl).toHaveBeenCalledWith(
       "https://api.gittensory.test/v1/extension/pull-context?owner=JSONbored&repo=gittensory&pullNumber=148",
       expect.objectContaining({ headers: expect.objectContaining({ authorization: `Bearer ${VALID_TOKEN}` }) }),
+    );
+    expect(storage.local.dump()).toEqual({});
+  });
+
+  it("clears sessions when the API returns insufficient_scope", async () => {
+    const storage = fakeExtensionStorage({
+      sync: { apiOrigin: "https://api.gittensory.test" },
+      local: { sessionToken: VALID_TOKEN, sessionExpiresAt: "2030-01-01T00:00:00.000Z" },
+    });
+    const fetchImpl = vi.fn(async () => jsonResponse(403, { error: "insufficient_scope" }));
+
+    await expect(requestPullContext({ owner: "JSONbored", repo: "gittensory", pullNumber: 148 }, { storage, fetchImpl })).rejects.toThrow(
+      EXTENSION_SESSION_EXPIRED_MESSAGE,
     );
     expect(storage.local.dump()).toEqual({});
   });

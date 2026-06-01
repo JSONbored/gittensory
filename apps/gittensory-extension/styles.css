@@ -98,6 +98,16 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.gittensory-overlay__notice {
+  margin: 0;
+  color: rgba(244, 247, 245, 0.82);
+}
+
+.gittensory-overlay__notice code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
 .gittensory-overlay__error {
   color: #ffb4a8;
 }
