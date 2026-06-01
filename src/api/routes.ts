@@ -791,6 +791,49 @@ export function createApp() {
     });
   });
 
+  app.get("/v1/app/notification-model", async (c) => {
+    const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
+    if (forbidden) return forbidden;
+    return c.json({
+      generatedAt: nowIso(),
+      notificationModel: {
+        mode: "opt_in",
+        defaultState: "disabled",
+        channels: [
+          {
+            id: "in_app_digest",
+            transport: "in_app",
+            defaultEnabled: true,
+            purpose: "Show control-panel digest and attention items after authenticated sign-in.",
+          },
+          {
+            id: "browser_push",
+            transport: "web_push",
+            defaultEnabled: false,
+            requiresPermission: true,
+            purpose: "Optional browser push alerts for install health and drift warnings.",
+          },
+        ],
+        privacyGuards: [
+          "Never include wallets, hotkeys, payout/reward estimates, raw trust scores, or farming language.",
+          "Require authenticated browser session before showing private maintainer/operator notification details.",
+          "Keep delivery opt-in and user-controlled on each device.",
+        ],
+        fallbackWhenUnavailable: "in_app_digest_only",
+      },
+      pwa: {
+        nativeDependency: false,
+        manifestPath: "/manifest.webmanifest",
+        serviceWorkerPath: "/sw.js",
+      },
+      mobileReadyRoutes: ["/app", "/app/runs", "/app/repos", "/app/maintainer", "/app/operator"],
+      nativeMobileFuture: [
+        "OS-level background sync for alerts when browser is closed.",
+        "Per-device biometric re-auth and secure lock-screen notification handling.",
+      ],
+    });
+  });
+
   app.get("/v1/app/commands", async (c) =>
     c.json({
       generatedAt: nowIso(),

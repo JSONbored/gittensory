@@ -9673,6 +9673,145 @@
         ]
       }
     },
+    "/v1/app/notification-model": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Opt-in notification model and PWA-readiness metadata for control-panel routes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "notificationModel": {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "opt_in"
+                          ]
+                        },
+                        "defaultState": {
+                          "type": "string",
+                          "enum": [
+                            "disabled"
+                          ]
+                        },
+                        "channels": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "transport": {
+                                "type": "string",
+                                "enum": [
+                                  "in_app",
+                                  "web_push"
+                                ]
+                              },
+                              "defaultEnabled": {
+                                "type": "boolean"
+                              },
+                              "requiresPermission": {
+                                "type": "boolean"
+                              },
+                              "purpose": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "transport",
+                              "defaultEnabled",
+                              "purpose"
+                            ]
+                          }
+                        },
+                        "privacyGuards": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "fallbackWhenUnavailable": {
+                          "type": "string",
+                          "enum": [
+                            "in_app_digest_only"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "defaultState",
+                        "channels",
+                        "privacyGuards",
+                        "fallbackWhenUnavailable"
+                      ]
+                    },
+                    "pwa": {
+                      "type": "object",
+                      "properties": {
+                        "nativeDependency": {
+                          "type": "boolean"
+                        },
+                        "manifestPath": {
+                          "type": "string"
+                        },
+                        "serviceWorkerPath": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "nativeDependency",
+                        "manifestPath",
+                        "serviceWorkerPath"
+                      ]
+                    },
+                    "mobileReadyRoutes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "nativeMobileFuture": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "notificationModel",
+                    "pwa",
+                    "mobileReadyRoutes",
+                    "nativeMobileFuture"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role does not allow control-panel notification model access"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/repos": {
       "get": {
         "responses": {
