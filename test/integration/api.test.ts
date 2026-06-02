@@ -2568,6 +2568,12 @@ describe("api routes", () => {
     const invalidCommandPreview = await app.request("/v1/app/commands/preview", { method: "POST", headers: apiHeaders(env), body: "{" }, env);
     expect(invalidCommandPreview.status).toBe(400);
 
+    const invalidQueueJson = await app.request("/v1/internal/queue-intelligence", { method: "POST", headers: internalHeaders, body: "{" }, env);
+    expect(invalidQueueJson.status).toBe(400);
+    const invalidQueueShape = await app.request("/v1/internal/queue-intelligence", { method: "POST", headers: internalHeaders, body: "{}" }, env);
+    expect(invalidQueueShape.status).toBe(400);
+    await expect(invalidQueueShape.json()).resolves.toMatchObject({ error: "invalid_request", detail: "pullRequests array required" });
+
     const invalidDigestJson = await app.request("/v1/app/digest/subscriptions", { method: "POST", headers: { cookie: `gittensory_session=${noIdToken}` }, body: "{" }, env);
     expect(invalidDigestJson.status).toBe(400);
 
