@@ -431,6 +431,272 @@ describe("product usage events", () => {
     await expect(getProductUsageRollupStatus(env, { nowIso: "2026-05-31T00:40:00.000Z" })).resolves.toMatchObject({ status: "ready", warnings: [] });
   });
 
+  it("builds empty role and retention rollups for days without product usage", async () => {
+    const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "fixed-test-salt" });
+    const result = await rollupProductUsageDaily(env, { day: "2026-06-01", nowIso: "2026-06-02T00:00:00.000Z" });
+
+    expect(result.rollups[0]).toMatchObject({
+      day: "2026-06-01",
+      status: "complete",
+      totalEvents: 0,
+      activeActors: 0,
+      byRole: [],
+      activationByRole: [],
+      activationBySurface: [],
+      retention: [
+        { window: "previous_7_days", capped: false, activeActors: 0, retainedActors: 0, retentionRate: 0, byRole: [], bySurface: [] },
+        { window: "previous_30_days", capped: false, activeActors: 0, retainedActors: 0, retentionRate: 0, byRole: [], bySurface: [] },
+      ],
+    });
+  });
+
+  it("recomputes single-role retention rollups when late product usage makes a day stale", async () => {
+    const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "fixed-test-salt" });
+    const day = "2026-06-12";
+    await recordProductUsageEvent(env, {
+      surface: "api",
+      eventName: "agent_pr_packet_completed",
+      actor: "single-miner",
+      outcome: "success",
+      metadata: { role: "miner" },
+      occurredAt: "2026-06-05T12:00:00.000Z",
+    });
+    await rollupProductUsageDaily(env, { day: "2026-06-05", nowIso: "2026-06-06T00:00:00.000Z" });
+    await recordProductUsageEvent(env, {
+      surface: "api",
+      eventName: "agent_pr_packet_completed",
+      actor: "single-miner",
+      outcome: "success",
+      metadata: { role: "miner" },
+      occurredAt: `${day}T01:00:00.000Z`,
+    });
+
+    const firstRun = await rollupProductUsageDaily(env, { day, nowIso: "2026-06-13T00:00:00.000Z" });
+    expect(firstRun.rollups[0]).toMatchObject({
+      byRole: [{ role: "miner", count: 1, activeActors: 1, activeRepos: 0 }],
+      activationByRole: [expect.objectContaining({ role: "miner", firstUsefulActionActors: 1 })],
+      activationBySurface: [expect.objectContaining({ surface: "api", firstUsefulActionActors: 1 })],
+      retention: expect.arrayContaining([
+        expect.objectContaining({
+          window: "previous_7_days",
+          activeActors: 1,
+          retainedActors: 1,
+          byRole: [{ role: "miner", activeActors: 1, retainedActors: 1, retentionRate: 1 }],
+        }),
+      ]),
+    });
+
+    await recordProductUsageEvent(env, {
+      surface: "github_app",
+      eventName: "github_installation_created",
+      actor: "late-owner",
+      repoFullName: "JSONbored/gittensory",
+      outcome: "completed",
+      occurredAt: `${day}T23:00:00.000Z`,
+    });
+    await expect(getProductUsageRollupStatus(env, { nowIso: "2026-06-13T00:10:00.000Z" })).resolves.toMatchObject({ status: "stale", staleDays: [day] });
+
+    const rerun = await rollupProductUsageDaily(env, { day, nowIso: "2026-06-13T00:20:00.000Z" });
+    expect(rerun.rollups[0]).toMatchObject({
+      totalEvents: 2,
+      activeActors: 2,
+      byRole: expect.arrayContaining([
+        { role: "miner", count: 1, activeActors: 1, activeRepos: 0 },
+        { role: "owner", count: 1, activeActors: 1, activeRepos: 1 },
+      ]),
+      retention: expect.arrayContaining([
+        expect.objectContaining({
+          window: "previous_7_days",
+          activeActors: 2,
+          retainedActors: 1,
+          retentionRate: 0.5,
+          byRole: expect.arrayContaining([
+            { role: "miner", activeActors: 1, retainedActors: 1, retentionRate: 1 },
+            { role: "owner", activeActors: 1, retainedActors: 0, retentionRate: 0 },
+          ]),
+        }),
+      ]),
+    });
+    expect(JSON.stringify(rerun.rollups[0])).not.toMatch(/single-miner|late-owner|fixed-test-salt/i);
+  });
+
+  it("normalizes explicit role metadata variants into aggregate buckets", async () => {
+    const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "fixed-test-salt" });
+    const day = "2026-06-14";
+    await recordProductUsageEvent(env, {
+      surface: "control_panel",
+      eventName: "command_previewed",
+      actor: "multi-role-actor",
+      outcome: "success",
+      metadata: {
+        roles: [
+          "miners",
+          "maintainers",
+          "owners",
+          "repo-owner",
+          "repo owners",
+          "repository-owner",
+          "repository owners",
+          "operators",
+          "author",
+          "contributors",
+          "outside contributor",
+          "outside-contributors",
+          "unknown",
+        ],
+      },
+      occurredAt: `${day}T01:00:00.000Z`,
+    });
+    await recordProductUsageEvent(env, {
+      surface: "control_panel",
+      eventName: "command_previewed",
+      actor: "reviewer-actor",
+      outcome: "success",
+      metadata: { actorKind: "reviewer" },
+      occurredAt: `${day}T02:00:00.000Z`,
+    });
+    await recordProductUsageEvent(env, {
+      surface: "control_panel",
+      eventName: "command_previewed",
+      actor: "none-actor",
+      outcome: "success",
+      metadata: { audience: "none" },
+      occurredAt: `${day}T03:00:00.000Z`,
+    });
+    await recordProductUsageEvent(env, {
+      surface: "control_panel",
+      eventName: "command_previewed",
+      actor: "invalid-role-actor",
+      outcome: "success",
+      metadata: { role: "not-a-product-role" },
+      occurredAt: `${day}T04:00:00.000Z`,
+    });
+    await recordProductUsageEvent(env, {
+      surface: "api",
+      eventName: "pr_public_surface_published",
+      actor: "public-surface-actor",
+      outcome: "success",
+      occurredAt: `${day}T05:00:00.000Z`,
+    });
+
+    const result = await rollupProductUsageDaily(env, { day, nowIso: "2026-06-15T00:00:00.000Z" });
+
+    expect(result.rollups[0]?.byRole).toEqual(
+      expect.arrayContaining([
+        { role: "owner", count: 1, activeActors: 1, activeRepos: 0 },
+        { role: "operator", count: 1, activeActors: 1, activeRepos: 0 },
+        { role: "miner", count: 1, activeActors: 1, activeRepos: 0 },
+        { role: "contributor", count: 2, activeActors: 2, activeRepos: 0 },
+        { role: "maintainer", count: 2, activeActors: 2, activeRepos: 0 },
+        { role: "unknown", count: 3, activeActors: 3, activeRepos: 0 },
+      ]),
+    );
+    expect(JSON.stringify(result.rollups[0])).not.toMatch(/multi-role-actor|reviewer-actor|none-actor|invalid-role-actor|public-surface-actor|fixed-test-salt/i);
+  });
+
+  it("builds role activation and coarse retention rollups without exposing actors", async () => {
+    const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "fixed-test-salt" });
+    const day = "2026-06-10";
+    await recordProductUsageEvent(env, {
+      surface: "mcp",
+      eventName: "mcp_request",
+      actor: "miner-retained",
+      outcome: "success",
+      metadata: { role: "miner" },
+      occurredAt: "2026-06-04T12:00:00.000Z",
+    });
+    await recordProductUsageEvent(env, {
+      surface: "github_app",
+      eventName: "agent_command_replied",
+      actor: "maintainer-retained",
+      outcome: "completed",
+      metadata: { command: "blockers", actorKind: "maintainer" },
+      occurredAt: "2026-06-06T12:00:00.000Z",
+    });
+    await recordProductUsageEvent(env, {
+      surface: "control_panel",
+      eventName: "auth_session_created",
+      actor: "miner-retained",
+      outcome: "success",
+      metadata: { role: "miner" },
+      occurredAt: `${day}T01:00:00.000Z`,
+    });
+    await recordProductUsageEvent(env, {
+      surface: "mcp",
+      eventName: "mcp_request",
+      actor: "miner-retained",
+      outcome: "success",
+      metadata: { role: "miner" },
+      occurredAt: `${day}T01:05:00.000Z`,
+    });
+    await recordProductUsageEvent(env, {
+      surface: "api",
+      eventName: "agent_pr_packet_completed",
+      actor: "miner-retained",
+      outcome: "success",
+      metadata: { role: "miner" },
+      occurredAt: `${day}T01:10:00.000Z`,
+    });
+    await recordProductUsageEvent(env, {
+      surface: "github_app",
+      eventName: "agent_command_replied",
+      actor: "maintainer-retained",
+      repoFullName: "JSONbored/gittensory",
+      outcome: "completed",
+      metadata: { command: "blockers", actorKind: "maintainer" },
+      occurredAt: `${day}T02:00:00.000Z`,
+    });
+    await recordProductUsageEvent(env, {
+      surface: "github_app",
+      eventName: "github_installation_created",
+      actor: "new-owner",
+      repoFullName: "JSONbored/gittensory",
+      outcome: "completed",
+      occurredAt: `${day}T03:00:00.000Z`,
+    });
+
+    const result = await rollupProductUsageDaily(env, { day, nowIso: "2026-06-11T00:00:00.000Z" });
+
+    expect(result.rollups[0]).toMatchObject({
+      day,
+      totalEvents: 5,
+      activeActors: 3,
+      byRole: expect.arrayContaining([
+        { role: "miner", count: 3, activeActors: 1, activeRepos: 0 },
+        { role: "maintainer", count: 1, activeActors: 1, activeRepos: 1 },
+        { role: "owner", count: 1, activeActors: 1, activeRepos: 1 },
+      ]),
+      activationByRole: expect.arrayContaining([
+        expect.objectContaining({ role: "miner", loginActors: 1, doctorPassActors: 1, firstUsefulActionActors: 1, fullyActivatedActors: 1 }),
+        expect.objectContaining({ role: "maintainer", githubUsefulMaintainerRepos: 1 }),
+        expect.objectContaining({ role: "owner", githubInstalledRepos: 1 }),
+      ]),
+      activationBySurface: expect.arrayContaining([
+        expect.objectContaining({ surface: "mcp", doctorPassActors: 1 }),
+        expect.objectContaining({ surface: "github_app", githubInstalledRepos: 1, githubUsefulMaintainerRepos: 1 }),
+      ]),
+      retention: expect.arrayContaining([
+        expect.objectContaining({
+          window: "previous_7_days",
+          activeActors: 3,
+          retainedActors: 2,
+          retentionRate: 0.6667,
+          capped: false,
+          byRole: expect.arrayContaining([
+            { role: "miner", activeActors: 1, retainedActors: 1, retentionRate: 1 },
+            { role: "maintainer", activeActors: 1, retainedActors: 1, retentionRate: 1 },
+            { role: "owner", activeActors: 1, retainedActors: 0, retentionRate: 0 },
+          ]),
+          bySurface: expect.arrayContaining([
+            { surface: "mcp", activeActors: 1, retainedActors: 1, retentionRate: 1 },
+            { surface: "github_app", activeActors: 2, retainedActors: 1, retentionRate: 0.5 },
+          ]),
+        }),
+      ]),
+    });
+    expect(JSON.stringify(result.rollups[0])).not.toMatch(/miner-retained|maintainer-retained|new-owner|fixed-test-salt/i);
+  });
+
   it("classifies rollup route classes and rejects failed activation signals", async () => {
     const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "fixed-test-salt" });
     const day = "2026-05-27";
