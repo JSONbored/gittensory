@@ -242,6 +242,38 @@ describe("GitHub mention commands", () => {
     expect(ask).toContain("Source: cached GitHub issues/PRs/recent merges/checks, signal snapshots, focus manifest, and upstream ruleset status.");
     expect(ask).toContain("Freshness: agent run status completed.");
     expect(ask).toContain("Connected sources: cached issues, pull requests, recent merges, check/review status");
+
+    const askWithTargets = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory ask what should I clean up before review?")!,
+      repo: null,
+      issue: { number: 15, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "author",
+      bundle: {
+        run: completedRun("run-ask-targets"),
+        actions: [
+          {
+            id: "ask-target-action",
+            runId: "run-ask-targets",
+            actionType: "prepare_pr_packet",
+            targetRepoFullName: "owner/repo",
+            targetPullNumber: 88,
+            targetIssueNumber: 34,
+            status: "recommended",
+            recommendation: "Prepare packet",
+            why: [],
+            blockedBy: [],
+            publicSafeSummary: "Prepare a concise packet and verify linked context.",
+            approvalRequired: false,
+            safetyClass: "public_safe",
+            payload: {},
+          },
+        ],
+        contextSnapshots: [],
+        summary: "ask targets",
+      },
+    });
+    expect(askWithTargets).toContain("owner/repo PR #88 issue #34; source: action prepare_pr_packet; freshness: completed.");
   });
 
   it("does not publish private blocker why details", () => {
