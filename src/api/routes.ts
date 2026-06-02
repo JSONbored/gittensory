@@ -1523,6 +1523,8 @@ export function createApp() {
 
   app.get("/v1/contributors/:login/profile", async (c) => {
     const login = c.req.param("login");
+    const unauthorized = await requireContributorAccess(c, login);
+    if (unauthorized) return unauthorized;
     const [github, pullRequests, issues, cachedRepoStats, gittensorSnapshot] = await Promise.all([
       fetchPublicContributorProfile(login),
       listContributorPullRequests(c.env, login),

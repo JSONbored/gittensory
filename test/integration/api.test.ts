@@ -3533,6 +3533,49 @@ describe("api routes", () => {
     expect(JSON.stringify(mcpUsageEvents)).not.toMatch(/oktofeesh1|\/Users|github_pat|ghp_|source code|wallet|hotkey|raw trust/i);
   }, 15_000);
 
+  it("gates the MCP contributor profile and redacts miner financial fields", async () => {
+    const app = createApp();
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "oktofeesh1,other" });
+    stubConfirmedMinerFetch();
+
+    const profileCall = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({ jsonrpc: "2.0", id: "profile", method: "tools/call", params: { name: "gittensory_get_contributor_profile", arguments: { login: "oktofeesh1" } } }),
+      },
+      env,
+    );
+    expect(profileCall.status).toBe(200);
+    const profilePayload = (await mcpJson(profileCall)) as {
+      result: { structuredContent: { login: string; gittensor?: Record<string, unknown> }; content: Array<{ text: string }> };
+    };
+    expect(profilePayload.result.structuredContent.login).toBe("oktofeesh1");
+    const gittensor = profilePayload.result.structuredContent.gittensor ?? {};
+    expect(gittensor).toHaveProperty("credibility");
+    expect(gittensor).not.toHaveProperty("hotkey");
+    expect(gittensor).not.toHaveProperty("alphaPerDay");
+    expect(gittensor).not.toHaveProperty("taoPerDay");
+    expect(gittensor).not.toHaveProperty("usdPerDay");
+    expect(profilePayload.result.content[0]?.text ?? "").not.toMatch(/alphaPerDay|taoPerDay|usdPerDay|hotkey/i);
+
+    const { token } = await createSessionForGitHubUser(env, { login: "other", id: 987 });
+    const forbiddenProfile = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, accept: "application/json, text/event-stream", "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "forbidden-profile", method: "tools/call", params: { name: "gittensory_get_contributor_profile", arguments: { login: "oktofeesh1" } } }),
+      },
+      env,
+    );
+    expect(forbiddenProfile.status).toBe(200);
+    const forbiddenPayload = await mcpJson(forbiddenProfile);
+    expect(JSON.stringify(forbiddenPayload)).toMatch(/Forbidden|error|isError/i);
+    expect(JSON.stringify(forbiddenPayload)).not.toMatch(/alphaPerDay|taoPerDay|usdPerDay/i);
+  });
+
   it("covers registration-readiness policy variants for repo-owner launch planning", async () => {
     const app = createApp();
     const env = createTestEnv();
@@ -4167,6 +4210,36 @@ function stubOktofeeshFetch(): void {
     if (url.includes("/users/oktofeesh1/repos")) {
       return Response.json([{ language: "TypeScript" }, { language: "Python" }, { language: "TypeScript" }]);
     }
+    return new Response("not found", { status: 404 });
+  });
+}
+
+function stubConfirmedMinerFetch(): void {
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const url = input.toString();
+    if (url === "https://api.gittensor.io/miners") {
+      return Response.json([
+        {
+          uid: 7,
+          hotkey: "5FHotkeySecretValue",
+          githubUsername: "oktofeesh1",
+          githubId: "12345",
+          totalPrs: 4,
+          totalMergedPrs: 3,
+          isEligible: true,
+          credibility: 1,
+          eligibleRepoCount: 1,
+          alphaPerDay: 72.5,
+          taoPerDay: 0.3,
+          usdPerDay: 92.4,
+        },
+      ]);
+    }
+    if (url === "https://api.gittensor.io/miners/12345") return Response.json({ repositories: [] });
+    if (url === "https://api.gittensor.io/miners/12345/prs") return Response.json([]);
+    if (url === "https://mirror.gittensor.io/api/v1/miners/12345/issues") return Response.json({ issues: [] });
+    if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 42, followers: 7 });
+    if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
     return new Response("not found", { status: 404 });
   });
 }

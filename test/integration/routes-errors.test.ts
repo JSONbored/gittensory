@@ -163,6 +163,10 @@ describe("api route guards and error branches", () => {
     expect(victimDecisionPack.status).toBe(403);
     await expect(victimDecisionPack.json()).resolves.toMatchObject({ error: "forbidden_contributor" });
 
+    const victimProfile = await app.request("/v1/contributors/victim/profile", { headers: sessionHeaders }, env);
+    expect(victimProfile.status).toBe(403);
+    await expect(victimProfile.json()).resolves.toMatchObject({ error: "forbidden_contributor" });
+
     const ownOpenPrMonitor = await app.request("/v1/contributors/attacker/open-pr-monitor", { headers: sessionHeaders }, env);
     expect(ownOpenPrMonitor.status).toBe(200);
     await expect(ownOpenPrMonitor.json()).resolves.toMatchObject({ login: "attacker", pullRequests: expect.any(Array) });
