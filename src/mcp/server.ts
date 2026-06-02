@@ -66,6 +66,7 @@ import { buildRepoDataQuality } from "../signals/data-quality";
 import { loadUpstreamStatus } from "../upstream/ruleset";
 
 type AppContext = Context<{ Bindings: Env }>;
+type AgentsMcpServer = Parameters<typeof createMcpHandler>[0];
 type ToolPayload = {
   summary: string;
   data: Record<string, unknown>;
@@ -173,7 +174,7 @@ const localBranchAnalysisShape = {
   expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).max(20).optional(),
-  focusManifest: z.record(z.unknown()).optional(),
+  focusManifest: z.record(z.string(), z.unknown()).optional(),
   branchEligibility: z.object(branchEligibilityShape).strict().optional(),
   localScorer: z
     .object({
@@ -262,7 +263,7 @@ export async function handleMcpRequest(c: AppContext): Promise<Response> {
   const startedAt = Date.now();
   const server = new GittensoryMcp(c.env, identity).createServer();
   try {
-    const response = await createMcpHandler(server, { route: "/mcp", enableJsonResponse: true })(c.req.raw, c.env, getExecutionContext(c));
+    const response = await createMcpHandler(server as unknown as AgentsMcpServer, { route: "/mcp", enableJsonResponse: true })(c.req.raw, c.env, getExecutionContext(c));
     await recordProductUsageEvent(c.env, {
       surface: "mcp",
       eventName: typeof usageMetadata.toolName === "string" ? "mcp_tool_called" : "mcp_request",
