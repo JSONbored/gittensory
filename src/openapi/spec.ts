@@ -2,6 +2,7 @@ import { OpenApiGeneratorV3, OpenAPIRegistry } from "@asteasolutions/zod-to-open
 import { z } from "zod";
 import {
   AdvisorySchema,
+  ActionPortfolioSchema,
   AgentActionSchema,
   AgentContextSnapshotSchema,
   AgentRunBundleSchema,
@@ -12,6 +13,7 @@ import {
   BurdenForecastSchema,
   CollisionReportSchema,
   ConfigQualitySchema,
+  CommandPreviewResponseSchema,
   ContributorFitSchema,
   ContributorIntakeHealthSchema,
   ContributorOutcomeHistorySchema,
@@ -80,6 +82,7 @@ export function buildOpenApiSpec() {
   registry.register("RegistrySnapshot", RegistrySnapshotSchema);
   registry.register("Repository", RepositorySchema);
   registry.register("Advisory", AdvisorySchema);
+  registry.register("ActionPortfolio", ActionPortfolioSchema);
   registry.register("WorkboardItem", WorkboardItemSchema);
   registry.register("QueueHealth", QueueHealthSchema);
   registry.register("CollisionReport", CollisionReportSchema);
@@ -116,6 +119,7 @@ export function buildOpenApiSpec() {
   registry.register("RepositorySettings", RepositorySettingsSchema);
   registry.register("InstallationRepair", InstallationRepairSchema);
   registry.register("RepoSettingsPreview", RepoSettingsPreviewSchema);
+  registry.register("CommandPreviewResponse", CommandPreviewResponseSchema);
   registry.register("AgentRun", AgentRunSchema);
   registry.register("AgentAction", AgentActionSchema);
   registry.register("AgentContextSnapshot", AgentContextSnapshotSchema);
@@ -612,7 +616,18 @@ export function buildOpenApiSpec() {
       },
     });
   }
-  for (const path of ["/v1/app/commands/preview", "/v1/app/commands/feedback", "/v1/app/digest/subscriptions"]) {
+  registry.registerPath({
+    method: "post",
+    path: "/v1/app/commands/preview",
+    responses: {
+      200: { description: "Maintainer dry-run preview of a sanitized @gittensory command response (no GitHub mutation)", content: { "application/json": { schema: CommandPreviewResponseSchema } } },
+      400: { description: "Invalid request" },
+      401: { description: "Unauthorized" },
+      403: { description: "Insufficient app role" },
+      404: { description: "Command not found" },
+    },
+  });
+  for (const path of ["/v1/app/commands/feedback", "/v1/app/digest/subscriptions"]) {
     registry.registerPath({
       method: "post",
       path,
