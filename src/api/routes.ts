@@ -316,7 +316,7 @@ const localBranchAnalysisSchema = z
     scenarioNotes: z.array(z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS)).max(20).optional(),
     pendingCommitCount: z.number().int().min(0).optional(),
     ciStatusHints: z.array(z.string().max(MAX_LOCAL_BRANCH_TEXT_CHARS)).max(20).optional(),
-    focusManifest: z.record(z.unknown()).optional(),
+    focusManifest: z.record(z.string(), z.unknown()).optional(),
     branchEligibility: branchEligibilitySchema.optional(),
   })
   .strict();
@@ -2724,7 +2724,7 @@ function normalizeOrigin(value: string | undefined): string | null {
   }
 }
 
-function buildExtensionPublicSafePacket(args: { repoFullName: string; pullNumber: number; contributor: string; reviewability: { action: string; noiseSources: string[]; maintainerNextSteps: string[] } }): string {
+function buildExtensionPublicSafePacket(args: { repoFullName: string; pullNumber: number; contributor: string; reviewability: { action: string; noiseSources?: string[]; maintainerNextSteps?: string[] } }): string {
   const lines = [
     "# Public-safe PR packet",
     "",
@@ -2734,19 +2734,34 @@ function buildExtensionPublicSafePacket(args: { repoFullName: string; pullNumber
     `- Contributor: ${args.contributor}`,
     "",
     "## Review readiness",
-    `- Current action: ${args.reviewability.action.replace(/_/g, " ")}`,
-    ...args.reviewability.maintainerNextSteps.slice(0, 4).map((step) => `- ${step}`),
+    ...extensionPublicReviewReadinessLines(args.reviewability.action),
     "",
     "## Queue caution",
-    ...(args.reviewability.noiseSources.length > 0
-      ? args.reviewability.noiseSources.slice(0, 4).map((source) => `- ${source}`)
-      : ["- No high-noise warning is visible from cached metadata."]),
+    "- Use only public GitHub context when discussing prioritization or next steps.",
+    "- Keep private reviewability signals in the extension and out of public comments.",
     "",
     "## Safety",
     "- Keep public comments limited to linked context, validation status, and maintainer-ready next steps.",
   ];
   const markdown = sanitizePublicComment(lines.join("\n"));
   return ensureExtensionPublicSafeText(markdown);
+}
+
+function extensionPublicReviewReadinessLines(action: string): string[] {
+  switch (action) {
+    case "review_now":
+      return ["- Public status: ready for maintainer review.", "- Suggested next step: review the technical diff and public checks."];
+    case "maintainer_lane":
+      return ["- Public status: maintainer follow-up recommended.", "- Suggested next step: verify the public diff and repository impact."];
+    case "likely_duplicate":
+      return ["- Public status: possible overlap to verify.", "- Suggested next step: compare against linked public issues, active PRs, and recent merges."];
+    case "close_or_redirect":
+      return ["- Public status: triage may be needed before review.", "- Suggested next step: confirm whether the public PR context is still current and actionable."];
+    case "needs_author":
+      return ["- Public status: author input may be needed before deep review.", "- Suggested next step: ask for missing public context, tests, or validation details."];
+    default:
+      return ["- Public status: keep monitoring the public PR context.", "- Suggested next step: watch for public tests, checks, linked context, or related changes before prioritizing review."];
+  }
 }
 
 function buildExtensionPrivateBlockers(reviewability: { noiseSources: string[]; maintainerNextSteps: string[]; privateSummary: string }) {
