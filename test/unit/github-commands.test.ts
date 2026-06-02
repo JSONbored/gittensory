@@ -389,6 +389,30 @@ describe("GitHub mention commands", () => {
     });
     expect(duplicateRefresh).toContain("**Duplicate-check snapshot refresh**");
 
+    const askRefresh = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory ask should I update linked issue context?")!,
+      repo: null,
+      issue: { number: 35, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "author",
+      bundle: {
+        run: {
+          id: "run-ask-refresh",
+          objective: "refresh",
+          actorLogin: "oktofeesh1",
+          surface: "github_comment",
+          mode: "copilot",
+          status: "needs_snapshot_refresh",
+          dataQualityStatus: "unknown",
+          payload: {},
+        },
+        actions: [],
+        contextSnapshots: [],
+        summary: "refresh",
+      },
+    });
+    expect(askRefresh).toContain("**Next-action snapshot refresh**");
+
     const empty = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory next-action")!,
       repo: null,
@@ -413,6 +437,31 @@ describe("GitHub mention commands", () => {
     });
     expect(empty).toContain("**Recommended next step**");
     expect(empty).toContain("No public-safe context is available");
+
+    const askNoQuestion = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory ask")!,
+      repo: null,
+      issue: { number: 36, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "author",
+      bundle: {
+        run: {
+          id: "run-ask-empty",
+          objective: "empty",
+          actorLogin: "oktofeesh1",
+          surface: "github_comment",
+          mode: "copilot",
+          status: "completed",
+          dataQualityStatus: "complete",
+          payload: {},
+        },
+        actions: [],
+        contextSnapshots: [],
+        summary: "empty",
+      },
+    });
+    expect(askNoQuestion).toContain("No specific question was provided");
+    expect(askNoQuestion).toContain("No matching contribution-quality context is available");
 
     const noBundle = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory preflight")!,
@@ -1177,6 +1226,18 @@ describe("GitHub mention commands", () => {
       expect(body).toContain("@\u200Borg/team");
       expect(body).toContain("&lt;b&gt;x&lt;/b&gt;");
     }
+  });
+
+  it("falls back to repository placeholder when queue digest has no source records", () => {
+    const digest = buildMaintainerQueueDigest({
+      repo: null,
+      issues: [],
+      pullRequests: [],
+      recentMergedPullRequests: [],
+    });
+    expect(digest.repoFullName).toBe("this repository");
+    expect(digest.reviewNowPullRequests).toHaveLength(0);
+    expect(digest.needsAuthorPullRequests).toHaveLength(0);
   });
 });
 
