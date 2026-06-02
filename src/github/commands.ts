@@ -62,6 +62,7 @@ const AGENT_COMMAND_FEEDBACK_MARKER = "gittensory-agent-command-answer";
 const COMMAND_TITLES = Object.fromEntries(GITTENSORY_MENTION_COMMAND_CATALOG.map((command) => [command.id, command.title])) as Record<GittensoryMentionCommandName, string>;
 
 const REFRESH_SECTION_TITLES: Record<SnapshotCommandName, string> = {
+  ask: "Contribution context snapshot refresh",
   preflight: "Preflight snapshot refresh",
   blockers: "Blocker snapshot refresh",
   "duplicate-check": "Duplicate-check snapshot refresh",
@@ -72,6 +73,7 @@ const REFRESH_SECTION_TITLES: Record<SnapshotCommandName, string> = {
 };
 
 const EMPTY_SECTION_TITLES: Record<SnapshotCommandName, string> = {
+  ask: "Contribution context Q&A",
   preflight: "Preflight summary",
   blockers: "Readiness blockers",
   "duplicate-check": "Duplicate & WIP caution",
