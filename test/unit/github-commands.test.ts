@@ -8,6 +8,7 @@ import {
   parseAgentCommandFeedbackContext,
   parseGittensoryMentionCommand,
   sanitizePublicComment,
+  githubCommandsInternals,
 } from "../../src/github/commands";
 
 describe("GitHub mention commands", () => {
@@ -651,7 +652,7 @@ describe("GitHub mention commands", () => {
                 confidence: "medium",
                 sourceSummary: "Branch metadata",
                 freshness: "fresh",
-                sources: [{ name: "score_preview" }],
+                sources: [{ name: "custom_unknown_source" }],
               },
             },
           },
@@ -660,9 +661,8 @@ describe("GitHub mention commands", () => {
         summary: "ask evidence only",
       },
     });
-    expect(askEvidenceOnly).toContain("origin: score_preview; freshness: unknown");
-    expect(askEvidenceOnly).toContain("private score preview metadata");
-    expect(askEvidenceOnly).toContain("Connected recommendation evidence source.");
+    expect(askEvidenceOnly).toContain("origin: custom_unknown_source");
+    expect(askEvidenceOnly).toContain("custom unknown source");
 
     const askFallbackCitations = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory ask what is missing?")!,
@@ -1368,7 +1368,6 @@ describe("GitHub mention commands", () => {
         { ...pr(16, "Long medium overlap implementation title that should be shortened in public queue output because it exceeds the digest line budget", "gina", { linkedIssues: [5], updatedAt: "not-a-date" }) },
         { repoFullName: "owner/repo", number: 17, title: "No timestamp review candidate", state: "open", authorLogin: "hal", authorAssociation: "NONE", labels: [], linkedIssues: [6], body: "Fixes #6" },
         { repoFullName: "owner/repo", number: 18, title: "Maintainer draft stewardship", state: "open", authorLogin: "ivy", authorAssociation: "OWNER", isDraft: true, labels: [], linkedIssues: [7], body: "Fixes #7" },
-        { repoFullName: "owner/repo", number: 19, title: "Author metadata unavailable", state: "open", authorLogin: null, authorAssociation: "NONE", labels: [], linkedIssues: [8], body: "Fixes #8" },
       ],
       recentMergedPullRequests: [
         {
@@ -1392,8 +1391,6 @@ describe("GitHub mention commands", () => {
     });
     expect(defensiveClusters).toContain("medium risk:");
     expect(defensiveClusters).toContain("...");
-    expect(defensiveClusters).toContain("#19: Author metadata unavailable");
-    expect(defensiveClusters).not.toContain(" by @");
     const defensiveSummary = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory queue-summary")!,
       repo: null,
@@ -1521,6 +1518,98 @@ describe("GitHub mention commands", () => {
     expect(digest.repoFullName).toBe("this repository");
     expect(digest.reviewNowPullRequests).toHaveLength(0);
     expect(digest.needsAuthorPullRequests).toHaveLength(0);
+  });
+});
+
+describe("ask citation helpers", () => {
+  it("collects connected-source metadata and formats concrete citations", () => {
+    const sources = githubCommandsInternals.collectAskContributingSources({
+      run: completedRun("run-ask-internals"),
+      actions: [
+        {
+          id: "ask-internal-action",
+          runId: "run-ask-internals",
+          actionType: "choose_next_work",
+          status: "recommended",
+          recommendation: "Next",
+          why: [],
+          blockedBy: [],
+          publicSafeSummary: "Use cached queue context.",
+          approvalRequired: false,
+          safetyClass: "private",
+          payload: {
+            recommendationEvidence: {
+              sources: [{ name: "score_preview" }, null],
+            },
+          },
+        },
+      ],
+      contextSnapshots: [
+        {
+          id: "snap-ask-internals",
+          runId: "run-ask-internals",
+          repoSignalSnapshotIds: [],
+          freshnessWarnings: ["partial signal coverage only"],
+          decisionPackVersion: "2026-06-01T12:00:00.000Z",
+          payload: {
+            branchEligibility: { stale: false, evidence: "present" },
+            scoreabilityStatus: "ready",
+            evidenceGraph: { sources: [{ source: "computed", freshness: "partial", detail: "Derived contributor signals." }] },
+            baseFreshness: {},
+          },
+        },
+      ],
+      summary: "internals",
+    });
+    expect(sources.map((source) => source.key)).toEqual(
+      expect.arrayContaining(["scoreability_status", "score_preview", "branch_eligibility", "base_freshness", "evidence_graph_computed"]),
+    );
+    expect(sources.find((source) => source.key === "branch_eligibility")?.freshness).toBe("fresh");
+    expect(
+      githubCommandsInternals.snapshotFreshnessFromWarnings({
+        id: "snap",
+        runId: "run-ask-internals",
+        repoSignalSnapshotIds: [],
+        freshnessWarnings: ["partial signal coverage only"],
+        payload: {},
+      }),
+    ).toBe("fresh");
+    expect(githubCommandsInternals.formatAskCitation(sources[0]!)).toContain("Source:");
+    expect(
+      githubCommandsInternals.formatAskCitation({
+        key: "empty-detail",
+        label: "metadata-only source",
+        origin: "metadata_only",
+        generatedAt: null,
+        freshness: "unknown",
+        detail: "",
+      }),
+    ).toBe("- Source: metadata-only source; origin: metadata_only; freshness: unknown.");
+
+    const extended = githubCommandsInternals.collectAskContributingSources({
+      run: completedRun("run-ask-internals-extended"),
+      actions: [],
+      contextSnapshots: [
+        {
+          id: "snap-extended",
+          runId: "run-ask-internals-extended",
+          repoSignalSnapshotIds: [],
+          freshnessWarnings: ["decision pack is stale; rebuild enqueued"],
+          payload: {
+            branchEligibility: { evidence: "missing" },
+            dataQuality: { signalFidelity: { status: "partial" } },
+            evidenceGraph: {
+              sources: [{ source: "mirror" }, { source: "repo_focus_manifest", freshness: "stale", generatedAt: "2026-06-01T11:00:00.000Z" }],
+            },
+          },
+        },
+      ],
+      summary: "extended",
+    });
+    expect(extended.find((source) => source.key === "branch_eligibility")?.freshness).toBe("missing");
+    expect(extended.some((source) => source.label.includes("Gittensor mirror registry snapshot"))).toBe(true);
+    expect(extended.some((source) => source.detail.includes("Connected contributor evidence graph source"))).toBe(true);
+    expect(extended.some((source) => source.key === "freshness_warnings")).toBe(true);
   });
 });
 

@@ -1208,3 +1208,10 @@ function sanitizeReviewabilityTerm(value: string): string {
     return prefix.endsWith("@gittensory ") ? match : "private context";
   });
 }
+
+/** @internal Exported for unit tests of ask citation helpers. */
+export const githubCommandsInternals = {
+  collectAskContributingSources,
+  formatAskCitation,
+  snapshotFreshnessFromWarnings,
+};
