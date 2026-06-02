@@ -609,7 +609,7 @@ export const CommandPreviewResponseSchema = z
       description: z.string(),
       endpoint: z.string(),
     }),
-    request: z.record(z.unknown()),
+    request: z.record(z.string(), z.unknown()),
     preview: z.object({
       boundary: z.enum(["public", "public-safe", "private-api", "private-mcp"]),
       endpoint: z.string(),

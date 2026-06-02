@@ -434,7 +434,7 @@ const commandPreviewSchema = z
         body: z.string().max(10000).nullable().optional(),
         labels: z.array(z.string().max(100)).max(50).optional(),
         linkedIssues: z.array(z.number().int().positive()).max(50).optional(),
-        permissions: z.record(z.string()).optional(),
+        permissions: z.record(z.string(), z.string()).optional(),
         missingPermissions: z.array(z.string().max(100)).max(50).optional(),
       })
       .strict()
