@@ -620,7 +620,7 @@ export function buildOpenApiSpec() {
       200: {
         description: "Weekly value report as structured JSON or copy-ready Markdown",
         content: {
-          "application/json": { schema: z.record(z.unknown()) },
+          "application/json": { schema: z.record(z.string(), z.unknown()) },
           "text/markdown": {
             schema: z.string().openapi({
               example: "# Weekly Gittensory value report\n\n## Adoption metrics\n- Active users: 4\n",
