@@ -113,7 +113,7 @@ export function extractPreviewRepoOptions(reviewability: Array<{ pr: string }>):
   return Array.from(
     new Set(
       reviewability
-        .map((row) => row.pr.split("#")[0]!.trim())
+        .map((row) => row.pr.split("#")[0]?.trim() ?? "")
         .filter((repo) => /^[^/\s#]+\/[^/\s#]+$/.test(repo)),
     ),
   ).sort((left, right) => left.localeCompare(right));

@@ -492,7 +492,7 @@ describe("contributor evidence graph", () => {
     expect(evidenceGraphTouchedRepoFullNames({ login: "dev" })).toEqual([]);
   });
 
-  it("keeps missing cache timestamps partial without optional input arrays", () => {
+  it("keeps missing cache timestamps partial without optional cache fields", () => {
     const repoFullName = "owner/missing-cache-dates";
     const graph = buildContributorEvidenceGraph({
       login: "dev",
@@ -501,11 +501,41 @@ describe("contributor evidence graph", () => {
       outcomeHistory: history([]),
       roleContexts: [],
       repositories: [repo(repoFullName)],
-      pullRequestFiles: [],
+      pullRequests: [pr(repoFullName, 4, { createdAt: undefined, updatedAt: undefined, mergedAt: undefined, authorAssociation: undefined, labels: ["cache"] })],
+      issues: [
+        {
+          repoFullName,
+          number: 5,
+          title: "Issue missing optional cache fields",
+          state: "open",
+          authorLogin: "dev",
+          authorAssociation: undefined,
+          labels: undefined,
+          linkedPrs: [],
+          createdAt: undefined,
+          updatedAt: undefined,
+        } as any,
+        {
+          repoFullName,
+          number: 6,
+          title: "Issue with label but missing cache dates",
+          state: "open",
+          authorLogin: "dev",
+          authorAssociation: "CONTRIBUTOR",
+          labels: ["cache-issue"],
+          linkedPrs: [],
+          createdAt: undefined,
+          updatedAt: undefined,
+        },
+      ],
+      pullRequestFiles: [file(repoFullName, 4, "src/undated.ts")],
     });
 
-    expect(graph.repos).toEqual([expect.objectContaining({ repoFullName, source: "computed", freshness: "fresh" })]);
-    expect(graph.labels).toEqual([]);
-    expect(graph.paths).toEqual([]);
+    expect(graph.repos).toEqual([expect.objectContaining({ repoFullName, source: "github_cache", freshness: "partial" })]);
+    expect(graph.labels).toEqual([
+      expect.objectContaining({ repoFullName, label: "cache", freshness: "partial" }),
+      expect.objectContaining({ repoFullName, label: "cache-issue", freshness: "partial" }),
+    ]);
+    expect(graph.paths).toEqual([expect.objectContaining({ repoFullName, path: "src/undated.ts", freshness: "partial" })]);
   });
 });
