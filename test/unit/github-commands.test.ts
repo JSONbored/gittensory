@@ -14,6 +14,10 @@ describe("GitHub mention commands", () => {
   it("parses only explicit @gittensory commands", () => {
     expect(parseGittensoryMentionCommand(null)).toBeNull();
     expect(parseGittensoryMentionCommand("@gittensory")?.name).toBe("help");
+    expect(parseGittensoryMentionCommand("@gittensory ask what should I fix first?")).toMatchObject({
+      name: "ask",
+      question: "what should I fix first?",
+    });
     expect(parseGittensoryMentionCommand("@gittensory preflight")?.name).toBe("preflight");
     expect(parseGittensoryMentionCommand("please @gittensory duplicate-check now")?.name).toBe("duplicate-check");
     expect(parseGittensoryMentionCommand("@gittensory reviewability")?.name).toBe("reviewability");
@@ -220,6 +224,19 @@ describe("GitHub mention commands", () => {
     expect(nextAction).toContain("### Gittensory next step");
     expect(nextAction).toContain("**Recommended next step**");
     expect(nextAction).toContain("After tests pass.");
+
+    const ask = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory ask what should I improve for contribution quality?")!,
+      repo: null,
+      issue: { number: 14, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "author",
+      bundle,
+    });
+    expect(ask).toContain("### Gittensory contribution context Q&A");
+    expect(ask).toContain("**Contribution context Q&A**");
+    expect(ask).toContain("Question: what should I improve for contribution quality?");
+    expect(ask).toContain("Connected sources: cached issues, pull requests, recent merges, check/review status");
   });
 
   it("does not publish private blocker why details", () => {

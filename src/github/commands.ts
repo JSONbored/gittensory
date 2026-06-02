@@ -8,6 +8,7 @@ import { buildCollisionReport, buildQueueHealth, type CollisionCluster, type Que
 
 const PUBLIC_MENTION_COMMAND_CATALOG = [
   { id: "help", title: "Gittensory command help", description: "Show public-safe @gittensory command help." },
+  { id: "ask", title: "Gittensory contribution context Q&A", description: "Answer contribution-quality questions from connected cached sources with citations." },
   { id: "preflight", title: "Gittensory preflight", description: "Summarize public PR hygiene and validation readiness." },
   { id: "blockers", title: "Gittensory readiness blockers", description: "Explain public-safe readiness blockers." },
   { id: "duplicate-check", title: "Gittensory duplicate & WIP check", description: "Summarize duplicate and in-progress overlap caution." },
@@ -35,6 +36,7 @@ type SnapshotCommandName = Exclude<GittensoryMentionCommandName, "help" | "miner
 export type GittensoryMentionCommand = {
   name: GittensoryMentionCommandName;
   raw: string;
+  question?: string | undefined;
 };
 
 type PublicAnswerCard = {
@@ -128,11 +130,12 @@ export type MaintainerQueueDigest = {
 
 export function parseGittensoryMentionCommand(body: string | null | undefined): GittensoryMentionCommand | null {
   if (!body) return null;
-  const match = body.match(/(?:^|\s)@gittensory(?:\s+([a-z-]+))?/i);
+  const match = body.match(/(?:^|\s)@gittensory(?:\s+([a-z-]+))?([^\n\r]*)/i);
   if (!match) return null;
   const requested = (match[1]?.toLowerCase() || "help") as GittensoryMentionCommandName;
   const name = COMMANDS.has(requested) ? requested : "help";
-  return { name, raw: match[0].trim() };
+  const question = name === "ask" ? (match[2] ?? "").trim() : undefined;
+  return { name, raw: match[0].trim(), question: question && question.length > 0 ? question : undefined };
 }
 
 export function isMaintainerAssociation(association: string | null | undefined): boolean {
@@ -192,7 +195,7 @@ export function buildPublicAgentCommandComment(args: {
   maintainerDigest?: MaintainerQueueDigest | null | undefined;
 }): string {
   const repoFullName = args.repo?.fullName ?? args.pullRequest?.repoFullName ?? "this repository";
-  const sections = commandSections(args.command.name, args.bundle, args.officialMiner, args.maintainerDigest);
+  const sections = commandSections(args.command.name, args.bundle, args.officialMiner, args.maintainerDigest, args.command.question);
   const card = buildPublicAnswerCard({
     command: args.command.name,
     sections,
@@ -271,6 +274,8 @@ function commandSummary(command: GittensoryMentionCommandName): string {
   switch (command) {
     case "help":
       return "Available public commands and their safest use on a PR thread.";
+    case "ask":
+      return "Contribution-context Q&A from connected cached sources, scoped to contribution quality and repository policy.";
     case "miner-context":
       return "Public miner context from official Gittensor data when available.";
     case "preflight":
@@ -307,6 +312,10 @@ function commandEvidence(
   actorKind: "maintainer" | "author",
 ): string[] {
   const evidence = [`Invocation authorized for ${actorKind} command use.`, "Output is sanitized before posting to GitHub."];
+  if (command === "ask") {
+    evidence.push("Answer scope is limited to contribution quality and repository policy.");
+    evidence.push("Sources are cited with freshness and public-boundary redaction.");
+  }
   if (command === "miner-context") {
     evidence.push(officialMiner ? "Official Gittensor miner context was available." : "Official Gittensor miner context was unavailable.");
   }
@@ -325,6 +334,8 @@ function commandNextActions(command: GittensoryMentionCommandName, bundle: Agent
   switch (command) {
     case "help":
       return ["Comment one listed command on the PR thread when more context is needed."];
+    case "ask":
+      return ["Ask one concrete contribution-quality question per command for clearer cited guidance."];
     case "miner-context":
       return ["Use MCP or the authenticated control panel for private contributor planning."];
     case "preflight":
@@ -362,6 +373,8 @@ function commandSourceNotes(
   const source =
     command === "help"
       ? "static command catalog"
+      : command === "ask"
+        ? "cached GitHub issues/PRs/recent merges/checks, signal snapshots, focus manifest, and upstream ruleset status"
       : command === "miner-context"
         ? officialMiner
           ? "official Gittensor miner API"
@@ -412,10 +425,13 @@ function commandSections(
   bundle: AgentRunBundle | null | undefined,
   officialMiner: GittensorContributorSnapshot | null | undefined,
   maintainerDigest: MaintainerQueueDigest | null | undefined,
+  question?: string | undefined,
 ): string[] {
   switch (command) {
     case "help":
       return helpSections();
+    case "ask":
+      return askSections(bundle, question);
     case "miner-context":
       return minerContextSections(officialMiner);
     case "preflight":
@@ -446,6 +462,7 @@ function helpSections(): string[] {
     "**Commands**",
     "",
     "- `@gittensory help` shows this command list.",
+    "- `@gittensory ask <question>` answers contribution-quality Q&A with source citations and freshness.",
     "- `@gittensory preflight` summarizes public PR hygiene.",
     "- `@gittensory blockers` explains public readiness blockers.",
     "- `@gittensory duplicate-check` summarizes duplicate/WIP caution.",
@@ -459,6 +476,32 @@ function helpSections(): string[] {
     "- `@gittensory needs-author` lists PRs that need author cleanup.",
     "- `@gittensory confirmed-miners` lists cached confirmed-miner PRs.",
     "- `@gittensory duplicate-clusters` lists duplicate/WIP clusters.",
+  ];
+}
+
+function askSections(bundle: AgentRunBundle | null | undefined, question?: string): string[] {
+  if (bundle?.run.status === "needs_snapshot_refresh") {
+    return refreshSections("next-action");
+  }
+  const cited = pickActions(bundle, () => true)
+    .slice(0, 4)
+    .map((action) => action.targetRepoFullName ? `${action.targetRepoFullName}: ${action.publicSafeSummary}` : action.publicSafeSummary)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => `- ${publicBlockerDetail(line)}`);
+  return [
+    "**Contribution context Q&A**",
+    "",
+    `- Question: ${sanitizePublicComment(question?.trim() || "No specific question was provided; this response summarizes the closest cached contribution context.")}`,
+    "",
+    "**Answer**",
+    "",
+    ...(cited.length > 0 ? cited : ["- No matching contribution-quality context is available in the current cached sources."]),
+    "",
+    "**Source coverage**",
+    "",
+    "- Connected sources: cached issues, pull requests, recent merges, check/review status, signal snapshots, focus manifest, and upstream ruleset status.",
+    "- README/docs context is used only when available from connected repo sources and app access allows it.",
+    "- Source contents are not sent to optional AI unless explicitly enabled.",
   ];
 }
 
