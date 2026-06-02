@@ -2399,10 +2399,47 @@ describe("api routes", () => {
 
     const dailyRollups = await app.request("/v1/app/analytics/daily-rollups?limit=3", { headers: apiHeaders(env) }, env);
     expect(dailyRollups.status).toBe(200);
-    await expect(dailyRollups.json()).resolves.toMatchObject({
+    const dailyRollupsBody = (await dailyRollups.json()) as {
+      status: { status: string; latestRollupDay?: string };
+      rollups: Array<{
+        day: string;
+        activation: Record<string, number>;
+        byRole: Array<{ role: string; count: number; activeActors: number; activeRepos: number }>;
+        activationByRole: Array<Record<string, number | string>>;
+        activationBySurface: Array<Record<string, number | string>>;
+        retention: Array<{
+          window: string;
+          activeActors: number;
+          retainedActors: number;
+          retentionRate: number;
+          capped: boolean;
+          byRole: Array<Record<string, number | string>>;
+          bySurface: Array<Record<string, number | string>>;
+        }>;
+      }>;
+    };
+    expect(dailyRollupsBody).toMatchObject({
       status: expect.objectContaining({ status: "partial", latestRollupDay: "2026-05-28" }),
       rollups: [expect.objectContaining({ day: "2026-05-28", activation: expect.any(Object) })],
     });
+    const [dailyRollup] = dailyRollupsBody.rollups;
+    expect(dailyRollup).toBeDefined();
+    if (!dailyRollup) throw new Error("expected daily usage rollup");
+    expect(dailyRollup.byRole).toEqual(expect.arrayContaining([expect.objectContaining({ role: "miner", count: expect.any(Number), activeActors: expect.any(Number), activeRepos: expect.any(Number) })]));
+    expect(dailyRollup.activationByRole).toEqual(expect.arrayContaining([expect.objectContaining({ role: "miner", doctorPassActors: expect.any(Number), firstUsefulActionActors: expect.any(Number) })]));
+    expect(dailyRollup.activationBySurface).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ surface: "mcp", doctorPassActors: expect.any(Number) }),
+        expect.objectContaining({ surface: "browser_extension", firstUsefulActionActors: expect.any(Number) }),
+      ]),
+    );
+    expect(dailyRollup.retention).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ window: "previous_7_days", activeActors: expect.any(Number), retainedActors: expect.any(Number), retentionRate: expect.any(Number), capped: false, byRole: expect.any(Array), bySurface: expect.any(Array) }),
+        expect.objectContaining({ window: "previous_30_days", activeActors: expect.any(Number), retainedActors: expect.any(Number), retentionRate: expect.any(Number), capped: false, byRole: expect.any(Array), bySurface: expect.any(Array) }),
+      ]),
+    );
+    expect(JSON.stringify(dailyRollupsBody)).not.toMatch(/oktofeesh1|operator@example.com|mcp-user|old-mcp-user|current-mcp-user|mcp-session|old-mcp-session|current-mcp-session|gittensory_session|\/Users|github_pat|ghp_|private-repo|wallet|hotkey|raw trust/i);
     const fallbackLimitRollups = await app.request("/v1/app/analytics/daily-rollups?limit=invalid", { headers: apiHeaders(env) }, env);
     expect(fallbackLimitRollups.status).toBe(200);
     await expect(fallbackLimitRollups.json()).resolves.toMatchObject({
@@ -2421,7 +2458,7 @@ describe("api routes", () => {
     const usageOperatorBody = (await usageOperator.json()) as {
       metrics: Array<{ label: string; value: string }>;
       usageSummary: { totalEvents: number };
-      usageRollups: Array<{ day: string }>;
+      usageRollups: Array<{ day: string; byRole: unknown[]; activationBySurface: unknown[]; retention: unknown[] }>;
       usageRollupStatus: { status: string };
       mcpCompatibilityAdoption: {
         totalEvents: number;
@@ -2449,7 +2486,7 @@ describe("api routes", () => {
       ]),
     );
     expect(usageOperatorBody.usageSummary.totalEvents).toBe(productUsageEvents.length);
-    expect(usageOperatorBody.usageRollups).toEqual([expect.objectContaining({ day: "2026-05-28" })]);
+    expect(usageOperatorBody.usageRollups).toEqual([expect.objectContaining({ day: "2026-05-28", byRole: expect.any(Array), activationBySurface: expect.any(Array), retention: expect.any(Array) })]);
     expect(usageOperatorBody.usageRollupStatus.status).toBe("partial");
     expect(usageOperatorBody.mcpCompatibilityAdoption).toMatchObject({
       totalEvents: 4,
