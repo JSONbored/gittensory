@@ -370,8 +370,7 @@ function preferredLabelEdges(buckets: LabelBucket[], generatedAt: string): Contr
       (left, right) =>
         right.pullRequests + right.issues - (left.pullRequests + left.issues) ||
         left.repoFullName.localeCompare(right.repoFullName) ||
-        left.label.localeCompare(right.label) ||
-        SOURCE_PRIORITY[left.source] - SOURCE_PRIORITY[right.source],
+        left.label.localeCompare(right.label),
     );
 }
 

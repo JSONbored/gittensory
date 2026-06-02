@@ -81,4 +81,40 @@ describe("maintainer settings preview UI helpers", () => {
       minerStatus: "unavailable",
     });
   });
+
+  it("falls back safely for unknown preview input without sending empty optional fields", () => {
+    expect(findPreviewScenario("unknown" as Parameters<typeof findPreviewScenario>[0])).toMatchObject({
+      id: "confirmed-miner",
+      sample: { authorLogin: "sample-miner", minerStatus: "confirmed" },
+    });
+    expect(
+      extractPreviewRepoOptions([
+        { pr: " owner/repo#1 " },
+        { pr: "owner/repo#2" },
+        { pr: "missing-repo#" },
+        { pr: "#missing-prefix" },
+      ]),
+    ).toEqual(["owner/repo"]);
+
+    expect(
+      buildSettingsPreviewRequest({
+        repoFullName: "JSONbored/gittensory",
+        scenarioId: "unknown" as Parameters<typeof findPreviewScenario>[0],
+        title: "Typed title",
+        labels: "",
+        linkedIssues: "",
+        body: "   ",
+      }),
+    ).toEqual({
+      sample: {
+        authorLogin: "sample-miner",
+        authorType: "User",
+        authorAssociation: "CONTRIBUTOR",
+        minerStatus: "confirmed",
+        title: "Typed title",
+        labels: [],
+        linkedIssues: [],
+      },
+    });
+  });
 });
