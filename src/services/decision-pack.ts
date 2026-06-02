@@ -1,3 +1,6 @@
+import { loadRepoFocusManifests } from "../signals/focus-manifest-loader";
+import type { FocusManifest, FocusManifestIssueDiscoveryPolicy, FocusManifestLinkedIssuePolicy, FocusManifestSource } from "../signals/focus-manifest";
+import { isFocusManifestPublicSafe } from "../signals/focus-manifest";
 import {
   hasRecentAuditEvent,
   listAllIssues,
@@ -7,6 +10,7 @@ import {
   listContributorPullRequests,
   listContributorRepoStats,
   listLatestRepoGithubTotalsSnapshots,
+  listRepoPullRequestFiles,
   listRepositories,
   listRepoSyncSegments,
   listRepoSyncStates,
@@ -30,16 +34,26 @@ import {
   type ContributorOutcomeHistory,
   type ContributorProfile,
   type IssueQualityReport,
+  type OutcomePattern,
+  type RepoOutcomePatterns,
   type RoleContext,
 } from "../signals/engine";
 import { buildSignalFidelity } from "../signals/data-quality";
 import { buildContributorOpenPrMonitor, type ContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
+import {
+  buildContributorEvidenceGraph,
+  CONTRIBUTOR_EVIDENCE_GRAPH_SIGNAL,
+  evidenceGraphTouchedRepoFullNames,
+  type ContributorEvidenceGraph,
+} from "./contributor-evidence-graph";
 import { loadIssueQualityReportMap } from "./issue-quality";
+import { loadRepoOutcomePatternsMap } from "./repo-outcome-patterns";
 import type {
   BountyRecord,
   ContributorRepoStatRecord,
   IssueRecord,
   JsonValue,
+  PullRequestFileRecord,
   PullRequestRecord,
   RepositoryRecord,
   RepoGithubTotalsSnapshotRecord,
@@ -87,6 +101,7 @@ export type ContributorDecisionPack = {
   avoidRepos: RepoDecision[];
   maintainerLaneRepos: RepoDecision[];
   scoreBlockers: ScoreBlocker[];
+  evidenceGraph?: ContributorEvidenceGraph | undefined;
   dataQuality: {
     signalFidelity: ReturnType<typeof buildSignalFidelity>;
   };
@@ -135,11 +150,32 @@ export type RepoDecision = {
   languageMatch: LanguageMatch;
   labelFit: string[];
   scoreBlockers: ScoreBlocker[];
+  repoOutcomePatterns?: RepoOutcomeSummary | undefined;
   riskReasons: string[];
   whyThisHelps: string[];
   nextActions: string[];
   publicNextActions: string[];
   issueQuality?: IssueQualitySummary | undefined;
+  manifestSummary?: RepoDecisionManifestSummary | undefined;
+};
+
+export type RepoDecisionManifestSummary = {
+  present: boolean;
+  source: FocusManifestSource;
+  linkedIssuePolicy: FocusManifestLinkedIssuePolicy;
+  issueDiscoveryPolicy: FocusManifestIssueDiscoveryPolicy;
+  wantedPathCount: number;
+  blockedPathCount: number;
+  preferredLabels: string[];
+  publicNotes: string[];
+};
+
+export type RepoOutcomeSummary = {
+  summary: string;
+  outsideContributorMergeRate: number;
+  sampleSize: number;
+  successPatterns: OutcomePattern[];
+  riskPatterns: OutcomePattern[];
 };
 
 export type DecisionAction = {
@@ -288,8 +324,27 @@ export async function buildAndPersistContributorDecisionPack(env: Env, login: st
     fetchGittensorContributorSnapshot(login),
   ]);
   const repoStats = authoritativeContributorRepoStats(gittensorSnapshot, cachedRepoStats);
-  const issueQualityByRepo = await loadIssueQualityReportMap(env, repositories);
+  const [issueQualityByRepo, repoOutcomePatternsByRepo] = await Promise.all([
+    loadIssueQualityReportMap(env, repositories),
+    loadRepoOutcomePatternsMap(env, repositories),
+  ]);
+  const focusManifests = await loadRepoFocusManifests(
+    env,
+    repositories.filter((repo) => repo.isRegistered).map((repo) => repo.fullName),
+  );
   const profile = buildContributorProfile(login, github, contributorPullRequests, contributorIssues, repoStats, gittensorSnapshot);
+  const pullRequestFiles = (
+    await Promise.all(
+      evidenceGraphTouchedRepoFullNames({
+        login,
+        profile,
+        pullRequests: contributorPullRequests,
+        issues: contributorIssues,
+        repoStats,
+        repositories,
+      }).map((repoFullName) => listRepoPullRequestFiles(env, repoFullName)),
+    )
+  ).flat();
   const outcomeHistory = buildContributorOutcomeHistory({
     login,
     profile,
@@ -314,8 +369,13 @@ export async function buildAndPersistContributorDecisionPack(env: Env, login: st
     scoringModelSnapshotId: scoringSnapshot.id,
     contributorPullRequests,
     contributorIssues,
+    repoStats,
+    pullRequestFiles,
+    gittensorSnapshot,
     issueQualityByRepo,
     openPrMonitor,
+    focusManifests,
+    repoOutcomePatternsByRepo,
   });
 
   await upsertContributorEvidence(env, {
@@ -330,6 +390,7 @@ export async function buildAndPersistContributorDecisionPack(env: Env, login: st
       issueDiscoveryReports: scoringProfile.evidence.issueDiscoveryReports,
       languageMatches: scoringProfile.evidence.languageMatches,
       credibilityAssumption: scoringProfile.evidence.credibilityAssumption,
+      evidenceGraph: pack.evidenceGraph as unknown as JsonValue,
     },
   });
   await upsertContributorScoringProfile(env, {
@@ -345,6 +406,15 @@ export async function buildAndPersistContributorDecisionPack(env: Env, login: st
     payload: pack as unknown as Record<string, JsonValue>,
     generatedAt: pack.generatedAt,
   });
+  if (pack.evidenceGraph) {
+    await persistSignalSnapshot(env, {
+      id: crypto.randomUUID(),
+      signalType: CONTRIBUTOR_EVIDENCE_GRAPH_SIGNAL,
+      targetKey: login,
+      payload: pack.evidenceGraph as unknown as Record<string, JsonValue>,
+      generatedAt: pack.evidenceGraph.generatedAt,
+    });
+  }
   return pack;
 }
 
@@ -365,8 +435,13 @@ function buildContributorDecisionPack(args: {
   scoringModelSnapshotId: string;
   contributorPullRequests: Parameters<typeof buildRoleContext>[0]["pullRequests"];
   contributorIssues: Parameters<typeof buildRoleContext>[0]["issues"];
+  repoStats?: ContributorRepoStatRecord[] | undefined;
+  pullRequestFiles?: PullRequestFileRecord[] | undefined;
+  gittensorSnapshot?: Awaited<ReturnType<typeof fetchGittensorContributorSnapshot>> | undefined;
   issueQualityByRepo?: Map<string, IssueQualityReport> | undefined;
   openPrMonitor: ContributorOpenPrMonitor;
+  focusManifests?: Map<string, FocusManifest> | undefined;
+  repoOutcomePatternsByRepo?: Map<string, RepoOutcomePatterns> | undefined;
 }): ContributorDecisionPack {
   const registeredRepositories = args.repositories.filter((repo) => repo.isRegistered);
   const syncByRepo = new Map(args.syncStates.map((state) => [state.repoFullName.toLowerCase(), state]));
@@ -400,6 +475,8 @@ function buildContributorDecisionPack(args: {
         languageSet,
         labelHistory,
         issueQuality: issueQualityByRepo.get(key),
+        focusManifest: args.focusManifests?.get(key),
+        repoOutcomePatterns: args.repoOutcomePatternsByRepo?.get(key),
       });
     })
     .sort((left, right) => right.priorityScore - left.priorityScore || left.repoFullName.localeCompare(right.repoFullName));
@@ -408,6 +485,19 @@ function buildContributorDecisionPack(args: {
   const dataQuality = {
     signalFidelity: buildSignalFidelity(registeredRepositories.length, args.syncStates, args.syncSegments),
   };
+  const evidenceGraph = buildContributorEvidenceGraph({
+    login: args.login,
+    profile: args.profile,
+    outcomeHistory: args.outcomeHistory,
+    roleContexts,
+    repositories: args.repositories,
+    pullRequests: args.contributorPullRequests,
+    issues: args.contributorIssues,
+    repoStats: args.repoStats,
+    syncStates: args.syncStates,
+    pullRequestFiles: args.pullRequestFiles,
+    gittensorSnapshot: args.gittensorSnapshot,
+  });
   const monitor = args.openPrMonitor;
   const monitorNextSteps = monitor.guidance.slice(0, 6);
   const packNextActions = [...new Set([...monitorNextSteps, ...topActions.flatMap((action) => action.nextActions)])].slice(0, 12);
@@ -439,6 +529,7 @@ function buildContributorDecisionPack(args: {
     avoidRepos: repoDecisions.filter((decision) => decision.recommendation === "avoid_for_now").slice(0, 8),
     maintainerLaneRepos: repoDecisions.filter((decision) => decision.recommendation === "maintainer_lane").slice(0, 8),
     scoreBlockers,
+    evidenceGraph,
     dataQuality,
     summary: `${args.login} has ${topActions.length} ranked action(s), ${scoreBlockers.length} scoreability blocker(s), and ${repoDecisions.length} registered repo decision(s).${monitorSummary}`,
     nextActions: packNextActions,
@@ -455,6 +546,8 @@ function buildRepoDecision(args: {
   languageSet?: Set<string> | undefined;
   labelHistory?: Set<string> | undefined;
   issueQuality?: IssueQualityReport | undefined;
+  focusManifest?: FocusManifest | undefined;
+  repoOutcomePatterns?: RepoOutcomePatterns | undefined;
 }): RepoDecision {
   const lane = buildLaneAdvice(args.repo, args.repo.fullName);
   const config = args.repo.registryConfig;
@@ -504,6 +597,12 @@ function buildRepoDecision(args: {
     labelFit,
     issueQuality,
   };
+  const manifest = args.focusManifest;
+  const manifestSummary = manifest && manifest.present ? buildRepoDecisionManifestSummary(manifest) : undefined;
+  const manifestReasons = manifest && manifest.present ? buildRepoDecisionManifestReasons(manifest) : { whyThisHelps: [], nextActions: [], publicNextActions: [], riskReasons: [] };
+  const repoOutcomePatterns = summarizeRepoOutcomePatterns(args.repoOutcomePatterns);
+  const outcomeRiskLines = args.roleContext.maintainerLane ? [] : (repoOutcomePatterns?.riskPatterns ?? []).slice(0, 2).map((pattern) => pattern.detail);
+  const outcomeSuccessLines = recommendation === "pursue" ? (repoOutcomePatterns?.successPatterns ?? []).slice(0, 1).map((pattern) => pattern.detail) : [];
   return {
     repoFullName: args.repo.fullName,
     recommendation,
@@ -516,11 +615,81 @@ function buildRepoDecision(args: {
     languageMatch,
     labelFit,
     scoreBlockers: blockers,
-    riskReasons,
-    whyThisHelps: whyThisHelpsFor(recommendation, copyContext),
-    nextActions: nextActionsFor(recommendation, copyContext),
-    publicNextActions: publicNextActionsFor(recommendation, copyContext),
+    repoOutcomePatterns,
+    riskReasons: [...new Set([...riskReasons, ...manifestReasons.riskReasons, ...outcomeRiskLines])],
+    whyThisHelps: [...new Set([...whyThisHelpsFor(recommendation, copyContext), ...manifestReasons.whyThisHelps, ...outcomeSuccessLines])],
+    nextActions: [...new Set([...nextActionsFor(recommendation, copyContext), ...manifestReasons.nextActions])],
+    publicNextActions: [...new Set([...publicNextActionsFor(recommendation, copyContext), ...manifestReasons.publicNextActions])],
     issueQuality,
+    manifestSummary,
+  };
+}
+
+/**
+ * Public-safe per-repo summary of a maintainer's focus manifest, intentionally excluding the
+ * manifest's private `maintainerNotes`. The contributor-facing decision pack must never carry
+ * maintainer-private reviewer text.
+ */
+function buildRepoDecisionManifestSummary(manifest: FocusManifest): RepoDecisionManifestSummary {
+  return {
+    present: true,
+    source: manifest.source,
+    linkedIssuePolicy: manifest.linkedIssuePolicy,
+    issueDiscoveryPolicy: manifest.issueDiscoveryPolicy,
+    wantedPathCount: manifest.wantedPaths.length,
+    blockedPathCount: manifest.blockedPaths.length,
+    preferredLabels: manifest.preferredLabels.slice(0, 8),
+    publicNotes: manifest.publicNotes.filter(isFocusManifestPublicSafe).slice(0, 4),
+  };
+}
+
+function buildRepoDecisionManifestReasons(manifest: FocusManifest): { whyThisHelps: string[]; nextActions: string[]; publicNextActions: string[]; riskReasons: string[] } {
+  const whyThisHelps: string[] = [];
+  const nextActions: string[] = [];
+  const publicNextActions: string[] = [];
+  const riskReasons: string[] = [];
+  if (manifest.wantedPaths.length > 0) {
+    whyThisHelps.push(`Maintainer focus manifest declares ${manifest.wantedPaths.length} wanted path(s) for this repo.`);
+    publicNextActions.push("Target the maintainer-wanted areas for this repo when picking a change.");
+  }
+  if (manifest.blockedPaths.length > 0) {
+    riskReasons.push(`Maintainer focus manifest blocks ${manifest.blockedPaths.length} path pattern(s) for this repo.`);
+    publicNextActions.push("Avoid the maintainer-blocked areas for this repo.");
+  }
+  if (manifest.linkedIssuePolicy === "required") {
+    nextActions.push("Link a tracked issue on every PR; the maintainer's manifest requires it.");
+    publicNextActions.push("Link a tracked issue on every PR; the maintainer requires linked issues.");
+  } else if (manifest.linkedIssuePolicy === "preferred") {
+    publicNextActions.push("Prefer linking a tracked issue; the maintainer prefers linked issues.");
+  }
+  if (manifest.preferredLabels.length > 0) {
+    publicNextActions.push(`Use a maintainer-preferred label when applicable (${manifest.preferredLabels.slice(0, 3).join(", ")}).`);
+  }
+  if (manifest.issueDiscoveryPolicy === "discouraged") {
+    publicNextActions.push("Prefer direct fixes over new issue-discovery reports here.");
+  } else if (manifest.issueDiscoveryPolicy === "encouraged") {
+    publicNextActions.push("High-quality issue-discovery reports are welcomed by the maintainer.");
+  }
+  for (const note of manifest.publicNotes) {
+    if (isFocusManifestPublicSafe(note)) publicNextActions.push(note);
+  }
+  return {
+    whyThisHelps,
+    nextActions,
+    publicNextActions: [...new Set(publicNextActions)].filter(isFocusManifestPublicSafe),
+    riskReasons,
+  };
+}
+
+function summarizeRepoOutcomePatterns(patterns: RepoOutcomePatterns | undefined): RepoOutcomeSummary | undefined {
+  if (!patterns) return undefined;
+  if (patterns.sampleSize < 1 && patterns.successPatterns.length === 0 && patterns.riskPatterns.length === 0) return undefined;
+  return {
+    summary: patterns.summary,
+    outsideContributorMergeRate: patterns.outsideContributorMergeRate,
+    sampleSize: patterns.sampleSize,
+    successPatterns: patterns.successPatterns.slice(0, 3),
+    riskPatterns: patterns.riskPatterns.slice(0, 3),
   };
 }
 

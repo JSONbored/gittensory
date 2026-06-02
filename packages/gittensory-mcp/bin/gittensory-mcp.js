@@ -66,6 +66,14 @@ const localDiffShape = {
   commitMessage: z.string().optional(),
 };
 
+const branchEligibilityShape = {
+  status: z.enum(["eligible", "ineligible", "unknown"]),
+  source: z.enum(["github_metadata", "local_metadata", "registry", "user_supplied"]).optional(),
+  reason: z.string().optional(),
+  checkedAt: z.string().optional(),
+  stale: z.boolean().optional(),
+};
+
 const localScoreShape = {
   ...localDiffShape,
   targetKey: z.string().optional(),
@@ -82,6 +90,7 @@ const localScoreShape = {
   expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).optional(),
+  branchEligibility: z.object(branchEligibilityShape).strict().optional(),
   scorePreviewCommand: z.string().optional(),
 };
 
@@ -106,6 +115,7 @@ const currentBranchShape = {
   expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).optional(),
+  branchEligibility: z.object(branchEligibilityShape).strict().optional(),
   validation: z
     .array(
       z.object({
@@ -273,6 +283,10 @@ server.registerTool(
     }
     return toolResult("Gittensory local MCP status.", {
       apiUrl,
+      package: {
+        name: packageName,
+        version: packageVersion,
+      },
       hasToken: Boolean(getApiToken()),
       authLogin: config.session?.login ?? null,
       sessionExpiresAt: config.session?.expiresAt ?? null,
@@ -484,6 +498,7 @@ async function runCli(args) {
     expectedOpenPrCountAfterMerge: optionalInteger(options.expectedOpenPrs),
     projectedCredibility: optionalNumber(options.projectedCredibility),
     scenarioNotes: options.scenarioNote,
+    branchEligibility: branchEligibilityFromOptions(options),
     validation: validationFromOptions(options),
     scorePreviewCommand: options.scorePreviewCommand,
   });
@@ -539,6 +554,7 @@ async function runAgentCli(args) {
       expectedOpenPrCountAfterMerge: optionalInteger(options.expectedOpenPrs),
       projectedCredibility: optionalNumber(options.projectedCredibility),
       scenarioNotes: options.scenarioNote,
+      branchEligibility: branchEligibilityFromOptions(options),
       validation: validationFromOptions(options),
       scorePreviewCommand: options.scorePreviewCommand,
     });
@@ -640,8 +656,8 @@ function printHelp() {
   gittensory-mcp changelog [--json]
   gittensory-mcp doctor [--cwd path] [--json]
   gittensory-mcp init-client --print codex|claude|cursor|mcp [--json]
-  gittensory-mcp analyze-branch --login <github-login> [--repo owner/repo] [--base origin/main] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--scenario-note "..."] [--validation "passed|npm test|summary"] [--json]
-  gittensory-mcp preflight --login <github-login> [--repo owner/repo] [--base origin/main] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--validation "passed|npm test|summary"] [--json]
+  gittensory-mcp analyze-branch --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--scenario-note "..."] [--validation "passed|npm test|summary"] [--json]
+  gittensory-mcp preflight --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--validation "passed|npm test|summary"] [--json]
   gittensory-mcp agent plan --login <github-login> [--repo owner/repo] [--json]
   gittensory-mcp agent status <run-id> [--json]
   gittensory-mcp agent explain <run-id> [--json]
@@ -1203,6 +1219,9 @@ async function apiFetch(path, init, options = {}) {
       ...(token && options.auth !== false ? { authorization: `Bearer ${token}` } : {}),
       "content-type": "application/json",
       accept: "application/json",
+      "x-gittensory-mcp-package": packageName,
+      "x-gittensory-mcp-version": packageVersion,
+      "x-gittensory-mcp-client": "gittensory-mcp-cli",
     },
   }).finally(() => clearTimeout(timeout));
   const text = await response.text();
@@ -1422,6 +1441,7 @@ async function previewLocalScore(input) {
     expectedOpenPrCountAfterMerge: input.expectedOpenPrCountAfterMerge,
     projectedCredibility: input.projectedCredibility,
     scenarioNotes: input.scenarioNotes,
+    branchEligibility: input.branchEligibility,
     metadataOnly: !upstreamPreview.ok,
   };
   return {
@@ -1438,6 +1458,30 @@ async function previewLocalScore(input) {
       ? []
       : setupGuidanceForLocalScorer(upstreamPreview),
   };
+}
+
+function branchEligibilityFromOptions(options) {
+  const status = options.branchEligibility ?? options.branchEligibilityStatus;
+  if (!["eligible", "ineligible", "unknown"].includes(status)) return undefined;
+  const source = ["github_metadata", "local_metadata", "registry", "user_supplied"].includes(options.branchEligibilitySource) ? options.branchEligibilitySource : "user_supplied";
+  return stripUndefined({
+    status,
+    source,
+    reason: options.branchEligibilityReason,
+    checkedAt: options.branchEligibilityCheckedAt,
+    stale: optionalBoolean(options.branchEligibilityStale),
+  });
+}
+
+function optionalBoolean(value) {
+  if (value === undefined) return undefined;
+  if (value === true) return true;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+  }
+  return Boolean(value);
 }
 
 function toolResult(summary, data) {

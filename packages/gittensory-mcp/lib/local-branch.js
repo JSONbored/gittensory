@@ -76,6 +76,7 @@ export function collectLocalBranchMetadata(input) {
     scenarioNotes: input.scenarioNotes,
     pendingCommitCount,
     ciStatusHints,
+    branchEligibility: input.branchEligibility,
   };
   return stripUndefined(payload);
 }

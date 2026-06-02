@@ -1,4 +1,4 @@
-import type { LinkedIssueMultiplierContext, ScorePreviewInput, ScorePreviewResult } from "../scoring/preview";
+import type { BranchEligibilityInput, BranchEligibilityResult, LinkedIssueMultiplierContext, ScorePreviewInput, ScorePreviewResult } from "../scoring/preview";
 import { buildScorePreview } from "../scoring/preview";
 import type { GittensorContributorSnapshot } from "../gittensor/api";
 import type { BountyRecord, CheckSummaryRecord, IssueRecord, PullRequestRecord, RecentMergedPullRequestRecord, RepositoryRecord, ScoringModelSnapshotRecord } from "../types";
@@ -17,6 +17,8 @@ import {
 } from "./engine";
 import { buildRepoRewardRisk, type RepoRewardRisk, type RewardRiskAction } from "./reward-risk";
 import { buildLocalWorkspaceIntelligence, type LocalWorkspaceIntelligence } from "./local-workspace-intelligence";
+import { buildFocusManifestGuidance, parseFocusManifest, type FocusManifestGuidance } from "./focus-manifest";
+import { sanitizeLocalScorerWarnings } from "./local-scorer-diagnostics";
 
 export type LocalBranchChangedFile = {
   path: string;
@@ -72,6 +74,8 @@ export type LocalBranchAnalysisInput = {
   scenarioNotes?: string[] | undefined;
   pendingCommitCount?: number | undefined;
   ciStatusHints?: string[] | undefined;
+  focusManifest?: unknown;
+  branchEligibility?: BranchEligibilityInput | undefined;
 };
 
 type ObservedPullRequestScenarios = {
@@ -129,6 +133,7 @@ export type LocalBranchAnalysis = {
   };
   observedPullRequestScenarios: ObservedPullRequestScenarios;
   githubBranchStatus: GitHubBranchStatus;
+  branchEligibility: BranchEligibilityResult;
   rewardRisk: RepoRewardRisk;
   scoreBlockers: string[];
   branchQualityBlockers: string[];
@@ -149,6 +154,7 @@ export type LocalBranchAnalysis = {
     reasons: string[];
     risks: string[];
   };
+  manifestGuidance: FocusManifestGuidance;
   prPacket: {
     titleSuggestion: string;
     markdown: string;
@@ -273,7 +279,25 @@ export function buildLocalBranchAnalysis(args: {
     issues: args.issues,
     pullRequests: args.pullRequests,
   });
-  const localFindings = buildLocalFindings(args.input, changedFiles, preflight, scorePreview, baseFreshness, githubBranchStatus);
+  const manifest = parseFocusManifest(args.input.focusManifest);
+  const manifestGuidance = buildFocusManifestGuidance({
+    manifest,
+    changedPaths,
+    labels: args.input.labels,
+    linkedIssueCount: preflight.linkedIssues.length,
+    testFileCount: testFiles.length,
+    passedValidationCount: validationSummary.passed,
+  });
+  const localFindings = [
+    ...buildLocalFindings(args.input, changedFiles, preflight, scorePreview, baseFreshness, githubBranchStatus, scorePreview.branchEligibility),
+    ...manifestGuidance.findings.map((finding) => ({
+      code: finding.code,
+      severity: finding.severity,
+      title: finding.title,
+      detail: finding.detail,
+      action: finding.action,
+    })),
+  ];
   const branchQualityBlockers = branchQualityBlockersFor(preflight, localFindings);
   const accountStateBlockers = accountStateBlockersFor(scorePreview);
   /* v8 ignore next -- buildScorePreview always emits a current scenario; this fallback protects malformed scorer adapters. */
@@ -289,7 +313,7 @@ export function buildLocalBranchAnalysis(args: {
     gateDeltas: scorePreview.gateDeltas,
     blockedBy: scorePreview.blockedBy,
   };
-  const recommendedRerunCondition = recommendedRerunFor(baseFreshness, branchQualityBlockers, accountStateBlockers, scorePreview);
+  const recommendedRerunCondition = recommendedRerunFor(baseFreshness, branchQualityBlockers, accountStateBlockers, scorePreview, scorePreview.branchEligibility);
   const prPacket = buildPublicSafePrPacket({
     title,
     preflight,
@@ -300,11 +324,13 @@ export function buildLocalBranchAnalysis(args: {
     localFindings,
     baseFreshness,
     githubBranchStatus,
+    branchEligibility: scorePreview.branchEligibility,
     recommendedRerunCondition,
+    manifestGuidance,
   });
   const scoreBlockers = [
     ...rewardRisk.scoreBlockers,
-    ...scorePreview.warnings.filter((warning) => /not registered|no active|exceeds|credibility|token gate/i.test(warning)),
+    ...scorePreview.warnings.filter((warning) => /not registered|no active|exceeds|credibility|token gate|confirmed ineligible/i.test(warning)),
     ...preflight.findings.filter((finding) => finding.severity !== "info").map((finding) => finding.title),
   ];
   return {
@@ -322,6 +348,7 @@ export function buildLocalBranchAnalysis(args: {
     scenarioScorePreview,
     observedPullRequestScenarios,
     githubBranchStatus,
+    branchEligibility: scorePreview.branchEligibility,
     rewardRisk,
     scoreBlockers: [...new Set(scoreBlockers)],
     branchQualityBlockers,
@@ -336,6 +363,7 @@ export function buildLocalBranchAnalysis(args: {
       reasons: recommendation.reasons,
       risks: recommendation.risks,
     },
+    manifestGuidance,
     prPacket,
     nextActions: withSituationalAction(rewardRisk.actions, branchQualityBlockers, accountStateBlockers, scorePreview).slice(0, 6),
     workspaceIntelligence: buildLocalWorkspaceIntelligence({
@@ -400,6 +428,7 @@ function buildLocalScoreInput(args: {
     projectedCredibility: args.input.projectedCredibility,
     scenarioNotes: args.input.scenarioNotes,
     observedScenarioNotes: args.observedPullRequestScenarios.notes,
+    branchEligibility: args.input.branchEligibility,
   };
 }
 
@@ -535,12 +564,16 @@ function buildObservedPullRequestScenarios(args: {
       draft += 1;
       continue;
     }
-    if (isStaleOpenPr(pr, args.nowMs)) {
-      stale += 1;
-      continue;
-    }
+    // CR with classifyOpenPullRequest (pending-pr-scenarios.ts): an actionable
+    // block (changes requested / bad mergeable state) takes precedence over age,
+    // so a changes-requested PR is never optimistically modeled as "stale, likely
+    // to close and free up an open-PR slot". Blocked must be checked before stale.
     if (isBlockedOpenPr(pr)) {
       blocked += 1;
+      continue;
+    }
+    if (isStaleOpenPr(pr, args.nowMs)) {
+      stale += 1;
       continue;
     }
     if (isApprovedOrMergeableOpenPr(pr)) approvedOrMergeable += 1;
@@ -679,8 +712,10 @@ function buildLocalFindings(
   scorePreview: ScorePreviewResult,
   baseFreshness: LocalBranchAnalysis["baseFreshness"],
   githubBranchStatus: GitHubBranchStatus,
+  branchEligibility: BranchEligibilityResult,
 ): LocalBranchAnalysis["localFindings"] {
   const failedValidation = (input.validation ?? []).filter((entry) => entry.status === "failed");
+  const localScorerWarnings = sanitizeLocalScorerWarnings(input.localScorer?.warnings);
   return [
     {
       code: "source_upload_disabled",
@@ -750,13 +785,13 @@ function buildLocalFindings(
           },
         ]
       : []),
-    ...(input.localScorer?.warnings?.length
+    ...(localScorerWarnings.length
       ? [
           {
             code: "local_scorer_warning",
             severity: "info" as const,
             title: "Local scorer diagnostics",
-            detail: input.localScorer.warnings.join(" "),
+            detail: localScorerWarnings.join(" "),
           },
         ]
       : []),
@@ -772,12 +807,15 @@ function buildLocalFindings(
         ]
       : []),
     ...githubBranchFindings(githubBranchStatus),
-    ...scorePreview.warnings.map((warning) => ({
-      code: "score_preview_warning",
-      severity: /not registered|no active|exceeds|credibility/i.test(warning) ? ("warning" as const) : ("info" as const),
-      title: "Private preview warning",
-      detail: warning,
-    })),
+    ...branchEligibilityFindings(branchEligibility),
+    ...scorePreview.warnings
+      .filter((warning) => !/branch eligibility/i.test(warning))
+      .map((warning) => ({
+        code: "score_preview_warning",
+        severity: /not registered|no active|exceeds|credibility/i.test(warning) ? ("warning" as const) : ("info" as const),
+        title: "Private preview warning",
+        detail: warning,
+      })),
     ...preflight.findings.map((finding) => ({
       code: `preflight_${finding.code}`,
       severity: finding.severity,
@@ -786,6 +824,45 @@ function buildLocalFindings(
       action: finding.action,
     })),
   ];
+}
+
+function branchEligibilityFindings(branchEligibility: BranchEligibilityResult): LocalBranchAnalysis["localFindings"] {
+  if (!branchEligibility.required) return [];
+  const detail = branchEligibility.warnings.join(" ") || "Branch eligibility metadata did not confirm the linked issue assumption.";
+  if (branchEligibility.status === "ineligible") {
+    return [
+      {
+        code: "branch_eligibility_ineligible",
+        severity: "warning" as const,
+        title: "Branch eligibility blocks linked-issue assumptions",
+        detail,
+        action: "Clean up linked issue context or use a branch whose linked issue context is valid before submission.",
+      },
+    ];
+  }
+  if (branchEligibility.stale) {
+    return [
+      {
+        code: "branch_eligibility_stale",
+        severity: "warning" as const,
+        title: "Branch eligibility metadata is stale",
+        detail,
+        action: "Refresh branch/base metadata and rerun branch analysis before submission.",
+      },
+    ];
+  }
+  if (branchEligibility.status === "unknown") {
+    return [
+      {
+        code: branchEligibility.evidence === "missing" ? "branch_eligibility_missing" : "branch_eligibility_unknown",
+        severity: "info" as const,
+        title: branchEligibility.evidence === "missing" ? "Branch eligibility evidence missing" : "Branch eligibility unknown",
+        detail,
+        action: "Refresh branch/base metadata before relying on linked issue context.",
+      },
+    ];
+  }
+  return [];
 }
 
 function githubBranchFindings(status: GitHubBranchStatus): LocalBranchAnalysis["localFindings"] {
@@ -874,8 +951,13 @@ function recommendedRerunFor(
   branchQualityBlockers: string[],
   accountStateBlockers: string[],
   scorePreview: ScorePreviewResult,
+  branchEligibility: BranchEligibilityResult,
 ): string {
   if (baseFreshness.status === "stale" || baseFreshness.status === "possibly_stale") return "Run `git fetch origin` and rerun; current diff size may be inflated by stale base state.";
+  if (branchEligibility.required && branchEligibility.status === "ineligible") return "Rerun after branch/base metadata confirms eligibility or after linked issue assumptions change.";
+  if (branchEligibility.required && (branchEligibility.stale || (branchEligibility.status === "unknown" && branchEligibility.evidence === "provided"))) {
+    return "Refresh branch/base eligibility metadata and rerun before relying on linked issue assumptions.";
+  }
   if (branchQualityBlockers.length > 0) return "Rerun after fixing branch-quality blockers or adding explicit validation/linked-context evidence.";
   const afterPending = scorePreview.scenarioPreviews.find((scenario) => scenario.name === "afterPendingMerges");
   if (accountStateBlockers.length > 0 && afterPending && afterPending.effectiveEstimatedScore > scorePreview.effectiveEstimatedScore) {
@@ -925,7 +1007,9 @@ function buildPublicSafePrPacket(args: {
   localFindings: LocalBranchAnalysis["localFindings"];
   baseFreshness: LocalBranchAnalysis["baseFreshness"];
   githubBranchStatus: GitHubBranchStatus;
+  branchEligibility: BranchEligibilityResult;
   recommendedRerunCondition: string;
+  manifestGuidance: FocusManifestGuidance;
 }): LocalBranchAnalysis["prPacket"] {
   const topPaths = args.changedFiles.slice(0, 8).map(changedFileSummary);
   const publicSafeWarnings = [
@@ -943,9 +1027,14 @@ function buildPublicSafePrPacket(args: {
         return finding.action ? [finding.action] : [finding.title];
       }),
   ].filter(isPublicSafeText);
-  const nextSteps = [...publicSafeWarnings, args.baseFreshness.recommendation, args.recommendedRerunCondition, "Keep source upload disabled; this packet is based on local git metadata only."].filter(
-    (line): line is string => Boolean(line && isPublicSafeText(line)),
-  );
+  const nextSteps = [
+    ...publicSafeWarnings,
+    ...args.manifestGuidance.publicNextSteps,
+    args.baseFreshness.recommendation,
+    publicSafeRerunCondition(args.recommendedRerunCondition),
+    "Keep source upload disabled; this packet is based on local git metadata only.",
+  ].filter((line): line is string => Boolean(line && isPublicSafeText(line)));
+  const manifestFocus = manifestFocusLines(args.manifestGuidance);
   const validationLines =
     args.validationSummary.commands.length > 0
       ? args.validationSummary.commands.map((entry) => `- ${entry.status}: ${entry.command}${entry.durationMs !== undefined ? ` [${entry.durationMs}ms]` : ""}${entry.summary ? ` (${entry.summary})` : ""}`)
@@ -959,8 +1048,10 @@ function buildPublicSafePrPacket(args: {
         heading: "Linked Context",
         lines: args.preflight.linkedIssues.length > 0 ? args.preflight.linkedIssues.map((issue) => `- Closes #${issue}`) : ["- No linked issue detected; explain why this is a no-issue PR."],
       },
+      { heading: "Linked Issue Hygiene", lines: linkedIssueHygieneLines(args.branchEligibility) },
       { heading: "Branch Freshness", lines: branchFreshnessLines(args.baseFreshness) },
       { heading: "GitHub Status", lines: githubStatusLines(args.githubBranchStatus) },
+      ...(manifestFocus.length > 0 ? [{ heading: "Maintainer Focus", lines: manifestFocus }] : []),
       { heading: "Overlap/WIP Check", lines: overlapCautionLines(args.preflight.collisions) },
       {
         heading: "Changed Paths",
@@ -986,6 +1077,24 @@ function buildPublicSafePrPacket(args: {
   };
 }
 
+function linkedIssueHygieneLines(branchEligibility: BranchEligibilityResult): string[] {
+  if (!branchEligibility.required) return ["- No issue-specific branch gate was required from supplied metadata."];
+  if (branchEligibility.status === "eligible") {
+    return [
+      "- Linked issue context was checked from local/GitHub metadata.",
+      ...(branchEligibility.stale ? ["- Reconfirm linked issue and base branch metadata before submission."] : []),
+    ];
+  }
+  if (branchEligibility.status === "ineligible") {
+    return ["- Linked issue context needs cleanup before presenting this PR as solving the issue."];
+  }
+  return ["- Linked issue context was not confirmed; verify the issue reference and base branch before submission."];
+}
+
+function publicSafeRerunCondition(condition: string): string {
+  return /eligibility|multiplier|scoreability|score/i.test(condition) ? "Refresh linked issue and base branch metadata before submission." : condition;
+}
+
 function branchFreshnessLines(freshness: LocalBranchAnalysis["baseFreshness"]): string[] {
   return [`- Base freshness: ${freshness.status}.`, ...freshness.warnings.filter(isPublicSafeText).map((warning) => `- ${warning}`), freshness.passedValidationCount > 0 ? `- Validation evidence supplied: ${freshness.passedValidationCount} passed command(s).` : "- No passed validation evidence was supplied."];
 }
@@ -993,6 +1102,12 @@ function branchFreshnessLines(freshness: LocalBranchAnalysis["baseFreshness"]): 
 function githubStatusLines(status: GitHubBranchStatus): string[] {
   if (status.status === "no_pr") return ["- No open GitHub PR was matched to this branch."];
   return [`- PR #${status.pullNumber}: ${status.status.replace(/_/g, " ")}.`, ...status.notes.map((note) => `- ${note}`)].filter(isPublicSafeText);
+}
+
+function manifestFocusLines(guidance: FocusManifestGuidance): string[] {
+  if (!guidance.present) return [];
+  const lines = guidance.publicNextSteps.map((step) => `- ${step}`).filter(isPublicSafeText);
+  return [...new Set(lines)].slice(0, 6);
 }
 
 function overlapCautionLines(collisions: LocalDiffPreflightResult["collisions"]): string[] {

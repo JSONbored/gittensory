@@ -253,6 +253,66 @@ MAX_CODE_DENSITY_MULTIPLIER = 1.15
     expect(preview.scoreEstimate.labelMultiplier).toBe(1);
   });
 
+  it("gates linked-issue assumptions with branch eligibility evidence", () => {
+    const baseInput = {
+      repoFullName: repo.fullName,
+      labels: ["bug"],
+      linkedIssueMode: "standard" as const,
+      linkedIssueContext: { status: "validated" as const, source: "official_mirror" as const, issueNumbers: [7], solvedByPullRequests: [100] },
+      sourceTokenScore: 60,
+      totalTokenScore: 90,
+      sourceLines: 50,
+      openPrCount: 0,
+      credibility: 1,
+    };
+    const eligible = buildScorePreview({
+      repo,
+      snapshot,
+      input: { ...baseInput, branchEligibility: { status: "eligible", source: "github_metadata", checkedAt: "2026-05-30T00:00:00.000Z" } },
+    });
+    const ineligible = buildScorePreview({
+      repo,
+      snapshot,
+      input: { ...baseInput, branchEligibility: { status: "ineligible", source: "github_metadata", reason: "head branch is not eligible" } },
+    });
+    const missing = buildScorePreview({ repo, snapshot, input: baseInput });
+    const unknown = buildScorePreview({
+      repo,
+      snapshot,
+      input: { ...baseInput, branchEligibility: { status: "unknown", stale: true } },
+    });
+    const implicitUnknown = buildScorePreview({
+      repo,
+      snapshot,
+      input: { ...baseInput, branchEligibility: {} as never },
+    });
+    const notRequired = buildScorePreview({
+      repo,
+      snapshot,
+      input: { ...baseInput, linkedIssueMode: "none", branchEligibility: { status: "eligible" } },
+    });
+
+    expect(eligible.branchEligibility).toMatchObject({ required: true, status: "eligible", evidence: "provided" });
+    expect(eligible.scoreEstimate.issueMultiplier).toBe(1.33);
+    expect(eligible.blockedBy.map((blocker) => blocker.code)).not.toContain("branch_ineligible");
+    expect(ineligible.branchEligibility).toMatchObject({ required: true, status: "ineligible", evidence: "provided", reason: "head branch is not eligible" });
+    expect(ineligible.scoreEstimate.issueMultiplier).toBe(1);
+    expect(ineligible.scoreEstimate.estimatedMergedScore).toBeLessThan(eligible.scoreEstimate.estimatedMergedScore);
+    expect(ineligible.blockedBy).toEqual(expect.arrayContaining([expect.objectContaining({ code: "branch_ineligible", severity: "reducer" })]));
+    expect(ineligible.recommendation.actions).toEqual(expect.arrayContaining([expect.stringMatching(/eligible branch/i)]));
+    expect(missing.branchEligibility).toMatchObject({ required: true, status: "unknown", evidence: "missing", source: "missing" });
+    expect(missing.blockedBy).toEqual(expect.arrayContaining([expect.objectContaining({ code: "branch_eligibility_missing", severity: "context" })]));
+    expect(missing.scoreEstimate.issueMultiplier).toBe(1.33);
+    expect(unknown.branchEligibility).toMatchObject({ required: true, status: "unknown", evidence: "provided", source: "user_supplied", stale: true });
+    expect(unknown.branchEligibility.warnings.join(" ")).toMatch(/unknown.*stale/i);
+    expect(unknown.recommendation.actions).toEqual(expect.arrayContaining([expect.stringMatching(/refresh branch\/base eligibility metadata/i)]));
+    expect(implicitUnknown.branchEligibility).toMatchObject({ required: true, status: "unknown", evidence: "provided", source: "user_supplied" });
+    expect(notRequired.branchEligibility).toMatchObject({ required: false, status: "not_required", evidence: "provided", source: "user_supplied" });
+    expect(notRequired.scoreEstimate.issueMultiplier).toBe(1);
+    expect(notRequired.blockedBy.map((blocker) => blocker.code)).not.toContain("branch_eligibility_missing");
+    expect(JSON.stringify({ eligible, ineligible, missing, unknown, implicitUnknown, notRequired })).not.toMatch(/guaranteed payout|wallet|hotkey|farming/i);
+  });
+
   it("requires solved-by-PR validation before applying the standard linked-issue multiplier", () => {
     const baseInput = {
       repoFullName: repo.fullName,
@@ -424,6 +484,60 @@ MAX_CODE_DENSITY_MULTIPLIER = 1.15
     expect(preview.effectiveEstimatedScore).toBe(0);
     expect(preview.underlyingPotentialScore).toBeGreaterThan(0);
     expect(JSON.stringify(preview)).not.toMatch(/guaranteed payout|wallet|hotkey|farming/i);
+  });
+
+  it("does not double-count merge-ready PRs supplied as both pendingMerged and approved", () => {
+    const preview = buildScorePreview({
+      repo,
+      snapshot,
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 60,
+        totalTokenScore: 90,
+        sourceLines: 50,
+        openPrCount: 6,
+        credibility: 1,
+        // The GitHub-observed detector reports the same merge-ready set as both
+        // pendingMergedPrCount and approvedPrCount; they must not be added twice.
+        pendingMergedPrCount: 3,
+        approvedPrCount: 3,
+        pendingClosedPrCount: 0,
+      },
+    });
+    const afterPending = preview.scenarioPreviews.find((scenario) => scenario.name === "afterPendingMerges");
+    // 3 merge-ready PRs leave the queue once: 6 - 3 = 3 open (not the buggy 6 - 6 = 0).
+    expect(afterPending?.gates.openPrCount).toBe(3);
+    // 3 still exceeds openPrThreshold (2 + floor(90/300) = 2) -> gate stays blocked.
+    expect(afterPending?.scoreEstimate.openPrMultiplier).toBe(0);
+    expect(afterPending?.effectiveEstimatedScore).toBe(0);
+    // Scenario note reports the de-duplicated count (3), never the doubled 6.
+    const note = afterPending?.assumptions.join(" ") ?? "";
+    expect(note).toMatch(/3 pending merged\/closed PR/);
+    expect(note).not.toMatch(/6 pending/);
+
+    // GitHub-observed path: same merge-ready set, note must still read 3, not 6.
+    const observed = buildScorePreview({
+      repo,
+      snapshot,
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 60,
+        totalTokenScore: 90,
+        sourceLines: 50,
+        openPrCount: 6,
+        credibility: 1,
+        pendingMergedPrCount: 3,
+        approvedPrCount: 3,
+        pendingClosedPrCount: 0,
+        expectedOpenPrCountAfterMerge: 3,
+        pendingScenarioObserved: true,
+      },
+    });
+    const observedAfterPending = observed.scenarioPreviews.find((scenario) => scenario.name === "afterPendingMerges");
+    expect(observedAfterPending?.source).toBe("github_observed");
+    const observedNote = observedAfterPending?.assumptions.join(" ") ?? "";
+    expect(observedNote).toMatch(/3 pending merged\/closed PR/);
+    expect(observedNote).not.toMatch(/6 pending|user-supplied/);
   });
 
   it("warns on metadata-only weak previews without using public reward or wallet language", () => {
