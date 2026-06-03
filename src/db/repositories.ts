@@ -1482,7 +1482,7 @@ function maxIso(left: string | null | undefined, right: string | null | undefine
 }
 
 function outcomeStateBuckets(outcomes: AgentRecommendationOutcomeRecord[]): AgentRecommendationOutcomeSummary["states"] {
-  const states: AgentRecommendationOutcomeState[] = ["accepted", "merged", "improved", "closed", "stale", "ignored"];
+  const states: AgentRecommendationOutcomeState[] = ["accepted", "merged", "improved", "closed", "rejected", "stale", "ignored"];
   return states.flatMap((state) => {
     const count = outcomes.filter((outcome) => outcome.outcomeState === state).length;
     return count > 0 ? [{ state, count }] : [];
@@ -1494,6 +1494,7 @@ function recommendationOutcomeTotals(
   maintainerLaneTotal: number,
 ): AgentRecommendationOutcomeSummary["totals"] {
   const accepted = outcomes.filter((outcome) => outcome.outcomeState === "accepted").length;
+  const rejected = outcomes.filter((outcome) => outcome.outcomeState === "rejected").length;
   const merged = outcomes.filter((outcome) => outcome.outcomeState === "merged").length;
   const improved = outcomes.filter((outcome) => outcome.outcomeState === "improved").length;
   const closed = outcomes.filter((outcome) => outcome.outcomeState === "closed").length;
@@ -1502,13 +1503,14 @@ function recommendationOutcomeTotals(
   return {
     total: outcomes.length,
     accepted,
+    rejected,
     ignored,
     stale,
     merged,
     closed,
     improved,
     positive: accepted + merged + improved,
-    negative: closed + stale + ignored,
+    negative: closed + rejected + stale + ignored,
     maintainerLaneTotal,
   };
 }
@@ -1532,6 +1534,7 @@ function summarizeRecommendationOutcomeRepos(outcomes: AgentRecommendationOutcom
         repoFullName: firstRepo.outcomeRepoFullName ?? firstRepo.targetRepoFullName ?? "unknown/repo",
         total: totals.total,
         accepted: totals.accepted,
+        rejected: totals.rejected,
         ignored: totals.ignored,
         stale: totals.stale,
         merged: totals.merged,
@@ -2427,6 +2430,8 @@ export async function upsertAgentRecommendationOutcome(env: Env, outcome: AgentR
     runId: outcome.runId,
     actorLogin: boundedString(outcome.actorLogin, 100),
     actionType: outcome.actionType,
+    surface: outcome.surface ?? null,
+    snapshotId: outcome.snapshotId ?? null,
     targetRepoFullName: outcome.targetRepoFullName ? boundedString(outcome.targetRepoFullName, 200) : null,
     targetPullNumber: outcome.targetPullNumber ?? null,
     targetIssueNumber: outcome.targetIssueNumber ?? null,
@@ -2452,6 +2457,8 @@ export async function upsertAgentRecommendationOutcome(env: Env, outcome: AgentR
       set: {
         actorLogin: values.actorLogin,
         actionType: values.actionType,
+        surface: values.surface,
+        snapshotId: values.snapshotId,
         targetRepoFullName: values.targetRepoFullName,
         targetPullNumber: values.targetPullNumber,
         targetIssueNumber: values.targetIssueNumber,
@@ -3202,6 +3209,8 @@ function toAgentRecommendationOutcomeRecord(row: typeof agentRecommendationOutco
     runId: row.runId,
     actorLogin: row.actorLogin,
     actionType: parseAgentActionType(row.actionType),
+    surface: row.surface ? parseAgentSurface(row.surface) : null,
+    snapshotId: row.snapshotId ?? null,
     targetRepoFullName: row.targetRepoFullName,
     targetPullNumber: row.targetPullNumber,
     targetIssueNumber: row.targetIssueNumber,
@@ -3996,7 +4005,7 @@ function parseAgentSafetyClass(value: string): AgentSafetyClass {
 }
 
 function parseAgentRecommendationOutcomeState(value: string): AgentRecommendationOutcomeState {
-  if (value === "accepted" || value === "ignored" || value === "stale" || value === "merged" || value === "closed" || value === "improved") return value;
+  if (value === "accepted" || value === "rejected" || value === "ignored" || value === "stale" || value === "merged" || value === "closed" || value === "improved") return value;
   return "ignored";
 }
 
