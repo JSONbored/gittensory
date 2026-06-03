@@ -1,6 +1,6 @@
 import { createMcpHandler } from "agents/mcp";
 import type { Context } from "hono";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authenticatePrivateToken, extractBearerToken, type AuthIdentity } from "../auth/security";
 import { loadControlPanelRoleSummary } from "../services/control-panel-roles";
@@ -589,6 +589,90 @@ export class GittensoryMcp {
         inputSchema: localBranchAnalysisShape,
       },
       async (input) => this.toolResult(await this.agentPreparePrPacket(input)),
+    );
+
+    // ── MCP resources ────────────────────────────────────────────────────
+    server.registerResource(
+      "gittensory_contributor_decision_pack",
+      new ResourceTemplate("gittensory://contributor/{login}/decision-pack", { list: undefined }),
+      {
+        title: "Contributor decision pack",
+        description: "Private contributor decision pack for planning Gittensor OSS contributions. Requires authenticated access.",
+        mimeType: "application/json",
+      },
+      async (uri, variables) => {
+        const login = String(variables.login ?? "");
+        this.requireContributorAccess(login);
+        const pack = await loadContributorDecisionPackForServing(this.env, login, { enqueueRebuild: false });
+        const data = redactSensitiveForMcp(pack as unknown as Record<string, unknown>);
+        return { contents: [{ uri: uri.toString(), mimeType: "application/json", text: JSON.stringify(data, null, 2) }] };
+      },
+    );
+
+    server.registerResource(
+      "gittensory_doctor_status",
+      "gittensory://doctor/status",
+      {
+        title: "Gittensory system status",
+        description: "System health: upstream ruleset drift status, registry snapshot freshness, and API availability.",
+        mimeType: "application/json",
+      },
+      async (uri) => {
+        const [upstreamStatus, registrySnapshots] = await Promise.all([
+          loadUpstreamStatus(this.env),
+          listLatestRegistrySnapshots(this.env, 1),
+        ]);
+        const latestSnapshot = registrySnapshots[0] ?? null;
+        const data = redactSensitiveForMcp({
+          upstream: { status: upstreamStatus.status, highestSeverity: upstreamStatus.highestSeverity },
+          registry: {
+            available: latestSnapshot !== null,
+            generatedAt: latestSnapshot?.generatedAt ?? null,
+            repoCount: latestSnapshot?.repoCount ?? null,
+          },
+          apiAvailable: true,
+        });
+        return { contents: [{ uri: uri.toString(), mimeType: "application/json", text: JSON.stringify(data, null, 2) }] };
+      },
+    );
+
+    server.registerResource(
+      "gittensory_compatibility",
+      "gittensory://compatibility",
+      {
+        title: "MCP compatibility metadata",
+        description: "Supported MCP protocol versions, minimum client package requirements, and server version.",
+        mimeType: "application/json",
+      },
+      async (uri) => {
+        const data = {
+          serverName: "gittensory",
+          serverVersion: "0.1.0",
+          supportedProtocolVersions: ["2024-11-05", "2025-03-26"],
+          minimumClientPackage: "@jsonbored/gittensory-mcp",
+          minimumClientVersion: "0.4.0",
+          recommendedClientVersion: "latest",
+        };
+        return { contents: [{ uri: uri.toString(), mimeType: "application/json", text: JSON.stringify(data, null, 2) }] };
+      },
+    );
+
+    server.registerResource(
+      "gittensory_release_notes",
+      "gittensory://release/notes",
+      {
+        title: "Gittensory release notes",
+        description: "Current Gittensory MCP server version and release notes reference.",
+        mimeType: "application/json",
+      },
+      async (uri) => {
+        const data = {
+          serverVersion: "0.1.0",
+          changelogUrl: "https://github.com/JSONbored/gittensory/blob/main/CHANGELOG.md",
+          note: "See the changelog for full release history and upgrade guidance.",
+        };
+        return { contents: [{ uri: uri.toString(), mimeType: "application/json", text: JSON.stringify(data, null, 2) }] };
+      },
     );
 
     return server;
