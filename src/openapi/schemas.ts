@@ -808,6 +808,43 @@ export const InstallationHealthSchema = z
   })
   .openapi("InstallationHealth");
 
+export const InstallationRepairSchema = z
+  .object({
+    generatedAt: z.string(),
+    installation: InstallationHealthSchema,
+    installedRepos: z.array(
+      z.object({
+        repoFullName: z.string(),
+        isRegistered: z.boolean(),
+        settings: z.object({
+          publicSurface: z.enum(["off", "comment_and_label", "comment_only", "label_only"]),
+          commentMode: z.enum(["off", "detected_contributors_only", "all_prs"]),
+          checkRunMode: z.enum(["off", "enabled"]),
+          autoLabelEnabled: z.boolean(),
+        }),
+      }),
+    ),
+    requiredPermissions: z.record(z.string(), z.string()),
+    optionalPermissions: z.record(z.string(), z.string()),
+    requiredEvents: z.array(z.string()),
+    optionalEvents: z.array(z.string()),
+    modeImpacts: z.array(
+      z.object({
+        mode: z.enum(["comment", "label", "check_run"]),
+        enabled: z.boolean(),
+        affectedRepoCount: z.number(),
+        requiredPermissions: z.array(z.object({ permission: z.string(), requiredAccess: z.string(), missing: z.boolean(), optional: z.boolean() })),
+        summary: z.string(),
+        action: z.string(),
+      }),
+    ),
+    eventDiagnostics: z.array(z.object({ event: z.string(), missing: z.boolean(), optional: z.boolean(), summary: z.string(), action: z.string() })),
+    repairSteps: z.array(z.string()),
+    refresh: z.object({ method: z.literal("POST"), path: z.string(), lastCheckedAt: z.string() }),
+    refreshed: z.boolean().optional(),
+  })
+  .openapi("InstallationRepair");
+
 export const UpstreamDriftReportSchema = z
   .object({
     id: z.string(),
@@ -816,6 +853,14 @@ export const UpstreamDriftReportSchema = z
     status: z.enum(["open", "acknowledged", "resolved", "ignored"]),
     summary: z.string(),
     affectedAreas: z.array(z.enum(["registry", "scoring_model", "issue_discovery", "mirror_linkage", "language_weights", "source"])),
+    source: z
+      .object({
+        repo: z.string().nullable(),
+        ref: z.string().nullable(),
+        commitSha: z.string().nullable().optional(),
+      })
+      .optional(),
+    recommendedFollowUp: z.array(z.string()).optional(),
     previousRulesetId: z.string().nullable().optional(),
     currentRulesetId: z.string().nullable().optional(),
     issueNumber: z.number().nullable().optional(),
@@ -1425,6 +1470,60 @@ export const ContributorStrategySchema = z
 
 export const DecisionPackFreshnessSchema = z.enum(["fresh", "stale", "rebuilding", "missing"]).openapi("DecisionPackFreshness");
 
+export const AgentRecommendationOutcomeStateSchema = z.enum(["accepted", "ignored", "stale", "merged", "closed", "improved"]).openapi("AgentRecommendationOutcomeState");
+
+export const AgentRecommendationOutcomeStateBucketSchema = z
+  .object({
+    state: AgentRecommendationOutcomeStateSchema,
+    count: z.number(),
+  })
+  .openapi("AgentRecommendationOutcomeStateBucket");
+
+export const AgentRecommendationOutcomeRepoSummarySchema = z
+  .object({
+    repoFullName: z.string(),
+    total: z.number(),
+    accepted: z.number(),
+    ignored: z.number(),
+    stale: z.number(),
+    merged: z.number(),
+    closed: z.number(),
+    improved: z.number(),
+    positive: z.number(),
+    negative: z.number(),
+    maintainerLaneTotal: z.number(),
+    latestOutcomeAt: z.string().nullable().optional(),
+    signal: z.enum(["positive", "negative", "mixed", "neutral"]),
+  })
+  .openapi("AgentRecommendationOutcomeRepoSummary");
+
+export const AgentRecommendationOutcomeSummarySchema = z
+  .object({
+    login: z.string(),
+    generatedAt: z.string(),
+    windowDays: z.number(),
+    totals: z.object({
+      total: z.number(),
+      accepted: z.number(),
+      ignored: z.number(),
+      stale: z.number(),
+      merged: z.number(),
+      closed: z.number(),
+      improved: z.number(),
+      positive: z.number(),
+      negative: z.number(),
+      maintainerLaneTotal: z.number(),
+    }),
+    states: z.array(AgentRecommendationOutcomeStateBucketSchema),
+    repos: z.array(AgentRecommendationOutcomeRepoSummarySchema),
+    maintainerLane: z.object({
+      total: z.number(),
+      states: z.array(AgentRecommendationOutcomeStateBucketSchema),
+    }),
+    privateSummary: z.string(),
+  })
+  .openapi("AgentRecommendationOutcomeSummary");
+
 export const DecisionRecommendationSchema = z.enum(["pursue", "cleanup_first", "maintainer_lane", "avoid_for_now", "watch"]).openapi("DecisionRecommendation");
 
 export const DecisionActionKindSchema = z
@@ -1505,6 +1604,7 @@ export const ContributorDecisionPackSchema = z
     avoidRepos: z.array(z.record(z.string(), z.unknown())),
     maintainerLaneRepos: z.array(z.record(z.string(), z.unknown())),
     scoreBlockers: z.array(z.record(z.string(), z.unknown())),
+    recommendationOutcomeFeedback: AgentRecommendationOutcomeSummarySchema,
     evidenceGraph: z.record(z.string(), z.unknown()).optional(),
     dataQuality: z.record(z.string(), z.unknown()),
     summary: z.string(),
@@ -1598,6 +1698,45 @@ export const RegistrationReadinessSchema = z
       behavior: z.string(),
       warnings: z.array(z.string()),
     }),
+    policyReadiness: z
+      .object({
+        repoFullName: z.string(),
+        source: z.enum(["focus_manifest_policy"]),
+        previewOnly: z.boolean(),
+        present: z.boolean(),
+        publicWarnings: z.array(
+          z.object({
+            code: z.string(),
+            category: z.enum(["contribution_flow", "direct_pr_policy", "issue_discovery", "validation", "maintainer_burden"]),
+            severity: z.enum(["info", "warning", "critical"]),
+            title: z.string(),
+            detail: z.string(),
+            action: z.string(),
+          }),
+        ),
+        ownerContext: z.object({
+          manifestPresent: z.boolean(),
+          manifestSource: z.enum(["repo_file", "api_record", "none"]),
+          privateNoteCount: z.number(),
+          manifestWarningCount: z.number(),
+          wantedPathCount: z.number(),
+          blockedPathCount: z.number(),
+          validationExpectationCount: z.number(),
+          queueLevel: z.enum(["low", "medium", "high", "critical"]),
+          contributorIntakeLevel: z.enum(["healthy", "watch", "strained", "blocked"]),
+          configLevel: z.enum(["excellent", "good", "needs_attention", "fragile"]),
+          issuePolicy: z.string(),
+          issueDiscoveryPolicy: z.enum(["encouraged", "neutral", "discouraged"]),
+        }),
+        droppedPublicWarnings: z.array(
+          z.object({
+            code: z.string(),
+            reason: z.enum(["unsafe_public_text"]),
+          }),
+        ),
+        summary: z.string(),
+      })
+      .nullable(),
     blockers: z.array(z.string()),
     warnings: z.array(z.string()),
     dataQuality: z.record(z.string(), z.unknown()),
@@ -1912,6 +2051,29 @@ export const RegistryChangeReportSchema = z
   })
   .openapi("RegistryChangeReport");
 
+export const AgentActionExplanationCardSchema = z
+  .object({
+    summary: z.string(),
+    whyNow: z.string(),
+    scoreabilityBlocker: z.string(),
+    risk: z.string(),
+    maintainerFriction: z.string(),
+    expectedImpact: z.string(),
+    blockerGroups: z.array(
+      z.object({
+        category: z.enum(["branch", "account", "queue", "scoreability", "risk", "maintainer", "unknown"]),
+        items: z.array(z.string()),
+      }),
+    ),
+    rerunWhen: z.string(),
+    publicSafe: z.object({
+      summary: z.string(),
+      whyNow: z.string(),
+      rerunWhen: z.string(),
+    }),
+  })
+  .openapi("AgentActionExplanationCard");
+
 export const AgentActionSchema = z
   .object({
     id: z.string(),
@@ -1938,6 +2100,7 @@ export const AgentActionSchema = z
     blockedBy: z.array(z.string()),
     rerunWhen: z.string().nullable().optional(),
     publicSafeSummary: z.string(),
+    explanationCard: AgentActionExplanationCardSchema,
     approvalRequired: z.boolean(),
     safetyClass: z.enum(["private", "public_safe", "approval_required"]),
     payload: z.record(z.string(), z.unknown()),
