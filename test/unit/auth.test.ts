@@ -79,15 +79,58 @@ describe("private-beta auth and rate limiting", () => {
   });
 
   it("classifies rate-limit route costs", () => {
+    expect(routeClassForPath("/v1/github/webhook")).toBe("strict");
     expect(routeClassForPath("/v1/auth/github/device/start")).toBe("strict");
     expect(routeClassForPath("/v1/local/branch-analysis")).toBe("expensive");
     expect(routeClassForPath("/v1/scoring/preview")).toBe("expensive");
     expect(routeClassForPath("/v1/upstream/status")).toBe("expensive");
     expect(routeClassForPath("/v1/contributors/jsonbored/decision-pack")).toBe("expensive");
+    expect(routeClassForPath("/v1/contributors/jsonbored/open-pr-monitor")).toBe("expensive");
+    expect(routeClassForPath("/v1/installations/999/repair/refresh")).toBe("expensive");
     expect(routeClassForPath("/v1/internal/jobs/generate-signal-snapshots")).toBe("expensive");
     expect(routeClassForPath("/v1/internal/jobs/build-contributor-decision-packs")).toBe("expensive");
     expect(routeClassForPath("/v1/internal/jobs/refresh-upstream-drift")).toBe("expensive");
     expect(routeClassForPath("/v1/repos")).toBe("normal");
+  });
+
+  it("keys unvalidated bearer tokens by Cloudflare client IP", async () => {
+    const observedKeys: string[] = [];
+    const env = createTestEnv({ RATE_LIMITER: rateLimiterNamespace({ status: 200, body: {} }, observedKeys) as unknown as DurableObjectNamespace });
+
+    await expect(
+      enforceRateLimit(
+        fakeContext(env, "/v1/auth/github/session", {
+          authorization: "Bearer random-token-one",
+          "cf-connecting-ip": "203.0.113.9",
+          "x-forwarded-for": "198.51.100.1",
+        }),
+        "strict",
+      ),
+    ).resolves.toBeNull();
+    await expect(
+      enforceRateLimit(
+        fakeContext(env, "/v1/auth/github/session", {
+          authorization: "Bearer random-token-two",
+          "cf-connecting-ip": "203.0.113.9",
+          "x-forwarded-for": "198.51.100.2",
+        }),
+        "strict",
+      ),
+    ).resolves.toBeNull();
+
+    expect(observedKeys).toHaveLength(2);
+    expect(observedKeys[0]).toBe(observedKeys[1]);
+    expect(observedKeys[0]).toMatch(/^strict:\/v1\/auth\/github\/session:ip:/);
+
+    observedKeys.length = 0;
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/repos", { authorization: "Bearer random-token", "cf-connecting-ip": "203.0.113.9" }), "normal"),
+    ).resolves.toBeNull();
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/repos", { authorization: `Bearer ${env.GITTENSORY_API_TOKEN}`, "cf-connecting-ip": "203.0.113.9" }), "normal"),
+    ).resolves.toBeNull();
+    expect(observedKeys[0]).toMatch(/^normal:\/v1\/repos:ip:/);
+    expect(observedKeys[1]).toMatch(/^normal:\/v1\/repos:token:/);
   });
 
   it("enforces route limits with session and IP keys plus retry headers", async () => {
@@ -140,7 +183,7 @@ describe("private-beta auth and rate limiting", () => {
     const deniedWithTokenEnv = createTestEnv({
       RATE_LIMITER: rateLimiterNamespace({ status: 429, body: { limit: 20, remaining: 0, retryAfterSeconds: 17, resetAt: "2026-05-25T00:03:00.000Z" } }) as unknown as DurableObjectNamespace,
     });
-    const deniedWithToken = fakeContext(deniedWithTokenEnv, "/v1/local/branch-analysis", { authorization: "Bearer session-token" });
+    const deniedWithToken = fakeContext(deniedWithTokenEnv, "/v1/local/branch-analysis", { authorization: `Bearer ${deniedWithTokenEnv.GITTENSORY_API_TOKEN}` });
     const deniedWithTokenResponse = await enforceRateLimit(deniedWithToken, "expensive");
     expect(deniedWithTokenResponse?.headers.get("retry-after")).toBe("17");
     expect(deniedWithTokenResponse?.headers.get("x-ratelimit-reset")).toBe("2026-05-25T00:03:00.000Z");
@@ -436,14 +479,15 @@ describe("private-beta auth and rate limiting", () => {
     await expect(createSessionFromGitHubToken(createTestEnv({ ADMIN_GITHUB_LOGINS: "no-id-user" }), "valid-token")).resolves.toMatchObject({ login: "no-id-user", scopes: [] });
   });
 
-  it("requires GitHub OAuth sessions to come from configured admin logins", async () => {
+  it("creates GitHub OAuth sessions without granting operator authorization", async () => {
     vi.stubGlobal("fetch", async () => Response.json({ login: "external-attacker", id: 99 }));
-    await expect(createSessionFromGitHubToken(createTestEnv(), "attacker-token")).rejects.toThrow(/github_user_not_authorized/);
-    await expect(createSessionFromGitHubToken(createTestEnv({ ADMIN_GITHUB_LOGINS: "" }), "attacker-token")).rejects.toThrow(/github_user_not_authorized/);
+    await expect(createSessionFromGitHubToken(createTestEnv(), "attacker-token")).resolves.toMatchObject({ login: "external-attacker" });
+    await expect(createSessionFromGitHubToken(createTestEnv({ ADMIN_GITHUB_LOGINS: "" }), "attacker-token")).resolves.toMatchObject({ login: "external-attacker" });
 
     const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "jsonbored" });
     const { token } = await createSessionForGitHubUser(env, { login: "external-attacker", id: 99 });
-    await expect(authenticatePrivateToken(env, token)).resolves.toBeNull();
+    await expect(authenticatePrivateToken(env, token)).resolves.toMatchObject({ kind: "session", actor: "external-attacker" });
+    expect(isAuthorizedGitHubSessionLogin(env, "external-attacker")).toBe(false);
   });
 });
 
@@ -461,10 +505,11 @@ function memoryDurableObjectState() {
   };
 }
 
-function rateLimiterNamespace(decision: { status: number; body: Record<string, unknown> | string }) {
+function rateLimiterNamespace(decision: { status: number; body: Record<string, unknown> | string }, observedKeys?: string[]) {
   return {
     idFromName(name: string) {
-      expect(name).toMatch(/^(normal|expensive):/);
+      expect(name).toMatch(/^(strict|normal|expensive):/);
+      observedKeys?.push(name);
       return name;
     },
     get() {

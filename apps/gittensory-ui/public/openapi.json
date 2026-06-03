@@ -146,59 +146,6 @@
           "generatedAt"
         ]
       },
-      "RegistryRepo": {
-        "type": "object",
-        "properties": {
-          "repo": {
-            "type": "string"
-          },
-          "emissionShare": {
-            "type": "number"
-          },
-          "issueDiscoveryShare": {
-            "type": "number"
-          },
-          "labelMultipliers": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "number"
-            }
-          },
-          "trustedLabelPipeline": {
-            "type": "boolean",
-            "nullable": true
-          },
-          "maintainerCut": {
-            "type": "number"
-          },
-          "defaultLabelMultiplier": {
-            "type": "number",
-            "nullable": true
-          },
-          "fixedBaseScore": {
-            "type": "number",
-            "nullable": true
-          },
-          "eligibilityMode": {
-            "type": "string",
-            "nullable": true
-          },
-          "raw": {
-            "type": "object",
-            "additionalProperties": {
-              "nullable": true
-            }
-          }
-        },
-        "required": [
-          "repo",
-          "emissionShare",
-          "issueDiscoveryShare",
-          "labelMultipliers",
-          "maintainerCut",
-          "raw"
-        ]
-      },
       "RegistrySnapshot": {
         "type": "object",
         "properties": {
@@ -260,6 +207,59 @@
           "repositories"
         ]
       },
+      "RegistryRepo": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "string"
+          },
+          "emissionShare": {
+            "type": "number"
+          },
+          "issueDiscoveryShare": {
+            "type": "number"
+          },
+          "labelMultipliers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "trustedLabelPipeline": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "maintainerCut": {
+            "type": "number"
+          },
+          "defaultLabelMultiplier": {
+            "type": "number",
+            "nullable": true
+          },
+          "fixedBaseScore": {
+            "type": "number",
+            "nullable": true
+          },
+          "eligibilityMode": {
+            "type": "string",
+            "nullable": true
+          },
+          "raw": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          }
+        },
+        "required": [
+          "repo",
+          "emissionShare",
+          "issueDiscoveryShare",
+          "labelMultipliers",
+          "maintainerCut",
+          "raw"
+        ]
+      },
       "Repository": {
         "type": "object",
         "properties": {
@@ -311,40 +311,6 @@
           "isInstalled",
           "isRegistered",
           "isPrivate"
-        ]
-      },
-      "Finding": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "severity": {
-            "type": "string",
-            "enum": [
-              "info",
-              "warning",
-              "critical"
-            ]
-          },
-          "detail": {
-            "type": "string"
-          },
-          "action": {
-            "type": "string"
-          },
-          "publicText": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "code",
-          "title",
-          "severity",
-          "detail"
         ]
       },
       "Advisory": {
@@ -419,6 +385,265 @@
           "summary",
           "findings",
           "generatedAt"
+        ]
+      },
+      "Finding": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "publicText": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "title",
+          "severity",
+          "detail"
+        ]
+      },
+      "ActionPortfolio": {
+        "type": "object",
+        "properties": {
+          "generatedAt": {
+            "type": "string"
+          },
+          "bucketOrder": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActionPortfolioBucketName"
+            }
+          },
+          "buckets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "bucket": {
+                  "$ref": "#/components/schemas/ActionPortfolioBucketName"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "actions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActionPortfolioItem"
+                  }
+                }
+              },
+              "required": [
+                "bucket",
+                "label",
+                "summary",
+                "actions"
+              ]
+            }
+          },
+          "topActions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActionPortfolioItem"
+            }
+          },
+          "counts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "generatedAt",
+          "bucketOrder",
+          "buckets",
+          "topActions",
+          "counts",
+          "summary"
+        ]
+      },
+      "ActionPortfolioBucketName": {
+        "type": "string",
+        "enum": [
+          "cleanup",
+          "wait",
+          "direct_pr",
+          "issue_discovery",
+          "avoid",
+          "maintainer_lane"
+        ]
+      },
+      "ActionPortfolioItem": {
+        "type": "object",
+        "properties": {
+          "bucket": {
+            "$ref": "#/components/schemas/ActionPortfolioBucketName"
+          },
+          "repoFullName": {
+            "type": "string"
+          },
+          "actionKind": {
+            "$ref": "#/components/schemas/DecisionActionKind"
+          },
+          "priorityScore": {
+            "type": "number"
+          },
+          "recommendation": {
+            "$ref": "#/components/schemas/DecisionRecommendation"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "recommended",
+              "blocked",
+              "watch"
+            ]
+          },
+          "whyNow": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scoreabilityImpact": {
+            "type": "string"
+          },
+          "riskImpact": {
+            "type": "string"
+          },
+          "maintainerImpact": {
+            "type": "string"
+          },
+          "blockedBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rerunWhen": {
+            "type": "string"
+          },
+          "publicSafeSummary": {
+            "type": "string"
+          },
+          "nextActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "publicNextActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "decision_pack"
+            ]
+          },
+          "scenarioProjection": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "github_observed",
+                  "user_supplied"
+                ]
+              },
+              "pendingMergedPrCount": {
+                "type": "number"
+              },
+              "pendingClosedPrCount": {
+                "type": "number"
+              },
+              "approvedPrCount": {
+                "type": "number"
+              },
+              "expectedOpenPrCountAfterMerge": {
+                "type": "number"
+              },
+              "notes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "source",
+              "pendingMergedPrCount",
+              "pendingClosedPrCount",
+              "approvedPrCount",
+              "notes"
+            ]
+          }
+        },
+        "required": [
+          "bucket",
+          "repoFullName",
+          "priorityScore",
+          "recommendation",
+          "status",
+          "whyNow",
+          "scoreabilityImpact",
+          "riskImpact",
+          "maintainerImpact",
+          "blockedBy",
+          "rerunWhen",
+          "publicSafeSummary",
+          "nextActions",
+          "publicNextActions",
+          "source"
+        ]
+      },
+      "DecisionActionKind": {
+        "type": "string",
+        "enum": [
+          "cleanup_existing_prs",
+          "land_existing_prs",
+          "open_new_direct_pr",
+          "file_issue_discovery",
+          "maintainer_lane_improve_repo",
+          "maintainer_cut_readiness"
+        ]
+      },
+      "DecisionRecommendation": {
+        "type": "string",
+        "enum": [
+          "pursue",
+          "cleanup_first",
+          "maintainer_lane",
+          "avoid_for_now",
+          "watch"
         ]
       },
       "WorkboardItem": {
@@ -560,68 +785,6 @@
           "findings"
         ]
       },
-      "CollisionItem": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": [
-              "issue",
-              "pull_request"
-            ]
-          },
-          "number": {
-            "type": "number"
-          },
-          "title": {
-            "type": "string"
-          },
-          "authorLogin": {
-            "type": "string",
-            "nullable": true
-          },
-          "htmlUrl": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "type",
-          "number",
-          "title"
-        ]
-      },
-      "CollisionCluster": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "risk": {
-            "type": "string",
-            "enum": [
-              "low",
-              "medium",
-              "high"
-            ]
-          },
-          "reason": {
-            "type": "string"
-          },
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/CollisionItem"
-            }
-          }
-        },
-        "required": [
-          "id",
-          "risk",
-          "reason",
-          "items"
-        ]
-      },
       "CollisionReport": {
         "type": "object",
         "properties": {
@@ -664,44 +827,66 @@
           "clusters"
         ]
       },
-      "LaneAdvice": {
+      "CollisionCluster": {
         "type": "object",
         "properties": {
-          "lane": {
+          "id": {
+            "type": "string"
+          },
+          "risk": {
             "type": "string",
             "enum": [
-              "direct_pr",
-              "issue_discovery",
-              "split",
-              "inactive",
-              "unknown"
+              "low",
+              "medium",
+              "high"
             ]
           },
-          "repoFullName": {
+          "reason": {
             "type": "string"
           },
-          "issueDiscoveryShare": {
-            "type": "number"
-          },
-          "directPrShare": {
-            "type": "number"
-          },
-          "summary": {
-            "type": "string"
-          },
-          "contributorGuidance": {
-            "type": "string"
-          },
-          "maintainerGuidance": {
-            "type": "string"
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollisionItem"
+            }
           }
         },
         "required": [
-          "lane",
-          "repoFullName",
-          "summary",
-          "contributorGuidance",
-          "maintainerGuidance"
+          "id",
+          "risk",
+          "reason",
+          "items"
+        ]
+      },
+      "CollisionItem": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "issue",
+              "pull_request"
+            ]
+          },
+          "number": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "authorLogin": {
+            "type": "string",
+            "nullable": true
+          },
+          "htmlUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "type",
+          "number",
+          "title"
         ]
       },
       "ConfigQuality": {
@@ -763,6 +948,46 @@
           "observedLabels",
           "notObservedConfiguredLabels",
           "findings"
+        ]
+      },
+      "LaneAdvice": {
+        "type": "object",
+        "properties": {
+          "lane": {
+            "type": "string",
+            "enum": [
+              "direct_pr",
+              "issue_discovery",
+              "split",
+              "inactive",
+              "unknown"
+            ]
+          },
+          "repoFullName": {
+            "type": "string"
+          },
+          "issueDiscoveryShare": {
+            "type": "number"
+          },
+          "directPrShare": {
+            "type": "number"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "contributorGuidance": {
+            "type": "string"
+          },
+          "maintainerGuidance": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lane",
+          "repoFullName",
+          "summary",
+          "contributorGuidance",
+          "maintainerGuidance"
         ]
       },
       "LabelAudit": {
@@ -1901,15 +2126,6 @@
           "summary"
         ]
       },
-      "DecisionPackFreshness": {
-        "type": "string",
-        "enum": [
-          "fresh",
-          "stale",
-          "rebuilding",
-          "missing"
-        ]
-      },
       "ContributorDecisionPack": {
         "type": "object",
         "properties": {
@@ -1986,6 +2202,9 @@
               }
             }
           },
+          "actionPortfolio": {
+            "$ref": "#/components/schemas/ActionPortfolio"
+          },
           "cleanupFirst": {
             "type": "array",
             "items": {
@@ -2031,6 +2250,15 @@
               }
             }
           },
+          "recommendationOutcomeFeedback": {
+            "$ref": "#/components/schemas/AgentRecommendationOutcomeSummary"
+          },
+          "evidenceGraph": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
           "dataQuality": {
             "type": "object",
             "additionalProperties": {
@@ -2045,6 +2273,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "openPrMonitor": {
+            "$ref": "#/components/schemas/ContributorOpenPrMonitor"
           }
         },
         "required": [
@@ -2062,14 +2293,406 @@
           "opportunities",
           "repoDecisions",
           "topActions",
+          "actionPortfolio",
           "cleanupFirst",
           "pursueRepos",
           "avoidRepos",
           "maintainerLaneRepos",
           "scoreBlockers",
+          "recommendationOutcomeFeedback",
           "dataQuality",
           "summary",
           "nextActions"
+        ]
+      },
+      "DecisionPackFreshness": {
+        "type": "string",
+        "enum": [
+          "fresh",
+          "stale",
+          "rebuilding",
+          "missing"
+        ]
+      },
+      "AgentRecommendationOutcomeSummary": {
+        "type": "object",
+        "properties": {
+          "login": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "windowDays": {
+            "type": "number"
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "number"
+              },
+              "accepted": {
+                "type": "number"
+              },
+              "ignored": {
+                "type": "number"
+              },
+              "stale": {
+                "type": "number"
+              },
+              "merged": {
+                "type": "number"
+              },
+              "closed": {
+                "type": "number"
+              },
+              "improved": {
+                "type": "number"
+              },
+              "positive": {
+                "type": "number"
+              },
+              "negative": {
+                "type": "number"
+              },
+              "maintainerLaneTotal": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "total",
+              "accepted",
+              "ignored",
+              "stale",
+              "merged",
+              "closed",
+              "improved",
+              "positive",
+              "negative",
+              "maintainerLaneTotal"
+            ]
+          },
+          "states": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentRecommendationOutcomeStateBucket"
+            }
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentRecommendationOutcomeRepoSummary"
+            }
+          },
+          "maintainerLane": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "number"
+              },
+              "states": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AgentRecommendationOutcomeStateBucket"
+                }
+              }
+            },
+            "required": [
+              "total",
+              "states"
+            ]
+          },
+          "privateSummary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "login",
+          "generatedAt",
+          "windowDays",
+          "totals",
+          "states",
+          "repos",
+          "maintainerLane",
+          "privateSummary"
+        ]
+      },
+      "AgentRecommendationOutcomeStateBucket": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/AgentRecommendationOutcomeState"
+          },
+          "count": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "state",
+          "count"
+        ]
+      },
+      "AgentRecommendationOutcomeState": {
+        "type": "string",
+        "enum": [
+          "accepted",
+          "ignored",
+          "stale",
+          "merged",
+          "closed",
+          "improved"
+        ]
+      },
+      "AgentRecommendationOutcomeRepoSummary": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "total": {
+            "type": "number"
+          },
+          "accepted": {
+            "type": "number"
+          },
+          "ignored": {
+            "type": "number"
+          },
+          "stale": {
+            "type": "number"
+          },
+          "merged": {
+            "type": "number"
+          },
+          "closed": {
+            "type": "number"
+          },
+          "improved": {
+            "type": "number"
+          },
+          "positive": {
+            "type": "number"
+          },
+          "negative": {
+            "type": "number"
+          },
+          "maintainerLaneTotal": {
+            "type": "number"
+          },
+          "latestOutcomeAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "signal": {
+            "type": "string",
+            "enum": [
+              "positive",
+              "negative",
+              "mixed",
+              "neutral"
+            ]
+          }
+        },
+        "required": [
+          "repoFullName",
+          "total",
+          "accepted",
+          "ignored",
+          "stale",
+          "merged",
+          "closed",
+          "improved",
+          "positive",
+          "negative",
+          "maintainerLaneTotal",
+          "signal"
+        ]
+      },
+      "ContributorOpenPrMonitor": {
+        "type": "object",
+        "properties": {
+          "login": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "openPrCount": {
+            "type": "number"
+          },
+          "registeredRepoCount": {
+            "type": "number"
+          },
+          "cleanupFirst": {
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "guidance": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pendingScenarios": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "repoFullName": {
+                  "type": "string"
+                },
+                "detection": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "github_observed",
+                        "user_supplied"
+                      ]
+                    },
+                    "pendingMergedPrCount": {
+                      "type": "number"
+                    },
+                    "pendingClosedPrCount": {
+                      "type": "number"
+                    },
+                    "approvedPrCount": {
+                      "type": "number"
+                    },
+                    "expectedOpenPrCountAfterMerge": {
+                      "type": "number"
+                    },
+                    "scenarioNotes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "classified": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "repoFullName": {
+                            "type": "string"
+                          },
+                          "number": {
+                            "type": "number"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "classification": {
+                            "type": "string"
+                          },
+                          "reasons": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "repoFullName",
+                          "number",
+                          "title",
+                          "classification",
+                          "reasons"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "pendingMergedPrCount",
+                    "pendingClosedPrCount",
+                    "approvedPrCount",
+                    "scenarioNotes",
+                    "classified"
+                  ]
+                }
+              },
+              "required": [
+                "repoFullName",
+                "detection"
+              ]
+            }
+          },
+          "pullRequests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContributorOpenPrNextStepPacket"
+            }
+          }
+        },
+        "required": [
+          "login",
+          "generatedAt",
+          "openPrCount",
+          "registeredRepoCount",
+          "cleanupFirst",
+          "summary",
+          "guidance",
+          "pendingScenarios",
+          "pullRequests"
+        ]
+      },
+      "ContributorOpenPrNextStepPacket": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "number": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "blocked",
+              "stale",
+              "needs_author",
+              "failing_checks",
+              "missing_tests",
+              "duplicate_prone",
+              "reviewable",
+              "should_close_or_withdraw",
+              "maintainer_lane",
+              "draft"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "nextSteps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "repoFullName",
+          "number",
+          "title",
+          "classification",
+          "summary",
+          "reasons",
+          "nextSteps"
         ]
       },
       "DecisionPackRefreshNeeded": {
@@ -2169,66 +2792,6 @@
           "rebuildEnqueued",
           "decision",
           "dataQuality"
-        ]
-      },
-      "BurdenForecast": {
-        "type": "object",
-        "properties": {
-          "repoFullName": {
-            "type": "string"
-          },
-          "generatedAt": {
-            "type": "string"
-          },
-          "horizonDays": {
-            "anyOf": [
-              {
-                "type": "number",
-                "enum": [
-                  7
-                ]
-              },
-              {
-                "type": "number",
-                "enum": [
-                  30
-                ]
-              }
-            ]
-          },
-          "level": {
-            "type": "string",
-            "enum": [
-              "low",
-              "medium",
-              "high",
-              "critical"
-            ]
-          },
-          "forecast": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "number"
-            }
-          },
-          "findings": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Finding"
-            }
-          },
-          "summary": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "repoFullName",
-          "generatedAt",
-          "horizonDays",
-          "level",
-          "forecast",
-          "findings",
-          "summary"
         ]
       },
       "RepoIntelligence": {
@@ -2365,6 +2928,261 @@
           "dataQuality"
         ]
       },
+      "BurdenForecast": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "horizonDays": {
+            "anyOf": [
+              {
+                "type": "number",
+                "enum": [
+                  7
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  30
+                ]
+              }
+            ]
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "forecast": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoFullName",
+          "generatedAt",
+          "horizonDays",
+          "level",
+          "forecast",
+          "findings",
+          "summary"
+        ]
+      },
+      "RepoOutcomePatterns": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "lane": {
+            "type": "string",
+            "enum": [
+              "direct_pr",
+              "issue_discovery",
+              "split",
+              "inactive",
+              "unknown"
+            ]
+          },
+          "primaryLanguage": {
+            "type": "string",
+            "nullable": true
+          },
+          "sampleSize": {
+            "type": "number"
+          },
+          "totals": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "outsideContributorMergeRate": {
+            "type": "number"
+          },
+          "maintainerLaneMergeRate": {
+            "type": "number"
+          },
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "successPatterns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "riskPatterns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          },
+          "evidenceCompleteness": {
+            "$ref": "#/components/schemas/RepoOutcomeEvidenceCompleteness"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoFullName",
+          "generatedAt",
+          "lane",
+          "primaryLanguage",
+          "sampleSize",
+          "totals",
+          "outsideContributorMergeRate",
+          "maintainerLaneMergeRate",
+          "dimensions",
+          "successPatterns",
+          "riskPatterns",
+          "evidenceCompleteness",
+          "findings",
+          "summary"
+        ]
+      },
+      "RepoOutcomeEvidenceCompleteness": {
+        "type": "object",
+        "properties": {
+          "pullRequestsAnalyzed": {
+            "type": "number"
+          },
+          "withFileDetail": {
+            "type": "number"
+          },
+          "withReviewDetail": {
+            "type": "number"
+          },
+          "withCheckDetail": {
+            "type": "number"
+          },
+          "filesCompletenessRatio": {
+            "type": "number"
+          },
+          "reviewsCompletenessRatio": {
+            "type": "number"
+          },
+          "checksCompletenessRatio": {
+            "type": "number"
+          },
+          "fullyDecidedWithDetail": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial",
+              "missing"
+            ]
+          }
+        },
+        "required": [
+          "pullRequestsAnalyzed",
+          "withFileDetail",
+          "withReviewDetail",
+          "withCheckDetail",
+          "filesCompletenessRatio",
+          "reviewsCompletenessRatio",
+          "checksCompletenessRatio",
+          "fullyDecidedWithDetail",
+          "status"
+        ]
+      },
+      "RepoOutcomePatternsResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "snapshot",
+              "computed"
+            ]
+          },
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "ageSeconds": {
+            "type": "number"
+          },
+          "freshness": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "stale"
+            ]
+          },
+          "patterns": {
+            "$ref": "#/components/schemas/RepoOutcomePatterns"
+          },
+          "dataQuality": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          }
+        },
+        "required": [
+          "status",
+          "source",
+          "repoFullName",
+          "generatedAt",
+          "ageSeconds",
+          "freshness",
+          "patterns"
+        ]
+      },
       "RegistrationReadiness": {
         "type": "object",
         "properties": {
@@ -2394,6 +3212,51 @@
               "direct_pr_no_issue_required"
             ]
           },
+          "directPrReadiness": {
+            "type": "object",
+            "properties": {
+              "ready": {
+                "type": "boolean"
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "ready",
+              "reasons"
+            ]
+          },
+          "issueDiscoveryReadiness": {
+            "type": "object",
+            "properties": {
+              "ready": {
+                "type": "boolean"
+              },
+              "recommendation": {
+                "type": "string",
+                "enum": [
+                  "enabled",
+                  "recommended",
+                  "not_recommended"
+                ]
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "ready",
+              "recommendation",
+              "reasons"
+            ]
+          },
           "labelPolicy": {
             "type": "object",
             "additionalProperties": {
@@ -2406,6 +3269,80 @@
               "nullable": true
             }
           },
+          "testCoverageHealth": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "gate_ready",
+                  "gate_unknown"
+                ]
+              },
+              "trustedLabelPipelineReady": {
+                "type": "boolean"
+              },
+              "checkRunMode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "enabled"
+                ]
+              },
+              "requiredGate": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "note": {
+                "type": "string"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "status",
+              "trustedLabelPipelineReady",
+              "checkRunMode",
+              "requiredGate",
+              "note",
+              "warnings"
+            ]
+          },
+          "queueHealth": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              },
+              "burdenScore": {
+                "type": "number"
+              },
+              "reviewablePullRequests": {
+                "type": "number"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "level",
+              "burdenScore",
+              "reviewablePullRequests",
+              "summary"
+            ]
+          },
           "contributorIntakeHealth": {
             "type": "object",
             "additionalProperties": {
@@ -2417,6 +3354,243 @@
             "additionalProperties": {
               "nullable": true
             }
+          },
+          "githubApp": {
+            "type": "object",
+            "properties": {
+              "installed": {
+                "type": "boolean"
+              },
+              "publicSurface": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "comment_and_label",
+                  "comment_only",
+                  "label_only"
+                ]
+              },
+              "commentMode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "detected_contributors_only",
+                  "all_prs"
+                ]
+              },
+              "checkRunMode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "enabled"
+                ]
+              },
+              "quietByDefault": {
+                "type": "boolean"
+              },
+              "behavior": {
+                "type": "string"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "installed",
+              "publicSurface",
+              "commentMode",
+              "checkRunMode",
+              "quietByDefault",
+              "behavior",
+              "warnings"
+            ]
+          },
+          "policyReadiness": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "repoFullName": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "focus_manifest_policy"
+                ]
+              },
+              "previewOnly": {
+                "type": "boolean"
+              },
+              "present": {
+                "type": "boolean"
+              },
+              "publicWarnings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "contribution_flow",
+                        "direct_pr_policy",
+                        "issue_discovery",
+                        "validation",
+                        "maintainer_burden"
+                      ]
+                    },
+                    "severity": {
+                      "type": "string",
+                      "enum": [
+                        "info",
+                        "warning",
+                        "critical"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "category",
+                    "severity",
+                    "title",
+                    "detail",
+                    "action"
+                  ]
+                }
+              },
+              "ownerContext": {
+                "type": "object",
+                "properties": {
+                  "manifestPresent": {
+                    "type": "boolean"
+                  },
+                  "manifestSource": {
+                    "type": "string",
+                    "enum": [
+                      "repo_file",
+                      "api_record",
+                      "none"
+                    ]
+                  },
+                  "privateNoteCount": {
+                    "type": "number"
+                  },
+                  "manifestWarningCount": {
+                    "type": "number"
+                  },
+                  "wantedPathCount": {
+                    "type": "number"
+                  },
+                  "blockedPathCount": {
+                    "type": "number"
+                  },
+                  "validationExpectationCount": {
+                    "type": "number"
+                  },
+                  "queueLevel": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high",
+                      "critical"
+                    ]
+                  },
+                  "contributorIntakeLevel": {
+                    "type": "string",
+                    "enum": [
+                      "healthy",
+                      "watch",
+                      "strained",
+                      "blocked"
+                    ]
+                  },
+                  "configLevel": {
+                    "type": "string",
+                    "enum": [
+                      "excellent",
+                      "good",
+                      "needs_attention",
+                      "fragile"
+                    ]
+                  },
+                  "issuePolicy": {
+                    "type": "string"
+                  },
+                  "issueDiscoveryPolicy": {
+                    "type": "string",
+                    "enum": [
+                      "encouraged",
+                      "neutral",
+                      "discouraged"
+                    ]
+                  }
+                },
+                "required": [
+                  "manifestPresent",
+                  "manifestSource",
+                  "privateNoteCount",
+                  "manifestWarningCount",
+                  "wantedPathCount",
+                  "blockedPathCount",
+                  "validationExpectationCount",
+                  "queueLevel",
+                  "contributorIntakeLevel",
+                  "configLevel",
+                  "issuePolicy",
+                  "issueDiscoveryPolicy"
+                ]
+              },
+              "droppedPublicWarnings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "unsafe_public_text"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "reason"
+                  ]
+                }
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "repoFullName",
+              "source",
+              "previewOnly",
+              "present",
+              "publicWarnings",
+              "ownerContext",
+              "droppedPublicWarnings",
+              "summary"
+            ]
           },
           "blockers": {
             "type": "array",
@@ -2443,10 +3617,16 @@
           "ready",
           "recommendedRegistrationMode",
           "issuePolicy",
+          "directPrReadiness",
+          "issueDiscoveryReadiness",
           "labelPolicy",
           "maintainerCutReadiness",
+          "testCoverageHealth",
+          "queueHealth",
           "contributorIntakeHealth",
           "docsCompleteness",
+          "githubApp",
+          "policyReadiness",
           "blockers",
           "warnings",
           "dataQuality"
@@ -2477,6 +3657,12 @@
               "nullable": true
             }
           },
+          "tradeoffs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "reasons": {
             "type": "array",
             "items": {
@@ -2502,6 +3688,7 @@
           "privateOnly",
           "current",
           "recommended",
+          "tradeoffs",
           "reasons",
           "warnings",
           "dataQuality"
@@ -2698,683 +3885,6 @@
               "localDiff"
             ]
           }
-        ]
-      },
-      "ScorePreviewResult": {
-        "type": "object",
-        "properties": {
-          "repoFullName": {
-            "type": "string"
-          },
-          "generatedAt": {
-            "type": "string"
-          },
-          "scoringModelSnapshotId": {
-            "type": "string"
-          },
-          "activeModel": {
-            "type": "string",
-            "enum": [
-              "current_density_model",
-              "pending_saturation_model",
-              "exponential_saturation_model",
-              "unknown"
-            ]
-          },
-          "privateOnly": {
-            "type": "boolean",
-            "enum": [
-              true
-            ]
-          },
-          "laneMath": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "number"
-            }
-          },
-          "scoreEstimate": {
-            "type": "object",
-            "properties": {
-              "baseScore": {
-                "type": "number"
-              },
-              "densityMultiplier": {
-                "type": "number"
-              },
-              "contributionBonus": {
-                "type": "number"
-              },
-              "labelMultiplier": {
-                "type": "number"
-              },
-              "issueMultiplier": {
-                "type": "number"
-              },
-              "credibilityMultiplier": {
-                "type": "number"
-              },
-              "reviewPenaltyMultiplier": {
-                "type": "number"
-              },
-              "openPrMultiplier": {
-                "type": "number"
-              },
-              "estimatedMergedScore": {
-                "type": "number"
-              },
-              "pendingSaturationScore": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "baseScore",
-              "densityMultiplier",
-              "contributionBonus",
-              "labelMultiplier",
-              "issueMultiplier",
-              "credibilityMultiplier",
-              "reviewPenaltyMultiplier",
-              "openPrMultiplier",
-              "estimatedMergedScore",
-              "pendingSaturationScore"
-            ]
-          },
-          "gates": {
-            "type": "object",
-            "properties": {
-              "baseTokenGatePassed": {
-                "type": "boolean"
-              },
-              "openPrThreshold": {
-                "type": "number"
-              },
-              "openPrCount": {
-                "type": "number"
-              },
-              "collateralFraction": {
-                "type": "number"
-              },
-              "credibilityFloor": {
-                "type": "number"
-              },
-              "credibilityObserved": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "baseTokenGatePassed",
-              "openPrThreshold",
-              "openPrCount",
-              "collateralFraction",
-              "credibilityFloor",
-              "credibilityObserved"
-            ]
-          },
-          "effectiveEstimatedScore": {
-            "type": "number"
-          },
-          "underlyingPotentialScore": {
-            "type": "number"
-          },
-          "blockedBy": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "code": {
-                  "type": "string",
-                  "enum": [
-                    "repo_not_registered",
-                    "inactive_allocation",
-                    "base_token_gate",
-                    "open_pr_threshold",
-                    "credibility_floor",
-                    "review_penalty",
-                    "metadata_only"
-                  ]
-                },
-                "severity": {
-                  "type": "string",
-                  "enum": [
-                    "blocker",
-                    "reducer",
-                    "context"
-                  ]
-                },
-                "detail": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "code",
-                "severity",
-                "detail"
-              ]
-            }
-          },
-          "gateDeltas": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "gate": {
-                  "type": "string",
-                  "enum": [
-                    "open_pr_threshold",
-                    "credibility_floor",
-                    "linked_issue_multiplier"
-                  ]
-                },
-                "current": {
-                  "type": "string"
-                },
-                "projected": {
-                  "type": "string"
-                },
-                "explanation": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "gate",
-                "current",
-                "projected",
-                "explanation"
-              ]
-            }
-          },
-          "scenarioPreviews": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "name": {
-                  "type": "string",
-                  "enum": [
-                    "current",
-                    "cleanGates",
-                    "afterPendingMerges",
-                    "afterApprovedPrsMerge",
-                    "afterStalePrsClose",
-                    "linkedIssueFixed",
-                    "bestReasonableCase"
-                  ]
-                },
-                "source": {
-                  "type": "string",
-                  "enum": [
-                    "current_data",
-                    "user_supplied",
-                    "github_observed",
-                    "gittensory_projection"
-                  ]
-                },
-                "assumptions": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "scoreEstimate": {
-                  "type": "object",
-                  "properties": {
-                    "baseScore": {
-                      "type": "number"
-                    },
-                    "densityMultiplier": {
-                      "type": "number"
-                    },
-                    "contributionBonus": {
-                      "type": "number"
-                    },
-                    "labelMultiplier": {
-                      "type": "number"
-                    },
-                    "issueMultiplier": {
-                      "type": "number"
-                    },
-                    "credibilityMultiplier": {
-                      "type": "number"
-                    },
-                    "reviewPenaltyMultiplier": {
-                      "type": "number"
-                    },
-                    "openPrMultiplier": {
-                      "type": "number"
-                    },
-                    "estimatedMergedScore": {
-                      "type": "number"
-                    },
-                    "pendingSaturationScore": {
-                      "type": "number"
-                    }
-                  },
-                  "required": [
-                    "baseScore",
-                    "densityMultiplier",
-                    "contributionBonus",
-                    "labelMultiplier",
-                    "issueMultiplier",
-                    "credibilityMultiplier",
-                    "reviewPenaltyMultiplier",
-                    "openPrMultiplier",
-                    "estimatedMergedScore",
-                    "pendingSaturationScore"
-                  ]
-                },
-                "gates": {
-                  "type": "object",
-                  "properties": {
-                    "baseTokenGatePassed": {
-                      "type": "boolean"
-                    },
-                    "openPrThreshold": {
-                      "type": "number"
-                    },
-                    "openPrCount": {
-                      "type": "number"
-                    },
-                    "collateralFraction": {
-                      "type": "number"
-                    },
-                    "credibilityFloor": {
-                      "type": "number"
-                    },
-                    "credibilityObserved": {
-                      "type": "number"
-                    }
-                  },
-                  "required": [
-                    "baseTokenGatePassed",
-                    "openPrThreshold",
-                    "openPrCount",
-                    "collateralFraction",
-                    "credibilityFloor",
-                    "credibilityObserved"
-                  ]
-                },
-                "effectiveEstimatedScore": {
-                  "type": "number"
-                },
-                "underlyingPotentialScore": {
-                  "type": "number"
-                },
-                "blockedBy": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "code": {
-                        "type": "string",
-                        "enum": [
-                          "repo_not_registered",
-                          "inactive_allocation",
-                          "base_token_gate",
-                          "open_pr_threshold",
-                          "credibility_floor",
-                          "review_penalty",
-                          "metadata_only"
-                        ]
-                      },
-                      "severity": {
-                        "type": "string",
-                        "enum": [
-                          "blocker",
-                          "reducer",
-                          "context"
-                        ]
-                      },
-                      "detail": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "code",
-                      "severity",
-                      "detail"
-                    ]
-                  }
-                },
-                "deltaExplanation": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "name",
-                "source",
-                "assumptions",
-                "scoreEstimate",
-                "gates",
-                "effectiveEstimatedScore",
-                "underlyingPotentialScore",
-                "blockedBy",
-                "deltaExplanation"
-              ]
-            }
-          },
-          "scoreabilityStatus": {
-            "type": "string",
-            "enum": [
-              "blocked",
-              "conditionally_scoreable",
-              "scoreable",
-              "hold"
-            ]
-          },
-          "warnings": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "assumptions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "recommendation": {
-            "type": "object",
-            "properties": {
-              "level": {
-                "type": "string",
-                "enum": [
-                  "strong_fit",
-                  "reasonable_fit",
-                  "needs_work",
-                  "hold"
-                ]
-              },
-              "actions": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            },
-            "required": [
-              "level",
-              "actions"
-            ]
-          }
-        },
-        "required": [
-          "repoFullName",
-          "generatedAt",
-          "scoringModelSnapshotId",
-          "activeModel",
-          "privateOnly",
-          "laneMath",
-          "scoreEstimate",
-          "gates",
-          "effectiveEstimatedScore",
-          "underlyingPotentialScore",
-          "blockedBy",
-          "gateDeltas",
-          "scenarioPreviews",
-          "scoreabilityStatus",
-          "warnings",
-          "assumptions",
-          "recommendation"
-        ]
-      },
-      "RewardRiskAction": {
-        "type": "object",
-        "properties": {
-          "actionKind": {
-            "type": "string",
-            "enum": [
-              "cleanup_existing_prs",
-              "land_existing_prs",
-              "close_or_withdraw_low_fit_prs",
-              "open_new_direct_pr",
-              "file_issue_discovery",
-              "maintainer_lane_improve_repo",
-              "maintainer_cut_readiness"
-            ]
-          },
-          "repoFullName": {
-            "type": "string"
-          },
-          "priorityScore": {
-            "type": "number"
-          },
-          "laneValueScore": {
-            "type": "number"
-          },
-          "scoreabilityScore": {
-            "type": "number"
-          },
-          "personalFitScore": {
-            "type": "number"
-          },
-          "riskPenalty": {
-            "type": "number"
-          },
-          "maintainerFrictionPenalty": {
-            "type": "number"
-          },
-          "actionLeverageScore": {
-            "type": "number"
-          },
-          "whyThisHelps": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "nextActions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "actionKind",
-          "repoFullName",
-          "priorityScore",
-          "laneValueScore",
-          "scoreabilityScore",
-          "personalFitScore",
-          "riskPenalty",
-          "maintainerFrictionPenalty",
-          "actionLeverageScore",
-          "whyThisHelps",
-          "nextActions"
-        ]
-      },
-      "RepoRewardRisk": {
-        "type": "object",
-        "properties": {
-          "login": {
-            "type": "string"
-          },
-          "repoFullName": {
-            "type": "string"
-          },
-          "generatedAt": {
-            "type": "string"
-          },
-          "roleContext": {
-            "$ref": "#/components/schemas/RoleContext"
-          },
-          "lane": {
-            "$ref": "#/components/schemas/LaneAdvice"
-          },
-          "recommendation": {
-            "type": "string",
-            "enum": [
-              "pursue",
-              "cleanup_first",
-              "maintainer_lane",
-              "avoid_for_now",
-              "unknown"
-            ]
-          },
-          "rewardUpside": {
-            "type": "object",
-            "properties": {
-              "relevantLane": {
-                "type": "string",
-                "enum": [
-                  "direct_pr",
-                  "issue_discovery",
-                  "maintainer_lane",
-                  "none"
-                ]
-              },
-              "repoSlice": {
-                "type": "number"
-              },
-              "directPrSlice": {
-                "type": "number"
-              },
-              "issueDiscoverySlice": {
-                "type": "number"
-              },
-              "maintainerCutSlice": {
-                "type": "number"
-              },
-              "labelMultiplier": {
-                "type": "number"
-              },
-              "issueMultiplier": {
-                "type": "number"
-              },
-              "estimatedScoreIfClean": {
-                "type": "number"
-              },
-              "currentEstimatedScore": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "relevantLane",
-              "repoSlice",
-              "directPrSlice",
-              "issueDiscoverySlice",
-              "maintainerCutSlice",
-              "labelMultiplier",
-              "issueMultiplier",
-              "estimatedScoreIfClean",
-              "currentEstimatedScore"
-            ]
-          },
-          "scoreBlockers": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "riskBreakdown": {
-            "type": "object",
-            "properties": {
-              "queueBurden": {
-                "type": "string",
-                "enum": [
-                  "low",
-                  "medium",
-                  "high",
-                  "critical"
-                ]
-              },
-              "queueBurdenScore": {
-                "type": "number"
-              },
-              "duplicateClusters": {
-                "type": "number"
-              },
-              "highRiskDuplicateClusters": {
-                "type": "number"
-              },
-              "closedPullRequestRate": {
-                "type": "number"
-              },
-              "openPullRequests": {
-                "type": "number"
-              },
-              "credibility": {
-                "type": "number"
-              },
-              "reviewChurnRisk": {
-                "type": "string",
-                "enum": [
-                  "low",
-                  "medium",
-                  "high"
-                ]
-              }
-            },
-            "required": [
-              "queueBurden",
-              "queueBurdenScore",
-              "duplicateClusters",
-              "highRiskDuplicateClusters",
-              "closedPullRequestRate",
-              "openPullRequests",
-              "credibility",
-              "reviewChurnRisk"
-            ]
-          },
-          "actionImpact": {
-            "type": "object",
-            "additionalProperties": {
-              "nullable": true
-            }
-          },
-          "currentPreview": {
-            "type": "object",
-            "additionalProperties": {
-              "nullable": true
-            }
-          },
-          "afterCleanupPreview": {
-            "type": "object",
-            "additionalProperties": {
-              "nullable": true
-            }
-          },
-          "actions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RewardRiskAction"
-            }
-          },
-          "whyThisHelps": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "nextActions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "summary": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "login",
-          "repoFullName",
-          "generatedAt",
-          "roleContext",
-          "lane",
-          "recommendation",
-          "rewardUpside",
-          "scoreBlockers",
-          "riskBreakdown",
-          "actionImpact",
-          "currentPreview",
-          "afterCleanupPreview",
-          "actions",
-          "whyThisHelps",
-          "nextActions",
-          "summary"
         ]
       },
       "LocalBranchAnalysis": {
@@ -3595,7 +4105,11 @@
                             "open_pr_threshold",
                             "credibility_floor",
                             "review_penalty",
-                            "metadata_only"
+                            "metadata_only",
+                            "linked_issue_invalid",
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -3617,6 +4131,83 @@
                       ]
                     }
                   },
+                  "linkedIssueMultiplier": {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "standard",
+                          "maintainer"
+                        ]
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "not_required",
+                          "raw",
+                          "plausible",
+                          "validated",
+                          "invalid",
+                          "unavailable"
+                        ]
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "user_supplied",
+                          "official_mirror",
+                          "github_cache",
+                          "issue_quality",
+                          "missing"
+                        ]
+                      },
+                      "eligible": {
+                        "type": "boolean"
+                      },
+                      "issueNumbers": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      },
+                      "solvedByPullRequests": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      },
+                      "baseMultiplier": {
+                        "type": "number"
+                      },
+                      "appliedMultiplier": {
+                        "type": "number"
+                      },
+                      "reason": {
+                        "type": "string"
+                      },
+                      "warnings": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "status",
+                      "source",
+                      "eligible",
+                      "issueNumbers",
+                      "solvedByPullRequests",
+                      "baseMultiplier",
+                      "appliedMultiplier",
+                      "reason",
+                      "warnings"
+                    ]
+                  },
                   "deltaExplanation": {
                     "type": "string"
                   }
@@ -3630,6 +4221,7 @@
                   "effectiveEstimatedScore",
                   "underlyingPotentialScore",
                   "blockedBy",
+                  "linkedIssueMultiplier",
                   "deltaExplanation"
                 ]
               },
@@ -3761,7 +4353,11 @@
                             "open_pr_threshold",
                             "credibility_floor",
                             "review_penalty",
-                            "metadata_only"
+                            "metadata_only",
+                            "linked_issue_invalid",
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -3783,6 +4379,83 @@
                       ]
                     }
                   },
+                  "linkedIssueMultiplier": {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "standard",
+                          "maintainer"
+                        ]
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "not_required",
+                          "raw",
+                          "plausible",
+                          "validated",
+                          "invalid",
+                          "unavailable"
+                        ]
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "user_supplied",
+                          "official_mirror",
+                          "github_cache",
+                          "issue_quality",
+                          "missing"
+                        ]
+                      },
+                      "eligible": {
+                        "type": "boolean"
+                      },
+                      "issueNumbers": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      },
+                      "solvedByPullRequests": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      },
+                      "baseMultiplier": {
+                        "type": "number"
+                      },
+                      "appliedMultiplier": {
+                        "type": "number"
+                      },
+                      "reason": {
+                        "type": "string"
+                      },
+                      "warnings": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "status",
+                      "source",
+                      "eligible",
+                      "issueNumbers",
+                      "solvedByPullRequests",
+                      "baseMultiplier",
+                      "appliedMultiplier",
+                      "reason",
+                      "warnings"
+                    ]
+                  },
                   "deltaExplanation": {
                     "type": "string"
                   }
@@ -3796,6 +4469,7 @@
                   "effectiveEstimatedScore",
                   "underlyingPotentialScore",
                   "blockedBy",
+                  "linkedIssueMultiplier",
                   "deltaExplanation"
                 ]
               },
@@ -3927,7 +4601,11 @@
                             "open_pr_threshold",
                             "credibility_floor",
                             "review_penalty",
-                            "metadata_only"
+                            "metadata_only",
+                            "linked_issue_invalid",
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -3949,6 +4627,83 @@
                       ]
                     }
                   },
+                  "linkedIssueMultiplier": {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "standard",
+                          "maintainer"
+                        ]
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "not_required",
+                          "raw",
+                          "plausible",
+                          "validated",
+                          "invalid",
+                          "unavailable"
+                        ]
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "user_supplied",
+                          "official_mirror",
+                          "github_cache",
+                          "issue_quality",
+                          "missing"
+                        ]
+                      },
+                      "eligible": {
+                        "type": "boolean"
+                      },
+                      "issueNumbers": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      },
+                      "solvedByPullRequests": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      },
+                      "baseMultiplier": {
+                        "type": "number"
+                      },
+                      "appliedMultiplier": {
+                        "type": "number"
+                      },
+                      "reason": {
+                        "type": "string"
+                      },
+                      "warnings": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "status",
+                      "source",
+                      "eligible",
+                      "issueNumbers",
+                      "solvedByPullRequests",
+                      "baseMultiplier",
+                      "appliedMultiplier",
+                      "reason",
+                      "warnings"
+                    ]
+                  },
                   "deltaExplanation": {
                     "type": "string"
                   }
@@ -3962,6 +4717,7 @@
                   "effectiveEstimatedScore",
                   "underlyingPotentialScore",
                   "blockedBy",
+                  "linkedIssueMultiplier",
                   "deltaExplanation"
                 ]
               },
@@ -4093,7 +4849,11 @@
                             "open_pr_threshold",
                             "credibility_floor",
                             "review_penalty",
-                            "metadata_only"
+                            "metadata_only",
+                            "linked_issue_invalid",
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -4115,6 +4875,83 @@
                       ]
                     }
                   },
+                  "linkedIssueMultiplier": {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "standard",
+                          "maintainer"
+                        ]
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "not_required",
+                          "raw",
+                          "plausible",
+                          "validated",
+                          "invalid",
+                          "unavailable"
+                        ]
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "user_supplied",
+                          "official_mirror",
+                          "github_cache",
+                          "issue_quality",
+                          "missing"
+                        ]
+                      },
+                      "eligible": {
+                        "type": "boolean"
+                      },
+                      "issueNumbers": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      },
+                      "solvedByPullRequests": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      },
+                      "baseMultiplier": {
+                        "type": "number"
+                      },
+                      "appliedMultiplier": {
+                        "type": "number"
+                      },
+                      "reason": {
+                        "type": "string"
+                      },
+                      "warnings": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "status",
+                      "source",
+                      "eligible",
+                      "issueNumbers",
+                      "solvedByPullRequests",
+                      "baseMultiplier",
+                      "appliedMultiplier",
+                      "reason",
+                      "warnings"
+                    ]
+                  },
                   "deltaExplanation": {
                     "type": "string"
                   }
@@ -4128,6 +4965,7 @@
                   "effectiveEstimatedScore",
                   "underlyingPotentialScore",
                   "blockedBy",
+                  "linkedIssueMultiplier",
                   "deltaExplanation"
                 ]
               },
@@ -4259,7 +5097,11 @@
                             "open_pr_threshold",
                             "credibility_floor",
                             "review_penalty",
-                            "metadata_only"
+                            "metadata_only",
+                            "linked_issue_invalid",
+                            "linked_issue_unvalidated",
+                            "branch_ineligible",
+                            "branch_eligibility_missing"
                           ]
                         },
                         "severity": {
@@ -4281,6 +5123,83 @@
                       ]
                     }
                   },
+                  "linkedIssueMultiplier": {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "standard",
+                          "maintainer"
+                        ]
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "not_required",
+                          "raw",
+                          "plausible",
+                          "validated",
+                          "invalid",
+                          "unavailable"
+                        ]
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "user_supplied",
+                          "official_mirror",
+                          "github_cache",
+                          "issue_quality",
+                          "missing"
+                        ]
+                      },
+                      "eligible": {
+                        "type": "boolean"
+                      },
+                      "issueNumbers": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      },
+                      "solvedByPullRequests": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      },
+                      "baseMultiplier": {
+                        "type": "number"
+                      },
+                      "appliedMultiplier": {
+                        "type": "number"
+                      },
+                      "reason": {
+                        "type": "string"
+                      },
+                      "warnings": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "status",
+                      "source",
+                      "eligible",
+                      "issueNumbers",
+                      "solvedByPullRequests",
+                      "baseMultiplier",
+                      "appliedMultiplier",
+                      "reason",
+                      "warnings"
+                    ]
+                  },
                   "deltaExplanation": {
                     "type": "string"
                   }
@@ -4294,6 +5213,7 @@
                   "effectiveEstimatedScore",
                   "underlyingPotentialScore",
                   "blockedBy",
+                  "linkedIssueMultiplier",
                   "deltaExplanation"
                 ]
               },
@@ -4342,7 +5262,11 @@
                         "open_pr_threshold",
                         "credibility_floor",
                         "review_penalty",
-                        "metadata_only"
+                        "metadata_only",
+                        "linked_issue_invalid",
+                        "linked_issue_unvalidated",
+                        "branch_ineligible",
+                        "branch_eligibility_missing"
                       ]
                     },
                     "severity": {
@@ -4458,6 +5382,63 @@
               "notes"
             ]
           },
+          "branchEligibility": {
+            "type": "object",
+            "properties": {
+              "required": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "eligible",
+                  "ineligible",
+                  "unknown",
+                  "not_required"
+                ]
+              },
+              "evidence": {
+                "type": "string",
+                "enum": [
+                  "provided",
+                  "missing"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "github_metadata",
+                  "local_metadata",
+                  "registry",
+                  "user_supplied",
+                  "missing"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "checkedAt": {
+                "type": "string"
+              },
+              "stale": {
+                "type": "boolean"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "required",
+              "status",
+              "evidence",
+              "source",
+              "stale",
+              "warnings"
+            ]
+          },
           "rewardRisk": {
             "$ref": "#/components/schemas/RepoRewardRisk"
           },
@@ -4543,6 +5524,118 @@
               "maintainerLane",
               "reasons",
               "risks"
+            ]
+          },
+          "manifestGuidance": {
+            "type": "object",
+            "properties": {
+              "present": {
+                "type": "boolean"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "repo_file",
+                  "api_record",
+                  "none"
+                ]
+              },
+              "linkedIssuePolicy": {
+                "type": "string",
+                "enum": [
+                  "required",
+                  "preferred",
+                  "optional"
+                ]
+              },
+              "issueDiscoveryPolicy": {
+                "type": "string",
+                "enum": [
+                  "encouraged",
+                  "neutral",
+                  "discouraged"
+                ]
+              },
+              "matchedWantedPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "matchedBlockedPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "preferredLabelHits": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "severity": {
+                      "type": "string",
+                      "enum": [
+                        "info",
+                        "warning",
+                        "critical"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "severity",
+                    "title",
+                    "detail"
+                  ]
+                }
+              },
+              "publicNextSteps": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "present",
+              "source",
+              "linkedIssuePolicy",
+              "issueDiscoveryPolicy",
+              "matchedWantedPaths",
+              "matchedBlockedPaths",
+              "preferredLabelHits",
+              "findings",
+              "publicNextSteps",
+              "warnings",
+              "summary"
             ]
           },
           "prPacket": {
@@ -4658,6 +5751,9 @@
               "$ref": "#/components/schemas/RewardRiskAction"
             }
           },
+          "workspaceIntelligence": {
+            "$ref": "#/components/schemas/LocalWorkspaceIntelligence"
+          },
           "summary": {
             "type": "string"
           }
@@ -4674,6 +5770,7 @@
           "scenarioScorePreview",
           "observedPullRequestScenarios",
           "githubBranchStatus",
+          "branchEligibility",
           "rewardRisk",
           "scoreBlockers",
           "branchQualityBlockers",
@@ -4681,9 +5778,1176 @@
           "recommendedRerunCondition",
           "localFindings",
           "maintainerFit",
+          "manifestGuidance",
           "prPacket",
           "nextActions",
+          "workspaceIntelligence",
           "summary"
+        ]
+      },
+      "ScorePreviewResult": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "scoringModelSnapshotId": {
+            "type": "string"
+          },
+          "activeModel": {
+            "type": "string",
+            "enum": [
+              "current_density_model",
+              "pending_saturation_model",
+              "exponential_saturation_model",
+              "unknown"
+            ]
+          },
+          "privateOnly": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "laneMath": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "scoreEstimate": {
+            "type": "object",
+            "properties": {
+              "baseScore": {
+                "type": "number"
+              },
+              "densityMultiplier": {
+                "type": "number"
+              },
+              "contributionBonus": {
+                "type": "number"
+              },
+              "labelMultiplier": {
+                "type": "number"
+              },
+              "issueMultiplier": {
+                "type": "number"
+              },
+              "credibilityMultiplier": {
+                "type": "number"
+              },
+              "reviewPenaltyMultiplier": {
+                "type": "number"
+              },
+              "openPrMultiplier": {
+                "type": "number"
+              },
+              "estimatedMergedScore": {
+                "type": "number"
+              },
+              "pendingSaturationScore": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "baseScore",
+              "densityMultiplier",
+              "contributionBonus",
+              "labelMultiplier",
+              "issueMultiplier",
+              "credibilityMultiplier",
+              "reviewPenaltyMultiplier",
+              "openPrMultiplier",
+              "estimatedMergedScore",
+              "pendingSaturationScore"
+            ]
+          },
+          "linkedIssueMultiplier": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "standard",
+                  "maintainer"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "not_required",
+                  "raw",
+                  "plausible",
+                  "validated",
+                  "invalid",
+                  "unavailable"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "user_supplied",
+                  "official_mirror",
+                  "github_cache",
+                  "issue_quality",
+                  "missing"
+                ]
+              },
+              "eligible": {
+                "type": "boolean"
+              },
+              "issueNumbers": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "solvedByPullRequests": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "baseMultiplier": {
+                "type": "number"
+              },
+              "appliedMultiplier": {
+                "type": "number"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "mode",
+              "status",
+              "source",
+              "eligible",
+              "issueNumbers",
+              "solvedByPullRequests",
+              "baseMultiplier",
+              "appliedMultiplier",
+              "reason",
+              "warnings"
+            ]
+          },
+          "gates": {
+            "type": "object",
+            "properties": {
+              "baseTokenGatePassed": {
+                "type": "boolean"
+              },
+              "openPrThreshold": {
+                "type": "number"
+              },
+              "openPrCount": {
+                "type": "number"
+              },
+              "collateralFraction": {
+                "type": "number"
+              },
+              "credibilityFloor": {
+                "type": "number"
+              },
+              "credibilityObserved": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "baseTokenGatePassed",
+              "openPrThreshold",
+              "openPrCount",
+              "collateralFraction",
+              "credibilityFloor",
+              "credibilityObserved"
+            ]
+          },
+          "branchEligibility": {
+            "type": "object",
+            "properties": {
+              "required": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "eligible",
+                  "ineligible",
+                  "unknown",
+                  "not_required"
+                ]
+              },
+              "evidence": {
+                "type": "string",
+                "enum": [
+                  "provided",
+                  "missing"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "github_metadata",
+                  "local_metadata",
+                  "registry",
+                  "user_supplied",
+                  "missing"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "checkedAt": {
+                "type": "string"
+              },
+              "stale": {
+                "type": "boolean"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "required",
+              "status",
+              "evidence",
+              "source",
+              "stale",
+              "warnings"
+            ]
+          },
+          "effectiveEstimatedScore": {
+            "type": "number"
+          },
+          "underlyingPotentialScore": {
+            "type": "number"
+          },
+          "blockedBy": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "repo_not_registered",
+                    "inactive_allocation",
+                    "base_token_gate",
+                    "open_pr_threshold",
+                    "credibility_floor",
+                    "review_penalty",
+                    "metadata_only",
+                    "linked_issue_invalid",
+                    "linked_issue_unvalidated",
+                    "branch_ineligible",
+                    "branch_eligibility_missing"
+                  ]
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "blocker",
+                    "reducer",
+                    "context"
+                  ]
+                },
+                "detail": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "severity",
+                "detail"
+              ]
+            }
+          },
+          "gateDeltas": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "gate": {
+                  "type": "string",
+                  "enum": [
+                    "open_pr_threshold",
+                    "credibility_floor",
+                    "linked_issue_multiplier"
+                  ]
+                },
+                "current": {
+                  "type": "string"
+                },
+                "projected": {
+                  "type": "string"
+                },
+                "explanation": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "gate",
+                "current",
+                "projected",
+                "explanation"
+              ]
+            }
+          },
+          "scenarioPreviews": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "enum": [
+                    "current",
+                    "cleanGates",
+                    "afterPendingMerges",
+                    "afterApprovedPrsMerge",
+                    "afterStalePrsClose",
+                    "linkedIssueFixed",
+                    "bestReasonableCase"
+                  ]
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "current_data",
+                    "user_supplied",
+                    "github_observed",
+                    "gittensory_projection"
+                  ]
+                },
+                "assumptions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "scoreEstimate": {
+                  "type": "object",
+                  "properties": {
+                    "baseScore": {
+                      "type": "number"
+                    },
+                    "densityMultiplier": {
+                      "type": "number"
+                    },
+                    "contributionBonus": {
+                      "type": "number"
+                    },
+                    "labelMultiplier": {
+                      "type": "number"
+                    },
+                    "issueMultiplier": {
+                      "type": "number"
+                    },
+                    "credibilityMultiplier": {
+                      "type": "number"
+                    },
+                    "reviewPenaltyMultiplier": {
+                      "type": "number"
+                    },
+                    "openPrMultiplier": {
+                      "type": "number"
+                    },
+                    "estimatedMergedScore": {
+                      "type": "number"
+                    },
+                    "pendingSaturationScore": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "baseScore",
+                    "densityMultiplier",
+                    "contributionBonus",
+                    "labelMultiplier",
+                    "issueMultiplier",
+                    "credibilityMultiplier",
+                    "reviewPenaltyMultiplier",
+                    "openPrMultiplier",
+                    "estimatedMergedScore",
+                    "pendingSaturationScore"
+                  ]
+                },
+                "gates": {
+                  "type": "object",
+                  "properties": {
+                    "baseTokenGatePassed": {
+                      "type": "boolean"
+                    },
+                    "openPrThreshold": {
+                      "type": "number"
+                    },
+                    "openPrCount": {
+                      "type": "number"
+                    },
+                    "collateralFraction": {
+                      "type": "number"
+                    },
+                    "credibilityFloor": {
+                      "type": "number"
+                    },
+                    "credibilityObserved": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "baseTokenGatePassed",
+                    "openPrThreshold",
+                    "openPrCount",
+                    "collateralFraction",
+                    "credibilityFloor",
+                    "credibilityObserved"
+                  ]
+                },
+                "effectiveEstimatedScore": {
+                  "type": "number"
+                },
+                "underlyingPotentialScore": {
+                  "type": "number"
+                },
+                "blockedBy": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string",
+                        "enum": [
+                          "repo_not_registered",
+                          "inactive_allocation",
+                          "base_token_gate",
+                          "open_pr_threshold",
+                          "credibility_floor",
+                          "review_penalty",
+                          "metadata_only",
+                          "linked_issue_invalid",
+                          "linked_issue_unvalidated",
+                          "branch_ineligible",
+                          "branch_eligibility_missing"
+                        ]
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": [
+                          "blocker",
+                          "reducer",
+                          "context"
+                        ]
+                      },
+                      "detail": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "severity",
+                      "detail"
+                    ]
+                  }
+                },
+                "linkedIssueMultiplier": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "standard",
+                        "maintainer"
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "not_required",
+                        "raw",
+                        "plausible",
+                        "validated",
+                        "invalid",
+                        "unavailable"
+                      ]
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "user_supplied",
+                        "official_mirror",
+                        "github_cache",
+                        "issue_quality",
+                        "missing"
+                      ]
+                    },
+                    "eligible": {
+                      "type": "boolean"
+                    },
+                    "issueNumbers": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    "solvedByPullRequests": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    "baseMultiplier": {
+                      "type": "number"
+                    },
+                    "appliedMultiplier": {
+                      "type": "number"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "status",
+                    "source",
+                    "eligible",
+                    "issueNumbers",
+                    "solvedByPullRequests",
+                    "baseMultiplier",
+                    "appliedMultiplier",
+                    "reason",
+                    "warnings"
+                  ]
+                },
+                "deltaExplanation": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "source",
+                "assumptions",
+                "scoreEstimate",
+                "gates",
+                "effectiveEstimatedScore",
+                "underlyingPotentialScore",
+                "blockedBy",
+                "linkedIssueMultiplier",
+                "deltaExplanation"
+              ]
+            }
+          },
+          "scoreabilityStatus": {
+            "type": "string",
+            "enum": [
+              "blocked",
+              "conditionally_scoreable",
+              "scoreable",
+              "hold"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "assumptions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recommendation": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "type": "string",
+                "enum": [
+                  "strong_fit",
+                  "reasonable_fit",
+                  "needs_work",
+                  "hold"
+                ]
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "level",
+              "actions"
+            ]
+          }
+        },
+        "required": [
+          "repoFullName",
+          "generatedAt",
+          "scoringModelSnapshotId",
+          "activeModel",
+          "privateOnly",
+          "laneMath",
+          "scoreEstimate",
+          "linkedIssueMultiplier",
+          "gates",
+          "branchEligibility",
+          "effectiveEstimatedScore",
+          "underlyingPotentialScore",
+          "blockedBy",
+          "gateDeltas",
+          "scenarioPreviews",
+          "scoreabilityStatus",
+          "warnings",
+          "assumptions",
+          "recommendation"
+        ]
+      },
+      "RepoRewardRisk": {
+        "type": "object",
+        "properties": {
+          "login": {
+            "type": "string"
+          },
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "roleContext": {
+            "$ref": "#/components/schemas/RoleContext"
+          },
+          "lane": {
+            "$ref": "#/components/schemas/LaneAdvice"
+          },
+          "recommendation": {
+            "type": "string",
+            "enum": [
+              "pursue",
+              "cleanup_first",
+              "maintainer_lane",
+              "avoid_for_now",
+              "unknown"
+            ]
+          },
+          "rewardUpside": {
+            "type": "object",
+            "properties": {
+              "relevantLane": {
+                "type": "string",
+                "enum": [
+                  "direct_pr",
+                  "issue_discovery",
+                  "maintainer_lane",
+                  "none"
+                ]
+              },
+              "repoSlice": {
+                "type": "number"
+              },
+              "directPrSlice": {
+                "type": "number"
+              },
+              "issueDiscoverySlice": {
+                "type": "number"
+              },
+              "maintainerCutSlice": {
+                "type": "number"
+              },
+              "labelMultiplier": {
+                "type": "number"
+              },
+              "issueMultiplier": {
+                "type": "number"
+              },
+              "estimatedScoreIfClean": {
+                "type": "number"
+              },
+              "currentEstimatedScore": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "relevantLane",
+              "repoSlice",
+              "directPrSlice",
+              "issueDiscoverySlice",
+              "maintainerCutSlice",
+              "labelMultiplier",
+              "issueMultiplier",
+              "estimatedScoreIfClean",
+              "currentEstimatedScore"
+            ]
+          },
+          "scoreBlockers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "riskBreakdown": {
+            "type": "object",
+            "properties": {
+              "queueBurden": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              },
+              "queueBurdenScore": {
+                "type": "number"
+              },
+              "duplicateClusters": {
+                "type": "number"
+              },
+              "highRiskDuplicateClusters": {
+                "type": "number"
+              },
+              "closedPullRequestRate": {
+                "type": "number"
+              },
+              "openPullRequests": {
+                "type": "number"
+              },
+              "credibility": {
+                "type": "number"
+              },
+              "reviewChurnRisk": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "required": [
+              "queueBurden",
+              "queueBurdenScore",
+              "duplicateClusters",
+              "highRiskDuplicateClusters",
+              "closedPullRequestRate",
+              "openPullRequests",
+              "credibility",
+              "reviewChurnRisk"
+            ]
+          },
+          "actionImpact": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "currentPreview": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "afterCleanupPreview": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RewardRiskAction"
+            }
+          },
+          "whyThisHelps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "nextActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "login",
+          "repoFullName",
+          "generatedAt",
+          "roleContext",
+          "lane",
+          "recommendation",
+          "rewardUpside",
+          "scoreBlockers",
+          "riskBreakdown",
+          "actionImpact",
+          "currentPreview",
+          "afterCleanupPreview",
+          "actions",
+          "whyThisHelps",
+          "nextActions",
+          "summary"
+        ]
+      },
+      "RewardRiskAction": {
+        "type": "object",
+        "properties": {
+          "actionKind": {
+            "type": "string",
+            "enum": [
+              "cleanup_existing_prs",
+              "land_existing_prs",
+              "close_or_withdraw_low_fit_prs",
+              "open_new_direct_pr",
+              "file_issue_discovery",
+              "maintainer_lane_improve_repo",
+              "maintainer_cut_readiness"
+            ]
+          },
+          "repoFullName": {
+            "type": "string"
+          },
+          "priorityScore": {
+            "type": "number"
+          },
+          "laneValueScore": {
+            "type": "number"
+          },
+          "scoreabilityScore": {
+            "type": "number"
+          },
+          "personalFitScore": {
+            "type": "number"
+          },
+          "riskPenalty": {
+            "type": "number"
+          },
+          "maintainerFrictionPenalty": {
+            "type": "number"
+          },
+          "actionLeverageScore": {
+            "type": "number"
+          },
+          "whyThisHelps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "nextActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "actionKind",
+          "repoFullName",
+          "priorityScore",
+          "laneValueScore",
+          "scoreabilityScore",
+          "personalFitScore",
+          "riskPenalty",
+          "maintainerFrictionPenalty",
+          "actionLeverageScore",
+          "whyThisHelps",
+          "nextActions"
+        ]
+      },
+      "LocalWorkspaceIntelligence": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              2
+            ]
+          },
+          "sourceUpload": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "enum": [
+                  false
+                ]
+              },
+              "detail": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "enabled",
+              "detail"
+            ]
+          },
+          "branch": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "baseRef": {
+                "type": "string"
+              },
+              "headSha": {
+                "type": "string"
+              },
+              "pendingCommitCount": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "pendingCommitCount"
+            ]
+          },
+          "changedFiles": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "number"
+              },
+              "added": {
+                "type": "number"
+              },
+              "modified": {
+                "type": "number"
+              },
+              "deleted": {
+                "type": "number"
+              },
+              "renamed": {
+                "type": "number"
+              },
+              "binary": {
+                "type": "number"
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "total",
+              "added",
+              "modified",
+              "deleted",
+              "renamed",
+              "binary",
+              "paths"
+            ]
+          },
+          "testEvidence": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "type": "string",
+                "enum": [
+                  "test_files",
+                  "validation_commands",
+                  "both",
+                  "none"
+                ]
+              },
+              "testFileCount": {
+                "type": "number"
+              },
+              "passedValidationCount": {
+                "type": "number"
+              },
+              "commands": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "passed",
+                        "failed",
+                        "not_run"
+                      ]
+                    },
+                    "summary": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "command",
+                    "status"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "level",
+              "testFileCount",
+              "passedValidationCount",
+              "commands"
+            ]
+          },
+          "linkedIssues": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "baseFreshness": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "fresh",
+                  "stale",
+                  "possibly_stale",
+                  "unknown"
+                ]
+              },
+              "baseRef": {
+                "type": "string"
+              },
+              "baseSha": {
+                "type": "string"
+              },
+              "headSha": {
+                "type": "string"
+              },
+              "mergeBaseSha": {
+                "type": "string"
+              },
+              "remoteTrackingSha": {
+                "type": "string"
+              },
+              "changedFileCount": {
+                "type": "number"
+              },
+              "testFileCount": {
+                "type": "number"
+              },
+              "passedValidationCount": {
+                "type": "number"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recommendation": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "changedFileCount",
+              "testFileCount",
+              "passedValidationCount",
+              "warnings"
+            ]
+          },
+          "ciStatusHints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "localScorerDiagnostics": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string"
+              },
+              "activeModel": {
+                "type": "string"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "metadataOnly": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "mode",
+              "warnings",
+              "metadataOnly"
+            ]
+          },
+          "blockers": {
+            "type": "object",
+            "properties": {
+              "branchQuality": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "accountState": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "branchQuality",
+              "accountState"
+            ]
+          },
+          "rerunWhen": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "sourceUpload",
+          "branch",
+          "changedFiles",
+          "testEvidence",
+          "linkedIssues",
+          "baseFreshness",
+          "ciStatusHints",
+          "blockers",
+          "rerunWhen"
         ]
       },
       "MaintainerPacket": {
@@ -4759,6 +7023,56 @@
           "suggestedActions"
         ]
       },
+      "MaintainerLaneReport": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "lane": {
+            "$ref": "#/components/schemas/LaneAdvice"
+          },
+          "maintainerCut": {
+            "type": "number"
+          },
+          "maintainerCutConfigured": {
+            "type": "boolean"
+          },
+          "queueHealth": {
+            "$ref": "#/components/schemas/QueueHealth"
+          },
+          "configQuality": {
+            "$ref": "#/components/schemas/ConfigQuality"
+          },
+          "contributorIntakeHealth": {
+            "$ref": "#/components/schemas/ContributorIntakeHealth"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          }
+        },
+        "required": [
+          "repoFullName",
+          "generatedAt",
+          "lane",
+          "maintainerCut",
+          "maintainerCutConfigured",
+          "queueHealth",
+          "configQuality",
+          "contributorIntakeHealth",
+          "summary",
+          "findings"
+        ]
+      },
       "ContributorIntakeHealth": {
         "type": "object",
         "properties": {
@@ -4820,56 +7134,6 @@
           "configLevel",
           "duplicateClusters",
           "reviewablePullRequests",
-          "summary",
-          "findings"
-        ]
-      },
-      "MaintainerLaneReport": {
-        "type": "object",
-        "properties": {
-          "repoFullName": {
-            "type": "string"
-          },
-          "generatedAt": {
-            "type": "string"
-          },
-          "lane": {
-            "$ref": "#/components/schemas/LaneAdvice"
-          },
-          "maintainerCut": {
-            "type": "number"
-          },
-          "maintainerCutConfigured": {
-            "type": "boolean"
-          },
-          "queueHealth": {
-            "$ref": "#/components/schemas/QueueHealth"
-          },
-          "configQuality": {
-            "$ref": "#/components/schemas/ConfigQuality"
-          },
-          "contributorIntakeHealth": {
-            "$ref": "#/components/schemas/ContributorIntakeHealth"
-          },
-          "summary": {
-            "type": "string"
-          },
-          "findings": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Finding"
-            }
-          }
-        },
-        "required": [
-          "repoFullName",
-          "generatedAt",
-          "lane",
-          "maintainerCut",
-          "maintainerCutConfigured",
-          "queueHealth",
-          "configQuality",
-          "contributorIntakeHealth",
           "summary",
           "findings"
         ]
@@ -5373,6 +7637,382 @@
           "privateTrustEnabled"
         ]
       },
+      "InstallationRepair": {
+        "type": "object",
+        "properties": {
+          "generatedAt": {
+            "type": "string"
+          },
+          "installation": {
+            "$ref": "#/components/schemas/InstallationHealth"
+          },
+          "installedRepos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "repoFullName": {
+                  "type": "string"
+                },
+                "isRegistered": {
+                  "type": "boolean"
+                },
+                "settings": {
+                  "type": "object",
+                  "properties": {
+                    "publicSurface": {
+                      "type": "string",
+                      "enum": [
+                        "off",
+                        "comment_and_label",
+                        "comment_only",
+                        "label_only"
+                      ]
+                    },
+                    "commentMode": {
+                      "type": "string",
+                      "enum": [
+                        "off",
+                        "detected_contributors_only",
+                        "all_prs"
+                      ]
+                    },
+                    "checkRunMode": {
+                      "type": "string",
+                      "enum": [
+                        "off",
+                        "enabled"
+                      ]
+                    },
+                    "autoLabelEnabled": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "publicSurface",
+                    "commentMode",
+                    "checkRunMode",
+                    "autoLabelEnabled"
+                  ]
+                }
+              },
+              "required": [
+                "repoFullName",
+                "isRegistered",
+                "settings"
+              ]
+            }
+          },
+          "requiredPermissions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "optionalPermissions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "requiredEvents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "optionalEvents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "modeImpacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "comment",
+                    "label",
+                    "check_run"
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "affectedRepoCount": {
+                  "type": "number"
+                },
+                "requiredPermissions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "permission": {
+                        "type": "string"
+                      },
+                      "requiredAccess": {
+                        "type": "string"
+                      },
+                      "missing": {
+                        "type": "boolean"
+                      },
+                      "optional": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "permission",
+                      "requiredAccess",
+                      "missing",
+                      "optional"
+                    ]
+                  }
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode",
+                "enabled",
+                "affectedRepoCount",
+                "requiredPermissions",
+                "summary",
+                "action"
+              ]
+            }
+          },
+          "eventDiagnostics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "event": {
+                  "type": "string"
+                },
+                "missing": {
+                  "type": "boolean"
+                },
+                "optional": {
+                  "type": "boolean"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "event",
+                "missing",
+                "optional",
+                "summary",
+                "action"
+              ]
+            }
+          },
+          "repairSteps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "refresh": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "POST"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "lastCheckedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "method",
+              "path",
+              "lastCheckedAt"
+            ]
+          },
+          "refreshed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "generatedAt",
+          "installation",
+          "installedRepos",
+          "requiredPermissions",
+          "optionalPermissions",
+          "requiredEvents",
+          "optionalEvents",
+          "modeImpacts",
+          "eventDiagnostics",
+          "repairSteps",
+          "refresh"
+        ]
+      },
+      "InstallationHealth": {
+        "type": "object",
+        "properties": {
+          "installationId": {
+            "type": "number"
+          },
+          "accountLogin": {
+            "type": "string"
+          },
+          "repositorySelection": {
+            "type": "string",
+            "nullable": true
+          },
+          "installedReposCount": {
+            "type": "number"
+          },
+          "registeredInstalledCount": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "needs_attention",
+              "broken"
+            ]
+          },
+          "missingPermissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "missingEvents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "permissions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "checkedAt": {
+            "type": "string"
+          },
+          "errorSummary": {
+            "type": "string",
+            "nullable": true
+          },
+          "requiredPermissions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "requiredEvents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "optionalVisibleEvents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "permissionRemediation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "permission": {
+                  "type": "string"
+                },
+                "requiredAccess": {
+                  "type": "string"
+                },
+                "currentAccess": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "action": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "permission",
+                "requiredAccess",
+                "currentAccess",
+                "ok",
+                "action"
+              ]
+            }
+          },
+          "eventRemediation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "event": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "action": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "event",
+                "ok",
+                "action"
+              ]
+            }
+          },
+          "repairSteps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "installationId",
+          "accountLogin",
+          "installedReposCount",
+          "registeredInstalledCount",
+          "status",
+          "missingPermissions",
+          "missingEvents",
+          "permissions",
+          "events",
+          "checkedAt"
+        ]
+      },
       "RepoSettingsPreview": {
         "type": "object",
         "properties": {
@@ -5589,7 +8229,8 @@
                   "bot_author",
                   "maintainer_author",
                   "miner_detection_unavailable",
-                  "not_official_gittensor_miner"
+                  "not_official_gittensor_miner",
+                  null
                 ]
               },
               "actions": {
@@ -5674,6 +8315,269 @@
           "checkRun",
           "warnings",
           "summary"
+        ]
+      },
+      "CommandPreviewResponse": {
+        "type": "object",
+        "properties": {
+          "generatedAt": {
+            "type": "string"
+          },
+          "command": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              },
+              "audience": {
+                "type": "string"
+              },
+              "boundary": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "endpoint": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "command",
+              "audience",
+              "boundary",
+              "description",
+              "endpoint"
+            ]
+          },
+          "request": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "preview": {
+            "type": "object",
+            "properties": {
+              "boundary": {
+                "type": "string",
+                "enum": [
+                  "public",
+                  "public-safe",
+                  "private-api",
+                  "private-mcp"
+                ]
+              },
+              "endpoint": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "missingPermissions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "permissionDiagnostics": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "permission": {
+                      "type": "string"
+                    },
+                    "requiredAccess": {
+                      "type": "string"
+                    },
+                    "currentAccess": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "action": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "permission",
+                    "requiredAccess",
+                    "currentAccess",
+                    "ok",
+                    "action"
+                  ]
+                }
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "decision": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "ready",
+                      "skipped",
+                      "missing_permission",
+                      "private_api"
+                    ]
+                  },
+                  "willComment": {
+                    "type": "boolean"
+                  },
+                  "willLabel": {
+                    "type": "boolean"
+                  },
+                  "willCheckRun": {
+                    "type": "boolean"
+                  },
+                  "skipped": {
+                    "type": "boolean"
+                  },
+                  "skipReason": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "actions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "comment",
+                        "label",
+                        "check_run",
+                        "skip",
+                        "none"
+                      ]
+                    }
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status",
+                  "willComment",
+                  "willLabel",
+                  "willCheckRun",
+                  "skipped",
+                  "skipReason",
+                  "actions",
+                  "summary"
+                ]
+              },
+              "sample": {
+                "type": "object",
+                "properties": {
+                  "pullNumber": {
+                    "type": "number"
+                  },
+                  "authorLogin": {
+                    "type": "string"
+                  },
+                  "authorType": {
+                    "type": "string"
+                  },
+                  "authorAssociation": {
+                    "type": "string"
+                  },
+                  "commenterLogin": {
+                    "type": "string"
+                  },
+                  "commenterAssociation": {
+                    "type": "string"
+                  },
+                  "minerStatus": {
+                    "type": "string",
+                    "enum": [
+                      "confirmed",
+                      "not_found",
+                      "unavailable"
+                    ]
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "body": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "labels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "linkedIssues": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "required": [
+                  "pullNumber",
+                  "authorLogin",
+                  "authorType",
+                  "authorAssociation",
+                  "commenterLogin",
+                  "commenterAssociation",
+                  "minerStatus",
+                  "title",
+                  "body",
+                  "labels",
+                  "linkedIssues"
+                ]
+              },
+              "sanitizer": {
+                "type": "object",
+                "properties": {
+                  "passed": {
+                    "type": "boolean"
+                  },
+                  "forbiddenTerms": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "passed",
+                  "forbiddenTerms"
+                ]
+              }
+            },
+            "required": [
+              "boundary",
+              "endpoint",
+              "target",
+              "body",
+              "missingPermissions",
+              "permissionDiagnostics",
+              "warnings",
+              "decision"
+            ]
+          }
+        },
+        "required": [
+          "generatedAt",
+          "command",
+          "request",
+          "preview"
         ]
       },
       "AgentRun": {
@@ -5829,6 +8733,9 @@
           "publicSafeSummary": {
             "type": "string"
           },
+          "explanationCard": {
+            "$ref": "#/components/schemas/AgentActionExplanationCard"
+          },
           "approvalRequired": {
             "type": "boolean"
           },
@@ -5860,9 +8767,96 @@
           "why",
           "blockedBy",
           "publicSafeSummary",
+          "explanationCard",
           "approvalRequired",
           "safetyClass",
           "payload"
+        ]
+      },
+      "AgentActionExplanationCard": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string"
+          },
+          "whyNow": {
+            "type": "string"
+          },
+          "scoreabilityBlocker": {
+            "type": "string"
+          },
+          "risk": {
+            "type": "string"
+          },
+          "maintainerFriction": {
+            "type": "string"
+          },
+          "expectedImpact": {
+            "type": "string"
+          },
+          "blockerGroups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "branch",
+                    "account",
+                    "queue",
+                    "scoreability",
+                    "risk",
+                    "maintainer",
+                    "unknown"
+                  ]
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "category",
+                "items"
+              ]
+            }
+          },
+          "rerunWhen": {
+            "type": "string"
+          },
+          "publicSafe": {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": "string"
+              },
+              "whyNow": {
+                "type": "string"
+              },
+              "rerunWhen": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "summary",
+              "whyNow",
+              "rerunWhen"
+            ]
+          }
+        },
+        "required": [
+          "summary",
+          "whyNow",
+          "scoreabilityBlocker",
+          "risk",
+          "maintainerFriction",
+          "expectedImpact",
+          "blockerGroups",
+          "rerunWhen",
+          "publicSafe"
         ]
       },
       "AgentContextSnapshot": {
@@ -6275,442 +9269,6 @@
           "rateLimitedRepos"
         ]
       },
-      "InstallationHealth": {
-        "type": "object",
-        "properties": {
-          "installationId": {
-            "type": "number"
-          },
-          "accountLogin": {
-            "type": "string"
-          },
-          "repositorySelection": {
-            "type": "string",
-            "nullable": true
-          },
-          "installedReposCount": {
-            "type": "number"
-          },
-          "registeredInstalledCount": {
-            "type": "number"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "healthy",
-              "needs_attention",
-              "broken"
-            ]
-          },
-          "missingPermissions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "missingEvents": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "permissions": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "checkedAt": {
-            "type": "string"
-          },
-          "errorSummary": {
-            "type": "string",
-            "nullable": true
-          },
-          "requiredPermissions": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
-          "requiredEvents": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "optionalVisibleEvents": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "permissionRemediation": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "permission": {
-                  "type": "string"
-                },
-                "requiredAccess": {
-                  "type": "string"
-                },
-                "currentAccess": {
-                  "type": "string"
-                },
-                "ok": {
-                  "type": "boolean"
-                },
-                "action": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "permission",
-                "requiredAccess",
-                "currentAccess",
-                "ok",
-                "action"
-              ]
-            }
-          },
-          "eventRemediation": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "event": {
-                  "type": "string"
-                },
-                "ok": {
-                  "type": "boolean"
-                },
-                "action": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "event",
-                "ok",
-                "action"
-              ]
-            }
-          },
-          "repairSteps": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "installationId",
-          "accountLogin",
-          "installedReposCount",
-          "registeredInstalledCount",
-          "status",
-          "missingPermissions",
-          "missingEvents",
-          "permissions",
-          "events",
-          "checkedAt"
-        ]
-      },
-      "CoreSignalFidelity": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "type": "string",
-            "enum": [
-              "complete",
-              "degraded",
-              "blocked",
-              "unknown"
-            ]
-          },
-          "repoCount": {
-            "type": "number"
-          },
-          "completeRepos": {
-            "type": "number"
-          },
-          "degradedRepos": {
-            "type": "number"
-          },
-          "blockedRepos": {
-            "type": "number"
-          },
-          "incompleteRepos": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "refreshingRepos": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "waitingForRateLimitRepos": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "historyCoverage": {
-            "type": "string",
-            "enum": [
-              "sampled",
-              "counts_only",
-              "full"
-            ]
-          }
-        },
-        "required": [
-          "status",
-          "repoCount",
-          "completeRepos",
-          "degradedRepos",
-          "blockedRepos",
-          "incompleteRepos",
-          "refreshingRepos",
-          "waitingForRateLimitRepos",
-          "historyCoverage"
-        ]
-      },
-      "UpstreamDriftReport": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "fingerprint": {
-            "type": "string"
-          },
-          "severity": {
-            "type": "string",
-            "enum": [
-              "low",
-              "medium",
-              "high",
-              "blocking"
-            ]
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "open",
-              "acknowledged",
-              "resolved",
-              "ignored"
-            ]
-          },
-          "summary": {
-            "type": "string"
-          },
-          "affectedAreas": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "registry",
-                "scoring_model",
-                "issue_discovery",
-                "mirror_linkage",
-                "language_weights",
-                "source"
-              ]
-            }
-          },
-          "previousRulesetId": {
-            "type": "string",
-            "nullable": true
-          },
-          "currentRulesetId": {
-            "type": "string",
-            "nullable": true
-          },
-          "issueNumber": {
-            "type": "number",
-            "nullable": true
-          },
-          "issueUrl": {
-            "type": "string",
-            "nullable": true
-          },
-          "payload": {
-            "type": "object",
-            "additionalProperties": {
-              "nullable": true
-            }
-          },
-          "generatedAt": {
-            "type": "string"
-          },
-          "updatedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "fingerprint",
-          "severity",
-          "status",
-          "summary",
-          "affectedAreas",
-          "generatedAt",
-          "updatedAt"
-        ]
-      },
-      "UpstreamStatus": {
-        "type": "object",
-        "properties": {
-          "generatedAt": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "current",
-              "drift_detected",
-              "stale",
-              "unavailable"
-            ]
-          },
-          "latestCommitSha": {
-            "type": "string",
-            "nullable": true
-          },
-          "latestRulesetId": {
-            "type": "string",
-            "nullable": true
-          },
-          "latestRulesetGeneratedAt": {
-            "type": "string",
-            "nullable": true
-          },
-          "activeModel": {
-            "type": "string",
-            "nullable": true,
-            "enum": [
-              "current_density_model",
-              "pending_saturation_model",
-              "exponential_saturation_model",
-              "unknown"
-            ]
-          },
-          "highestSeverity": {
-            "type": "string",
-            "nullable": true,
-            "enum": [
-              "low",
-              "medium",
-              "high",
-              "blocking"
-            ]
-          },
-          "affectedAreas": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "registry",
-                "scoring_model",
-                "issue_discovery",
-                "mirror_linkage",
-                "language_weights",
-                "source"
-              ]
-            }
-          },
-          "openReportCount": {
-            "type": "number"
-          },
-          "reports": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/UpstreamDriftReport"
-            }
-          }
-        },
-        "required": [
-          "generatedAt",
-          "status",
-          "affectedAreas",
-          "openReportCount",
-          "reports"
-        ]
-      },
-      "RepoGithubTotalsSnapshot": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "repoFullName": {
-            "type": "string"
-          },
-          "openIssuesTotal": {
-            "type": "number"
-          },
-          "openPullRequestsTotal": {
-            "type": "number"
-          },
-          "mergedPullRequestsTotal": {
-            "type": "number"
-          },
-          "closedUnmergedPullRequestsTotal": {
-            "type": "number"
-          },
-          "labelsTotal": {
-            "type": "number"
-          },
-          "sourceKind": {
-            "type": "string",
-            "enum": [
-              "github",
-              "installation",
-              "test"
-            ]
-          },
-          "fetchedAt": {
-            "type": "string"
-          },
-          "rateLimitRemaining": {
-            "type": "number",
-            "nullable": true
-          },
-          "rateLimitResetAt": {
-            "type": "string",
-            "nullable": true
-          },
-          "payload": {
-            "type": "object",
-            "additionalProperties": {
-              "nullable": true
-            }
-          }
-        },
-        "required": [
-          "id",
-          "repoFullName",
-          "openIssuesTotal",
-          "openPullRequestsTotal",
-          "mergedPullRequestsTotal",
-          "closedUnmergedPullRequestsTotal",
-          "labelsTotal",
-          "sourceKind",
-          "fetchedAt"
-        ]
-      },
       "SyncStatus": {
         "type": "object",
         "properties": {
@@ -6897,6 +9455,383 @@
           "pullRequestDetailSync",
           "installations",
           "rateLimits"
+        ]
+      },
+      "CoreSignalFidelity": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "degraded",
+              "blocked",
+              "unknown"
+            ]
+          },
+          "repoCount": {
+            "type": "number"
+          },
+          "completeRepos": {
+            "type": "number"
+          },
+          "degradedRepos": {
+            "type": "number"
+          },
+          "blockedRepos": {
+            "type": "number"
+          },
+          "incompleteRepos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "refreshingRepos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "waitingForRateLimitRepos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "historyCoverage": {
+            "type": "string",
+            "enum": [
+              "sampled",
+              "counts_only",
+              "full"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "repoCount",
+          "completeRepos",
+          "degradedRepos",
+          "blockedRepos",
+          "incompleteRepos",
+          "refreshingRepos",
+          "waitingForRateLimitRepos",
+          "historyCoverage"
+        ]
+      },
+      "UpstreamStatus": {
+        "type": "object",
+        "properties": {
+          "generatedAt": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "current",
+              "drift_detected",
+              "stale",
+              "unavailable"
+            ]
+          },
+          "latestCommitSha": {
+            "type": "string",
+            "nullable": true
+          },
+          "latestRulesetId": {
+            "type": "string",
+            "nullable": true
+          },
+          "latestRulesetGeneratedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "activeModel": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "current_density_model",
+              "pending_saturation_model",
+              "exponential_saturation_model",
+              "unknown",
+              null
+            ]
+          },
+          "highestSeverity": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "blocking",
+              null
+            ]
+          },
+          "affectedAreas": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "registry",
+                "scoring_model",
+                "issue_discovery",
+                "mirror_linkage",
+                "language_weights",
+                "source"
+              ]
+            }
+          },
+          "registryHyperparameterDrift": {
+            "$ref": "#/components/schemas/RegistryHyperparameterDriftSummary"
+          },
+          "openReportCount": {
+            "type": "number"
+          },
+          "reports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpstreamDriftReport"
+            }
+          }
+        },
+        "required": [
+          "generatedAt",
+          "status",
+          "affectedAreas",
+          "registryHyperparameterDrift",
+          "openReportCount",
+          "reports"
+        ]
+      },
+      "RegistryHyperparameterDriftSummary": {
+        "type": "object",
+        "properties": {
+          "totalEvents": {
+            "type": "number"
+          },
+          "omittedEvents": {
+            "type": "number"
+          },
+          "highImpactCount": {
+            "type": "number"
+          },
+          "affectedRepoCount": {
+            "type": "number"
+          },
+          "affectedFields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "repo",
+                "emissionShare",
+                "issueDiscoveryShare",
+                "maintainerCut",
+                "labelMultipliers",
+                "trustedLabelPipeline",
+                "defaultLabelMultiplier",
+                "fixedBaseScore",
+                "eligibilityMode"
+              ]
+            }
+          },
+          "affectedSurfaces": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "allocation",
+                "lane_fit",
+                "scoreability_assumptions",
+                "maintainer_economics",
+                "issue_discovery_behavior",
+                "label_policy"
+              ]
+            }
+          }
+        },
+        "required": [
+          "totalEvents",
+          "omittedEvents",
+          "highImpactCount",
+          "affectedRepoCount",
+          "affectedFields",
+          "affectedSurfaces"
+        ]
+      },
+      "UpstreamDriftReport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "blocking"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "acknowledged",
+              "resolved",
+              "ignored"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "affectedAreas": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "registry",
+                "scoring_model",
+                "issue_discovery",
+                "mirror_linkage",
+                "language_weights",
+                "source"
+              ]
+            }
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "repo": {
+                "type": "string",
+                "nullable": true
+              },
+              "ref": {
+                "type": "string",
+                "nullable": true
+              },
+              "commitSha": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "repo",
+              "ref"
+            ]
+          },
+          "recommendedFollowUp": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "previousRulesetId": {
+            "type": "string",
+            "nullable": true
+          },
+          "currentRulesetId": {
+            "type": "string",
+            "nullable": true
+          },
+          "issueNumber": {
+            "type": "number",
+            "nullable": true
+          },
+          "issueUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "fingerprint",
+          "severity",
+          "status",
+          "summary",
+          "affectedAreas",
+          "generatedAt",
+          "updatedAt"
+        ]
+      },
+      "RepoGithubTotalsSnapshot": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "repoFullName": {
+            "type": "string"
+          },
+          "openIssuesTotal": {
+            "type": "number"
+          },
+          "openPullRequestsTotal": {
+            "type": "number"
+          },
+          "mergedPullRequestsTotal": {
+            "type": "number"
+          },
+          "closedUnmergedPullRequestsTotal": {
+            "type": "number"
+          },
+          "labelsTotal": {
+            "type": "number"
+          },
+          "sourceKind": {
+            "type": "string",
+            "enum": [
+              "github",
+              "installation",
+              "test"
+            ]
+          },
+          "fetchedAt": {
+            "type": "string"
+          },
+          "rateLimitRemaining": {
+            "type": "number",
+            "nullable": true
+          },
+          "rateLimitResetAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          }
+        },
+        "required": [
+          "id",
+          "repoFullName",
+          "openIssuesTotal",
+          "openPullRequestsTotal",
+          "mergedPullRequestsTotal",
+          "closedUnmergedPullRequestsTotal",
+          "labelsTotal",
+          "sourceKind",
+          "fetchedAt"
         ]
       },
       "Readiness": {
@@ -7655,6 +10590,51 @@
                     "invalid"
                   ]
                 },
+                "linkage": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "raw",
+                        "plausible",
+                        "validated",
+                        "invalid",
+                        "unavailable"
+                      ]
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "official_mirror",
+                        "github_cache",
+                        "missing"
+                      ]
+                    },
+                    "solvedByPullRequests": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "source",
+                    "solvedByPullRequests",
+                    "reason",
+                    "warnings"
+                  ]
+                },
                 "status": {
                   "type": "string",
                   "enum": [
@@ -8067,7 +11047,7 @@
       "GittensoryBearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Static API/MCP token or GitHub device-flow Gittensory session token."
+        "description": "Static API/MCP token, GitHub device-flow Gittensory session token, or extension-scoped Gittensory session token where supported. GitHub personal access tokens are not accepted."
       },
       "GittensorySessionCookie": {
         "type": "apiKey",
@@ -8423,6 +11403,199 @@
         ]
       }
     },
+    "/v1/installations/{id}/repair": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "GitHub App installation repair diagnostics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallationRepair"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Installation health not found"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/installations/{id}/repair/refresh": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Refreshed GitHub App installation repair diagnostics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallationRepair"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Installation not found"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/notification-model": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Opt-in notification model and PWA-readiness metadata for control-panel routes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "notificationModel": {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "opt_in"
+                          ]
+                        },
+                        "defaultState": {
+                          "type": "string",
+                          "enum": [
+                            "disabled"
+                          ]
+                        },
+                        "channels": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "transport": {
+                                "type": "string",
+                                "enum": [
+                                  "in_app",
+                                  "web_push"
+                                ]
+                              },
+                              "defaultEnabled": {
+                                "type": "boolean"
+                              },
+                              "requiresPermission": {
+                                "type": "boolean"
+                              },
+                              "purpose": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "transport",
+                              "defaultEnabled",
+                              "purpose"
+                            ]
+                          }
+                        },
+                        "privacyGuards": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "fallbackWhenUnavailable": {
+                          "type": "string",
+                          "enum": [
+                            "in_app_digest_only"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "defaultState",
+                        "channels",
+                        "privacyGuards",
+                        "fallbackWhenUnavailable"
+                      ]
+                    },
+                    "pwa": {
+                      "type": "object",
+                      "properties": {
+                        "nativeDependency": {
+                          "type": "boolean"
+                        },
+                        "manifestPath": {
+                          "type": "string"
+                        },
+                        "serviceWorkerPath": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "nativeDependency",
+                        "manifestPath",
+                        "serviceWorkerPath"
+                      ]
+                    },
+                    "mobileReadyRoutes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "nativeMobileFuture": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "notificationModel",
+                    "pwa",
+                    "mobileReadyRoutes",
+                    "nativeMobileFuture"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role does not allow control-panel notification model access"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/repos": {
       "get": {
         "responses": {
@@ -8516,6 +11689,33 @@
           },
           "404": {
             "description": "Repo is unknown or has no issue-quality coverage yet"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/repos/{owner}/{repo}/outcome-patterns": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Cached or freshly-computed per-repo accepted/rejected PR outcome patterns with freshness envelope and explicit evidence-completeness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoOutcomePatternsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Repo is unknown or has no outcome-pattern coverage yet"
           }
         },
         "security": [
@@ -8718,6 +11918,30 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DecisionPackRefreshNeeded"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/contributors/{login}/open-pr-monitor": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Contributor open-PR monitor with classifications and public-safe next-step packets from cached metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributorOpenPrMonitor"
                 }
               }
             }
@@ -9396,6 +12620,36 @@
         ]
       }
     },
+    "/v1/app/roles": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/app/miner-dashboard": {
       "get": {
         "responses": {
@@ -9516,6 +12770,36 @@
         ]
       }
     },
+    "/v1/app/commands/usefulness": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/app/digest": {
       "get": {
         "responses": {
@@ -9546,7 +12830,182 @@
         ]
       }
     },
+    "/v1/app/analytics/daily-rollups": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/analytics/mcp-compatibility": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Live app API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/analytics/weekly-value-report": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "public",
+                "operator"
+              ],
+              "example": "public"
+            },
+            "required": false,
+            "description": "Report variant. Operator reports require the operator app role.",
+            "name": "variant",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "example": "7"
+            },
+            "required": false,
+            "description": "Report window in days, clamped from 1 to 31.",
+            "name": "days",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "example": "markdown"
+            },
+            "required": false,
+            "description": "Response format. Omit or use json for the structured report; use markdown for copy-ready text.",
+            "name": "format",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Weekly value report as structured JSON or copy-ready Markdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              },
+              "text/markdown": {
+                "schema": {
+                  "type": "string",
+                  "example": "# Weekly Gittensory value report\n\n## Adoption metrics\n- Active users: 4\n"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Insufficient app role for requested report variant"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/app/commands/preview": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Maintainer dry-run preview of a sanitized @gittensory command response (no GitHub mutation)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandPreviewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Insufficient app role"
+          },
+          "404": {
+            "description": "Command not found"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/commands/feedback": {
       "post": {
         "responses": {
           "200": {
@@ -9694,6 +13153,9 @@
           },
           "401": {
             "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Extension-scoped session required"
           }
         },
         "security": [
@@ -9913,6 +13375,26 @@
       }
     },
     "/v1/internal/jobs/generate-signal-snapshots": {
+      "post": {
+        "responses": {
+          "202": {
+            "description": "Internal job queued"
+          },
+          "401": {
+            "description": "Invalid internal token"
+          }
+        },
+        "security": [
+          {
+            "GittensoryBearer": []
+          },
+          {
+            "GittensorySessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/internal/jobs/generate-weekly-value-report": {
       "post": {
         "responses": {
           "202": {

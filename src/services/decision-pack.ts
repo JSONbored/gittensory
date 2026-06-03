@@ -1,3 +1,6 @@
+import { loadRepoFocusManifests } from "../signals/focus-manifest-loader";
+import type { FocusManifest, FocusManifestIssueDiscoveryPolicy, FocusManifestLinkedIssuePolicy, FocusManifestSource } from "../signals/focus-manifest";
+import { isFocusManifestPublicSafe } from "../signals/focus-manifest";
 import {
   hasRecentAuditEvent,
   listAllIssues,
@@ -7,12 +10,14 @@ import {
   listContributorPullRequests,
   listContributorRepoStats,
   listLatestRepoGithubTotalsSnapshots,
+  listRepoPullRequestFiles,
   listRepositories,
   listRepoSyncSegments,
   listRepoSyncStates,
   listSignalSnapshots,
   persistSignalSnapshot,
   recordAuditEvent,
+  getAgentRecommendationOutcomeSummary,
   upsertContributorEvidence,
   upsertContributorScoringProfile,
 } from "../db/repositories";
@@ -30,15 +35,29 @@ import {
   type ContributorOutcomeHistory,
   type ContributorProfile,
   type IssueQualityReport,
+  type OutcomePattern,
+  type RepoOutcomePatterns,
   type RoleContext,
 } from "../signals/engine";
 import { buildSignalFidelity } from "../signals/data-quality";
+import { buildContributorOpenPrMonitor, type ContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
+import {
+  buildContributorEvidenceGraph,
+  CONTRIBUTOR_EVIDENCE_GRAPH_SIGNAL,
+  evidenceGraphTouchedRepoFullNames,
+  type ContributorEvidenceGraph,
+} from "./contributor-evidence-graph";
 import { loadIssueQualityReportMap } from "./issue-quality";
+import { loadRepoOutcomePatternsMap } from "./repo-outcome-patterns";
+import { evaluateRecommendationOutcomes } from "./recommendation-outcomes";
 import type {
   BountyRecord,
+  AgentRecommendationOutcomeRepoSummary,
+  AgentRecommendationOutcomeSummary,
   ContributorRepoStatRecord,
   IssueRecord,
   JsonValue,
+  PullRequestFileRecord,
   PullRequestRecord,
   RepositoryRecord,
   RepoGithubTotalsSnapshotRecord,
@@ -57,6 +76,7 @@ const pendingDecisionPackRebuilds = new Map<string, Promise<boolean>>();
 export type DecisionRecommendation = "pursue" | "cleanup_first" | "maintainer_lane" | "avoid_for_now" | "watch";
 export type DecisionActionKind = "cleanup_existing_prs" | "land_existing_prs" | "open_new_direct_pr" | "file_issue_discovery" | "maintainer_lane_improve_repo" | "maintainer_cut_readiness";
 export type DecisionPackFreshness = "fresh" | "stale" | "rebuilding" | "missing";
+export type ActionPortfolioBucketName = "cleanup" | "wait" | "direct_pr" | "issue_discovery" | "avoid" | "maintainer_lane";
 
 export type ContributorDecisionPack = {
   status: "ready";
@@ -81,16 +101,20 @@ export type ContributorDecisionPack = {
   opportunities: ContributorOpportunity[];
   repoDecisions: RepoDecision[];
   topActions: DecisionAction[];
+  actionPortfolio: ActionPortfolio;
   cleanupFirst: RepoDecision[];
   pursueRepos: RepoDecision[];
   avoidRepos: RepoDecision[];
   maintainerLaneRepos: RepoDecision[];
   scoreBlockers: ScoreBlocker[];
+  recommendationOutcomeFeedback: AgentRecommendationOutcomeSummary;
+  evidenceGraph?: ContributorEvidenceGraph | undefined;
   dataQuality: {
     signalFidelity: ReturnType<typeof buildSignalFidelity>;
   };
   summary: string;
   nextActions: string[];
+  openPrMonitor?: ContributorOpenPrMonitor | undefined;
 };
 
 export type DecisionPackRefreshNeeded = {
@@ -109,6 +133,25 @@ export type ContributorDecisionPackServing =
 export type LanguageMatch = {
   language: string | null;
   match: boolean;
+};
+
+export type RepoDecisionFitLevel = "strong" | "moderate" | "weak" | "blocked";
+export type RepoDecisionPressureLevel = "low" | "medium" | "high" | "critical";
+export type RepoDecisionPolicyConfidence = "high" | "medium" | "low";
+
+export type RepoDecisionTradeoffDimension<TLevel extends string> = {
+  level: TLevel;
+  summary: string;
+  reasons: string[];
+};
+
+export type RepoDecisionTradeoffSummary = {
+  directPrFit: RepoDecisionTradeoffDimension<RepoDecisionFitLevel>;
+  issueDiscoveryFit: RepoDecisionTradeoffDimension<RepoDecisionFitLevel>;
+  maintainerBurden: RepoDecisionTradeoffDimension<RepoDecisionPressureLevel>;
+  queuePressure: RepoDecisionTradeoffDimension<RepoDecisionPressureLevel>;
+  policyConfidence: RepoDecisionTradeoffDimension<RepoDecisionPolicyConfidence>;
+  publicSummary: string;
 };
 
 export type RepoDecision = {
@@ -133,11 +176,48 @@ export type RepoDecision = {
   languageMatch: LanguageMatch;
   labelFit: string[];
   scoreBlockers: ScoreBlocker[];
+  repoOutcomePatterns?: RepoOutcomeSummary | undefined;
+  recommendationOutcomeFeedback?: RepoRecommendationOutcomeFeedback | undefined;
   riskReasons: string[];
   whyThisHelps: string[];
   nextActions: string[];
   publicNextActions: string[];
   issueQuality?: IssueQualitySummary | undefined;
+  manifestSummary?: RepoDecisionManifestSummary | undefined;
+  tradeoffSummary?: RepoDecisionTradeoffSummary | undefined;
+};
+
+export type RepoDecisionManifestSummary = {
+  present: boolean;
+  source: FocusManifestSource;
+  linkedIssuePolicy: FocusManifestLinkedIssuePolicy;
+  issueDiscoveryPolicy: FocusManifestIssueDiscoveryPolicy;
+  wantedPathCount: number;
+  blockedPathCount: number;
+  preferredLabels: string[];
+  publicNotes: string[];
+};
+
+export type RepoOutcomeSummary = {
+  summary: string;
+  outsideContributorMergeRate: number;
+  sampleSize: number;
+  successPatterns: OutcomePattern[];
+  riskPatterns: OutcomePattern[];
+};
+
+export type RepoRecommendationOutcomeFeedback = {
+  signal: AgentRecommendationOutcomeRepoSummary["signal"];
+  total: number;
+  positive: number;
+  negative: number;
+  merged: number;
+  closed: number;
+  stale: number;
+  ignored: number;
+  improved: number;
+  maintainerLaneTotal: number;
+  latestOutcomeAt?: string | null | undefined;
 };
 
 export type DecisionAction = {
@@ -148,6 +228,51 @@ export type DecisionAction = {
   whyThisHelps: string[];
   nextActions: string[];
   publicNextActions: string[];
+};
+
+export type ActionPortfolioScenarioProjection = {
+  source: ContributorOpenPrMonitor["pendingScenarios"][number]["detection"]["source"];
+  pendingMergedPrCount: number;
+  pendingClosedPrCount: number;
+  approvedPrCount: number;
+  expectedOpenPrCountAfterMerge?: number | undefined;
+  notes: string[];
+};
+
+export type ActionPortfolioItem = {
+  bucket: ActionPortfolioBucketName;
+  repoFullName: string;
+  actionKind?: DecisionActionKind | undefined;
+  priorityScore: number;
+  recommendation: DecisionRecommendation;
+  status: "recommended" | "blocked" | "watch";
+  whyNow: string[];
+  scoreabilityImpact: string;
+  riskImpact: string;
+  maintainerImpact: string;
+  blockedBy: string[];
+  rerunWhen: string;
+  publicSafeSummary: string;
+  nextActions: string[];
+  publicNextActions: string[];
+  source: "decision_pack";
+  scenarioProjection?: ActionPortfolioScenarioProjection | undefined;
+};
+
+export type ActionPortfolioBucket = {
+  bucket: ActionPortfolioBucketName;
+  label: string;
+  summary: string;
+  actions: ActionPortfolioItem[];
+};
+
+export type ActionPortfolio = {
+  generatedAt: string;
+  bucketOrder: ActionPortfolioBucketName[];
+  buckets: ActionPortfolioBucket[];
+  topActions: ActionPortfolioItem[];
+  counts: Record<ActionPortfolioBucketName, number>;
+  summary: string;
 };
 
 export type ScoreBlocker = {
@@ -286,8 +411,29 @@ export async function buildAndPersistContributorDecisionPack(env: Env, login: st
     fetchGittensorContributorSnapshot(login),
   ]);
   const repoStats = authoritativeContributorRepoStats(gittensorSnapshot, cachedRepoStats);
-  const issueQualityByRepo = await loadIssueQualityReportMap(env, repositories);
+  await evaluateRecommendationOutcomes(env, login);
+  const [issueQualityByRepo, repoOutcomePatternsByRepo, recommendationOutcomeFeedback] = await Promise.all([
+    loadIssueQualityReportMap(env, repositories),
+    loadRepoOutcomePatternsMap(env, repositories),
+    getAgentRecommendationOutcomeSummary(env, login),
+  ]);
+  const focusManifests = await loadRepoFocusManifests(
+    env,
+    repositories.filter((repo) => repo.isRegistered).map((repo) => repo.fullName),
+  );
   const profile = buildContributorProfile(login, github, contributorPullRequests, contributorIssues, repoStats, gittensorSnapshot);
+  const pullRequestFiles = (
+    await Promise.all(
+      evidenceGraphTouchedRepoFullNames({
+        login,
+        profile,
+        pullRequests: contributorPullRequests,
+        issues: contributorIssues,
+        repoStats,
+        repositories,
+      }).map((repoFullName) => listRepoPullRequestFiles(env, repoFullName)),
+    )
+  ).flat();
   const outcomeHistory = buildContributorOutcomeHistory({
     login,
     profile,
@@ -299,6 +445,7 @@ export async function buildAndPersistContributorDecisionPack(env: Env, login: st
   });
   const fit = buildContributorFit(profile, repositories, allIssues, allPullRequests, syncStates, repoStats, bounties, issueQualityByRepo);
   const scoringProfile = buildContributorScoringProfile({ login, fit, scoringSnapshot });
+  const openPrMonitor = await buildContributorOpenPrMonitor(env, login);
   const pack = buildContributorDecisionPack({
     login,
     profile,
@@ -311,7 +458,14 @@ export async function buildAndPersistContributorDecisionPack(env: Env, login: st
     scoringModelSnapshotId: scoringSnapshot.id,
     contributorPullRequests,
     contributorIssues,
+    repoStats,
+    pullRequestFiles,
+    gittensorSnapshot,
     issueQualityByRepo,
+    openPrMonitor,
+    focusManifests,
+    repoOutcomePatternsByRepo,
+    recommendationOutcomeFeedback,
   });
 
   await upsertContributorEvidence(env, {
@@ -326,6 +480,7 @@ export async function buildAndPersistContributorDecisionPack(env: Env, login: st
       issueDiscoveryReports: scoringProfile.evidence.issueDiscoveryReports,
       languageMatches: scoringProfile.evidence.languageMatches,
       credibilityAssumption: scoringProfile.evidence.credibilityAssumption,
+      evidenceGraph: pack.evidenceGraph as unknown as JsonValue,
     },
   });
   await upsertContributorScoringProfile(env, {
@@ -341,6 +496,15 @@ export async function buildAndPersistContributorDecisionPack(env: Env, login: st
     payload: pack as unknown as Record<string, JsonValue>,
     generatedAt: pack.generatedAt,
   });
+  if (pack.evidenceGraph) {
+    await persistSignalSnapshot(env, {
+      id: crypto.randomUUID(),
+      signalType: CONTRIBUTOR_EVIDENCE_GRAPH_SIGNAL,
+      targetKey: login,
+      payload: pack.evidenceGraph as unknown as Record<string, JsonValue>,
+      generatedAt: pack.evidenceGraph.generatedAt,
+    });
+  }
   return pack;
 }
 
@@ -361,8 +525,16 @@ function buildContributorDecisionPack(args: {
   scoringModelSnapshotId: string;
   contributorPullRequests: Parameters<typeof buildRoleContext>[0]["pullRequests"];
   contributorIssues: Parameters<typeof buildRoleContext>[0]["issues"];
+  repoStats?: ContributorRepoStatRecord[] | undefined;
+  pullRequestFiles?: PullRequestFileRecord[] | undefined;
+  gittensorSnapshot?: Awaited<ReturnType<typeof fetchGittensorContributorSnapshot>> | undefined;
   issueQualityByRepo?: Map<string, IssueQualityReport> | undefined;
+  openPrMonitor: ContributorOpenPrMonitor;
+  focusManifests?: Map<string, FocusManifest> | undefined;
+  repoOutcomePatternsByRepo?: Map<string, RepoOutcomePatterns> | undefined;
+  recommendationOutcomeFeedback?: AgentRecommendationOutcomeSummary | undefined;
 }): ContributorDecisionPack {
+  const recommendationOutcomeFeedback = args.recommendationOutcomeFeedback ?? emptyRecommendationOutcomeFeedback(args.login);
   const registeredRepositories = args.repositories.filter((repo) => repo.isRegistered);
   const syncByRepo = new Map(args.syncStates.map((state) => [state.repoFullName.toLowerCase(), state]));
   const totalsByRepo = new Map(args.totals.map((total) => [total.repoFullName.toLowerCase(), total]));
@@ -383,6 +555,7 @@ function buildContributorDecisionPack(args: {
     }),
   );
   const roleByRepo = new Map(roleContexts.map((role) => [role.repoFullName.toLowerCase(), role]));
+  const recommendationFeedbackByRepo = new Map(recommendationOutcomeFeedback.repos.map((repo) => [repo.repoFullName.toLowerCase(), repo]));
   const repoDecisions = registeredRepositories
     .map((repo) => {
       const key = repo.fullName.toLowerCase();
@@ -395,6 +568,9 @@ function buildContributorDecisionPack(args: {
         languageSet,
         labelHistory,
         issueQuality: issueQualityByRepo.get(key),
+        focusManifest: args.focusManifests?.get(key),
+        repoOutcomePatterns: args.repoOutcomePatternsByRepo?.get(key),
+        recommendationOutcomeFeedback: recommendationFeedbackByRepo.get(key),
       });
     })
     .sort((left, right) => right.priorityScore - left.priorityScore || left.repoFullName.localeCompare(right.repoFullName));
@@ -403,11 +579,35 @@ function buildContributorDecisionPack(args: {
   const dataQuality = {
     signalFidelity: buildSignalFidelity(registeredRepositories.length, args.syncStates, args.syncSegments),
   };
+  const evidenceGraph = buildContributorEvidenceGraph({
+    login: args.login,
+    profile: args.profile,
+    outcomeHistory: args.outcomeHistory,
+    roleContexts,
+    repositories: args.repositories,
+    pullRequests: args.contributorPullRequests,
+    issues: args.contributorIssues,
+    repoStats: args.repoStats,
+    syncStates: args.syncStates,
+    pullRequestFiles: args.pullRequestFiles,
+    gittensorSnapshot: args.gittensorSnapshot,
+  });
+  const monitor = args.openPrMonitor;
+  const monitorNextSteps = monitor.guidance.slice(0, 6);
+  const packNextActions = [...new Set([...monitorNextSteps, ...topActions.flatMap((action) => action.nextActions)])].slice(0, 12);
+  const monitorSummary = monitor.openPrCount > 0 ? ` ${monitor.summary}` : "";
+  const generatedAt = nowIso();
+  const actionPortfolio = buildActionPortfolio({
+    generatedAt,
+    repoDecisions,
+    topActions,
+    openPrMonitor: monitor,
+  });
   return {
     status: "ready",
     source: "computed",
     login: args.login,
-    generatedAt: nowIso(),
+    generatedAt,
     stale: false,
     freshness: "fresh",
     rebuildEnqueued: false,
@@ -425,14 +625,18 @@ function buildContributorDecisionPack(args: {
     opportunities: args.opportunities ?? [],
     repoDecisions,
     topActions,
+    actionPortfolio,
     cleanupFirst: repoDecisions.filter((decision) => decision.recommendation === "cleanup_first").slice(0, 8),
     pursueRepos: repoDecisions.filter((decision) => decision.recommendation === "pursue").slice(0, 8),
     avoidRepos: repoDecisions.filter((decision) => decision.recommendation === "avoid_for_now").slice(0, 8),
     maintainerLaneRepos: repoDecisions.filter((decision) => decision.recommendation === "maintainer_lane").slice(0, 8),
     scoreBlockers,
+    recommendationOutcomeFeedback,
+    evidenceGraph,
     dataQuality,
-    summary: `${args.login} has ${topActions.length} ranked action(s), ${scoreBlockers.length} scoreability blocker(s), and ${repoDecisions.length} registered repo decision(s).`,
-    nextActions: [...new Set(topActions.flatMap((action) => action.nextActions))].slice(0, 10),
+    summary: `${args.login} has ${topActions.length} ranked action(s), ${scoreBlockers.length} scoreability blocker(s), and ${repoDecisions.length} registered repo decision(s).${monitorSummary}${recommendationFeedbackSummary(recommendationOutcomeFeedback)}`,
+    nextActions: packNextActions,
+    openPrMonitor: monitor,
   };
 }
 
@@ -445,6 +649,9 @@ function buildRepoDecision(args: {
   languageSet?: Set<string> | undefined;
   labelHistory?: Set<string> | undefined;
   issueQuality?: IssueQualityReport | undefined;
+  focusManifest?: FocusManifest | undefined;
+  repoOutcomePatterns?: RepoOutcomePatterns | undefined;
+  recommendationOutcomeFeedback?: AgentRecommendationOutcomeRepoSummary | undefined;
 }): RepoDecision {
   const lane = buildLaneAdvice(args.repo, args.repo.fullName);
   const config = args.repo.registryConfig;
@@ -464,6 +671,7 @@ function buildRepoDecision(args: {
   };
   const blockers = scoreBlockersFor(args.repo.fullName, lane.lane, args.roleContext, args.outcome);
   const issueQuality = summarizeIssueQuality(args.issueQuality);
+  const recommendationFeedback = summarizeRecommendationOutcomeFeedback(args.recommendationOutcomeFeedback);
   const riskReasons = [
     ...(queue.openPullRequests >= 25 ? [`Repo queue is busy with ${queue.openPullRequests} open PR(s).`] : []),
     ...(queue.openIssues >= 100 ? [`Repo issue queue is large with ${queue.openIssues} open issue(s).`] : []),
@@ -474,7 +682,7 @@ function buildRepoDecision(args: {
     ...(issueQuality && issueQuality.readyCount === 0 && (lane.lane === "issue_discovery" || lane.lane === "split") ? ["No ready issue-quality candidate is cached for this repo."] : []),
   ];
   const recommendation = recommendationFor(lane.lane, args.roleContext, args.outcome, blockers);
-  const priorityScore = clamp(priorityFor(recommendation, rewardUpside, args.outcome, queue, blockers) + issueQualityPriorityAdjustment(lane.lane, issueQuality), 0, 100);
+  const priorityScore = clamp(priorityFor(recommendation, rewardUpside, args.outcome, queue, blockers) + issueQualityPriorityAdjustment(lane.lane, issueQuality) + recommendationOutcomePriorityAdjustment(recommendationFeedback), 0, 100);
   const syncLanguage = args.syncState?.primaryLanguage ?? null;
   const languageMatch: LanguageMatch = {
     language: syncLanguage,
@@ -494,6 +702,24 @@ function buildRepoDecision(args: {
     labelFit,
     issueQuality,
   };
+  const manifest = args.focusManifest;
+  const manifestSummary = manifest && manifest.present ? buildRepoDecisionManifestSummary(manifest) : undefined;
+  const manifestReasons = manifest && manifest.present ? buildRepoDecisionManifestReasons(manifest) : { whyThisHelps: [], nextActions: [], publicNextActions: [], riskReasons: [] };
+  const repoOutcomePatterns = summarizeRepoOutcomePatterns(args.repoOutcomePatterns);
+  const outcomeRiskLines = args.roleContext.maintainerLane ? [] : (repoOutcomePatterns?.riskPatterns ?? []).slice(0, 2).map((pattern) => pattern.detail);
+  const outcomeSuccessLines = recommendation === "pursue" ? (repoOutcomePatterns?.successPatterns ?? []).slice(0, 1).map((pattern) => pattern.detail) : [];
+  const recommendationFeedbackRiskLines = args.roleContext.maintainerLane ? [] : recommendationFeedbackRiskReasons(recommendationFeedback);
+  const recommendationFeedbackSuccessLines = recommendationFeedbackWhyThisHelps(recommendationFeedback);
+  const tradeoffSummary = buildRepoDecisionTradeoffSummary({
+    repoFullName: args.repo.fullName,
+    lane: lane.lane,
+    queue,
+    roleContext: args.roleContext,
+    outcome: args.outcome,
+    issueQuality,
+    manifestSummary,
+    blockers,
+  });
   return {
     repoFullName: args.repo.fullName,
     recommendation,
@@ -506,11 +732,311 @@ function buildRepoDecision(args: {
     languageMatch,
     labelFit,
     scoreBlockers: blockers,
-    riskReasons,
-    whyThisHelps: whyThisHelpsFor(recommendation, copyContext),
-    nextActions: nextActionsFor(recommendation, copyContext),
-    publicNextActions: publicNextActionsFor(recommendation, copyContext),
+    repoOutcomePatterns,
+    recommendationOutcomeFeedback: recommendationFeedback,
+    riskReasons: [...new Set([...riskReasons, ...manifestReasons.riskReasons, ...outcomeRiskLines, ...recommendationFeedbackRiskLines])],
+    whyThisHelps: [...new Set([...whyThisHelpsFor(recommendation, copyContext), ...manifestReasons.whyThisHelps, ...outcomeSuccessLines, ...recommendationFeedbackSuccessLines])],
+    nextActions: [...new Set([...nextActionsFor(recommendation, copyContext), ...manifestReasons.nextActions])],
+    publicNextActions: [...new Set([...publicNextActionsFor(recommendation, copyContext), ...manifestReasons.publicNextActions])],
     issueQuality,
+    manifestSummary,
+    tradeoffSummary,
+  };
+}
+
+function buildRepoDecisionTradeoffSummary(args: {
+  repoFullName: string;
+  lane: string;
+  queue: RepoDecision["queue"];
+  roleContext: RoleContext;
+  outcome: ContributorOutcomeHistory["repoOutcomes"][number] | undefined;
+  issueQuality: IssueQualitySummary | undefined;
+  manifestSummary: RepoDecisionManifestSummary | undefined;
+  blockers: ScoreBlocker[];
+}): RepoDecisionTradeoffSummary {
+  const directPrFit = tradeoffDimension(...directPrFitFor(args));
+  const issueDiscoveryFit = tradeoffDimension(...issueDiscoveryFitFor(args));
+  const maintainerBurden = tradeoffDimension(...maintainerBurdenFor(args));
+  const queuePressure = tradeoffDimension(...queuePressureFor(args.queue));
+  const policyConfidence = tradeoffDimension(...policyConfidenceFor(args));
+  const publicSummary = sanitizeTradeoffPublicText(
+    `${args.repoFullName}: ${tradeoffPrimaryPath(directPrFit.level, issueDiscoveryFit.level)}. Maintainer burden is ${maintainerBurden.level}; queue pressure is ${queuePressure.level}; policy confidence is ${policyConfidence.level}.`,
+  );
+  return { directPrFit, issueDiscoveryFit, maintainerBurden, queuePressure, policyConfidence, publicSummary };
+}
+
+function directPrFitFor(args: {
+  lane: string;
+  roleContext: RoleContext;
+  outcome: ContributorOutcomeHistory["repoOutcomes"][number] | undefined;
+  blockers: ScoreBlocker[];
+}): [RepoDecisionFitLevel, string, string[]] {
+  if (args.roleContext.maintainerLane) {
+    return ["weak", "Direct PR fit is weak for normal contributor work because this is a maintainer-owned lane.", ["Treat this repo as owner health and intake work rather than a normal outside-contributor target."]];
+  }
+  if (args.lane === "inactive" || args.lane === "unknown") {
+    return ["blocked", "Direct PR fit is blocked until the repo has a clear active lane.", ["Refresh registry data or choose a repo with an active contribution lane."]];
+  }
+  if (args.lane === "issue_discovery") {
+    return ["blocked", "Direct PR fit is blocked because the repo is configured for issue-discovery flow.", ["Use actionable issue reports instead of implementation-first work here."]];
+  }
+  if (args.blockers.some((blocker) => blocker.code === "open_pr_pressure") || (args.outcome?.openPullRequests ?? 0) >= 3) {
+    return ["weak", "Direct PR fit is weak until existing contributor work is cleaned up.", ["Resolve open contributor work before adding more review load."]];
+  }
+  if (args.lane === "split") {
+    return ["moderate", "Direct PR fit is moderate because the repo supports direct PRs and issue discovery.", ["Pick direct PR work only when the change is narrow, tested, and clearly scoped."]];
+  }
+  return ["strong", "Direct PR fit is strong for focused, well-tested implementation work.", ["Use direct PR work when the change is narrow and review-ready."]];
+}
+
+function issueDiscoveryFitFor(args: {
+  lane: string;
+  issueQuality: IssueQualitySummary | undefined;
+  manifestSummary: RepoDecisionManifestSummary | undefined;
+}): [RepoDecisionFitLevel, string, string[]] {
+  if (args.lane === "inactive" || args.lane === "unknown") {
+    return ["blocked", "Issue-discovery fit is blocked until the repo has a clear active lane.", ["Refresh registry data or choose a repo with an active contribution lane."]];
+  }
+  if (args.manifestSummary?.issueDiscoveryPolicy === "discouraged") {
+    return ["weak", "Issue-discovery fit is weak because the maintainer focus policy discourages new issue reports.", ["Prefer direct fixes or repo-owner intake work."]];
+  }
+  if (args.issueQuality && args.issueQuality.readyCount === 0 && args.issueQuality.doNotUseCount + args.issueQuality.needsProofCount + args.issueQuality.holdCount > 0) {
+    return ["weak", "Issue-discovery fit is weak because cached candidates are not ready to use.", ["Only file new reports with clear evidence and low duplicate risk."]];
+  }
+  if (args.lane === "issue_discovery") {
+    return ["strong", "Issue-discovery fit is strong for high-confidence, actionable reports.", ["Use this lane only for non-duplicate reports with clear maintainer value."]];
+  }
+  if (args.lane === "split") {
+    return args.issueQuality && args.issueQuality.readyCount > 0
+      ? ["strong", "Issue-discovery fit is strong because the split lane has ready issue-quality candidates.", ["Use ready candidates before adding new public reports."]]
+      : ["moderate", "Issue-discovery fit is moderate because the repo supports both issue reports and direct PRs.", ["Choose issue discovery only when the report is actionable and not a duplicate."]];
+  }
+  if (args.manifestSummary?.issueDiscoveryPolicy === "encouraged") {
+    return ["moderate", "Issue-discovery fit is moderate because maintainer focus policy welcomes high-quality reports.", ["Keep reports actionable, narrow, and evidence-backed."]];
+  }
+  return ["weak", "Issue-discovery fit is weak because the repo is direct-PR-first.", ["Prefer direct fixes over new issue reports."]];
+}
+
+function maintainerBurdenFor(args: {
+  queue: RepoDecision["queue"];
+  outcome: ContributorOutcomeHistory["repoOutcomes"][number] | undefined;
+  issueQuality: IssueQualitySummary | undefined;
+}): [RepoDecisionPressureLevel, string, string[]] {
+  const level = pressureLevel(args.queue);
+  const contributorOpenPrs = args.outcome?.openPullRequests ?? 0;
+  const adjustedLevel = contributorOpenPrs >= 5 ? "critical" : contributorOpenPrs >= 3 && level === "low" ? "medium" : level;
+  const duplicateRisk = (args.issueQuality?.doNotUseCount ?? 0) > 0;
+  const finalLevel = duplicateRisk && adjustedLevel === "low" ? "medium" : adjustedLevel;
+  return [
+    finalLevel,
+    finalLevel === "low"
+      ? "Maintainer burden is low for additional narrow work."
+      : finalLevel === "medium"
+        ? "Maintainer burden is medium; new work should be especially narrow and easy to review."
+        : finalLevel === "high"
+          ? "Maintainer burden is high; cleanup and issue quality matter before adding more work."
+          : "Maintainer burden is critical; avoid adding review load until the queue improves.",
+    [
+      finalLevel === "low" ? "Queue and contributor-specific pressure are low." : "Queue or contributor-specific pressure can add review friction.",
+      ...(duplicateRisk ? ["Some cached issue candidates are duplicate-prone or already covered."] : []),
+    ],
+  ];
+}
+
+function queuePressureFor(queue: RepoDecision["queue"]): [RepoDecisionPressureLevel, string, string[]] {
+  const level = pressureLevel(queue);
+  return [
+    level,
+    level === "low"
+      ? "Queue pressure is low."
+      : level === "medium"
+        ? "Queue pressure is medium."
+        : level === "high"
+          ? "Queue pressure is high."
+          : "Queue pressure is critical.",
+    [
+      level === "low"
+        ? "Cached queue counts do not show a busy review backlog."
+        : "Cached queue counts show enough open work to affect the recommended lane.",
+    ],
+  ];
+}
+
+function policyConfidenceFor(args: {
+  lane: string;
+  manifestSummary: RepoDecisionManifestSummary | undefined;
+}): [RepoDecisionPolicyConfidence, string, string[]] {
+  if (args.lane === "inactive" || args.lane === "unknown") {
+    return ["low", "Policy confidence is low because the active repo lane is unavailable.", ["Refresh registry data before relying on this recommendation."]];
+  }
+  if (args.manifestSummary?.issueDiscoveryPolicy === "discouraged" && (args.lane === "issue_discovery" || args.lane === "split")) {
+    return ["low", "Policy confidence is low because registry lane and maintainer focus policy point in different directions.", ["Ask the maintainer to clarify whether issue reports should be accepted."]];
+  }
+  if (args.manifestSummary?.issueDiscoveryPolicy === "encouraged" && args.lane === "direct_pr") {
+    return ["medium", "Policy confidence is medium because maintainer focus policy welcomes reports while the registry lane is direct-PR-first.", ["Prefer direct fixes unless the issue report is clearly actionable."]];
+  }
+  if (args.manifestSummary?.present) {
+    return ["high", "Policy confidence is high because registry lane and maintainer focus policy are aligned.", ["Follow the maintainer focus policy when choosing work."]];
+  }
+  return ["medium", "Policy confidence is medium because registry lane is available but no maintainer focus policy is cached.", ["Use registry lane guidance and rerun after focus policy is added."]];
+}
+
+function pressureLevel(queue: RepoDecision["queue"]): RepoDecisionPressureLevel {
+  if (queue.openPullRequests >= 25 || queue.openIssues >= 250) return "critical";
+  if (queue.openPullRequests >= 10 || queue.openIssues >= 100) return "high";
+  if (queue.openPullRequests >= 3 || queue.openIssues >= 50) return "medium";
+  return "low";
+}
+
+function tradeoffPrimaryPath(directPrFit: RepoDecisionFitLevel, issueDiscoveryFit: RepoDecisionFitLevel): string {
+  if (directPrFit === "strong" && (issueDiscoveryFit === "strong" || issueDiscoveryFit === "moderate")) return "direct PR work is the clearest path, with issue discovery available for strong reports";
+  if (directPrFit === "strong") return "direct PR work is the clearest path";
+  if (issueDiscoveryFit === "strong" && directPrFit === "moderate") return "both direct PR work and issue discovery can fit, but issue discovery is currently clearer";
+  if (issueDiscoveryFit === "strong") return "issue discovery is the clearest path";
+  if (directPrFit === "moderate" && issueDiscoveryFit === "moderate") return "both paths are possible with careful scope";
+  if (directPrFit === "moderate") return "direct PR work is possible with careful scope";
+  if (issueDiscoveryFit === "moderate") return "issue discovery is possible with careful evidence";
+  return "wait or choose a cleaner repo";
+}
+
+function tradeoffDimension<TLevel extends string>(level: TLevel, summary: string, reasons: string[]): RepoDecisionTradeoffDimension<TLevel> {
+  return {
+    level,
+    summary: sanitizeTradeoffPublicText(summary),
+    reasons: reasons.map(sanitizeTradeoffPublicText).filter(Boolean).slice(0, 4),
+  };
+}
+
+/**
+ * Public-safe per-repo summary of a maintainer's focus manifest, intentionally excluding the
+ * manifest's private `maintainerNotes`. The contributor-facing decision pack must never carry
+ * maintainer-private reviewer text.
+ */
+function buildRepoDecisionManifestSummary(manifest: FocusManifest): RepoDecisionManifestSummary {
+  return {
+    present: true,
+    source: manifest.source,
+    linkedIssuePolicy: manifest.linkedIssuePolicy,
+    issueDiscoveryPolicy: manifest.issueDiscoveryPolicy,
+    wantedPathCount: manifest.wantedPaths.length,
+    blockedPathCount: manifest.blockedPaths.length,
+    preferredLabels: manifest.preferredLabels.slice(0, 8),
+    publicNotes: manifest.publicNotes.filter(isFocusManifestPublicSafe).slice(0, 4),
+  };
+}
+
+function buildRepoDecisionManifestReasons(manifest: FocusManifest): { whyThisHelps: string[]; nextActions: string[]; publicNextActions: string[]; riskReasons: string[] } {
+  const whyThisHelps: string[] = [];
+  const nextActions: string[] = [];
+  const publicNextActions: string[] = [];
+  const riskReasons: string[] = [];
+  if (manifest.wantedPaths.length > 0) {
+    whyThisHelps.push(`Maintainer focus manifest declares ${manifest.wantedPaths.length} wanted path(s) for this repo.`);
+    publicNextActions.push("Target the maintainer-wanted areas for this repo when picking a change.");
+  }
+  if (manifest.blockedPaths.length > 0) {
+    riskReasons.push(`Maintainer focus manifest blocks ${manifest.blockedPaths.length} path pattern(s) for this repo.`);
+    publicNextActions.push("Avoid the maintainer-blocked areas for this repo.");
+  }
+  if (manifest.linkedIssuePolicy === "required") {
+    nextActions.push("Link a tracked issue on every PR; the maintainer's manifest requires it.");
+    publicNextActions.push("Link a tracked issue on every PR; the maintainer requires linked issues.");
+  } else if (manifest.linkedIssuePolicy === "preferred") {
+    publicNextActions.push("Prefer linking a tracked issue; the maintainer prefers linked issues.");
+  }
+  if (manifest.preferredLabels.length > 0) {
+    publicNextActions.push(`Use a maintainer-preferred label when applicable (${manifest.preferredLabels.slice(0, 3).join(", ")}).`);
+  }
+  if (manifest.issueDiscoveryPolicy === "discouraged") {
+    publicNextActions.push("Prefer direct fixes over new issue-discovery reports here.");
+  } else if (manifest.issueDiscoveryPolicy === "encouraged") {
+    publicNextActions.push("High-quality issue-discovery reports are welcomed by the maintainer.");
+  }
+  for (const note of manifest.publicNotes) {
+    if (isFocusManifestPublicSafe(note)) publicNextActions.push(note);
+  }
+  return {
+    whyThisHelps,
+    nextActions,
+    publicNextActions: [...new Set(publicNextActions)].filter(isFocusManifestPublicSafe),
+    riskReasons,
+  };
+}
+
+function summarizeRepoOutcomePatterns(patterns: RepoOutcomePatterns | undefined): RepoOutcomeSummary | undefined {
+  if (!patterns) return undefined;
+  if (patterns.sampleSize < 1 && patterns.successPatterns.length === 0 && patterns.riskPatterns.length === 0) return undefined;
+  return {
+    summary: patterns.summary,
+    outsideContributorMergeRate: patterns.outsideContributorMergeRate,
+    sampleSize: patterns.sampleSize,
+    successPatterns: patterns.successPatterns.slice(0, 3),
+    riskPatterns: patterns.riskPatterns.slice(0, 3),
+  };
+}
+
+function summarizeRecommendationOutcomeFeedback(feedback: AgentRecommendationOutcomeRepoSummary | undefined): RepoRecommendationOutcomeFeedback | undefined {
+  if (!feedback || feedback.total === 0) return undefined;
+  return {
+    signal: feedback.signal,
+    total: feedback.total,
+    positive: feedback.positive,
+    negative: feedback.negative,
+    merged: feedback.merged,
+    closed: feedback.closed,
+    stale: feedback.stale,
+    ignored: feedback.ignored,
+    improved: feedback.improved,
+    maintainerLaneTotal: feedback.maintainerLaneTotal,
+    latestOutcomeAt: feedback.latestOutcomeAt,
+  };
+}
+
+function recommendationFeedbackWhyThisHelps(feedback: RepoRecommendationOutcomeFeedback | undefined): string[] {
+  if (!feedback || feedback.positive === 0) return [];
+  return [`Private recommendation feedback has ${feedback.positive} positive contributor-lane outcome(s) for this repo (${feedback.merged} merged, ${feedback.improved} improved, ${feedback.total - feedback.negative - feedback.merged - feedback.improved} accepted).`];
+}
+
+function recommendationFeedbackRiskReasons(feedback: RepoRecommendationOutcomeFeedback | undefined): string[] {
+  if (!feedback || feedback.negative === 0) return [];
+  return [`Private recommendation feedback has ${feedback.negative} unresolved or negative contributor-lane outcome(s) for this repo (${feedback.closed} closed, ${feedback.stale} stale, ${feedback.ignored} ignored).`];
+}
+
+function recommendationOutcomePriorityAdjustment(feedback: RepoRecommendationOutcomeFeedback | undefined): number {
+  if (!feedback) return 0;
+  if (feedback.signal === "positive") return Math.min(8, feedback.positive * 2);
+  if (feedback.signal === "negative") return -Math.min(12, feedback.negative * 2);
+  if (feedback.signal === "mixed") return -Math.min(4, feedback.negative);
+  return 0;
+}
+
+function recommendationFeedbackSummary(feedback: AgentRecommendationOutcomeSummary): string {
+  if (feedback.totals.total === 0 && feedback.totals.maintainerLaneTotal === 0) return "";
+  return ` Recommendation feedback: ${feedback.totals.positive} positive, ${feedback.totals.negative} negative, ${feedback.totals.maintainerLaneTotal} maintainer-lane separated.`;
+}
+
+function emptyRecommendationOutcomeFeedback(login: string): AgentRecommendationOutcomeSummary {
+  return {
+    login,
+    generatedAt: nowIso(),
+    windowDays: 90,
+    totals: {
+      total: 0,
+      accepted: 0,
+      rejected: 0,
+      ignored: 0,
+      stale: 0,
+      merged: 0,
+      closed: 0,
+      improved: 0,
+      positive: 0,
+      negative: 0,
+      maintainerLaneTotal: 0,
+    },
+    states: [],
+    repos: [],
+    maintainerLane: { total: 0, states: [] },
+    privateSummary: `${login} has no evaluated recommendation outcomes in the last 90 day(s).`,
   };
 }
 
@@ -580,6 +1106,245 @@ function action(kind: DecisionActionKind, decision: RepoDecision, priorityScore:
     nextActions: decision.nextActions,
     publicNextActions: decision.publicNextActions,
   };
+}
+
+const ACTION_PORTFOLIO_BUCKET_ORDER: ActionPortfolioBucketName[] = ["cleanup", "wait", "direct_pr", "issue_discovery", "avoid", "maintainer_lane"];
+
+function buildActionPortfolio(args: {
+  generatedAt: string;
+  repoDecisions: RepoDecision[];
+  topActions: DecisionAction[];
+  openPrMonitor?: ContributorOpenPrMonitor | undefined;
+}): ActionPortfolio {
+  const repoDecisions = args.repoDecisions.filter(isPortfolioDecision);
+  const decisionByRepo = new Map(repoDecisions.map((decision) => [decision.repoFullName.toLowerCase(), decision]));
+  const scenarioByRepo = new Map((args.openPrMonitor?.pendingScenarios ?? []).map((scenario) => [scenario.repoFullName.toLowerCase(), scenario.detection]));
+  const items = [
+    ...args.topActions
+      .filter((entry) => typeof entry.repoFullName === "string")
+      .map((entry) => {
+        const decision = decisionByRepo.get(entry.repoFullName.toLowerCase());
+        return decision ? portfolioItemFromAction(entry, decision, scenarioByRepo.get(entry.repoFullName.toLowerCase())) : null;
+      })
+      .filter((entry): entry is ActionPortfolioItem => Boolean(entry)),
+    ...repoDecisions
+      .filter((decision) => decision.recommendation === "avoid_for_now")
+      .map((decision) => portfolioItemFromDecision(decision, "avoid", scenarioByRepo.get(decision.repoFullName.toLowerCase()))),
+  ];
+  const uniqueItems = dedupePortfolioItems(items).sort(comparePortfolioItems);
+  const buckets = ACTION_PORTFOLIO_BUCKET_ORDER.map((bucket) => {
+    const actions = uniqueItems.filter((entry) => entry.bucket === bucket);
+    return {
+      bucket,
+      label: portfolioBucketLabel(bucket),
+      summary: portfolioBucketSummary(bucket, actions),
+      actions,
+    } satisfies ActionPortfolioBucket;
+  });
+  const counts = Object.fromEntries(buckets.map((bucket) => [bucket.bucket, bucket.actions.length])) as Record<ActionPortfolioBucketName, number>;
+  const activeBuckets = buckets.filter((bucket) => bucket.actions.length > 0);
+  return {
+    generatedAt: args.generatedAt,
+    bucketOrder: ACTION_PORTFOLIO_BUCKET_ORDER,
+    buckets,
+    topActions: uniqueItems.slice(0, 12),
+    counts,
+    summary:
+      activeBuckets.length === 0
+        ? "No portfolio actions are currently available from the decision pack."
+        : `Portfolio has ${uniqueItems.length} action(s) across ${activeBuckets.length} active bucket(s): ${activeBuckets.map((bucket) => `${bucket.bucket} ${bucket.actions.length}`).join(", ")}.`,
+  };
+}
+
+function portfolioItemFromAction(
+  actionEntry: DecisionAction,
+  decision: RepoDecision,
+  scenario: ContributorOpenPrMonitor["pendingScenarios"][number]["detection"] | undefined,
+): ActionPortfolioItem {
+  const bucket = bucketForAction(actionEntry);
+  return portfolioItem({
+    bucket,
+    actionKind: actionEntry.actionKind,
+    decision,
+    priorityScore: Number.isFinite(actionEntry.priorityScore) ? actionEntry.priorityScore : decision.priorityScore,
+    whyNow: [...safeStringArray(actionEntry.whyThisHelps), ...safeStringArray(decision.riskReasons), ...scenarioWhyNow(scenario)].slice(0, 8),
+    nextActions: safeStringArray(actionEntry.nextActions).length > 0 ? safeStringArray(actionEntry.nextActions) : safeStringArray(decision.nextActions),
+    publicNextActions: safeStringArray(actionEntry.publicNextActions).length > 0 ? safeStringArray(actionEntry.publicNextActions) : safeStringArray(decision.publicNextActions),
+    scenario,
+  });
+}
+
+function portfolioItemFromDecision(
+  decision: RepoDecision,
+  bucket: ActionPortfolioBucketName,
+  scenario: ContributorOpenPrMonitor["pendingScenarios"][number]["detection"] | undefined,
+): ActionPortfolioItem {
+  return portfolioItem({
+    bucket,
+    decision,
+    priorityScore: decision.priorityScore,
+    whyNow: [...safeStringArray(decision.whyThisHelps), ...safeStringArray(decision.riskReasons), ...scenarioWhyNow(scenario)].slice(0, 8),
+    nextActions: safeStringArray(decision.nextActions),
+    publicNextActions: safeStringArray(decision.publicNextActions),
+    scenario,
+  });
+}
+
+function portfolioItem(args: {
+  bucket: ActionPortfolioBucketName;
+  actionKind?: DecisionActionKind | undefined;
+  decision: RepoDecision;
+  priorityScore: number;
+  whyNow: string[];
+  nextActions: string[];
+  publicNextActions: string[];
+  scenario?: ContributorOpenPrMonitor["pendingScenarios"][number]["detection"] | undefined;
+}): ActionPortfolioItem {
+  return {
+    bucket: args.bucket,
+    repoFullName: args.decision.repoFullName,
+    actionKind: args.actionKind,
+    priorityScore: args.priorityScore,
+    recommendation: args.decision.recommendation,
+    status: portfolioStatusFor(args.decision, args.bucket),
+    whyNow: args.whyNow.length > 0 ? args.whyNow : [`${args.decision.repoFullName}: current decision-pack signals place this repo in ${args.bucket}.`],
+    scoreabilityImpact: portfolioScoreabilityImpact(args.decision, args.bucket),
+    riskImpact: safeStringArray(args.decision.riskReasons)[0] ?? "No major repo-specific risk is visible in the current decision pack.",
+    maintainerImpact: portfolioMaintainerImpact(args.decision, args.bucket),
+    blockedBy: safeScoreBlockers(args.decision).map((blocker) => blocker.code),
+    rerunWhen: portfolioRerunWhen(args.decision, args.bucket),
+    publicSafeSummary: sanitizePortfolioPublicSummary(args.publicNextActions[0] ?? `${args.decision.repoFullName}: Use Gittensory preflight before posting public PR context.`),
+    nextActions: args.nextActions,
+    publicNextActions: args.publicNextActions.map(sanitizePortfolioPublicSummary),
+    source: "decision_pack",
+    scenarioProjection: args.scenario ? portfolioScenarioProjection(args.scenario) : undefined,
+  };
+}
+
+function bucketForAction(actionEntry: DecisionAction): ActionPortfolioBucketName {
+  if (actionEntry.actionKind === "cleanup_existing_prs") return "cleanup";
+  if (actionEntry.actionKind === "land_existing_prs") return "wait";
+  if (actionEntry.actionKind === "file_issue_discovery") return "issue_discovery";
+  if (actionEntry.actionKind === "maintainer_lane_improve_repo" || actionEntry.actionKind === "maintainer_cut_readiness") return "maintainer_lane";
+  return "direct_pr";
+}
+
+function portfolioStatusFor(decision: RepoDecision, bucket: ActionPortfolioBucketName): ActionPortfolioItem["status"] {
+  if (bucket === "avoid" || bucket === "wait") return "watch";
+  if (safeScoreBlockers(decision).some((blocker) => blocker.severity === "critical")) return "blocked";
+  return "recommended";
+}
+
+function portfolioScoreabilityImpact(decision: RepoDecision, bucket: ActionPortfolioBucketName): string {
+  if (bucket === "cleanup") return "Resolving open PR pressure can unblock scoreability before opening new work.";
+  if (bucket === "wait") return "Wait for current PR outcomes or close stale work before adding more queue pressure.";
+  if (bucket === "issue_discovery") return "Direct PR scoreability is not the target; issue-discovery evidence is the useful lane.";
+  if (bucket === "maintainer_lane") return "Maintainer-lane work is separated from outside-contributor scoreability evidence.";
+  const blockers = safeScoreBlockers(decision);
+  if (blockers.length > 0) return `Blocked by ${blockers.map((blocker) => blocker.code).join(", ")}.`;
+  return `Lane fit: ${decision.lane?.lane ?? "unknown"}; direct PR share ${decision.rewardUpside?.directPrShare ?? 0}.`;
+}
+
+function portfolioMaintainerImpact(decision: RepoDecision, bucket: ActionPortfolioBucketName): string {
+  if (bucket === "cleanup") return "Cleanup lowers active-review pressure before adding more queue load.";
+  if (bucket === "wait") return "Waiting on merge-ready or stale PR outcomes avoids noisy parallel work.";
+  if (bucket === "maintainer_lane") return "Repo-owner work should improve intake quality and contributor routing.";
+  if (bucket === "avoid") return "Avoiding this repo keeps maintainer attention away from low-fit or blocked submissions.";
+  return "Narrow, validated work with clear lane fit is easier to review.";
+}
+
+function portfolioRerunWhen(decision: RepoDecision, bucket: ActionPortfolioBucketName): string {
+  if (bucket === "cleanup" || bucket === "wait") return "Rerun after open PRs merge, close, or are withdrawn.";
+  if (safeScoreBlockers(decision).length > 0) return "Rerun after the listed scoreability blockers change.";
+  return "Rerun before opening a PR or when repo queue/registry signals change.";
+}
+
+function scenarioWhyNow(scenario: ContributorOpenPrMonitor["pendingScenarios"][number]["detection"] | undefined): string[] {
+  if (!scenario) return [];
+  return scenario.scenarioNotes.slice(0, 2).map((note) => `Scenario projection: ${note}`);
+}
+
+function portfolioScenarioProjection(
+  scenario: ContributorOpenPrMonitor["pendingScenarios"][number]["detection"],
+): ActionPortfolioScenarioProjection {
+  return {
+    source: scenario.source,
+    pendingMergedPrCount: scenario.pendingMergedPrCount,
+    pendingClosedPrCount: scenario.pendingClosedPrCount,
+    approvedPrCount: scenario.approvedPrCount,
+    ...(scenario.expectedOpenPrCountAfterMerge !== undefined ? { expectedOpenPrCountAfterMerge: scenario.expectedOpenPrCountAfterMerge } : {}),
+    notes: scenario.scenarioNotes.slice(0, 4),
+  };
+}
+
+function portfolioBucketLabel(bucket: ActionPortfolioBucketName): string {
+  if (bucket === "cleanup") return "Cleanup first";
+  if (bucket === "wait") return "Wait or land existing work";
+  if (bucket === "direct_pr") return "Direct PR opportunities";
+  if (bucket === "issue_discovery") return "Issue discovery";
+  if (bucket === "avoid") return "Avoid for now";
+  return "Maintainer lane";
+}
+
+function portfolioBucketSummary(bucket: ActionPortfolioBucketName, actions: ActionPortfolioItem[]): string {
+  if (actions.length === 0) return `No ${portfolioBucketLabel(bucket).toLowerCase()} actions are currently recommended.`;
+  const topRepo = actions[0]?.repoFullName ?? "repo";
+  if (bucket === "cleanup") return `${actions.length} cleanup action(s), led by ${topRepo}.`;
+  if (bucket === "wait") return `${actions.length} wait/land action(s), led by ${topRepo}.`;
+  if (bucket === "direct_pr") return `${actions.length} direct-PR action(s), led by ${topRepo}.`;
+  if (bucket === "issue_discovery") return `${actions.length} issue-discovery action(s), led by ${topRepo}.`;
+  if (bucket === "avoid") return `${actions.length} repo(s) should be avoided for now, led by ${topRepo}.`;
+  return `${actions.length} maintainer-lane action(s), led by ${topRepo}.`;
+}
+
+function dedupePortfolioItems(items: ActionPortfolioItem[]): ActionPortfolioItem[] {
+  const seen = new Set<string>();
+  const deduped: ActionPortfolioItem[] = [];
+  for (const item of items) {
+    const key = `${item.bucket}:${item.repoFullName.toLowerCase()}:${item.actionKind ?? item.recommendation}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+  }
+  return deduped;
+}
+
+function comparePortfolioItems(left: ActionPortfolioItem, right: ActionPortfolioItem): number {
+  return (
+    ACTION_PORTFOLIO_BUCKET_ORDER.indexOf(left.bucket) - ACTION_PORTFOLIO_BUCKET_ORDER.indexOf(right.bucket) ||
+    right.priorityScore - left.priorityScore ||
+    left.repoFullName.localeCompare(right.repoFullName) ||
+    (left.actionKind ?? "").localeCompare(right.actionKind ?? "")
+  );
+}
+
+function isPortfolioDecision(value: RepoDecision): boolean {
+  return typeof value.repoFullName === "string" && typeof value.recommendation === "string";
+}
+
+function safeStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function safeScoreBlockers(decision: RepoDecision): ScoreBlocker[] {
+  return Array.isArray(decision.scoreBlockers) ? decision.scoreBlockers : [];
+}
+
+function sanitizePortfolioPublicSummary(value: string): string {
+  return value
+    .replace(/\b(reward|payout|farming|estimated score|public score estimate|raw trust score|trust score|scoreability|wallet|hotkey|coldkey|private reviewability)\b/gi, "private signal")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sanitizeTradeoffPublicText(value: string): string {
+  return value
+    .replace(
+      /\b(wallet|hotkey|coldkey|seed phrase|mnemonic|private key|raw[-\s]?trust|trust[-\s]?score|scoreability|score[-\s]?estimate|estimated[-\s]?score|public[-\s]?score[-\s]?(?:estimate|prediction)|reward|reward[-\s]?estimate|payout|farming(?:[-\s]?language)?|private[-\s]?reviewability|private[-\s]?scoreability)\b/gi,
+      "private context",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 type RepoCopyContext = {
@@ -715,19 +1480,31 @@ function sanitizeOfficialStats(profile: ContributorProfile): ContributorDecision
 
 function withSnapshotMetadata(snapshot: SignalSnapshotRecord): ContributorDecisionPack {
   const payload = snapshot.payload as unknown as ContributorDecisionPack;
+  const login = payload.login ?? snapshot.targetKey;
   const generatedAt = snapshot.generatedAt ?? payload.generatedAt ?? nowIso();
   const ageSeconds = Math.max(0, Math.floor(snapshotAgeMs(generatedAt) / 1000));
   const stale = snapshotAgeMs(generatedAt) > DECISION_PACK_MAX_AGE_MS;
+  const actionPortfolio =
+    (payload as Partial<ContributorDecisionPack>).actionPortfolio ??
+    buildActionPortfolio({
+      generatedAt,
+      repoDecisions: payload.repoDecisions ?? [],
+      topActions: payload.topActions ?? [],
+      openPrMonitor: payload.openPrMonitor,
+    });
   return {
     ...payload,
     status: "ready",
     source: "snapshot",
+    login,
     generatedAt,
     snapshotAgeSeconds: ageSeconds,
     stale,
     freshness: stale ? "stale" : "fresh",
     rebuildEnqueued: false,
     opportunities: payload.opportunities ?? [],
+    actionPortfolio,
+    recommendationOutcomeFeedback: payload.recommendationOutcomeFeedback ?? emptyRecommendationOutcomeFeedback(login),
   };
 }
 
@@ -765,6 +1542,7 @@ export const __decisionPackInternals = {
   recommendationFor,
   priorityFor,
   actionsForDecision,
+  buildActionPortfolio,
   whyThisHelpsFor,
   nextActionsFor,
   publicNextActionsFor,
@@ -775,4 +1553,6 @@ export const __decisionPackInternals = {
   severityRank,
   clamp,
   round,
+  buildRepoDecisionTradeoffSummary,
+  sanitizeTradeoffPublicText,
 };

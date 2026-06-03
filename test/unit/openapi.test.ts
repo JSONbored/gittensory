@@ -12,12 +12,14 @@ describe("OpenAPI contract", () => {
     expect(spec.paths["/v1/sync/status"]).toBeDefined();
     expect(spec.paths["/v1/repos/{owner}/{repo}/intelligence"]).toBeDefined();
     expect(spec.paths["/v1/repos/{owner}/{repo}/issue-quality"]).toBeDefined();
+    expect(spec.paths["/v1/repos/{owner}/{repo}/outcome-patterns"]).toBeDefined();
     expect(spec.paths["/v1/repos/{owner}/{repo}/registration-readiness"]).toBeDefined();
     expect(spec.paths["/v1/repos/{owner}/{repo}/gittensor-config-recommendation"]).toBeDefined();
     expect(spec.paths["/v1/repos/{owner}/{repo}/pulls/{number}/maintainer-packet"]).toBeDefined();
     expect(spec.paths["/v1/repos/{owner}/{repo}/pulls/{number}/reviewability"]).toBeDefined();
     expect(spec.paths["/v1/contributors/{login}/profile"]).toBeDefined();
     expect(spec.paths["/v1/contributors/{login}/decision-pack"]).toBeDefined();
+    expect(spec.paths["/v1/contributors/{login}/open-pr-monitor"]).toBeDefined();
     expect(spec.paths["/v1/contributors/{login}/repos/{owner}/{repo}/decision"]).toBeDefined();
     expect(spec.paths["/v1/preflight/pr"]).toBeDefined();
     expect(spec.paths["/v1/preflight/local-diff"]).toBeDefined();
@@ -41,8 +43,11 @@ describe("OpenAPI contract", () => {
     expect(spec.paths["/v1/app/operator-dashboard"]).toBeDefined();
     expect(spec.paths["/v1/app/commands"]).toBeDefined();
     expect(spec.paths["/v1/app/commands/preview"]).toBeDefined();
+    expect(spec.paths["/v1/app/commands/usefulness"]).toBeDefined();
+    expect(spec.paths["/v1/app/commands/feedback"]).toBeDefined();
     expect(spec.paths["/v1/app/digest"]).toBeDefined();
     expect(spec.paths["/v1/app/digest/subscriptions"]).toBeDefined();
+    expect(spec.paths["/v1/app/analytics/daily-rollups"]).toBeDefined();
     expect(spec.paths["/v1/auth/github/start"]).toBeDefined();
     expect(spec.paths["/v1/auth/github/callback"]).toBeDefined();
     expect(spec.paths["/v1/auth/extension/session"]).toBeDefined();
@@ -50,6 +55,8 @@ describe("OpenAPI contract", () => {
     expect(spec.paths["/v1/auth/github/device/start"]).toBeDefined();
     expect(spec.paths["/v1/auth/session"]).toBeDefined();
     expect(spec.paths["/v1/internal/jobs/repair-data-fidelity"]).toBeDefined();
+    expect(spec.paths["/v1/installations/{id}/repair"]).toBeDefined();
+    expect(spec.paths["/v1/installations/{id}/repair/refresh"]).toBeDefined();
 
     for (const removedPath of [
       "/v1/contributors/{login}/opportunities",
@@ -81,20 +88,26 @@ describe("OpenAPI contract", () => {
     expect(spec.components?.schemas?.DecisionPackRefreshNeeded).toBeDefined();
     expect(spec.components?.schemas?.RepoDecisionResponse).toBeDefined();
     expect(spec.components?.schemas?.RepoIntelligence).toBeDefined();
+    expect(spec.components?.schemas?.RepoOutcomePatterns).toBeDefined();
     expect(spec.components?.schemas?.RegistrationReadiness).toBeDefined();
     expect(spec.components?.schemas?.GittensorConfigRecommendation).toBeDefined();
     expect(spec.components?.schemas?.PullRequestMaintainerPacket).toBeDefined();
     expect(spec.components?.schemas?.PullRequestReviewability).toBeDefined();
     expect(spec.components?.schemas?.LocalBranchAnalysis).toBeDefined();
     expect(spec.components?.schemas?.RepoSettingsPreview).toBeDefined();
+    expect(spec.components?.schemas?.InstallationRepair).toBeDefined();
+    expect(spec.components?.schemas?.CommandPreviewResponse).toBeDefined();
     expect(spec.components?.schemas?.AgentRunBundle).toBeDefined();
     expect(spec.components?.schemas?.AgentAction).toBeDefined();
     expect(spec.components?.schemas?.UpstreamStatus).toBeDefined();
     expect(spec.components?.schemas?.UpstreamRulesetSnapshot).toBeDefined();
     expect(spec.components?.schemas?.UpstreamDriftReport).toBeDefined();
     expect(JSON.stringify(spec.components?.schemas?.ScorePreviewResult)).toContain("scenarioPreviews");
+    expect(JSON.stringify(spec.components?.schemas?.AgentAction)).toContain("explanationCard");
     expect(JSON.stringify(spec.components?.schemas?.RepoIntelligence)).toContain("burdenForecastFreshness");
+    expect(JSON.stringify(spec.components?.schemas?.CommandPreviewResponse)).toContain("missing_permission");
     expect(JSON.stringify(spec.components?.schemas?.ContributorOutcomeHistory)).toContain("reconciliation");
+    expect(JSON.stringify(spec.components?.schemas?.ContributorDecisionPack)).toContain("recommendationOutcomeFeedback");
     expect(JSON.stringify(spec.components?.schemas?.LocalBranchAnalysis)).toContain("baseFreshness");
     expect(JSON.stringify(spec.components?.schemas?.LocalBranchAnalysis)).toContain("recommendedRerunCondition");
     expect(JSON.stringify(spec.components?.schemas?.Health)).toContain("minMcpVersion");

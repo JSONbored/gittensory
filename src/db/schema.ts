@@ -473,6 +473,41 @@ export const agentContextSnapshots = sqliteTable(
   }),
 );
 
+export const agentRecommendationOutcomes = sqliteTable(
+  "agent_recommendation_outcomes",
+  {
+    id: text("id").primaryKey(),
+    actionId: text("action_id").notNull(),
+    runId: text("run_id").notNull(),
+    actorLogin: text("actor_login").notNull(),
+    actionType: text("action_type").notNull(),
+    targetRepoFullName: text("target_repo_full_name"),
+    targetPullNumber: integer("target_pull_number"),
+    targetIssueNumber: integer("target_issue_number"),
+    surface: text("surface"),
+    snapshotId: text("snapshot_id"),
+    outcomeState: text("outcome_state").notNull(),
+    outcomeTargetType: text("outcome_target_type").notNull(),
+    outcomeRepoFullName: text("outcome_repo_full_name"),
+    outcomePullNumber: integer("outcome_pull_number"),
+    outcomeIssueNumber: integer("outcome_issue_number"),
+    maintainerLane: integer("maintainer_lane", { mode: "boolean" }).notNull().default(false),
+    confidence: text("confidence").notNull(),
+    reason: text("reason").notNull(),
+    sourceUpdatedAt: text("source_updated_at"),
+    detectedAt: text("detected_at").notNull().default("CURRENT_TIMESTAMP"),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+    createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
+    updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    action: uniqueIndex("agent_recommendation_outcomes_action_unique").on(table.actionId),
+    actorState: index("agent_recommendation_outcomes_actor_state_idx").on(table.actorLogin, table.outcomeState, table.updatedAt),
+    target: index("agent_recommendation_outcomes_target_idx").on(table.targetRepoFullName, table.targetPullNumber, table.targetIssueNumber),
+    maintainer: index("agent_recommendation_outcomes_maintainer_idx").on(table.actorLogin, table.maintainerLane, table.updatedAt),
+  }),
+);
+
 export const installationHealth = sqliteTable("installation_health", {
   installationId: integer("installation_id").primaryKey(),
   accountLogin: text("account_login").notNull(),
@@ -729,6 +764,52 @@ export const digestSubscriptions = sqliteTable(
   }),
 );
 
+export const githubAgentCommandAnswers = sqliteTable(
+  "github_agent_command_answers",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name").notNull(),
+    issueNumber: integer("issue_number").notNull(),
+    command: text("command").notNull(),
+    requestCommentId: integer("request_comment_id"),
+    responseCommentId: integer("response_comment_id"),
+    responseUrl: text("response_url"),
+    actorKind: text("actor_kind").notNull(),
+    createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
+    updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+  },
+  (table) => ({
+    repoIssue: index("github_agent_command_answers_repo_issue_idx").on(table.repoFullName, table.issueNumber),
+    commandUpdated: index("github_agent_command_answers_command_updated_idx").on(table.command, table.updatedAt),
+  }),
+);
+
+export const githubAgentCommandFeedback = sqliteTable(
+  "github_agent_command_feedback",
+  {
+    id: text("id").primaryKey(),
+    answerId: text("answer_id")
+      .notNull()
+      .references(() => githubAgentCommandAnswers.id),
+    repoFullName: text("repo_full_name").notNull(),
+    issueNumber: integer("issue_number").notNull(),
+    command: text("command").notNull(),
+    actorHash: text("actor_hash").notNull(),
+    vote: text("vote").notNull(),
+    source: text("source").notNull(),
+    actorKind: text("actor_kind").notNull(),
+    createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
+    updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+  },
+  (table) => ({
+    actorAnswer: uniqueIndex("github_agent_command_feedback_actor_answer_unique").on(table.answerId, table.actorHash),
+    commandUpdated: index("github_agent_command_feedback_command_updated_idx").on(table.command, table.updatedAt),
+    repoIssue: index("github_agent_command_feedback_repo_issue_idx").on(table.repoFullName, table.issueNumber),
+  }),
+);
+
 export const auditEvents = sqliteTable(
   "audit_events",
   {
@@ -746,6 +827,67 @@ export const auditEvents = sqliteTable(
     typeCreated: index("audit_events_type_created_idx").on(table.eventType, table.createdAt),
     actorCreated: index("audit_events_actor_created_idx").on(table.actor, table.createdAt),
     routeCreated: index("audit_events_route_created_idx").on(table.route, table.createdAt),
+  }),
+);
+
+export const productUsageEvents = sqliteTable(
+  "product_usage_events",
+  {
+    id: text("id").primaryKey(),
+    surface: text("surface").notNull(),
+    role: text("role").notNull().default("unknown"),
+    eventName: text("event_name").notNull(),
+    route: text("route"),
+    actorHash: text("actor_hash"),
+    sessionHash: text("session_hash"),
+    repoFullName: text("repo_full_name"),
+    targetKey: text("target_key"),
+    outcome: text("outcome").notNull(),
+    latencyMs: integer("latency_ms"),
+    clientName: text("client_name"),
+    clientVersion: text("client_version"),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+    occurredAt: text("occurred_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    surfaceOccurred: index("product_usage_events_surface_occurred_idx").on(table.surface, table.occurredAt),
+    roleOccurred: index("product_usage_events_role_occurred_idx").on(table.role, table.occurredAt),
+    eventOccurred: index("product_usage_events_event_occurred_idx").on(table.eventName, table.occurredAt),
+    actorOccurred: index("product_usage_events_actor_occurred_idx").on(table.actorHash, table.occurredAt),
+    repoOccurred: index("product_usage_events_repo_occurred_idx").on(table.repoFullName, table.occurredAt),
+  }),
+);
+
+export const productUsageDailyRollups = sqliteTable(
+  "product_usage_daily_rollups",
+  {
+    day: text("day").primaryKey(),
+    status: text("status").notNull(),
+    totalEvents: integer("total_events").notNull().default(0),
+    activeActors: integer("active_actors").notNull().default(0),
+    activeSessions: integer("active_sessions").notNull().default(0),
+    activeRepos: integer("active_repos").notNull().default(0),
+    sourceEventCount: integer("source_event_count").notNull().default(0),
+    maxEventCapacity: integer("max_event_capacity").notNull().default(0),
+    firstEventAt: text("first_event_at"),
+    lastEventAt: text("last_event_at"),
+    surfacesJson: text("surfaces_json").notNull().default("[]"),
+    outcomesJson: text("outcomes_json").notNull().default("[]"),
+    eventsJson: text("events_json").notNull().default("[]"),
+    reposJson: text("repos_json").notNull().default("[]"),
+    commandsJson: text("commands_json").notNull().default("[]"),
+    toolsJson: text("tools_json").notNull().default("[]"),
+    routeClassesJson: text("route_classes_json").notNull().default("[]"),
+    activationJson: text("activation_json").notNull().default("{}"),
+    rolesJson: text("roles_json").notNull().default("[]"),
+    activationByRoleJson: text("activation_by_role_json").notNull().default("[]"),
+    activationBySurfaceJson: text("activation_by_surface_json").notNull().default("[]"),
+    retentionJson: text("retention_json").notNull().default("[]"),
+    generatedAt: text("generated_at").notNull().default("CURRENT_TIMESTAMP"),
+    updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+  },
+  (table) => ({
+    statusUpdated: index("product_usage_daily_rollups_status_idx").on(table.status, table.updatedAt),
   }),
 );
 

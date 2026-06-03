@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authenticatePrivateToken, extractBearerToken, type AuthIdentity } from "../auth/security";
+import { loadControlPanelRoleSummary } from "../services/control-panel-roles";
 import {
   countOpenIssues,
   countOpenPullRequests,
@@ -24,6 +25,7 @@ import {
   listRepoSyncSegments,
   listRepoSyncStates,
   listRepositories,
+  recordProductUsageEvent,
 } from "../db/repositories";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
 import { fetchPublicContributorProfile } from "../github/public";
@@ -40,6 +42,8 @@ import {
 import { loadContributorDecisionPackForServing, repoDecisionFromPack } from "../services/decision-pack";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
+import { buildMcpClientTelemetry } from "../services/client-telemetry";
+import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
 import {
   buildBountyAdvisory,
   buildCollisionReport,
@@ -55,7 +59,9 @@ import {
   buildRegistryChangeReport,
   buildRoleContext,
 } from "../signals/engine";
+import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
+import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildRepoDataQuality } from "../signals/data-quality";
 import { loadUpstreamStatus } from "../upstream/ruleset";
 
@@ -109,6 +115,14 @@ const localDiffPreflightShape = {
   commitMessage: z.string().optional(),
 };
 
+const branchEligibilityShape = {
+  status: z.enum(["eligible", "ineligible", "unknown"]),
+  source: z.enum(["github_metadata", "local_metadata", "registry", "user_supplied"]).optional(),
+  reason: z.string().optional(),
+  checkedAt: z.string().optional(),
+  stale: z.boolean().optional(),
+};
+
 const localBranchAnalysisShape = {
   login: z.string().min(1),
   repoFullName: z.string().min(3),
@@ -159,6 +173,8 @@ const localBranchAnalysisShape = {
   expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).max(20).optional(),
+  focusManifest: z.record(z.string(), z.unknown()).optional(),
+  branchEligibility: z.object(branchEligibilityShape).strict().optional(),
   localScorer: z
     .object({
       mode: z.enum(["metadata_only", "external_command", "gittensor_root"]),
@@ -196,6 +212,15 @@ const agentPlanShape = {
   repoFullName: z.string().min(3).optional(),
 };
 
+const linkedIssueContextShape = {
+  status: z.enum(["raw", "plausible", "validated", "invalid", "unavailable"]).optional(),
+  source: z.enum(["user_supplied", "official_mirror", "github_cache", "issue_quality", "missing"]).optional(),
+  issueNumbers: z.array(z.number().int().positive()).max(50).optional(),
+  solvedByPullRequests: z.array(z.number().int().positive()).max(50).optional(),
+  reason: z.string().optional(),
+  warnings: z.array(z.string()).max(20).optional(),
+};
+
 const scorePreviewShape = {
   repoFullName: z.string().min(3),
   targetType: z.enum(["planned_pr", "pull_request", "local_diff", "variant"]).default("local_diff"),
@@ -203,6 +228,7 @@ const scorePreviewShape = {
   contributorLogin: z.string().min(1).optional(),
   labels: z.array(z.string()).optional(),
   linkedIssueMode: z.enum(["none", "standard", "maintainer"]).default("none"),
+  linkedIssueContext: z.object(linkedIssueContextShape).strict().optional(),
   sourceTokenScore: z.number().min(0).optional(),
   totalTokenScore: z.number().min(0).optional(),
   sourceLines: z.number().min(0).optional(),
@@ -219,10 +245,109 @@ const scorePreviewShape = {
   expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).max(20).optional(),
+  branchEligibility: z.object(branchEligibilityShape).strict().optional(),
 };
 
 const variantsShape = {
   variants: z.array(z.object(scorePreviewShape)).min(1).max(10),
+};
+
+// ── MCP tool output schemas ────────────────────────────────────────────────
+// Structured-output metadata for machine-readable tools so modern MCP clients
+// can discover and validate Gittensory responses. Schemas declare documented
+// top-level fields; complex/nullable/variant fields use a permissive type so
+// validation never rejects a real response (the SDK strips unknown keys). All
+// fields are optional because several tools return either a result payload or a
+// `{ status: "not_found" | ... }` / refresh envelope.
+const repoContextOutputSchema = {
+  repoFullName: z.string().optional(),
+  repo: z.unknown().optional(),
+  lane: z.unknown().optional(),
+  queueHealth: z.unknown().optional(),
+  collisions: z.unknown().optional(),
+  configQuality: z.unknown().optional(),
+  dataQuality: z.unknown().optional(),
+};
+
+const freshnessResponseOutputSchema = {
+  status: z.string().optional(),
+  repoFullName: z.string().optional(),
+  source: z.string().optional(),
+  freshness: z.string().optional(),
+  generatedAt: z.string().optional(),
+  report: z.unknown().optional(),
+};
+
+const contributorProfileOutputSchema = {
+  login: z.string().optional(),
+  github: z.unknown().optional(),
+  source: z.unknown().optional(),
+  repoStats: z.unknown().optional(),
+  trustSignals: z.unknown().optional(),
+};
+
+const decisionPackOutputSchema = {
+  status: z.string().optional(),
+  login: z.string().optional(),
+  source: z.string().optional(),
+  freshness: z.string().optional(),
+  generatedAt: z.string().optional(),
+  rebuildEnqueued: z.boolean().optional(),
+  summary: z.string().optional(),
+  repoDecisions: z.unknown().optional(),
+  topActions: z.unknown().optional(),
+};
+
+const openPrMonitorOutputSchema = {
+  login: z.string().optional(),
+  generatedAt: z.string().optional(),
+  openPrCount: z.number().optional(),
+  registeredRepoCount: z.number().optional(),
+  cleanupFirst: z.boolean().optional(),
+  summary: z.string().optional(),
+  guidance: z.unknown().optional(),
+  pendingScenarios: z.unknown().optional(),
+  pullRequests: z.unknown().optional(),
+};
+
+const explainRepoDecisionOutputSchema = {
+  status: z.string().optional(),
+  login: z.string().optional(),
+  repoFullName: z.string().optional(),
+  generatedAt: z.string().optional(),
+  source: z.string().optional(),
+  freshness: z.string().optional(),
+  rebuildEnqueued: z.boolean().optional(),
+  decision: z.unknown().optional(),
+  dataQuality: z.unknown().optional(),
+};
+
+const registryChangesOutputSchema = {
+  generatedAt: z.string().optional(),
+  previous: z.unknown().optional(),
+  current: z.unknown().optional(),
+  added: z.unknown().optional(),
+  removed: z.unknown().optional(),
+  changed: z.unknown().optional(),
+  warnings: z.unknown().optional(),
+};
+
+const upstreamDriftOutputSchema = {
+  generatedAt: z.string().optional(),
+  status: z.string().optional(),
+  latestCommitSha: z.string().nullable().optional(),
+  latestRulesetId: z.string().nullable().optional(),
+  highestSeverity: z.string().nullable().optional(),
+  affectedAreas: z.unknown().optional(),
+  openReportCount: z.number().optional(),
+  reports: z.unknown().optional(),
+};
+
+const localStatusOutputSchema = {
+  apiAvailable: z.boolean().optional(),
+  sourceUploadDefault: z.boolean().optional(),
+  supportedEndpoint: z.string().optional(),
+  supportedTools: z.unknown().optional(),
 };
 
 export async function handleMcpRequest(c: AppContext): Promise<Response> {
@@ -230,8 +355,56 @@ export async function handleMcpRequest(c: AppContext): Promise<Response> {
   const identity = await authenticateMcpRequest(c);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
 
+  const telemetry = buildMcpClientTelemetry(c.req.raw.headers, { defaultClientName: "mcp" })!;
+  const usageMetadata = await describeMcpUsageRequest(c.req.raw, telemetry.metadata);
+  const startedAt = Date.now();
   const server = new GittensoryMcp(c.env, identity).createServer();
-  return createMcpHandler(server, { route: "/mcp", enableJsonResponse: true })(c.req.raw, c.env, getExecutionContext(c));
+  try {
+    const response = await createMcpHandler(server, { route: "/mcp", enableJsonResponse: true })(c.req.raw, c.env, getExecutionContext(c));
+    await recordProductUsageEvent(c.env, {
+      surface: "mcp",
+      role: "miner",
+      eventName: typeof usageMetadata.toolName === "string" ? "mcp_tool_called" : "mcp_request",
+      route: "/mcp",
+      actor: identity.actor,
+      sessionId: identity.kind === "session" ? identity.session.id : undefined,
+      outcome: response.status >= 400 ? "error" : "success",
+      latencyMs: Date.now() - startedAt,
+      clientName: telemetry.clientName,
+      clientVersion: telemetry.clientVersion,
+      metadata: usageMetadata,
+    }).catch(() => undefined);
+    return response;
+  } catch (error) {
+    await recordProductUsageEvent(c.env, {
+      surface: "mcp",
+      role: "miner",
+      eventName: typeof usageMetadata.toolName === "string" ? "mcp_tool_called" : "mcp_request",
+      route: "/mcp",
+      actor: identity.actor,
+      sessionId: identity.kind === "session" ? identity.session.id : undefined,
+      outcome: "error",
+      latencyMs: Date.now() - startedAt,
+      clientName: telemetry.clientName,
+      clientVersion: telemetry.clientVersion,
+      metadata: usageMetadata,
+    }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function describeMcpUsageRequest(request: Request, telemetryMetadata: Record<string, unknown> | undefined): Promise<Record<string, unknown>> {
+  const body = await request.clone().json().catch(() => null);
+  if (!body || typeof body !== "object") return { transport: "http", method: request.method, ...telemetryMetadata };
+  const envelope = body as { method?: unknown; params?: { name?: unknown } };
+  const rpcMethod = typeof envelope.method === "string" ? envelope.method : undefined;
+  const toolName = envelope.params && typeof envelope.params.name === "string" ? envelope.params.name : undefined;
+  return {
+    transport: "http",
+    rpcMethod,
+    toolName,
+    ...telemetryMetadata,
+  };
 }
 
 export class GittensoryMcp {
@@ -251,6 +424,7 @@ export class GittensoryMcp {
       {
         description: "Return Gittensory repo context: registration, lane, queue health, collisions, and config quality.",
         inputSchema: ownerRepoShape,
+        outputSchema: repoContextOutputSchema,
       },
       async (input) => this.toolResult(await this.getRepoContext(input)),
     );
@@ -260,8 +434,19 @@ export class GittensoryMcp {
       {
         description: "Return the cached or freshly-computed maintainer burden forecast for a repo, including projected review load, queue growth risk, stale PR signals, and a freshness marker.",
         inputSchema: ownerRepoShape,
+        outputSchema: freshnessResponseOutputSchema,
       },
       async (input) => this.toolResult(await this.getBurdenForecast(input)),
+    );
+
+    server.registerTool(
+      "gittensory_get_repo_outcome_patterns",
+      {
+        description: "Return cached or freshly-computed per-repo accepted/rejected PR outcome patterns: what maintainers actually merge or close, separated from maintainer-lane activity, with a freshness marker and explicit evidence-completeness.",
+        inputSchema: ownerRepoShape,
+        outputSchema: freshnessResponseOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getRepoOutcomePatterns(input)),
     );
 
     server.registerTool(
@@ -269,6 +454,7 @@ export class GittensoryMcp {
       {
         description: "Return an evidence-backed Gittensory contributor profile for a GitHub login.",
         inputSchema: loginShape,
+        outputSchema: contributorProfileOutputSchema,
       },
       async (input) => this.toolResult(await this.getContributorProfile(input.login)),
     );
@@ -278,8 +464,20 @@ export class GittensoryMcp {
       {
         description: "Return the canonical private contributor decision pack for a GitHub login.",
         inputSchema: loginShape,
+        outputSchema: decisionPackOutputSchema,
       },
       async (input) => this.toolResult(await this.getDecisionPack(input.login)),
+    );
+
+    server.registerTool(
+      "gittensory_monitor_open_prs",
+      {
+        description:
+          "Inspect a contributor's open PRs on registered repos, classify queue state, and return public-safe next-step packets from cached metadata.",
+        inputSchema: loginShape,
+        outputSchema: openPrMonitorOutputSchema,
+      },
+      async (input) => this.toolResult(await this.monitorOpenPullRequests(input.login)),
     );
 
     server.registerTool(
@@ -287,6 +485,7 @@ export class GittensoryMcp {
       {
         description: "Return the contributor/repo decision from the canonical decision pack.",
         inputSchema: loginRepoShape,
+        outputSchema: explainRepoDecisionOutputSchema,
       },
       async (input) => this.toolResult(await this.explainRepoDecision(input)),
     );
@@ -314,6 +513,7 @@ export class GittensoryMcp {
       {
         description: "Return the diff between the latest cached Gittensor registry snapshots.",
         inputSchema: {},
+        outputSchema: registryChangesOutputSchema,
       },
       async () => this.toolResult(await this.getRegistryChanges()),
     );
@@ -323,6 +523,7 @@ export class GittensoryMcp {
       {
         description: "Return private upstream Gittensor ruleset drift status, including stale/drift warnings for MCP planning.",
         inputSchema: {},
+        outputSchema: upstreamDriftOutputSchema,
       },
       async () => this.toolResult(await this.getUpstreamDrift()),
     );
@@ -332,6 +533,7 @@ export class GittensoryMcp {
       {
         description: "Return the cached or freshly-computed issue-quality report for a repo, ranking which open issues are actionable, need proof, are stale/duplicate-prone, or already solved.",
         inputSchema: ownerRepoShape,
+        outputSchema: freshnessResponseOutputSchema,
       },
       async (input) => this.toolResult(await this.getIssueQuality(input)),
     );
@@ -377,6 +579,7 @@ export class GittensoryMcp {
       {
         description: "Return Gittensory local-MCP contract status and privacy defaults.",
         inputSchema: {},
+        outputSchema: localStatusOutputSchema,
       },
       async () =>
         this.toolResult({
@@ -499,6 +702,87 @@ export class GittensoryMcp {
       async (input) => this.toolResult(await this.agentPreparePrPacket(input)),
     );
 
+    // ── Miner planning prompts ───────────────────────────────────────────
+    server.registerPrompt(
+      "gittensory_select_contribution_issue",
+      {
+        title: "Select contribution issue",
+        description: "Identify the best open issue for a contributor to work on based on lane fit, issue quality, and queue signals. Advisory only — no GitHub writes.",
+        argsSchema: { ...ownerRepoShape, login: z.string().min(1) },
+      },
+      ({ owner, repo, login }) => ({
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: `Use gittensory_get_issue_quality and gittensory_explain_repo_decision for ${login} on ${owner}/${repo} to identify which open issues are the best fit. Rank candidates by actionability, lane alignment, and queue pressure. Present a short ranked list with a brief rationale for each. Do not create issues, file comments, or take any GitHub action — this is a planning aid for the contributor to decide from.`,
+            },
+          },
+        ],
+      }),
+    );
+
+    server.registerPrompt(
+      "gittensory_draft_contribution_pr_packet",
+      {
+        title: "Draft contribution PR packet",
+        description: "Draft a public-safe PR submission packet for a planned contribution without uploading source code. Advisory only — no GitHub writes.",
+        argsSchema: { ...ownerRepoShape, login: z.string().min(1) },
+      },
+      ({ owner, repo, login }) => ({
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: `Use gittensory_get_repo_context and gittensory_get_decision_pack for ${login} to prepare a public-safe PR packet for work on ${owner}/${repo}. The packet should include lane fit, recommended next steps, and any preflight considerations the contributor should address before opening the PR. Do not open a PR, post any comment, or take any GitHub action — present the packet for the contributor to review and submit manually.`,
+            },
+          },
+        ],
+      }),
+    );
+
+    server.registerPrompt(
+      "gittensory_preflight_contribution_branch",
+      {
+        title: "Preflight contribution branch",
+        description: "Assess branch readiness before opening a PR using cached lane and preflight signals. Advisory only — no GitHub writes.",
+        argsSchema: { ...ownerRepoShape, login: z.string().min(1) },
+      },
+      ({ owner, repo, login }) => ({
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: `Use gittensory_get_repo_context and gittensory_explain_repo_decision for ${login} on ${owner}/${repo} to assess whether the planned branch is ready to be submitted as a PR. Check lane fit, duplicate risk, linked issue coverage, and any signals that suggest the branch needs more work. Present a preflight summary the contributor can act on before opening the PR. Do not open a PR, push any branch, or take any GitHub action.`,
+            },
+          },
+        ],
+      }),
+    );
+
+    server.registerPrompt(
+      "gittensory_plan_cleanup_first",
+      {
+        title: "Plan cleanup-first work",
+        description: "Identify open PRs to address before starting new work to reduce queue pressure and improve lane fit. Advisory only — no GitHub writes.",
+        argsSchema: { login: z.string().min(1) },
+      },
+      ({ login }) => ({
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: `Use gittensory_monitor_open_prs and gittensory_get_decision_pack for ${login} to identify which open PRs to address before starting new contribution work. Surface PRs with failing checks, pending review comments, stale queue pressure, or duplicate risk. Recommend an ordered cleanup list with a brief rationale for each item. Do not close PRs, post comments, or take any GitHub action — present the plan for the contributor to execute manually.`,
+            },
+          },
+        ],
+      }),
+    );
+
     return server;
   }
 
@@ -568,6 +852,24 @@ export class GittensoryMcp {
     };
   }
 
+  private async getRepoOutcomePatterns(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    const response = await loadOrComputeRepoOutcomePatternsResponse(this.env, fullName);
+    if (!response) {
+      return {
+        summary: `Gittensory has no cached repo outcome patterns for ${fullName}.`,
+        data: { status: "not_found", repoFullName: fullName },
+      };
+    }
+    return {
+      summary:
+        response.source === "snapshot"
+          ? `Gittensory repo outcome patterns for ${fullName} (cached, ${response.freshness}).`
+          : `Gittensory repo outcome patterns for ${fullName} (computed from cached metadata).`,
+      data: response as unknown as Record<string, unknown>,
+    };
+  }
+
   private async loadOpenQueueCounts(fullName: string): Promise<{ openIssues: number; openPullRequests: number }> {
     const [totals, openIssues, openPullRequests] = await Promise.all([
       getLatestRepoGithubTotalsSnapshot(this.env, fullName),
@@ -581,6 +883,7 @@ export class GittensoryMcp {
   }
 
   private async getContributorProfile(login: string): Promise<ToolPayload> {
+    this.requireContributorAccess(login);
     const [github, pullRequests, issues, cachedRepoStats, gittensorSnapshot] = await Promise.all([
       fetchPublicContributorProfile(login),
       listContributorPullRequests(this.env, login),
@@ -607,6 +910,15 @@ export class GittensoryMcp {
     return {
       summary: `Gittensory decision pack for ${login} needs a snapshot refresh.`,
       data: serving.refresh as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async monitorOpenPullRequests(login: string): Promise<ToolPayload> {
+    this.requireContributorAccess(login);
+    const monitor = await buildContributorOpenPrMonitor(this.env, login);
+    return {
+      summary: monitor.summary,
+      data: monitor as unknown as Record<string, unknown>,
     };
   }
 
@@ -852,7 +1164,7 @@ export class GittensoryMcp {
 
   private async analyzeLocalBranch(input: z.infer<z.ZodObject<typeof localBranchAnalysisShape>>) {
     this.requireContributorAccess(input.login);
-    const [context, repo, issues, pullRequests, recentMergedPullRequests, bounties, snapshot, issueQuality] = await Promise.all([
+    const [context, repo, issues, pullRequests, recentMergedPullRequests, bounties, snapshot, issueQuality, repoManifest] = await Promise.all([
       this.loadContributorFastContext(input.login),
       getRepository(this.env, input.repoFullName),
       listIssues(this.env, input.repoFullName),
@@ -861,13 +1173,18 @@ export class GittensoryMcp {
       listBountiesByRepo(this.env, input.repoFullName),
       getOrCreateScoringModelSnapshot(this.env),
       loadOrComputeIssueQualityResponse(this.env, input.repoFullName),
+      loadRepoFocusManifest(this.env, input.repoFullName),
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: input.login, fit, scoringSnapshot: snapshot });
     const checkSummaries = await this.loadCheckSummariesForPullRequests(input.repoFullName, input, pullRequests);
+    // Caller-supplied focusManifest wins; otherwise fall back to the repo-owned manifest when present.
+    const analysisInput = input.focusManifest !== undefined || !repoManifest.present
+      ? input
+      : { ...input, focusManifest: repoManifest as unknown };
     return {
       ...buildLocalBranchAnalysis({
-        input,
+        input: analysisInput,
         repo,
         issues,
         pullRequests,
@@ -881,6 +1198,7 @@ export class GittensoryMcp {
         scoringSnapshot: snapshot,
         scoringProfile,
         issueQuality: issueQuality?.report,
+        gittensorSnapshot: context.gittensorSnapshot,
       }),
       dataQuality: await this.loadRepoDataQuality(input.repoFullName),
     };
@@ -932,6 +1250,7 @@ export class GittensoryMcp {
       repositories,
       syncStates,
       repoStats,
+      gittensorSnapshot,
       outcomeHistory,
     };
   }
@@ -964,7 +1283,7 @@ function redactSensitiveForMcp(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => !/hotkey|coldkey|wallet|private_key|privateKey|mnemonic/i.test(key))
+      .filter(([key]) => !/hotkey|coldkey|wallet|private_key|privateKey|mnemonic|alphaPerDay|taoPerDay|usdPerDay/i.test(key))
       .map(([key, entry]) => [key, redactSensitiveForMcp(entry)]),
   );
 }
@@ -978,7 +1297,10 @@ function authoritativeContributorRepoStats(
 }
 
 async function authenticateMcpRequest(c: AppContext): Promise<AuthIdentity | null> {
-  return authenticatePrivateToken(c.env, extractBearerToken(c.req.header("authorization")));
+  const identity = await authenticatePrivateToken(c.env, extractBearerToken(c.req.header("authorization")));
+  if (!identity || identity.kind !== "session") return identity;
+  const summary = await loadControlPanelRoleSummary(c.env, identity.actor);
+  return summary.roles.length > 0 ? identity : null;
 }
 
 function getExecutionContext(c: AppContext): ExecutionContext<unknown> {

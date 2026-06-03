@@ -2,6 +2,7 @@ import { OpenApiGeneratorV3, OpenAPIRegistry } from "@asteasolutions/zod-to-open
 import { z } from "zod";
 import {
   AdvisorySchema,
+  ActionPortfolioSchema,
   AgentActionSchema,
   AgentContextSnapshotSchema,
   AgentRunBundleSchema,
@@ -12,6 +13,7 @@ import {
   BurdenForecastSchema,
   CollisionReportSchema,
   ConfigQualitySchema,
+  CommandPreviewResponseSchema,
   ContributorFitSchema,
   ContributorIntakeHealthSchema,
   ContributorOutcomeHistorySchema,
@@ -19,12 +21,14 @@ import {
   ContributorOpportunitySchema,
   ContributorPatternReportSchema,
   ContributorDecisionPackSchema,
+  ContributorOpenPrMonitorSchema,
   ContributorRewardRiskStrategySchema,
   ContributorProfileSchema,
   ContributorScoringProfileSchema,
   ContributorStrategySchema,
   HealthSchema,
   InstallationHealthSchema,
+  InstallationRepairSchema,
   IssueQualityReportSchema,
   IssueQualityResponseSchema,
   LabelAuditSchema,
@@ -46,6 +50,8 @@ import {
   DecisionPackRefreshNeededSchema,
   RepoFitRecommendationSchema,
   RepoDecisionResponseSchema,
+  RepoOutcomePatternsSchema,
+  RepoOutcomePatternsResponseSchema,
   GittensorConfigRecommendationSchema,
   RegistrationReadinessSchema,
   RepoIntelligenceSchema,
@@ -76,6 +82,7 @@ export function buildOpenApiSpec() {
   registry.register("RegistrySnapshot", RegistrySnapshotSchema);
   registry.register("Repository", RepositorySchema);
   registry.register("Advisory", AdvisorySchema);
+  registry.register("ActionPortfolio", ActionPortfolioSchema);
   registry.register("WorkboardItem", WorkboardItemSchema);
   registry.register("QueueHealth", QueueHealthSchema);
   registry.register("CollisionReport", CollisionReportSchema);
@@ -92,6 +99,8 @@ export function buildOpenApiSpec() {
   registry.register("DecisionPackRefreshNeeded", DecisionPackRefreshNeededSchema);
   registry.register("RepoDecisionResponse", RepoDecisionResponseSchema);
   registry.register("RepoIntelligence", RepoIntelligenceSchema);
+  registry.register("RepoOutcomePatterns", RepoOutcomePatternsSchema);
+  registry.register("RepoOutcomePatternsResponse", RepoOutcomePatternsResponseSchema);
   registry.register("RegistrationReadiness", RegistrationReadinessSchema);
   registry.register("GittensorConfigRecommendation", GittensorConfigRecommendationSchema);
   registry.register("RepoFitRecommendation", RepoFitRecommendationSchema);
@@ -108,7 +117,9 @@ export function buildOpenApiSpec() {
   registry.register("BountyAdvisory", BountyAdvisorySchema);
   registry.register("BountyLifecycleEvents", BountyLifecycleEventsSchema);
   registry.register("RepositorySettings", RepositorySettingsSchema);
+  registry.register("InstallationRepair", InstallationRepairSchema);
   registry.register("RepoSettingsPreview", RepoSettingsPreviewSchema);
+  registry.register("CommandPreviewResponse", CommandPreviewResponseSchema);
   registry.register("AgentRun", AgentRunSchema);
   registry.register("AgentAction", AgentActionSchema);
   registry.register("AgentContextSnapshot", AgentContextSnapshotSchema);
@@ -237,7 +248,7 @@ export function buildOpenApiSpec() {
         content: {
           "application/json": {
             schema: z.object({
-              installations: z.array(z.record(z.unknown())),
+              installations: z.array(z.record(z.string(), z.unknown())),
               health: z.array(InstallationHealthSchema),
             }),
           },
@@ -251,6 +262,61 @@ export function buildOpenApiSpec() {
     responses: {
       200: { description: "GitHub App installation health", content: { "application/json": { schema: InstallationHealthSchema } } },
       404: { description: "Installation health not found" },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/installations/{id}/repair",
+    responses: {
+      200: { description: "GitHub App installation repair diagnostics", content: { "application/json": { schema: InstallationRepairSchema } } },
+      404: { description: "Installation health not found" },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/installations/{id}/repair/refresh",
+    responses: {
+      200: { description: "Refreshed GitHub App installation repair diagnostics", content: { "application/json": { schema: InstallationRepairSchema } } },
+      404: { description: "Installation not found" },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/app/notification-model",
+    responses: {
+      200: {
+        description: "Opt-in notification model and PWA-readiness metadata for control-panel routes",
+        content: {
+          "application/json": {
+            schema: z.object({
+              generatedAt: z.string(),
+              notificationModel: z.object({
+                mode: z.literal("opt_in"),
+                defaultState: z.literal("disabled"),
+                channels: z.array(
+                  z.object({
+                    id: z.string(),
+                    transport: z.enum(["in_app", "web_push"]),
+                    defaultEnabled: z.boolean(),
+                    requiresPermission: z.boolean().optional(),
+                    purpose: z.string(),
+                  }),
+                ),
+                privacyGuards: z.array(z.string()),
+                fallbackWhenUnavailable: z.literal("in_app_digest_only"),
+              }),
+              pwa: z.object({
+                nativeDependency: z.boolean(),
+                manifestPath: z.string(),
+                serviceWorkerPath: z.string(),
+              }),
+              mobileReadyRoutes: z.array(z.string()),
+              nativeMobileFuture: z.array(z.string()),
+            }),
+          },
+        },
+      },
+      403: { description: "Role does not allow control-panel notification model access" },
     },
   });
   registry.registerPath({
@@ -281,6 +347,14 @@ export function buildOpenApiSpec() {
     responses: {
       200: { description: "Cached or computed issue quality report for the repo", content: { "application/json": { schema: IssueQualityResponseSchema } } },
       404: { description: "Repo is unknown or has no issue-quality coverage yet" },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/repos/{owner}/{repo}/outcome-patterns",
+    responses: {
+      200: { description: "Cached or freshly-computed per-repo accepted/rejected PR outcome patterns with freshness envelope and explicit evidence-completeness", content: { "application/json": { schema: RepoOutcomePatternsResponseSchema } } },
+      404: { description: "Repo is unknown or has no outcome-pattern coverage yet" },
     },
   });
   registry.registerPath({
@@ -342,6 +416,16 @@ export function buildOpenApiSpec() {
         content: { "application/json": { schema: ContributorDecisionPackSchema } },
       },
       202: { description: "Decision pack snapshot is missing; a background rebuild has been requested", content: { "application/json": { schema: DecisionPackRefreshNeededSchema } } },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/contributors/{login}/open-pr-monitor",
+    responses: {
+      200: {
+        description: "Contributor open-PR monitor with classifications and public-safe next-step packets from cached metadata.",
+        content: { "application/json": { schema: ContributorOpenPrMonitorSchema } },
+      },
     },
   });
   registry.registerPath({
@@ -507,27 +591,87 @@ export function buildOpenApiSpec() {
     method: "get",
     path: "/v1/app/overview",
     responses: {
-      200: { description: "Live app overview assembled from backend data", content: { "application/json": { schema: z.record(z.unknown()) } } },
+      200: { description: "Live app overview assembled from backend data", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
       401: { description: "Unauthorized" },
     },
   });
-  for (const path of ["/v1/app/miner-dashboard", "/v1/app/maintainer-dashboard", "/v1/app/operator-dashboard", "/v1/app/commands", "/v1/app/digest"]) {
+  for (const path of [
+    "/v1/app/roles",
+    "/v1/app/miner-dashboard",
+    "/v1/app/maintainer-dashboard",
+    "/v1/app/operator-dashboard",
+    "/v1/app/commands",
+    "/v1/app/commands/usefulness",
+    "/v1/app/digest",
+    "/v1/app/analytics/daily-rollups",
+    "/v1/app/analytics/mcp-compatibility",
+  ]) {
     registry.registerPath({
       method: "get",
       path,
       responses: {
-        200: { description: "Live app API response", content: { "application/json": { schema: z.record(z.unknown()) } } },
+        200: { description: "Live app API response", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
         401: { description: "Unauthorized" },
       },
     });
   }
-  for (const path of ["/v1/app/commands/preview", "/v1/app/digest/subscriptions"]) {
+  registry.registerPath({
+    method: "get",
+    path: "/v1/app/analytics/weekly-value-report",
+    request: {
+      query: z.object({
+        variant: z.enum(["public", "operator"]).optional().openapi({
+          param: {
+            description: "Report variant. Operator reports require the operator app role.",
+          },
+          example: "public",
+        }),
+        days: z.string().optional().openapi({
+          param: { description: "Report window in days, clamped from 1 to 31." },
+          example: "7",
+        }),
+        format: z.enum(["json", "markdown"]).optional().openapi({
+          param: {
+            description: "Response format. Omit or use json for the structured report; use markdown for copy-ready text.",
+          },
+          example: "markdown",
+        }),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Weekly value report as structured JSON or copy-ready Markdown",
+        content: {
+          "application/json": { schema: z.record(z.string(), z.unknown()) },
+          "text/markdown": {
+            schema: z.string().openapi({
+              example: "# Weekly Gittensory value report\n\n## Adoption metrics\n- Active users: 4\n",
+            }),
+          },
+        },
+      },
+      401: { description: "Unauthorized" },
+      403: { description: "Insufficient app role for requested report variant" },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/app/commands/preview",
+    responses: {
+      200: { description: "Maintainer dry-run preview of a sanitized @gittensory command response (no GitHub mutation)", content: { "application/json": { schema: CommandPreviewResponseSchema } } },
+      400: { description: "Invalid request" },
+      401: { description: "Unauthorized" },
+      403: { description: "Insufficient app role" },
+      404: { description: "Command not found" },
+    },
+  });
+  for (const path of ["/v1/app/commands/feedback", "/v1/app/digest/subscriptions"]) {
     registry.registerPath({
       method: "post",
       path,
       responses: {
-        200: { description: "Live app mutation or preview response", content: { "application/json": { schema: z.record(z.unknown()) } } },
-        201: { description: "Created", content: { "application/json": { schema: z.record(z.unknown()) } } },
+        200: { description: "Live app mutation or preview response", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
+        201: { description: "Created", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
         400: { description: "Invalid request" },
         401: { description: "Unauthorized" },
       },
@@ -544,9 +688,10 @@ export function buildOpenApiSpec() {
       }),
     },
     responses: {
-      200: { description: "Browser extension PR context overlay payload", content: { "application/json": { schema: z.record(z.unknown()) } } },
+      200: { description: "Browser extension PR context overlay payload", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
       400: { description: "Invalid pull context query" },
       401: { description: "Unauthorized" },
+      403: { description: "Extension-scoped session required" },
     },
   });
   registry.registerPath({
@@ -591,6 +736,7 @@ export function buildOpenApiSpec() {
     "/v1/internal/jobs/build-contributor-decision-packs",
     "/v1/internal/jobs/build-burden-forecasts",
     "/v1/internal/jobs/generate-signal-snapshots",
+    "/v1/internal/jobs/generate-weekly-value-report",
     "/v1/internal/jobs/repair-data-fidelity",
   ]) {
     registry.registerPath({
@@ -636,7 +782,7 @@ function applySecurityMetadata(document: GeneratedOpenApiDocument): GeneratedOpe
       GittensoryBearer: {
         type: "http",
         scheme: "bearer",
-        description: "Static API/MCP token or GitHub device-flow Gittensory session token.",
+        description: "Static API/MCP token, GitHub device-flow Gittensory session token, or extension-scoped Gittensory session token where supported. GitHub personal access tokens are not accepted.",
       },
       GittensorySessionCookie: {
         type: "apiKey",

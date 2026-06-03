@@ -39,10 +39,10 @@ function Quickstart() {
       </p>
       <CodeBlock
         code={`# one-off
-npx -y @jsonbored/gittensory-mcp --help
+npx -y @jsonbored/gittensory-mcp@latest --help
 
 # install
-npm i -g @jsonbored/gittensory-mcp`}
+npm i -g @jsonbored/gittensory-mcp@latest`}
       />
 
       <h2>2. Sign in (GitHub Device Flow)</h2>
@@ -71,12 +71,14 @@ gittensory-mcp preflight --login your-login --json`}
       <h2>4. Wire it into your coding agent</h2>
       <p>
         Print a config snippet for your editor of choice and paste it in. See{" "}
-        <a href="/docs/mcp-clients">MCP client setup</a> for the details.
+        <a href="/docs/mcp-clients">MCP client setup</a> for the details. For the full miner path
+        (plan → preflight → packet) and other roles, see{" "}
+        <a href="/docs/beta-onboarding">Beta onboarding</a>.
       </p>
       <CodeBlock
-        code={`gittensory-mcp init-client --target codex
-gittensory-mcp init-client --target claude-desktop
-gittensory-mcp init-client --target cursor`}
+        code={`gittensory-mcp init-client --print codex
+gittensory-mcp init-client --print claude
+gittensory-mcp init-client --print cursor`}
       />
     </DocsPage>
   );

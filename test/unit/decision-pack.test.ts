@@ -10,6 +10,9 @@ import {
 } from "../../src/services/decision-pack";
 import { createTestEnv } from "../helpers/d1";
 
+const FORBIDDEN_PUBLIC_TRADEOFF_LANGUAGE =
+  /\b(wallet|hotkey|coldkey|raw[-\s]?trust|trust[-\s]?score|reward|reward[-\s]?estimate|payout|farming(?:[-\s]?language)?|private[-\s]?reviewability|private[-\s]?scoreability|scoreability|public[-\s]?score[-\s]?(?:estimate|prediction)|estimated[-\s]?score|score[-\s]?estimate)\b/i;
+
 describe("decision-pack service", () => {
   it("classifies score blockers, recommendations, actions, and explanations deterministically", () => {
     const maintainerRole = { maintainerLane: true } as any;
@@ -108,6 +111,235 @@ describe("decision-pack service", () => {
     expect(__decisionPackInternals.round(1.23456)).toBe(1.2346);
   });
 
+  it("feeds repo outcome patterns into repo decisions without inflating maintainer-lane evidence", () => {
+    const outsideRole = { maintainerLane: false } as any;
+    const maintainerRole = { maintainerLane: true } as any;
+    const patterns = {
+      summary: "owner/direct: 5 merged, 3 closed-unmerged, 0 open (0 stale) PR(s); outside-contributor merge rate 62% across 8 decided PR(s).",
+      outsideContributorMergeRate: 0.62,
+      sampleSize: 8,
+      successPatterns: [{ repoFullName: "owner/direct", title: "Merge-friendly pattern", detail: "PRs touching src/ merge well here (5/5 merged).", confidence: "high" }],
+      riskPatterns: [{ repoFullName: "owner/direct", title: "High closure-risk pattern", detail: "PRs with no linked issue have high closure risk here (0/3 merged).", confidence: "medium" }],
+    } as any;
+
+    const pursue = __decisionPackInternals.buildRepoDecision({
+      repo: repo("owner/direct", 0.03, 0),
+      roleContext: outsideRole,
+      outcome: undefined,
+      repoOutcomePatterns: patterns,
+    });
+    expect(pursue.recommendation).toBe("pursue");
+    expect(pursue.repoOutcomePatterns?.sampleSize).toBe(8);
+    expect(pursue.whyThisHelps.some((line) => line.includes("PRs touching src/ merge well here"))).toBe(true);
+    expect(pursue.riskReasons.some((line) => line.includes("high closure risk"))).toBe(true);
+
+    // Maintainer-lane repos surface the patterns for context but never fold the risk into the contributor's own risk reasons.
+    const maintainer = __decisionPackInternals.buildRepoDecision({
+      repo: repo("owner/direct", 0.03, 0),
+      roleContext: maintainerRole,
+      outcome: undefined,
+      repoOutcomePatterns: patterns,
+    });
+    expect(maintainer.recommendation).toBe("maintainer_lane");
+    expect(maintainer.repoOutcomePatterns?.sampleSize).toBe(8);
+    expect(maintainer.riskReasons.some((line) => line.includes("high closure risk"))).toBe(false);
+  });
+
+  it("feeds private recommendation outcome feedback without changing public next actions", () => {
+    const baseline = __decisionPackInternals.buildRepoDecision({
+      repo: repo("owner/direct", 0.03, 0),
+      roleContext: { maintainerLane: false } as any,
+      outcome: undefined,
+    });
+    const decision = __decisionPackInternals.buildRepoDecision({
+      repo: repo("owner/direct", 0.03, 0),
+      roleContext: { maintainerLane: false } as any,
+      outcome: undefined,
+      recommendationOutcomeFeedback: {
+        repoFullName: "owner/direct",
+        total: 4,
+        accepted: 1,
+        rejected: 0,
+        ignored: 1,
+        stale: 0,
+        merged: 1,
+        closed: 1,
+        improved: 1,
+        positive: 3,
+        negative: 1,
+        maintainerLaneTotal: 2,
+        latestOutcomeAt: "2026-05-30T00:00:00.000Z",
+        signal: "positive",
+      },
+    });
+
+    expect(decision.recommendationOutcomeFeedback).toMatchObject({ signal: "positive", positive: 3, negative: 1, maintainerLaneTotal: 2 });
+    expect(decision.priorityScore).toBeGreaterThan(baseline.priorityScore);
+    expect(decision.whyThisHelps.some((line) => line.includes("Private recommendation feedback"))).toBe(true);
+    expect(decision.riskReasons.some((line) => line.includes("Private recommendation feedback"))).toBe(true);
+    expect(decision.publicNextActions.join(" ")).not.toMatch(/Private recommendation feedback|wallet|hotkey|raw trust score|reward estimate|payout|farming/i);
+  });
+
+  it("penalizes negative and mixed private recommendation feedback without leaking it publicly", () => {
+    const baseline = __decisionPackInternals.buildRepoDecision({
+      repo: repo("owner/direct", 0.03, 0),
+      roleContext: { maintainerLane: false } as any,
+      outcome: undefined,
+    });
+    const negative = __decisionPackInternals.buildRepoDecision({
+      repo: repo("owner/direct", 0.03, 0),
+      roleContext: { maintainerLane: false } as any,
+      outcome: undefined,
+      recommendationOutcomeFeedback: {
+        repoFullName: "owner/direct",
+        total: 6,
+        accepted: 0,
+        rejected: 0,
+        ignored: 2,
+        stale: 2,
+        merged: 0,
+        closed: 2,
+        improved: 0,
+        positive: 0,
+        negative: 6,
+        maintainerLaneTotal: 0,
+        latestOutcomeAt: "2026-05-30T00:00:00.000Z",
+        signal: "negative",
+      },
+    });
+    const mixed = __decisionPackInternals.buildRepoDecision({
+      repo: repo("owner/direct", 0.03, 0),
+      roleContext: { maintainerLane: false } as any,
+      outcome: undefined,
+      recommendationOutcomeFeedback: {
+        repoFullName: "owner/direct",
+        total: 4,
+        accepted: 1,
+        rejected: 0,
+        ignored: 1,
+        stale: 0,
+        merged: 1,
+        closed: 1,
+        improved: 0,
+        positive: 2,
+        negative: 2,
+        maintainerLaneTotal: 1,
+        latestOutcomeAt: null,
+        signal: "mixed",
+      },
+    });
+
+    expect(negative.priorityScore).toBeLessThan(baseline.priorityScore);
+    expect(negative.riskReasons.join(" ")).toMatch(/6 unresolved or negative/);
+    expect(negative.whyThisHelps.some((line) => line.includes("Private recommendation feedback"))).toBe(false);
+    expect(mixed.priorityScore).toBeLessThan(baseline.priorityScore);
+    expect(mixed.riskReasons.join(" ")).toMatch(/2 unresolved or negative/);
+    expect(mixed.whyThisHelps.join(" ")).toMatch(/2 positive/);
+    expect(`${negative.publicNextActions.join(" ")} ${mixed.publicNextActions.join(" ")}`).not.toMatch(/Private recommendation feedback/i);
+  });
+
+  it("keeps zero-count and maintainer-lane private feedback from changing repo decisions", () => {
+    const baseline = __decisionPackInternals.buildRepoDecision({
+      repo: repo("owner/direct", 0.03, 0),
+      roleContext: { maintainerLane: false } as any,
+      outcome: undefined,
+    });
+    const zero = __decisionPackInternals.buildRepoDecision({
+      repo: repo("owner/direct", 0.03, 0),
+      roleContext: { maintainerLane: false } as any,
+      outcome: undefined,
+      recommendationOutcomeFeedback: {
+        repoFullName: "owner/direct",
+        total: 0,
+        accepted: 0,
+        rejected: 0,
+        ignored: 0,
+        stale: 0,
+        merged: 0,
+        closed: 0,
+        improved: 0,
+        positive: 0,
+        negative: 0,
+        maintainerLaneTotal: 3,
+        latestOutcomeAt: null,
+        signal: "neutral",
+      },
+    });
+    const maintainerLane = __decisionPackInternals.buildRepoDecision({
+      repo: repo("owner/direct", 0.03, 0),
+      roleContext: { maintainerLane: true } as any,
+      outcome: undefined,
+      recommendationOutcomeFeedback: {
+        repoFullName: "owner/direct",
+        total: 2,
+        accepted: 0,
+        rejected: 0,
+        ignored: 1,
+        stale: 0,
+        merged: 0,
+        closed: 1,
+        improved: 0,
+        positive: 0,
+        negative: 2,
+        maintainerLaneTotal: 0,
+        latestOutcomeAt: null,
+        signal: "negative",
+      },
+    });
+
+    expect(zero.recommendationOutcomeFeedback).toBeUndefined();
+    expect(zero.priorityScore).toBe(baseline.priorityScore);
+    expect(maintainerLane.recommendation).toBe("maintainer_lane");
+    expect(maintainerLane.riskReasons.join(" ")).not.toMatch(/Private recommendation feedback/);
+  });
+
+  it("summarizes non-empty recommendation feedback in contributor decision packs", () => {
+    const pack = __decisionPackInternals.buildContributorDecisionPack({
+      login: "dev",
+      profile: {
+        login: "dev",
+        github: {},
+        source: {},
+        gittensor: null,
+        registeredRepoActivity: {},
+        trustSignals: {},
+      } as any,
+      outcomeHistory: { login: "dev", totals: {}, repoOutcomes: [], successPatterns: [], failurePatterns: [], summary: "" } as any,
+      repositories: [],
+      syncStates: [],
+      syncSegments: [],
+      totals: [],
+      scoringModelSnapshotId: "scoring-1",
+      contributorPullRequests: [],
+      contributorIssues: [],
+      openPrMonitor: emptyOpenPrMonitor("dev"),
+      recommendationOutcomeFeedback: {
+        login: "dev",
+        generatedAt: "2026-05-30T00:00:00.000Z",
+        windowDays: 90,
+        totals: {
+          total: 1,
+          accepted: 1,
+          rejected: 0,
+          ignored: 0,
+          stale: 0,
+          merged: 0,
+          closed: 0,
+          improved: 0,
+          positive: 1,
+          negative: 0,
+          maintainerLaneTotal: 1,
+        },
+        states: [{ state: "accepted", count: 1 }],
+        repos: [],
+        maintainerLane: { total: 1, states: [{ state: "merged", count: 1 }] },
+        privateSummary: "dev has feedback.",
+      },
+    });
+
+    expect(pack.summary).toContain("Recommendation feedback: 1 positive, 0 negative, 1 maintainer-lane separated.");
+  });
+
   it("redacts official hotkeys, loads stale snapshots, and resolves repo decisions case-insensitively", async () => {
     const env = createTestEnv();
     const pack = {
@@ -143,6 +375,7 @@ describe("decision-pack service", () => {
 
     const loaded = await loadContributorDecisionPack(env, "jsonbored");
     expect(loaded).toMatchObject({ source: "snapshot", snapshotAgeSeconds: expect.any(Number), stale: expect.any(Boolean), freshness: "stale", rebuildEnqueued: false });
+    expect(loaded?.recommendationOutcomeFeedback).toMatchObject({ login: "jsonbored", totals: { total: 0, maintainerLaneTotal: 0 } });
     expect(repoDecisionFromPack(loaded!, "jsonbored/AWESOME-CLAUDE")).toMatchObject({ recommendation: "maintainer_lane" });
     expect(repoDecisionFromPack(loaded!, "missing/repo")).toBeNull();
 
@@ -573,6 +806,7 @@ describe("decision-pack service", () => {
       scoringModelSnapshotId: "scoring-1",
       contributorPullRequests: [{ repoFullName: "owner/cleanup", authorLogin: "jsonbored", authorAssociation: "CONTRIBUTOR" }] as any,
       contributorIssues: [],
+      openPrMonitor: emptyOpenPrMonitor("jsonbored"),
     });
 
     expect(pack.repoDecisions).toHaveLength(6);
@@ -581,9 +815,103 @@ describe("decision-pack service", () => {
     expect(pack.pursueRepos.map((decision) => decision.repoFullName)).toContain("owner/pursue");
     expect(pack.avoidRepos.map((decision) => decision.repoFullName)).toEqual(expect.arrayContaining(["owner/inactive", "owner/unconfigured"]));
     expect(pack.topActions.map((action) => action.actionKind)).toEqual(expect.arrayContaining(["maintainer_lane_improve_repo", "cleanup_existing_prs", "open_new_direct_pr", "file_issue_discovery"]));
+    expect(pack.actionPortfolio.bucketOrder).toEqual(["cleanup", "wait", "direct_pr", "issue_discovery", "avoid", "maintainer_lane"]);
+    const portfolioBuckets = new Map(pack.actionPortfolio.buckets.map((bucket) => [bucket.bucket, bucket.actions]));
+    expect(portfolioBuckets.get("cleanup")).toEqual([expect.objectContaining({ repoFullName: "owner/cleanup", actionKind: "cleanup_existing_prs" })]);
+    expect(portfolioBuckets.get("wait")).toEqual([expect.objectContaining({ repoFullName: "owner/cleanup", actionKind: "land_existing_prs", status: "watch" })]);
+    expect(portfolioBuckets.get("direct_pr")).toEqual(expect.arrayContaining([expect.objectContaining({ repoFullName: "owner/pursue", actionKind: "open_new_direct_pr" })]));
+    expect(portfolioBuckets.get("issue_discovery")).toEqual(expect.arrayContaining([expect.objectContaining({ repoFullName: "owner/issues", actionKind: "file_issue_discovery" })]));
+    expect(portfolioBuckets.get("avoid")).toEqual(expect.arrayContaining([expect.objectContaining({ repoFullName: "owner/inactive", recommendation: "avoid_for_now" })]));
+    expect(portfolioBuckets.get("maintainer_lane")).toEqual(expect.arrayContaining([expect.objectContaining({ repoFullName: "jsonbored/owned", actionKind: "maintainer_lane_improve_repo" })]));
+    expect(pack.actionPortfolio.topActions[0]).toMatchObject({ bucket: "cleanup", repoFullName: "owner/cleanup" });
+    expect(portfolioBuckets.get("issue_discovery")?.[0]?.scoreabilityImpact).toMatch(/Direct PR scoreability is not the target/);
+    expect(JSON.stringify(pack.actionPortfolio.buckets.map((bucket) => bucket.actions.map((entry) => entry.publicSafeSummary)))).not.toMatch(
+      /wallet|hotkey|raw trust score|payout|reward estimate|farming|private reviewability|public score estimate|scoreability/i,
+    );
     expect(pack.roleContexts.map((role) => role.repoFullName)).not.toContain("owner/unconfigured");
     expect(pack.opportunities).toEqual([expect.objectContaining({ repoFullName: "owner/pursue", issueNumber: 7, fit: "good" })]);
     expect(pack.nextActions.length).toBeGreaterThan(0);
+    expect(pack.evidenceGraph).toMatchObject({ login: "jsonbored", totals: expect.objectContaining({ repositories: expect.any(Number) }) });
+  });
+
+  it("merges open PR monitor guidance into pack summary and next actions", () => {
+    const monitor = {
+      login: "jsonbored",
+      generatedAt: "2026-05-25T00:00:00.000Z",
+      openPrCount: 1,
+      registeredRepoCount: 1,
+      cleanupFirst: true,
+      summary: "One open PR needs attention on owner/cleanup.",
+      guidance: ["Close or land owner/cleanup#42 before opening new direct PR work."],
+      pendingScenarios: [
+        {
+          repoFullName: "owner/cleanup",
+          detection: {
+            source: "github_observed" as const,
+            pendingMergedPrCount: 1,
+            pendingClosedPrCount: 0,
+            approvedPrCount: 1,
+            expectedOpenPrCountAfterMerge: 5,
+            scenarioNotes: ["1 open PR looks merge-ready after review.", "Expected open PR pressure drops after merge."],
+            classified: [],
+          },
+        },
+      ],
+      pullRequests: [
+        {
+          repoFullName: "owner/cleanup",
+          number: 42,
+          title: "WIP cleanup",
+          classification: "needs_author" as const,
+          summary: "Changes requested.",
+          reasons: ["Reviewer asked for tests."],
+          nextSteps: ["Add tests and push updates."],
+        },
+      ],
+    };
+    const pack = __decisionPackInternals.buildContributorDecisionPack({
+      login: "jsonbored",
+      profile: {
+        login: "jsonbored",
+        generatedAt: "2026-05-25T00:00:00.000Z",
+        github: {},
+        source: {},
+        gittensor: null,
+        registeredRepoActivity: { reposTouched: ["owner/cleanup"] },
+        trustSignals: {},
+      } as any,
+      outcomeHistory: {
+        login: "jsonbored",
+        generatedAt: "2026-05-25T00:00:00.000Z",
+        source: {},
+        totals: {},
+        repoOutcomes: [
+          { repoFullName: "owner/cleanup", role: "outside_contributor", lane: "direct_pr", maintainerLane: false, openPullRequests: 6, closedPullRequestRate: 0.4, credibility: 0.5, mergedPullRequests: 1, closedPullRequests: 2, validSolvedIssues: 0 },
+        ],
+        successPatterns: [],
+        failurePatterns: [],
+        summary: "fixture",
+      } as any,
+      repositories: [repo("owner/cleanup", 0.03, 0)],
+      syncStates: [
+        { repoFullName: "owner/cleanup", status: "complete", openPullRequestsCount: 30, openIssuesCount: 150, recentMergedPullRequestsCount: 5, warnings: [], lastCompletedAt: "2026-05-25T00:00:00.000Z" },
+      ] as any,
+      syncSegments: [],
+      totals: [],
+      scoringModelSnapshotId: "scoring-1",
+      contributorPullRequests: [{ repoFullName: "owner/cleanup", authorLogin: "jsonbored", authorAssociation: "CONTRIBUTOR" }] as any,
+      contributorIssues: [],
+      openPrMonitor: monitor,
+    });
+    expect(pack.summary).toContain("One open PR needs attention");
+    expect(pack.nextActions[0]).toMatch(/owner\/cleanup#42/);
+    expect(pack.openPrMonitor).toEqual(monitor);
+    const cleanupPortfolioItem = pack.actionPortfolio.buckets.find((bucket) => bucket.bucket === "cleanup")?.actions[0];
+    expect(cleanupPortfolioItem).toMatchObject({
+      repoFullName: "owner/cleanup",
+      scenarioProjection: { source: "github_observed", pendingMergedPrCount: 1, expectedOpenPrCountAfterMerge: 5 },
+    });
+    expect(cleanupPortfolioItem?.whyNow.join(" ")).toMatch(/Scenario projection/);
   });
 
   it("issues repo-specific direct-PR reasoning that names language and label fit", () => {
@@ -820,6 +1148,7 @@ describe("decision-pack service", () => {
       scoringModelSnapshotId: "scoring-1",
       contributorPullRequests: [],
       contributorIssues: [],
+      openPrMonitor: emptyOpenPrMonitor("jsonbored"),
     });
     const tsDecision = pack.repoDecisions.find((d) => d.repoFullName === "owner/ts")!;
     expect(tsDecision.languageMatch).toEqual({ language: "TypeScript", match: true });
@@ -851,6 +1180,84 @@ describe("decision-pack service", () => {
       expect(joined).not.toMatch(/share|emission|priority/i);
       expect(noStructuralCountLeak(decision.publicNextActions)).toBe(true);
     }
+  });
+
+  it("separates direct-PR, issue-discovery, burden, queue, and policy tradeoff dimensions", async () => {
+    const { parseFocusManifest } = await import("../../src/signals/focus-manifest");
+    const direct = __decisionPackInternals.buildRepoDecision({
+      repo: repoWithLabels("owner/direct-fit", 0.04, 0, { bug: 1 }),
+      roleContext: { maintainerLane: false } as any,
+      outcome: { openPullRequests: 0, mergedPullRequests: 2, closedPullRequestRate: 0, credibility: 1 } as any,
+      totals: { openPullRequestsTotal: 1, openIssuesTotal: 8, mergedPullRequestsTotal: 4, closedUnmergedPullRequestsTotal: 0 } as any,
+      syncState: { primaryLanguage: "TypeScript" } as any,
+      languageSet: new Set(["typescript"]),
+      labelHistory: new Set(["bug"]),
+    });
+    expect(direct.tradeoffSummary).toMatchObject({
+      directPrFit: { level: "strong" },
+      issueDiscoveryFit: { level: "weak" },
+      maintainerBurden: { level: "low" },
+      queuePressure: { level: "low" },
+      policyConfidence: { level: "medium" },
+    });
+    expect(direct.tradeoffSummary?.publicSummary).toMatch(/direct PR work is the clearest path/i);
+
+    const issueOnly = __decisionPackInternals.buildRepoDecision({
+      repo: repoWithLabels("owner/issue-fit", 0.03, 1, { bug: 1 }),
+      roleContext: { maintainerLane: false } as any,
+      issueQuality: {
+        repoFullName: "owner/issue-fit",
+        generatedAt: "2026-06-02T00:00:00.000Z",
+        lane: { repoFullName: "owner/issue-fit", lane: "issue_discovery", issueDiscoveryShare: 1, directPrShare: 0, summary: "", contributorGuidance: "", maintainerGuidance: "" },
+        issues: [{ number: 7, title: "Ready duplicate-safe issue", status: "ready", score: 88, reasons: [], warnings: [] }],
+        summary: "1 issue evaluated.",
+      },
+    });
+    expect(issueOnly.tradeoffSummary).toMatchObject({
+      directPrFit: { level: "blocked" },
+      issueDiscoveryFit: { level: "strong" },
+    });
+    expect(issueOnly.tradeoffSummary?.publicSummary).toMatch(/issue discovery is the clearest path/i);
+
+    const splitBusy = __decisionPackInternals.buildRepoDecision({
+      repo: repoWithLabels("owner/split-busy", 0.03, 0.5, { bug: 1 }),
+      roleContext: { maintainerLane: false } as any,
+      outcome: { openPullRequests: 0, mergedPullRequests: 1, closedPullRequestRate: 0, credibility: 1 } as any,
+      totals: { openPullRequestsTotal: 12, openIssuesTotal: 120, mergedPullRequestsTotal: 4, closedUnmergedPullRequestsTotal: 0 } as any,
+      focusManifest: parseFocusManifest({ source: "repo_file", issueDiscoveryPolicy: "encouraged" }),
+      issueQuality: {
+        repoFullName: "owner/split-busy",
+        generatedAt: "2026-06-02T00:00:00.000Z",
+        lane: { repoFullName: "owner/split-busy", lane: "split", issueDiscoveryShare: 0.5, directPrShare: 0.5, summary: "", contributorGuidance: "", maintainerGuidance: "" },
+        issues: [{ number: 8, title: "Ready split issue", status: "ready", score: 90, reasons: [], warnings: [] }],
+        summary: "1 issue evaluated.",
+      },
+    });
+    expect(splitBusy.tradeoffSummary).toMatchObject({
+      directPrFit: { level: "moderate" },
+      issueDiscoveryFit: { level: "strong" },
+      maintainerBurden: { level: "high" },
+      queuePressure: { level: "high" },
+      policyConfidence: { level: "high" },
+    });
+
+    const policyConflict = __decisionPackInternals.buildRepoDecision({
+      repo: repoWithLabels("owner/policy-conflict", 0.03, 0.5, { bug: 1 }),
+      roleContext: { maintainerLane: false } as any,
+      focusManifest: parseFocusManifest({ source: "repo_file", issueDiscoveryPolicy: "discouraged" }),
+    });
+    expect(policyConflict.tradeoffSummary).toMatchObject({
+      issueDiscoveryFit: { level: "weak" },
+      policyConfidence: { level: "low" },
+    });
+
+    const serialized = JSON.stringify([direct.tradeoffSummary, issueOnly.tradeoffSummary, splitBusy.tradeoffSummary, policyConflict.tradeoffSummary]);
+    expect(serialized).not.toMatch(FORBIDDEN_PUBLIC_TRADEOFF_LANGUAGE);
+    expect(
+      __decisionPackInternals.sanitizeTradeoffPublicText(
+        "wallet hotkey reward-estimate payout scoreability public-score-prediction trust-score private-reviewability private-scoreability farming-language",
+      ),
+    ).not.toMatch(FORBIDDEN_PUBLIC_TRADEOFF_LANGUAGE);
   });
 
   it("covers languageMatch true/false and labelFit empty/non-empty paths", () => {
@@ -957,10 +1364,127 @@ describe("decision-pack service", () => {
       signalType: "contributor-decision-pack",
       targetKey: "user",
       generatedAt: null,
-      payload: { status: "ready", source: "computed", login: "user", repoDecisions: [], topActions: [] } as any,
+      payload: { status: "ready", source: "computed", login: "user", repoDecisions: undefined, topActions: undefined } as any,
     });
     expect(typeof wrapped.generatedAt).toBe("string");
     expect(wrapped.generatedAt.length).toBeGreaterThan(0);
+    expect(wrapped.actionPortfolio.topActions).toEqual([]);
+  });
+
+  it("builds action portfolios from sparse legacy actions with stable tie-breaks", () => {
+    const directDecision = (repoFullName: string): RepoDecision =>
+      ({
+        repoFullName,
+        recommendation: "pursue",
+        priorityScore: 30,
+        lane: { lane: "direct_pr" },
+        whyThisHelps: [],
+        riskReasons: [],
+        nextActions: ["Open a narrow PR."],
+        publicNextActions: ["Run public preflight before posting."],
+        scoreBlockers: [],
+        rewardUpside: { directPrShare: 0.03, issueDiscoveryShare: 0, emissionShare: 0.02 },
+      }) as any;
+    const maintainerDecision = {
+      ...directDecision("owner/maintainer"),
+      recommendation: "maintainer_lane",
+      priorityScore: 20,
+      scoreBlockers: [{ code: "maintainer_lane", severity: "info" }],
+    } as RepoDecision;
+    const portfolio = __decisionPackInternals.buildActionPortfolio({
+      generatedAt: "2026-05-25T00:00:00.000Z",
+      repoDecisions: [
+        directDecision("owner/beta"),
+        directDecision("owner/alpha"),
+        maintainerDecision,
+        { recommendation: "pursue", priorityScore: 5 } as RepoDecision,
+      ],
+      topActions: [
+        { actionKind: "open_new_direct_pr", repoFullName: "owner/beta", priorityScore: 30, recommendation: "pursue", whyThisHelps: [], nextActions: [], publicNextActions: [] },
+        { actionKind: "open_new_direct_pr", repoFullName: "owner/alpha", priorityScore: 30, recommendation: "pursue", whyThisHelps: [], nextActions: [], publicNextActions: [] },
+        { actionKind: "maintainer_lane_improve_repo", repoFullName: "owner/maintainer", priorityScore: 20, recommendation: "maintainer_lane", whyThisHelps: [], nextActions: [], publicNextActions: ["Avoid reward payout language."] },
+        { actionKind: "maintainer_cut_readiness", repoFullName: "owner/maintainer", priorityScore: 20, recommendation: "maintainer_lane", whyThisHelps: [], nextActions: [], publicNextActions: ["Prepare public intake notes."] },
+        { actionKind: "maintainer_cut_readiness", repoFullName: "owner/maintainer", priorityScore: 20, recommendation: "maintainer_lane", whyThisHelps: [], nextActions: [], publicNextActions: ["Prepare public intake notes."] },
+        { actionKind: "open_new_direct_pr", repoFullName: 42, priorityScore: 99, recommendation: "pursue", whyThisHelps: [], nextActions: [], publicNextActions: [] },
+      ] as any,
+      openPrMonitor: {
+        pendingScenarios: [
+          {
+            repoFullName: "owner/maintainer",
+            detection: {
+              source: "user_supplied",
+              pendingMergedPrCount: 0,
+              pendingClosedPrCount: 1,
+              approvedPrCount: 0,
+              scenarioNotes: ["Manual projection expects one PR to close."],
+              classified: [],
+            },
+          },
+        ],
+      } as any,
+    });
+    const buckets = new Map(portfolio.buckets.map((bucket) => [bucket.bucket, bucket.actions]));
+    expect(buckets.get("direct_pr")?.map((action) => action.repoFullName)).toEqual(["owner/alpha", "owner/beta"]);
+    expect(buckets.get("maintainer_lane")?.map((action) => action.actionKind)).toEqual(["maintainer_cut_readiness", "maintainer_lane_improve_repo"]);
+    expect(buckets.get("maintainer_lane")).toHaveLength(2);
+    expect(buckets.get("maintainer_lane")?.[0]?.scenarioProjection).toMatchObject({ source: "user_supplied", pendingClosedPrCount: 1 });
+    expect(buckets.get("maintainer_lane")?.[1]?.maintainerImpact).toMatch(/Repo-owner work/);
+    expect(JSON.stringify(buckets.get("maintainer_lane"))).not.toMatch(/reward payout/i);
+  });
+
+  it("builds safe portfolio fallbacks for empty and sparse action inputs", () => {
+    const emptyPortfolio = __decisionPackInternals.buildActionPortfolio({
+      generatedAt: "2026-05-25T00:00:00.000Z",
+      repoDecisions: [{ priorityScore: 99 } as RepoDecision],
+      topActions: [{ actionKind: "open_new_direct_pr", repoFullName: "owner/missing", priorityScore: 99, recommendation: "pursue" } as any],
+    });
+    expect(emptyPortfolio.summary).toBe("No portfolio actions are currently available from the decision pack.");
+    expect(emptyPortfolio.topActions).toEqual([]);
+    expect(emptyPortfolio.buckets.every((bucket) => bucket.actions.length === 0)).toBe(true);
+    expect(emptyPortfolio.buckets.find((bucket) => bucket.bucket === "direct_pr")?.summary).toBe("No direct pr opportunities actions are currently recommended.");
+
+    const sparseDecision = {
+      repoFullName: "owner/sparse",
+      recommendation: "pursue",
+      priorityScore: 17,
+      lane: { lane: "direct_pr" },
+      whyThisHelps: ["Decision-level reason."],
+      riskReasons: ["Queue is busy."],
+      nextActions: ["Use decision next action."],
+      publicNextActions: ["Use public preflight."],
+      scoreBlockers: [{ code: "open_pr_pressure", severity: "warning" }],
+      rewardUpside: { directPrShare: 0.02, issueDiscoveryShare: 0, emissionShare: 0.02 },
+    } as RepoDecision;
+
+    const portfolio = __decisionPackInternals.buildActionPortfolio({
+      generatedAt: "2026-05-25T00:00:00.000Z",
+      repoDecisions: [sparseDecision],
+      topActions: [
+        {
+          actionKind: "open_new_direct_pr",
+          repoFullName: "owner/sparse",
+          priorityScore: Number.NaN,
+          recommendation: "pursue",
+          whyThisHelps: undefined,
+          nextActions: undefined,
+          publicNextActions: undefined,
+        } as any,
+      ],
+    });
+
+    const action = portfolio.buckets.find((bucket) => bucket.bucket === "direct_pr")?.actions[0];
+    expect(action).toMatchObject({
+      repoFullName: "owner/sparse",
+      priorityScore: 17,
+      whyNow: ["Queue is busy."],
+      riskImpact: "Queue is busy.",
+      blockedBy: ["open_pr_pressure"],
+      rerunWhen: "Rerun after the listed scoreability blockers change.",
+      nextActions: ["Use decision next action."],
+      publicNextActions: ["Use public preflight."],
+    });
+    expect(action?.scoreabilityImpact).toMatch(/Blocked by open_pr_pressure/);
+    expect(action?.publicSafeSummary).toBe("Use public preflight.");
   });
 
   it("produces fully deterministic repoDecisions, priorityScores, and nextActions across builds", () => {
@@ -982,6 +1506,7 @@ describe("decision-pack service", () => {
       scoringModelSnapshotId: "scoring-1",
       contributorPullRequests: [],
       contributorIssues: [],
+      openPrMonitor: emptyOpenPrMonitor("jsonbored"),
     });
     const packA = __decisionPackInternals.buildContributorDecisionPack(fixedArgs());
     const packB = __decisionPackInternals.buildContributorDecisionPack(fixedArgs());
@@ -989,8 +1514,161 @@ describe("decision-pack service", () => {
     expect(packA.repoDecisions.map((d) => d.priorityScore)).toEqual(packB.repoDecisions.map((d) => d.priorityScore));
     expect(packA.repoDecisions.map((d) => d.nextActions)).toEqual(packB.repoDecisions.map((d) => d.nextActions));
     expect(packA.topActions.map((a) => `${a.actionKind}:${a.repoFullName}`)).toEqual(packB.topActions.map((a) => `${a.actionKind}:${a.repoFullName}`));
+    expect(packA.actionPortfolio.buckets.map((bucket) => `${bucket.bucket}:${bucket.actions.map((action) => `${action.actionKind ?? action.recommendation}:${action.repoFullName}`).join(",")}`)).toEqual(
+      packB.actionPortfolio.buckets.map((bucket) => `${bucket.bucket}:${bucket.actions.map((action) => `${action.actionKind ?? action.recommendation}:${action.repoFullName}`).join(",")}`),
+    );
+    expect(packA.evidenceGraph?.repos.map((repo) => repo.repoFullName)).toEqual(packB.evidenceGraph?.repos.map((repo) => repo.repoFullName));
+  });
+
+  it("threads a maintainer focus manifest into RepoDecision without leaking maintainer-private notes", async () => {
+    const { parseFocusManifest } = await import("../../src/signals/focus-manifest");
+    const manifest = parseFocusManifest({
+      source: "repo_file",
+      wantedPaths: ["src/"],
+      blockedPaths: ["migrations/"],
+      preferredLabels: ["bug"],
+      linkedIssuePolicy: "required",
+      issueDiscoveryPolicy: "discouraged",
+      maintainerNotes: ["Internal: ping @owner before touching the queue processor."],
+      publicNotes: ["Prefer small, focused PRs."],
+    });
+    const decision = __decisionPackInternals.buildRepoDecision({
+      repo: repoWithLabels("owner/manifested", 0.04, 0, { bug: 1 }),
+      roleContext: { maintainerLane: false } as any,
+      outcome: { mergedPullRequests: 1, openPullRequests: 0, closedPullRequestRate: 0, credibility: 1 } as any,
+      syncState: { primaryLanguage: "TypeScript" } as any,
+      languageSet: new Set(["typescript"]),
+      labelHistory: new Set(["bug"]),
+      focusManifest: manifest,
+    });
+    expect(decision.manifestSummary).toMatchObject({
+      present: true,
+      source: "repo_file",
+      linkedIssuePolicy: "required",
+      issueDiscoveryPolicy: "discouraged",
+      wantedPathCount: 1,
+      blockedPathCount: 1,
+      preferredLabels: ["bug"],
+      publicNotes: ["Prefer small, focused PRs."],
+    });
+    expect(decision.riskReasons.join(" ")).toMatch(/maintainer focus manifest blocks/i);
+    expect(decision.whyThisHelps.join(" ")).toMatch(/wanted path/i);
+    expect(decision.publicNextActions.join(" ")).toMatch(/maintainer requires linked issues/i);
+    expect(decision.publicNextActions.join(" ")).toMatch(/Prefer small, focused PRs/);
+    // Privacy boundary: maintainer-private notes must not appear anywhere on RepoDecision.
+    const decisionJson = JSON.stringify(decision);
+    expect(decisionJson).not.toMatch(/ping @owner/);
+    expect(decisionJson).not.toMatch(/Internal:/);
+    expect(noStructuralCountLeak(decision.publicNextActions)).toBe(true);
+  });
+
+  it("covers the preferred linked-issue and encouraged issue-discovery manifest arms", async () => {
+    const { parseFocusManifest } = await import("../../src/signals/focus-manifest");
+    const manifest = parseFocusManifest({
+      source: "api_record",
+      wantedPaths: ["src/"],
+      preferredLabels: ["bug"],
+      linkedIssuePolicy: "preferred",
+      issueDiscoveryPolicy: "encouraged",
+    });
+    const decision = __decisionPackInternals.buildRepoDecision({
+      repo: repoWithLabels("owner/preferred", 0.04, 0, { bug: 1 }),
+      roleContext: { maintainerLane: false } as any,
+      outcome: { mergedPullRequests: 1, openPullRequests: 0, closedPullRequestRate: 0, credibility: 1 } as any,
+      syncState: { primaryLanguage: "TypeScript" } as any,
+      languageSet: new Set(["typescript"]),
+      labelHistory: new Set(["bug"]),
+      focusManifest: manifest,
+    });
+    expect(decision.manifestSummary?.linkedIssuePolicy).toBe("preferred");
+    expect(decision.publicNextActions.join(" ")).toMatch(/prefers linked issues/i);
+    expect(decision.publicNextActions.join(" ")).toMatch(/issue-discovery reports are welcomed/i);
+    expect(decision.publicNextActions.join(" ")).toMatch(/maintainer-preferred label/i);
+    expect(noStructuralCountLeak(decision.publicNextActions)).toBe(true);
+  });
+
+  it("covers the optional linked-issue, neutral issue-discovery, and unlabeled manifest arms", async () => {
+    const { parseFocusManifest } = await import("../../src/signals/focus-manifest");
+    const manifest = parseFocusManifest({
+      source: "api_record",
+      blockedPaths: ["migrations/"],
+      linkedIssuePolicy: "optional",
+      issueDiscoveryPolicy: "neutral",
+    });
+    const decision = __decisionPackInternals.buildRepoDecision({
+      repo: repoWithLabels("owner/neutral", 0.04, 0, { bug: 1 }),
+      roleContext: { maintainerLane: false } as any,
+      outcome: { mergedPullRequests: 1, openPullRequests: 0, closedPullRequestRate: 0, credibility: 1 } as any,
+      syncState: { primaryLanguage: "TypeScript" } as any,
+      languageSet: new Set(["typescript"]),
+      labelHistory: new Set(["bug"]),
+      focusManifest: manifest,
+    });
+    expect(decision.manifestSummary?.linkedIssuePolicy).toBe("optional");
+    expect(decision.manifestSummary?.issueDiscoveryPolicy).toBe("neutral");
+    // Optional/neutral policies and absent preferred labels emit no policy-specific public actions.
+    expect(decision.publicNextActions.join(" ")).not.toMatch(/requires linked issues|prefers linked issues/i);
+    expect(decision.publicNextActions.join(" ")).not.toMatch(/issue-discovery reports are welcomed|Prefer direct fixes over new issue-discovery/i);
+    expect(decision.publicNextActions.join(" ")).not.toMatch(/maintainer-preferred label/i);
+    expect(noStructuralCountLeak(decision.publicNextActions)).toBe(true);
+  });
+
+  it("drops a non-public-safe manifest note before it reaches public next actions", () => {
+    // Defense-in-depth: even if a present manifest carries an unsafe public note, the
+    // per-note redaction guard keeps it out of the contributor-facing actions.
+    const manifest = {
+      present: true,
+      source: "repo_file",
+      wantedPaths: ["src/"],
+      blockedPaths: [],
+      preferredLabels: [],
+      linkedIssuePolicy: "optional",
+      testExpectations: [],
+      issueDiscoveryPolicy: "neutral",
+      maintainerNotes: [],
+      publicNotes: ["Maximize your reward payout", "Keep PRs small"],
+      warnings: [],
+    } as const;
+    const decision = __decisionPackInternals.buildRepoDecision({
+      repo: repoWithLabels("owner/unsafe-note", 0.04, 0, { bug: 1 }),
+      roleContext: { maintainerLane: false } as any,
+      outcome: { mergedPullRequests: 1, openPullRequests: 0, closedPullRequestRate: 0, credibility: 1 } as any,
+      syncState: { primaryLanguage: "TypeScript" } as any,
+      languageSet: new Set(["typescript"]),
+      labelHistory: new Set(["bug"]),
+      focusManifest: manifest as any,
+    });
+    expect(decision.publicNextActions.join(" ")).not.toMatch(/reward payout/i);
+    expect(decision.publicNextActions).toContain("Keep PRs small");
+    expect(noStructuralCountLeak(decision.publicNextActions)).toBe(true);
+  });
+
+  it("omits manifestSummary when no manifest is configured", () => {
+    const decision = __decisionPackInternals.buildRepoDecision({
+      repo: repoWithLabels("owner/no-manifest", 0.04, 0, { bug: 1 }),
+      roleContext: { maintainerLane: false } as any,
+      outcome: { mergedPullRequests: 1, openPullRequests: 0, closedPullRequestRate: 0, credibility: 1 } as any,
+      syncState: { primaryLanguage: "TypeScript" } as any,
+      languageSet: new Set(["typescript"]),
+      labelHistory: new Set(["bug"]),
+    });
+    expect(decision.manifestSummary).toBeUndefined();
   });
 });
+
+function emptyOpenPrMonitor(login: string) {
+  return {
+    login,
+    generatedAt: "2026-05-25T00:00:00.000Z",
+    openPrCount: 0,
+    registeredRepoCount: 0,
+    cleanupFirst: false,
+    summary: "No open PRs on registered repos.",
+    guidance: [],
+    pendingScenarios: [],
+    pullRequests: [],
+  };
+}
 
 function noStructuralCountLeak(lines: string[]): boolean {
   const joined = lines.join(" | ");
