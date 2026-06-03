@@ -203,6 +203,46 @@ describe("reopened-link — linked issue is raw (unvalidated, needs evidence)", 
   });
 });
 
+// ── Fixture: plausible and unavailable link statuses ───────────────────────
+
+describe("plausible link — mirror sees the issue but solved-by-PR is not confirmed", () => {
+  const result = preview({
+    linkedIssueMode: "standard",
+    linkedIssueContext: { status: "plausible", source: "issue_quality", issueNumbers: [88] },
+    branchEligibility: { status: "eligible", source: "github_metadata" },
+  });
+
+  it("derives eligible:false with unvalidated status and summary", () => {
+    const plan = deriveEligibilityPlan(result);
+    expect(plan.eligible).toBe(false);
+    expect(plan.linkedIssueStatus).toBe("plausible");
+    expect(plan.publicSummary).toMatch(/not yet validated|validation is needed/i);
+  });
+
+  it("plan is free of forbidden public language", () => {
+    const plan = deriveEligibilityPlan(result);
+    expect(JSON.stringify(plan)).not.toMatch(FORBIDDEN_PUBLIC_LANGUAGE);
+  });
+});
+
+describe("unavailable link — mirror/cache data cannot confirm the linked issue", () => {
+  const result = preview({
+    linkedIssueMode: "standard",
+    linkedIssueContext: { status: "unavailable", source: "missing", issueNumbers: [90] },
+    branchEligibility: { status: "eligible", source: "github_metadata" },
+  });
+
+  it("derives eligible:false with unvalidated status and a blocker", () => {
+    const plan = deriveEligibilityPlan(result);
+    expect(plan.eligible).toBe(false);
+    expect(plan.linkedIssueStatus).toBe("unavailable");
+    expect(plan.publicSummary).toMatch(/not yet validated|validation is needed/i);
+    expect(plan.blockers).toEqual(
+      expect.arrayContaining([expect.stringMatching(/not yet validated|solved-by-PR|validation/i)]),
+    );
+  });
+});
+
 // ── Fixture: branch-ineligible ────────────────────────────────────────────
 
 describe("branch-ineligible — branch does not qualify for linked-issue assumptions", () => {
