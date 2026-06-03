@@ -484,6 +484,8 @@ export const agentRecommendationOutcomes = sqliteTable(
     targetRepoFullName: text("target_repo_full_name"),
     targetPullNumber: integer("target_pull_number"),
     targetIssueNumber: integer("target_issue_number"),
+    surface: text("surface"),
+    snapshotId: text("snapshot_id"),
     outcomeState: text("outcome_state").notNull(),
     outcomeTargetType: text("outcome_target_type").notNull(),
     outcomeRepoFullName: text("outcome_repo_full_name"),
