@@ -7478,6 +7478,43 @@
             "items": {
               "$ref": "#/components/schemas/Finding"
             }
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "sourceUrl": {
+                "type": "string",
+                "nullable": true
+              },
+              "discoveredAt": {
+                "type": "string",
+                "nullable": true
+              },
+              "updatedAt": {
+                "type": "string",
+                "nullable": true
+              },
+              "observedAt": {
+                "type": "string",
+                "nullable": true
+              },
+              "ageDays": {
+                "type": "number",
+                "nullable": true
+              },
+              "freshness": {
+                "type": "string",
+                "enum": [
+                  "fresh",
+                  "stale",
+                  "unknown"
+                ]
+              }
+            },
+            "required": [
+              "ageDays",
+              "freshness"
+            ]
           }
         },
         "required": [
@@ -7489,6 +7526,7 @@
           "isActiveOpportunity",
           "fundingStatus",
           "consensusRisk",
+          "source",
           "linkedPrs",
           "findings"
         ]
@@ -10833,6 +10871,119 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "bounty": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "lifecycle": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "historical",
+                        "completed",
+                        "cancelled",
+                        "stale",
+                        "ambiguous",
+                        "unknown"
+                      ]
+                    },
+                    "isActiveOpportunity": {
+                      "type": "boolean"
+                    },
+                    "fundingStatus": {
+                      "type": "string",
+                      "enum": [
+                        "funded",
+                        "target_only",
+                        "unknown"
+                      ]
+                    },
+                    "consensusRisk": {
+                      "type": "string",
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                      ]
+                    },
+                    "source": {
+                      "type": "object",
+                      "properties": {
+                        "sourceUrl": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "discoveredAt": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "observedAt": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "ageDays": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "freshness": {
+                          "type": "string",
+                          "enum": [
+                            "fresh",
+                            "stale",
+                            "unknown"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ageDays",
+                        "freshness"
+                      ]
+                    },
+                    "linkedPrs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "number": {
+                            "type": "number"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "closed",
+                              "merged",
+                              "unknown"
+                            ]
+                          },
+                          "isActive": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "number",
+                          "state",
+                          "isActive"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "lifecycle",
+                    "isActiveOpportunity",
+                    "fundingStatus",
+                    "consensusRisk",
+                    "source",
+                    "linkedPrs"
+                  ]
                 }
               },
               "required": [

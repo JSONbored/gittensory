@@ -475,6 +475,31 @@ export const BountySchema = z
   })
   .openapi("Bounty");
 
+const BountySourceContextSchema = z.object({
+  sourceUrl: z.string().nullable().optional(),
+  discoveredAt: z.string().nullable().optional(),
+  updatedAt: z.string().nullable().optional(),
+  observedAt: z.string().nullable().optional(),
+  ageDays: z.number().nullable(),
+  freshness: z.enum(["fresh", "stale", "unknown"]),
+});
+
+const BountyLinkedPrSchema = z.object({
+  number: z.number(),
+  state: z.enum(["open", "closed", "merged", "unknown"]),
+  isActive: z.boolean(),
+});
+
+const BountyOpportunityContextSchema = z.object({
+  id: z.string(),
+  lifecycle: z.enum(["active", "historical", "completed", "cancelled", "stale", "ambiguous", "unknown"]),
+  isActiveOpportunity: z.boolean(),
+  fundingStatus: z.enum(["funded", "target_only", "unknown"]),
+  consensusRisk: z.enum(["low", "medium", "high"]),
+  source: BountySourceContextSchema,
+  linkedPrs: z.array(BountyLinkedPrSchema),
+});
+
 export const BountyAdvisorySchema = z
   .object({
     id: z.string(),
@@ -485,13 +510,8 @@ export const BountyAdvisorySchema = z
     isActiveOpportunity: z.boolean(),
     fundingStatus: z.enum(["funded", "target_only", "unknown"]),
     consensusRisk: z.enum(["low", "medium", "high"]),
-    linkedPrs: z.array(
-      z.object({
-        number: z.number(),
-        state: z.enum(["open", "closed", "merged", "unknown"]),
-        isActive: z.boolean(),
-      }),
-    ),
+    source: BountySourceContextSchema,
+    linkedPrs: z.array(BountyLinkedPrSchema),
     findings: z.array(FindingSchema),
   })
   .openapi("BountyAdvisory");
@@ -1237,6 +1257,7 @@ export const IssueQualityReportSchema = z
             warnings: z.array(z.string()),
           })
           .optional(),
+        bounty: BountyOpportunityContextSchema.optional(),
         status: z.enum(["ready", "needs_proof", "hold", "do_not_use"]),
         score: z.number(),
         reasons: z.array(z.string()),
