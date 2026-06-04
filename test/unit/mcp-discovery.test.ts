@@ -128,15 +128,21 @@ describe("MCP resource discovery", () => {
 // ── Prompt discovery ──────────────────────────────────────────────────────────
 
 describe("MCP prompt discovery", () => {
-  it("no prompts are currently registered — listing prompts is unavailable", async () => {
-    const { mcpServer } = await connectTestClient();
-    const prompts = (mcpServer as unknown as { _registeredPrompts: Record<string, unknown> })._registeredPrompts;
-    expect(Object.keys(prompts)).toHaveLength(0);
+  it("registered prompts are discoverable via the protocol and all gittensory_-prefixed", async () => {
+    const { client, mcpServer } = await connectTestClient();
+    const { prompts } = await client.listPrompts();
+    const registered = (mcpServer as unknown as { _registeredPrompts: Record<string, unknown> })._registeredPrompts;
+    // Prompts are now registered (miner planning prompts); discovery must surface every one.
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(prompts.length).toBe(Object.keys(registered).length);
+    for (const prompt of prompts) {
+      expect(prompt.name).toMatch(/^gittensory_/);
+    }
   });
 
   it("getting a non-existent prompt fails safely", async () => {
     const { client } = await connectTestClient();
-    // No prompts are registered; the server returns an error for any prompt name.
+    // Unknown prompt names are rejected even though valid prompts are registered.
     await expect(client.getPrompt({ name: "nonexistent" })).rejects.toThrow();
   });
 
