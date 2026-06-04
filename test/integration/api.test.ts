@@ -4825,17 +4825,10 @@ describe("api routes", () => {
     expect(readinessPayload.policyReadiness).toMatchObject({
       source: "focus_manifest_policy",
       present: true,
-      ownerContext: {
-        manifestPresent: true,
-        manifestSource: "api_record",
-        privateNoteCount: 1,
-        wantedPathCount: 1,
-        blockedPathCount: 1,
-        validationExpectationCount: 1,
-        issueDiscoveryPolicy: "discouraged",
-      },
     });
+    expect(readinessPayload.policyReadiness).not.toHaveProperty("ownerContext");
     expect(JSON.stringify(readinessPayload)).not.toContain(privateNote);
+    expect(JSON.stringify(readinessPayload)).not.toMatch(/privateNoteCount|blockedPathCount|validationExpectationCount/i);
     expect(JSON.stringify(readinessPayload)).not.toMatch(FORBIDDEN_PUBLIC_REPORT_TERMS);
 
     const malformed = await app.request(
