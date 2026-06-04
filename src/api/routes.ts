@@ -175,7 +175,8 @@ import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-mo
 import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
-import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
+import { compileFocusManifestPolicy } from "../signals/focus-manifest";
+import { loadRepoFocusManifest, upsertRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildRepoSettingsPreview } from "../signals/settings-preview";
 import { buildGittensorConfigRecommendation, buildRegistrationReadiness, type InstallationHealthSummary } from "../signals/registration-readiness";
 import { fileUpstreamDriftIssues, loadUpstreamStatus, refreshUpstreamDrift, registryHyperparameterDriftWarningsForRepo } from "../upstream/ruleset";
@@ -2170,6 +2171,30 @@ export function createApp() {
         privateTrustEnabled: parsed.data.privateTrustEnabled,
       }),
     );
+  });
+
+  app.get("/v1/internal/repos/:owner/:repo/contribution-policy", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const focusManifest = await loadRepoFocusManifest(c.env, fullName, { fetcher: async () => null });
+    return c.json({
+      repoFullName: fullName,
+      generatedAt: nowIso(),
+      focusManifest,
+      policy: compileFocusManifestPolicy(focusManifest),
+    });
+  });
+
+  app.post("/v1/internal/repos/:owner/:repo/contribution-policy", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (body === null) return c.json({ error: "invalid_contribution_policy_json" }, 400);
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const focusManifest = await upsertRepoFocusManifest(c.env, fullName, body, "api_record");
+    return c.json({
+      repoFullName: fullName,
+      generatedAt: nowIso(),
+      focusManifest,
+      policy: compileFocusManifestPolicy(focusManifest),
+    });
   });
 
   return app;
