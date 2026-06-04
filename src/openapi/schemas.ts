@@ -548,6 +548,10 @@ export const RepositorySettingsSchema = z
     requireLinkedIssue: z.boolean(),
     backfillEnabled: z.boolean(),
     privateTrustEnabled: z.boolean(),
+    commandAuthorization: z.object({
+      default: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])),
+      commands: z.record(z.string(), z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"]))),
+    }),
     createdAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
   })
@@ -568,6 +572,27 @@ export const RepoSettingsPreviewSchema = z
       createMissingLabel: z.boolean(),
       includeMaintainerAuthors: z.boolean(),
       requireLinkedIssue: z.boolean(),
+      commandAuthorization: z.object({
+        defaultAllowed: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])),
+        commandOverrides: z.array(
+          z.object({
+            command: z.string(),
+            allowedRoles: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])),
+          }),
+        ),
+      }),
+    }),
+    commandAuthorizationPreview: z.object({
+      commandName: z.string(),
+      commenterLogin: z.string(),
+      commenterAssociation: z.string(),
+      decision: z.object({
+        authorized: z.boolean(),
+        reason: z.string(),
+        actorKind: z.enum(["maintainer", "author", "none"]),
+        matchedRole: z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"]).nullable(),
+        allowedRoles: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])),
+      }),
     }),
     installation: z
       .object({
@@ -647,6 +672,30 @@ export const RepoSettingsPreviewSchema = z
     summary: z.string(),
   })
   .openapi("RepoSettingsPreview");
+
+export const SkippedPrAuditExportSchema = z
+  .object({
+    generatedAt: z.string(),
+    limit: z.number().int().min(1).max(100),
+    hasMore: z.boolean(),
+    filters: z.object({
+      repoFullName: z.string().nullable(),
+      reason: z
+        .enum(["surface_off", "missing_author", "bot_author", "maintainer_author", "miner_detection_unavailable", "not_official_gittensor_miner"])
+        .nullable(),
+      since: z.string().nullable(),
+    }),
+    items: z.array(
+      z.object({
+        repoFullName: z.string(),
+        pullNumber: z.number().int().positive(),
+        reason: z.string(),
+        timestamp: z.string(),
+        remediation: z.string(),
+      }),
+    ),
+  })
+  .openapi("SkippedPrAuditExport");
 
 export const CommandPreviewResponseSchema = z
   .object({
