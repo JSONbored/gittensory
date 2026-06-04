@@ -7612,6 +7612,42 @@
           "privateTrustEnabled": {
             "type": "boolean"
           },
+          "commandAuthorization": {
+            "type": "object",
+            "properties": {
+              "default": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "maintainer",
+                    "collaborator",
+                    "pr_author",
+                    "confirmed_miner"
+                  ]
+                }
+              },
+              "commands": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "maintainer",
+                      "collaborator",
+                      "pr_author",
+                      "confirmed_miner"
+                    ]
+                  }
+                }
+              }
+            },
+            "required": [
+              "default",
+              "commands"
+            ]
+          },
           "createdAt": {
             "type": "string",
             "nullable": true
@@ -7634,7 +7670,8 @@
           "includeMaintainerAuthors",
           "requireLinkedIssue",
           "backfillEnabled",
-          "privateTrustEnabled"
+          "privateTrustEnabled",
+          "commandAuthorization"
         ]
       },
       "InstallationRepair": {
@@ -8078,6 +8115,54 @@
               },
               "requireLinkedIssue": {
                 "type": "boolean"
+              },
+              "commandAuthorization": {
+                "type": "object",
+                "properties": {
+                  "defaultAllowed": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "maintainer",
+                        "collaborator",
+                        "pr_author",
+                        "confirmed_miner"
+                      ]
+                    }
+                  },
+                  "commandOverrides": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "command": {
+                          "type": "string"
+                        },
+                        "allowedRoles": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "maintainer",
+                              "collaborator",
+                              "pr_author",
+                              "confirmed_miner"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "command",
+                        "allowedRoles"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "defaultAllowed",
+                  "commandOverrides"
+                ]
               }
             },
             "required": [
@@ -8090,7 +8175,77 @@
               "gittensorLabel",
               "createMissingLabel",
               "includeMaintainerAuthors",
-              "requireLinkedIssue"
+              "requireLinkedIssue",
+              "commandAuthorization"
+            ]
+          },
+          "commandAuthorizationPreview": {
+            "type": "object",
+            "properties": {
+              "commandName": {
+                "type": "string"
+              },
+              "commenterLogin": {
+                "type": "string"
+              },
+              "commenterAssociation": {
+                "type": "string"
+              },
+              "decision": {
+                "type": "object",
+                "properties": {
+                  "authorized": {
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "actorKind": {
+                    "type": "string",
+                    "enum": [
+                      "maintainer",
+                      "author",
+                      "none"
+                    ]
+                  },
+                  "matchedRole": {
+                    "type": "string",
+                    "nullable": true,
+                    "enum": [
+                      "maintainer",
+                      "collaborator",
+                      "pr_author",
+                      "confirmed_miner",
+                      null
+                    ]
+                  },
+                  "allowedRoles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "maintainer",
+                        "collaborator",
+                        "pr_author",
+                        "confirmed_miner"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "authorized",
+                  "reason",
+                  "actorKind",
+                  "matchedRole",
+                  "allowedRoles"
+                ]
+              }
+            },
+            "required": [
+              "commandName",
+              "commenterLogin",
+              "commenterAssociation",
+              "decision"
             ]
           },
           "installation": {
@@ -8307,6 +8462,7 @@
           "repoFullName",
           "generatedAt",
           "settings",
+          "commandAuthorizationPreview",
           "installation",
           "sample",
           "decision",

@@ -528,6 +528,10 @@ export const RepositorySettingsSchema = z
     requireLinkedIssue: z.boolean(),
     backfillEnabled: z.boolean(),
     privateTrustEnabled: z.boolean(),
+    commandAuthorization: z.object({
+      default: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])),
+      commands: z.record(z.string(), z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"]))),
+    }),
     createdAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
   })
@@ -548,6 +552,27 @@ export const RepoSettingsPreviewSchema = z
       createMissingLabel: z.boolean(),
       includeMaintainerAuthors: z.boolean(),
       requireLinkedIssue: z.boolean(),
+      commandAuthorization: z.object({
+        defaultAllowed: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])),
+        commandOverrides: z.array(
+          z.object({
+            command: z.string(),
+            allowedRoles: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])),
+          }),
+        ),
+      }),
+    }),
+    commandAuthorizationPreview: z.object({
+      commandName: z.string(),
+      commenterLogin: z.string(),
+      commenterAssociation: z.string(),
+      decision: z.object({
+        authorized: z.boolean(),
+        reason: z.string(),
+        actorKind: z.enum(["maintainer", "author", "none"]),
+        matchedRole: z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"]).nullable(),
+        allowedRoles: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])),
+      }),
     }),
     installation: z
       .object({

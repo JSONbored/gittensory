@@ -22,6 +22,7 @@ import {
   type AuthIdentity,
 } from "../auth/security";
 import { normalizeGittBountySnapshot } from "../bounties/ingest";
+import { DEFAULT_COMMAND_AUTHORIZATION_POLICY, normalizeCommandAuthorizationPolicy } from "../settings/command-authorization";
 import {
   countOpenIssues,
   countOpenPullRequests,
@@ -409,6 +410,12 @@ const repositorySettingsSchema = z.object({
   requireLinkedIssue: z.boolean().default(false),
   backfillEnabled: z.boolean().default(true),
   privateTrustEnabled: z.boolean().default(true),
+  commandAuthorization: z
+    .object({
+      default: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])).max(4).optional(),
+      commands: z.record(z.string().trim().min(1).max(64), z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])).max(4)).optional(),
+    })
+    .default(DEFAULT_COMMAND_AUTHORIZATION_POLICY),
 });
 
 const settingsPreviewSchema = z.object({
@@ -422,6 +429,9 @@ const settingsPreviewSchema = z.object({
       body: z.string().max(10000).nullable().optional(),
       labels: z.array(z.string().max(100)).max(50).optional(),
       linkedIssues: z.array(z.number().int().positive()).max(50).optional(),
+      commandName: z.string().trim().min(1).max(64).optional(),
+      commenterLogin: z.string().trim().min(1).max(100).optional(),
+      commenterAssociation: z.enum(["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN", "NONE"]).optional(),
     })
     .optional(),
 });
@@ -2166,6 +2176,7 @@ export function createApp() {
         requireLinkedIssue: parsed.data.requireLinkedIssue,
         backfillEnabled: parsed.data.backfillEnabled,
         privateTrustEnabled: parsed.data.privateTrustEnabled,
+        commandAuthorization: normalizeCommandAuthorizationPolicy(parsed.data.commandAuthorization).policy,
       }),
     );
   });

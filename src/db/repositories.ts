@@ -135,6 +135,7 @@ import type {
 } from "../types";
 import type { GittensorContributorSnapshot, OfficialGittensorMinerDetection } from "../gittensor/api";
 import { classifyMcpClientVersion, LATEST_RECOMMENDED_MCP_VERSION, MINIMUM_SUPPORTED_MCP_VERSION } from "../services/mcp-compatibility";
+import { DEFAULT_COMMAND_AUTHORIZATION_POLICY, normalizeCommandAuthorizationPolicy } from "../settings/command-authorization";
 import { sha256Hex } from "../utils/crypto";
 import { jsonString, nowIso, parseJson, repoParts } from "../utils/json";
 
@@ -367,6 +368,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       requireLinkedIssue: false,
       backfillEnabled: true,
       privateTrustEnabled: true,
+      commandAuthorization: normalizeCommandAuthorizationPolicy(DEFAULT_COMMAND_AUTHORIZATION_POLICY).policy,
     };
   }
   return {
@@ -383,6 +385,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     requireLinkedIssue: row.requireLinkedIssue,
     backfillEnabled: row.backfillEnabled,
     privateTrustEnabled: row.privateTrustEnabled,
+    commandAuthorization: parseCommandAuthorizationPolicy(row.commandAuthorizationJson),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -403,6 +406,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     requireLinkedIssue: settings.requireLinkedIssue ?? false,
     backfillEnabled: settings.backfillEnabled ?? true,
     privateTrustEnabled: settings.privateTrustEnabled ?? true,
+    commandAuthorization: normalizeCommandAuthorizationPolicy(settings.commandAuthorization).policy,
   };
   const db = getDb(env.DB);
   await db
@@ -421,6 +425,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       requireLinkedIssue: resolved.requireLinkedIssue,
       backfillEnabled: resolved.backfillEnabled,
       privateTrustEnabled: resolved.privateTrustEnabled,
+      commandAuthorizationJson: jsonString(resolved.commandAuthorization),
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -438,6 +443,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         requireLinkedIssue: resolved.requireLinkedIssue,
         backfillEnabled: resolved.backfillEnabled,
         privateTrustEnabled: resolved.privateTrustEnabled,
+        commandAuthorizationJson: jsonString(resolved.commandAuthorization),
         updatedAt: nowIso(),
       },
     });
@@ -4077,6 +4083,10 @@ function parseCheckRunDetailLevel(value: string): RepositorySettings["checkRunDe
 function parsePublicSurface(value: string): RepositorySettings["publicSurface"] {
   if (value === "comment_only" || value === "label_only" || value === "off") return value;
   return "comment_and_label";
+}
+
+function parseCommandAuthorizationPolicy(value: string): RepositorySettings["commandAuthorization"] {
+  return normalizeCommandAuthorizationPolicy(parseJson<unknown>(value, null)).policy;
 }
 
 function parseSyncStatus(value: string): RepoSyncStateRecord["status"] {

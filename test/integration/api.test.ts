@@ -4679,16 +4679,39 @@ describe("api routes", () => {
       {
         method: "POST",
         headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}` },
-        body: JSON.stringify({ commentMode: "detected_contributors_only", publicSignalLevel: "minimal" }),
+        body: JSON.stringify({
+          commentMode: "detected_contributors_only",
+          publicSignalLevel: "minimal",
+          commandAuthorization: { default: ["maintainer"], commands: { preflight: ["pr_author"], "queue-summary": ["maintainer", "collaborator"] } },
+        }),
       },
       env,
     );
     expect(updated.status).toBe(200);
-    await expect(updated.json()).resolves.toMatchObject({ commentMode: "detected_contributors_only", publicSignalLevel: "minimal" });
+    await expect(updated.json()).resolves.toMatchObject({
+      commentMode: "detected_contributors_only",
+      publicSignalLevel: "minimal",
+      commandAuthorization: { default: ["maintainer"], commands: expect.objectContaining({ preflight: ["pr_author"] }) },
+    });
 
     const settings = await app.request("/v1/repos/entrius/allways-ui/settings", { headers: apiHeaders(env) }, env);
     expect(settings.status).toBe(200);
-    await expect(settings.json()).resolves.toMatchObject({ commentMode: "detected_contributors_only" });
+    await expect(settings.json()).resolves.toMatchObject({ commentMode: "detected_contributors_only", commandAuthorization: { commands: expect.objectContaining({ preflight: ["pr_author"] }) } });
+
+    const preview = await app.request(
+      "/v1/repos/entrius/allways-ui/settings-preview",
+      {
+        method: "POST",
+        headers: apiHeaders(env),
+        body: JSON.stringify({ sample: { authorLogin: "author", commenterLogin: "author", commandName: "preflight", minerStatus: "not_found" } }),
+      },
+      env,
+    );
+    expect(preview.status).toBe(200);
+    await expect(preview.json()).resolves.toMatchObject({
+      settings: { commandAuthorization: { defaultAllowed: ["maintainer"], commandOverrides: expect.arrayContaining([expect.objectContaining({ command: "preflight", allowedRoles: ["pr_author"] })]) } },
+      commandAuthorizationPreview: { commandName: "preflight", decision: { authorized: true, reason: "allowed_pr_author", matchedRole: "pr_author" } },
+    });
   });
 });
 
