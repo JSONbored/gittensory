@@ -15,6 +15,7 @@ describe("GitHub mention commands", () => {
   it("parses only explicit @gittensory commands", () => {
     expect(parseGittensoryMentionCommand(null)).toBeNull();
     expect(parseGittensoryMentionCommand("@gittensory")?.name).toBe("help");
+    expect(parseGittensoryMentionCommand("@gittensory ask   ")).toMatchObject({ name: "ask", question: undefined });
     expect(parseGittensoryMentionCommand("@gittensory ask what should I fix first?")).toMatchObject({
       name: "ask",
       question: "what should I fix first?",
@@ -237,16 +238,17 @@ describe("GitHub mention commands", () => {
     expect(ask).toContain("### Gittensory contribution context Q&A");
     expect(ask).toContain("**Contribution context Q&A**");
     expect(ask).toContain("Question: what should I improve for contribution quality?");
-    expect(ask).toContain("Citations");
-    expect(ask).toContain("origin: contributor_decision_pack; freshness: fresh");
-    expect(ask).toContain("origin: open_pr_monitor; freshness: fresh");
-    expect(ask).toContain("origin: github_cache; freshness: fresh");
-    expect(ask).toContain("origin: official_gittensor; freshness: fresh");
-    expect(ask).toContain("signal data-quality status; origin: cached_signals");
-    expect(ask).toContain("Policy");
+    const askFindings = publicCardFindings(ask);
+    expect(askFindings).toContain("origin: contributor_decision_pack; freshness: fresh");
+    expect(askFindings).toContain("origin: open_pr_monitor; freshness: fresh");
+    expect(askFindings).toContain("origin: github_cache; freshness: fresh");
+    expect(askFindings).toContain("origin: official_gittensor; freshness: fresh");
+    expect(askFindings).toContain("signal data-quality status; origin: cached_signals");
+    expect(ask).toMatch(/Connected source contributor decision pack snapshot \(contributor_decision_pack\): freshness fresh/);
     expect(ask).toContain("README/docs context is included only when connected repo sources");
     expect(ask).not.toContain("source: action choose_next_work");
     expect(ask).not.toContain("**Source coverage**");
+    expect(ask).not.toContain("**Citations**");
     expect(ask).toContain("contributor decision pack snapshot");
     expect(ask).toContain("cached GitHub open PR/issue queue");
     expect(ask).toContain("Freshness: agent run status completed.");
@@ -293,7 +295,7 @@ describe("GitHub mention commands", () => {
         ],
       }),
     });
-    expect(askWithTargets).toContain("Source: repo focus manifest; origin: repo_focus_manifest; freshness: fresh");
+    expect(publicCardFindings(askWithTargets)).toContain("Source: repo focus manifest; origin: repo_focus_manifest; freshness: fresh");
     expect(askWithTargets).toContain("owner/repo: Prepare a concise packet and verify linked context.");
   });
 
@@ -469,7 +471,12 @@ describe("GitHub mention commands", () => {
         summary: "refresh",
       },
     });
-    expect(askRefresh).toContain("**Contribution context snapshot refresh**");
+    const askRefreshFindings = publicCardFindings(askRefresh);
+    expect(askRefreshFindings).toContain("Contribution context snapshot refresh");
+    expect(askRefreshFindings).toContain("Try @gittensory ask again shortly");
+    expect(askRefresh).not.toMatch(/next-action snapshot refresh/i);
+    expect(askRefresh).toContain("Retry @gittensory ask after the contribution context snapshot refresh completes.");
+    expect(askRefresh).toContain("Freshness: contribution context snapshot refresh in progress.");
 
     const nextActionRefresh = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory next-action")!,
@@ -613,10 +620,8 @@ describe("GitHub mention commands", () => {
     expect(askMetadata).toContain("repo sync freshness metadata");
     expect(askMetadata).toContain("branch eligibility metadata");
     expect(askMetadata).toContain("contribution readiness metadata");
-    expect(askMetadata).toContain("snapshot freshness warnings");
-    expect(askMetadata).toContain("freshness: partial");
+    expect(publicCardFindings(askMetadata)).toContain("freshness: partial");
     expect(askMetadata).not.toContain("No concrete cached source reference is available for this response.");
-    expect(askMetadata).toContain("Graph source without explicit origin.");
 
     const askNoSources = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory ask what is the repo policy?")!,
@@ -692,6 +697,10 @@ describe("GitHub mention commands", () => {
       },
     });
     expect(askFallbackCitations).toContain("No concrete cached source reference is available for this response.");
+    expect(publicCardFindings(askFallbackCitations)).toContain("No concrete cached source reference is available for this response.");
+    const askFallbackDetails = askFallbackCitations.slice(askFallbackCitations.indexOf("Additional safe details"));
+    expect(askFallbackDetails).toContain("README/docs context is included only when connected repo sources");
+    expect(askFallbackDetails).not.toMatch(/origin: /);
 
     const noBundle = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory preflight")!,
@@ -1522,6 +1531,24 @@ describe("GitHub mention commands", () => {
 });
 
 describe("ask citation helpers", () => {
+  it("uses contribution-context refresh wording for ask snapshot rebuilds", () => {
+    const refresh = githubCommandsInternals.refreshSections("ask");
+    expect(refresh.join("\n")).toContain("Contribution context snapshot refresh");
+    expect(refresh.join("\n")).toContain("Try @gittensory ask again shortly");
+    expect(refresh.join("\n")).not.toContain("next-action");
+
+    const sections = githubCommandsInternals.askSections(
+      {
+        run: { ...completedRun("run-ask-sections"), status: "needs_snapshot_refresh" },
+        actions: [],
+        contextSnapshots: [],
+        summary: "refresh",
+      },
+      "What should I fix?",
+    );
+    expect(sections.join("\n")).toContain("Try @gittensory ask again shortly");
+  });
+
   it("collects connected-source metadata and formats concrete citations", () => {
     const sources = githubCommandsInternals.collectAskContributingSources({
       run: completedRun("run-ask-internals"),
@@ -1574,6 +1601,15 @@ describe("ask citation helpers", () => {
         payload: {},
       }),
     ).toBe("fresh");
+    expect(
+      githubCommandsInternals.snapshotFreshnessFromWarnings({
+        id: "snap-stale",
+        runId: "run-ask-internals",
+        repoSignalSnapshotIds: [],
+        freshnessWarnings: ["decision pack is stale; rebuild enqueued"],
+        payload: {},
+      }),
+    ).toBe("stale");
     expect(githubCommandsInternals.formatAskCitation(sources[0]!)).toContain("Source:");
     expect(
       githubCommandsInternals.formatAskCitation({
@@ -1596,6 +1632,8 @@ describe("ask citation helpers", () => {
           repoSignalSnapshotIds: [],
           freshnessWarnings: ["decision pack is stale; rebuild enqueued"],
           payload: {
+            source: "gittensor_api",
+            openPrMonitor: {},
             branchEligibility: { evidence: "missing" },
             dataQuality: { signalFidelity: { status: "partial" } },
             evidenceGraph: {
@@ -1610,8 +1648,86 @@ describe("ask citation helpers", () => {
     expect(extended.some((source) => source.label.includes("Gittensor mirror registry snapshot"))).toBe(true);
     expect(extended.some((source) => source.detail.includes("Connected contributor evidence graph source"))).toBe(true);
     expect(extended.some((source) => source.key === "freshness_warnings")).toBe(true);
+    expect(extended.some((source) => source.key === "contributor_decision_pack" && source.detail.includes("gittensor_api"))).toBe(true);
+    expect(extended.find((source) => source.key === "open_pr_monitor")?.freshness).toBe("unknown");
+
+    const askOverflow = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory ask list every connected source?")!,
+      repo: null,
+      issue: { number: 41, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "author",
+      bundle: askCitedBundle(),
+    });
+    expect(askOverflow).toContain("<summary>Additional safe details</summary>");
+    expect(askOverflow).toContain("origin: open_pr_monitor");
+
+    const askWithoutTimestamps = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory ask what is synced?")!,
+      repo: null,
+      issue: { number: 42, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "author",
+      bundle: {
+        run: completedRun("run-ask-no-ts"),
+        actions: [],
+        contextSnapshots: [
+          {
+            id: "snap-no-ts",
+            runId: "run-ask-no-ts",
+            repoSignalSnapshotIds: [],
+            freshnessWarnings: [],
+            payload: { baseFreshness: {}, openPrMonitor: {} },
+          },
+        ],
+        summary: "no timestamps",
+      },
+    });
+    expect(askWithoutTimestamps).toContain("Connected source repo sync freshness metadata (metadata_only): freshness unknown.");
+    expect(askWithoutTimestamps).not.toContain("freshness unknown as of");
+
+    const askFourSources = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory ask what sources apply?")!,
+      repo: null,
+      issue: { number: 43, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "author",
+      bundle: {
+        run: completedRun("run-ask-four"),
+        actions: [],
+        contextSnapshots: [
+          {
+            id: "snap-four",
+            runId: "run-ask-four",
+            repoSignalSnapshotIds: [],
+            freshnessWarnings: [],
+            payload: {
+              evidenceGraph: {
+                sources: [
+                  { source: "github_cache", freshness: "fresh", generatedAt: "2026-06-01T12:00:00.000Z", detail: "a" },
+                  { source: "official_gittensor", freshness: "fresh", generatedAt: "2026-06-01T12:00:00.000Z", detail: "b" },
+                  { source: "mirror", freshness: "fresh", generatedAt: "2026-06-01T12:00:00.000Z", detail: "c" },
+                  { source: "computed", freshness: "fresh", generatedAt: "2026-06-01T12:00:00.000Z", detail: "d" },
+                ],
+              },
+            },
+          },
+        ],
+        summary: "four sources",
+      },
+    });
+    const fourDetails = askFourSources.slice(askFourSources.indexOf("Additional safe details"));
+    expect(fourDetails).toContain("README/docs context is included only when connected repo sources");
+    expect(fourDetails).not.toMatch(/origin: computed/);
   });
 });
+
+function publicCardFindings(comment: string): string {
+  const start = comment.indexOf("**Findings**");
+  const end = comment.indexOf("**Evidence**");
+  if (start < 0 || end < 0 || end <= start) return comment;
+  return comment.slice(start, end);
+}
 
 function completedRun(id: string) {
   return {

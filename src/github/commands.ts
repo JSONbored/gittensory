@@ -204,6 +204,7 @@ export function buildPublicAgentCommandComment(args: {
     bundle: args.bundle,
     officialMiner: args.officialMiner,
     actorKind: args.actorKind,
+    question: args.command.name === "ask" ? args.command.question : undefined,
   });
   const body = [
     AGENT_COMMAND_COMMENT_MARKER,
@@ -226,7 +227,11 @@ function buildPublicAnswerCard(args: {
   bundle: AgentRunBundle | null | undefined;
   officialMiner: GittensorContributorSnapshot | null | undefined;
   actorKind: "maintainer" | "author";
+  question?: string | undefined;
 }): PublicAnswerCard {
+  if (args.command === "ask") {
+    return buildAskPublicAnswerCard(args);
+  }
   const [titleLine, ...contentLines] = args.sections;
   const safeContent = contentLines.map(stripBulletPrefix).filter((line) => line.length > 0);
   const findings = safeContent.length > 0 ? safeContent.slice(0, 5) : ["No public-safe findings are available from the current cached context."];
@@ -238,6 +243,61 @@ function buildPublicAnswerCard(args: {
     nextActions: commandNextActions(args.command, args.bundle),
     sourceNotes: commandSourceNotes(args.command, args.bundle, args.officialMiner),
     safeDetails: safeContent.slice(5),
+  };
+}
+
+function buildAskPublicAnswerCard(args: {
+  bundle: AgentRunBundle | null | undefined;
+  officialMiner: GittensorContributorSnapshot | null | undefined;
+  actorKind: "maintainer" | "author";
+  question?: string | undefined;
+}): PublicAnswerCard {
+  const title = "Contribution context Q&A";
+  if (args.bundle?.run.status === "needs_snapshot_refresh") {
+    return {
+      title,
+      summary: commandSummary("ask"),
+      findings: [
+        stripEmphasis(REFRESH_SECTION_TITLES.ask),
+        "Gittensory is refreshing connected contribution-context snapshots (cached issues, PRs, signals, and decision packs). Try @gittensory ask again shortly.",
+      ],
+      evidence: commandEvidence("ask", args.bundle, args.officialMiner, args.actorKind),
+      nextActions: commandNextActions("ask", args.bundle),
+      sourceNotes: commandSourceNotes("ask", args.bundle, args.officialMiner),
+    };
+  }
+
+  const contributingSources = prioritizeAskSources(collectAskContributingSources(args.bundle));
+  const citationLines = contributingSources.slice(0, 8).map((source) => stripBulletPrefix(formatAskCitation(source)));
+  const answerLines = pickActions(args.bundle, () => true)
+    .slice(0, 3)
+    .map((action) => (action.targetRepoFullName ? `${action.targetRepoFullName}: ${action.publicSafeSummary}` : action.publicSafeSummary))
+    .filter((line) => line.trim().length > 0)
+    .map((line) => publicBlockerDetail(line));
+  const questionText = sanitizePublicComment(
+    args.question?.trim() || "No specific question was provided; this response summarizes the closest cached contribution context.",
+  );
+  const findings = [
+    `Question: ${questionText}`,
+    ...(answerLines.length > 0 ? answerLines : ["No matching contribution-quality context is available in the current cached sources."]),
+    ...(citationLines.length > 0 ? citationLines : ["No concrete cached source reference is available for this response."]),
+  ];
+  const sourceEvidence = contributingSources.slice(0, 3).map((source) => {
+    const observed = source.generatedAt ? ` as of ${source.generatedAt}` : "";
+    return `Connected source ${source.label} (${source.origin}): freshness ${source.freshness}${observed}.`;
+  });
+  return {
+    title,
+    summary: commandSummary("ask"),
+    findings,
+    evidence: [...commandEvidence("ask", args.bundle, args.officialMiner, args.actorKind), ...sourceEvidence],
+    nextActions: commandNextActions("ask", args.bundle),
+    sourceNotes: commandSourceNotes("ask", args.bundle, args.officialMiner),
+    safeDetails: [
+      ...(citationLines.length > 4 ? citationLines.slice(4) : []),
+      "README/docs context is included only when connected repo sources and app permissions allow it.",
+      "Source contents are not sent to optional AI unless explicitly enabled.",
+    ],
   };
 }
 
@@ -332,7 +392,11 @@ function commandEvidence(
 }
 
 function commandNextActions(command: GittensoryMentionCommandName, bundle: AgentRunBundle | null | undefined): string[] {
-  if (bundle?.run.status === "needs_snapshot_refresh") return ["Retry after the contributor decision snapshot refresh completes."];
+  if (bundle?.run.status === "needs_snapshot_refresh") {
+    return command === "ask"
+      ? ["Retry @gittensory ask after the contribution context snapshot refresh completes."]
+      : ["Retry after the contributor decision snapshot refresh completes."];
+  }
   switch (command) {
     case "help":
       return ["Comment one listed command on the PR thread when more context is needed."];
@@ -395,7 +459,9 @@ function publicFreshness(bundle: AgentRunBundle | null | undefined, command: Git
   if (command === "help") return "shipped command list";
   if (isMaintainerQueueDigestCommand(command)) return "cached queue digest generated at invocation time";
   if (!bundle) return "no agent run was required or available";
-  if (bundle.run.status === "needs_snapshot_refresh") return "snapshot refresh in progress";
+  if (bundle.run.status === "needs_snapshot_refresh") {
+    return command === "ask" ? "contribution context snapshot refresh in progress" : "snapshot refresh in progress";
+  }
   return `agent run status ${publicStatus(bundle.run.status)}`;
 }
 
@@ -520,8 +586,31 @@ function askSections(bundle: AgentRunBundle | null | undefined, question?: strin
   ];
 }
 
+const ASK_SOURCE_DISPLAY_PRIORITY = [
+  "contributor_decision_pack",
+  "open_pr_monitor",
+  "repo_decision",
+  "github_cache",
+  "official_gittensor",
+  "repo_focus_manifest",
+  "upstream_ruleset",
+  "issue_quality",
+  "computed",
+  "mirror",
+  "metadata_only",
+  "cached_signals",
+] as const;
+
+function prioritizeAskSources(sources: AskContributingSource[]): AskContributingSource[] {
+  const rank = (origin: string) => {
+    const index = ASK_SOURCE_DISPLAY_PRIORITY.indexOf(origin as (typeof ASK_SOURCE_DISPLAY_PRIORITY)[number]);
+    return index >= 0 ? index : ASK_SOURCE_DISPLAY_PRIORITY.length;
+  };
+  return [...sources].sort((left, right) => rank(left.origin) - rank(right.origin) || left.label.localeCompare(right.label));
+}
+
 function askSourceReferences(bundle: AgentRunBundle | null | undefined): string[] {
-  return collectAskContributingSources(bundle).slice(0, 8).map(formatAskCitation);
+  return prioritizeAskSources(collectAskContributingSources(bundle)).slice(0, 8).map(formatAskCitation);
 }
 
 function collectAskContributingSources(bundle: AgentRunBundle | null | undefined): AskContributingSource[] {
@@ -631,6 +720,27 @@ function askSourcesFromContextSnapshot(snapshot: AgentRunBundle["contextSnapshot
       detail: snapshot.freshnessWarnings.slice(0, 2).join(" "),
     });
   }
+  if (typeof payload.source === "string") {
+    sources.push({
+      key: "contributor_decision_pack",
+      label: askSourceLabel("contributor_decision_pack"),
+      origin: "contributor_decision_pack",
+      generatedAt: generatedAt ?? snapshot.decisionPackVersion ?? null,
+      freshness: snapshotFreshnessFromWarnings(snapshot),
+      detail: `Contributor decision pack (${payload.source}).`,
+    });
+  }
+  const openPrMonitor = readRecord(payload.openPrMonitor);
+  if (openPrMonitor) {
+    sources.push({
+      key: "open_pr_monitor",
+      label: askSourceLabel("open_pr_monitor"),
+      origin: "open_pr_monitor",
+      generatedAt,
+      freshness: typeof openPrMonitor.freshness === "string" ? openPrMonitor.freshness : "unknown",
+      detail: "Cached open PR and issue queue used for contribution-context answers.",
+    });
+  }
   return sources;
 }
 
@@ -655,9 +765,7 @@ function askSourcesFromActionEvidence(action: AgentActionRecord): AskContributin
 }
 
 function formatAskCitation(source: AskContributingSource): string {
-  const header = [`Source: ${source.label}`, source.origin ? `origin: ${source.origin}` : null, `freshness: ${source.freshness}`]
-    .filter((part): part is string => Boolean(part))
-    .join("; ");
+  const header = `Source: ${source.label}; origin: ${source.origin}; freshness: ${source.freshness}`;
   const observed = source.generatedAt ? ` as of ${source.generatedAt}` : "";
   const detail = source.detail ? ` — ${publicBlockerDetail(source.detail)}` : "";
   return `- ${header}${observed}${detail}.`;
@@ -852,11 +960,11 @@ function packetSections(bundle: AgentRunBundle | null | undefined): string[] {
 }
 
 function refreshSections(command: SnapshotCommandName): string[] {
-  return [
-    `**${REFRESH_SECTION_TITLES[command]}**`,
-    "",
-    "- Gittensory is refreshing the contributor decision snapshot. Try the command again shortly.",
-  ];
+  const body =
+    command === "ask"
+      ? "- Gittensory is refreshing connected contribution-context snapshots (cached issues, PRs, signals, and decision packs). Try @gittensory ask again shortly."
+      : "- Gittensory is refreshing the contributor decision snapshot. Try the command again shortly.";
+  return [`**${REFRESH_SECTION_TITLES[command]}**`, "", body];
 }
 
 function emptySections(command: SnapshotCommandName): string[] {
@@ -1214,4 +1322,6 @@ export const githubCommandsInternals = {
   collectAskContributingSources,
   formatAskCitation,
   snapshotFreshnessFromWarnings,
+  refreshSections,
+  askSections,
 };
