@@ -104,6 +104,49 @@ describe("recommendation quality report", () => {
     expect(report.roleSurfaces.find((surface) => surface.role === "owner")).toMatchObject({ positive: 0, negative: 1 });
   });
 
+  it("uses metadata role and timestamp fallbacks for report grouping", () => {
+    const detectedOnly = {
+      ...outcome("detected-only", "accepted", {
+        repo: "owner/detected",
+        metadata: { actorKind: "maintainer" },
+      }),
+      updatedAt: null,
+      detectedAt: "2026-05-25T00:00:00.000Z",
+      createdAt: null,
+    };
+    const createdOnly = {
+      ...outcome("created-only", "closed", {
+        repo: "owner/detected",
+        metadata: { surface: "repository-owner" },
+      }),
+      updatedAt: null,
+      detectedAt: null,
+      createdAt: "2026-05-26T00:00:00.000Z",
+    };
+    const missingTimestamp = {
+      ...outcome("missing-time", "ignored", {
+        repo: "owner/no-time",
+        metadata: { role: "operator" },
+      }),
+      updatedAt: null,
+      detectedAt: null,
+      createdAt: null,
+    };
+
+    const report = buildRecommendationQualityReportFromOutcomes(
+      [detectedOnly, createdOnly, missingTimestamp],
+      { generatedAt: "2026-06-01T00:00:00.000Z", windowDays: 7 },
+    );
+
+    expect(report.roleSurfaces.map((surface) => surface.role)).toEqual(["maintainer", "owner", "operator"]);
+    expect(report.roleSurfaces.find((surface) => surface.role === "maintainer")).toMatchObject({ positive: 1, negative: 0 });
+    expect(report.roleSurfaces.find((surface) => surface.role === "owner")?.topRepos).toEqual(
+      expect.arrayContaining([expect.objectContaining({ repoFullName: "owner/detected", signal: "negative" })]),
+    );
+    expect(report.roleSurfaces.find((surface) => surface.role === "operator")).toMatchObject({ positive: 0, negative: 1 });
+    expect(report.trends.some((bucket) => bucket.total > 0)).toBe(true);
+  });
+
   it("loads persisted outcomes for the operator report window", async () => {
     const env = createTestEnv();
     await createAgentRun(env, {
@@ -147,6 +190,15 @@ describe("recommendation quality report", () => {
     await expect(buildRecommendationQualityReport(env, { now: "2026-06-01T00:00:00.000Z", windowDays: 14 })).resolves.toMatchObject({
       totals: { total: 1, positive: 1, negative: 0 },
       roleSurfaces: [expect.objectContaining({ role: "miner", positive: 1 })],
+    });
+  });
+
+  it("clamps invalid persisted report windows", async () => {
+    const env = createTestEnv();
+
+    await expect(buildRecommendationQualityReport(env, { now: "2026-06-01T00:00:00.000Z", windowDays: Number.NaN })).resolves.toMatchObject({
+      windowDays: 1,
+      totals: { total: 0 },
     });
   });
 });

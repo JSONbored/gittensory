@@ -182,7 +182,7 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
 
 export function latestUsageRollup(rollups: ProductUsageDailyRollupRecord[]): ProductUsageDailyRollupRecord | null {
   if (rollups.length === 0) return null;
-  return [...rollups].sort((a, b) => b.day.localeCompare(a.day))[0] ?? null;
+  return [...rollups].sort((a, b) => b.day.localeCompare(a.day))[0]!;
 }
 
 function usefulnessDelta(rate: number | null): string {
