@@ -4,7 +4,7 @@ export type WorkspaceFreshness = "complete" | "degraded" | "stale" | "unknown";
 export type WorkspaceLaneStatus = "ready" | "warn" | "blocked" | "info";
 
 const FORBIDDEN_PUBLIC_LANGUAGE =
-  /wallet|hotkey|coldkey|raw trust score|payout|reward estimate|farming|private reviewability|public score estimate|mnemonic|seed phrase|private key/i;
+  /wallet|hotkey|coldkey|raw trust score|payout|\breward\b|reward estimate|farming|private reviewability|public score estimate|mnemonic|seed phrase|private key/i;
 
 export type RegistrationWorkspaceDataQuality = {
   status?: string | undefined;
@@ -193,7 +193,7 @@ export function buildRegistrationWorkspaceView(
     repoFullName: readiness.repoFullName,
     generatedAt: readiness.generatedAt,
     advisoryBanner:
-      "Advisory workspace only. Recommendations explain tradeoffs for repo owners; they do not guarantee Gittensor payouts or miner rewards.",
+      "Advisory workspace only. Recommendations explain tradeoffs for repo owners; they do not guarantee Gittensor incentive outcomes.",
     freshness,
     summary: {
       ready: readiness.ready,
@@ -225,7 +225,9 @@ export function buildRegistrationWorkspaceView(
         id: "maintainer-economics",
         title: "Maintainer economics",
         status: maintainerEconomicsStatus,
-        summary: stringField(maintainerCut, "summary") ?? "Maintainer-cut posture is separate from miner reward estimates.",
+        summary:
+          stringField(maintainerCut, "summary") ??
+          "Maintainer-cut posture is separate from public contributor incentive guidance.",
         bullets: sanitizeBulletList([
           ...(Array.isArray(maintainerCut.reasons) ? (maintainerCut.reasons as string[]) : []),
           ...(Array.isArray(maintainerCut.warnings) ? (maintainerCut.warnings as string[]) : []),
