@@ -1139,8 +1139,10 @@ export function createApp() {
     const pullNumber = Number(c.req.query("pullNumber") ?? "");
     if (!owner || !repoName || !Number.isInteger(pullNumber) || pullNumber <= 0) return c.json({ error: "valid_owner_repo_pull_required" }, 400);
     const fullName = `${owner}/${repoName}`;
-    const [repo, pullRequest, issues, pullRequests, files, reviews, checks, recentMergedPullRequests] = await Promise.all([
-      getRepository(c.env, fullName),
+    const repo = await getRepository(c.env, fullName);
+    const repoForbidden = await requireExtensionPullContextRepoAccess(c, identity, fullName, repo);
+    if (repoForbidden) return repoForbidden;
+    const [pullRequest, issues, pullRequests, files, reviews, checks, recentMergedPullRequests] = await Promise.all([
       getPullRequest(c.env, fullName, pullNumber),
       listIssues(c.env, fullName),
       listPullRequests(c.env, fullName),
@@ -3384,6 +3386,24 @@ async function requireCommandPreviewRepoAccess(
   /* v8 ignore next -- The broad route role guard already authenticates protected preview requests. */
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   if (identity.kind !== "session" || !repoFullName) return null;
+  return requireSessionRepoAccess(c, identity, repoFullName, repo);
+}
+
+async function requireExtensionPullContextRepoAccess(
+  c: ProtectedRouteContext,
+  identity: Extract<AuthIdentity, { kind: "session" }>,
+  repoFullName: string,
+  repo: RepositoryRecord | null,
+): Promise<Response | null> {
+  return requireSessionRepoAccess(c, identity, repoFullName, repo);
+}
+
+async function requireSessionRepoAccess(
+  c: ProtectedRouteContext,
+  identity: Extract<AuthIdentity, { kind: "session" }>,
+  repoFullName: string,
+  repo: RepositoryRecord | null,
+): Promise<Response | null> {
   const summary = await loadControlPanelRoleSummary(c.env, identity.actor);
   if (summary.roles.includes("operator")) return null;
   const scope = await loadControlPanelAccessScope(c.env, identity.actor);
