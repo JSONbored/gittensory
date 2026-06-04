@@ -3,13 +3,19 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { z } from "zod";
 import { AnimatePresence, motion } from "motion/react";
 import {
+  AlertTriangle,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Filter,
   Link2,
   RotateCw,
   Save,
   Search,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldOff,
   Trash2,
   Workflow,
   X,
@@ -58,7 +64,49 @@ interface AgentRun {
   created_at: string;
   summary?: string;
   recommendations?: string[];
+  evidenceActions: ActionEvidence[];
+  freshnessWarnings: string[];
+  errorSummary?: string | null;
 }
+
+type AgentSafetyClass = "private" | "public_safe" | "approval_required";
+
+type EvidenceSource = {
+  name: string;
+  source?: string | null;
+  generatedAt?: string | null;
+  freshness: string;
+  summary: string;
+};
+
+type RecommendationEvidence = {
+  confidence: "high" | "medium" | "low";
+  sourceSummary: string;
+  freshness: string;
+  sources: EvidenceSource[];
+  assumptions: string[];
+  warnings: string[];
+  userSuppliedScenarios: boolean;
+  userSuppliedScenarioCount: number;
+};
+
+type ActionEvidence = {
+  id: string;
+  actionType: string;
+  targetRepoFullName?: string | null;
+  recommendation: string;
+  why: string[];
+  blockedBy: string[];
+  scoreabilityImpact?: string | null;
+  riskImpact?: string | null;
+  maintainerImpact?: string | null;
+  publicSafeSummary: string;
+  approvalRequired: boolean;
+  safetyClass: AgentSafetyClass;
+  status: string;
+  rerunWhen?: string | null;
+  evidence?: RecommendationEvidence | null;
+};
 
 type AgentRunBundleResponse = {
   runs: AgentRunBundle[];
@@ -78,9 +126,21 @@ type AgentRunBundle = {
     updatedAt?: string | null;
   };
   actions: Array<{
+    id: string;
     actionType: string;
     targetRepoFullName?: string | null;
-    recommendation?: string | null;
+    recommendation: string;
+    why: string[];
+    blockedBy: string[];
+    scoreabilityImpact?: string | null;
+    riskImpact?: string | null;
+    maintainerImpact?: string | null;
+    publicSafeSummary: string;
+    approvalRequired: boolean;
+    safetyClass: AgentSafetyClass;
+    status: string;
+    rerunWhen?: string | null;
+    payload?: Record<string, unknown>;
   }>;
   contextSnapshots: Array<{
     scoringModelId?: string | null;
@@ -386,6 +446,58 @@ function mapAgentRunBundle(bundle: AgentRunBundle): AgentRun {
     bundle.contextSnapshots[0]?.scoringModelId ??
     bundle.contextSnapshots[0]?.decisionPackVersion ??
     "live";
+  const freshnessWarnings = bundle.contextSnapshots.flatMap((s) => s.freshnessWarnings ?? []);
+
+  const evidenceActions: ActionEvidence[] = bundle.actions.map((action) => {
+    const evidencePayload = recordValue(action.payload?.recommendationEvidence ?? null);
+    const evidence: RecommendationEvidence | null = evidencePayload
+      ? {
+          confidence: (evidencePayload.confidence as RecommendationEvidence["confidence"]) ?? "low",
+          sourceSummary: stringValue(evidencePayload.sourceSummary) ?? "",
+          freshness: stringValue(evidencePayload.freshness) ?? "unknown",
+          sources: (Array.isArray(evidencePayload.sources) ? evidencePayload.sources : []).map(
+            (s: unknown) => {
+              const src = recordValue(s);
+              return {
+                name: stringValue(src?.name) ?? "unknown",
+                source: stringValue(src?.source),
+                generatedAt: stringValue(src?.generatedAt),
+                freshness: stringValue(src?.freshness) ?? "unknown",
+                summary: stringValue(src?.summary) ?? "",
+              };
+            },
+          ),
+          assumptions: (Array.isArray(evidencePayload.assumptions)
+            ? evidencePayload.assumptions
+            : []
+          ).filter(isString),
+          warnings: (Array.isArray(evidencePayload.warnings) ? evidencePayload.warnings : []).filter(
+            isString,
+          ),
+          userSuppliedScenarios: Boolean(evidencePayload.userSuppliedScenarios),
+          userSuppliedScenarioCount: Number(evidencePayload.userSuppliedScenarioCount ?? 0),
+        }
+      : null;
+
+    return {
+      id: action.id,
+      actionType: action.actionType,
+      targetRepoFullName: action.targetRepoFullName,
+      recommendation: action.recommendation,
+      why: action.why ?? [],
+      blockedBy: action.blockedBy ?? [],
+      scoreabilityImpact: action.scoreabilityImpact,
+      riskImpact: action.riskImpact,
+      maintainerImpact: action.maintainerImpact,
+      publicSafeSummary: action.publicSafeSummary,
+      approvalRequired: action.approvalRequired,
+      safetyClass: action.safetyClass,
+      status: action.status,
+      rerunWhen: action.rerunWhen,
+      evidence,
+    };
+  });
+
   return {
     id: bundle.run.id,
     source: bundle.run.surface === "github_comment" ? "github-command" : bundle.run.surface,
@@ -403,6 +515,9 @@ function mapAgentRunBundle(bundle: AgentRunBundle): AgentRun {
     created_at: bundle.run.createdAt ?? bundle.run.updatedAt ?? new Date().toISOString(),
     summary: bundle.summary,
     recommendations: bundle.actions.map((action) => action.recommendation).filter(isString),
+    evidenceActions,
+    freshnessWarnings,
+    errorSummary: bundle.run.errorSummary,
   };
 }
 
@@ -743,6 +858,12 @@ function DrawerSurface({
           </div>
         )}
 
+        {run.errorSummary && (
+          <div className="rounded-token border border-destructive/30 bg-destructive/5 p-3 text-token-xs text-destructive">
+            <strong>Error:</strong> {run.errorSummary}
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-4 text-token-sm">
           <KV k="Source" v={run.source} />
           <KV k="Repo" v={run.repo} />
@@ -751,6 +872,8 @@ function DrawerSurface({
           <KV k="Created" v={new Date(run.created_at).toUTCString().slice(5, 22)} />
           <KV k="Signal" v={run.signal_fidelity} />
         </div>
+
+        <FreshnessWarningsBanner warnings={run.freshnessWarnings} />
 
         <div>
           <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
@@ -761,23 +884,7 @@ function DrawerSurface({
           </pre>
         </div>
 
-        <div>
-          <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-            Evidence
-          </div>
-          <ul className="mt-2 space-y-1 text-token-sm text-foreground/90">
-            {(run.recommendations?.length
-              ? [run.summary, ...run.recommendations].filter(isString)
-              : [
-                  "Decision pack snapshot hash matched.",
-                  "Linked-issue policy evaluated against current ruleset.",
-                  "Queue capacity sampled at run start.",
-                ]
-            ).map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </div>
+        <ActionEvidenceList actions={run.evidenceActions} boundary={run.boundary} />
       </motion.div>
 
       <footer className="border-t border-border p-4">
@@ -822,6 +929,287 @@ function KV({ k, v }: { k: string; v: ReactNode }) {
         {k}
       </div>
       <div className="mt-0.5 font-mono text-[12px] text-foreground/90">{v}</div>
+    </div>
+  );
+}
+
+function FreshnessWarningsBanner({ warnings }: { warnings: string[] }) {
+  if (!warnings.length) return null;
+  return (
+    <div className="rounded-token border border-warning/30 bg-warning/5 p-3">
+      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-token-2xs uppercase tracking-wider text-warning">
+        <Clock className="size-3.5" />
+        Snapshot Freshness
+      </div>
+      <ul className="space-y-1">
+        {warnings.map((w, i) => (
+          <li key={i} className="flex items-start gap-1.5 text-token-xs text-warning/90">
+            <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+            {w}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function SafetyClassBadge({ safetyClass, approvalRequired }: { safetyClass: AgentSafetyClass; approvalRequired: boolean }) {
+  if (safetyClass === "public_safe") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-mint/30 bg-mint/10 px-2 py-0.5 font-mono text-token-2xs text-mint">
+        <ShieldCheck className="size-3" />
+        public-safe
+      </span>
+    );
+  }
+  if (approvalRequired || safetyClass === "approval_required") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 font-mono text-token-2xs text-warning">
+        <ShieldAlert className="size-3" />
+        approval-required
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-border bg-card/40 px-2 py-0.5 font-mono text-token-2xs text-muted-foreground">
+      <ShieldOff className="size-3" />
+      private
+    </span>
+  );
+}
+
+function FreshnessIcon({ freshness }: { freshness: string }) {
+  if (freshness === "fresh") return <CheckCircle2 className="size-3 text-mint" />;
+  if (freshness === "stale" || freshness === "possibly_stale") return <AlertTriangle className="size-3 text-warning" />;
+  if (freshness === "missing") return <ShieldOff className="size-3 text-muted-foreground" />;
+  return <Clock className="size-3 text-muted-foreground" />;
+}
+
+function EvidenceSources({ sources }: { sources: EvidenceSource[] }) {
+  if (!sources.length) return null;
+  return (
+    <div className="mt-2">
+      <div className="mb-1 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+        Sources
+      </div>
+      <ul className="space-y-1.5">
+        {sources.map((src, i) => (
+          <li key={i} className="flex items-start gap-2 text-token-xs text-foreground/80">
+            <FreshnessIcon freshness={src.freshness} />
+            <span>
+              <span className="font-mono text-foreground/60">{src.name}</span>
+              {" — "}
+              {src.summary}
+              {src.generatedAt && (
+                <span className="ml-1 text-muted-foreground">
+                  ({new Date(src.generatedAt).toUTCString().slice(5, 22)})
+                </span>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ActionEvidenceList({ actions, boundary }: { actions: ActionEvidence[]; boundary: Boundary }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+  if (!actions.length) {
+    return (
+      <div>
+        <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+          Evidence
+        </div>
+        <p className="mt-2 text-token-xs text-muted-foreground">
+          No ranked actions available for this run. The run may have been queued or interrupted
+          before completing.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+        Evidence · {actions.length} ranked action{actions.length !== 1 ? "s" : ""}
+      </div>
+      <ul className="mt-2 space-y-2">
+        {actions.map((action, i) => {
+          const isOpen = expanded === action.id;
+          const ev = action.evidence;
+          return (
+            <li
+              key={action.id}
+              className="rounded-token border border-border bg-background/40"
+            >
+              <button
+                type="button"
+                onClick={() => setExpanded(isOpen ? null : action.id)}
+                className="flex w-full items-start justify-between gap-3 p-3 text-left focus-ring"
+                aria-expanded={isOpen}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-token-xs text-foreground/90">
+                      {i + 1}. {action.actionType.replace(/_/g, " ")}
+                    </span>
+                    <SafetyClassBadge
+                      safetyClass={action.safetyClass}
+                      approvalRequired={action.approvalRequired}
+                    />
+                    {action.status === "blocked" && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 font-mono text-token-2xs text-destructive">
+                        blocked
+                      </span>
+                    )}
+                  </div>
+                  {action.targetRepoFullName && (
+                    <div className="mt-0.5 font-mono text-token-2xs text-muted-foreground">
+                      {action.targetRepoFullName}
+                    </div>
+                  )}
+                  <p className="mt-1 text-token-xs text-foreground/80">{action.recommendation}</p>
+                </div>
+                <ChevronRight
+                  className={cn(
+                    "mt-1 size-4 shrink-0 text-muted-foreground transition-transform",
+                    isOpen && "rotate-90",
+                  )}
+                />
+              </button>
+
+              {isOpen && (
+                <div className="border-t border-border px-3 pb-3 pt-2 space-y-3">
+                  {boundary !== "public" && action.why.length > 0 && (
+                    <div>
+                      <div className="mb-1 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                        Why
+                      </div>
+                      <ul className="space-y-1">
+                        {action.why.map((reason, j) => (
+                          <li key={j} className="flex items-start gap-1.5 text-token-xs text-foreground/80">
+                            <CheckCircle2 className="mt-0.5 size-3 shrink-0 text-mint" />
+                            {reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {action.blockedBy.length > 0 && (
+                    <div>
+                      <div className="mb-1 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                        Blocked by
+                      </div>
+                      <ul className="space-y-1">
+                        {action.blockedBy.map((blocker, j) => (
+                          <li key={j} className="flex items-start gap-1.5 text-token-xs text-destructive/80">
+                            <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+                            {blocker}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {boundary !== "public" && (action.scoreabilityImpact || action.riskImpact || action.maintainerImpact) && (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      {action.scoreabilityImpact && (
+                        <div>
+                          <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                            Scoreability
+                          </div>
+                          <p className="mt-0.5 text-token-xs text-foreground/80">
+                            {action.scoreabilityImpact}
+                          </p>
+                        </div>
+                      )}
+                      {action.riskImpact && (
+                        <div>
+                          <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                            Risk
+                          </div>
+                          <p className="mt-0.5 text-token-xs text-foreground/80">
+                            {action.riskImpact}
+                          </p>
+                        </div>
+                      )}
+                      {action.maintainerImpact && (
+                        <div>
+                          <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                            Maintainer
+                          </div>
+                          <p className="mt-0.5 text-token-xs text-foreground/80">
+                            {action.maintainerImpact}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div>
+                    <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                      Public-safe summary
+                    </div>
+                    <p className="mt-0.5 text-token-xs text-foreground/80">{action.publicSafeSummary}</p>
+                  </div>
+
+                  {action.rerunWhen && (
+                    <div>
+                      <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                        Rerun when
+                      </div>
+                      <p className="mt-0.5 text-token-xs text-foreground/80">{action.rerunWhen}</p>
+                    </div>
+                  )}
+
+                  {boundary !== "public" && ev && (
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                          Provenance
+                        </div>
+                        <span className={cn(
+                          "font-mono text-token-2xs",
+                          ev.confidence === "high" ? "text-mint" : ev.confidence === "medium" ? "text-foreground/60" : "text-warning",
+                        )}>
+                          {ev.confidence} confidence · {ev.freshness}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-token-xs text-foreground/70">{ev.sourceSummary}</p>
+                      <EvidenceSources sources={ev.sources} />
+                      {ev.warnings.length > 0 && (
+                        <ul className="mt-2 space-y-1">
+                          {ev.warnings.map((w, j) => (
+                            <li key={j} className="flex items-start gap-1.5 text-token-xs text-warning/80">
+                              <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+                              {w}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {ev.assumptions.length > 0 && (
+                        <div className="mt-2">
+                          <div className="mb-1 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                            Assumptions
+                          </div>
+                          <ul className="space-y-1">
+                            {ev.assumptions.map((a, j) => (
+                              <li key={j} className="text-token-xs text-muted-foreground">
+                                {a}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

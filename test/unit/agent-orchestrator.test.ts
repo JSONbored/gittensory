@@ -1178,6 +1178,119 @@ describe("agent orchestrator", () => {
     expect(__agentOrchestratorInternals.aggregateOutcomeQuality(highRiskPatterns).signal).toBe("high_risk");
     expect(__agentOrchestratorInternals.aggregateOutcomeQuality(weakPatterns).signal).toBe("weak");
   });
+
+  it("evidence viewer: bundles include why, blockedBy, safetyClass, and freshness for each action", async () => {
+    const env = createTestEnv();
+    await persistDecisionPack(env, decisionPackFixture());
+
+    const bundle = await planNextWork(env, { login: "oktofeesh1", repoFullName: "we-promise/sure" });
+
+    // Every action must include the fields the evidence viewer depends on.
+    for (const action of bundle.actions) {
+      expect(Array.isArray(action.why)).toBe(true);
+      expect(Array.isArray(action.blockedBy)).toBe(true);
+      expect(typeof action.publicSafeSummary).toBe("string");
+      expect(["private", "public_safe", "approval_required"]).toContain(action.safetyClass);
+      expect(typeof action.approvalRequired).toBe("boolean");
+      expect(action.payload.recommendationEvidence).toBeDefined();
+    }
+
+    // Context snapshots must expose freshness warnings.
+    expect(bundle.contextSnapshots[0]).toMatchObject({
+      freshnessWarnings: expect.any(Array),
+    });
+  });
+
+  it("evidence viewer: missing recommendationEvidence payload falls back to default evidence without throwing", () => {
+    const run = __agentOrchestratorInternals.buildRunRecord({
+      objective: "fallback evidence test",
+      actorLogin: "oktofeesh1",
+      surface: "api",
+      status: "running",
+      payload: {},
+    });
+
+    const action = __agentOrchestratorInternals.actionRecord({
+      run,
+      actionType: "choose_next_work",
+      index: 0,
+      targetRepoFullName: "owner/repo",
+      status: "recommended",
+      recommendation: "Pick the next action.",
+      why: ["Signal coverage is complete."],
+      blockedBy: [],
+      publicSafeSummary: "owner/repo: proceed with next action.",
+      payload: {},
+      // No evidence arg — should fall back to default.
+    });
+
+    expect(action.payload.recommendationEvidence).toMatchObject({
+      confidence: "medium",
+      sourceSummary: "Generated from Gittensory agent metadata.",
+      freshness: expect.any(String),
+      sources: expect.any(Array),
+      warnings: expect.arrayContaining([
+        "Source-specific evidence was not attached; treat this recommendation as medium confidence.",
+      ]),
+    });
+    expect(action.why).toEqual(["Signal coverage is complete."]);
+    expect(action.blockedBy).toEqual([]);
+    expect(action.safetyClass).toBe("private");
+    expect(action.approvalRequired).toBe(true);
+  });
+
+  it("evidence viewer: stale snapshot freshness warnings are present in context snapshots", async () => {
+    const env = createTestEnv();
+    await persistDecisionPack(
+      env,
+      decisionPackFixture({
+        generatedAt: "2026-01-01T00:00:00.000Z",
+        dataQuality: {
+          signalFidelity: {
+            status: "degraded",
+            repoCount: 1,
+            completeRepos: 0,
+            degradedRepos: 1,
+            blockedRepos: 0,
+            partialRepos: ["we-promise/sure"],
+            cappedRepos: [],
+            staleRepos: ["we-promise/sure"],
+            rateLimitedRepos: [],
+          },
+        } as unknown as ContributorDecisionPack["dataQuality"],
+      }),
+    );
+
+    const bundle = await planNextWork(env, { login: "oktofeesh1", repoFullName: "we-promise/sure" });
+
+    expect(bundle.run.dataQualityStatus).toBe("degraded");
+    const warnings = bundle.contextSnapshots[0]?.freshnessWarnings ?? [];
+    expect(warnings.some((w) => w.includes("we-promise/sure"))).toBe(true);
+    // Actions should still be present with evidence despite staleness.
+    expect(bundle.actions.length).toBeGreaterThan(0);
+    expect(bundle.actions[0]?.payload.recommendationEvidence).toBeDefined();
+    expect(
+      (bundle.actions[0]?.payload.recommendationEvidence as Record<string, unknown>)?.warnings,
+    ).toEqual(expect.any(Array));
+  });
+
+  it("evidence viewer: publicSafeSummary and why fields omit private signal terms", async () => {
+    const env = createTestEnv();
+    await persistDecisionPack(env, decisionPackFixture());
+
+    const bundle = await planNextWork(env, { login: "oktofeesh1", repoFullName: "we-promise/sure" });
+
+    // publicSafeSummary is the only field safe to expose publicly — it must never contain private terms.
+    for (const action of bundle.actions) {
+      expect(action.publicSafeSummary).not.toMatch(/reward|payout|wallet|hotkey|raw trust score|coldkey/i);
+    }
+
+    // sanitizePublicSummary replaces sensitive terms with "private signal".
+    const raw = "estimated score 42, wallet abc, hotkey xyz, payout 0.1";
+    const sanitized = __agentOrchestratorInternals.sanitizePublicSummary(raw);
+    expect(sanitized).not.toMatch(/reward|payout|wallet|hotkey|raw trust score/i);
+    expect(sanitized).toContain("private signal");
+  });
 });
 
 async function persistDecisionPack(env: Env, pack: ContributorDecisionPack): Promise<void> {
