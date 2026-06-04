@@ -193,6 +193,101 @@ describe("advisory rules", () => {
     expect(formatCheckRunOutput({ ...uncachedPr, findings: [] }).text).toContain("No detailed findings are published");
   });
 
+  it("formatCheckRunOutput respects detailLevel — minimal always omits findings text", () => {
+    const pr: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 50,
+      title: "PR with findings",
+      state: "open",
+      authorLogin: "contributor",
+      authorAssociation: "NONE",
+      labels: [],
+      linkedIssues: [],
+    };
+    const advisory = buildPullRequestAdvisory(repo, pr, { requireLinkedIssue: true, otherOpenPullRequests: [] });
+    expect(advisory.findings.length).toBeGreaterThan(0);
+
+    const minimal = formatCheckRunOutput(advisory, "minimal");
+    expect(minimal.text).toContain("No detailed findings are published");
+
+    const standard = formatCheckRunOutput(advisory, "standard");
+    expect(standard.text).not.toContain("No detailed findings are published");
+    expect(standard.text).toMatch(/⚠️|ℹ️/);
+
+    const deep = formatCheckRunOutput(advisory, "deep");
+    expect(deep.text).not.toContain("No detailed findings are published");
+    expect(deep.text).toMatch(/⚠️|ℹ️/);
+  });
+
+  it("formatCheckRunOutput sanitizes forbidden terms at every detail level", () => {
+    const poisonedAdvisory = buildPullRequestAdvisory(repo, null);
+    const poisoned = {
+      ...poisonedAdvisory,
+      findings: [
+        {
+          code: "test_finding",
+          title: "reward wallet hotkey trust score reviewability",
+          severity: "warning" as const,
+          detail: "private detail",
+          publicText: "rewards and farming content near wallets hotkeys with trust score and score estimate",
+          action: "Check your scoreability and reviewability",
+        },
+      ],
+    };
+    for (const level of ["minimal", "standard", "deep"] as const) {
+      const out = formatCheckRunOutput(poisoned, level);
+      expect(out.title).not.toMatch(/rewards?|wallets?|hotkeys?|trust score|score estimate|reviewability|scoreability|farming/i);
+      expect(out.summary).not.toMatch(/rewards?|wallets?|hotkeys?|trust score|score estimate|reviewability|scoreability|farming/i);
+      expect(out.text).not.toMatch(/rewards?|wallets?|hotkeys?|trust score|score estimate|reviewability|scoreability|farming/i);
+    }
+  });
+
+  it("formatCheckRunOutput publishes only explicit public finding text", () => {
+    const advisory = buildPullRequestAdvisory(repo, null);
+    const output = formatCheckRunOutput(
+      {
+        ...advisory,
+        findings: [
+          {
+            code: "private_title",
+            title: "Maintainer allocation is configured",
+            severity: "info" as const,
+            detail: "Private allocation detail",
+            action: "Deep action exposes trust score and rewards estimate.",
+          },
+          {
+            code: "public_text",
+            title: "Private score estimate title",
+            severity: "warning" as const,
+            detail: "Private detail",
+            publicText: "Safe public repo context with trust score and rewards variants removed.",
+            action: "Do not publish this trust score action.",
+          },
+        ],
+      },
+      "deep",
+    );
+
+    expect(output.text).toContain("Safe public repo context");
+    expect(output.text).not.toContain("Maintainer allocation is configured");
+    expect(output.text).not.toContain("Private score estimate title");
+    expect(output.text).not.toContain("Deep action exposes");
+    expect(output.text).not.toContain("Do not publish this");
+    expect(output.text).not.toMatch(/trust score|rewards|score estimate/i);
+  });
+
+  it("classifies critical-severity findings as action_required", () => {
+    const advisory = buildPullRequestAdvisory(null, null);
+    const withCritical = {
+      ...advisory,
+      findings: [{ code: "critical_test", title: "Critical finding", severity: "critical" as const, detail: "Something broke." }],
+    };
+    const output = formatCheckRunOutput(withCritical, "standard");
+    expect(output.title).toBe("Gittensory context posted");
+    expect(output.text).toContain("No detailed findings are published");
+    expect(output.text).not.toContain("Critical finding");
+  });
+
   it("separates issue-discovery-only issues from clean split-lane issue advisories", () => {
     const issue: IssueRecord = {
       repoFullName: repo.fullName,
