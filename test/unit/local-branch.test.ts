@@ -63,6 +63,36 @@ describe("local branch analysis", () => {
     expect(JSON.stringify(analysis.prPacket)).not.toMatch(/reward|score|wallet|hotkey|farming|payout|ranking|trust score/i);
   });
 
+  it("threads duplicate collision risk into private scoreability blockers", () => {
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        branchName: "fix-cache-duplicate",
+        title: "Fix dashboard cache refresh after reconnect",
+        linkedIssues: [7],
+        changedFiles: [{ path: "src/cache.ts", additions: 12, deletions: 2, status: "modified" }],
+        localScorer: { mode: "external_command", sourceTokenScore: 20, totalTokenScore: 30, sourceLines: 14 },
+      },
+      repo,
+      issues: [{ repoFullName: repo.fullName, number: 7, title: "Dashboard cache refresh fails after reconnect", state: "open", labels: ["bug"], linkedPrs: [10, 11] }],
+      pullRequests: [
+        { repoFullName: repo.fullName, number: 10, title: "Fix dashboard cache refresh", state: "open", authorLogin: "other-dev", authorAssociation: "NONE", labels: [], linkedIssues: [7], body: "", updatedAt: "2026-05-25T00:00:00.000Z" },
+        { repoFullName: repo.fullName, number: 11, title: "Repair dashboard reconnect cache", state: "open", authorLogin: "third-dev", authorAssociation: "NONE", labels: [], linkedIssues: [7], body: "", updatedAt: "2026-05-25T00:00:00.000Z" },
+      ],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+
+    expect(analysis.preflight.collisions.filter((cluster) => cluster.risk === "high").length).toBeGreaterThan(0);
+    expect(analysis.scorePreview.blockedBy).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "duplicate_risk", severity: "reducer" })]),
+    );
+    expect(analysis.scorePreview.warnings.join(" ")).toMatch(/duplicate-risk/i);
+  });
+
   it("bounds local scorer warnings before adding local findings", () => {
     const analysis = buildLocalBranchAnalysis({
       input: {

@@ -246,6 +246,7 @@ export function buildLocalBranchAnalysis(args: {
     testFiles,
     linkedIssueCount: preflight.linkedIssues.length,
     linkedIssueContext,
+    duplicateRiskCount: preflight.collisions.filter((cluster) => cluster.risk === "high").length,
     roleContext,
     outcomeHistory: args.outcomeHistory,
     repoOutcome,
@@ -388,6 +389,7 @@ function buildLocalScoreInput(args: {
   testFiles: string[];
   linkedIssueCount: number;
   linkedIssueContext?: LinkedIssueMultiplierContext | undefined;
+  duplicateRiskCount: number;
   roleContext: RoleContext;
   outcomeHistory: ContributorOutcomeHistory;
   repoOutcome?: ContributorOutcomeHistory["repoOutcomes"][number] | undefined;
@@ -424,6 +426,7 @@ function buildLocalScoreInput(args: {
     observedDraftPrCount: args.observedPullRequestScenarios.draft,
     observedBlockedPrCount: args.observedPullRequestScenarios.blocked,
     observedMaintainerPrCount: args.observedPullRequestScenarios.maintainerLane,
+    duplicateRiskCount: args.duplicateRiskCount,
     expectedOpenPrCountAfterMerge: args.input.expectedOpenPrCountAfterMerge,
     projectedCredibility: args.input.projectedCredibility,
     scenarioNotes: args.input.scenarioNotes,

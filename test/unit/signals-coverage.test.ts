@@ -511,6 +511,39 @@ describe("signal coverage edge cases", () => {
     expect(issueCleanup.actions.map((action) => action.actionKind)).not.toContain("land_existing_prs");
   });
 
+  it("threads duplicate collision risk into reward-risk scoreability blockers", () => {
+    const targetRepo = repo("owner/duplicates");
+    const profile = buildContributorProfile("dev", { login: "dev", topLanguages: ["TypeScript"], source: "github" }, [], []);
+    const history = buildContributorOutcomeHistory({
+      login: "dev",
+      profile,
+      repositories: [targetRepo],
+      pullRequests: [],
+      issues: [],
+      repoStats: [],
+    });
+    const fit = buildContributorFit(profile, [targetRepo], [], [], [], []);
+    const result = buildRepoRewardRisk({
+      login: "dev",
+      repo: targetRepo,
+      repoFullName: targetRepo.fullName,
+      profile,
+      outcomeHistory: history,
+      scoringSnapshot: scoringSnapshot(),
+      scoringProfile: buildContributorScoringProfile({ login: "dev", fit, scoringSnapshot: scoringSnapshot() }),
+      issues: [issue(targetRepo.fullName, 7, "Dashboard cache refresh fails after reconnect", { linkedPrs: [10, 11] })],
+      pullRequests: [
+        pr(targetRepo.fullName, 10, "Fix dashboard cache refresh", { linkedIssues: [7] }),
+        pr(targetRepo.fullName, 11, "Repair dashboard reconnect cache", { linkedIssues: [7] }),
+      ],
+    });
+
+    expect(result.riskBreakdown.highRiskDuplicateClusters).toBeGreaterThan(0);
+    expect(result.currentPreview.blockedBy).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "duplicate_risk", severity: "reducer" })]),
+    );
+  });
+
   it("flags possible duplicate work when the planned title overlaps an existing cluster", () => {
     // Regression: previously the preflight used `item.title.includes(input.title)`,
     // so a longer/more descriptive planned title never matched a shorter existing
