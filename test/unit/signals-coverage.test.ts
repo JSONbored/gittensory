@@ -801,6 +801,55 @@ describe("signal coverage edge cases", () => {
     expect(scopedComment).toContain("Additional title-only matches omitted; title-only overlap does not block.");
   });
 
+  it("counts scoped related-work as the union of PR-specific and preflight clusters, not the max", () => {
+    const directRepo = repo("owner/union");
+    const currentPr = pr(directRepo.fullName, 99, "Union overlap PR", { authorLogin: "dev", linkedIssues: [50], body: "Fixes #50" });
+    // One repo collision cluster that contains THIS PR (deterministic literal, so prCollisionClusters = 1).
+    const collisions: CollisionReport = {
+      repoFullName: directRepo.fullName,
+      generatedAt: "2026-06-05T00:00:00.000Z",
+      summary: { clusterCount: 1, highRiskCount: 0, itemsReviewed: 2 },
+      clusters: [
+        {
+          id: "pr-cluster",
+          risk: "medium",
+          reason: "Open PR work references issue #50.",
+          items: [
+            { type: "pull_request", number: 99, title: "Union overlap PR", authorLogin: "dev", labels: [], linkedIssues: [50] },
+            { type: "issue", number: 50, title: "Shared issue", authorLogin: "reporter", labels: [], linkedIssues: [] },
+          ],
+        },
+      ],
+    };
+    // Two preflight clusters, disjoint from the PR cluster (different ids, none contain PR #99).
+    const preflightClusters: CollisionCluster[] = [1, 2].map((n) => ({
+      id: `preflight-${n}`,
+      risk: "medium",
+      reason: "Titles share 2 meaningful terms.",
+      items: [{ type: "issue", number: 200 + n, title: `Related ${n}`, authorLogin: "reporter", labels: [], linkedIssues: [] }],
+    }));
+    const profile = buildContributorProfile("dev", { login: "dev", topLanguages: [], source: "github" }, [currentPr], []);
+    const detection = { detected: true, source: "github_cache" as const, reason: "cached contributor", priorPullRequests: 1, priorMergedPullRequests: 0, priorIssues: 0 };
+    const comment = buildPublicPrIntelligenceComment({
+      repo: directRepo,
+      pr: currentPr,
+      profile,
+      detection,
+      queueHealth: buildQueueHealth(directRepo, [], [currentPr], collisions),
+      collisions,
+      preflight: {
+        ...buildPreflightResult({ repoFullName: directRepo.fullName, title: currentPr.title, body: currentPr.body ?? undefined, linkedIssues: [50] }, directRepo, [], [currentPr]),
+        collisions: preflightClusters,
+        findings: [],
+      },
+      settings: { ...repoSettings(directRepo.fullName), gateCheckMode: "off" },
+    });
+    // PR-specific clusters = {pr-cluster} (1); preflight clusters = 2 disjoint -> 3 distinct overlaps.
+    // Old code used Math.max(1, 2) = 2; the union (3) is the correct count feeding the related-work row.
+    expect(comment).toContain("3 scoped overlaps");
+    expect(comment).not.toContain("2 scoped overlaps");
+  });
+
   it("does not present global repo collision clusters as PR duplicate risk", () => {
     const directRepo = repo("owner/noisy");
     const unrelatedIssues = Array.from({ length: 12 }, (_, index) => issue(directRepo.fullName, index + 1, `Unrelated cache issue ${index + 1}`));
