@@ -181,6 +181,7 @@ import { buildPullRequestReviewability, type PullRequestReviewability } from "..
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
+import { buildRepoOnboardingPackPreviewForRepo } from "../services/repo-onboarding-pack";
 import { buildRepoSettingsPreview, type PublicSurfaceSkipReason } from "../signals/settings-preview";
 import { buildGittensorConfigRecommendation, buildRegistrationReadiness, type InstallationHealthSummary } from "../signals/registration-readiness";
 import { fileUpstreamDriftIssues, loadUpstreamStatus, refreshUpstreamDrift, registryHyperparameterDriftWarningsForRepo } from "../upstream/ruleset";
@@ -1477,6 +1478,19 @@ export function createApp() {
   app.get("/v1/repos/:owner/:repo/gittensor-config-recommendation", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     return c.json(await buildGittensorConfigRecommendationResponse(c.env, fullName));
+  });
+
+  app.get("/v1/repos/:owner/:repo/onboarding-pack/preview", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
+    if (forbidden) return forbidden;
+    const response = await buildRepoOnboardingPackPreviewForRepo(c.env, fullName, {
+      refreshManifest: c.req.query("refresh") === "true",
+    });
+    if ("error" in response) {
+      return c.json(response, 404);
+    }
+    return c.json(response);
   });
 
   app.get("/v1/repos/:owner/:repo/settings", async (c) => {
