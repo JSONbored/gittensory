@@ -30,6 +30,7 @@ const CLI_COMMAND_SPEC = {
   whoami: [],
   status: [],
   changelog: [],
+  completion: [],
   version: [],
   doctor: [],
   "init-client": [],
