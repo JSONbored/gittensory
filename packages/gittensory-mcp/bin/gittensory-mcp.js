@@ -30,6 +30,7 @@ const CLI_COMMAND_SPEC = {
   whoami: [],
   status: [],
   changelog: [],
+  completion: [],
   version: [],
   doctor: [],
   "init-client": [],
@@ -590,8 +591,9 @@ server.registerTool(
   },
   async (input) => {
     let git = null;
+    const workspaceInput = await withClientWorkspaceRoots(input);
     try {
-      git = collectLocalBranchMetadata({ cwd: input.cwd ?? process.cwd(), baseRef: input.baseRef, repoFullName: input.repoFullName, login: "local" });
+      git = collectLocalBranchMetadata({ cwd: workspaceInput.cwd, baseRef: input.baseRef, repoFullName: input.repoFullName, login: "local", workspaceRoots: workspaceInput.workspaceRoots });
     } catch (error) {
       git = { error: error instanceof Error ? error.message : "local_status_failed" };
     }
