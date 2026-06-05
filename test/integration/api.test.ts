@@ -498,7 +498,8 @@ describe("api routes", () => {
     };
     expect(minerPreviewBody.decision.skipped).toBe(false);
     expect(minerPreviewBody.decision.willComment).toBe(true);
-    expect(minerPreviewBody.previewComment).toContain("Gittensory contribution context");
+    expect(minerPreviewBody.previewComment).toContain("<!-- gittensory-pr-panel:v1 -->");
+    expect(minerPreviewBody.previewComment).toContain("Confirmed Gittensor contributor");
     expect(minerPreviewBody.previewComment).not.toMatch(/wallet|hotkey|trust score|scoreability|payout/i);
     expect(minerPreviewBody.installPreview).toMatchObject({
       status: "ready",
@@ -1107,7 +1108,7 @@ describe("api routes", () => {
     expect(installationHealth.status).toBe(200);
     await expect(installationHealth.json()).resolves.toMatchObject({
       installationId: 123,
-      requiredPermissions: { metadata: "read", pull_requests: "read", issues: "write" },
+      requiredPermissions: { metadata: "read", pull_requests: "write", issues: "write" },
       optionalPermissions: { checks: "write" },
       permissionRemediation: expect.arrayContaining([expect.objectContaining({ permission: "issues", ok: true })]),
       repairSteps: ["No repair needed."],
@@ -1293,7 +1294,7 @@ describe("api routes", () => {
       installedReposCount: 1,
       registeredInstalledCount: 0,
       status: "needs_attention",
-      missingPermissions: ["issues"],
+      missingPermissions: ["pull_requests", "issues"],
       missingEvents: ["issue_comment"],
       permissions: { metadata: "read", pull_requests: "read" },
       events: ["issues", "pull_request", "repository"],
@@ -1311,16 +1312,16 @@ describe("api routes", () => {
       refresh: { method: string; path: string };
     };
     expect(repairBody).toMatchObject({
-      installation: { status: "needs_attention", missingPermissions: ["issues"], missingEvents: ["issue_comment"] },
-      requiredPermissions: { metadata: "read", pull_requests: "read", issues: "write" },
+      installation: { status: "needs_attention", missingPermissions: ["pull_requests", "issues"], missingEvents: ["issue_comment"] },
+      requiredPermissions: { metadata: "read", pull_requests: "write", issues: "write" },
       optionalPermissions: { checks: "write" },
       refresh: { method: "POST", path: "/v1/installations/777/repair/refresh" },
     });
     expect(repairBody.requiredPermissions).not.toHaveProperty("checks");
     expect(repairBody.modeImpacts).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ mode: "comment", enabled: true, affectedRepoCount: 1, requiredPermissions: [expect.objectContaining({ permission: "issues", missing: true, optional: false })] }),
-        expect.objectContaining({ mode: "label", enabled: true, affectedRepoCount: 1, requiredPermissions: [expect.objectContaining({ permission: "issues", missing: true, optional: false })] }),
+        expect.objectContaining({ mode: "comment", enabled: true, affectedRepoCount: 1, requiredPermissions: [expect.objectContaining({ permission: "pull_requests", missing: true, optional: false })] }),
+        expect.objectContaining({ mode: "label", enabled: true, affectedRepoCount: 1, requiredPermissions: [expect.objectContaining({ permission: "pull_requests", missing: true, optional: false })] }),
         expect.objectContaining({ mode: "check_run", enabled: false, affectedRepoCount: 0, requiredPermissions: [expect.objectContaining({ permission: "checks", missing: false, optional: true })] }),
       ]),
     );
@@ -1337,8 +1338,8 @@ describe("api routes", () => {
       status: "needs_attention",
       missingPermissions: ["checks"],
       missingEvents: [],
-      permissions: { metadata: "read", pull_requests: "read", issues: "write" },
-      events: ["issues", "issue_comment", "pull_request", "repository"],
+      permissions: { metadata: "read", pull_requests: "write", issues: "write" },
+      events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
       checkedAt: "2026-05-28T00:01:00.000Z",
     });
     const repairWithChecks = await app.request("/v1/installations/777/repair", { headers: apiHeaders(env) }, env);
@@ -1356,8 +1357,8 @@ describe("api routes", () => {
           id: 777,
           account: { login: "JSONbored", id: 1, type: "User" },
           repository_selection: "selected",
-          permissions: { metadata: "read", pull_requests: "read", issues: "write", checks: "write" },
-          events: ["issues", "issue_comment", "pull_request", "repository"],
+          permissions: { metadata: "read", pull_requests: "write", issues: "write", checks: "write" },
+          events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
         });
       }
       return new Response("not found", { status: 404 });
@@ -1367,7 +1368,7 @@ describe("api routes", () => {
     await expect(refreshed.json()).resolves.toMatchObject({
       refreshed: true,
       installation: { status: "healthy", missingPermissions: [], missingEvents: [] },
-      requiredPermissions: { metadata: "read", pull_requests: "read", issues: "write", checks: "write" },
+      requiredPermissions: { metadata: "read", pull_requests: "write", issues: "write", checks: "write" },
     });
   });
 
@@ -2044,10 +2045,10 @@ describe("api routes", () => {
         endpoint: "GitHub issue comment",
         decision: { status: "ready", willComment: true, willLabel: false, willCheckRun: false },
         sanitizer: { passed: true, forbiddenTerms: [] },
-        body: expect.stringContaining("### Gittensory preflight"),
+        body: expect.stringContaining("**Gittensory preflight**"),
       },
     });
-    expect(commandResponsePreviewBody.preview.body).toContain("Scope: entrius/allways-ui#12");
+    expect(commandResponsePreviewBody.preview.body).toContain("| Scope | entrius/allways-ui#12 |");
     expect(commandResponsePreviewBody.preview.body).not.toMatch(/wallet|hotkey|raw trust|payout|reward estimate|farming|scoreability|public score estimate/i);
 
     const nonMinerPreview = await app.request(
@@ -2094,7 +2095,7 @@ describe("api routes", () => {
     );
     expect(permissionMapPreview.status).toBe(200);
     await expect(permissionMapPreview.json()).resolves.toMatchObject({
-      preview: { decision: { status: "missing_permission", skipReason: "missing_permission" }, missingPermissions: ["issues"] },
+      preview: { decision: { status: "missing_permission", skipReason: "missing_permission" }, missingPermissions: ["issues", "pull_requests"] },
     });
 
     const checksWarningPreview = await app.request(
@@ -2150,7 +2151,7 @@ describe("api routes", () => {
     );
     expect(helpPreview.status).toBe(200);
     await expect(helpPreview.json()).resolves.toMatchObject({
-      preview: { decision: { status: "ready", willComment: true }, body: expect.stringContaining("### Gittensory command help") },
+      preview: { decision: { status: "ready", willComment: true }, body: expect.stringContaining("**Gittensory command help**") },
     });
 
     const maintainerCommandPreview = await app.request(
@@ -2169,7 +2170,7 @@ describe("api routes", () => {
     );
     expect(maintainerCommandPreview.status).toBe(200);
     await expect(maintainerCommandPreview.json()).resolves.toMatchObject({
-      preview: { decision: { status: "ready", willComment: true }, body: expect.stringContaining("### Gittensory maintainer queue summary") },
+      preview: { decision: { status: "ready", willComment: true }, body: expect.stringContaining("**Gittensory maintainer queue summary**") },
     });
 
     const maintainerMinerContextPreview = await app.request(
@@ -2335,7 +2336,7 @@ describe("api routes", () => {
       status: "needs_attention",
       missingPermissions: ["checks"],
       missingEvents: ["pull_request_review"],
-      permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+      permissions: { metadata: "read", pull_requests: "write", issues: "write" },
       events: ["issues", "pull_request", "repository"],
       checkedAt: "2026-05-31T11:00:00.000Z",
     });
@@ -3585,7 +3586,7 @@ describe("api routes", () => {
       missingPermissions: ["issues"],
       missingEvents: [],
       permissions: { metadata: "read", pull_requests: "read" },
-      events: ["issues", "issue_comment", "pull_request", "repository"],
+      events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
       checkedAt: "2026-05-23T00:00:00.000Z",
     });
     await upsertRepoSyncSegment(env, {
@@ -5413,7 +5414,7 @@ async function seedSignalData(env: Env): Promise<void> {
       id: 123,
       account: { login: "entrius", id: 1, type: "Organization" },
       repository_selection: "selected",
-      permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+      permissions: { metadata: "read", pull_requests: "write", issues: "write" },
       events: ["issues", "pull_request", "repository"],
     },
   });
@@ -5426,7 +5427,7 @@ async function seedSignalData(env: Env): Promise<void> {
     status: "healthy",
     missingPermissions: [],
     missingEvents: [],
-    permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+    permissions: { metadata: "read", pull_requests: "write", issues: "write" },
     events: ["issues", "pull_request", "repository"],
     checkedAt: freshAt,
   });
@@ -5607,8 +5608,8 @@ async function seedSignalData(env: Env): Promise<void> {
     status: "healthy",
     missingPermissions: [],
     missingEvents: [],
-    permissions: { metadata: "read", pull_requests: "read", issues: "write" },
-    events: ["issues", "issue_comment", "pull_request", "repository"],
+    permissions: { metadata: "read", pull_requests: "write", issues: "write" },
+    events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
     checkedAt: freshAt,
   });
   await upsertIssueFromGitHub(env, "entrius/allways-ui", {
