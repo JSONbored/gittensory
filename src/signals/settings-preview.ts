@@ -315,8 +315,10 @@ function buildWarnings(settings: RepositorySettings, decision: PublicSurfaceDeci
     return warnings;
   }
   const missing = new Set(installation.missingPermissions);
-  if ((decision.willComment || decision.willLabel) && missing.has("issues")) {
-    warnings.push("Comments and labels require GitHub App permission Issues: write, which is currently missing. Set repository permission issues to write, then approve the change.");
+  if ((decision.willComment || decision.willLabel) && (missing.has("issues") || missing.has("pull_requests"))) {
+    warnings.push(
+      "Comments and labels require GitHub App permissions Issues: write and Pull requests: write. Set both repository permissions to write, then approve the change.",
+    );
   }
   if (settings.checkRunMode === "enabled" && missing.has("checks")) {
     warnings.push("Check runs are enabled but GitHub App permission Checks: write is missing. Set repository permission checks to write, then approve the change.");
@@ -378,7 +380,10 @@ function buildRepoInstallPreview(args: {
       status: commandAuthorizationStatus,
       label: "Command authorization",
       summary: "Public command responses require a maintainer or confirmed PR author; maintainer queue commands require owner, member, or collaborator context.",
-      action: commandAuthorizationStatus === "ready" ? "Use command previews to confirm actor and permission behavior before relying on repo commands." : "Restore Issues: write before enabling public command responses.",
+      action:
+        commandAuthorizationStatus === "ready"
+          ? "Use command previews to confirm actor and permission behavior before relying on repo commands."
+          : "Restore Issues: write and Pull requests: write before enabling public command responses.",
     },
     {
       id: "audit-behavior",

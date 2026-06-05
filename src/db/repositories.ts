@@ -162,30 +162,41 @@ const FRESHNESS_SIGNAL_TYPES = [
 export async function upsertInstallation(env: Env, payload: GitHubWebhookPayload): Promise<void> {
   if (!payload.installation?.id) return;
   const account = payload.installation.account;
+  const existing = await getInstallation(env, payload.installation.id);
+  const permissions =
+    payload.installation.permissions && Object.keys(payload.installation.permissions).length > 0
+      ? (payload.installation.permissions as Record<string, string>)
+      : (existing?.permissions ?? {});
+  const events = payload.installation.events && payload.installation.events.length > 0 ? payload.installation.events : (existing?.events ?? []);
+  const accountLogin = account?.login ?? existing?.accountLogin ?? "unknown";
+  const accountId = account?.id ?? existing?.accountId ?? 0;
+  const targetType = payload.installation.target_type ?? account?.type ?? existing?.targetType ?? "unknown";
+  const repositorySelection = payload.installation.repository_selection ?? existing?.repositorySelection;
+  const suspendedAt = payload.installation.suspended_at !== undefined ? payload.installation.suspended_at : (existing?.suspendedAt ?? undefined);
   const db = getDb(env.DB);
   await db
     .insert(installations)
     .values({
       id: payload.installation.id,
-      accountLogin: account?.login ?? "unknown",
-      accountId: account?.id ?? 0,
-      targetType: payload.installation.target_type ?? account?.type ?? "unknown",
-      repositorySelection: payload.installation.repository_selection,
-      permissionsJson: jsonString((payload.installation.permissions ?? {}) as Record<string, string>),
-      eventsJson: jsonString(payload.installation.events ?? []),
-      suspendedAt: payload.installation.suspended_at ?? undefined,
+      accountLogin,
+      accountId,
+      targetType,
+      repositorySelection,
+      permissionsJson: jsonString(permissions),
+      eventsJson: jsonString(events),
+      suspendedAt,
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
       target: installations.id,
       set: {
-        accountLogin: account?.login ?? "unknown",
-        accountId: account?.id ?? 0,
-        targetType: payload.installation.target_type ?? account?.type ?? "unknown",
-        repositorySelection: payload.installation.repository_selection,
-        permissionsJson: jsonString((payload.installation.permissions ?? {}) as Record<string, string>),
-        eventsJson: jsonString(payload.installation.events ?? []),
-        suspendedAt: payload.installation.suspended_at ?? undefined,
+        accountLogin,
+        accountId,
+        targetType,
+        repositorySelection,
+        permissionsJson: jsonString(permissions),
+        eventsJson: jsonString(events),
+        suspendedAt,
         updatedAt: nowIso(),
       },
     });

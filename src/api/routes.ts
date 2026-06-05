@@ -2450,8 +2450,8 @@ function buildCommandPreview(
     };
   }
 
-  if (missingPermissions.includes("issues")) {
-    const summary = "GitHub App permission Issues: write is required before a command response can be posted.";
+  if (missingPermissions.includes("issues") || missingPermissions.includes("pull_requests")) {
+    const summary = "GitHub App permissions Issues: write and Pull requests: write are required before a command response can be posted.";
     const body = sanitizePublicComment(`Gittensory preview is ready for ${target}, but ${summary}`);
     return {
       ...base,
@@ -2605,6 +2605,7 @@ function commandPreviewMissingPermissions(request: z.infer<typeof commandPreview
   const configured = new Set([...(installation?.missingPermissions ?? []), ...(request.sample?.missingPermissions ?? [])]);
   const permissions = request.sample?.permissions ?? installation?.permissions;
   if (permissions && permissions.issues !== "write") configured.add("issues");
+  if (permissions && permissions.pull_requests !== "write") configured.add("pull_requests");
   return [...configured].sort();
 }
 
@@ -2620,6 +2621,8 @@ function commandPreviewPermissionWarnings(missingPermissions: string[]) {
       message:
         permission === "issues"
           ? "Command responses require GitHub App permission Issues: write; preview will not post while it is missing."
+          : permission === "pull_requests"
+            ? "Command responses require GitHub App permission Pull requests: write; preview will not post while it is missing."
           : `GitHub App permission ${permission}: ${requiredAccess} is missing for this preview scenario.`,
     };
   });

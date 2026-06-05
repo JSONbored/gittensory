@@ -305,7 +305,7 @@ describe("GitHub backfill", () => {
           id: 124,
           account: { login: "JSONbored", id: 1, type: "User" },
           repository_selection: "selected",
-          permissions: { checks: "write", metadata: "read", pull_requests: "read", issues: "write" },
+          permissions: { checks: "write", metadata: "read", pull_requests: "write", issues: "write" },
           events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
         });
       }
@@ -325,7 +325,7 @@ describe("GitHub backfill", () => {
         id: 124,
         account: { login: "JSONbored", id: 1, type: "User" },
         repository_selection: "selected",
-        permissions: { checks: "write", metadata: "read", pull_requests: "read", issues: "write" },
+        permissions: { checks: "write", metadata: "read", pull_requests: "write", issues: "write" },
         events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
       },
     });
@@ -341,7 +341,7 @@ describe("GitHub backfill", () => {
         id: 123,
         account: { login: "JSONbored", id: 1, type: "User" },
         repository_selection: "selected",
-        permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+        permissions: { metadata: "read", pull_requests: "write", issues: "write" },
         events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
       },
     });
@@ -357,7 +357,7 @@ describe("GitHub backfill", () => {
           id: 123,
           account: { login: "JSONbored", id: 1, type: "User" },
           repository_selection: "selected",
-          permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+          permissions: { metadata: "read", pull_requests: "write", issues: "write" },
           events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
         });
       }
@@ -440,17 +440,17 @@ describe("GitHub backfill", () => {
       installedReposCount: 2,
       registeredInstalledCount: 0,
       status: "needs_attention",
-      missingPermissions: ["issues"],
+      missingPermissions: ["pull_requests"],
       missingEvents: [],
-      permissions: { metadata: "read", pull_requests: "read" },
+      permissions: { metadata: "read", pull_requests: "read", issues: "write" },
       events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
       checkedAt: "2026-05-28T00:00:00.000Z",
     });
 
     expect(repair.modeImpacts).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ mode: "comment", enabled: true, affectedRepoCount: 1, requiredPermissions: [expect.objectContaining({ permission: "issues", missing: true })] }),
-        expect.objectContaining({ mode: "label", enabled: true, affectedRepoCount: 1, requiredPermissions: [expect.objectContaining({ permission: "issues", missing: true })] }),
+        expect.objectContaining({ mode: "comment", enabled: true, affectedRepoCount: 1, requiredPermissions: [expect.objectContaining({ permission: "pull_requests", missing: true })] }),
+        expect.objectContaining({ mode: "label", enabled: true, affectedRepoCount: 1, requiredPermissions: [expect.objectContaining({ permission: "pull_requests", missing: true })] }),
       ]),
     );
   });
@@ -475,7 +475,7 @@ describe("GitHub backfill", () => {
           account: { login: "JSONbored", id: 1, type: "User" },
           target_type: "User",
           repository_selection: "selected",
-          permissions: { checks: "write", metadata: "read", pull_requests: "read", issues: "write" },
+          permissions: { checks: "write", metadata: "read", pull_requests: "write", issues: "write" },
           events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
         });
       }
@@ -503,7 +503,7 @@ describe("GitHub backfill", () => {
           id: 123,
           account: { login: "JSONbored", id: 1, type: "User" },
           repository_selection: "selected",
-          permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+          permissions: { metadata: "read", pull_requests: "write", issues: "write" },
           events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
         });
       }

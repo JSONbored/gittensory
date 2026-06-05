@@ -2,6 +2,7 @@ import {
   countOpenIssues,
   countOpenPullRequests,
   getAgentCommandAnswer,
+  getInstallation,
   getLatestRepoGithubTotalsSnapshot,
   getFreshOfficialMinerDetection,
   getPullRequest,
@@ -593,6 +594,9 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
     }
 
     await upsertInstallation(env, payload);
+    const installationActor =
+      payload.installation?.account?.login ??
+      (payload.installation?.id ? (await getInstallation(env, payload.installation.id))?.accountLogin : undefined);
     if (eventName === "installation_repositories" && payload.installation?.id) {
       const addedRepos = payload.repositories_added?.map((repo) => repo.full_name).filter(Boolean) ?? [];
       const removedRepos = payload.repositories_removed?.map((repo) => repo.full_name).filter(Boolean) ?? [];
@@ -601,7 +605,7 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
       await Promise.all([
         ...addedRepos.slice(0, 50).map((repoFullName) =>
           recordGithubProductUsage(env, "github_installation_repository_added", {
-            actor: payload.installation?.account?.login,
+            actor: installationActor,
             repoFullName,
             targetKey: payload.installation?.id ? `installation:${payload.installation.id}` : repoFullName,
             outcome: "completed",
@@ -610,7 +614,7 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
         ),
         ...removedRepos.slice(0, 50).map((repoFullName) =>
           recordGithubProductUsage(env, "github_installation_repository_removed", {
-            actor: payload.installation?.account?.login,
+            actor: installationActor,
             repoFullName,
             targetKey: payload.installation?.id ? `installation:${payload.installation.id}` : repoFullName,
             outcome: "completed",
@@ -625,7 +629,7 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
       await Promise.all(
         installedRepos.slice(0, 50).map((repoFullName) =>
           recordGithubProductUsage(env, "github_installation_created", {
-            actor: payload.installation?.account?.login,
+            actor: installationActor,
             repoFullName,
             targetKey: payload.installation?.id ? `installation:${payload.installation.id}` : repoFullName,
             outcome: "completed",
@@ -727,6 +731,9 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
   }
 }
 
+type PublicSurfaceOutput = "comment" | "label" | "check_run";
+type PublicSurfaceOutputFailure = { output: PublicSurfaceOutput; error: string };
+
 async function maybePublishPrPublicSurface(
   env: Env,
   installationId: number,
@@ -820,36 +827,76 @@ async function maybePublishPrPublicSurface(
     repoPullRequests,
     repoBounties,
   );
+  const publishedOutputs: PublicSurfaceOutput[] = [];
+  const failedOutputs: PublicSurfaceOutputFailure[] = [];
+
+  if (decision.willCheckRun && advisory.headSha) {
+    try {
+      const checkRunResult = await createOrUpdateCheckRun(env, installationId, repoFullName, advisory, settings.checkRunDetailLevel);
+      if (checkRunResult?.kind === "permission_missing") {
+        failedOutputs.push({ output: "check_run", error: checkRunResult.warning });
+        await recordAuditEvent(env, {
+          eventType: "github_app.check_run_permission_missing",
+          actor: author,
+          targetKey: `${repoFullName}#${pr.number}`,
+          outcome: "error",
+          detail: checkRunResult.warning,
+          metadata: { deliveryId: webhook.deliveryId, repoFullName },
+        });
+      } else if (checkRunResult?.kind === "published") {
+        publishedOutputs.push("check_run");
+      }
+    } catch (error) {
+      const message = errorMessage(error);
+      failedOutputs.push({ output: "check_run", error: message });
+      await recordPublicSurfaceOutputFailure(env, "check_run", author, repoFullName, pr.number, webhook.deliveryId, message);
+    }
+  }
+
   if (decision.willComment) {
     const commentArgs = { repo, pr, profile, detection, queueHealth, collisions, preflight, settings };
     const deterministicBody = buildPublicPrIntelligenceComment(commentArgs);
     // Optional AI rewrite (issue #151): disabled by default, source-free bundle only, quota-limited,
     // sanitizer-gated, and falls back to the deterministic body on any non-ok outcome.
-    const { body } = await rewritePublicPrIntelligenceComment(env, {
-      bundle: buildPublicCommentSignalBundle(commentArgs),
-      deterministicBody,
-      actor: author,
-      route: "github_app.pr_public_surface",
-    });
-    await createOrUpdatePrIntelligenceComment(env, installationId, repoFullName, pr.number, body);
+    try {
+      const { body } = await rewritePublicPrIntelligenceComment(env, {
+        bundle: buildPublicCommentSignalBundle(commentArgs),
+        deterministicBody,
+        actor: author,
+        route: "github_app.pr_public_surface",
+      });
+      await createOrUpdatePrIntelligenceComment(env, installationId, repoFullName, pr.number, body);
+      publishedOutputs.push("comment");
+    } catch (error) {
+      const message = errorMessage(error);
+      failedOutputs.push({ output: "comment", error: message });
+      await recordPublicSurfaceOutputFailure(env, "comment", author, repoFullName, pr.number, webhook.deliveryId, message);
+    }
   }
   if (decision.willLabel) {
-    await ensurePullRequestLabel(env, installationId, repoFullName, pr.number, settings.gittensorLabel, {
-      createMissingLabel: settings.createMissingLabel,
-    });
+    try {
+      await ensurePullRequestLabel(env, installationId, repoFullName, pr.number, settings.gittensorLabel, {
+        createMissingLabel: settings.createMissingLabel,
+      });
+      publishedOutputs.push("label");
+    } catch (error) {
+      const message = errorMessage(error);
+      failedOutputs.push({ output: "label", error: message });
+      await recordPublicSurfaceOutputFailure(env, "label", author, repoFullName, pr.number, webhook.deliveryId, message);
+    }
   }
-  if (decision.willCheckRun && advisory.headSha) {
-    const checkRunResult = await createOrUpdateCheckRun(env, installationId, repoFullName, advisory, settings.checkRunDetailLevel);
-    if (checkRunResult?.kind === "permission_missing") {
+  if (publishedOutputs.length === 0) {
+    if (failedOutputs.length > 0) {
       await recordAuditEvent(env, {
-        eventType: "github_app.check_run_permission_missing",
+        eventType: "github_app.pr_public_surface_failed",
         actor: author,
         targetKey: `${repoFullName}#${pr.number}`,
         outcome: "error",
-        detail: checkRunResult.warning,
-        metadata: { deliveryId: webhook.deliveryId, repoFullName },
+        detail: failedOutputs.map((failure) => failure.output).join(","),
+        metadata: { deliveryId: webhook.deliveryId, repoFullName, failedOutputs },
       });
     }
+    return;
   }
   await recordAuditEvent(env, {
     eventType: "github_app.pr_public_surface_published",
@@ -863,6 +910,8 @@ async function maybePublishPrPublicSurface(
       checkRunMode: settings.checkRunMode,
       gateCheckMode: settings.gateCheckMode,
       publicAudienceMode: settings.publicAudienceMode,
+      publishedOutputs,
+      failedOutputs,
     },
   });
   await recordGithubProductUsage(env, "pr_public_surface_published", {
@@ -876,7 +925,28 @@ async function maybePublishPrPublicSurface(
       checkRunMode: settings.checkRunMode,
       gateCheckMode: settings.gateCheckMode,
       publicAudienceMode: settings.publicAudienceMode,
+      publishedOutputs,
+      failedOutputs,
     },
+  });
+}
+
+async function recordPublicSurfaceOutputFailure(
+  env: Env,
+  output: PublicSurfaceOutput,
+  actor: string | null,
+  repoFullName: string,
+  pullNumber: number,
+  deliveryId: string,
+  error: string,
+): Promise<void> {
+  await recordAuditEvent(env, {
+    eventType: `github_app.pr_${output}_publish_failed`,
+    actor,
+    targetKey: `${repoFullName}#${pullNumber}`,
+    outcome: "error",
+    detail: error,
+    metadata: { deliveryId, repoFullName, output },
   });
 }
 

@@ -638,7 +638,7 @@ export async function refreshContributorActivity(
 
 export const REQUIRED_INSTALLATION_PERMISSIONS: Record<string, string> = {
   metadata: "read",
-  pull_requests: "read",
+  pull_requests: "write",
   issues: "write",
 };
 export const OPTIONAL_CHECK_RUN_PERMISSION: Record<string, string> = {
@@ -721,19 +721,19 @@ export async function buildInstallationRepairDiagnostics(env: Env, health: Insta
       mode: "comment",
       enabled: commentRepoCount > 0,
       affectedRepoCount: commentRepoCount,
-      permission: "issues",
+      permission: "pull_requests",
       requiredAccess: "write",
-      missing: missingPermissions.has("issues"),
-      summary: "PR comments use the GitHub Issues API, so comment mode requires Issues: write.",
+      missing: missingPermissions.has("pull_requests"),
+      summary: "PR comments are posted on pull requests, so comment mode requires Pull requests: write.",
     }),
     buildPermissionModeImpact({
       mode: "label",
       enabled: labelRepoCount > 0,
       affectedRepoCount: labelRepoCount,
-      permission: "issues",
+      permission: "pull_requests",
       requiredAccess: "write",
-      missing: missingPermissions.has("issues"),
-      summary: "PR labels use the GitHub Issues API, so label mode requires Issues: write.",
+      missing: missingPermissions.has("pull_requests"),
+      summary: "PR labels are applied to pull requests, so label mode requires Pull requests: write.",
     }),
     buildPermissionModeImpact({
       mode: "check_run",
