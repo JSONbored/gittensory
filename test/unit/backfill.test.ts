@@ -29,6 +29,7 @@ import {
   backfillRepositorySegment,
   buildInstallationRepairDiagnostics,
   enqueueRepositoryOpenDataBackfill,
+  enrichInstallationHealth,
   refreshContributorActivity,
   refreshInstallationHealth,
 } from "../../src/github/backfill";
@@ -316,7 +317,7 @@ describe("GitHub backfill", () => {
     expect(result.installations[0]).toMatchObject({
       status: "needs_attention",
       missingPermissions: ["pull_requests", "issues"],
-      missingEvents: ["issues", "issue_comment", "repository", "installation_repositories"],
+      missingEvents: ["issues", "issue_comment", "repository"],
       repairSteps: expect.arrayContaining(["Update the GitHub App permissions and subscribed events."]),
     });
 
@@ -331,6 +332,28 @@ describe("GitHub backfill", () => {
     });
     const refreshed = await refreshInstallationHealth(env);
     expect(refreshed.installations).toEqual(expect.arrayContaining([expect.objectContaining({ installationId: 124, status: "healthy" })]));
+  });
+
+  it("normalizes stale automatic installation repository event health", () => {
+    const health = enrichInstallationHealth({
+      installationId: 125,
+      accountLogin: "JSONbored",
+      repositorySelection: "selected",
+      installedReposCount: 2,
+      registeredInstalledCount: 2,
+      status: "needs_attention",
+      missingPermissions: [],
+      missingEvents: ["installation_repositories"],
+      permissions: { metadata: "read", pull_requests: "write", issues: "write" },
+      events: ["issues", "issue_comment", "pull_request", "repository"],
+      checkedAt: "2026-06-05T00:00:00.000Z",
+    });
+
+    expect(health).toMatchObject({
+      status: "healthy",
+      missingEvents: [],
+      optionalVisibleEvents: expect.arrayContaining(["installation_repositories"]),
+    });
   });
 
   it("requires Checks write only for repos with check runs enabled", async () => {
@@ -2197,7 +2220,7 @@ describe("GitHub backfill", () => {
           permissions: {},
           events: [],
           missingPermissions: ["metadata", "pull_requests", "issues"],
-          missingEvents: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+          missingEvents: ["issues", "issue_comment", "pull_request", "repository"],
         }),
       ]),
     );

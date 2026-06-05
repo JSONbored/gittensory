@@ -75,7 +75,7 @@ import {
 import { ensurePullRequestLabel } from "../github/labels";
 import { fetchPublicContributorProfile } from "../github/public";
 import { refreshRegistry } from "../registry/sync";
-import { buildIssueAdvisory, buildPullRequestAdvisory } from "../rules/advisory";
+import { buildIssueAdvisory, buildPullRequestAdvisory, evaluateGateCheck } from "../rules/advisory";
 import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
 import { buildAndPersistContributorDecisionPack, loadDecisionPackSharedInputs } from "../services/decision-pack";
 import {
@@ -794,20 +794,21 @@ async function maybePublishPrPublicSurface(
     minerStatus: official.status,
   });
 
+  const publishCachedContributorActivity = official.status === "confirmed";
   const [contributorPullRequests, contributorIssues, repoIssues, repoPullRequests, repoBounties, github, cachedRepoStats] = await Promise.all([
-    listContributorPullRequests(env, author),
-    listContributorIssues(env, author),
+    publishCachedContributorActivity ? listContributorPullRequests(env, author) : Promise.resolve([]),
+    publishCachedContributorActivity ? listContributorIssues(env, author) : Promise.resolve([]),
     listIssues(env, repoFullName),
     listPullRequests(env, repoFullName),
     listBountiesByRepo(env, repoFullName),
     fetchPublicContributorProfile(author),
-    listContributorRepoStats(env, author),
+    publishCachedContributorActivity ? listContributorRepoStats(env, author) : Promise.resolve([]),
   ]);
-  const repoStats = official.status === "confirmed" ? authoritativeContributorRepoStats(official.snapshot, cachedRepoStats) : cachedRepoStats;
+  const repoStats = official.status === "confirmed" ? authoritativeContributorRepoStats(official.snapshot, cachedRepoStats) : [];
   const detection =
     official.status === "confirmed"
       ? officialGittensorContributorDetection(official.snapshot, pr, contributorPullRequests, contributorIssues, repoStats)
-      : detectGittensorContributor(author, pr, contributorPullRequests, contributorIssues, repoStats);
+      : { detected: false, reason: "Official Gittensor API did not confirm this GitHub user.", priorPullRequests: 0, priorMergedPullRequests: 0, priorIssues: 0 };
 
   const profile = buildContributorProfile(author, github, contributorPullRequests, contributorIssues, repoStats, official.status === "confirmed" ? official.snapshot : null);
   const collisions = buildCollisionReport(repoFullName, repoIssues, repoPullRequests);
@@ -854,7 +855,7 @@ async function maybePublishPrPublicSurface(
   }
 
   if (decision.willComment) {
-    const commentArgs = { repo, pr, profile, detection, queueHealth, collisions, preflight, settings };
+    const commentArgs = { repo, pr, profile, detection, queueHealth, collisions, preflight, settings, gate: settings.gateCheckMode === "enabled" ? evaluateGateCheck(advisory) : undefined };
     const deterministicBody = buildPublicPrIntelligenceComment(commentArgs);
     // Optional AI rewrite (issue #151): disabled by default, source-free bundle only, quota-limited,
     // sanitizer-gated, and falls back to the deterministic body on any non-ok outcome.

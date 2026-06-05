@@ -3426,13 +3426,17 @@ export function buildPublicPrIntelligenceComment(args: {
   collisions: CollisionReport;
   preflight: PreflightResult;
   settings: RepositorySettings;
+  gate?: PublicPrPanelGateEvaluation | undefined;
 }): string {
   const publicFindings = args.preflight.findings
     .filter((finding) => finding.severity !== "critical")
     .filter((finding) => args.settings.requireLinkedIssue || finding.code !== "missing_linked_issue")
     .filter((finding) => !containsPrivatePublicTerm([finding.code, finding.title, finding.detail, finding.publicText, finding.action].filter(Boolean).join(" ")))
     .slice(0, args.settings.publicSignalLevel === "minimal" ? 2 : 5);
-  const collisionCount = args.collisions.clusters.length;
+  const prCollisionClusters = pullRequestSpecificCollisionClusters(args.collisions, args.pr);
+  const linkedDuplicatePrs = linkedIssueDuplicatePullRequests(args.pr, prCollisionClusters);
+  const scopedOverlapCount = Math.max(prCollisionClusters.length, args.preflight.collisions.length);
+  const hasRelatedWork = linkedDuplicatePrs.length > 0 || scopedOverlapCount > 0;
   const linkedIssues =
     args.pr.linkedIssues.length > 0
       ? args.pr.linkedIssues.map((issue) => `#${issue}`).join(", ")
@@ -3450,44 +3454,62 @@ export function buildPublicPrIntelligenceComment(args: {
   const nextSteps = [
     ...(roleContext.maintainerLane ? ["Treat this as maintainer-lane context rather than normal contributor-lane activity."] : []),
     ...(args.settings.requireLinkedIssue && args.pr.linkedIssues.length === 0 ? ["Link the issue being solved, or explain why this is a no-issue PR."] : []),
-    ...(collisionCount > 0 ? ["Check overlapping issues/PRs before review continues."] : []),
+    ...(linkedDuplicatePrs.length > 0 ? [`Resolve the same-issue overlap with ${formatPrRefs(linkedDuplicatePrs)}, or explain why both PRs should stay open.`] : []),
+    ...(linkedDuplicatePrs.length === 0 && hasRelatedWork ? ["Review the scoped related-work signal before deep review; it is not a merge blocker by itself."] : []),
     /* v8 ignore next -- Public findings may omit actions; public comment tests cover sanitized action inclusion. */
     ...(publicFindings.length > 0 ? publicFindings.flatMap((finding) => (finding.action ? [finding.action] : [])) : []),
   ].filter((step) => !containsPrivatePublicTerm(step));
   const gateEnabled = args.settings.gateCheckMode === "enabled";
   const missingRequiredIssue = args.settings.requireLinkedIssue && args.pr.linkedIssues.length === 0;
-  const gateBlocking = gateEnabled && (missingRequiredIssue || collisionCount > 0 || !args.repo);
-  const confirmedMiner = args.detection.source === "official_gittensor_api";
+  const fallbackGateConclusion = !gateEnabled
+    ? "success"
+    : missingRequiredIssue || linkedDuplicatePrs.length > 0 || !args.repo
+      ? "failure"
+      : "success";
+  const gateConclusion = args.gate?.conclusion ?? fallbackGateConclusion;
+  const gateBlocking = gateEnabled && gateConclusion !== "success";
+  const confirmedMiner = isOfficialContributorDetection(args.detection);
   const genericOssMode = args.settings.publicAudienceMode === "oss_maintainer";
   const alert = gateBlocking
-    ? missingRequiredIssue
+    ? gateConclusion === "action_required"
+      ? "IMPORTANT"
+      : missingRequiredIssue
       ? "WARNING"
       : "CAUTION"
-    : args.preflight.findings.some((finding) => finding.severity === "warning")
+    : args.preflight.findings.some((finding) => finding.severity === "warning") || hasRelatedWork
       ? "IMPORTANT"
       : "TIP";
   const panelTitle = gateBlocking
     ? "Gittensory Gate is blocking merge"
-    : args.preflight.findings.some((finding) => finding.severity === "warning")
+    : args.preflight.findings.some((finding) => finding.severity === "warning") || hasRelatedWork
       ? "Gittensory found maintainer review notes"
       : "Gittensory PR readiness looks good";
   const panelSummary = gateBlocking
-    ? missingRequiredIssue
+    ? args.gate?.summary ?? (missingRequiredIssue
       ? "This repository requires linked issues, but this PR does not reference one yet."
-      : collisionCount > 0
-        ? "This PR overlaps with cached open work and should be resolved before merge."
-        : "Gittensory cannot evaluate the repo state closely enough for the enabled gate."
+      : linkedDuplicatePrs.length > 0
+        ? `Another open PR references the same linked issue: ${formatPrRefs(linkedDuplicatePrs)}.`
+        : "Gittensory cannot evaluate the repo state closely enough for the enabled gate.")
+    : linkedDuplicatePrs.length > 0
+      ? `Same-issue duplicate risk found against ${formatPrRefs(linkedDuplicatePrs)}. Maintainers should resolve the overlap before review continues.`
+      : hasRelatedWork
+        ? "Scoped related-work signals were found for this PR. They are advisory unless the gate reports a blocker."
     : genericOssMode
       ? "Public GitHub metadata was checked for review readiness. Gittensor-specific context appears only when confirmed."
       : "Confirmed Gittensor contributor context was checked from public metadata and Gittensory cache.";
-  const rows: Array<[string, string]> = [
-    ["Linked issue", linkedIssues],
-    ["Duplicate risk", collisionCount > 0 ? `${collisionCount} possible overlap${collisionCount === 1 ? "" : "s"}` : "No cached overlap"],
-    ["Review burden", args.preflight.reviewBurden],
-    ["Queue level", args.queueHealth.level],
-    ["Contributor context", confirmedMiner ? "Confirmed Gittensor contributor" : args.detection.detected ? "Cached OSS contributor activity" : "Public profile only"],
-    ["Gate result", gateEnabled ? (gateBlocking ? "Failing" : "Passing") : "Advisory only"],
+  const rows: Array<[string, string, string]> = [
+    [
+      "Linked issue",
+      linkedIssues,
+      args.pr.linkedIssues.length > 0 ? "Ready for issue-scoped review." : args.settings.requireLinkedIssue ? "Required before merge." : "Optional for this repo.",
+    ],
+    ["Duplicate risk", duplicateRiskStatus(linkedDuplicatePrs, scopedOverlapCount), duplicateRiskAction(linkedDuplicatePrs, scopedOverlapCount, gateBlocking)],
+    ["Review burden", titleCase(args.preflight.reviewBurden), "Estimated from public PR metadata."],
+    ["Repo queue", titleCase(args.queueHealth.level), "Repo-wide context only; this does not block the gate."],
+    ["Contributor context", confirmedMiner ? "Confirmed Gittensor contributor" : "Public profile only", confirmedMiner ? "Official public API confirmed this GitHub user." : "Cached contributor activity is not published."],
+    ["Gate result", gateStatus(gateEnabled, gateConclusion), gateEnabled ? gateAction(gateConclusion) : "No required check is being enforced."],
   ];
+  const overlapDetails = relatedWorkDetails(args.pr, prCollisionClusters, args.preflight.collisions);
   const maintainerNotes =
     publicFindings.length > 0
       ? publicFindings.map((finding) => `- ${sanitizePanelText(finding.title)}: ${sanitizePanelText(finding.publicText ?? finding.detail)}`)
@@ -3498,13 +3520,15 @@ export function buildPublicPrIntelligenceComment(args: {
   return [
     "<!-- gittensory-pr-panel:v1 -->",
     "",
-    `> [!${alert}]`,
-    `> **${panelTitle}**`,
-    `> ${panelSummary}`,
-    "",
-    "| Signal | State |",
-    "| --- | --- |",
-    ...rows.map(([signal, state]) => `| ${escapeTableCell(signal)} | ${escapeTableCell(state)} |`),
+    ...formatAlertBlock([
+      `[!${alert}]`,
+      `## ${panelTitle}`,
+      panelSummary,
+      "",
+      "| Signal | Status | Action |",
+      "| --- | --- | --- |",
+      ...rows.map(([signal, state, action]) => `| ${escapeTableCell(signal)} | ${escapeTableCell(state)} | ${escapeTableCell(action)} |`),
+    ]),
     "",
     "<details>",
     "<summary>Review context</summary>",
@@ -3513,9 +3537,9 @@ export function buildPublicPrIntelligenceComment(args: {
     `- Role context: ${sanitizePanelText(roleContext.role)}${roleContext.maintainerLane ? " (maintainer lane)" : ""}`,
     `- Public audience mode: ${args.settings.publicAudienceMode.replace(/_/g, " ")}`,
     `- Lane context: ${sanitizePanelText(buildLaneAdvice(args.repo, args.pr.repoFullName).summary)}`,
-    `- Cached prior PRs/issues: ${args.detection.priorPullRequests} PR(s), ${args.detection.priorIssues} issue(s)`,
     `- Public profile languages: ${args.profile.github.topLanguages.length > 0 ? sanitizePanelText(args.profile.github.topLanguages.join(", ")) : "not available"}`,
-    ...(confirmedMiner ? ["- Gittensor context: official public API confirms this GitHub user."] : []),
+    ...(confirmedMiner ? [`- Official Gittensor activity: ${args.detection.priorPullRequests} PR(s), ${args.detection.priorIssues} issue(s).`] : ["- Contributor context: public profile only."]),
+    ...overlapDetails,
     "",
     "</details>",
     "",
@@ -3536,6 +3560,86 @@ export function buildPublicPrIntelligenceComment(args: {
     "---",
     footer,
   ].join("\n");
+}
+
+type PublicPrPanelGateEvaluation = {
+  conclusion: "success" | "failure" | "action_required";
+  summary: string;
+};
+
+function isOfficialContributorDetection(detection: ContributorDetection): boolean {
+  return detection.source === "official_gittensor_api";
+}
+
+function pullRequestSpecificCollisionClusters(report: CollisionReport, pr: PullRequestRecord): CollisionCluster[] {
+  return report.clusters.filter((cluster) => cluster.items.some((item) => item.type === "pull_request" && item.number === pr.number));
+}
+
+function linkedIssueDuplicatePullRequests(pr: PullRequestRecord, clusters: CollisionCluster[]): number[] {
+  const linkedIssues = new Set(pr.linkedIssues);
+  if (linkedIssues.size === 0) return [];
+  const duplicates = clusters.flatMap((cluster) =>
+    cluster.items.flatMap((item) => {
+      if (item.type !== "pull_request" || item.number === pr.number) return [];
+      return (item.linkedIssues ?? []).some((issue) => linkedIssues.has(issue)) ? [item.number] : [];
+    }),
+  );
+  return [...new Set(duplicates)].sort((left, right) => left - right);
+}
+
+function duplicateRiskStatus(linkedDuplicatePrs: number[], scopedOverlapCount: number): string {
+  if (linkedDuplicatePrs.length > 0) return `Clear same-issue overlap: ${formatPrRefs(linkedDuplicatePrs)}`;
+  if (scopedOverlapCount > 0) return `${displayScopedCount(scopedOverlapCount)} scoped related-work signal${scopedOverlapCount === 1 ? "" : "s"}`;
+  return "No PR-specific duplicate found";
+}
+
+function duplicateRiskAction(linkedDuplicatePrs: number[], scopedOverlapCount: number, gateBlocking: boolean): string {
+  if (linkedDuplicatePrs.length > 0) return gateBlocking ? "Resolve before merge." : "Maintainer should reconcile before review.";
+  if (scopedOverlapCount > 0) return "Advisory review only.";
+  return "No action needed.";
+}
+
+function displayScopedCount(count: number): string {
+  return count > 9 ? "9+" : String(count);
+}
+
+function gateStatus(gateEnabled: boolean, conclusion: PublicPrPanelGateEvaluation["conclusion"]): string {
+  if (!gateEnabled) return "Advisory only";
+  if (conclusion === "success") return "Passing";
+  return conclusion === "action_required" ? "Action required" : "Failing";
+}
+
+function gateAction(conclusion: PublicPrPanelGateEvaluation["conclusion"]): string {
+  if (conclusion === "success") return "No configured blocker found.";
+  if (conclusion === "action_required") return "Fix app/repo state, then re-run.";
+  return "Fix configured blocker before merge.";
+}
+
+function titleCase(value: string): string {
+  return value.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatPrRefs(numbers: number[]): string {
+  return numbers.map((number) => `#${number}`).join(", ");
+}
+
+function relatedWorkDetails(pr: PullRequestRecord, prCollisionClusters: CollisionCluster[], preflightCollisions: CollisionCluster[]): string[] {
+  const clusters = [...new Map([...prCollisionClusters, ...preflightCollisions].map((cluster) => [cluster.id, cluster])).values()];
+  if (clusters.length === 0) return ["- PR-specific overlap: none found."];
+  const summaries = clusters.slice(0, 4).map((cluster) => {
+    const refs = cluster.items
+      .filter((item) => !(item.type === "pull_request" && item.number === pr.number))
+      .slice(0, 4)
+      .map((item) => `${item.type === "issue" ? "issue" : item.type === "recent_merged_pull_request" ? "merged PR" : "PR"} #${item.number}`)
+      .join(", ");
+    return `- PR-specific overlap: ${sanitizePanelText(cluster.reason)}${refs ? ` (${refs})` : ""}`;
+  });
+  if (clusters.length > summaries.length) summaries.push(`- Additional scoped related-work signals hidden: ${clusters.length - summaries.length}.`);
+  return summaries;
+}
+
+function formatAlertBlock(lines: string[]): string[] {
+  return lines.map((line) => (line.length > 0 ? `> ${line}` : ">"));
 }
 
 function containsPrivatePublicTerm(value: string): boolean {
@@ -3567,6 +3671,8 @@ export function buildPublicCommentSignalBundle(args: {
   preflight: PreflightResult;
   settings: RepositorySettings;
 }): Record<string, JsonValue> {
+  const confirmedMiner = isOfficialContributorDetection(args.detection);
+  const prCollisionCount = pullRequestSpecificCollisionClusters(args.collisions, args.pr).length;
   const roleContext = buildRoleContext({
     login: args.pr.authorLogin ?? args.profile.login,
     repo: args.repo,
@@ -3582,17 +3688,17 @@ export function buildPublicCommentSignalBundle(args: {
     .slice(0, args.settings.publicSignalLevel === "minimal" ? 2 : 5)
     .map((finding) => finding.title);
   return {
-    confirmedMiner: args.detection.source === "official_gittensor_api",
-    minerSignalDetected: args.detection.detected,
-    priorPullRequests: args.detection.priorPullRequests,
-    priorIssues: args.detection.priorIssues,
+    confirmedMiner,
+    minerSignalDetected: confirmedMiner,
+    priorPullRequests: confirmedMiner ? args.detection.priorPullRequests : 0,
+    priorIssues: confirmedMiner ? args.detection.priorIssues : 0,
     role: roleContext.role,
     maintainerLane: roleContext.maintainerLane,
     linkedIssueCount: args.pr.linkedIssues.length,
     requireLinkedIssue: args.settings.requireLinkedIssue,
     laneSummary: buildLaneAdvice(args.repo, args.pr.repoFullName).summary,
     reviewBurden: args.preflight.reviewBurden,
-    collisionClusters: args.collisions.clusters.length,
+    collisionClusters: prCollisionCount,
     queueLevel: args.queueHealth.level,
     topLanguages: args.profile.github.topLanguages.slice(0, 6),
     publicFindingTitles,
