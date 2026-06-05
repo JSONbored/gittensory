@@ -77,3 +77,27 @@ describe("extension packet helper internals", () => {
     expect(identity).toMatchObject({ kind: "session", actor: "jsonbored" });
   });
 });
+
+describe("extensionQueueLevel", () => {
+  it("returns 'high' when repo open PRs >= 8", () => {
+    expect(__routesInternals.extensionQueueLevel(8, 0)).toBe("high");
+  });
+
+  it("returns 'high' when author open PRs >= 4", () => {
+    expect(__routesInternals.extensionQueueLevel(0, 4)).toBe("high");
+  });
+
+  it("returns 'medium' when repo open PRs >= 4 and author < 4", () => {
+    expect(__routesInternals.extensionQueueLevel(4, 0)).toBe("medium");
+  });
+
+  it("returns 'medium' when author open PRs >= 2 and repo < 8", () => {
+    expect(__routesInternals.extensionQueueLevel(1, 2)).toBe("medium");
+  });
+
+  it("returns 'low' when repo and author open PRs are below thresholds", () => {
+    expect(__routesInternals.extensionQueueLevel(1, 1)).toBe("low");
+    expect(__routesInternals.extensionQueueLevel(0, 0)).toBe("low");
+    expect(__routesInternals.extensionQueueLevel(3, 1)).toBe("low");
+  });
+});

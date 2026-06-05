@@ -3632,4 +3632,5 @@ export const __routesInternals = {
   buildExtensionPrivateBlockers,
   ensureExtensionPublicSafeText,
   authenticateRequestIdentity,
+  extensionQueueLevel,
 };
