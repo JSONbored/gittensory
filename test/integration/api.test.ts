@@ -1397,6 +1397,49 @@ describe("api routes", () => {
     expect(body.metrics.find((metric) => metric.label === "Open PRs cached")?.value).toBe(8);
   });
 
+  it("counts cached open PRs from sync states beyond the latest 500 rows", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+
+    vi.setSystemTime(new Date("2026-05-27T00:00:00.000Z"));
+    await upsertRepositoryFromGitHub(env, { name: "oldest", full_name: "entrius/oldest", private: false, owner: { login: "entrius" }, default_branch: "main" });
+    await upsertRepoSyncState(env, {
+      repoFullName: "entrius/oldest",
+      status: "success",
+      sourceKind: "github",
+      primaryLanguage: "TypeScript",
+      defaultBranch: "main",
+      isPrivate: false,
+      openIssuesCount: 0,
+      openPullRequestsCount: 7,
+      recentMergedPullRequestsCount: 0,
+      warnings: [],
+    });
+
+    vi.setSystemTime(new Date("2026-05-28T00:00:00.000Z"));
+    for (let index = 0; index < 500; index += 1) {
+      const name = `newer-${index}`;
+      await upsertRepositoryFromGitHub(env, { name, full_name: `entrius/${name}`, private: false, owner: { login: "entrius" }, default_branch: "main" });
+      await upsertRepoSyncState(env, {
+        repoFullName: `entrius/${name}`,
+        status: "success",
+        sourceKind: "github",
+        primaryLanguage: "TypeScript",
+        defaultBranch: "main",
+        isPrivate: false,
+        openIssuesCount: 0,
+        openPullRequestsCount: 1,
+        recentMergedPullRequestsCount: 0,
+        warnings: [],
+      });
+    }
+
+    const res = await app.request("/v1/app/maintainer-dashboard", { headers: apiHeaders(env) }, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { metrics: Array<{ label: string; value: number }> };
+    expect(body.metrics.find((metric) => metric.label === "Open PRs cached")?.value).toBe(507);
+  });
+
   it("serves live app dashboards, digest subscriptions, commands, and extension context", async () => {
     const app = createApp();
     const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "oktofeesh1,other", PRODUCT_USAGE_HASH_SALT: "usage-adoption-test-salt" });

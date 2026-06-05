@@ -69,6 +69,7 @@ import {
   listRepoLabels,
   listRepoSyncSegments,
   listRepoSyncStates,
+  summarizeRepoSyncOpenPullRequests,
   listSignalSnapshots,
   listPullRequests,
   listRepositories,
@@ -827,12 +828,11 @@ export function createApp() {
     const summary = await getRoleSummaryForIdentity(c.env, identity);
     if (!summary.roles.some((role) => ["maintainer", "owner", "operator"].includes(role))) return c.json({ error: "insufficient_role" }, 403);
 
-    const [allRepositories, allInstallations, allHealth, allRateLimits, allSyncStates] = await Promise.all([
+    const [allRepositories, allInstallations, allHealth, allRateLimits] = await Promise.all([
       listRepositories(c.env),
       listInstallations(c.env),
       listInstallationHealth(c.env),
       listLatestGitHubRateLimitObservations(c.env, 20),
-      listRepoSyncStates(c.env),
     ]);
     const scope = identity.kind === "session" && !summary.roles.includes("operator") ? await loadControlPanelAccessScope(c.env, identity.actor) : null;
     const scopedRepoNames = new Set(scope?.repositoryFullNames.map((repo) => repo.toLowerCase()) ?? []);
@@ -846,13 +846,10 @@ export function createApp() {
       ? allHealth.filter((record) => scopedInstallationIds.has(record.installationId) || scopedAccountLogins.has(record.accountLogin.toLowerCase()))
       : allHealth;
     const rateLimits = scope ? allRateLimits.filter((record) => record.repoFullName !== undefined && record.repoFullName !== null && scopedRepoNames.has(record.repoFullName.toLowerCase())) : allRateLimits;
-    // Cached open-PR count is summed across ALL in-scope repos from sync state (a single query) so the
-    // headline metric is a true global count like its siblings. The per-repo PR fetch below is capped at
+    // Cached open-PR count is aggregated across ALL in-scope repos from sync state without using the
+    // capped sync-state listing that powers previews elsewhere. The per-repo PR fetch below is capped at
     // 12 only to bound the `reviewability` preview list, not the metric.
-    const scopedRepoNameSet = new Set(repositories.map((repo) => repo.fullName.toLowerCase()));
-    const scopedSyncStates = allSyncStates.filter((state) => scopedRepoNameSet.has(state.repoFullName.toLowerCase()));
-    const totalOpenPullRequestsCached = scopedSyncStates.reduce((sum, state) => sum + Math.max(0, state.openPullRequestsCount), 0);
-    const reposWithOpenPullRequests = scopedSyncStates.filter((state) => state.openPullRequestsCount > 0).length;
+    const { totalOpenPullRequestsCached, reposWithOpenPullRequests } = await summarizeRepoSyncOpenPullRequests(c.env, repositories.map((repo) => repo.fullName));
     const openPullRequests = (
       await Promise.all(repositories.slice(0, 12).map((repo) => listOpenPullRequests(c.env, repo.fullName).then((rows) => rows.map((pull) => ({ repoFullName: repo.fullName, pull })))))
     ).flat();
