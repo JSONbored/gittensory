@@ -38,6 +38,7 @@ import {
   getLatestScoringModelSnapshot,
   getPullRequest,
   getRepository,
+  getRepoQueueTrendSnapshot,
   getRepositorySettings,
   recordAuditEvent,
   getContributorEvidence,
@@ -148,6 +149,7 @@ import {
 } from "../services/weekly-value-report";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
+import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
 import {
   buildBountyAdvisory,
@@ -2716,7 +2718,7 @@ function buildDigestItems(args: {
 
 async function buildRepoIntelligenceResponse(env: Env, fullName: string) {
   let burdenForecastError: unknown;
-  const [repo, snapshots, dataQuality, burdenForecast] = await Promise.all([
+  const [repo, snapshots, dataQuality, burdenForecast, queueTrends] = await Promise.all([
     getRepository(env, fullName),
     Promise.all(
       ["queue-health", "config-quality", "label-audit", "maintainer-lane", "maintainer-cut-readiness", "contributor-intake-health"].map(async (signalType) => [
@@ -2729,6 +2731,7 @@ async function buildRepoIntelligenceResponse(env: Env, fullName: string) {
       burdenForecastError = error;
       return null;
     }),
+    getRepoQueueTrendSnapshot(env, fullName),
   ]);
   const intelligenceDataQuality = burdenForecastError
     ? withDataQualityWarning(dataQuality, `Burden forecast unavailable for ${fullName}: ${errorMessage(burdenForecastError)}`)
@@ -2745,6 +2748,7 @@ async function buildRepoIntelligenceResponse(env: Env, fullName: string) {
         },
       }
     : {};
+  const queueTrendReport = queueTrends?.payload ?? (buildUnavailableQueueTrendReport(fullName) as unknown as Record<string, never>);
   if (snapshotMap["queue-health"] && snapshotMap["config-quality"] && snapshotMap["label-audit"]) {
     return {
       status: "ready",
@@ -2754,6 +2758,7 @@ async function buildRepoIntelligenceResponse(env: Env, fullName: string) {
       repo,
       lane: buildLaneAdvice(repo, fullName),
       queueHealth: snapshotMap["queue-health"],
+      queueTrends: queueTrendReport,
       configQuality: snapshotMap["config-quality"],
       labelAudit: snapshotMap["label-audit"],
       maintainerLane: snapshotMap["maintainer-lane"],
@@ -2785,6 +2790,7 @@ async function buildRepoIntelligenceResponse(env: Env, fullName: string) {
     repo,
     lane: buildLaneAdvice(repo, fullName),
     queueHealth,
+    queueTrends: queueTrendReport,
     collisions,
     configQuality,
     labelAudit,
