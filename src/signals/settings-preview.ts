@@ -134,6 +134,7 @@ export type InstallationHealthSummary = {
   status: "healthy" | "needs_attention" | "broken";
   missingPermissions: string[];
   missingEvents: string[];
+  permissions?: Record<string, string> | undefined;
   permissionRemediation: Array<{ permission: string; requiredAccess: string; currentAccess: string; ok: boolean; action: string }>;
 };
 
@@ -324,7 +325,12 @@ function buildWarnings(settings: RepositorySettings, decision: PublicSurfaceDeci
     warnings.push("Installation health is unknown for this repo; run refresh-installation-health to verify GitHub App permissions and subscribed events.");
     return warnings;
   }
-  const missing = new Set(installation.missingPermissions);
+  const missing = new Set(activeMissingPermissions(settings, decision, installation));
+  if (writesPrPublicSurface(settings, decision) && missing.has("pull_requests")) {
+    warnings.push(
+      "PR comments and labels require GitHub App permission Pull requests: write. Set Pull requests to write, then approve the change.",
+    );
+  }
   if ((decision.willComment || decision.willLabel) && missing.has("issues")) {
     warnings.push(
       "Comments and labels use GitHub Issues endpoints and require GitHub App permission Issues: write. Set Issues to write, then approve the change.",
@@ -495,10 +501,17 @@ function activeMissingPermissions(settings: RepositorySettings, decision: Public
   const missing = new Set(installation.missingPermissions);
   const active: string[] = [];
   const writesPrSurface = writesPrPublicSurface(settings, decision);
-  if (writesPrSurface && missing.has("pull_requests")) active.push("pull_requests");
+  const lacksPrWrite = installation.permissions ? !permissionSatisfies(installation.permissions.pull_requests, "write") : false;
+  if (writesPrSurface && (missing.has("pull_requests") || lacksPrWrite)) active.push("pull_requests");
   if (writesPrSurface && missing.has("issues")) active.push("issues");
   if ((decision.willCheckRun || settings.checkRunMode === "enabled" || settings.gateCheckMode === "enabled") && missing.has("checks")) active.push("checks");
   return active;
+}
+
+function permissionSatisfies(current: string | undefined, expected: string): boolean {
+  if (current === expected) return true;
+  const order: Record<string, number> = { read: 1, write: 2, admin: 3 };
+  return (order[current ?? ""] ?? 0) >= (order[expected] ?? Number.POSITIVE_INFINITY);
 }
 
 function permissionSummary(installation: InstallationHealthSummary | null, missing: string[], missingEvents: string[]): string {

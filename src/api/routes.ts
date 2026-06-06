@@ -1535,6 +1535,7 @@ export function createApp() {
           status: enriched.status,
           missingPermissions: enriched.missingPermissions,
           missingEvents: enriched.missingEvents,
+          permissions: enriched.permissions,
           permissionRemediation: enriched.permissionRemediation,
         }
       : null;

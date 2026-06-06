@@ -59,6 +59,7 @@ const healthyInstall: InstallationHealthSummary = {
   status: "healthy",
   missingPermissions: [],
   missingEvents: [],
+  permissions: { metadata: "read", pull_requests: "write", issues: "write" },
   permissionRemediation: [{ permission: "issues", requiredAccess: "write", currentAccess: "write", ok: true, action: "No change needed." }],
 };
 
@@ -176,6 +177,18 @@ describe("buildRepoSettingsPreview", () => {
     // PR comments/labels need pull_requests: write; the preview must require it and surface it as missing.
     expect(preview.installPreview.permissions.required).toContain("pull_requests: write");
     expect(preview.installPreview.permissions).toMatchObject({ status: "needs_attention", missing: ["pull_requests"] });
+  });
+
+  it("detects Pull requests: read as insufficient for PR comment/label output", () => {
+    const preview = buildRepoSettingsPreview({
+      ...base,
+      settings: settings(),
+      installation: { ...healthyInstall, permissions: { metadata: "read", pull_requests: "read", issues: "write" } },
+      sample: { authorLogin: "miner", minerStatus: "confirmed" },
+    });
+    expect(preview.installPreview.permissions.required).toContain("pull_requests: write");
+    expect(preview.installPreview.permissions).toMatchObject({ status: "needs_attention", missing: ["pull_requests"] });
+    expect(preview.warnings.some((warning) => /Pull requests: write/.test(warning))).toBe(true);
   });
 
   it("explains a missing optional Checks: write permission only when check runs are enabled", () => {
