@@ -230,6 +230,52 @@ describe("miner dashboard recommendation metadata", () => {
     });
   });
 
+  it("handles repo-fit fallback rows with sparse optional evidence", () => {
+    const previous = decisionPack({
+      generatedAt: "2026-06-01T00:00:00.000Z",
+      repoDecisions: [],
+      topActions: [],
+      pursueRepos: [
+        {
+          repoFullName: "owner/sparse-fit",
+          recommendation: "watch",
+          priorityScore: 45,
+          queue: {},
+          outcome: {},
+          roleContext: { lane: "review" },
+        },
+      ],
+    });
+    const current = decisionPack({
+      generatedAt: "2026-06-02T00:00:00.000Z",
+      repoDecisions: [],
+      topActions: [],
+      pursueRepos: [
+        {
+          repoFullName: "owner/sparse-fit",
+          queue: {},
+          outcome: {},
+          roleContext: {},
+        },
+      ],
+    });
+
+    const [repoFit] = buildMinerDashboardRepoFit(current, previous);
+    const recommendationChange = repoFit?.change.labels.find((label) => label.label === "Recommendation changed");
+    const priorityChange = repoFit?.change.labels.find((label) => label.label === "Priority bucket changed");
+
+    expect(repoFit?.change).toMatchObject({
+      status: "changed",
+      labels: expect.arrayContaining([
+        expect.objectContaining({ kind: "repo_state", label: "Recommendation changed", before: "watch" }),
+        expect.objectContaining({ kind: "repo_state", label: "Priority bucket changed", before: "medium" }),
+        expect.objectContaining({ kind: "contributor_state", label: "Contributor lane changed", before: "review", after: "contributor" }),
+      ]),
+    });
+    expect(recommendationChange).not.toHaveProperty("after");
+    expect(priorityChange).not.toHaveProperty("after");
+  });
+
   it("selects the previous ready decision-pack snapshot", () => {
     const current = decisionPack({ generatedAt: "2026-06-02T00:00:00.000Z" });
     const previous = decisionPack({ generatedAt: "2026-06-01T00:00:00.000Z" });
