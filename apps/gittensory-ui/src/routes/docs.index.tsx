@@ -79,8 +79,9 @@ const AUDIENCES: Audience[] = [
     icon: <Building2 className="size-4" />,
     title: "Repo owners",
     description: "Registration readiness, label policy, repo settings preview.",
-    primary: { to: "/docs/beta-onboarding", label: "Beta onboarding" },
+    primary: { to: "/docs/owner-onboarding", label: "Onboarding checklist" },
     links: [
+      { to: "/docs/beta-onboarding", label: "Beta onboarding" },
       { to: "/app/owner", label: "Owner console" },
       { to: "/docs/privacy-security", label: "Privacy & security" },
       { to: "/docs/troubleshooting", label: "Troubleshooting" },

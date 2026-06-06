@@ -182,6 +182,12 @@ gittensory-mcp preflight --login your-login --json`}
         stale. Check <Link to="/docs/upstream-drift">Upstream drift</Link> when you change scoring
         assumptions.
       </p>
+      <p>
+        Before registering, work through the{" "}
+        <Link to="/docs/owner-onboarding">Repo owner onboarding checklist</Link> — it covers policy,
+        labels, issue quality, maintainer capacity, contribution lanes, and public/private
+        boundaries.
+      </p>
 
       <h2>Operator journey</h2>
       <p>

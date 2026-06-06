@@ -32,6 +32,7 @@ import { Route as DocsMcpClientsRouteImport } from './routes/docs.mcp-clients'
 import { Route as DocsMaintainerWorkflowRouteImport } from './routes/docs.maintainer-workflow'
 import { Route as DocsGithubAppRouteImport } from './routes/docs.github-app'
 import { Route as DocsBranchAnalysisRouteImport } from './routes/docs.branch-analysis'
+import { Route as DocsOwnerOnboardingRouteImport } from './routes/docs.owner-onboarding'
 import { Route as DocsBetaOnboardingRouteImport } from './routes/docs.beta-onboarding'
 import { Route as DocsAiSummariesRouteImport } from './routes/docs.ai-summaries'
 import { Route as AppWorkbenchRouteImport } from './routes/app.workbench'
@@ -162,6 +163,11 @@ const DocsBranchAnalysisRoute = DocsBranchAnalysisRouteImport.update({
   path: '/branch-analysis',
   getParentRoute: () => DocsRoute,
 } as any)
+const DocsOwnerOnboardingRoute = DocsOwnerOnboardingRouteImport.update({
+  id: '/owner-onboarding',
+  path: '/owner-onboarding',
+  getParentRoute: () => DocsRoute,
+} as any)
 const DocsBetaOnboardingRoute = DocsBetaOnboardingRouteImport.update({
   id: '/beta-onboarding',
   path: '/beta-onboarding',
@@ -263,6 +269,7 @@ export interface FileRoutesByFullPath {
   '/docs/maintainer-workflow': typeof DocsMaintainerWorkflowRoute
   '/docs/mcp-clients': typeof DocsMcpClientsRoute
   '/docs/miner-workflow': typeof DocsMinerWorkflowRoute
+  '/docs/owner-onboarding': typeof DocsOwnerOnboardingRoute
   '/docs/privacy-security': typeof DocsPrivacySecurityRoute
   '/docs/quickstart': typeof DocsQuickstartRoute
   '/docs/scoreability': typeof DocsScoreabilityRoute
@@ -299,6 +306,7 @@ export interface FileRoutesByTo {
   '/docs/maintainer-workflow': typeof DocsMaintainerWorkflowRoute
   '/docs/mcp-clients': typeof DocsMcpClientsRoute
   '/docs/miner-workflow': typeof DocsMinerWorkflowRoute
+  '/docs/owner-onboarding': typeof DocsOwnerOnboardingRoute
   '/docs/privacy-security': typeof DocsPrivacySecurityRoute
   '/docs/quickstart': typeof DocsQuickstartRoute
   '/docs/scoreability': typeof DocsScoreabilityRoute
@@ -339,6 +347,7 @@ export interface FileRoutesById {
   '/docs/maintainer-workflow': typeof DocsMaintainerWorkflowRoute
   '/docs/mcp-clients': typeof DocsMcpClientsRoute
   '/docs/miner-workflow': typeof DocsMinerWorkflowRoute
+  '/docs/owner-onboarding': typeof DocsOwnerOnboardingRoute
   '/docs/privacy-security': typeof DocsPrivacySecurityRoute
   '/docs/quickstart': typeof DocsQuickstartRoute
   '/docs/scoreability': typeof DocsScoreabilityRoute
@@ -380,6 +389,7 @@ export interface FileRouteTypes {
     | '/docs/maintainer-workflow'
     | '/docs/mcp-clients'
     | '/docs/miner-workflow'
+    | '/docs/owner-onboarding'
     | '/docs/privacy-security'
     | '/docs/quickstart'
     | '/docs/scoreability'
@@ -416,6 +426,7 @@ export interface FileRouteTypes {
     | '/docs/maintainer-workflow'
     | '/docs/mcp-clients'
     | '/docs/miner-workflow'
+    | '/docs/owner-onboarding'
     | '/docs/privacy-security'
     | '/docs/quickstart'
     | '/docs/scoreability'
@@ -455,6 +466,7 @@ export interface FileRouteTypes {
     | '/docs/maintainer-workflow'
     | '/docs/mcp-clients'
     | '/docs/miner-workflow'
+    | '/docs/owner-onboarding'
     | '/docs/privacy-security'
     | '/docs/quickstart'
     | '/docs/scoreability'
@@ -648,6 +660,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsBetaOnboardingRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/docs/owner-onboarding': {
+      id: '/docs/owner-onboarding'
+      path: '/owner-onboarding'
+      fullPath: '/docs/owner-onboarding'
+      preLoaderRoute: typeof DocsOwnerOnboardingRouteImport
+      parentRoute: typeof DocsRoute
+    }
     '/docs/ai-summaries': {
       id: '/docs/ai-summaries'
       path: '/ai-summaries'
@@ -794,6 +813,7 @@ interface DocsRouteChildren {
   DocsMaintainerWorkflowRoute: typeof DocsMaintainerWorkflowRoute
   DocsMcpClientsRoute: typeof DocsMcpClientsRoute
   DocsMinerWorkflowRoute: typeof DocsMinerWorkflowRoute
+  DocsOwnerOnboardingRoute: typeof DocsOwnerOnboardingRoute
   DocsPrivacySecurityRoute: typeof DocsPrivacySecurityRoute
   DocsQuickstartRoute: typeof DocsQuickstartRoute
   DocsScoreabilityRoute: typeof DocsScoreabilityRoute
@@ -810,6 +830,7 @@ const DocsRouteChildren: DocsRouteChildren = {
   DocsMaintainerWorkflowRoute: DocsMaintainerWorkflowRoute,
   DocsMcpClientsRoute: DocsMcpClientsRoute,
   DocsMinerWorkflowRoute: DocsMinerWorkflowRoute,
+  DocsOwnerOnboardingRoute: DocsOwnerOnboardingRoute,
   DocsPrivacySecurityRoute: DocsPrivacySecurityRoute,
   DocsQuickstartRoute: DocsQuickstartRoute,
   DocsScoreabilityRoute: DocsScoreabilityRoute,
