@@ -5137,6 +5137,18 @@ describe("api routes", () => {
     );
     expect(rejected.status).toBe(401);
 
+    const invalidJson = await app.request(
+      "/v1/internal/repos/entrius/allways-ui/contribution-policy",
+      {
+        method: "POST",
+        headers: internalHeaders(env),
+        body: "{",
+      },
+      env,
+    );
+    expect(invalidJson.status).toBe(400);
+    await expect(invalidJson.json()).resolves.toEqual({ error: "invalid_contribution_policy_json" });
+
     const privateNote = "Internal: wallet and hotkey evidence stays private.";
     const updated = await app.request(
       "/v1/internal/repos/entrius/allways-ui/contribution-policy",
