@@ -93,6 +93,27 @@ describe("gittensory-mcp CLI", () => {
     expect(localScorer?.detail).not.toMatch(join(process.cwd(), "test/fixtures"));
   });
 
+  it("shell-quotes doctor next command values derived from local repo metadata", async () => {
+    tempDir = createPacketRepo();
+    git(tempDir, "remote", "set-url", "origin", "git@github.com:owner/repo$(touch /tmp/av_pwned).git");
+    const url = await startFixtureServer();
+    const env = {
+      GITTENSORY_API_URL: url,
+      GITTENSORY_TOKEN: "session-token",
+      GITTENSORY_CONFIG_DIR: tempDir,
+      GITTENSOR_SCORE_PREVIEW_CMD: `node ${join(process.cwd(), "test/fixtures/local-scorer/scorer-success.mjs")}`,
+      GITTENSORY_SKIP_NPM_VERSION_CHECK: "true",
+    };
+
+    const payload = JSON.parse(await runAsync(["doctor", "--cwd", tempDir, "--json"], env)) as { nextCommand: { command: string } };
+    expect(payload.nextCommand.command).toBe("gittensory-mcp preflight --login JSONbored --repo 'owner/repo$(touch /tmp/av_pwned)' --json");
+    expect(payload.nextCommand.command).not.toContain("--repo owner/repo$(");
+
+    const humanOutput = await runAsync(["doctor", "--cwd", tempDir], env);
+    expect(humanOutput).toContain("gittensory-mcp preflight --login JSONbored --repo 'owner/repo$(touch /tmp/av_pwned)' --json");
+    expect(humanOutput).not.toContain("--repo owner/repo$(");
+  });
+
   it("uses doctor as a first-run auth checklist when no local session is configured", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
     const url = await startFixtureServer();
@@ -1076,7 +1097,7 @@ describe("gittensory-mcp CLI", () => {
       cacheDirSource: string;
       tokenConfigured: boolean;
       tokenSource: string;
-      sourceUpload: { default: boolean; supported: boolean };
+      sourceUpload: { default: boolean; enabled: boolean; source: string; supported: boolean };
     };
     // The run() harness sets GITTENSORY_CONFIG_DIR but no API URL or token.
     expect(payload.apiUrl).toBe("https://gittensory-api.aethereal.dev");
@@ -1088,7 +1109,7 @@ describe("gittensory-mcp CLI", () => {
     expect(payload.cacheDirSource).toBe("default");
     expect(payload.tokenConfigured).toBe(false);
     expect(payload.tokenSource).toBe("none");
-    expect(payload.sourceUpload).toEqual({ default: false, supported: false });
+    expect(payload.sourceUpload).toEqual({ default: false, enabled: false, source: "default", supported: false });
   });
 
   it("attributes config values to environment overrides without leaking secrets", () => {
@@ -1110,6 +1131,16 @@ describe("gittensory-mcp CLI", () => {
     } finally {
       rmSync(secretDir, { recursive: true, force: true });
     }
+  });
+
+  it("reports enabled unsupported source upload environment settings via config", () => {
+    const payload = JSON.parse(run(["config", "--json"], { GITTENSORY_UPLOAD_SOURCE: "true" })) as {
+      sourceUpload: { default: boolean; enabled: boolean; source: string; supported: boolean };
+    };
+    expect(payload.sourceUpload).toEqual({ default: false, enabled: true, source: "GITTENSORY_UPLOAD_SOURCE", supported: false });
+
+    const out = run(["config"], { GITTENSORY_UPLOAD_SOURCE: "true" });
+    expect(out).toContain("Source upload: enabled via GITTENSORY_UPLOAD_SOURCE (unsupported; unset GITTENSORY_UPLOAD_SOURCE)");
   });
 
   it("attributes API URL and token to a named profile from the config file", () => {

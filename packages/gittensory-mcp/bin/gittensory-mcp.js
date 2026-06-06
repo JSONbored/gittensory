@@ -1888,7 +1888,7 @@ function doctorNextCommand(byName, context) {
   const auth = byName.get("auth");
   if (auth?.status === "fail") {
     return {
-      command: `gittensory-mcp login --profile ${context.profileName}`,
+      command: `gittensory-mcp login --profile ${shellArg(context.profileName ?? "default")}`,
       reason: "Authenticate the active profile so doctor, plan, preflight, and packet commands can call the API.",
     };
   }
@@ -1922,9 +1922,15 @@ function doctorNextCommand(byName, context) {
     };
   }
   return {
-    command: `gittensory-mcp preflight --login ${context.login ?? "<github-login>"} --repo ${context.repoFullName ?? "owner/repo"} --json`,
+    command: `gittensory-mcp preflight --login ${shellArg(context.login ?? "<github-login>")} --repo ${shellArg(context.repoFullName ?? "owner/repo")} --json`,
     reason: "Run branch preflight next; source upload remains disabled.",
   };
+}
+
+function shellArg(value) {
+  const text = String(value ?? "");
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
+  return `'${text.replace(/'/g, `'"'"'`)}'`;
 }
 
 function initClient(options) {
@@ -2018,6 +2024,16 @@ function resolvedTokenSource() {
   return "none";
 }
 
+function sourceUploadState() {
+  const enabled = /^(1|true|yes)$/i.test(process.env.GITTENSORY_UPLOAD_SOURCE ?? "false");
+  return {
+    default: false,
+    enabled,
+    source: enabled ? "GITTENSORY_UPLOAD_SOURCE" : "default",
+    supported: false,
+  };
+}
+
 // Report the resolved effective configuration and where each value came from, without leaking
 // local absolute paths or token values. Distinct from `status` (health/version), `doctor`
 // (diagnostic checks), and `whoami` (session identity): this answers "what config is in effect
@@ -2033,7 +2049,7 @@ function configCommand(options) {
     cacheDirSource: process.env.GITTENSORY_CACHE_DIR ? "GITTENSORY_CACHE_DIR" : "default",
     tokenConfigured: Boolean(getApiToken()),
     tokenSource: resolvedTokenSource(),
-    sourceUpload: { default: false, supported: false },
+    sourceUpload: sourceUploadState(),
     profile: profilePublicState(activeProfileName),
   };
   if (options.json) {
@@ -2045,7 +2061,11 @@ function configCommand(options) {
   process.stdout.write(`Config file: ${payload.configured ? "present" : "absent"} (location: ${payload.configPathSource})\n`);
   process.stdout.write(`Cache dir: ${payload.cacheDirSource}\n`);
   process.stdout.write(`Token: ${payload.tokenConfigured ? `configured (${payload.tokenSource})` : "not configured"}\n`);
-  process.stdout.write("Source upload: disabled (unsupported)\n");
+  process.stdout.write(
+    payload.sourceUpload.enabled
+      ? `Source upload: enabled via ${payload.sourceUpload.source} (unsupported; unset GITTENSORY_UPLOAD_SOURCE)\n`
+      : "Source upload: disabled (unsupported)\n",
+  );
 }
 
 function normalizeProfileName(value) {
