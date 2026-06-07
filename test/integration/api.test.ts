@@ -5216,6 +5216,152 @@ describe("api routes", () => {
       commandAuthorizationPreview: { commandName: "preflight", decision: { authorized: true, reason: "allowed_pr_author", matchedRole: "pr_author" } },
     });
   });
+
+  it("persists repo-owner contribution policy snapshots through protected internal API", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+
+    const rejected = await app.request(
+      "/v1/internal/repos/entrius/allways-ui/contribution-policy",
+      {
+        method: "POST",
+        body: JSON.stringify({ wantedPaths: ["src/"] }),
+      },
+      env,
+    );
+    expect(rejected.status).toBe(401);
+
+    const invalidJson = await app.request(
+      "/v1/internal/repos/entrius/allways-ui/contribution-policy",
+      {
+        method: "POST",
+        headers: internalHeaders(env),
+        body: "{",
+      },
+      env,
+    );
+    expect(invalidJson.status).toBe(400);
+    await expect(invalidJson.json()).resolves.toEqual({ error: "invalid_contribution_policy_json" });
+
+    const privateNote = "Internal: wallet and hotkey evidence stays private.";
+    const updated = await app.request(
+      "/v1/internal/repos/entrius/allways-ui/contribution-policy",
+      {
+        method: "POST",
+        headers: internalHeaders(env),
+        body: JSON.stringify({
+          wantedPaths: ["src/"],
+          blockedPaths: ["dist/"],
+          preferredLabels: ["bug"],
+          linkedIssuePolicy: "required",
+          issueDiscoveryPolicy: "discouraged",
+          testExpectations: ["Run npm run test:ci."],
+          maintainerNotes: [privateNote],
+          publicNotes: ["Prefer small, focused PRs."],
+        }),
+      },
+      env,
+    );
+    expect(updated.status).toBe(200);
+    const updatedPayload = (await updated.json()) as {
+      generatedAt: string;
+      policy: { generatedAt: string; publicSafe: { contributionLanes: unknown[] } };
+    };
+    expect(updatedPayload.policy.generatedAt).toBe(updatedPayload.generatedAt);
+    expect(updatedPayload).toMatchObject({
+      repoFullName: "entrius/allways-ui",
+      focusManifest: {
+        present: true,
+        source: "api_record",
+        wantedPaths: ["src/"],
+        blockedPaths: ["dist/"],
+        maintainerNotes: [privateNote],
+      },
+      policy: {
+        repoFullName: "entrius/allways-ui",
+        present: true,
+        source: "api_record",
+        publicSafe: {
+          contributionLanes: [
+            expect.objectContaining({
+              id: "direct-pr",
+              preference: "preferred",
+              preferredPaths: ["src/"],
+              discouragedPaths: ["dist/"],
+              validationExpectations: ["Run npm run test:ci."],
+              publicNotes: ["Prefer small, focused PRs."],
+            }),
+            expect.objectContaining({
+              id: "issue-discovery",
+              preference: "discouraged",
+              preferredPaths: [],
+              discouragedPaths: ["dist/"],
+            }),
+          ],
+          labelPolicy: { preferredLabels: ["bug"], required: true },
+          validation: { expectations: ["Run npm run test:ci."], linkedIssuePolicy: "required" },
+          issueDiscoveryPolicy: "discouraged",
+          publicNotes: ["Prefer small, focused PRs."],
+        },
+        authenticated: { maintainerContext: [privateNote] },
+      },
+    });
+
+    const readback = await app.request("/v1/internal/repos/entrius/allways-ui/contribution-policy", { headers: internalHeaders(env) }, env);
+    expect(readback.status).toBe(200);
+    await expect(readback.json()).resolves.toMatchObject({
+      policy: {
+        publicSafe: { summary: expect.stringMatching(/direct PRs/i) },
+        authenticated: { maintainerContext: [privateNote] },
+      },
+    });
+
+    const readiness = await app.request("/v1/repos/entrius/allways-ui/registration-readiness", { headers: apiHeaders(env) }, env);
+    expect(readiness.status).toBe(200);
+    const readinessPayload = (await readiness.json()) as { policyReadiness: Record<string, unknown> };
+    expect(readinessPayload.policyReadiness).toMatchObject({
+      source: "focus_manifest_policy",
+      present: true,
+    });
+    expect(readinessPayload.policyReadiness).not.toHaveProperty("ownerContext");
+    expect(JSON.stringify(readinessPayload)).not.toContain(privateNote);
+    expect(JSON.stringify(readinessPayload)).not.toMatch(/privateNoteCount|blockedPathCount|validationExpectationCount/i);
+    expect(JSON.stringify(readinessPayload)).not.toMatch(FORBIDDEN_PUBLIC_REPORT_TERMS);
+
+    const malformed = await app.request(
+      "/v1/internal/repos/entrius/allways-ui/contribution-policy",
+      {
+        method: "POST",
+        headers: internalHeaders(env),
+        body: JSON.stringify({
+          wantedPaths: "src/",
+          preferredLabels: [123, "bug"],
+          linkedIssuePolicy: "sometimes",
+          publicNotes: ["reward estimate", "Keep scope focused."],
+        }),
+      },
+      env,
+    );
+    expect(malformed.status).toBe(200);
+    const malformedPayload = (await malformed.json()) as {
+      focusManifest: { warnings: string[] };
+      policy: { publicSafe: Record<string, unknown> };
+    };
+    expect(malformedPayload.focusManifest).toMatchObject({
+      present: true,
+      wantedPaths: [],
+      preferredLabels: ["bug"],
+      linkedIssuePolicy: "optional",
+    });
+    expect(malformedPayload.focusManifest.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("wantedPaths"),
+        expect.stringContaining("preferredLabels"),
+        expect.stringContaining("linkedIssuePolicy"),
+      ]),
+    );
+    expect(JSON.stringify(malformedPayload.policy.publicSafe)).not.toMatch(FORBIDDEN_PUBLIC_REPORT_TERMS);
+  });
 });
 
 async function signWebhook(body: string, secret: string): Promise<string> {
