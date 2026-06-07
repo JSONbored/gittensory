@@ -163,6 +163,7 @@ function readinessFixture(overrides: Partial<RegistrationReadinessReport> = {}):
       warnings: ["GitHub App is not installed on this repo; maintainers will not get any automated assistance."],
     },
     policyReadiness: null,
+    onboardingPackPreview: null,
     blockers: [],
     warnings: [],
     ...overrides,
