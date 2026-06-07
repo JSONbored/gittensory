@@ -100,7 +100,7 @@ import {
   refreshInstallationHealthForInstallation,
 } from "../github/backfill";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
-import { fetchPublicContributorProfile } from "../github/public";
+import { fetchPublicContributorProfile, fetchPublicRepoStats } from "../github/public";
 import {
   buildPublicAgentCommandComment,
   buildMaintainerQueueDigest,
@@ -128,9 +128,15 @@ import {
 import { buildMcpClientTelemetry } from "../services/client-telemetry";
 import {
   buildAndPersistContributorDecisionPack,
+  CONTRIBUTOR_DECISION_PACK_SIGNAL,
   loadContributorDecisionPackForServing,
   repoDecisionFromPack,
 } from "../services/decision-pack";
+import {
+  buildMinerDashboardNextActions,
+  buildMinerDashboardRepoFit,
+  previousDecisionPackFromSnapshots,
+} from "../services/miner-dashboard-recommendations";
 import {
   buildStaticControlPanelRoleSummary,
   loadControlPanelAccessScope,
@@ -182,7 +188,8 @@ import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-mo
 import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
-import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
+import { compileFocusManifestPolicy } from "../signals/focus-manifest";
+import { loadRepoFocusManifest, upsertRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildRepoOnboardingPackPreviewForRepo } from "../services/repo-onboarding-pack";
 import { buildRepoSettingsPreview, type PublicSurfaceSkipReason } from "../signals/settings-preview";
 import {
@@ -565,6 +572,17 @@ export function createApp() {
   app.get("/openapi.json", (c) => c.json(buildOpenApiSpec()));
   app.all("/mcp", handleMcpRequest);
 
+  app.get("/v1/public/github/repos/:owner/:repo/stats", async (c) => {
+    try {
+      const stats = await fetchPublicRepoStats(c.env, c.req.param("owner"), c.req.param("repo"));
+      c.header("Cache-Control", stats.stale ? "public, max-age=60, stale-while-revalidate=3600" : "public, max-age=600, stale-while-revalidate=86400");
+      return c.json(stats);
+    } catch (error) {
+      if (error instanceof Error && error.message === "invalid_github_repo") return c.json({ error: "invalid_github_repo" }, 400);
+      return c.json({ error: "github_repo_stats_unavailable" }, 503);
+    }
+  });
+
   app.get("/v1/auth/github/start", async (c) => {
     try {
       const start = await startGitHubWebOAuth(c.env, c.req.url, c.req.query("returnTo"));
@@ -794,11 +812,12 @@ export function createApp() {
     if (!login) return c.json({ error: "login_required" }, 400);
     const unauthorized = await requireContributorAccess(c, login);
     if (unauthorized) return unauthorized;
-    const [serving, scoring, upstreamDrift, runs] = await Promise.all([
+    const [serving, scoring, upstreamDrift, runs, decisionPackSnapshots] = await Promise.all([
       loadContributorDecisionPackForServing(c.env, login),
       getLatestScoringModelSnapshot(c.env),
       loadUpstreamStatus(c.env),
       listAgentRunsForActor(c.env, login, 5),
+      listSignalSnapshots(c.env, CONTRIBUTOR_DECISION_PACK_SIGNAL, login),
     ]);
     if (serving.kind === "needs_refresh") {
       return c.json({
@@ -814,21 +833,17 @@ export function createApp() {
       });
     }
     const pack = serving.pack;
+    const previousPack = previousDecisionPackFromSnapshots(pack, decisionPackSnapshots);
     return c.json({
       status: "ready",
       login,
       generatedAt: pack.generatedAt,
       source: pack.source,
       freshness: pack.freshness,
-      nextActions: pack.topActions ?? [],
+      nextActions: buildMinerDashboardNextActions(pack, previousPack),
       blockers: groupDecisionPackBlockers(pack.scoreBlockers ?? []),
       projections: buildProjectionRows(pack),
-      repoFit: [
-        ...(pack.pursueRepos ?? []).map((repo) => ({ ...repo, lane: "pursue" })),
-        ...(pack.cleanupFirst ?? []).map((repo) => ({ ...repo, lane: "cleanup-first" })),
-        ...(pack.maintainerLaneRepos ?? []).map((repo) => ({ ...repo, lane: "maintainer-lane" })),
-        ...(pack.avoidRepos ?? []).map((repo) => ({ ...repo, lane: "avoid" })),
-      ],
+      repoFit: buildMinerDashboardRepoFit(pack, previousPack),
       dataQuality: pack.dataQuality,
       mcp: { snapshot: scoring?.id ?? null, drift: upstreamDrift.status, lastRun: runs[0]?.updatedAt ?? null },
     });
@@ -2223,6 +2238,32 @@ export function createApp() {
     );
   });
 
+  app.get("/v1/internal/repos/:owner/:repo/contribution-policy", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const focusManifest = await loadRepoFocusManifest(c.env, fullName, { fetcher: async () => null });
+    const generatedAt = nowIso();
+    return c.json({
+      repoFullName: fullName,
+      generatedAt,
+      focusManifest,
+      policy: compileFocusManifestPolicy(fullName, focusManifest, { generatedAt }),
+    });
+  });
+
+  app.post("/v1/internal/repos/:owner/:repo/contribution-policy", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (body === null) return c.json({ error: "invalid_contribution_policy_json" }, 400);
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const focusManifest = await upsertRepoFocusManifest(c.env, fullName, body, "api_record");
+    const generatedAt = nowIso();
+    return c.json({
+      repoFullName: fullName,
+      generatedAt,
+      focusManifest,
+      policy: compileFocusManifestPolicy(fullName, focusManifest, { generatedAt }),
+    });
+  });
+
   return app;
 }
 
@@ -3536,6 +3577,7 @@ function toIsoQueryDate(value: string): string | undefined {
 function requiresApiToken(path: string): boolean {
   if (path === "/health") return false;
   if (path === "/v1/mcp/compatibility") return false;
+  if (/^\/v1\/public\/github\/repos\/[^/]+\/[^/]+\/stats$/.test(path)) return false;
   if (path === "/openapi.json") return false;
   if (path === "/mcp") return false;
   if (path.startsWith("/v1/auth/")) return false;
