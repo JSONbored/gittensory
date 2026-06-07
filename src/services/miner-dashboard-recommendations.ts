@@ -43,6 +43,7 @@ const REASON_LIMIT = 3;
 const FORBIDDEN_PUBLIC_TEXT =
   /\b(wallets?|hotkeys?|coldkeys?|seed phrases?|mnemonics?|private keys?|raw[-_\s]?trust(?: scores?)?|trust[-_\s]?scores?|reward(?:[-_\s]?(?:estimate|prediction|claim|score))?s?|payouts?|farming(?:[-_\s]?language)?|private[-_\s]?reviewability|private[-_\s]?scoreability|scoreability|public[-_\s]?score[-_\s]?(?:estimate|prediction)|estimated[-_\s]?score|score[-_\s]?estimate)\b/gi;
 const LOCAL_PATH = /(?:\/(?:Users|home|root|tmp|var)\/[^\s,;:)]+|[A-Za-z]:\\Users\\[^\s,;:)]+)/g;
+const FORBIDDEN_TOKEN = /\b(?:ghp_|github_pat_|gts_|glpat-|sk-)[A-Za-z0-9_=-]{8,}/g;
 
 export function previousDecisionPackFromSnapshots(currentPack: ContributorDecisionPack, snapshots: SignalSnapshotRecord[]): ContributorDecisionPack | undefined {
   const current = asRecord(currentPack);
@@ -166,11 +167,11 @@ function buildRecommendationChange(args: {
   addChanged(labels, "policy_context", "Repo policy changed", manifestSummary(args.previousDecision), manifestSummary(args.currentDecision));
 
   const limited = labels.slice(0, CHANGE_LABEL_LIMIT);
-  if (limited.length === 0) {
+  if (labels.length === 0) {
     return { status: "unchanged", summary: "No tracked evidence changed since the previous run.", labels: [] };
   }
 
-  const changedGroups = [...new Set(limited.map((label) => GROUP_TITLES[label.kind]))].join(", ");
+  const changedGroups = [...new Set(labels.map((label) => GROUP_TITLES[label.kind]))].join(", ");
   return {
     status: "changed",
     summary: `Changed since the previous run: ${changedGroups}.`,
@@ -383,6 +384,7 @@ function numberValue(record: DashboardRecord | undefined, key: string): number |
 function sanitizePublicText(value: string): string {
   return value
     .replace(LOCAL_PATH, "[local path]")
+    .replace(FORBIDDEN_TOKEN, "private context")
     .replace(FORBIDDEN_PUBLIC_TEXT, "private context")
     .replace(/\s+/g, " ")
     .trim();
