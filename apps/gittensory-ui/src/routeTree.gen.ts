@@ -27,12 +27,12 @@ import { Route as DocsTroubleshootingRouteImport } from './routes/docs.troublesh
 import { Route as DocsScoreabilityRouteImport } from './routes/docs.scoreability'
 import { Route as DocsQuickstartRouteImport } from './routes/docs.quickstart'
 import { Route as DocsPrivacySecurityRouteImport } from './routes/docs.privacy-security'
+import { Route as DocsOwnerOnboardingRouteImport } from './routes/docs.owner-onboarding'
 import { Route as DocsMinerWorkflowRouteImport } from './routes/docs.miner-workflow'
 import { Route as DocsMcpClientsRouteImport } from './routes/docs.mcp-clients'
 import { Route as DocsMaintainerWorkflowRouteImport } from './routes/docs.maintainer-workflow'
 import { Route as DocsGithubAppRouteImport } from './routes/docs.github-app'
 import { Route as DocsBranchAnalysisRouteImport } from './routes/docs.branch-analysis'
-import { Route as DocsOwnerOnboardingRouteImport } from './routes/docs.owner-onboarding'
 import { Route as DocsBetaOnboardingRouteImport } from './routes/docs.beta-onboarding'
 import { Route as DocsAiSummariesRouteImport } from './routes/docs.ai-summaries'
 import { Route as AppWorkbenchRouteImport } from './routes/app.workbench'
@@ -138,6 +138,11 @@ const DocsPrivacySecurityRoute = DocsPrivacySecurityRouteImport.update({
   path: '/privacy-security',
   getParentRoute: () => DocsRoute,
 } as any)
+const DocsOwnerOnboardingRoute = DocsOwnerOnboardingRouteImport.update({
+  id: '/owner-onboarding',
+  path: '/owner-onboarding',
+  getParentRoute: () => DocsRoute,
+} as any)
 const DocsMinerWorkflowRoute = DocsMinerWorkflowRouteImport.update({
   id: '/miner-workflow',
   path: '/miner-workflow',
@@ -161,11 +166,6 @@ const DocsGithubAppRoute = DocsGithubAppRouteImport.update({
 const DocsBranchAnalysisRoute = DocsBranchAnalysisRouteImport.update({
   id: '/branch-analysis',
   path: '/branch-analysis',
-  getParentRoute: () => DocsRoute,
-} as any)
-const DocsOwnerOnboardingRoute = DocsOwnerOnboardingRouteImport.update({
-  id: '/owner-onboarding',
-  path: '/owner-onboarding',
   getParentRoute: () => DocsRoute,
 } as any)
 const DocsBetaOnboardingRoute = DocsBetaOnboardingRouteImport.update({
@@ -618,6 +618,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsPrivacySecurityRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/docs/owner-onboarding': {
+      id: '/docs/owner-onboarding'
+      path: '/owner-onboarding'
+      fullPath: '/docs/owner-onboarding'
+      preLoaderRoute: typeof DocsOwnerOnboardingRouteImport
+      parentRoute: typeof DocsRoute
+    }
     '/docs/miner-workflow': {
       id: '/docs/miner-workflow'
       path: '/miner-workflow'
@@ -658,13 +665,6 @@ declare module '@tanstack/react-router' {
       path: '/beta-onboarding'
       fullPath: '/docs/beta-onboarding'
       preLoaderRoute: typeof DocsBetaOnboardingRouteImport
-      parentRoute: typeof DocsRoute
-    }
-    '/docs/owner-onboarding': {
-      id: '/docs/owner-onboarding'
-      path: '/owner-onboarding'
-      fullPath: '/docs/owner-onboarding'
-      preLoaderRoute: typeof DocsOwnerOnboardingRouteImport
       parentRoute: typeof DocsRoute
     }
     '/docs/ai-summaries': {
