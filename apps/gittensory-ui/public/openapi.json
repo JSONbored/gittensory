@@ -2369,11 +2369,15 @@
               },
               "maintainerLaneTotal": {
                 "type": "number"
+              },
+              "rejected": {
+                "type": "number"
               }
             },
             "required": [
               "total",
               "accepted",
+              "rejected",
               "ignored",
               "stale",
               "merged",
@@ -2416,6 +2420,21 @@
           },
           "privateSummary": {
             "type": "string"
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "explicit": {
+                "type": "number"
+              },
+              "inferred": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "explicit",
+              "inferred"
+            ]
           }
         },
         "required": [
@@ -2423,6 +2442,7 @@
           "generatedAt",
           "windowDays",
           "totals",
+          "sources",
           "states",
           "repos",
           "maintainerLane",
@@ -2448,6 +2468,7 @@
         "type": "string",
         "enum": [
           "accepted",
+          "rejected",
           "ignored",
           "stale",
           "merged",
@@ -2503,12 +2524,16 @@
               "mixed",
               "neutral"
             ]
+          },
+          "rejected": {
+            "type": "number"
           }
         },
         "required": [
           "repoFullName",
           "total",
           "accepted",
+          "rejected",
           "ignored",
           "stale",
           "merged",

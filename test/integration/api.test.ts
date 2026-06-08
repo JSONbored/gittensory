@@ -2146,6 +2146,7 @@ describe("api routes", () => {
       targetRepoFullName: "JSONbored/gittensory",
       targetPullNumber: null,
       targetIssueNumber: null,
+      source: "inferred",
       outcomeState: "merged",
       outcomeTargetType: "pull_request",
       outcomeRepoFullName: "JSONbored/gittensory",
