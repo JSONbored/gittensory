@@ -29,6 +29,7 @@ import { loadUpstreamStatus, type UpstreamStatus } from "../upstream/ruleset";
 import { nowIso } from "../utils/json";
 import { buildRecommendationQualityReport, type RecommendationQualityReport } from "./recommendation-quality-report";
 import { buildWeeklyValueReport } from "./weekly-value-report";
+import { buildFederatedQueueIndex, type FederatedQueueIndex } from "./queue-federation";
 
 export type OperatorDashboardMetric = {
   label: string;
@@ -57,6 +58,7 @@ export type OperatorDashboardPayload = {
   registry: RegistrySnapshot | null;
   scoringModel: ScoringModelSnapshotRecord | null;
   upstreamDrift: UpstreamStatus;
+  queueFederation: FederatedQueueIndex;
 };
 
 const USAGE_WINDOW_DAYS = 7;
@@ -96,6 +98,10 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     getCommandUsefulnessSummary(env),
     buildRecommendationQualityReport(env, { windowDays: 90 }),
   ]);
+  const queueFederation = await buildFederatedQueueIndex(env);
+  const topCriticalRepos = queueFederation.entries.filter(
+    (entry) => entry.level === "critical" || entry.level === "high",
+  ).length;
   const weeklyValueReport = buildWeeklyValueReport({
     generatedAt: nowIso(),
     variant: "operator",
@@ -111,6 +117,7 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     usageRollupStatus,
     activeSessions,
     digestSubscriptions,
+    topCriticalRepos,
   });
   const installedRepos = repositories.filter((repo: RepositoryRecord) => repo.isInstalled).length;
   const registeredRepos = repositories.filter((repo: RepositoryRecord) => repo.isRegistered).length;
@@ -177,6 +184,7 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     registry,
     scoringModel: scoring,
     upstreamDrift,
+    queueFederation,
   };
 }
 

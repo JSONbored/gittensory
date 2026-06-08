@@ -46,6 +46,7 @@ import { loadContributorDecisionPackForServing, repoDecisionFromPack } from "../
 import { buildPublicPrBodyDraft } from "../services/pr-body-draft";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
+import { buildFederatedQueueIndex, FEDERATED_QUEUE_INDEX_MAX_LIMIT } from "../services/queue-federation";
 import { buildMcpClientTelemetry } from "../services/client-telemetry";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
@@ -455,6 +456,15 @@ export class GittensoryMcp {
     );
 
     server.registerTool(
+      "gittensory_queue_health_federation",
+      {
+        description: "Return a ranked cross-repo queue pressure index showing the worst-burden registered repos. Operator-only.",
+        inputSchema: { limit: z.number().int().min(1).max(FEDERATED_QUEUE_INDEX_MAX_LIMIT).optional() },
+      },
+      async (input) => this.toolResult(await this.getQueueHealthFederation(input.limit)),
+    );
+
+    server.registerTool(
       "gittensory_get_repo_outcome_patterns",
       {
         description: "Return cached or freshly-computed per-repo accepted/rejected PR outcome patterns: what maintainers actually merge or close, separated from maintainer-lane activity, with a freshness marker and explicit evidence-completeness.",
@@ -857,6 +867,15 @@ export class GittensoryMcp {
           ? `Gittensory burden forecast for ${fullName} (cached, ${response.freshness}).`
           : `Gittensory burden forecast for ${fullName} (computed from cached metadata).`,
       data: response as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getQueueHealthFederation(limit?: number): Promise<ToolPayload> {
+    const index = await buildFederatedQueueIndex(this.env, limit);
+    const criticalCount = index.entries.filter((entry) => entry.level === "critical" || entry.level === "high").length;
+    return {
+      summary: `Cross-repo queue pressure index: ${index.repoCount} repo(s) ranked, ${criticalCount} at critical/high burden.`,
+      data: index as unknown as Record<string, unknown>,
     };
   }
 

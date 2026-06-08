@@ -1,0 +1,235 @@
+import { describe, expect, it, vi } from "vitest";
+import { buildFederatedQueueIndex, FEDERATED_QUEUE_INDEX_DEFAULT_LIMIT, FEDERATED_QUEUE_INDEX_MAX_LIMIT } from "../../src/services/queue-federation";
+import { compositeQueuePressureScore } from "../../src/signals/engine";
+import { upsertBurdenForecast, upsertRepositoryFromGitHub, upsertRepoQueueTrendSnapshot } from "../../src/db/repositories";
+import type { JsonValue } from "../../src/types";
+import { createTestEnv } from "../helpers/d1";
+
+// ---------------------------------------------------------------------------
+// compositeQueuePressureScore unit tests
+// ---------------------------------------------------------------------------
+
+describe("compositeQueuePressureScore", () => {
+  it("uses burdenScore when stale rate and growth are both null", () => {
+    expect(compositeQueuePressureScore(80, null, null)).toBe(80);
+  });
+
+  it("amplifies burden score by stale rate", () => {
+    // burdenScore=50, staleRate=0.5 → 50 * 1.5 = 75
+    expect(compositeQueuePressureScore(50, 0.5, null)).toBeCloseTo(75);
+  });
+
+  it("adds pull request growth to the score", () => {
+    // burdenScore=50, staleRate=0, growth=10 → 50 + 10 = 60
+    expect(compositeQueuePressureScore(50, 0, 10)).toBeCloseTo(60);
+  });
+
+  it("combines stale rate and growth correctly", () => {
+    // burdenScore=40, staleRate=0.25, growth=5 → 40*1.25 + 5 = 55
+    expect(compositeQueuePressureScore(40, 0.25, 5)).toBeCloseTo(55);
+  });
+
+  it("handles zero burden score", () => {
+    expect(compositeQueuePressureScore(0, 0.9, 20)).toBeCloseTo(20);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildFederatedQueueIndex integration tests
+// ---------------------------------------------------------------------------
+
+describe("buildFederatedQueueIndex", () => {
+  it("returns an empty index when no repos are registered and installed", async () => {
+    const env = createTestEnv();
+    const index = await buildFederatedQueueIndex(env);
+    expect(index.repoCount).toBe(0);
+    expect(index.entries).toEqual([]);
+    expect(index.limitApplied).toBe(FEDERATED_QUEUE_INDEX_DEFAULT_LIMIT);
+  });
+
+  it("includes a repo with a cached burden forecast", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "alpha", full_name: "owner/alpha", private: false, owner: { login: "owner" }, default_branch: "main" });
+    await markInstalled(env, "owner/alpha");
+    await markRegistered(env, "owner/alpha");
+    await upsertBurdenForecast(env, {
+      repoFullName: "owner/alpha",
+      payload: { repoFullName: "owner/alpha", level: "high", forecast: { projectedReviewLoad: 70, reviewablePullRequests: 0, stalePullRequests: 0, duplicateTrend: 0, queueGrowthRisk: 0 }, summary: "high burden" } as unknown as Record<string, JsonValue>,
+      generatedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const index = await buildFederatedQueueIndex(env);
+    expect(index.repoCount).toBe(1);
+    expect(index.entries[0]?.repoFullName).toBe("owner/alpha");
+    expect(index.entries[0]?.level).toBe("high");
+    expect(index.entries[0]?.burdenScore).toBe(70); // projectedReviewLoad from fixture
+  });
+
+  it("ranks repos descending by composite score", async () => {
+    const env = createTestEnv();
+    for (const [name, score, level] of [["low-repo", 20, "low"], ["high-repo", 80, "critical"], ["mid-repo", 50, "high"]] as const) {
+      await upsertRepositoryFromGitHub(env, { name, full_name: `owner/${name}`, private: false, owner: { login: "owner" }, default_branch: "main" });
+      await markInstalled(env, `owner/${name}`);
+      await markRegistered(env, `owner/${name}`);
+      await upsertBurdenForecast(env, {
+        repoFullName: `owner/${name}`,
+        payload: { repoFullName: `owner/${name}`, level, forecast: { projectedReviewLoad: score, reviewablePullRequests: 0, stalePullRequests: 0, duplicateTrend: 0, queueGrowthRisk: 0 }, summary: `${level} burden` } as unknown as Record<string, JsonValue>,
+        generatedAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+    }
+    const index = await buildFederatedQueueIndex(env);
+    expect(index.entries.map((e) => e.repoFullName)).toEqual(["owner/high-repo", "owner/mid-repo", "owner/low-repo"]);
+  });
+
+  it("sorts critical above high when composite scores are equal", async () => {
+    const env = createTestEnv();
+    for (const [name, level] of [["repo-high", "high"], ["repo-critical", "critical"]] as const) {
+      await upsertRepositoryFromGitHub(env, { name, full_name: `owner/${name}`, private: false, owner: { login: "owner" }, default_branch: "main" });
+      await markInstalled(env, `owner/${name}`);
+      await markRegistered(env, `owner/${name}`);
+      await upsertBurdenForecast(env, {
+        repoFullName: `owner/${name}`,
+        payload: { repoFullName: `owner/${name}`, level, forecast: { projectedReviewLoad: 60, reviewablePullRequests: 0, stalePullRequests: 0, duplicateTrend: 0, queueGrowthRisk: 0 }, summary: `${level} burden` } as unknown as Record<string, JsonValue>,
+        generatedAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+    }
+    const index = await buildFederatedQueueIndex(env);
+    expect(index.entries[0]?.level).toBe("critical");
+    expect(index.entries[1]?.level).toBe("high");
+  });
+
+  it("omits repos that are registered but not installed", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "uninstalled", full_name: "owner/uninstalled", private: false, owner: { login: "owner" }, default_branch: "main" });
+    await markRegistered(env, "owner/uninstalled");
+    // deliberately not marking installed
+    const index = await buildFederatedQueueIndex(env);
+    expect(index.repoCount).toBe(0);
+  });
+
+  it("respects the limit parameter and clamps it to the maximum", async () => {
+    const env = createTestEnv();
+    for (let i = 0; i < 5; i++) {
+      const name = `repo-${i}`;
+      await upsertRepositoryFromGitHub(env, { name, full_name: `owner/${name}`, private: false, owner: { login: "owner" }, default_branch: "main" });
+      await markInstalled(env, `owner/${name}`);
+      await markRegistered(env, `owner/${name}`);
+      await upsertBurdenForecast(env, {
+        repoFullName: `owner/${name}`,
+        payload: { repoFullName: `owner/${name}`, level: "low", burdenScore: i * 5, summary: "low" } as unknown as Record<string, JsonValue>,
+        generatedAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+    }
+    const limited = await buildFederatedQueueIndex(env, 2);
+    expect(limited.entries).toHaveLength(2);
+    expect(limited.limitApplied).toBe(2);
+    expect(limited.repoCount).toBe(5);
+
+    const clamped = await buildFederatedQueueIndex(env, FEDERATED_QUEUE_INDEX_MAX_LIMIT + 100);
+    expect(clamped.limitApplied).toBe(FEDERATED_QUEUE_INDEX_MAX_LIMIT);
+  });
+
+  it("still includes a repo with no trend snapshot (pullRequestGrowth7d: null)", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "notrend", full_name: "owner/notrend", private: false, owner: { login: "owner" }, default_branch: "main" });
+    await markInstalled(env, "owner/notrend");
+    await markRegistered(env, "owner/notrend");
+    await upsertBurdenForecast(env, {
+      repoFullName: "owner/notrend",
+      payload: { repoFullName: "owner/notrend", level: "medium", forecast: { projectedReviewLoad: 40, reviewablePullRequests: 0, stalePullRequests: 0, duplicateTrend: 0, queueGrowthRisk: 0 }, summary: "medium" } as unknown as Record<string, JsonValue>,
+      generatedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const index = await buildFederatedQueueIndex(env);
+    expect(index.repoCount).toBe(1);
+    expect(index.entries[0]?.pullRequestGrowth7d).toBeNull();
+    expect(index.entries[0]?.stalePullRequestRate).toBeNull();
+  });
+
+  it("reads stalePullRequestRate and pullRequestGrowth7d from a stored trend snapshot", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "trend", full_name: "owner/trend", private: false, owner: { login: "owner" }, default_branch: "main" });
+    await markInstalled(env, "owner/trend");
+    await markRegistered(env, "owner/trend");
+    await upsertBurdenForecast(env, {
+      repoFullName: "owner/trend",
+      payload: { repoFullName: "owner/trend", level: "medium", forecast: { projectedReviewLoad: 45, reviewablePullRequests: 2, stalePullRequests: 1, duplicateTrend: 0, queueGrowthRisk: 20 }, summary: "medium" } as unknown as Record<string, JsonValue>,
+      generatedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    await upsertRepoQueueTrendSnapshot(env, {
+      repoFullName: "owner/trend",
+      generatedAt: new Date(Date.now() - 60_000).toISOString(),
+      payload: {
+        repoFullName: "owner/trend",
+        status: "ready",
+        generatedAt: new Date(Date.now() - 60_000).toISOString(),
+        source: "snapshot",
+        windows: [
+          {
+            windowDays: 7,
+            status: "ready",
+            observedDays: 7,
+            baselineAt: null,
+            latestAt: null,
+            pullRequestGrowth: 3,
+            issueGrowth: 1,
+            mergedPullRequests: 5,
+            closedUnmergedPullRequests: 1,
+            reviewVelocityPerDay: 0.86,
+            stalePullRequestRate: 0.25,
+            stalePullRequestRateDelta: 0.05,
+            duplicateTrend: 0,
+            summary: "7d trend: PR queue +3, review velocity 0.86/day.",
+          },
+        ],
+        warnings: [],
+        summary: "1 queue trend window available.",
+      } as unknown as Record<string, import("../../src/types").JsonValue>,
+    });
+    const index = await buildFederatedQueueIndex(env);
+    expect(index.repoCount).toBe(1);
+    expect(index.entries[0]?.stalePullRequestRate).toBeCloseTo(0.25);
+    expect(index.entries[0]?.pullRequestGrowth7d).toBe(3);
+    // compositeScore = 45 * (1 + 0.25) + 3 = 45*1.25 + 3 = 56.25 + 3 = 59.25
+    expect(index.entries[0]?.compositeScore).toBeCloseTo(59.25);
+  });
+
+  it("does not include private signal fields (privateTrustEnabled, hotkeys, raw trust scores)", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "safe", full_name: "owner/safe", private: false, owner: { login: "owner" }, default_branch: "main" });
+    await markInstalled(env, "owner/safe");
+    await markRegistered(env, "owner/safe");
+    await upsertBurdenForecast(env, {
+      repoFullName: "owner/safe",
+      payload: { repoFullName: "owner/safe", level: "low", forecast: { projectedReviewLoad: 10, reviewablePullRequests: 0, stalePullRequests: 0, duplicateTrend: 0, queueGrowthRisk: 0 }, summary: "low" } as unknown as Record<string, JsonValue>,
+      generatedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const index = await buildFederatedQueueIndex(env);
+    const entry = index.entries[0];
+    expect(entry).toBeDefined();
+    const entryKeys = Object.keys(entry!);
+    for (const forbidden of ["privateTrustEnabled", "hotkey", "trustScore", "wallet", "reward", "payout"]) {
+      expect(entryKeys).not.toContain(forbidden);
+    }
+    const serialized = JSON.stringify(entry);
+    for (const forbidden of ["wallet", "hotkey", "trust score", "payout", "reward estimate", "farming"]) {
+      expect(serialized.toLowerCase()).not.toContain(forbidden.toLowerCase());
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helpers — mirror the DB upsert helpers used elsewhere in tests
+// ---------------------------------------------------------------------------
+
+async function markInstalled(env: ReturnType<typeof createTestEnv>, fullName: string): Promise<void> {
+  const { getDb } = await import("../../src/db/client");
+  const { repositories } = await import("../../src/db/schema");
+  const { eq } = await import("drizzle-orm");
+  await getDb(env.DB).update(repositories).set({ isInstalled: true }).where(eq(repositories.fullName, fullName));
+}
+
+async function markRegistered(env: ReturnType<typeof createTestEnv>, fullName: string): Promise<void> {
+  const { getDb } = await import("../../src/db/client");
+  const { repositories } = await import("../../src/db/schema");
+  const { eq } = await import("drizzle-orm");
+  await getDb(env.DB).update(repositories).set({ isRegistered: true }).where(eq(repositories.fullName, fullName));
+}

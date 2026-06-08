@@ -146,6 +146,28 @@ export const CollisionReportSchema = z
   })
   .openapi("CollisionReport");
 
+export const FederatedRepoEntrySchema = z
+  .object({
+    repoFullName: z.string(),
+    burdenScore: z.number(),
+    level: z.enum(["low", "medium", "high", "critical"]),
+    compositeScore: z.number(),
+    stalePullRequestRate: z.number().nullable(),
+    pullRequestGrowth7d: z.number().nullable(),
+    freshness: z.enum(["fresh", "stale"]),
+    summary: z.string(),
+  })
+  .openapi("FederatedRepoEntry");
+
+export const FederatedQueueIndexSchema = z
+  .object({
+    generatedAt: z.string(),
+    repoCount: z.number(),
+    limitApplied: z.number(),
+    entries: z.array(FederatedRepoEntrySchema),
+  })
+  .openapi("FederatedQueueIndex");
+
 export const QueueHealthSchema = z
   .object({
     repoFullName: z.string(),
