@@ -2,7 +2,7 @@ import { sanitizePublicComment } from "../github/commands";
 import type { EligibilityPlan } from "../services/eligibility-plan";
 import type { OpenPrPressureSimulation, OpenPrStrategyOption } from "../services/open-pr-pressure-scenarios";
 import type { ScoreGateBlocker } from "../scoring/preview";
-import type { PendingPrScenarioDetection } from "../scoring/pending-pr-scenarios";
+import type { PendingPrScenarioDetection, OpenPrPendingClass } from "../scoring/pending-pr-scenarios";
 import type { AgentScenarioInput } from "./input-model";
 import { serializeScenarioInputPublic } from "./input-model";
 
@@ -25,6 +25,12 @@ export type RenderedScenarioOption = {
   recommended: boolean;
 };
 
+export type RenderedPendingPullRequest = {
+  pullNumber: number;
+  classification: string;
+  notes: string[];
+};
+
 export type PublicScenarioSummary = {
   repoFullName: string;
   generatedAt: string;
@@ -35,6 +41,8 @@ export type PublicScenarioSummary = {
   options: RenderedScenarioOption[];
   eligibilityNotes: string[];
   blockerNotes: string[];
+  pendingScenarioNotes: string[];
+  pendingPullRequests: RenderedPendingPullRequest[];
   dataClassification: {
     facts: string[];
     assumptions: string[];
@@ -50,6 +58,15 @@ export type ScenarioSummaryInput = {
   pendingDetection?: PendingPrScenarioDetection | undefined;
   publicBlockers?: ScoreGateBlocker[] | undefined;
   scenarioInput?: AgentScenarioInput | undefined;
+};
+
+const PENDING_CLASSIFICATION_LABELS: Record<OpenPrPendingClass, string> = {
+  merge_ready: "merge-ready pending resolution",
+  stale_likely_close: "stale open work likely to close",
+  draft: "draft open PR",
+  blocked: "blocked open PR",
+  maintainer_lane: "maintainer-lane open PR",
+  open_other: "open PR",
 };
 
 const OPTION_NEXT_STEPS: Record<OpenPrStrategyOption, string> = {
@@ -93,12 +110,20 @@ function renderOptions(simulation: OpenPrPressureSimulation): RenderedScenarioOp
 function renderHeadline(
   pressureSimulation: OpenPrPressureSimulation | undefined,
   eligibilityPlan: EligibilityPlan | undefined,
+  pendingDetection: PendingPrScenarioDetection | undefined,
 ): string {
   if (pressureSimulation) {
     return sanitizePublicComment(pressureSimulation.summary);
   }
   if (eligibilityPlan) {
     return sanitizePublicComment(eligibilityPlan.publicSummary);
+  }
+  if (pendingDetection) {
+    return sanitizePublicComment(
+      pendingDetection.source === "user_supplied"
+        ? "Pending open PR scenario assumptions were supplied for advisory planning."
+        : "Pending open PR resolution scenarios are available from cached GitHub metadata.",
+    );
   }
   return "Advisory scenario summary generated from available repo signals.";
 }
@@ -117,6 +142,27 @@ function extractBlockerNotes(blockers: ScoreGateBlocker[]): string[] {
     .filter((b) => b.code !== "repo_not_registered" && b.code !== "inactive_allocation")
     .map((b) => sanitizePublicComment(PUBLIC_BLOCKER_TEXT[b.code] ?? b.detail))
     .filter(Boolean);
+}
+
+function extractPendingScenarioNotes(detection: PendingPrScenarioDetection): string[] {
+  const notes = [
+    detection.source === "user_supplied"
+      ? sanitizePublicComment("Pending PR scenario counts were supplied by the caller as assumptions.")
+      : sanitizePublicComment("Pending PR scenarios were inferred from cached GitHub reviews, checks, and activity."),
+    ...detection.scenarioNotes.map((note) => sanitizePublicComment(note)),
+    ...(detection.expectedOpenPrCountAfterMerge !== undefined
+      ? [sanitizePublicComment(`Projected open PR count after pending cleanup: ${detection.expectedOpenPrCountAfterMerge}.`)]
+      : []),
+  ];
+  return [...new Set(notes.filter(Boolean))];
+}
+
+function extractPendingPullRequests(detection: PendingPrScenarioDetection): RenderedPendingPullRequest[] {
+  return detection.classified.slice(0, 8).map((entry) => ({
+    pullNumber: entry.number,
+    classification: sanitizePublicComment(PENDING_CLASSIFICATION_LABELS[entry.classification] ?? entry.classification.replace(/_/g, " ")),
+    notes: entry.reasons.slice(0, 3).map((reason) => sanitizePublicComment(reason)),
+  }));
 }
 
 function extractDataClassification(scenarioInput: AgentScenarioInput | undefined): PublicScenarioSummary["dataClassification"] {
@@ -154,10 +200,12 @@ export function renderPublicScenarioSummary(input: ScenarioSummaryInput): Public
     advisoryOnly: true,
     notAutonomousPrBot: true,
     notPublicScoring: true,
-    headline: renderHeadline(input.pressureSimulation, input.eligibilityPlan),
+    headline: renderHeadline(input.pressureSimulation, input.eligibilityPlan, input.pendingDetection),
     options: input.pressureSimulation ? renderOptions(input.pressureSimulation) : [],
     eligibilityNotes: input.eligibilityPlan ? extractEligibilityNotes(input.eligibilityPlan) : [],
     blockerNotes: input.publicBlockers ? extractBlockerNotes(input.publicBlockers) : [],
+    pendingScenarioNotes: input.pendingDetection ? extractPendingScenarioNotes(input.pendingDetection) : [],
+    pendingPullRequests: input.pendingDetection ? extractPendingPullRequests(input.pendingDetection) : [],
     dataClassification: extractDataClassification(input.scenarioInput),
   };
   assertPublicSummaryClean(summary);
