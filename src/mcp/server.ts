@@ -253,6 +253,7 @@ const scorePreviewShape = {
   openPrCount: z.number().int().min(0).optional(),
   credibility: z.number().min(0).max(1).optional(),
   changesRequestedCount: z.number().int().min(0).optional(),
+  duplicateRiskCount: z.number().int().min(0).optional(),
   metadataOnly: z.boolean().default(true),
   pendingMergedPrCount: z.number().int().min(0).optional(),
   pendingClosedPrCount: z.number().int().min(0).optional(),

@@ -1345,6 +1345,7 @@ describe("api routes", () => {
           totalTokenScore: 60,
           sourceLines: 40,
           openPrCount: 1,
+          duplicateRiskCount: 2,
         }),
       },
       env,
@@ -1353,7 +1354,12 @@ describe("api routes", () => {
     await expect(scorePreview.json()).resolves.toMatchObject({
       repoFullName: "entrius/allways-ui",
       targetType: "planned_pr",
-      result: { privateOnly: true, scoringModelSnapshotId: "scoring-1" },
+      input: { duplicateRiskCount: 2 },
+      result: {
+        privateOnly: true,
+        scoringModelSnapshotId: "scoring-1",
+        blockedBy: expect.arrayContaining([expect.objectContaining({ code: "duplicate_risk", severity: "reducer" })]),
+      },
     });
     const noContributorScorePreview = await app.request(
       "/v1/scoring/preview",
@@ -4333,6 +4339,39 @@ describe("api routes", () => {
     const callPayload = (await mcpJson(call)) as { result: { structuredContent: { repoFullName: string }; content: Array<{ text: string }> } };
     expect(callPayload.result.structuredContent.repoFullName).toBe("entrius/allways-ui");
     expect(callPayload.result.content[0]?.text).not.toMatch(/reward|farming/i);
+
+    const scorePreviewCall = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "score-preview-duplicate-risk",
+          method: "tools/call",
+          params: {
+            name: "gittensory_preview_local_pr_score",
+            arguments: {
+              repoFullName: "entrius/allways-ui",
+              targetKey: "mcp-duplicate-risk",
+              sourceTokenScore: 40,
+              totalTokenScore: 60,
+              sourceLines: 42,
+              duplicateRiskCount: 2,
+            },
+          },
+        }),
+      },
+      env,
+    );
+    expect(scorePreviewCall.status).toBe(200);
+    const scorePreviewPayload = (await mcpJson(scorePreviewCall)) as {
+      result: { structuredContent: { input: { duplicateRiskCount?: number }; result: { blockedBy: Array<{ code: string; severity: string }> } } };
+    };
+    expect(scorePreviewPayload.result.structuredContent.input.duplicateRiskCount).toBe(2);
+    expect(scorePreviewPayload.result.structuredContent.result.blockedBy).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "duplicate_risk", severity: "reducer" })]),
+    );
 
     const noTotalsContext = await app.request(
       "/mcp",

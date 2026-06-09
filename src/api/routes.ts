@@ -437,6 +437,7 @@ const scorePreviewSchema = z.object({
   openPrCount: z.number().int().min(0).optional(),
   credibility: z.number().min(0).max(1).optional(),
   changesRequestedCount: z.number().int().min(0).optional(),
+  duplicateRiskCount: z.number().int().min(0).optional(),
   fixedBaseScore: z.number().min(0).optional(),
   metadataOnly: z.boolean().default(false),
   pendingMergedPrCount: z.number().int().min(0).optional(),
