@@ -1530,6 +1530,13 @@ export function createApp() {
   app.get("/v1/app/self-dogfood/registration-pack", async (c) => {
     const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
     if (forbidden) return forbidden;
+    const identity = await authenticateRequestIdentity(c);
+    const fullName = resolveSelfDogfoodRepoFullName(c.env);
+    const repo = await getRepository(c.env, fullName);
+    if (identity?.kind === "session") {
+      const repoForbidden = await requireSessionRepoAccess(c, identity, fullName, repo);
+      if (repoForbidden) return repoForbidden;
+    }
     return c.json(await buildSelfDogfoodRegistrationPackResponse(c.env));
   });
 
