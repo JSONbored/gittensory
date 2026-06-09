@@ -906,7 +906,7 @@ function duplicateCheckSections(bundle: AgentRunBundle | null | undefined): stri
       lines.push(`- ${publicBlockerLabel(code)}`);
     }
     const caution = [...action.why, action.riskImpact ?? ""]
-      .filter((item) => item.trim().length > 0 && (mentionsDuplicateRiskText(item) || /\blikely_duplicate\b/i.test(item)))
+      .filter(isPublicDuplicateCautionLine)
       .slice(0, 3)
       .map((item) => `- ${publicBlockerDetail(item)}`);
     lines.push(...caution);
@@ -1271,13 +1271,20 @@ function formatActionBullets(
 }
 
 function mentionsDuplicateRisk(action: AgentActionRecord): boolean {
-  return [action.publicSafeSummary, action.recommendation, action.riskImpact ?? "", ...action.why, ...action.blockedBy].some((item) =>
-    mentionsDuplicateRiskText(item),
-  );
+  return [action.publicSafeSummary, action.recommendation, action.riskImpact ?? "", ...action.why, ...action.blockedBy].some(isPublicDuplicateCautionLine);
 }
 
 function mentionsDuplicateRiskText(value: string): boolean {
   return /\b(duplicate|overlap|wip|collision|concurrent|in[- ]progress)\b/i.test(value);
+}
+
+function isPublicDuplicateCautionLine(value: string): boolean {
+  const detail = value.trim();
+  return detail.length > 0 && !mentionsRepoOutcomePatternDetail(detail) && (mentionsDuplicateRiskText(detail) || /\blikely_duplicate\b/i.test(detail));
+}
+
+function mentionsRepoOutcomePatternDetail(value: string): boolean {
+  return /\bPRs (?:touching|labeled|with|that|from) .+\b(?:merge well|high closure risk) here \(\d+\/\d+ merged\)\./i.test(value);
 }
 
 function publicBlockerLabel(code: string): string {

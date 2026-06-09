@@ -173,6 +173,46 @@ describe("GitHub mention commands", () => {
     expect(body).not.toMatch(/wallet|hotkey|raw trust score|payout|reward estimate|farming|private reviewability|public score estimate/i);
   });
 
+  it("does not publish repo outcome-pattern details in duplicate-check comments", () => {
+    const body = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory duplicate-check")!,
+      repo: null,
+      issue: { number: 99, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "maintainer",
+      bundle: {
+        run: completedRun("run-duplicate-outcome-pattern"),
+        actions: [
+          {
+            id: "repo-outcome-pattern-action",
+            runId: "run-duplicate-outcome-pattern",
+            actionType: "check_duplicate_risk" as const,
+            status: "recommended" as const,
+            recommendation: "Open direct PR",
+            why: [
+              "PRs touching duplicate/ have high closure risk here (0/3 merged).",
+              'PRs labeled "wip" merge well here (3/3 merged).',
+            ],
+            blockedBy: [],
+            riskImpact: "PRs touching collision/ have high closure risk here (0/3 merged).",
+            publicSafeSummary: "Consider a narrow public-safe change.",
+            approvalRequired: true,
+            safetyClass: "private" as const,
+            payload: {},
+          },
+        ],
+        contextSnapshots: [],
+        summary: "duplicate outcome-pattern guard",
+      },
+    });
+
+    expect(body).toContain("**Duplicate & WIP caution**");
+    expect(body).toContain("Consider a narrow public-safe change.");
+    expect(body).not.toContain("PRs touching duplicate/");
+    expect(body).not.toContain("high closure risk here (0/3 merged)");
+    expect(body).not.toContain("merge well here (3/3 merged)");
+  });
+
   it("renders command-specific sections for preflight, blockers, duplicate-check, and next-action", () => {
     const bundle = sampleBundle();
 
