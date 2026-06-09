@@ -147,8 +147,40 @@ describe("GitHub mention commands", () => {
     );
     expect(sanitizePublicComment("public score estimate and scoreability should stay private")).not.toMatch(/public score estimate|scoreability/i);
     expect(sanitizePublicComment("public score estimate private scoreability context score preview")).not.toMatch(/public score estimate|scoreability|score preview/i);
+    expect(sanitizePublicComment("projected score changes 12.3 -> 45.6")).not.toMatch(/projected score changes|12\.3|45\.6/i);
     expect(sanitizePublicComment("Command: @gittensory reviewability")).toContain("@gittensory reviewability");
     expect(sanitizePublicComment("private ranking, wallet, payout")).toBe("private context");
+  });
+
+  it("redacts private score projection deltas from public command rerun guidance", () => {
+    const baseBundle = sampleBundle();
+    const bundle = {
+      ...baseBundle,
+      actions: [
+        {
+          ...baseBundle.actions[0]!,
+          actionType: "prepare_pr_packet" as const,
+          publicSafeSummary: "Prepare public PR packet after validation completes.",
+          rerunWhen:
+            "Rerun after pending PRs merge/close or after open PR count is at or below 3; projected score changes 12.3 -> 45.6.",
+        },
+      ],
+    };
+
+    for (const mention of ["@gittensory preflight", "@gittensory reviewability", "@gittensory packet"]) {
+      const body = buildPublicAgentCommandComment({
+        command: parseGittensoryMentionCommand(mention)!,
+        repo: { fullName: "owner/repo" } as any,
+        issue: { number: 12, title: "PR", state: "open", pull_request: {} },
+        pullRequest: null,
+        actorKind: "author",
+        bundle,
+      });
+
+      expect(body).toContain("Rerun when:");
+      expect(body).toContain("private context");
+      expect(body).not.toMatch(/projected score changes|12\.3|45\.6/i);
+    }
   });
 
   it("adds parseable aggregate-only feedback context without public leak terms", () => {
