@@ -140,8 +140,8 @@ describe("fetchPublicRepoStats edge cases", () => {
     const env = { GITHUB_PUBLIC_TOKEN: "token" } as Pick<Env, "GITHUB_PUBLIC_TOKEN">;
     vi.stubGlobal("fetch", async () => Response.json({ stargazers_count: 7, forks_count: 2 }));
     const stats = await fetchPublicRepoStats(env, "JSONbored", "gittensory");
-    expect(stats.repoFullName).toBe("JSONbored/gittensory");
-    expect(stats.htmlUrl).toBe("https://github.com/JSONbored/gittensory");
+    expect(stats.repoFullName).toBe("jsonbored/gittensory");
+    expect(stats.htmlUrl).toBe("https://github.com/jsonbored/gittensory");
     expect(stats.stargazers_count).toBe(7);
   });
 });

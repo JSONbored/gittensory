@@ -1,9 +1,10 @@
-import { listRepositories } from "../db/repositories";
+import { listRepositories, getQueueFederationSnapshot, upsertQueueFederationSnapshot } from "../db/repositories";
 import { compositeQueuePressureScore, type BurdenForecast } from "../signals/engine";
-import { loadOrComputeBurdenForecastResponse, type BurdenForecastResponse } from "./burden-forecast";
+import { loadOrComputeBurdenForecastResponse, BURDEN_FORECAST_MAX_AGE_MS, type BurdenForecastResponse } from "./burden-forecast";
 import { buildUnavailableQueueTrendReport, type QueueTrendReport } from "./queue-trends";
 import { getRepoQueueTrendSnapshot } from "../db/repositories";
-import { nowIso } from "../utils/json";
+import { jsonString, nowIso, parseJson } from "../utils/json";
+import type { JsonValue } from "../types";
 
 export const FEDERATED_QUEUE_INDEX_DEFAULT_LIMIT = 10;
 export const FEDERATED_QUEUE_INDEX_MAX_LIMIT = 25;
@@ -30,6 +31,7 @@ export type FederatedQueueIndex = {
   generatedAt: string;
   repoCount: number;
   limitApplied: number;
+  source: "snapshot" | "computed";
   entries: FederatedRepoEntry[];
 };
 
@@ -38,6 +40,23 @@ export async function buildFederatedQueueIndex(
   limit: number = FEDERATED_QUEUE_INDEX_DEFAULT_LIMIT,
 ): Promise<FederatedQueueIndex> {
   const safeLimit = Math.min(Math.max(1, limit), FEDERATED_QUEUE_INDEX_MAX_LIMIT);
+
+  const cached = await getQueueFederationSnapshot(env);
+  if (cached) {
+    const ageMs = federationAgeMs(cached.generatedAt);
+    if (ageMs <= BURDEN_FORECAST_MAX_AGE_MS) {
+      const full = cached.payload as unknown as { entries: FederatedRepoEntry[] };
+      const entries = Array.isArray(full.entries) ? full.entries : [];
+      return {
+        generatedAt: cached.generatedAt,
+        repoCount: cached.repoCount,
+        limitApplied: safeLimit,
+        source: "snapshot",
+        entries: entries.slice(0, safeLimit),
+      };
+    }
+  }
+
   const repos = (await listRepositories(env)).filter((repo) => repo.isRegistered && repo.isInstalled);
 
   const [forecasts, trendSnapshots] = await Promise.all([
@@ -83,10 +102,24 @@ export async function buildFederatedQueueIndex(
     return LEVEL_RANK[b.level] - LEVEL_RANK[a.level];
   });
 
+  const generatedAt = nowIso();
+  await upsertQueueFederationSnapshot(env, {
+    id: "current",
+    generatedAt,
+    repoCount: entries.length,
+    payload: { entries } as unknown as Record<string, JsonValue>,
+  });
+
   return {
-    generatedAt: nowIso(),
+    generatedAt,
     repoCount: entries.length,
     limitApplied: safeLimit,
+    source: "computed",
     entries: entries.slice(0, safeLimit),
   };
+}
+
+function federationAgeMs(generatedAt: string): number {
+  const parsed = Date.parse(generatedAt);
+  return Number.isFinite(parsed) ? Date.now() - parsed : Number.POSITIVE_INFINITY;
 }

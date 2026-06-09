@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildFederatedQueueIndex, FEDERATED_QUEUE_INDEX_DEFAULT_LIMIT, FEDERATED_QUEUE_INDEX_MAX_LIMIT } from "../../src/services/queue-federation";
 import { compositeQueuePressureScore } from "../../src/signals/engine";
-import { upsertBurdenForecast, upsertRepositoryFromGitHub, upsertRepoQueueTrendSnapshot } from "../../src/db/repositories";
+import { upsertBurdenForecast, upsertQueueFederationSnapshot, upsertRepositoryFromGitHub, upsertRepoQueueTrendSnapshot } from "../../src/db/repositories";
 import type { JsonValue } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
 import { createApp } from "../../src/api/routes";
@@ -46,6 +46,23 @@ describe("buildFederatedQueueIndex", () => {
     expect(index.repoCount).toBe(0);
     expect(index.entries).toEqual([]);
     expect(index.limitApplied).toBe(FEDERATED_QUEUE_INDEX_DEFAULT_LIMIT);
+    expect(index.source).toBe("computed");
+  });
+
+  it("returns source=snapshot and entries from cache when a fresh snapshot exists", async () => {
+    const env = createTestEnv();
+    await upsertQueueFederationSnapshot(env, {
+      id: "current",
+      generatedAt: new Date(Date.now() - 30_000).toISOString(),
+      repoCount: 1,
+      payload: {
+        entries: [{ repoFullName: "owner/cached", burdenScore: 55, level: "high", compositeScore: 55, stalePullRequestRate: null, pullRequestGrowth7d: null, freshness: "fresh", summary: "high burden" }],
+      } as unknown as Record<string, JsonValue>,
+    });
+    const index = await buildFederatedQueueIndex(env);
+    expect(index.source).toBe("snapshot");
+    expect(index.repoCount).toBe(1);
+    expect(index.entries[0]?.repoFullName).toBe("owner/cached");
   });
 
   it("includes a repo with a cached burden forecast", async () => {
@@ -238,9 +255,32 @@ describe("GET /v1/app/queue-health/federation route", () => {
     const env = createTestEnv();
     const response = await app.request("/v1/app/queue-health/federation", { headers: apiHeaders(env) }, env);
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { repoCount: number; entries: unknown[] };
+    const body = (await response.json()) as { repoCount: number; entries: unknown[]; source: string };
     expect(body.repoCount).toBe(0);
     expect(body.entries).toEqual([]);
+    expect(body.source).toBe("computed");
+  });
+
+  it("returns source=snapshot when a fresh cached index exists", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    await upsertQueueFederationSnapshot(env, {
+      id: "current",
+      generatedAt: new Date(Date.now() - 60_000).toISOString(),
+      repoCount: 2,
+      payload: {
+        entries: [
+          { repoFullName: "owner/alpha", burdenScore: 70, level: "high", compositeScore: 70, stalePullRequestRate: null, pullRequestGrowth7d: null, freshness: "fresh", summary: "high" },
+          { repoFullName: "owner/beta", burdenScore: 40, level: "medium", compositeScore: 40, stalePullRequestRate: null, pullRequestGrowth7d: null, freshness: "fresh", summary: "medium" },
+        ],
+      } as unknown as Record<string, import("../../src/types").JsonValue>,
+    });
+    const response = await app.request("/v1/app/queue-health/federation", { headers: apiHeaders(env) }, env);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { repoCount: number; entries: unknown[]; source: string };
+    expect(body.source).toBe("snapshot");
+    expect(body.repoCount).toBe(2);
+    expect((body.entries as unknown[]).length).toBe(2);
   });
 
   it("returns 422 for an invalid limit parameter", async () => {

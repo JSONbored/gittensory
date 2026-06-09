@@ -955,6 +955,13 @@ export type BurdenForecastRecord = {
   generatedAt: string;
 };
 
+export type QueueFederationSnapshotRecord = {
+  id: string;
+  generatedAt: string;
+  repoCount: number;
+  payload: Record<string, JsonValue>;
+};
+
 export type RegistryDriftEventRecord = {
   id: string;
   repoFullName: string;

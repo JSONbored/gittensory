@@ -165,6 +165,7 @@ describe("MCP tool calls return schema-valid structured content", () => {
     const data = result.structuredContent as Record<string, unknown>;
     expect(typeof data.repoCount).toBe("number");
     expect(Array.isArray(data.entries)).toBe(true);
+    expect(data.source === "snapshot" || data.source === "computed").toBe(true);
     const serialized = JSON.stringify(data);
     expect(serialized).not.toMatch(/wallet|hotkey|coldkey|trustScore|payout|reward estimate|farming/i);
   });

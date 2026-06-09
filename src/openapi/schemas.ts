@@ -164,6 +164,7 @@ export const FederatedQueueIndexSchema = z
     generatedAt: z.string(),
     repoCount: z.number(),
     limitApplied: z.number(),
+    source: z.enum(["snapshot", "computed"]),
     entries: z.array(FederatedRepoEntrySchema),
   })
   .openapi("FederatedQueueIndex");
