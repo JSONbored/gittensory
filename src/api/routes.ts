@@ -256,6 +256,44 @@ async function recordRouteProductUsage(
   }).catch(() => undefined);
 }
 
+const QUEUE_INTELLIGENCE_MAX_BODY_BYTES = 1024 * 1024;
+const QUEUE_INTELLIGENCE_MAX_PULL_REQUESTS = 250;
+const QUEUE_INTELLIGENCE_MAX_AUTHOR_LENGTH = 100;
+const QUEUE_INTELLIGENCE_MAX_TITLE_LENGTH = 300;
+const QUEUE_INTELLIGENCE_MAX_BODY_LENGTH = 4000;
+const QUEUE_INTELLIGENCE_MAX_DUPLICATE_CANDIDATES = 25;
+
+function parsePositiveInt(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+async function readRequestBodyWithLimit(request: Request, maxBytes: number): Promise<string | null> {
+  const stream = request.body;
+  if (!stream) return "";
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let total = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(decoder.decode(value, { stream: true }));
+  }
+
+  chunks.push(decoder.decode());
+  return chunks.join("");
+}
+
 const MAX_LOCAL_BRANCH_REF_CHARS = 256;
 const MAX_LOCAL_BRANCH_TEXT_CHARS = 4000;
 const PR_VISIBILITY_SKIP_REASONS = [
@@ -2225,13 +2263,29 @@ export function createApp() {
   });
 
   app.post("/v1/internal/queue-intelligence", async (c) => {
-    const body = await c.req.json().catch(() => null);
-    if (!body || !Array.isArray(body.pullRequests)) {
+    const contentLength = parsePositiveInt(c.req.header("content-length"));
+    if (contentLength !== null && contentLength > QUEUE_INTELLIGENCE_MAX_BODY_BYTES) {
+      return c.json({ error: "payload_too_large", maxBytes: QUEUE_INTELLIGENCE_MAX_BODY_BYTES }, 413);
+    }
+
+    const rawBody = await readRequestBodyWithLimit(c.req.raw, QUEUE_INTELLIGENCE_MAX_BODY_BYTES);
+    if (rawBody === null) {
+      return c.json({ error: "payload_too_large", maxBytes: QUEUE_INTELLIGENCE_MAX_BODY_BYTES }, 413);
+    }
+
+    let body: unknown;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      body = null;
+    }
+    if (!body || typeof body !== "object" || !Array.isArray((body as { pullRequests?: unknown }).pullRequests)) {
       return c.json({ error: "invalid_request", detail: "pullRequests array required" }, 400);
     }
+    const queueBody = body as { pullRequests: unknown[]; repoContext?: unknown };
     const prSchema = z.object({
       number: z.number().int().positive(),
-      author: z.string(),
+      author: z.string().max(QUEUE_INTELLIGENCE_MAX_AUTHOR_LENGTH),
       authorRole: z.enum(["first-time", "contributor", "maintainer"] as [AuthorRole, ...AuthorRole[]]),
       isConfirmedMiner: z.boolean(),
       linkedIssue: z.object({ qualityScore: z.number().min(0).max(1) }).nullable(),
@@ -2239,9 +2293,9 @@ export function createApp() {
       isStale: z.boolean(),
       additions: z.number().int().nonnegative(),
       deletions: z.number().int().nonnegative(),
-      title: z.string(),
-      body: z.string(),
-      duplicateCandidates: z.array(z.number().int().positive()),
+      title: z.string().max(QUEUE_INTELLIGENCE_MAX_TITLE_LENGTH),
+      body: z.string().max(QUEUE_INTELLIGENCE_MAX_BODY_LENGTH),
+      duplicateCandidates: z.array(z.number().int().positive()).max(QUEUE_INTELLIGENCE_MAX_DUPLICATE_CANDIDATES),
       createdAt: z.string().datetime(),
       lastUpdatedAt: z.string().datetime(),
     });
@@ -2250,10 +2304,10 @@ export function createApp() {
       avgReviewTimeDays: z.number().nonnegative(),
       maintainerWorkload: z.number().min(0).max(1),
     });
-    const prsResult = z.array(prSchema).safeParse(body.pullRequests);
+    const prsResult = z.array(prSchema).max(QUEUE_INTELLIGENCE_MAX_PULL_REQUESTS).safeParse(queueBody.pullRequests);
     if (!prsResult.success) return c.json({ error: "invalid_request", issues: prsResult.error.issues }, 400);
-    const repoContext = repoContextSchema.safeParse(body.repoContext).success
-      ? repoContextSchema.parse(body.repoContext)
+    const repoContext = repoContextSchema.safeParse(queueBody.repoContext).success
+      ? repoContextSchema.parse(queueBody.repoContext)
       : { totalOpenPRs: 0, avgReviewTimeDays: 0, maintainerWorkload: 0 };
     const result = await analyzePRQueue(prsResult.data, repoContext);
     const recommendations: Record<number, string> = {};

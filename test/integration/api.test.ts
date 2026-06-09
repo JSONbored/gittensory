@@ -988,6 +988,100 @@ describe("api routes", () => {
     );
     expect(invalidRepoContext.status).toBe(200);
 
+    const boundedQueuePr = {
+      number: 1,
+      author: "alice",
+      authorRole: "contributor",
+      isConfirmedMiner: true,
+      linkedIssue: { qualityScore: 0.9 },
+      checksStatus: "passing",
+      isStale: false,
+      additions: 50,
+      deletions: 10,
+      title: "Fix cache",
+      body: "Fixes #1",
+      duplicateCandidates: [],
+      createdAt: new Date(Date.now() - 5 * 86400000).toISOString(),
+      lastUpdatedAt: new Date(Date.now() - 3600000).toISOString(),
+    };
+
+    const tooManyQueuePRs = await app.request(
+      "/v1/internal/queue-intelligence",
+      {
+        method: "POST",
+        headers: internalHeaders(env),
+        body: JSON.stringify({ pullRequests: Array.from({ length: 251 }, (_, index) => ({ ...boundedQueuePr, number: index + 1 })) }),
+      },
+      env,
+    );
+    expect(tooManyQueuePRs.status).toBe(400);
+
+    const oversizedQueueFields = await app.request(
+      "/v1/internal/queue-intelligence",
+      {
+        method: "POST",
+        headers: internalHeaders(env),
+        body: JSON.stringify({
+          pullRequests: [
+            {
+              ...boundedQueuePr,
+              author: "a".repeat(101),
+              title: "t".repeat(301),
+              body: "b".repeat(4001),
+              duplicateCandidates: Array.from({ length: 26 }, (_, index) => index + 1),
+            },
+          ],
+        }),
+      },
+      env,
+    );
+    expect(oversizedQueueFields.status).toBe(400);
+
+    const oversizedQueuePayload = await app.request(
+      "/v1/internal/queue-intelligence",
+      {
+        method: "POST",
+        headers: { ...internalHeaders(env), "content-length": "1048577" },
+        body: JSON.stringify({}),
+      },
+      env,
+    );
+    expect(oversizedQueuePayload.status).toBe(413);
+    await expect(oversizedQueuePayload.json()).resolves.toMatchObject({ error: "payload_too_large", maxBytes: 1048576 });
+
+    const oversizedQueueStream = await app.request(
+      "/v1/internal/queue-intelligence",
+      {
+        method: "POST",
+        headers: internalHeaders(env),
+        body: "x".repeat(1048577),
+      },
+      env,
+    );
+    expect(oversizedQueueStream.status).toBe(413);
+    await expect(oversizedQueueStream.json()).resolves.toMatchObject({ error: "payload_too_large", maxBytes: 1048576 });
+
+    const invalidQueueContentLength = await app.request(
+      "/v1/internal/queue-intelligence",
+      {
+        method: "POST",
+        headers: { ...internalHeaders(env), "content-length": "not-a-number" },
+        body: JSON.stringify({ pullRequests: [boundedQueuePr] }),
+      },
+      env,
+    );
+    expect(invalidQueueContentLength.status).toBe(200);
+
+    const missingQueueBody = await app.request(
+      "/v1/internal/queue-intelligence",
+      {
+        method: "POST",
+        headers: internalHeaders(env),
+      },
+      env,
+    );
+    expect(missingQueueBody.status).toBe(400);
+
     const localBranchAnalysis = await app.request(
       "/v1/local/branch-analysis",
       {
