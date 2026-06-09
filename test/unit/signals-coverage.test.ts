@@ -34,6 +34,7 @@ import {
   buildPullRequestReviewability,
   buildRepoRewardRisk,
 } from "../../src/signals/reward-risk";
+import { PREFLIGHT_LIMITS } from "../../src/signals/preflight-limits";
 import type { GittensorContributorSnapshot } from "../../src/gittensor/api";
 import type {
   ContributorRepoStatRecord,
@@ -602,6 +603,35 @@ describe("signal coverage edge cases", () => {
     );
 
     expect(preflight.findings.map((finding) => finding.code)).not.toContain("possible_duplicate_work");
+  });
+
+  it("bounds preflight body scanning for linked issue extraction", () => {
+    const directRepo = repo("owner/direct");
+    const linkedInsideLimit = buildPreflightResult(
+      {
+        repoFullName: directRepo.fullName,
+        title: "Bounded body scan",
+        body: `Fixes #99 ${"x".repeat(PREFLIGHT_LIMITS.bodyChars + 100)}`,
+        linkedIssues: [],
+      },
+      directRepo,
+      [],
+      [],
+    );
+    const linkedPastLimit = buildPreflightResult(
+      {
+        repoFullName: directRepo.fullName,
+        title: "Bounded body scan",
+        body: `${"x".repeat(PREFLIGHT_LIMITS.bodyChars)} Fixes #100`,
+        linkedIssues: [],
+      },
+      directRepo,
+      [],
+      [],
+    );
+
+    expect(linkedInsideLimit.linkedIssues).toContain(99);
+    expect(linkedPastLimit.linkedIssues).not.toContain(100);
   });
 
   it("sanitizes public PR comments and supports minimal public signal level", () => {

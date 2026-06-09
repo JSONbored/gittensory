@@ -159,6 +159,7 @@ import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
+import { PREFLIGHT_LIMITS } from "../signals/preflight-limits";
 import {
   buildBountyAdvisory,
   buildBurdenForecast,
@@ -306,21 +307,21 @@ const PR_VISIBILITY_SKIP_REASONS = [
 ] as const satisfies readonly PublicSurfaceSkipReason[];
 
 const preflightSchema = z.object({
-  repoFullName: z.string().min(3),
-  contributorLogin: z.string().min(1).optional(),
-  title: z.string().min(1),
-  body: z.string().optional(),
-  labels: z.array(z.string()).optional(),
-  changedFiles: z.array(z.string()).optional(),
-  linkedIssues: z.array(z.number().int().positive()).optional(),
-  tests: z.array(z.string()).optional(),
-  authorAssociation: z.string().optional(),
+  repoFullName: z.string().min(3).max(PREFLIGHT_LIMITS.repoFullNameChars),
+  contributorLogin: z.string().min(1).max(PREFLIGHT_LIMITS.contributorLoginChars).optional(),
+  title: z.string().min(1).max(PREFLIGHT_LIMITS.titleChars),
+  body: z.string().max(PREFLIGHT_LIMITS.bodyChars).optional(),
+  labels: z.array(z.string().max(PREFLIGHT_LIMITS.labelChars)).max(PREFLIGHT_LIMITS.labels).optional(),
+  changedFiles: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
+  linkedIssues: z.array(z.number().int().positive()).max(PREFLIGHT_LIMITS.linkedIssues).optional(),
+  tests: z.array(z.string().max(PREFLIGHT_LIMITS.testChars)).max(PREFLIGHT_LIMITS.tests).optional(),
+  authorAssociation: z.string().max(PREFLIGHT_LIMITS.authorAssociationChars).optional(),
 });
 
 const localDiffPreflightSchema = preflightSchema.extend({
   changedLineCount: z.number().int().min(0).optional(),
-  testFiles: z.array(z.string()).optional(),
-  commitMessage: z.string().optional(),
+  testFiles: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
+  commitMessage: z.string().max(PREFLIGHT_LIMITS.bodyChars).optional(),
 });
 
 const skippedPrAuditQuerySchema = z
