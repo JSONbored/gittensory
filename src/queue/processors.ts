@@ -839,14 +839,17 @@ async function maybePublishPrPublicSurface(
     authorAssociation: pr.authorAssociation ?? null,
     minerStatus: "not_checked",
   });
+  let publicSurfaceSkipped = false;
   if (prelim.skipped) {
     await auditPrVisibilitySkip(env, repoFullName, pr.number, author, prelim.skipReason ?? "skipped", webhook.deliveryId);
-    return;
+    publicSurfaceSkipped = true;
   }
   const needsMinerCheckForDetectedComment =
-    settings.commentMode === "detected_contributors_only" && (settings.publicSurface === "comment_and_label" || settings.publicSurface === "comment_only");
-  if (!gateEnabled && prelim.actions.length === 1 && prelim.actions[0] === "none" && !needsMinerCheckForDetectedComment) return;
-  if (!author) return;
+    !publicSurfaceSkipped &&
+    settings.commentMode === "detected_contributors_only" &&
+    (settings.publicSurface === "comment_and_label" || settings.publicSurface === "comment_only");
+  if (!gateEnabled && (publicSurfaceSkipped || (prelim.actions.length === 1 && prelim.actions[0] === "none" && !needsMinerCheckForDetectedComment))) return;
+  if (!author && !gateEnabled) return;
 
   if (gateEnabled && (pr.state !== "open" || webhook.action === "closed")) {
     const gateCheckResult = await createOrUpdateSkippedGateCheckRun(env, installationId, repoFullName, advisory, "PR closed before full evaluation.");
@@ -863,10 +866,11 @@ async function maybePublishPrPublicSurface(
     ).catch(() => undefined);
     return;
   }
-  const prelimHasPublicOutput = needsMinerCheckForDetectedComment || prelim.actions.some((action) => action === "comment" || action === "label" || action === "check_run");
+  const prelimHasPublicOutput =
+    !publicSurfaceSkipped && (needsMinerCheckForDetectedComment || prelim.actions.some((action) => action === "comment" || action === "label" || action === "check_run"));
   let official: Awaited<ReturnType<typeof getCachedOfficialMinerDetection>> | null = null;
   let decision = prelim;
-  if (prelimHasPublicOutput) {
+  if (prelimHasPublicOutput && author) {
     const requireOfficialMiner = settings.publicAudienceMode === "gittensor_only";
     official = await getCachedOfficialMinerDetection(env, author, {
       targetKey: `${repoFullName}#${pr.number}`,
@@ -874,11 +878,13 @@ async function maybePublishPrPublicSurface(
     });
     if (requireOfficialMiner && official.status === "unavailable") {
       await auditPrVisibilitySkip(env, repoFullName, pr.number, author, "miner_detection_unavailable", webhook.deliveryId);
-      return;
+      if (!gateEnabled) return;
+      publicSurfaceSkipped = true;
     }
     if (requireOfficialMiner && official.status !== "confirmed") {
       await auditPrVisibilitySkip(env, repoFullName, pr.number, author, "not_official_gittensor_miner", webhook.deliveryId);
-      return;
+      if (!gateEnabled) return;
+      publicSurfaceSkipped = true;
     }
     decision = decidePublicSurface({
       settings,
@@ -941,7 +947,7 @@ async function maybePublishPrPublicSurface(
   }
 
   if (!prelimHasPublicOutput) return;
-  if (!official) return;
+  if (publicSurfaceSkipped || !official || !author) return;
 
   const [github] = await Promise.all([fetchPublicContributorProfile(author)]);
   const contributorPullRequests: Awaited<ReturnType<typeof listContributorPullRequests>> = [];

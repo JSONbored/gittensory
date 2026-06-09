@@ -750,6 +750,145 @@ describe("queue processors", () => {
     expect(calls).toEqual({ minerList: 0, gateChecks: 2 });
   });
 
+  it("publishes an enabled gate when bot PR public output is skipped", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "block",
+    });
+    const calls = { gateChecks: 0, comments: 0, minerList: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        calls.minerList += 1;
+        return Response.json([]);
+      }
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/commits/gatebot123/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/issues/53/comments")) {
+        calls.comments += 1;
+        return Response.json([]);
+      }
+      if (url.includes("/check-runs") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string; output?: { title?: string } };
+        expect(body).toMatchObject({ status: "in_progress", output: { title: "Gittensory Gate is evaluating" } });
+        expect(body.conclusion).toBeUndefined();
+        calls.gateChecks += 1;
+        return Response.json({ id: 910 }, { status: 201 });
+      }
+      if (url.includes("/check-runs/910") && method === "PATCH") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string; output?: { title?: string } };
+        expect(body).toMatchObject({ status: "completed", conclusion: "failure", output: { title: "Gittensory Gate is blocking merge" } });
+        calls.gateChecks += 1;
+        return Response.json({ id: 910 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-bot-public-skip",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 53, title: "Bot PR", state: "open", user: { login: "automation-bot", type: "Bot" }, head: { sha: "gatebot123" }, labels: [], body: "No issue link." },
+      },
+    });
+
+    expect(calls).toEqual({ gateChecks: 2, comments: 0, minerList: 0 });
+    const audit = await env.DB.prepare("select detail from audit_events where event_type = ? and target_key = ?")
+      .bind("github_app.pr_visibility_skipped", "JSONbored/gittensory#53")
+      .first<{ detail: string }>();
+    expect(audit?.detail).toBe("bot_author");
+  });
+
+  it("publishes an enabled gate when Gittensor-only public output is skipped for an unconfirmed miner", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicAudienceMode: "gittensor_only",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "block",
+    });
+    const calls = { minerList: 0, gateChecks: 0, comments: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        calls.minerList += 1;
+        return Response.json([]);
+      }
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/commits/gateminer123/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/issues/54/comments")) {
+        calls.comments += 1;
+        return Response.json([]);
+      }
+      if (url.includes("/check-runs") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string; output?: { title?: string } };
+        expect(body).toMatchObject({ status: "in_progress", output: { title: "Gittensory Gate is evaluating" } });
+        expect(body.conclusion).toBeUndefined();
+        calls.gateChecks += 1;
+        return Response.json({ id: 920 }, { status: 201 });
+      }
+      if (url.includes("/check-runs/920") && method === "PATCH") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string; output?: { title?: string } };
+        expect(body).toMatchObject({ status: "completed", conclusion: "failure", output: { title: "Gittensory Gate is blocking merge" } });
+        calls.gateChecks += 1;
+        return Response.json({ id: 920 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-unconfirmed-miner-public-skip",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 54, title: "Unconfirmed miner PR", state: "open", user: { login: "newbie" }, head: { sha: "gateminer123" }, labels: [], body: "No issue link." },
+      },
+    });
+
+    expect(calls).toEqual({ minerList: 1, gateChecks: 2, comments: 0 });
+    const audit = await env.DB.prepare("select detail from audit_events where event_type = ? and target_key = ?")
+      .bind("github_app.pr_visibility_skipped", "JSONbored/gittensory#54")
+      .first<{ detail: string }>();
+    expect(audit?.detail).toBe("not_official_gittensor_miner");
+  });
+
   it("audits opt-in gate check permission failures without blocking webhook processing", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
