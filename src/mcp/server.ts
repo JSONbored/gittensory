@@ -5,7 +5,7 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import { ElicitResultSchema, type ServerNotification, type ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { authenticatePrivateToken, extractBearerToken, type AuthIdentity } from "../auth/security";
-import { loadControlPanelRoleSummary } from "../services/control-panel-roles";
+import { loadControlPanelAccessScope, loadControlPanelRoleSummary } from "../services/control-panel-roles";
 import {
   countOpenIssues,
   countOpenPullRequests,
@@ -862,6 +862,12 @@ export class GittensoryMcp {
 
   private async getIssueQuality(input: { owner: string; repo: string }): Promise<ToolPayload> {
     const fullName = `${input.owner}/${input.repo}`;
+    if (!(await this.canAccessRepo(fullName))) {
+      return {
+        summary: `Forbidden: session cannot access issue quality for ${fullName}.`,
+        data: { status: "forbidden", repoFullName: fullName },
+      };
+    }
     const response = await loadOrComputeIssueQualityResponse(this.env, fullName);
     if (!response) {
       return {
@@ -876,6 +882,16 @@ export class GittensoryMcp {
           : `Gittensory issue quality for ${fullName} (computed from cached metadata).`,
       data: response as unknown as Record<string, unknown>,
     };
+  }
+
+  private async canAccessRepo(fullName: string): Promise<boolean> {
+    if (this.identity.kind !== "session") return true;
+    const [summary, repo] = await Promise.all([loadControlPanelRoleSummary(this.env, this.identity.actor), getRepository(this.env, fullName)]);
+    if (summary.roles.includes("operator")) return true;
+    const scope = await loadControlPanelAccessScope(this.env, this.identity.actor);
+    const requestedRepo = fullName.toLowerCase();
+    if (scope.repositoryFullNames.some((name) => name.toLowerCase() === requestedRepo)) return true;
+    return Boolean(repo && scope.accountLogins.some((login) => login.toLowerCase() === repo.owner.toLowerCase()));
   }
 
   private async getRepoOutcomePatterns(input: { owner: string; repo: string }): Promise<ToolPayload> {

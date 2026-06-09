@@ -1504,6 +1504,14 @@ export function createApp() {
 
   app.get("/v1/repos/:owner/:repo/issue-quality", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- Protected middleware rejects unauthenticated private routes before route-specific repo guards. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const repo = identity.kind === "session" ? await getRepository(c.env, fullName) : null;
+    if (identity.kind === "session") {
+      const forbidden = await requireSessionRepoAccess(c, identity, fullName, repo);
+      if (forbidden) return forbidden;
+    }
     const response = await buildIssueQualityResponse(c.env, fullName);
     if (!response) return c.json({ error: "issue_quality_not_found", repoFullName: fullName }, 404);
     return c.json(response);
@@ -3487,6 +3495,7 @@ function isExtensionScopedSession(identity: AuthIdentity): boolean {
 function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: "session" }>, path: string): boolean {
   if (isAuthorizedGitHubSessionLogin(env, identity.actor)) return true;
   if (path.startsWith("/v1/app/")) return true;
+  if (isIssueQualityPath(path)) return true;
   if (isRepoOnboardingPackPreviewPath(path)) return true;
   if (isRepoContributorIssueDraftGeneratePath(path)) return true;
   if (path === EXTENSION_PULL_CONTEXT_PATH && isExtensionScopedSession(identity)) return true;
@@ -3499,6 +3508,10 @@ function isRepoOnboardingPackPreviewPath(path: string): boolean {
 
 function isRepoContributorIssueDraftGeneratePath(path: string): boolean {
   return /^\/v1\/repos\/[^/]+\/[^/]+\/contributor-issue-drafts\/generate$/.test(path);
+}
+
+function isIssueQualityPath(path: string): boolean {
+  return /^\/v1\/repos\/[^/]+\/[^/]+\/issue-quality$/.test(path);
 }
 
 async function authenticateRequestIdentity(c: ProtectedRouteContext): Promise<AuthIdentity | null> {

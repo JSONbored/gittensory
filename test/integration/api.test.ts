@@ -1352,6 +1352,11 @@ describe("api routes", () => {
       report: { repoFullName: "entrius/allways-ui", issues: expect.any(Array) },
     });
 
+    const { token: unrelatedIssueQualityToken } = await createSessionForGitHubUser(env, { login: "unrelated-user", id: 404 });
+    const forbiddenIssueQuality = await app.request("/v1/repos/entrius/allways-ui/issue-quality", { headers: { authorization: `Bearer ${unrelatedIssueQualityToken}` } }, env);
+    expect(forbiddenIssueQuality.status).toBe(403);
+    await expect(forbiddenIssueQuality.json()).resolves.toMatchObject({ error: "forbidden_repo" });
+
     await upsertRepositoryFromGitHub(env, { name: "uncached", full_name: "entrius/uncached", private: false, owner: { login: "entrius" }, default_branch: "main" });
     const computedIssueQuality = await app.request("/v1/repos/entrius/uncached/issue-quality", { headers: apiHeaders(env) }, env);
     expect(computedIssueQuality.status).toBe(200);
