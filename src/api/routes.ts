@@ -1636,7 +1636,7 @@ export function createApp() {
         includeMaintainerAuthors: parsed.data.includeMaintainerAuthors,
         requireLinkedIssue: parsed.data.requireLinkedIssue,
       },
-    }).catch(() => undefined);
+    });
     return c.json(updated);
   });
 

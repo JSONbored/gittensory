@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/api/routes";
 import { createSessionForGitHubUser } from "../../src/auth/security";
+import * as repositories from "../../src/db/repositories";
 import { upsertInstallation, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { createTestEnv } from "../helpers/d1";
 
@@ -172,6 +173,21 @@ describe("maintainer settings update authorization", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: "invalid_request_body" });
+  });
+
+  it("propagates audit write failures instead of silently swallowing them", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    vi.spyOn(repositories, "recordAuditEvent").mockRejectedValueOnce(new Error("db write failed"));
+
+    const response = await app.request(
+      "/v1/app/repos/owner/project/settings",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify(VALID_SETTINGS) },
+      env,
+    );
+
+    expect(response.status).toBe(500);
+    vi.restoreAllMocks();
   });
 
   it("persists all gate and policy settings without silently resetting to defaults", async () => {
