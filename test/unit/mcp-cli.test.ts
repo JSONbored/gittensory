@@ -768,6 +768,35 @@ describe("gittensory-mcp CLI", () => {
     await expect(runAsync(["decision-pack", "--login", "JSONbored", "--json"], env)).rejects.toThrow(/Gittensory API 403/);
   });
 
+  it("does not use stale decision-pack cache for non-JSON authorization failures", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    const fixtureOptions: {
+      decisionPackStatus?: number;
+      decisionPackErrorBody?: string;
+      decisionPackErrorContentType?: string;
+      repoDecisionStatus?: number;
+      repoDecisionErrorBody?: string;
+      repoDecisionErrorContentType?: string;
+    } = {};
+    const url = await startFixtureServer(fixtureOptions);
+    const env = {
+      GITTENSORY_API_URL: url,
+      GITTENSORY_TOKEN: "session-token",
+      GITTENSORY_CONFIG_DIR: tempDir,
+    };
+
+    await runAsync(["decision-pack", "--login", "JSONbored", "--json"], env);
+    fixtureOptions.decisionPackStatus = 403;
+    fixtureOptions.decisionPackErrorBody = "<html>forbidden</html>";
+    fixtureOptions.decisionPackErrorContentType = "text/html";
+    fixtureOptions.repoDecisionStatus = 403;
+    fixtureOptions.repoDecisionErrorBody = "<html>forbidden</html>";
+    fixtureOptions.repoDecisionErrorContentType = "text/html";
+
+    await expect(runAsync(["decision-pack", "--login", "JSONbored", "--json"], env)).rejects.toThrow(/Gittensory API 403/);
+    await expect(runAsync(["repo-decision", "--login", "JSONbored", "--repo", "JSONbored/gittensory", "--json"], env)).rejects.toThrow(/Gittensory API 403/);
+  });
+
   it("does not use stale decision-pack cache when local credentials are missing", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
     const url = await startFixtureServer();
@@ -1336,6 +1365,11 @@ async function startFixtureServer(
     compatibilityStatus?: number;
     npmStatus?: number;
     decisionPackStatus?: number;
+    decisionPackErrorBody?: string;
+    decisionPackErrorContentType?: string;
+    repoDecisionStatus?: number;
+    repoDecisionErrorBody?: string;
+    repoDecisionErrorContentType?: string;
     packetMarkdown?: string;
     onPacketRequest?: (body: unknown) => void;
     onApiRequest?: (request: IncomingMessage) => void;
@@ -1420,10 +1454,21 @@ async function startFixtureServer(
     if (request.url === "/v1/contributors/JSONbored/decision-pack" && request.method === "GET") {
       if (options.decisionPackStatus && options.decisionPackStatus >= 400) {
         response.statusCode = options.decisionPackStatus;
-        response.end(JSON.stringify({ error: "decision_pack_unavailable" }));
+        if (options.decisionPackErrorContentType) response.setHeader("content-type", options.decisionPackErrorContentType);
+        response.end(options.decisionPackErrorBody ?? JSON.stringify({ error: "decision_pack_unavailable" }));
         return;
       }
       response.end(JSON.stringify(decisionPackFixture()));
+      return;
+    }
+    if (request.url === "/v1/contributors/JSONbored/repos/JSONbored/gittensory/decision" && request.method === "GET") {
+      if (options.repoDecisionStatus && options.repoDecisionStatus >= 400) {
+        response.statusCode = options.repoDecisionStatus;
+        if (options.repoDecisionErrorContentType) response.setHeader("content-type", options.repoDecisionErrorContentType);
+        response.end(options.repoDecisionErrorBody ?? JSON.stringify({ error: "repo_decision_unavailable" }));
+        return;
+      }
+      response.end(JSON.stringify({ status: "ready", login: "JSONbored", repoFullName: "JSONbored/gittensory", decision: decisionPackFixture().repoDecisions[0] }));
       return;
     }
     if (request.url === "/v1/agent/plan-next-work" && request.method === "POST") {
