@@ -807,6 +807,29 @@ describe("v2 signal builders", () => {
     expect(t.openPullRequests).toBe(1); // the stranger's 5 open PRs are excluded
   });
 
+  it("uses aggregate repo-stat issues for cache-only outcome totals when issue rows are absent", () => {
+    const docsRepo: RepositoryRecord = {
+      fullName: "acme/docs",
+      owner: "acme",
+      name: "docs",
+      isInstalled: true,
+      isRegistered: true,
+      isPrivate: false,
+      defaultBranch: "main",
+      registryConfig: { repo: "acme/docs", emissionShare: 0.02, issueDiscoveryShare: 0, labelMultipliers: {}, trustedLabelPipeline: false, maintainerCut: 0, raw: {} },
+    };
+    const repoStats: ContributorRepoStatRecord[] = [
+      { login: "statdev", repoFullName: "acme/docs", pullRequests: 0, mergedPullRequests: 0, openPullRequests: 0, issues: 7, stalePullRequests: 0, unlinkedPullRequests: 0, dominantLabels: ["docs"] },
+    ];
+    const profile = buildContributorProfile("statdev", { login: "statdev", topLanguages: ["Markdown"], source: "github" }, [], [], repoStats);
+    const history = buildContributorOutcomeHistory({ login: "statdev", profile, repositories: [docsRepo], pullRequests: [], issues: [], repoStats });
+
+    expect(profile.registeredRepoActivity.issues).toBe(7);
+    expect(history.repoOutcomes.find((entry) => entry.repoFullName === "acme/docs")).toMatchObject({ issues: 7, openIssues: 0, closedIssues: 7 });
+    expect(history.totals).toMatchObject({ issues: 7, openIssues: 0, closedIssues: 7 });
+    expect(history.reconciliation?.repos.find((entry) => entry.repoFullName === "acme/docs")?.cached).toMatchObject({ issues: 7, openIssues: 0, closedIssues: 7 });
+  });
+
   it("derives solved and valid-solved issue-discovery counts from cache when official data is absent", () => {
     const mkRepo = (fullName: string, issueDiscoveryShare: number): RepositoryRecord => {
       const [owner, name] = fullName.split("/") as [string, string];

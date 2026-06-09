@@ -1540,8 +1540,11 @@ export function buildContributorOutcomeHistory(args: {
       const mergedPullRequests = official?.mergedPullRequests ?? Math.max(cachedPrs.filter((pr) => pr.mergedAt || pr.state === "merged").length, cachedStat?.mergedPullRequests ?? 0);
       const openPullRequests = official?.openPullRequests ?? Math.max(cachedPrs.filter((pr) => pr.state === "open").length, cachedStat?.openPullRequests ?? 0);
       const closedPullRequests = official?.closedPullRequests ?? Math.max(cachedPrs.filter((pr) => pr.state === "closed" && !pr.mergedAt).length, pullRequests - mergedPullRequests - openPullRequests, 0);
-      const openIssues = official?.openIssues ?? cachedIssues.filter((issue) => issue.state === "open").length;
-      const closedIssues = official?.closedIssues ?? cachedIssues.filter((issue) => issue.state !== "open").length;
+      const openIssueRows = cachedIssues.filter((issue) => issue.state === "open").length;
+      const closedIssueRows = cachedIssues.filter((issue) => issue.state !== "open").length;
+      const cachedIssueCount = Math.max(cachedIssues.length, cachedStat?.issues ?? 0);
+      const openIssues = official?.openIssues ?? openIssueRows;
+      const closedIssues = official?.closedIssues ?? Math.max(closedIssueRows, cachedIssueCount - openIssueRows, 0);
       // Like every field above, issue-discovery solved counts fall back to cache (the issue
       // lifecycle), not a literal 0, when official Gittensor data is absent for this repo.
       const laneAdvice = buildLaneAdvice(repo, repoFullName);
