@@ -60,7 +60,7 @@ import {
   refreshInstallationHealth,
 } from "../github/backfill";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot, fetchOfficialGittensorMiner, type GittensorContributorSnapshot, type OfficialGittensorMinerDetection } from "../gittensor/api";
-import { createOrUpdateCheckRun, createOrUpdateGateCheckRun, createOrUpdatePendingGateCheckRun, createOrUpdateSkippedGateCheckRun, getInstallationId } from "../github/app";
+import { createOrUpdateCheckRun, createOrUpdateGateCheckRun, createOrUpdatePendingGateCheckRun, createOrUpdateSkippedGateCheckRun, getInstallationId, getRepositoryCollaboratorPermission } from "../github/app";
 import { createOrUpdateAgentCommandComment, createOrUpdatePrIntelligenceComment, PR_PANEL_COMMENT_MARKER } from "../github/comments";
 import {
   buildMaintainerQueueDigest,
@@ -1117,15 +1117,44 @@ async function maybeProcessPrPanelRetrigger(env: Env, deliveryId: string, payloa
     await recordPrPanelRetriggerSkip(env, deliveryId, repoFullName, targetKey, actor, "missing_repo_pr_or_installation");
     return true;
   }
-  const pr = await getPullRequest(env, repoFullName, issue.number);
+  const [pr, settings] = await Promise.all([getPullRequest(env, repoFullName, issue.number), getRepositorySettings(env, repoFullName)]);
   if (!pr) {
     await recordPrPanelRetriggerSkip(env, deliveryId, repoFullName, targetKey, actor, "cached_pr_missing");
     return true;
   }
 
-  const [repo, settings, otherOpenPullRequests] = await Promise.all([
+  const actorAssociation = await resolvePrPanelRetriggerActorAssociation(env, installationId, repoFullName, actor);
+  const pullRequestAuthor = pr.authorLogin ?? issue.user?.login ?? null;
+  const needsMinerDetection = commandAuthorizationNeedsMinerDetection({
+    policy: settings.commandAuthorization,
+    commandName: "review-now",
+    commenterLogin: actor,
+    commenterAssociation: actorAssociation,
+    pullRequestAuthorLogin: pullRequestAuthor,
+  });
+  const official = pullRequestAuthor && needsMinerDetection ? await getCachedOfficialMinerDetection(env, pullRequestAuthor, { targetKey: `${repoFullName}#${issue.number}`, deliveryId }) : undefined;
+  const authorization = isAuthorizedCommandActor({
+    commandName: "review-now",
+    commenterLogin: actor,
+    commenterAssociation: actorAssociation,
+    pullRequestAuthorLogin: pullRequestAuthor,
+    officialAuthorDetection: official,
+    commandAuthorizationPolicy: settings.commandAuthorization,
+  });
+  if (!authorization.authorized) {
+    await recordPrPanelRetriggerSkip(env, deliveryId, repoFullName, `${repoFullName}#${pr.number}`, actor, authorization.reason);
+    await recordGithubProductUsage(env, "pr_panel_retrigger_skipped", {
+      actor,
+      repoFullName,
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: authorization.reason === "miner_detection_unavailable" ? "error" : "skipped",
+      metadata: { reason: authorization.reason, actorKind: authorization.actorKind, allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "review-now") },
+    });
+    return true;
+  }
+
+  const [repo, otherOpenPullRequests] = await Promise.all([
     getRepository(env, repoFullName),
-    getRepositorySettings(env, repoFullName),
     listOtherOpenPullRequests(env, repoFullName, pr.number),
   ]);
   const advisory = buildPullRequestAdvisory(repo, pr, {
@@ -1152,6 +1181,14 @@ async function maybeProcessPrPanelRetrigger(env: Env, deliveryId: string, payloa
     metadata: { commentId: comment.id },
   });
   return true;
+}
+
+async function resolvePrPanelRetriggerActorAssociation(env: Env, installationId: number, repoFullName: string, actor: string | null): Promise<string | null> {
+  if (!actor) return null;
+  const permission = await getRepositoryCollaboratorPermission(env, installationId, repoFullName, actor).catch(() => null);
+  if (permission === "admin" || permission === "maintain") return "MEMBER";
+  if (permission === "write") return "COLLABORATOR";
+  return null;
 }
 
 function isCheckedPrPanelRetrigger(body: string | null | undefined): boolean {
