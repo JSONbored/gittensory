@@ -1480,8 +1480,9 @@ export function buildRoleContext(args: {
 // Derive solved / valid-solved issue-discovery counts from cached issues using the same
 // lifecycle classifier as buildIssueDiscoveryLifecycleReport. Used as the cache fallback for
 // official solvedIssues / validSolvedIssues so a contributor without official Gittensor data
-// still gets credit for issues their own merged PRs solved. (Contributor-wide recent-merged
-// solver PRs are not loaded here, so detection uses the cached pull_requests set.)
+// still gets solved credit from merged PR evidence while self-solved issue loops do not
+// inflate valid issue-discovery credit. (Contributor-wide recent-merged solver PRs are not
+// loaded here, so detection uses the cached pull_requests set.)
 function cachedSolvedIssueCounts(issues: IssueRecord[], pullRequests: PullRequestRecord[], lane: LaneAdvice): { solvedIssues: number; validSolvedIssues: number } {
   let solvedIssues = 0;
   let validSolvedIssues = 0;
@@ -2869,9 +2870,10 @@ function classifyIssueDiscoveryLifecycle(
 ): IssueDiscoveryLifecycleReport["states"][number] {
   const linkedOpenPrs = pullRequests.filter((pr) => pr.linkedIssues.includes(issue.number));
   const linkedMergedPrs = recentMergedPullRequests.filter((pr) => pr.linkedIssues.includes(issue.number));
-  const solvedByPullRequests = [...new Set([...linkedOpenPrs.filter((pr) => pr.mergedAt || pr.state === "merged").map((pr) => pr.number), ...linkedMergedPrs.map((pr) => pr.number)])].sort(
-    (left, right) => left - right,
-  );
+  const mergedSolverPrs = [...linkedOpenPrs.filter((pr) => pr.mergedAt || pr.state === "merged"), ...linkedMergedPrs];
+  const solvedByPullRequests = [...new Set(mergedSolverPrs.map((pr) => pr.number))].sort((left, right) => left - right);
+  const issueAuthorLogin = issue.authorLogin;
+  const selfSolvedLoop = Boolean(issueAuthorLogin && mergedSolverPrs.length > 0 && mergedSolverPrs.every((pr) => sameLogin(pr.authorLogin, issueAuthorLogin)));
   const labels = issue.labels.map((label) => label.toLowerCase());
   const stale = daysSince(issue.updatedAt ?? issue.createdAt) > 90;
   const duplicate = labels.some((label) => /duplicate/.test(label));
@@ -2881,7 +2883,7 @@ function classifyIssueDiscoveryLifecycle(
     : invalid
       ? "invalid"
       : solvedByPullRequests.length > 0
-        ? lane.lane === "issue_discovery" || lane.lane === "split"
+        ? (lane.lane === "issue_discovery" || lane.lane === "split") && !selfSolvedLoop
           ? "valid_solved"
           : "solved"
         : issue.state !== "open"
@@ -2893,6 +2895,7 @@ function classifyIssueDiscoveryLifecycle(
     ...(duplicate ? ["Issue carries duplicate labeling."] : []),
     ...(invalid ? ["Issue carries invalid or not-planned labeling."] : []),
     ...(solvedByPullRequests.length > 0 ? [`Linked solver PR(s): ${solvedByPullRequests.map((number) => `#${number}`).join(", ")}.`] : []),
+    ...(selfSolvedLoop ? ["Linked solver PR author matches the issue reporter; cache treats this as solved but not valid issue-discovery evidence."] : []),
     ...(issue.state !== "open" && solvedByPullRequests.length === 0 ? ["Issue is closed without cached solver PR evidence."] : []),
     ...(stale && issue.state === "open" ? ["Issue is stale in cached metadata."] : []),
     ...(lane.lane === "direct_pr" ? ["Repo is direct-PR first; lifecycle should not encourage issue filing."] : []),
