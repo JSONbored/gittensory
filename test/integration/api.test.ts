@@ -1345,6 +1345,7 @@ describe("api routes", () => {
           totalTokenScore: 60,
           sourceLines: 40,
           openPrCount: 1,
+          duplicateRiskCount: 2,
         }),
       },
       env,
@@ -1353,7 +1354,12 @@ describe("api routes", () => {
     await expect(scorePreview.json()).resolves.toMatchObject({
       repoFullName: "entrius/allways-ui",
       targetType: "planned_pr",
-      result: { privateOnly: true, scoringModelSnapshotId: "scoring-1" },
+      input: { duplicateRiskCount: 2 },
+      result: {
+        privateOnly: true,
+        scoringModelSnapshotId: "scoring-1",
+        blockedBy: expect.arrayContaining([expect.objectContaining({ code: "duplicate_risk", severity: "reducer" })]),
+      },
     });
     const noContributorScorePreview = await app.request(
       "/v1/scoring/preview",
@@ -1835,6 +1841,20 @@ describe("api routes", () => {
     expect((await app.request("/v1/app/operator-dashboard", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
     expect((await app.request("/v1/app/analytics/daily-rollups", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
     expect((await app.request("/v1/app/analytics/mcp-compatibility", { headers: ownerHeaders }, ownerEnv)).status).toBe(403);
+    const ownerSettingsPreview = await app.request(
+      "/v1/repos/repo-owner/owned-repo/settings-preview",
+      { method: "POST", headers: ownerHeaders, body: JSON.stringify({ sample: { authorLogin: "oktofeesh1", minerStatus: "confirmed" } }) },
+      ownerEnv,
+    );
+    expect(ownerSettingsPreview.status).toBe(200);
+    await expect(ownerSettingsPreview.json()).resolves.toMatchObject({ repoFullName: "repo-owner/owned-repo" });
+    const forbiddenVictimSettingsPreview = await app.request(
+      "/v1/repos/victim-org/secret-repo/settings-preview",
+      { method: "POST", headers: ownerHeaders, body: JSON.stringify({ sample: { authorLogin: "oktofeesh1", minerStatus: "confirmed" } }) },
+      ownerEnv,
+    );
+    expect(forbiddenVictimSettingsPreview.status).toBe(403);
+    await expect(forbiddenVictimSettingsPreview.json()).resolves.toMatchObject({ error: "forbidden_repo" });
     const ownerWeeklyReport = await app.request("/v1/app/analytics/weekly-value-report", { headers: ownerHeaders }, ownerEnv);
     expect(ownerWeeklyReport.status).toBe(200);
     const ownerWeeklyReportBody = await ownerWeeklyReport.json();
@@ -4334,6 +4354,39 @@ describe("api routes", () => {
     expect(callPayload.result.structuredContent.repoFullName).toBe("entrius/allways-ui");
     expect(callPayload.result.content[0]?.text).not.toMatch(/reward|farming/i);
 
+    const scorePreviewCall = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: mcpHeaders(env),
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "score-preview-duplicate-risk",
+          method: "tools/call",
+          params: {
+            name: "gittensory_preview_local_pr_score",
+            arguments: {
+              repoFullName: "entrius/allways-ui",
+              targetKey: "mcp-duplicate-risk",
+              sourceTokenScore: 40,
+              totalTokenScore: 60,
+              sourceLines: 42,
+              duplicateRiskCount: 2,
+            },
+          },
+        }),
+      },
+      env,
+    );
+    expect(scorePreviewCall.status).toBe(200);
+    const scorePreviewPayload = (await mcpJson(scorePreviewCall)) as {
+      result: { structuredContent: { input: { duplicateRiskCount?: number }; result: { blockedBy: Array<{ code: string; severity: string }> } } };
+    };
+    expect(scorePreviewPayload.result.structuredContent.input.duplicateRiskCount).toBe(2);
+    expect(scorePreviewPayload.result.structuredContent.result.blockedBy).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "duplicate_risk", severity: "reducer" })]),
+    );
+
     const noTotalsContext = await app.request(
       "/mcp",
       {
@@ -4912,12 +4965,12 @@ describe("api routes", () => {
     const mcpUsageEvents = await listProductUsageEvents(env, { limit: 100 });
     expect(mcpUsageEvents).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ surface: "mcp", eventName: "mcp_request", outcome: "success", clientName: "gittensory-mcp-cli", clientVersion: "0.4.0" }),
+        expect.objectContaining({ surface: "mcp", eventName: "mcp_request", outcome: "success", clientName: "gittensory-<redacted-actor>-cli", clientVersion: "0.4.0" }),
         expect.objectContaining({
           surface: "mcp",
           eventName: "mcp_tool_called",
           outcome: "success",
-          clientName: "gittensory-mcp-cli",
+          clientName: "gittensory-<redacted-actor>-cli",
           clientVersion: "0.4.0",
           metadata: expect.objectContaining({
             toolName: "gittensory_get_bounty_advisory",
