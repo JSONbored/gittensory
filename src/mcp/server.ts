@@ -893,8 +893,6 @@ export class GittensoryMcp {
       if (!summary.roles.includes("operator")) {
         throw new Error("Forbidden: gittensory_queue_health_federation requires operator role.");
       }
-    } else if (this.identity.kind !== "static") {
-      throw new Error("Forbidden: gittensory_queue_health_federation requires operator role.");
     }
     const index = await buildFederatedQueueIndex(this.env, limit);
     const criticalCount = index.entries.filter((entry) => entry.level === "critical" || entry.level === "high").length;
