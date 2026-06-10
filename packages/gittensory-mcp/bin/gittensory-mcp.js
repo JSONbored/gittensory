@@ -2767,7 +2767,15 @@ async function apiFetch(path, init, options = {}) {
     },
   }).finally(() => clearTimeout(timeout));
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : {};
+  let payload = {};
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch (error) {
+      if (response.ok) throw error;
+      payload = { error: "non_json_response", body: text.slice(0, 500) };
+    }
+  }
   if (!response.ok) {
     const retry = response.headers.get("retry-after");
     const error = new Error(`Gittensory API ${response.status}${retry ? ` retry-after=${retry}s` : ""}: ${JSON.stringify(payload).slice(0, 500)}`);

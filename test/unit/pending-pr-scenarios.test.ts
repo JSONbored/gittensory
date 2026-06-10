@@ -34,6 +34,10 @@ const maintainerRole: RoleContext = {
   guidance: "maintainer",
 };
 
+function daysAgo(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
+}
+
 function pr(overrides: Partial<PullRequestRecord> & Pick<PullRequestRecord, "number">): PullRequestRecord {
   const recentDate = new Date(Date.now() - 2 * 86_400_000).toISOString();
   return {
@@ -45,6 +49,8 @@ function pr(overrides: Partial<PullRequestRecord> & Pick<PullRequestRecord, "num
     linkedIssues: [1],
     createdAt: recentDate,
     updatedAt: recentDate,
+    createdAt: daysAgo(3),
+    updatedAt: daysAgo(2),
     ...overrides,
   };
 }

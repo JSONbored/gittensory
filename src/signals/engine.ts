@@ -23,6 +23,7 @@ import type { PublicContributorProfile } from "../github/public";
 import type { GittensorContributorSnapshot } from "../gittensor/api";
 import { nowIso } from "../utils/json";
 import { hasLocalTestEvidence } from "./test-evidence";
+import { PREFLIGHT_LIMITS } from "./preflight-limits";
 
 export type ParticipationLane = "direct_pr" | "issue_discovery" | "split" | "inactive" | "unknown";
 export type SignalFinding = AdvisoryFinding;
@@ -823,7 +824,7 @@ export function buildCollisionReport(
   /* v8 ignore stop */
 
   const clusterList = [...clusters.values()].sort((left, right) => riskRank(right.risk) - riskRank(left.risk));
-  return {
+  const report = {
     repoFullName,
     generatedAt: nowIso(),
     summary: {
@@ -833,6 +834,8 @@ export function buildCollisionReport(
     },
     clusters: clusterList,
   };
+  collisionReportTermCache.set(report, itemTerms);
+  return report;
 }
 
 export function buildQueueHealth(
@@ -2343,7 +2346,9 @@ export function buildPreflightResult(
   issueQuality?: IssueQualityReport | null | undefined,
 ): PreflightResult {
   const lane = buildLaneAdvice(repo, input.repoFullName);
-  const linkedIssues = [...new Set([...(input.linkedIssues ?? []), ...extractLinkedIssueNumbers(input.body ?? "")])].sort((left, right) => left - right);
+  const linkedIssues = [...new Set([...(input.linkedIssues ?? []), ...extractLinkedIssueNumbers(truncateText(input.body ?? "", PREFLIGHT_LIMITS.bodyChars))])].sort(
+    (left, right) => left - right,
+  );
   // Flag an existing open-work cluster as a possible duplicate when it shares a
   // linked issue, OR when its title/body meaningfully overlaps the planned
   // contribution. The previous check used `item.title.includes(input.title)`,
@@ -2354,12 +2359,14 @@ export function buildPreflightResult(
   // symmetric term-overlap heuristic `buildCollisionReport` uses between items
   // (>=2 shared meaningful terms), which is direction-independent.
   const plannedTerms = plannedContributionTerms(input);
-  const collisions = buildCollisionReport(input.repoFullName, issues, pullRequests).clusters.filter((cluster) =>
+  const collisionReport = buildCollisionReport(input.repoFullName, issues, pullRequests);
+  const itemTerms = collisionReportTermCache.get(collisionReport) ?? new Map<string, CollisionTerms>();
+  const collisions = collisionReport.clusters.filter((cluster) =>
     cluster.items.some((item) => {
       if (linkedIssues.includes(item.number)) {
         return true;
       }
-      const overlap = termOverlap(plannedTerms, collisionTerms(item));
+      const overlap = termOverlap(plannedTerms, itemTerms.get(itemKey(item)) ?? collisionTerms(item));
       return overlap.shared >= 2 && overlap.score >= 0.5;
     }),
   );
@@ -2805,11 +2812,13 @@ function buildIssueLinkageRecord(
   linkedPrs: PullRequestRecord[],
   linkedMergedPrs: RecentMergedPullRequestRecord[],
 ): IssueLinkageRecord {
+  const verifiedMergedPrs = linkedPrs.filter((pr) => pr.linkedIssues.includes(issue.number) && (pr.mergedAt || pr.state === "merged"));
+  const verifiedRecentMergedPrs = linkedMergedPrs.filter((pr) => pr.linkedIssues.includes(issue.number));
   const solvedByPullRequests = [
     ...new Set([
       ...(lifecycleEntry?.solvedByPullRequests ?? []),
-      ...linkedPrs.filter((pr) => pr.mergedAt || pr.state === "merged").map((pr) => pr.number),
-      ...linkedMergedPrs.map((pr) => pr.number),
+      ...verifiedMergedPrs.map((pr) => pr.number),
+      ...verifiedRecentMergedPrs.map((pr) => pr.number),
     ]),
   ].sort((left, right) => left - right);
   const linkedWorkCount = linkedPrs.length + linkedMergedPrs.length + issue.linkedPrs.length;
@@ -2858,8 +2867,8 @@ function classifyIssueDiscoveryLifecycle(
   recentMergedPullRequests: RecentMergedPullRequestRecord[],
   lane: LaneAdvice,
 ): IssueDiscoveryLifecycleReport["states"][number] {
-  const linkedOpenPrs = pullRequests.filter((pr) => pr.linkedIssues.includes(issue.number) || issue.linkedPrs.includes(pr.number));
-  const linkedMergedPrs = recentMergedPullRequests.filter((pr) => pr.linkedIssues.includes(issue.number) || issue.linkedPrs.includes(pr.number));
+  const linkedOpenPrs = pullRequests.filter((pr) => pr.linkedIssues.includes(issue.number));
+  const linkedMergedPrs = recentMergedPullRequests.filter((pr) => pr.linkedIssues.includes(issue.number));
   const solvedByPullRequests = [...new Set([...linkedOpenPrs.filter((pr) => pr.mergedAt || pr.state === "merged").map((pr) => pr.number), ...linkedMergedPrs.map((pr) => pr.number)])].sort(
     (left, right) => left - right,
   );
@@ -3842,7 +3851,7 @@ function queuePressureComponent(queueHealth: QueueHealth): { score: number; max:
   const cachedOpenPullRequests = Math.max(0, signals.cachedOpenPullRequests ?? signals.ageBuckets.under7Days + signals.ageBuckets.days7To30 + signals.ageBuckets.over30Days);
   const likelyReviewablePullRequests = Math.max(0, Math.min(openPullRequests, signals.likelyReviewablePullRequests));
   const sampledLikelyReviewable = signals.likelyReviewablePullRequestsSource === "sampled_cache" || (signals.likelyReviewablePullRequestsSource === undefined && cachedOpenPullRequests < openPullRequests);
-  const score = queuePressureScore(openPullRequests);
+  const score = queuePressureScore(queueHealth, openPullRequests);
   const likelyEvidence =
     openPullRequests === 0
       ? "0 likely reviewable"
@@ -3865,10 +3874,22 @@ function queuePressureComponent(queueHealth: QueueHealth): { score: number; max:
   };
 }
 
-function queuePressureScore(openPullRequests: number): number {
+function queuePressureScore(queueHealth: QueueHealth, openPullRequests: number): number {
+  if (openPullRequests === 0) return 10;
+  return Math.min(queuePressureOpenPullRequestScore(openPullRequests), queuePressureLevelScore(queueHealth.level));
+}
+
+function queuePressureOpenPullRequestScore(openPullRequests: number): number {
   if (openPullRequests <= 4) return 10;
   if (openPullRequests <= 8) return 8;
   if (openPullRequests <= 13) return 5;
+  return 3;
+}
+
+function queuePressureLevelScore(level: QueueHealth["level"]): number {
+  if (level === "low") return 10;
+  if (level === "medium") return 8;
+  if (level === "high") return 5;
   return 3;
 }
 
@@ -4074,6 +4095,8 @@ type CollisionTerms = {
   size: number;
 };
 
+const collisionReportTermCache = new WeakMap<CollisionReport, Map<string, CollisionTerms>>();
+
 function collisionTerms(item: CollisionItem): CollisionTerms {
   const terms = new Set(tokenize(collisionItemText(item)));
   return { terms, size: terms.size };
@@ -4086,7 +4109,15 @@ function collisionTerms(item: CollisionItem): CollisionTerms {
  * uses between items, rather than a one-direction substring test.
  */
 function plannedContributionTerms(input: PreflightInput): CollisionTerms {
-  const terms = new Set(tokenize([input.title, ...(input.labels ?? []), ...(input.changedFiles ?? [])].join(" ")));
+  const terms = new Set(
+    tokenize(
+      [
+        truncateText(input.title, PREFLIGHT_LIMITS.titleChars),
+        ...boundedTextItems(input.labels, PREFLIGHT_LIMITS.labels, PREFLIGHT_LIMITS.labelChars),
+        ...boundedTextItems(input.changedFiles, PREFLIGHT_LIMITS.changedFiles, PREFLIGHT_LIMITS.changedFileChars),
+      ].join(" "),
+    ),
+  );
   return { terms, size: terms.size };
 }
 
@@ -4101,7 +4132,21 @@ function termOverlap(left: CollisionTerms, right: CollisionTerms): { score: numb
 }
 
 function collisionItemText(item: CollisionItem): string {
-  return [item.title, ...(item.labels ?? []), ...(item.changedFiles ?? [])].filter(Boolean).join(" ");
+  return [
+    truncateText(item.title, PREFLIGHT_LIMITS.titleChars),
+    ...boundedTextItems(item.labels, PREFLIGHT_LIMITS.labels, PREFLIGHT_LIMITS.labelChars),
+    ...boundedTextItems(item.changedFiles, PREFLIGHT_LIMITS.changedFiles, PREFLIGHT_LIMITS.changedFileChars),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function boundedTextItems(values: string[] | undefined, maxItems: number, maxChars: number): string[] {
+  return (values ?? []).slice(0, maxItems).map((value) => truncateText(value, maxChars));
+}
+
+function truncateText(value: string, maxChars: number): string {
+  return value.length > maxChars ? value.slice(0, maxChars) : value;
 }
 
 function tokenize(value: string): string[] {
