@@ -890,7 +890,18 @@ describe("gittensory-mcp CLI", () => {
     git(tempDir, "commit", "-m", "initial commit");
     git(tempDir, "checkout", "-b", "codex/public-safe-pr-packets");
 
-    for (const unsafePhrase of ["score: 1.15", "reward estimate", "wallet address", "hotkey id", "raw-trust: 0.7", "private-reviewability: ready", "raw_trust: 0.7", "private_reviewability: ready", "trust_score: 0.4"]) {
+    for (const unsafePhrase of [
+      "score: 1.15",
+      "reward estimate",
+      "wallet address",
+      "hotkey id",
+      "raw-trust: 0.7",
+      "private-reviewability: ready",
+      "raw_trust: 0.7",
+      "private_reviewability: ready",
+      "trust_score: 0.4",
+      "log path C:\\Users\\alice\\workspace\\raw.log",
+    ]) {
       if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
       server = null;
       const url = await startFixtureServer({ packetMarkdown: `# Public-safe PR packet\n\n- ${unsafePhrase}\n` });
@@ -1106,7 +1117,10 @@ describe("gittensory-mcp CLI", () => {
   });
 
   it("rejects unsupported agent profiles", () => {
-    expect(() => run(["init-client", "--print", "codex", "--agent-profile", "autopilot"])).toThrow(/Unsupported agent profile/);
+    for (const profile of ["autopilot", "__proto__", "constructor"]) {
+      expect(() => run(["init-client", "--print", "codex", "--agent-profile", profile])).toThrow(/Unsupported agent profile/);
+      expect(() => run(["init-client", "--print", "codex", "--agent-profile", profile, "--json"])).toThrow(/Unsupported agent profile/);
+    }
   });
 
   it("reports the package version via version, --version, and -v", () => {
@@ -1138,18 +1152,19 @@ describe("gittensory-mcp CLI", () => {
     expect(bash).toContain("_gittensory_mcp()");
     expect(bash).toContain("complete -F _gittensory_mcp gittensory-mcp");
     expect(bash).toContain("analyze-branch");
-    expect(bash).toContain("local commands=\"login logout whoami status changelog completion version doctor");
+    expect(bash).toContain("local commands=\"login logout whoami config status changelog completion version doctor");
     expect(bash).toContain("version");
     expect(bash).toContain("plan status explain packet");
 
     const zsh = run(["completion", "zsh"]);
     expect(zsh).toContain("#compdef gittensory-mcp");
     expect(zsh).toContain("_describe 'command' commands");
-    expect(zsh).toContain("commands=(login logout whoami status changelog completion version doctor");
+    expect(zsh).toContain("commands=(login logout whoami config status changelog completion version doctor");
     expect(zsh).toContain("list create switch remove");
 
     const fish = run(["completion", "fish"]);
     expect(fish).toContain("complete -c gittensory-mcp");
+    expect(fish).toContain("complete -c gittensory-mcp -n __fish_use_subcommand -a config");
     expect(fish).toContain("complete -c gittensory-mcp -n __fish_use_subcommand -a completion");
     expect(fish).toContain("__fish_seen_subcommand_from agent");
   });
