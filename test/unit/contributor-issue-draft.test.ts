@@ -257,14 +257,16 @@ describe("contributor issue drafts", () => {
 
   it("skips drafts a maintainer already declined by closing the issue", async () => {
     const env = createTestEnv();
-    const fingerprint = await contributorIssueDraftFingerprint("JSONbored/gittensory", "policy:focus_policy_missing", "policy:focus_policy_missing");
+    // Use a non-self repo so the policy candidate is deterministic (the self-repo carries a bundled manifest).
+    const repoFullName = "other-owner/other-repo";
+    const fingerprint = await contributorIssueDraftFingerprint(repoFullName, "policy:focus_policy_missing", "policy:focus_policy_missing");
     const marker = contributorIssueDraftMarker(fingerprint);
     vi.spyOn(repositories, "listOpenIssues").mockResolvedValue([]);
     vi.spyOn(repositories, "listClosedContributorDraftIssues").mockResolvedValue([
       { ...openIssue(90, "feat(issues): address focus-policy-missing policy readiness for repo", marker), state: "closed", updatedAt: new Date().toISOString() },
     ]);
 
-    const result = await generateContributorIssueDrafts(env, "JSONbored/gittensory", { dryRun: false, create: true, limit: 1 });
+    const result = await generateContributorIssueDrafts(env, repoFullName, { dryRun: false, create: true, limit: 1 });
     expect(result.skippedDeclined).toBe(1);
     expect(result.created).toBe(0);
     expect(result.drafts[0]?.status).toBe("skipped_declined");
