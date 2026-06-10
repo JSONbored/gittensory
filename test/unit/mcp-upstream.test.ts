@@ -26,6 +26,8 @@ describe("MCP contributor access", () => {
     const result = await (mcp as unknown as { monitorOpenPullRequests(login: string): Promise<{ summary: string; data: Record<string, unknown> }> }).monitorOpenPullRequests("monitor-user");
     expect(typeof result.summary).toBe("string");
     expect(result.data).toBeDefined();
+  });
+
   it("blocks session actors from issue-quality reports for inaccessible repos", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "private-repo", full_name: "victim/private-repo", private: true, owner: { login: "victim" }, default_branch: "main" });
