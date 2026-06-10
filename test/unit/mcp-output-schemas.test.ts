@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
 import { persistSignalSnapshot, upsertRepositoryFromGitHub } from "../../src/db/repositories";
+import { authenticatePrivateToken, createSessionForGitHubUser } from "../../src/auth/security";
 import { GittensoryMcp } from "../../src/mcp/server";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
@@ -159,7 +160,15 @@ describe("MCP tool calls return schema-valid structured content", () => {
   });
 
   it("gittensory_queue_health_federation returns a ranked index with no private financial fields", async () => {
-    const { client } = await connectTestClient();
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "operator-user" });
+    const { token } = await createSessionForGitHubUser(env, { login: "operator-user", id: 99 });
+    const identity = await authenticatePrivateToken(env, token);
+    if (!identity || identity.kind !== "session") throw new Error("expected session identity");
+    const mcpServer = new GittensoryMcp(env, identity).createServer();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await mcpServer.connect(serverTransport);
+    const client = new Client({ name: "gittensory-output-schema-test", version: "0.1.0" }, { capabilities: {} });
+    await client.connect(clientTransport);
     const result = await client.callTool({ name: "gittensory_queue_health_federation", arguments: {} });
     expect(result.isError).toBeFalsy();
     const data = result.structuredContent as Record<string, unknown>;
