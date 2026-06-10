@@ -34,10 +34,11 @@ const maintainerRole: RoleContext = {
   guidance: "maintainer",
 };
 
-const recentDate = () => new Date(Date.now() - 2 * 86_400_000).toISOString();
+function daysAgo(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
+}
 
 function pr(overrides: Partial<PullRequestRecord> & Pick<PullRequestRecord, "number">): PullRequestRecord {
-  const recent = recentDate();
   return {
     repoFullName: "entrius/allways-ui",
     title: `PR #${overrides.number}`,
@@ -45,8 +46,8 @@ function pr(overrides: Partial<PullRequestRecord> & Pick<PullRequestRecord, "num
     authorLogin: "miner-a",
     labels: [],
     linkedIssues: [1],
-    createdAt: recent,
-    updatedAt: recent,
+    createdAt: daysAgo(3),
+    updatedAt: daysAgo(2),
     ...overrides,
   };
 }
