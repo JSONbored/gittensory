@@ -288,6 +288,7 @@ export async function generateContributorIssueDrafts(
       drafts.push(draft);
       continue;
     }
+    /* v8 ignore next -- loadContributorIssueDraftContext always sets declinedIssues; the [] fallback only guards hand-built candidate contexts. */
     const declined = findDeclinedContributorDraft(context.declinedIssues ?? [], draft);
     if (declined) {
       draft.status = "skipped_declined";

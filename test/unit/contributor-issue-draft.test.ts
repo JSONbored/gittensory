@@ -246,6 +246,8 @@ describe("contributor issue drafts", () => {
     expect(findDeclinedContributorDraft([closed({ updatedAt: longAgo, labels: ["wontfix"] })], { fingerprint })).toMatchObject({ reason: "wontfix" });
     // Past the cooldown without a wontfix label -> may resurface (a later regression).
     expect(findDeclinedContributorDraft([closed({ updatedAt: longAgo })], { fingerprint })).toBeNull();
+    // Missing/unparseable close timestamp -> treat as still within cooldown (suppress).
+    expect(findDeclinedContributorDraft([closed({ updatedAt: undefined })], { fingerprint })).toMatchObject({ reason: "cooldown" });
     // Open issues, missing markers, and other fingerprints are ignored.
     expect(findDeclinedContributorDraft([{ ...closed({}), state: "open" }], { fingerprint })).toBeNull();
     expect(findDeclinedContributorDraft([closed({ body: "no marker here" })], { fingerprint })).toBeNull();
