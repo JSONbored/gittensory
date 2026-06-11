@@ -147,13 +147,13 @@ describe("private-beta auth and rate limiting", () => {
 
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", { "x-forwarded-for": "198.51.100.1" }),
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-forwarded-for": "198.51.100.1" })),
         "strict",
       ),
     ).resolves.toBeNull();
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", { "x-forwarded-for": "198.51.100.2" }),
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-forwarded-for": "198.51.100.2" })),
         "strict",
       ),
     ).resolves.toBeNull();
@@ -164,13 +164,13 @@ describe("private-beta auth and rate limiting", () => {
     observedKeys.length = 0;
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", { "x-forwarded-for": "198.51.100.2, 198.51.100.3" }),
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-forwarded-for": "198.51.100.2, 198.51.100.3" })),
         "strict",
       ),
     ).resolves.toBeNull();
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", { "x-forwarded-for": "198.51.100.2" }),
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-forwarded-for": "198.51.100.3" })),
         "strict",
       ),
     ).resolves.toBeNull();
@@ -179,14 +179,77 @@ describe("private-beta auth and rate limiting", () => {
 
     observedKeys.length = 0;
     await expect(
-      enforceRateLimit(fakeContext(env, "/v1/auth/github/session", { "x-real-ip": "203.0.113.44" }), "strict"),
+      enforceRateLimit(
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-real-ip": "203.0.113.44", "x-forwarded-for": "198.51.100.99" })),
+        "strict",
+      ),
     ).resolves.toBeNull();
     await expect(
-      enforceRateLimit(fakeContext(env, "/v1/auth/github/session", { "x-forwarded-for": "", "x-real-ip": "   " }), "strict"),
+      enforceRateLimit(fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-real-ip": "203.0.113.44" })), "strict"),
     ).resolves.toBeNull();
     expect(observedKeys).toHaveLength(2);
-    expect(observedKeys[0]).not.toBe(observedKeys[1]);
-    expect(observedKeys[1]).toMatch(/^strict:\/v1\/auth\/github\/session:ip:/);
+    expect(observedKeys[0]).toBe(observedKeys[1]);
+
+    observedKeys.length = 0;
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/auth/github/session", { "x-forwarded-for": "198.51.100.1" }), "strict"),
+    ).resolves.toBeNull();
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/auth/github/session", { "x-forwarded-for": "198.51.100.2" }), "strict"),
+    ).resolves.toBeNull();
+    expect(observedKeys).toHaveLength(2);
+    expect(observedKeys[0]).toBe(observedKeys[1]);
+    expect(observedKeys[0]).toMatch(/^strict:\/v1\/auth\/github\/session:ip:/);
+  });
+
+  it("keys pre-auth routes by configured trusted proxy IPs without cf-ray", async () => {
+    const observedKeys: string[] = [];
+    const env = createTestEnv({
+      RATE_LIMITER: rateLimiterNamespace({ status: 200, body: {} }, observedKeys) as unknown as DurableObjectNamespace,
+      RATE_LIMIT_TRUSTED_PROXIES: "198.51.100.99",
+      RATE_LIMIT_TRUSTED_PROXY_COUNT: "2",
+    });
+
+    await expect(
+      enforceRateLimit(
+        fakeContext(env, "/v1/auth/github/session", {
+          "x-forwarded-for": "198.51.100.2, 198.51.100.99",
+          "x-real-ip": "198.51.100.2",
+        }),
+        "strict",
+      ),
+    ).resolves.toBeNull();
+    await expect(
+      enforceRateLimit(
+        fakeContext(env, "/v1/auth/github/session", {
+          "x-forwarded-for": "198.51.100.2, 198.51.100.99",
+        }),
+        "strict",
+      ),
+    ).resolves.toBeNull();
+    expect(observedKeys).toHaveLength(2);
+    expect(observedKeys[0]).toBe(observedKeys[1]);
+    expect(observedKeys[0]).toMatch(/^strict:\/v1\/auth\/github\/session:ip:/);
+  });
+
+  it("ignores forwarded headers when configured trusted proxy peer is absent", async () => {
+    const observedKeys: string[] = [];
+    const env = createTestEnv({
+      RATE_LIMITER: rateLimiterNamespace({ status: 200, body: {} }, observedKeys) as unknown as DurableObjectNamespace,
+      RATE_LIMIT_TRUSTED_PROXIES: "198.51.100.99",
+    });
+
+    await expect(enforceRateLimit(fakeContext(env, "/v1/auth/github/session"), "strict")).resolves.toBeNull();
+    const unknownIpKey = observedKeys[0];
+
+    observedKeys.length = 0;
+    await expect(
+      enforceRateLimit(
+        fakeContext(env, "/v1/auth/github/session", { "x-forwarded-for": "198.51.100.1, 198.51.100.2", "x-real-ip": "198.51.100.3" }),
+        "strict",
+      ),
+    ).resolves.toBeNull();
+    expect(observedKeys[0]).toBe(unknownIpKey);
   });
 
   it("ignores malformed client address headers when building rate-limit keys", async () => {
@@ -195,18 +258,16 @@ describe("private-beta auth and rate limiting", () => {
 
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", {
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({
           "cf-connecting-ip": "not-an-ip",
           "x-forwarded-for": "198.51.100.2, 198.51.100.3",
-        }),
+        })),
         "strict",
       ),
     ).resolves.toBeNull();
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", {
-          "x-forwarded-for": "198.51.100.2",
-        }),
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-forwarded-for": "198.51.100.3" })),
         "strict",
       ),
     ).resolves.toBeNull();
@@ -216,18 +277,16 @@ describe("private-beta auth and rate limiting", () => {
     observedKeys.length = 0;
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", {
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({
           "x-forwarded-for": "garbage, also-not-ip",
           "x-real-ip": "203.0.113.44",
-        }),
+        })),
         "strict",
       ),
     ).resolves.toBeNull();
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", {
-          "x-real-ip": "203.0.113.44",
-        }),
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-real-ip": "203.0.113.44" })),
         "strict",
       ),
     ).resolves.toBeNull();
@@ -270,17 +329,15 @@ describe("private-beta auth and rate limiting", () => {
     ).resolves.toBeNull();
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", {
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({
           "x-forwarded-for": "not-an-ip, 198.51.100.55",
-        }),
+        })),
         "strict",
       ),
     ).resolves.toBeNull();
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", {
-          "x-forwarded-for": "198.51.100.55",
-        }),
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-forwarded-for": "198.51.100.55" })),
         "strict",
       ),
     ).resolves.toBeNull();
@@ -291,17 +348,13 @@ describe("private-beta auth and rate limiting", () => {
     observedKeys.length = 0;
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", {
-          "x-real-ip": "[2001:db8::1]",
-        }),
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-real-ip": "[2001:db8::1]" })),
         "strict",
       ),
     ).resolves.toBeNull();
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", {
-          "x-real-ip": "2001:db8::1",
-        }),
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-real-ip": "2001:db8::1" })),
         "strict",
       ),
     ).resolves.toBeNull();
@@ -311,6 +364,15 @@ describe("private-beta auth and rate limiting", () => {
     observedKeys.length = 0;
     await expect(enforceRateLimit(fakeContext(env, "/v1/auth/github/session"), "strict")).resolves.toBeNull();
     const unknownIpKey = observedKeys[0];
+
+    observedKeys.length = 0;
+    await expect(
+      enforceRateLimit(
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-forwarded-for": "", "x-real-ip": "   " })),
+        "strict",
+      ),
+    ).resolves.toBeNull();
+    expect(observedKeys[0]).toBe(unknownIpKey);
 
     observedKeys.length = 0;
     await expect(
@@ -346,7 +408,7 @@ describe("private-beta auth and rate limiting", () => {
     const fallbackHeaders = fakeContext(
       createTestEnv({ RATE_LIMITER: rateLimiterNamespace({ status: 200, body: {} }, fallbackObservedKeys) as unknown as DurableObjectNamespace }),
       "/v1/repos/JSONbored/gittensory",
-      { "x-forwarded-for": "198.51.100.2, 198.51.100.3" },
+      trustedProxyHeaders({ "x-forwarded-for": "198.51.100.2, 198.51.100.3" }),
     );
     await expect(enforceRateLimit(fallbackHeaders, "normal")).resolves.toBeNull();
     expect(fallbackObservedKeys).toHaveLength(1);
@@ -747,4 +809,8 @@ function fakeContext(env: Env, path: string, headers: Record<string, string> = {
       return Response.json(body, responseHeadersInit ? { status, headers: responseHeadersInit } : { status });
     },
   } as unknown as import("hono").Context<{ Bindings: Env }> & { res: { headers: Headers } };
+}
+
+function trustedProxyHeaders(headers: Record<string, string> = {}): Record<string, string> {
+  return { "cf-ray": "test-trusted-edge", ...headers };
 }
