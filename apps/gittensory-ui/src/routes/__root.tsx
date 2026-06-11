@@ -127,8 +127,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         }),
       },
       // Self-hosted, privacy-friendly Umami analytics (cookieless, no PII).
+      // Served first-party via the Worker proxy in src/server.ts, which forwards
+      // /stats/* to tasty.aethereal.dev. The browser only talks to our own
+      // origin, so there's no cross-origin script (no SRI to re-pin on Umami
+      // upgrades) and the tracker derives its collect endpoint (/stats/api/send)
+      // from this src on its own.
       {
-        src: "https://tasty.aethereal.dev/script.js",
+        src: "/stats/script.js",
         defer: true,
         "data-website-id": "2ec37da2-e519-4bd5-bc16-76e17b03a458",
       },
