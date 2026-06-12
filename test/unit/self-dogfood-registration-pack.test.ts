@@ -58,6 +58,7 @@ function settingsFor(repoFullName: string, overrides: Partial<RepositorySettings
     linkedIssueGateMode: "advisory",
     duplicatePrGateMode: "advisory",
     qualityGateMode: "advisory",
+    slopGateMode: "advisory",
     qualityGateMinScore: null,
     autoLabelEnabled: true,
     gittensorLabel: "gittensor",

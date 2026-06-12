@@ -19,6 +19,12 @@ export type GateCheckPolicy = {
   duplicatePrGateMode?: GateRuleMode | undefined;
   qualityGateMode?: GateRuleMode | undefined;
   qualityGateMinScore?: number | null | undefined;
+  slopGateMode?: GateRuleMode | undefined;
+  /** Hard-block when `slopRisk` exceeds this maximum (0-100). NOTE: the deterministic slop rubric can
+   *  currently emit at most 55 (missing_test_evidence 30 + trivial_whitespace_churn 25), so any
+   *  `slopGateMaxRisk >= 55` can never block until more slop signals are added. */
+  slopGateMaxRisk?: number | null | undefined;
+  slopRisk?: number | null | undefined;
   readinessScore?: number | null | undefined;
   /** ONLY confirmed gittensor contributors can be hard-blocked. When explicitly `false`, the gate is
    *  forced to a neutral (non-blocking) conclusion regardless of blockers — gittensory must never block
@@ -297,7 +303,10 @@ export function evaluateGateCheck(advisoryResult: Advisory, policy: GateCheckPol
   }
   const configuredBlockers = advisoryResult.findings.filter((finding) => isConfiguredGateBlocker(finding.code, policy));
   const qualityBlocker = buildQualityGateBlocker(policy);
-  const blockers = [...configuredBlockers, ...(qualityBlocker ? [qualityBlocker] : [])];
+  const slopBlocker = buildSlopGateBlocker(policy);
+  // The slop blocker is folded in here, ABOVE the confirmed-contributor early-return, so it is subject
+  // to the same #644 gate: it can only ever hard-block a confirmed Gittensor contributor.
+  const blockers = [...configuredBlockers, ...(qualityBlocker ? [qualityBlocker] : []), ...(slopBlocker ? [slopBlocker] : [])];
   // Contributor-gated: ONLY confirmed Gittensor contributors can be hard-blocked. For everyone else the
   // gate is neutral (non-blocking) + the minimal advisory comment — gittensory must never block a
   // non-confirmed contributor, regardless of what blockers fired.
@@ -572,6 +581,22 @@ function buildQualityGateBlocker(policy: GateCheckPolicy): AdvisoryFinding | nul
     title: "Readiness score is below the configured threshold",
     detail: `The public readiness score is ${score}/100, below the repository threshold of ${minScore}/100.`,
     action: "Address the short explicit PR panel actions, then re-run the gate.",
+  };
+}
+
+function buildSlopGateBlocker(policy: GateCheckPolicy): AdvisoryFinding | null {
+  // Only "block" mode with an explicit max risk can hard-block — advisory/off mode (or a null max)
+  // does no work here, so the caller can skip computing slop risk entirely.
+  if (gateMode(policy.slopGateMode) !== "block" || policy.slopGateMaxRisk == null) return null;
+  const slopRisk = normalizeScore(policy.slopRisk);
+  const maxRisk = normalizeScore(policy.slopGateMaxRisk);
+  if (slopRisk === null || maxRisk === null || slopRisk <= maxRisk) return null;
+  return {
+    code: "slop_risk_above_threshold",
+    severity: "warning",
+    title: "Slop risk is above the configured threshold",
+    detail: `The deterministic slop risk is ${slopRisk}/100, above the repository maximum of ${maxRisk}/100.`,
+    action: "Address the flagged slop signals (e.g. add test evidence), then re-run the gate.",
   };
 }
 

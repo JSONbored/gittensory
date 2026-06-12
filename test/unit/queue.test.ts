@@ -24,6 +24,7 @@ import {
   upsertRepoSyncSegment,
   upsertInstallation,
   upsertOfficialMinerDetection,
+  upsertPullRequestFile,
   upsertPullRequestFromGitHub,
   upsertRepositorySettings,
   upsertRepositoryFromGitHub,
@@ -1012,6 +1013,98 @@ describe("queue processors", () => {
 
     // gate.enabled: false in .gittensory.yml disables the gate entirely — no Gate check is posted.
     expect(calls.gateChecks).toBe(0);
+  });
+
+  it("hard-blocks a confirmed Gittensor contributor when slop risk exceeds the configured maximum", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicAudienceMode: "oss_maintainer",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      // Only the slop gate may block, so the failure can only come from the slop signal.
+      linkedIssueGateMode: "off",
+      duplicatePrGateMode: "off",
+      qualityGateMode: "off",
+      slopGateMode: "block",
+      slopGateMaxRisk: 10,
+    });
+    // A code file changed with no accompanying test → missing_test_evidence (risk 30) > max 10.
+    await upsertPullRequestFile(env, {
+      repoFullName: "JSONbored/gittensory",
+      pullNumber: 62,
+      path: "src/feature.ts",
+      status: "modified",
+      additions: 30,
+      deletions: 5,
+      changes: 35,
+      payload: {},
+    });
+    const calls = { minerList: 0, gateChecks: 0, fileReads: 0 };
+    let gatePatchBody: { conclusion?: string; output?: { title?: string; text?: string } } = {};
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        calls.minerList += 1;
+        return Response.json([
+          { uid: 7, githubUsername: "confirmed-dev", githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1 },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({ repositories: [{ repositoryFullName: "JSONbored/gittensory", totalPrs: "4", totalMergedPrs: "3", totalOpenPrs: "1", totalClosedPrs: "0", totalOpenIssues: "0", totalClosedIssues: "0", isEligible: true, credibility: "1.000000" }] });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/confirmed-dev")) return Response.json({ login: "confirmed-dev", public_repos: 2, followers: 1 });
+      if (url.includes("/users/confirmed-dev/repos")) return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/commits/slop123/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/pulls/62/files")) {
+        calls.fileReads += 1;
+        return Response.json([{ filename: "src/feature.ts", status: "modified", additions: 30, deletions: 5, changes: 35 }]);
+      }
+      if (url.includes("/issues/62/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/62/comments") && method === "POST") return Response.json({ id: 622 }, { status: 201 });
+      if (url.includes("/check-runs/940") && method === "PATCH") {
+        gatePatchBody = JSON.parse(String(init?.body ?? "{}")) as typeof gatePatchBody;
+        calls.gateChecks += 1;
+        return Response.json({ id: 940 });
+      }
+      if (url.includes("/check-runs") && method === "POST") {
+        calls.gateChecks += 1;
+        return Response.json({ id: 940 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-confirmed-slop-block",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 62, title: "Add feature without tests", state: "open", user: { login: "confirmed-dev" }, head: { sha: "slop123" }, labels: [], body: "Adds a feature." },
+      },
+    });
+
+    expect(gatePatchBody.conclusion).toBe("failure");
+    expect(gatePatchBody.output?.title).toBe("Gittensory Gate: Slop risk is above the configured threshold");
+    expect(gatePatchBody.output?.text).toContain("Address the flagged slop signals");
   });
 
   it("audits opt-in gate check permission failures without blocking webhook processing", async () => {
