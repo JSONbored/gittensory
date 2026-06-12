@@ -20,6 +20,7 @@ function settings(overrides: Partial<RepositorySettings> = {}): RepositorySettin
     checkRunMode: "enabled",
     checkRunDetailLevel: "standard",
     gateCheckMode: "off",
+    firstTimeContributorGrace: false,
     linkedIssueGateMode: "advisory",
     duplicatePrGateMode: "advisory",
     qualityGateMode: "advisory",

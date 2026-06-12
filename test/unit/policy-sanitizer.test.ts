@@ -62,6 +62,7 @@ function settingsFor(repoFullName: string, overrides: Partial<RepositorySettings
     checkRunMode: "off",
     checkRunDetailLevel: "standard",
     gateCheckMode: "off",
+    firstTimeContributorGrace: false,
     linkedIssueGateMode: "advisory",
     duplicatePrGateMode: "advisory",
     qualityGateMode: "advisory",

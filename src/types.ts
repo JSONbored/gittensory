@@ -363,6 +363,7 @@ export type RepositorySettings = {
   checkRunMode: "off" | "enabled";
   checkRunDetailLevel: "minimal" | "standard" | "deep";
   gateCheckMode: "off" | "enabled";
+  firstTimeContributorGrace: boolean;
   linkedIssueGateMode: GateRuleMode;
   duplicatePrGateMode: GateRuleMode;
   qualityGateMode: GateRuleMode;

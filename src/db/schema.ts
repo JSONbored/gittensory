@@ -41,6 +41,7 @@ export const repositorySettings = sqliteTable("repository_settings", {
   checkRunMode: text("check_run_mode").notNull().default("off"),
   checkRunDetailLevel: text("check_run_detail_level").notNull().default("minimal"),
   gateCheckMode: text("gate_check_mode").notNull().default("off"),
+  firstTimeContributorGrace: integer("first_time_contributor_grace", { mode: "boolean" }).notNull().default(false),
   linkedIssueGateMode: text("linked_issue_gate_mode").notNull().default("block"),
   duplicatePrGateMode: text("duplicate_pr_gate_mode").notNull().default("block"),
   qualityGateMode: text("quality_gate_mode").notNull().default("advisory"),

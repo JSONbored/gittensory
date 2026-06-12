@@ -78,6 +78,7 @@ import { ensurePullRequestLabel } from "../github/labels";
 import { fetchPublicContributorProfile } from "../github/public";
 import { refreshRegistry } from "../registry/sync";
 import { buildIssueAdvisory, buildPullRequestAdvisory, evaluateGateCheck } from "../rules/advisory";
+import { resolveContributorGraceGatePolicy } from "../rules/gate-grace";
 import { detectNotificationEvents } from "../notifications/events";
 import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
 import { buildAndPersistContributorDecisionPack, loadDecisionPackSharedInputs } from "../services/decision-pack";
@@ -790,6 +791,47 @@ function gateCheckPolicy(settings: RepositorySettings, readinessScore?: number |
   };
 }
 
+function resolveGateCheckPolicy(
+  settings: RepositorySettings,
+  readinessScore: number | null | undefined,
+  args: {
+    authorLogin: string;
+    repo: NonNullable<Awaited<ReturnType<typeof getRepository>>>;
+    repoFullName: string;
+    repoIssues: Awaited<ReturnType<typeof listIssues>>;
+    repoPullRequests: PullRequestRecord[];
+  },
+) {
+  const base = gateCheckPolicy(settings, readinessScore);
+  const normalizedAuthor = args.authorLogin.toLowerCase();
+  const authorPullRequests = args.repoPullRequests.filter((entry) => entry.authorLogin?.toLowerCase() === normalizedAuthor);
+  const authorIssues = args.repoIssues.filter((entry) => entry.authorLogin?.toLowerCase() === normalizedAuthor);
+  const profile = buildContributorProfile(
+    args.authorLogin,
+    { login: args.authorLogin, topLanguages: [], source: "github" },
+    authorPullRequests,
+    authorIssues,
+  );
+  const roleContext = buildRoleContext({
+    login: args.authorLogin,
+    repo: args.repo,
+    repoFullName: args.repoFullName,
+    pullRequests: authorPullRequests,
+    issues: authorIssues,
+    profile,
+  });
+  const outcomeHistory = buildContributorOutcomeHistory({
+    login: args.authorLogin,
+    profile,
+    repositories: [args.repo],
+    pullRequests: authorPullRequests,
+    issues: authorIssues,
+    repoStats: [],
+  });
+  const repoOutcome = outcomeHistory.repoOutcomes.find((entry) => entry.repoFullName === args.repoFullName);
+  return resolveContributorGraceGatePolicy(base, settings, { roleContext, repoOutcome });
+}
+
 function linkedIssueDuplicatePullRequestsForGate(pr: PullRequestRecord, pullRequests: PullRequestRecord[]): number[] {
   const linkedIssues = new Set(pr.linkedIssues);
   if (linkedIssues.size === 0) return [];
@@ -955,9 +997,20 @@ async function maybePublishPrPublicSurface(
     scopedOverlapCount: unionScopedOverlapClusters(collisions, pr, preflight.collisions).length,
   });
 
-  const gateEvaluation = settings.gateCheckMode === "enabled" ? evaluateGateCheck(advisory, gateCheckPolicy(settings, readiness.total)) : undefined;
+  const gatePolicy =
+    author && repo && settings.firstTimeContributorGrace
+      ? resolveGateCheckPolicy(settings, readiness.total, {
+          authorLogin: author,
+          repo,
+          repoFullName,
+          repoIssues,
+          repoPullRequests,
+        })
+      : gateCheckPolicy(settings, readiness.total);
+
+  const gateEvaluation = settings.gateCheckMode === "enabled" ? evaluateGateCheck(advisory, gatePolicy) : undefined;
   if (gateEnabled) {
-    const gateCheckResult = await createOrUpdateGateCheckRun(env, installationId, repoFullName, advisory, gateCheckPolicy(settings, readiness.total), {
+    const gateCheckResult = await createOrUpdateGateCheckRun(env, installationId, repoFullName, advisory, gatePolicy, {
       checkRunId: pendingGateCheckRunId,
     });
     if (gateCheckResult?.kind === "permission_missing") {

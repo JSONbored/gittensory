@@ -1503,6 +1503,7 @@ function repoSettings(repoFullName: string): RepositorySettings {
     checkRunMode: "off",
     checkRunDetailLevel: "minimal",
     gateCheckMode: "off",
+    firstTimeContributorGrace: false,
     linkedIssueGateMode: "advisory",
     duplicatePrGateMode: "advisory",
     qualityGateMode: "advisory",

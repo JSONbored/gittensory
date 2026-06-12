@@ -556,6 +556,7 @@ export const RepositorySettingsSchema = z
     checkRunMode: z.enum(["off", "enabled"]),
     checkRunDetailLevel: z.enum(["minimal", "standard", "deep"]),
     gateCheckMode: z.enum(["off", "enabled"]),
+    firstTimeContributorGrace: z.boolean(),
     linkedIssueGateMode: z.enum(["off", "advisory", "block"]),
     duplicatePrGateMode: z.enum(["off", "advisory", "block"]),
     qualityGateMode: z.enum(["off", "advisory", "block"]),

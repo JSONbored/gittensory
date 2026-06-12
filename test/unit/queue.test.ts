@@ -708,6 +708,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "enabled",
+    firstTimeContributorGrace: false,
       requireLinkedIssue: true,
     });
     const calls = { minerList: 0, gateChecks: 0 };
@@ -750,6 +751,61 @@ describe("queue processors", () => {
     expect(calls).toEqual({ minerList: 0, gateChecks: 2 });
   });
 
+  it("applies first-time contributor gate grace for a newcomer's borderline PR", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      firstTimeContributorGrace: true,
+      requireLinkedIssue: true,
+      linkedIssueGateMode: "block",
+    });
+    const calls = { gateChecks: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/commits/grace123/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && (init?.method ?? "GET") === "POST") {
+        calls.gateChecks += 1;
+        return Response.json({ id: 901 }, { status: 201 });
+      }
+      if (url.includes("/check-runs/901") && (init?.method ?? "GET") === "PATCH") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string; output?: { title?: string } };
+        expect(body).toMatchObject({ status: "completed", conclusion: "success", output: { title: "Gittensory Gate passed" } });
+        calls.gateChecks += 1;
+        return Response.json({ id: 901 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-grace-newcomer",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 43, title: "First contribution", state: "open", user: { login: "newcontributor" }, head: { sha: "grace123" }, labels: [], body: "No issue link." },
+      },
+    });
+
+    expect(calls).toEqual({ gateChecks: 2 });
+  });
+
   it("publishes an enabled gate when bot PR public output is skipped", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
@@ -768,6 +824,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "enabled",
+    firstTimeContributorGrace: false,
       linkedIssueGateMode: "block",
     });
     const calls = { gateChecks: 0, comments: 0, minerList: 0 };
@@ -838,6 +895,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "enabled",
+    firstTimeContributorGrace: false,
       linkedIssueGateMode: "block",
     });
     const calls = { minerList: 0, gateChecks: 0, comments: 0 };
@@ -907,6 +965,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "enabled",
+    firstTimeContributorGrace: false,
       requireLinkedIssue: true,
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -960,6 +1019,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "enabled",
+    firstTimeContributorGrace: false,
     });
     const calls = { gateWrites: 0, commentGets: 0, commentPosts: 0 };
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1017,6 +1077,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "enabled",
+    firstTimeContributorGrace: false,
     });
     let commentGets = 0;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -1067,6 +1128,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "off",
+    firstTimeContributorGrace: false,
       includeMaintainerAuthors: true,
       commandAuthorization: { default: ["maintainer", "collaborator", "confirmed_miner"], commands: { "review-now": ["maintainer"] } },
     });
@@ -1236,6 +1298,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "off",
+    firstTimeContributorGrace: false,
       includeMaintainerAuthors: true,
     });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
@@ -1484,6 +1547,7 @@ describe("queue processors", () => {
       autoLabelEnabled: true,
       checkRunMode: "enabled",
       gateCheckMode: "enabled",
+    firstTimeContributorGrace: false,
     });
     let publicCalls = 0;
     vi.stubGlobal("fetch", async () => {
@@ -1852,6 +1916,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "enabled",
       gateCheckMode: "off",
+    firstTimeContributorGrace: false,
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
@@ -1906,6 +1971,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "enabled",
       gateCheckMode: "off",
+    firstTimeContributorGrace: false,
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
