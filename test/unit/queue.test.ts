@@ -1092,8 +1092,17 @@ describe("queue processors", () => {
       const method = init?.method ?? "GET";
       if (url === "https://api.gittensor.io/miners") {
         calls.minerList += 1;
-        return Response.json([]);
+        // A confirmed official Gittensor contributor → the rerun renders the FULL readiness panel
+        // (which carries the rerun task); a non-registered author would get the minimal invite.
+        return Response.json([
+          { uid: 7, githubUsername: "contributor", githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1 },
+        ]);
       }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({ repositories: [{ repositoryFullName: "JSONbored/gittensory", totalPrs: "4", totalMergedPrs: "3", totalOpenPrs: "1", totalClosedPrs: "0", totalOpenIssues: "0", totalClosedIssues: "0", isEligible: true, credibility: "1.000000" }] });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
       if (url.endsWith("/users/contributor")) return Response.json({ login: "contributor", public_repos: 2, followers: 1 });
       if (url.includes("/users/contributor/repos")) return Response.json([]);
       if (url.includes("/access_tokens")) {
@@ -3460,6 +3469,55 @@ describe("queue processors", () => {
       .bind("github_app.agent_command_skipped", "JSONbored/gittensory#84")
       .first<{ outcome: string; detail: string }>();
     expect(event).toMatchObject({ outcome: "error", detail: "miner_detection_unavailable" });
+  });
+
+  it("detects a changes-requested review notification for the PR author", async () => {
+    const env = createTestEnv();
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "review-changes-requested",
+      eventName: "pull_request_review",
+      payload: {
+        action: "submitted",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: {
+          number: 42,
+          title: "Add feature",
+          state: "open",
+          user: { login: "contributor", type: "User" },
+          html_url: "https://github.com/JSONbored/gittensory/pull/42",
+        },
+        review: {
+          state: "changes_requested",
+          user: { login: "maintainer", type: "User" },
+          submitted_at: "2026-05-28T12:00:00.000Z",
+          html_url: "https://github.com/JSONbored/gittensory/pull/42#pullrequestreview-1",
+        },
+        sender: { login: "maintainer", type: "User" },
+      },
+    });
+
+    const detected = await env.DB.prepare("select actor, target_key, outcome, detail, metadata_json from audit_events where event_type = ?")
+      .bind("notification.event_detected")
+      .all<{ actor: string; target_key: string; outcome: string; detail: string; metadata_json: string }>();
+    expect(detected.results).toHaveLength(1);
+    expect(detected.results[0]).toMatchObject({
+      actor: "maintainer",
+      target_key: "contributor",
+      outcome: "success",
+      detail: "pull_request_changes_requested for JSONbored/gittensory#42",
+    });
+    expect(JSON.parse(detected.results[0]!.metadata_json)).toMatchObject({
+      deliveryId: "review-changes-requested",
+      eventType: "pull_request_changes_requested",
+      recipientLogin: "contributor",
+      repoFullName: "JSONbored/gittensory",
+      pullNumber: 42,
+      dedupKey: "changes_requested:JSONbored/gittensory#42:maintainer:2026-05-28T12:00:00.000Z",
+    });
+    expect(JSON.stringify(detected.results[0])).not.toMatch(/trust score|wallet|hotkey|reward estimate|reviewability/i);
   });
 });
 

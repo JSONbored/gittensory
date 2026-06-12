@@ -62,6 +62,7 @@ import {
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot, fetchOfficialGittensorMiner, type GittensorContributorSnapshot, type OfficialGittensorMinerDetection } from "../gittensor/api";
 import { createOrUpdateCheckRun, createOrUpdateGateCheckRun, createOrUpdatePendingGateCheckRun, createOrUpdateSkippedGateCheckRun, getInstallationId, getRepositoryCollaboratorPermission } from "../github/app";
 import { createOrUpdateAgentCommandComment, createOrUpdatePrIntelligenceComment, PR_PANEL_COMMENT_MARKER } from "../github/comments";
+import { gittensoryFooter, gittensorRepoEarnUrl } from "../github/footer";
 import {
   buildMaintainerQueueDigest,
   buildPublicAgentCommandComment,
@@ -76,6 +77,7 @@ import { ensurePullRequestLabel } from "../github/labels";
 import { fetchPublicContributorProfile } from "../github/public";
 import { refreshRegistry } from "../registry/sync";
 import { buildIssueAdvisory, buildPullRequestAdvisory, evaluateGateCheck } from "../rules/advisory";
+import { detectNotificationEvents } from "../notifications/events";
 import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
 import { buildAndPersistContributorDecisionPack, loadDecisionPackSharedInputs } from "../services/decision-pack";
 import {
@@ -727,6 +729,25 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
       await persistAdvisory(env, advisory);
     }
 
+    for (const notificationEvent of detectNotificationEvents(eventName, payload)) {
+      await recordAuditEvent(env, {
+        eventType: "notification.event_detected",
+        actor: notificationEvent.actorLogin,
+        targetKey: notificationEvent.recipientLogin,
+        outcome: "success",
+        detail: `${notificationEvent.eventType} for ${notificationEvent.repoFullName}#${notificationEvent.pullNumber}`,
+        metadata: {
+          deliveryId,
+          eventType: notificationEvent.eventType,
+          recipientLogin: notificationEvent.recipientLogin,
+          repoFullName: notificationEvent.repoFullName,
+          pullNumber: notificationEvent.pullNumber,
+          dedupKey: notificationEvent.dedupKey,
+          deeplink: notificationEvent.deeplink,
+        },
+      });
+    }
+
     await recordWebhookEvent(env, {
       deliveryId,
       eventName,
@@ -812,7 +833,7 @@ function buildClosedPrPanelUpdate(repoFullName: string, pullNumber: number): str
     `> | Gate result | ⚠️ Skipped | ${repoFullName}#${pullNumber} is no longer open. | No action. |`,
     "",
     "---",
-    "Checked by [Gittensory](https://github.com/JSONbored/gittensory), a quiet PR intelligence layer for OSS maintainers.",
+    gittensoryFooter({ earnUrl: gittensorRepoEarnUrl(repoFullName) }),
   ].join("\n");
 }
 
