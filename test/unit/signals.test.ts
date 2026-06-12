@@ -30,6 +30,7 @@ import {
   detectGittensorContributor,
   shouldPublishPrIntelligenceComment,
 } from "../../src/signals/engine";
+import { GITTENSOR_HOME_URL } from "../../src/github/footer";
 import type {
   BountyRecord,
   CheckSummaryRecord,
@@ -355,6 +356,63 @@ describe("world-class backend signals", () => {
     expect(shouldPublishPrIntelligenceComment(settings, detection)).toBe(true);
     expect(comment).toContain("<!-- gittensory-pr-panel:v1 -->");
     expect(comment).not.toMatch(/wallet|raw trust score|ranking|farming|reward/i);
+  });
+
+  it("scopes the earn-footer CTA to the repo miner page only when the repo is registered", () => {
+    const currentPr = pullRequests[0]!;
+    const settings = {
+      repoFullName: repo.fullName,
+      commentMode: "detected_contributors_only" as const,
+      publicAudienceMode: "gittensor_only" as const,
+      publicSignalLevel: "standard" as const,
+      checkRunMode: "off" as const,
+      checkRunDetailLevel: "minimal" as const,
+      gateCheckMode: "off" as const,
+      linkedIssueGateMode: "advisory" as const,
+      duplicatePrGateMode: "advisory" as const,
+      qualityGateMode: "advisory" as const,
+      qualityGateMinScore: null,
+      autoLabelEnabled: true,
+      gittensorLabel: "gittensor",
+      createMissingLabel: true,
+      publicSurface: "comment_and_label" as const,
+      includeMaintainerAuthors: false,
+      requireLinkedIssue: false,
+      backfillEnabled: true,
+      privateTrustEnabled: true,
+    };
+    const collisions = buildCollisionReport(repo.fullName, issues, pullRequests);
+    const queueHealth = buildQueueHealth(repo, issues, pullRequests, collisions);
+    const preflight = buildPreflightResult({ repoFullName: repo.fullName, title: currentPr.title, body: "Fixes #7", linkedIssues: [7] }, repo, issues, pullRequests);
+    const repoEarnPage = `${GITTENSOR_HOME_URL}/miners/repository?name=${encodeURIComponent(repo.fullName)}&tab=miners`;
+    const homeCta = `(${GITTENSOR_HOME_URL})`;
+
+    // Detected contributor → full panel. Registered repo links the repo miner page; unregistered repo
+    // must NOT (the page has no miner data for an unregistered repo) and falls back to the home URL.
+    const priorPr: PullRequestRecord = { ...currentPr, number: 3, state: "closed", mergedAt: "2026-05-01T00:00:00.000Z" };
+    const detected = { ...detectGittensorContributor("oktofeesh1", currentPr, [currentPr, priorPr], []), source: "official_gittensor_api" as const };
+    const detectedProfile = buildContributorProfile("oktofeesh1", { login: "oktofeesh1", topLanguages: ["TypeScript"], source: "github" }, [currentPr, priorPr], []);
+    expect(detected.detected).toBe(true);
+
+    const registeredComment = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile: detectedProfile, detection: detected, queueHealth, collisions, preflight, settings });
+    expect(registeredComment).toContain(repoEarnPage);
+
+    const unregisteredRepo = { ...repo, isRegistered: false, registryConfig: null };
+    const unregisteredComment = buildPublicPrIntelligenceComment({ repo: unregisteredRepo, pr: currentPr, profile: detectedProfile, detection: detected, queueHealth, collisions, preflight, settings });
+    expect(unregisteredComment).not.toContain("/miners/repository");
+    expect(unregisteredComment).toContain(homeCta);
+
+    // Non-detected contributor → minimal invite. Same registration gating must hold there.
+    const undetected = detectGittensorContributor("brand-new-outsider", currentPr, [], []);
+    const undetectedProfile = buildContributorProfile("brand-new-outsider", { login: "brand-new-outsider", topLanguages: [], source: "github" }, [], []);
+    expect(undetected.detected).toBe(false);
+
+    const minimalRegistered = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile: undetectedProfile, detection: undetected, queueHealth, collisions, preflight, settings });
+    expect(minimalRegistered).toContain(repoEarnPage);
+
+    const minimalUnregistered = buildPublicPrIntelligenceComment({ repo: unregisteredRepo, pr: currentPr, profile: undetectedProfile, detection: undetected, queueHealth, collisions, preflight, settings });
+    expect(minimalUnregistered).not.toContain("/miners/repository");
+    expect(minimalUnregistered).toContain(homeCta);
   });
 
   it("builds a compact, source-free public AI signal bundle", () => {

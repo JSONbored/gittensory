@@ -3547,6 +3547,14 @@ export function buildPublicReadinessScore(args: {
 
 export const PR_PANEL_RETRIGGER_MARKER = "<!-- gittensory-rerun-review:v1 -->";
 
+/** Earn-CTA target for a public-comment footer. The repo-scoped miner page is only meaningful for
+ *  repos registered on Gittensor (per `gittensorRepoEarnUrl`'s documented contract); for an
+ *  unregistered repo the page has no miner data, so fall back to the general Gittensor home URL
+ *  (the `gittensoryFooter` default) instead of implying THIS repo's contributions already earn. */
+function footerEarnUrl(repo: RepositoryRecord | null, repoFullName: string): string | undefined {
+  return repo?.isRegistered ? gittensorRepoEarnUrl(repoFullName) : undefined;
+}
+
 export function buildPublicPrIntelligenceComment(args: {
   repo: RepositoryRecord | null;
   pr: PullRequestRecord;
@@ -3656,9 +3664,10 @@ export function buildPublicPrIntelligenceComment(args: {
     publicFindings.length > 0
       ? publicFindings.map((finding) => `- ${sanitizePanelText(finding.title)}: ${sanitizePanelText(finding.publicText ?? finding.detail)}`)
       : ["- No public-safe advisory findings were generated from cached metadata."];
-  // Always-on earn CTA — a permanent, free marketing surface on every reviewed PR. The CTA points at
-  // this repo's public Gittensor miner page (social proof for THIS repo + a path to register).
-  const footer = gittensoryFooter({ earnUrl: gittensorRepoEarnUrl(args.pr.repoFullName) });
+  // Always-on earn CTA — a permanent, free marketing surface on every reviewed PR. For a registered
+  // repo the CTA points at this repo's public Gittensor miner page (social proof for THIS repo + a
+  // path to register); for an unregistered repo it falls back to the general Gittensor home URL.
+  const footer = gittensoryFooter({ earnUrl: footerEarnUrl(args.repo, args.pr.repoFullName) });
   return [
     "<!-- gittensory-pr-panel:v1 -->",
     "",
@@ -3722,7 +3731,7 @@ export function buildPublicPrIntelligenceComment(args: {
  *  analysis is for registered Gittensor contributors, so we skip the panel and post a brief welcome
  *  + earn invite; the always-on footer CTA does the conversion. Carries the same panel marker so it
  *  updates in place if the author later registers (the full panel then replaces it). */
-function buildMinimalInviteComment(args: { pr: PullRequestRecord }): string {
+function buildMinimalInviteComment(args: { repo: RepositoryRecord | null; pr: PullRequestRecord }): string {
   return [
     "<!-- gittensory-pr-panel:v1 -->",
     "",
@@ -3733,7 +3742,7 @@ function buildMinimalInviteComment(args: { pr: PullRequestRecord }): string {
     ]),
     "",
     "---",
-    gittensoryFooter({ earnUrl: gittensorRepoEarnUrl(args.pr.repoFullName) }),
+    gittensoryFooter({ earnUrl: footerEarnUrl(args.repo, args.pr.repoFullName) }),
   ].join("\n");
 }
 
