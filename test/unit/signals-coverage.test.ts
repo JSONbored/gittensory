@@ -724,13 +724,14 @@ describe("signal coverage edge cases", () => {
     expect(collisionComment).not.toContain("possible overlaps");
     expect(collisionComment).not.toContain("Cached OSS contributor activity");
     expect(collisionComment).not.toContain("Cached prior PRs/issues");
-    expect(collisionComment).not.toContain("gittensor.io");
+    // The always-on earn CTA footer is a permanent marketing surface on every PR.
+    expect(collisionComment).toContain("register to start earning");
 
     const repoBlockedComment = buildPublicPrIntelligenceComment({
       repo: null,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
-      detection: { detected: false, reason: "no cache", priorPullRequests: 0, priorMergedPullRequests: 0, priorIssues: 0 },
+      detection: { detected: true, source: "github_cache" as const, reason: "cached", priorPullRequests: 0, priorMergedPullRequests: 0, priorIssues: 0 },
       queueHealth: buildQueueHealth(null, [], [], buildCollisionReport(directRepo.fullName, [], [])),
       collisions: buildCollisionReport(directRepo.fullName, [], []),
       preflight: buildPreflightResult(
@@ -945,7 +946,7 @@ describe("signal coverage edge cases", () => {
       repo: directRepo,
       pr: currentPr,
       profile: buildContributorProfile("dev", { login: "dev", topLanguages: ["Markdown"], source: "github" }, [], []),
-      detection: { detected: false, reason: "no official context", priorPullRequests: 0, priorMergedPullRequests: 0, priorIssues: 0 },
+      detection: { detected: true, source: "github_cache" as const, reason: "cached", priorPullRequests: 0, priorMergedPullRequests: 0, priorIssues: 0 },
       queueHealth,
       collisions,
       preflight,
@@ -956,6 +957,38 @@ describe("signal coverage edge cases", () => {
     expect(comment).toContain("> | Gate result | ✅ Passing | No configured blocker found. | No action. |");
     expect(comment).not.toContain("possible overlap");
     expect(comment).not.toContain("12");
+  });
+
+  it("posts a minimal earn-invite (no readiness panel) for a non-registered contributor", () => {
+    const directRepo = repo("owner/invite");
+    const currentPr = pr(directRepo.fullName, 42, "Add docs", { authorLogin: "newcomer", linkedIssues: [], body: "" });
+    const collisions = buildCollisionReport(directRepo.fullName, [], [currentPr]);
+    const queueHealth = buildQueueHealth(directRepo, [], [currentPr], collisions);
+    const preflight = buildPreflightResult(
+      { repoFullName: directRepo.fullName, title: currentPr.title, body: currentPr.body ?? undefined, linkedIssues: currentPr.linkedIssues },
+      directRepo,
+      [],
+      [currentPr],
+    );
+
+    const comment = buildPublicPrIntelligenceComment({
+      repo: directRepo,
+      pr: currentPr,
+      profile: buildContributorProfile("newcomer", { login: "newcomer", topLanguages: [], source: "github" }, [], []),
+      detection: { detected: false, reason: "no gittensor footprint", priorPullRequests: 0, priorMergedPullRequests: 0, priorIssues: 0 },
+      queueHealth,
+      collisions,
+      preflight,
+      settings: repoSettings(directRepo.fullName),
+    });
+
+    // Minimal: brief welcome + earn invite + the always-on footer CTA; NO readiness table.
+    expect(comment).toContain("<!-- gittensory-pr-panel:v1 -->");
+    expect(comment).toContain("Thanks for the contribution");
+    expect(comment).toMatch(/earn/i);
+    expect(comment).toContain("register to start earning");
+    expect(comment).not.toContain("Readiness score");
+    expect(comment).not.toContain("| Signal | Result | Evidence | Action |");
   });
 
   it("covers PR panel edge formatting without publishing unconfirmed cache counts", () => {
@@ -1336,7 +1369,7 @@ describe("signal coverage edge cases", () => {
       repo: directRepo,
       pr: currentPr,
       profile,
-      detection: { detected: false, reason: "no official match", priorPullRequests: 0, priorMergedPullRequests: 0, priorIssues: 0 },
+      detection: { detected: true, source: "github_cache" as const, reason: "cached", priorPullRequests: 0, priorMergedPullRequests: 0, priorIssues: 0 },
       queueHealth: queueHealthFixture(directRepo.fullName, "low"),
       collisions: buildCollisionReport(directRepo.fullName, [], [currentPr]),
       preflight,
