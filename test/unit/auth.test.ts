@@ -141,7 +141,7 @@ describe("private-beta auth and rate limiting", () => {
     expect(observedKeys[0]).toMatch(/^normal:\/v1\/public\/github\/repos\/:owner\/:repo\/stats:ip:/);
   });
 
-  it("keys pre-auth routes by proxy fallback headers when cf-connecting-ip is absent", async () => {
+  it("ignores proxy fallback headers when cf-connecting-ip is absent", async () => {
     const observedKeys: string[] = [];
     const env = rateLimitTestEnv({}, observedKeys);
 
@@ -158,7 +158,7 @@ describe("private-beta auth and rate limiting", () => {
       ),
     ).resolves.toBeNull();
     expect(observedKeys).toHaveLength(2);
-    expect(observedKeys[0]).not.toBe(observedKeys[1]);
+    expect(observedKeys[0]).toBe(observedKeys[1]);
     expect(observedKeys[0]).toMatch(/^strict:\/v1\/auth\/github\/session:ip:/);
 
     observedKeys.length = 0;
@@ -170,36 +170,12 @@ describe("private-beta auth and rate limiting", () => {
     ).resolves.toBeNull();
     await expect(
       enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-real-ip": "198.51.100.3" })),
+        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-real-ip": "203.0.113.44" })),
         "strict",
       ),
     ).resolves.toBeNull();
     expect(observedKeys).toHaveLength(2);
     expect(observedKeys[0]).toBe(observedKeys[1]);
-
-    observedKeys.length = 0;
-    await expect(
-      enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-real-ip": "203.0.113.44", "x-forwarded-for": "198.51.100.99" })),
-        "strict",
-      ),
-    ).resolves.toBeNull();
-    await expect(
-      enforceRateLimit(fakeContext(env, "/v1/auth/github/session", trustedProxyHeaders({ "x-real-ip": "203.0.113.44" })), "strict"),
-    ).resolves.toBeNull();
-    expect(observedKeys).toHaveLength(2);
-    expect(observedKeys[0]).toBe(observedKeys[1]);
-
-    observedKeys.length = 0;
-    await expect(
-      enforceRateLimit(fakeContext(env, "/v1/auth/github/session", { "x-forwarded-for": "198.51.100.1" }), "strict"),
-    ).resolves.toBeNull();
-    await expect(
-      enforceRateLimit(fakeContext(env, "/v1/auth/github/session", { "x-forwarded-for": "198.51.100.2" }), "strict"),
-    ).resolves.toBeNull();
-    expect(observedKeys).toHaveLength(2);
-    expect(observedKeys[0]).toBe(observedKeys[1]);
-    expect(observedKeys[0]).toMatch(/^strict:\/v1\/auth\/github\/session:ip:/);
   });
 
   it("does not treat spoofed cf-ray as trusted proxy proof", async () => {
@@ -226,7 +202,7 @@ describe("private-beta auth and rate limiting", () => {
     expect(observedKeys[0]).toMatch(/^strict:\/v1\/auth\/github\/session:ip:/);
   });
 
-  it("keys pre-auth routes by configured trusted proxy IPs without cf-ray", async () => {
+  it("ignores configured trusted proxy IPs without Cloudflare client IP", async () => {
     const observedKeys: string[] = [];
     const env = createTestEnv({
       RATE_LIMITER: rateLimiterNamespace({ status: 200, body: {} }, observedKeys) as unknown as DurableObjectNamespace,
@@ -246,7 +222,7 @@ describe("private-beta auth and rate limiting", () => {
     await expect(
       enforceRateLimit(
         fakeContext(env, "/v1/auth/github/session", {
-          "x-forwarded-for": "198.51.100.2, 198.51.100.99",
+          "x-forwarded-for": "198.51.100.3, 198.51.100.99",
         }),
         "strict",
       ),
@@ -422,6 +398,31 @@ describe("private-beta auth and rate limiting", () => {
       ),
     ).resolves.toBeNull();
     expect(observedKeys[0]).toBe(unknownIpKey);
+  });
+
+  it("normalizes only valid Cloudflare client IP headers", async () => {
+    const observedKeys: string[] = [];
+    const env = rateLimitTestEnv({}, observedKeys);
+
+    await expect(enforceRateLimit(fakeContext(env, "/v1/auth/github/session", { "cf-connecting-ip": " 203.0.113.9 " }), "strict")).resolves.toBeNull();
+    const ipv4Key = observedKeys[0];
+
+    observedKeys.length = 0;
+    await expect(enforceRateLimit(fakeContext(env, "/v1/auth/github/session", { "cf-connecting-ip": "[2001:db8::1]" }), "strict")).resolves.toBeNull();
+    await expect(enforceRateLimit(fakeContext(env, "/v1/auth/github/session", { "cf-connecting-ip": "2001:db8::1" }), "strict")).resolves.toBeNull();
+    expect(observedKeys).toHaveLength(2);
+    expect(observedKeys[0]).toBe(observedKeys[1]);
+    expect(observedKeys[0]).not.toBe(ipv4Key);
+
+    observedKeys.length = 0;
+    await expect(enforceRateLimit(fakeContext(env, "/v1/auth/github/session"), "strict")).resolves.toBeNull();
+    const unknownIpKey = observedKeys[0];
+
+    for (const value of ["", "not-an-ip", "1.2.3", "256.0.0.1", "1::2::3", "1:2:3:4:5:6:7:8:9", "::"]) {
+      observedKeys.length = 0;
+      await expect(enforceRateLimit(fakeContext(env, "/v1/auth/github/session", { "cf-connecting-ip": value }), "strict")).resolves.toBeNull();
+      expect(observedKeys[0]).toBe(unknownIpKey);
+    }
   });
 
   it("enforces route limits with session and IP keys plus retry headers", async () => {

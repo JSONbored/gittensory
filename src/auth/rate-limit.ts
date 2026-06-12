@@ -147,59 +147,8 @@ async function validateBearerForRateLimit(c: Context<{ Bindings: Env }>, token: 
 }
 
 function clientIp(c: Context<{ Bindings: Env }>): string {
-  const cloudflareIp = normalizeIpAddress(c.req.header("cf-connecting-ip"));
-  if (cloudflareIp) return cloudflareIp;
-
-  if (!isTrustedProxyRequest(c)) return "unknown-ip";
-
-  const proxyCount = trustedProxyCount(c.env.RATE_LIMIT_TRUSTED_PROXY_COUNT);
-  return (
-    firstValidIp([
-      c.req.header("x-real-ip"),
-      trustedForwardedForIp(c.req.header("x-forwarded-for"), proxyCount),
-    ]) ?? "unknown-ip"
-  );
-}
-
-function isTrustedProxyRequest(c: Context<{ Bindings: Env }>): boolean {
-  const trustedProxies = parseTrustedProxyList(c.env.RATE_LIMIT_TRUSTED_PROXIES);
-  if (trustedProxies.length === 0) return false;
-  const chain = forwardedForCandidates(c.req.header("x-forwarded-for"))
-    .map((entry) => normalizeIpAddress(entry))
-    .filter((entry): entry is string => Boolean(entry));
-  const peer = chain[chain.length - 1];
-  return peer ? trustedProxies.includes(peer) : false;
-}
-
-function parseTrustedProxyList(value: string | undefined): string[] {
-  return (value ?? "")
-    .split(",")
-    .map((entry) => normalizeIpAddress(entry))
-    .filter((entry): entry is string => Boolean(entry));
-}
-
-function trustedProxyCount(value: string | undefined): number {
-  const parsed = Number(value?.trim());
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
-}
-
-function trustedForwardedForIp(header: string | undefined, trustedProxyCountValue: number): string | undefined {
-  const chain = forwardedForCandidates(header);
-  if (chain.length < trustedProxyCountValue) return undefined;
-  return chain[chain.length - trustedProxyCountValue];
-}
-
-function forwardedForCandidates(header: string | undefined): string[] {
-  if (!header?.trim()) return [];
-  return header.split(",").map((part) => part.trim()).filter(Boolean);
-}
-
-function firstValidIp(candidates: Array<string | undefined>): string | undefined {
-  for (const candidate of candidates) {
-    const valid = normalizeIpAddress(candidate);
-    if (valid) return valid;
-  }
-  return undefined;
+  // Only trust Cloudflare-populated client IPs. Proxy fallback headers can be supplied by clients in Workers.
+  return normalizeIpAddress(c.req.header("cf-connecting-ip")) ?? "unknown-ip";
 }
 
 function normalizeIpAddress(value: string | undefined): string | undefined {
