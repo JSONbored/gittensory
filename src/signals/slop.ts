@@ -65,6 +65,33 @@ export function buildSlopAssessment(input: SlopAssessmentInput): SlopAssessment 
   };
 }
 
+export type SlopRiskReport = {
+  slopRisk: number;
+  band: SlopBand;
+  signals: Array<{ code: string; reason: string; howToFix: string }>;
+  rubric: string;
+};
+
+/**
+ * Public-safe slop-risk report for the miner's own harness: the deterministic risk + band, each
+ * signal rendered as a {reason, howToFix} pair, and the rubric markdown so the harness can self-audit
+ * the actual code locally. Wraps {@link buildSlopAssessment}; no source contents are required.
+ */
+export function buildSlopRiskReport(input: SlopAssessmentInput): SlopRiskReport {
+  const assessment = buildSlopAssessment(input);
+  return {
+    slopRisk: assessment.slopRisk,
+    band: assessment.band,
+    signals: assessment.findings.map((finding) => ({
+      code: finding.code,
+      /* v8 ignore next 2 -- slop findings always set publicText/action; the ?? fallbacks are type-required guards never hit at runtime. */
+      reason: finding.publicText ?? finding.detail,
+      howToFix: finding.action ?? "Address this slop signal before submitting.",
+    })),
+    rubric: SLOP_RUBRIC_MARKDOWN,
+  };
+}
+
 export function buildMissingTestEvidenceFinding(input: SlopAssessmentInput): SignalFinding | null {
   const changedFiles = input.changedFiles ?? [];
   const changedPaths = changedFiles.map((file) => file.path).filter(Boolean);

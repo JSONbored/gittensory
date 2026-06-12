@@ -922,6 +922,19 @@ describe("api routes", () => {
     const invalidLocalDiff = await app.request("/v1/preflight/local-diff", { method: "POST", headers: apiHeaders(env), body: JSON.stringify({}) }, env);
     expect(invalidLocalDiff.status).toBe(400);
 
+    const slopRisk = await app.request(
+      "/v1/lint/slop-risk",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ changedFiles: [{ path: "src/api/routes.ts", additions: 5 }] }) },
+      env,
+    );
+    expect(slopRisk.status).toBe(200);
+    const slopRiskBody = await slopRisk.json();
+    expect(slopRiskBody).toMatchObject({ slopRisk: expect.any(Number), band: expect.any(String), signals: expect.any(Array) });
+    expect(JSON.stringify(slopRiskBody)).not.toMatch(/hotkey|coldkey|wallet|payout|reward/i);
+
+    const invalidSlopRisk = await app.request("/v1/lint/slop-risk", { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ changedFiles: "nope" }) }, env);
+    expect(invalidSlopRisk.status).toBe(400);
+
     const queueIntelligence = await app.request(
       "/v1/internal/queue-intelligence",
       {

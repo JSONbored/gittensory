@@ -165,6 +165,12 @@ const localDiffShape = {
   commitMessage: z.string().optional(),
 };
 
+const checkSlopRiskShape = {
+  cwd: z.string().optional(),
+  baseRef: z.string().default("HEAD"),
+  tests: z.array(z.string()).optional(),
+};
+
 const branchEligibilityShape = {
   status: z.enum(["eligible", "ineligible", "unknown"]),
   source: z.enum(["github_metadata", "local_metadata", "registry", "user_supplied"]).optional(),
@@ -338,6 +344,24 @@ server.registerTool(
       changedLineCount: diff.changedLineCount,
     };
     return toolResult("Gittensory local diff preflight.", await apiPost("/v1/preflight/local-diff", body));
+  },
+);
+
+server.registerTool(
+  "gittensory_check_slop_risk",
+  {
+    description:
+      "Score local git diff metadata against the deterministic slop rubric before opening a PR. Returns slopRisk + band, per-signal {reason, howToFix}, and the rubric markdown so your own harness can self-audit. No source upload.",
+    inputSchema: checkSlopRiskShape,
+  },
+  async (input) => {
+    const workspaceInput = await withClientWorkspaceRoots(input);
+    // Use the rich branch metadata (not collectLocalDiff, which flattens to bare paths) so per-file
+    // additions/deletions reach the slop rubric — the trivial_whitespace_churn signal needs them.
+    const metadata = collectLocalBranchMetadata({ cwd: workspaceInput.cwd, baseRef: input.baseRef, login: "local", workspaceRoots: workspaceInput.workspaceRoots });
+    const changedFiles = metadata.changedFiles.map((file) => ({ path: file.path, additions: file.additions, deletions: file.deletions }));
+    const body = { changedFiles, ...(input.tests ? { tests: input.tests } : {}) };
+    return toolResult("Gittensory slop risk.", await apiPost("/v1/lint/slop-risk", body));
   },
 );
 

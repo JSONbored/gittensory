@@ -16,6 +16,7 @@ import {
   type RoleContext,
 } from "./engine";
 import { buildRepoRewardRisk, type RepoRewardRisk, type RewardRiskAction } from "./reward-risk";
+import { buildSlopAssessment, type SlopAssessment } from "./slop";
 import { buildLocalWorkspaceIntelligence, type LocalWorkspaceIntelligence } from "./local-workspace-intelligence";
 import { buildFocusManifestGuidance, parseFocusManifest, type FocusManifestGuidance } from "./focus-manifest";
 import { sanitizeLocalScorerWarnings } from "./local-scorer-diagnostics";
@@ -174,6 +175,7 @@ export type LocalBranchAnalysis = {
   nextActions: RewardRiskAction[];
   workspaceIntelligence: LocalWorkspaceIntelligence;
   scenarioSummary: PublicScenarioSummary;
+  slop: SlopAssessment;
   summary: string;
 };
 
@@ -198,6 +200,9 @@ export function buildLocalBranchAnalysis(args: {
   const changedPaths = changedFiles.map((file) => file.path);
   const testFiles = changedPaths.filter(isTestFile);
   const changedLineCount = changedFiles.reduce((sum, file) => sum + nonNegative(file.additions) + nonNegative(file.deletions), 0);
+  // Deterministic slop assessment from local diff metadata, surfaced on the analysis so preflight,
+  // explain_local_blockers, and prepare_pr_packet all carry slop risk without extra work.
+  const slop = buildSlopAssessment({ changedFiles: changedFiles.map((file) => ({ path: file.path, additions: file.additions, deletions: file.deletions })), testFiles });
   const commitMessage = (args.input.commitMessages ?? []).join("\n\n").trim();
   const title = args.input.title?.trim() || titleFromBranch(args.input.branchName) || firstCommitTitle(args.input.commitMessages) || "Local branch preflight";
   const preflight = buildLocalDiffPreflightResult(
@@ -418,6 +423,7 @@ export function buildLocalBranchAnalysis(args: {
       },
       changedFiles,
     }),
+    slop,
     summary: `${args.input.repoFullName}: local branch analysis is ${preflight.status}; ${rewardRisk.actions[0]?.actionKind ?? "no ranked action"} is the top private next action.`,
   };
 }
