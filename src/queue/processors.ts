@@ -77,7 +77,8 @@ import {
 import { ensurePullRequestLabel } from "../github/labels";
 import { fetchPublicContributorProfile } from "../github/public";
 import { refreshRegistry } from "../registry/sync";
-import { buildIssueAdvisory, buildPullRequestAdvisory, evaluateGateCheck } from "../rules/advisory";
+import { buildIssueAdvisory, buildPullRequestAdvisory, evaluateGateCheck, type GateCheckPolicy } from "../rules/advisory";
+import { slopFindingsToAdvisoryFindings } from "../rules/merge-readiness-gate";
 import { detectNotificationEvents } from "../notifications/events";
 import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
 import { buildAndPersistContributorDecisionPack, loadDecisionPackSharedInputs } from "../services/decision-pack";
@@ -129,6 +130,7 @@ import {
   unionScopedOverlapClusters,
 } from "../signals/engine";
 import { decidePublicSurface } from "../signals/settings-preview";
+import { buildSlopAssessment } from "../signals/slop";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import type { ContributorEvidenceRecord, GitHubWebhookPayload, JobMessage, JsonValue, PullRequestRecord, RepositorySettings } from "../types";
 import { sha256Hex } from "../utils/crypto";
@@ -780,14 +782,29 @@ function shouldProcessPullRequestPublicSurface(action: string | undefined): bool
   return PR_PUBLIC_SURFACE_ACTIONS.has(action ?? "") || PR_GATE_CLOSED_ACTIONS.has(action ?? "");
 }
 
-function gateCheckPolicy(settings: RepositorySettings, readinessScore?: number | null) {
+function gateCheckPolicy(settings: RepositorySettings, readinessScore?: number | null, slopFindings: GateCheckPolicy["slopFindings"] = []): GateCheckPolicy {
   return {
     linkedIssueGateMode: settings.linkedIssueGateMode,
     duplicatePrGateMode: settings.duplicatePrGateMode,
     qualityGateMode: settings.qualityGateMode,
     qualityGateMinScore: settings.qualityGateMinScore ?? null,
     readinessScore: readinessScore ?? null,
+    mergeReadinessGateMode: settings.mergeReadinessGateMode,
+    slopFindings,
   };
+}
+
+async function loadSlopAdvisoryFindings(env: Env, repoFullName: string, pullNumber: number) {
+  const files = await listPullRequestFiles(env, repoFullName, pullNumber);
+  return slopFindingsToAdvisoryFindings(
+    buildSlopAssessment({
+      changedFiles: files.map((file) => ({
+        path: file.path,
+        additions: file.additions,
+        deletions: file.deletions,
+      })),
+    }),
+  );
 }
 
 function linkedIssueDuplicatePullRequestsForGate(pr: PullRequestRecord, pullRequests: PullRequestRecord[]): number[] {
@@ -955,9 +972,11 @@ async function maybePublishPrPublicSurface(
     scopedOverlapCount: unionScopedOverlapClusters(collisions, pr, preflight.collisions).length,
   });
 
-  const gateEvaluation = settings.gateCheckMode === "enabled" ? evaluateGateCheck(advisory, gateCheckPolicy(settings, readiness.total)) : undefined;
+  const slopFindings = settings.mergeReadinessGateMode !== "off" ? await loadSlopAdvisoryFindings(env, repoFullName, pr.number) : [];
+  const gatePolicy = gateCheckPolicy(settings, readiness.total, slopFindings);
+  const gateEvaluation = settings.gateCheckMode === "enabled" ? evaluateGateCheck(advisory, gatePolicy) : undefined;
   if (gateEnabled) {
-    const gateCheckResult = await createOrUpdateGateCheckRun(env, installationId, repoFullName, advisory, gateCheckPolicy(settings, readiness.total), {
+    const gateCheckResult = await createOrUpdateGateCheckRun(env, installationId, repoFullName, advisory, gatePolicy, {
       checkRunId: pendingGateCheckRunId,
     });
     if (gateCheckResult?.kind === "permission_missing") {

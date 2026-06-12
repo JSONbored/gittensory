@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import type { CollisionCluster, CollisionReport } from "../signals/engine";
 import { nowIso } from "../utils/json";
+import { evaluateMergeReadinessGateCheck, isMergeReadinessCompositeEnabled } from "./merge-readiness-gate";
 
 export type GateCheckConclusion = "success" | "failure" | "action_required" | "neutral" | "skipped";
 
@@ -20,6 +21,8 @@ export type GateCheckPolicy = {
   qualityGateMode?: GateRuleMode | undefined;
   qualityGateMinScore?: number | null | undefined;
   readinessScore?: number | null | undefined;
+  mergeReadinessGateMode?: GateRuleMode | undefined;
+  slopFindings?: AdvisoryFinding[] | undefined;
 };
 
 export type GateCheckEvaluation = {
@@ -277,7 +280,10 @@ export function formatCheckRunOutput(
 }
 
 export function evaluateGateCheck(advisoryResult: Advisory, policy: GateCheckPolicy = {}): GateCheckEvaluation {
-  const evaluationBlockers = advisoryResult.findings.filter((finding) => isEvaluationBlocker(finding.code));
+  if (isMergeReadinessCompositeEnabled(policy)) {
+    return evaluateMergeReadinessGateCheck(advisoryResult, policy);
+  }
+  const evaluationBlockers = advisoryResult.findings.filter((finding) => isEvaluationBlockerFinding(finding.code));
   const configuredBlockers = advisoryResult.findings.filter((finding) => isConfiguredGateBlocker(finding.code, policy));
   const qualityBlocker = buildQualityGateBlocker(policy);
   const blockers = [...evaluationBlockers, ...configuredBlockers, ...(qualityBlocker ? [qualityBlocker] : [])];
@@ -520,8 +526,16 @@ function conclusionForSeverity(severity: AdvisorySeverity, findings: AdvisoryFin
   return "success";
 }
 
-function isEvaluationBlocker(code: string): boolean {
+export function isEvaluationBlockerFinding(code: string): boolean {
   return code === "repo_not_registered" || code === "repo_not_seen" || code === "pr_not_cached";
+}
+
+export function buildQualityGateFinding(policy: GateCheckPolicy): AdvisoryFinding | null {
+  return buildQualityGateBlocker(policy);
+}
+
+export function gateMode(value: GateRuleMode | null | undefined): GateRuleMode {
+  return value === "off" || value === "block" ? value : "advisory";
 }
 
 function isConfiguredGateBlocker(code: string, policy: GateCheckPolicy): boolean {
@@ -542,10 +556,6 @@ function buildQualityGateBlocker(policy: GateCheckPolicy): AdvisoryFinding | nul
     detail: `The public readiness score is ${score}/100, below the repository threshold of ${minScore}/100.`,
     action: "Address the short explicit PR panel actions, then re-run the gate.",
   };
-}
-
-function gateMode(value: GateRuleMode | null | undefined): GateRuleMode {
-  return value === "off" || value === "block" ? value : "advisory";
 }
 
 function normalizeScore(value: number | null | undefined): number | null {

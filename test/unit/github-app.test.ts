@@ -239,6 +239,61 @@ describe("GitHub check runs", () => {
     expect(capturedBody.output?.text).not.toMatch(/reward|wallet|hotkey|trust score|reviewability|farming/i);
   });
 
+  it("formats merge-readiness composite gate blockers in check run output", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    let capturedBody: { conclusion?: string; output?: { title?: string; summary?: string; text?: string } } = {};
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/commits/")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs")) {
+        capturedBody = JSON.parse(String(init?.body)) as typeof capturedBody;
+        return Response.json({ id: 90 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await createOrUpdateGateCheckRun(
+      createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }),
+      123,
+      "JSONbored/gittensory",
+      {
+        id: "gate-composite",
+        targetType: "pull_request",
+        targetKey: "JSONbored/gittensory#10",
+        repoFullName: "JSONbored/gittensory",
+        pullNumber: 10,
+        headSha: "gate123",
+        conclusion: "neutral",
+        severity: "warning",
+        title: "Gittensory advisory available",
+        summary: "2 advisory findings generated.",
+        findings: [
+          { code: "missing_linked_issue", title: "No linked issue detected", severity: "warning", detail: "No closing reference.", action: "Link the issue before merge." },
+          { code: "missing_test_evidence", title: "Code changes lack test evidence", severity: "warning", detail: "Code changes were detected without accompanying test evidence.", action: "Add focused tests or explain why existing coverage is sufficient." },
+        ],
+        generatedAt: "2026-05-22T00:00:00.000Z",
+      },
+      {
+        mergeReadinessGateMode: "block",
+        linkedIssueGateMode: "block",
+        duplicatePrGateMode: "off",
+        qualityGateMode: "off",
+        slopFindings: [
+          { code: "missing_test_evidence", title: "Code changes lack test evidence", severity: "warning", detail: "Code changes were detected without accompanying test evidence.", action: "Add focused tests or explain why existing coverage is sufficient." },
+        ],
+      },
+    );
+
+    expect(result).toMatchObject({ kind: "published", id: 90 });
+    expect(capturedBody).toMatchObject({
+      conclusion: "failure",
+      output: { title: "Gittensory Gate is blocking merge" },
+    });
+    expect(capturedBody.output?.text).toContain("No linked issue detected");
+    expect(capturedBody.output?.text).toContain("Code changes lack test evidence");
+  });
+
   it("creates an in-progress Gate check without a conclusion", async () => {
     const privateKey = await generatePrivateKeyPem();
     let capturedBody: { name?: string; status?: string; conclusion?: string; output?: { title?: string; text?: string } } = {};

@@ -1007,12 +1007,19 @@ describe("api route guards and error branches", () => {
           checkRunDetailLevel: "deep",
           backfillEnabled: false,
           privateTrustEnabled: false,
+          mergeReadinessGateMode: "block",
         }),
       },
       env,
     );
     expect(updated.status).toBe(200);
-    await expect(updated.json()).resolves.toMatchObject({ commentMode: "all_prs", checkRunDetailLevel: "deep", backfillEnabled: false, privateTrustEnabled: false });
+    await expect(updated.json()).resolves.toMatchObject({
+      commentMode: "all_prs",
+      checkRunDetailLevel: "deep",
+      backfillEnabled: false,
+      privateTrustEnabled: false,
+      mergeReadinessGateMode: "block",
+    });
   });
 });
 

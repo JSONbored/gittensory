@@ -560,6 +560,7 @@ export const RepositorySettingsSchema = z
     duplicatePrGateMode: z.enum(["off", "advisory", "block"]),
     qualityGateMode: z.enum(["off", "advisory", "block"]),
     qualityGateMinScore: z.number().nullable().optional(),
+    mergeReadinessGateMode: z.enum(["off", "advisory", "block"]),
     autoLabelEnabled: z.boolean(),
     gittensorLabel: z.string(),
     createMissingLabel: z.boolean(),

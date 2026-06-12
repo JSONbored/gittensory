@@ -7940,6 +7940,14 @@
           "qualityGateMinScore": {
             "type": "number",
             "nullable": true
+          },
+          "mergeReadinessGateMode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "advisory",
+              "block"
+            ]
           }
         },
         "required": [
@@ -7953,6 +7961,7 @@
           "linkedIssueGateMode",
           "duplicatePrGateMode",
           "qualityGateMode",
+          "mergeReadinessGateMode",
           "autoLabelEnabled",
           "gittensorLabel",
           "createMissingLabel",

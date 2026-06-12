@@ -25,6 +25,7 @@ import {
   upsertInstallation,
   upsertOfficialMinerDetection,
   upsertPullRequestFromGitHub,
+  upsertPullRequestFile,
   upsertRepositorySettings,
   upsertRepositoryFromGitHub,
 } from "../../src/db/repositories";
@@ -748,6 +749,75 @@ describe("queue processors", () => {
     });
 
     expect(calls).toEqual({ minerList: 0, gateChecks: 2 });
+  });
+
+  it("publishes a merge-readiness composite gate with linked-issue and slop blockers", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      mergeReadinessGateMode: "block",
+      linkedIssueGateMode: "block",
+      duplicatePrGateMode: "off",
+      qualityGateMode: "off",
+      requireLinkedIssue: true,
+    });
+    await upsertPullRequestFile(env, {
+      repoFullName: "JSONbored/gittensory",
+      pullNumber: 44,
+      path: "src/app.ts",
+      status: "added",
+      additions: 12,
+      deletions: 0,
+      changes: 12,
+      payload: {},
+    });
+    const calls = { gateChecks: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/commits/composite123/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && (init?.method ?? "GET") === "POST") {
+        calls.gateChecks += 1;
+        return Response.json({ id: 902 }, { status: 201 });
+      }
+      if (url.includes("/check-runs/902") && (init?.method ?? "GET") === "PATCH") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string; output?: { title?: string; text?: string } };
+        expect(body).toMatchObject({ status: "completed", conclusion: "failure", output: { title: "Gittensory Gate is blocking merge" } });
+        expect(body.output?.text).toContain("No linked issue detected");
+        expect(body.output?.text).toContain("Code changes lack test evidence");
+        calls.gateChecks += 1;
+        return Response.json({ id: 902 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-composite",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 44, title: "Composite gate", state: "open", user: { login: "contributor" }, head: { sha: "composite123" }, labels: [], body: "No issue link." },
+      },
+    });
+
+    expect(calls).toEqual({ gateChecks: 2 });
   });
 
   it("publishes an enabled gate when bot PR public output is skipped", async () => {

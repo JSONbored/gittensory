@@ -24,6 +24,7 @@ function settings(overrides: Partial<RepositorySettings> = {}): RepositorySettin
     duplicatePrGateMode: "advisory",
     qualityGateMode: "advisory",
     qualityGateMinScore: null,
+    mergeReadinessGateMode: "off",
     autoLabelEnabled: true,
     gittensorLabel: "gittensor",
     createMissingLabel: true,

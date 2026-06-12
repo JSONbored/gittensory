@@ -45,6 +45,7 @@ export const repositorySettings = sqliteTable("repository_settings", {
   duplicatePrGateMode: text("duplicate_pr_gate_mode").notNull().default("block"),
   qualityGateMode: text("quality_gate_mode").notNull().default("advisory"),
   qualityGateMinScore: integer("quality_gate_min_score"),
+  mergeReadinessGateMode: text("merge_readiness_gate_mode").notNull().default("off"),
   autoLabelEnabled: integer("auto_label_enabled", { mode: "boolean" }).notNull().default(true),
   gittensorLabel: text("gittensor_label").notNull().default("gittensor"),
   createMissingLabel: integer("create_missing_label", { mode: "boolean" }).notNull().default(true),

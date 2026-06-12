@@ -1617,6 +1617,7 @@ describe("v2 signal builders", () => {
         duplicatePrGateMode: "advisory",
         qualityGateMode: "advisory",
         qualityGateMinScore: null,
+    mergeReadinessGateMode: "off",
         autoLabelEnabled: true,
         gittensorLabel: "gittensor",
         createMissingLabel: true,

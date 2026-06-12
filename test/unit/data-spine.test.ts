@@ -39,6 +39,7 @@ import {
   upsertRepoLabel,
   upsertRepoSyncState,
   upsertRepositoryFromGitHub,
+  upsertRepositorySettings,
 } from "../../src/db/repositories";
 import { createTestEnv } from "../helpers/d1";
 
@@ -234,6 +235,7 @@ describe("data spine repositories", () => {
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
       publicSurface: "comment_and_label",
+      mergeReadinessGateMode: "off",
     });
     expect(await getRepoSyncState(env, "missing/repo")).toBeNull();
     expect(await getPullRequest(env, "owner/repo", 404)).toBeNull();
@@ -323,5 +325,17 @@ describe("data spine repositories", () => {
     expect(await listIssueSignalSample(env, "owner/repo", 1)).toHaveLength(1);
     expect(await listContributorPullRequests(env, "jsonbored")).toMatchObject([{ repoFullName: "owner/repo", number: 1 }]);
     expect(await listContributorIssues(env, "JSONBORED")).toEqual(expect.arrayContaining([expect.objectContaining({ repoFullName: "owner/repo", number: 10 }), expect.objectContaining({ repoFullName: "owner/repo", number: 11 })]));
+  });
+
+  it("persists merge-readiness gate settings", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo" });
+    await upsertRepositorySettings(env, {
+      repoFullName: "owner/repo",
+      mergeReadinessGateMode: "block",
+    });
+    expect(await getRepositorySettings(env, "owner/repo")).toMatchObject({
+      mergeReadinessGateMode: "block",
+    });
   });
 });
