@@ -100,6 +100,9 @@ export async function persistRegistrySnapshot(env: Env, snapshot: RegistrySnapsh
 
   for (const repo of snapshot.repositories) {
     const fullName = canonicalByLower.get(repo.repo.toLowerCase()) ?? repo.repo;
+    // Record the resolved name so a later case-variant of the same repo within this snapshot maps to
+    // the same row (upsert) instead of inserting a second case-only-different primary key.
+    canonicalByLower.set(repo.repo.toLowerCase(), fullName);
     const parts = repoParts(fullName);
     await db
       .insert(repositories)
@@ -133,9 +136,11 @@ export async function persistRegistrySnapshot(env: Env, snapshot: RegistrySnapsh
 
   // De-register case-insensitively: only existing rows whose lowercased name is absent from the snapshot,
   // so a casing variant of a still-registered repo is never wrongly de-registered.
+  // Never de-register on an empty snapshot (e.g. a failed/empty registry fetch) -- that would wipe every
+  // registration. Only de-register when the snapshot actually lists repos and some stored row is absent.
   const registeredLower = new Set(snapshot.repositories.map((repo) => repo.repo.toLowerCase()));
   const staleFullNames = existingFullNames.filter((name) => !registeredLower.has(name.toLowerCase()));
-  if (staleFullNames.length > 0) {
+  if (snapshot.repositories.length > 0 && staleFullNames.length > 0) {
     await db
       .update(repositories)
       .set({

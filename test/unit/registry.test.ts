@@ -186,6 +186,35 @@ describe("registry normalization", () => {
     expect(rows.results).toHaveLength(1);
   });
 
+  it("does not de-register existing repos when the snapshot is empty", async () => {
+    const env = createTestEnv();
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload({ "JSONbored/gittensory": { emission_share: 0.02, issue_discovery_share: 0 } }, { kind: "raw-github", url: "fixture://seed" }, "2026-05-22T00:00:00.000Z"),
+    );
+    // An empty snapshot (e.g. a failed/empty registry fetch) must preserve registrations, not wipe them.
+    await persistRegistrySnapshot(env, normalizeRegistryPayload({}, { kind: "raw-github", url: "fixture://empty" }, "2026-05-23T00:00:00.000Z"));
+    await expect(getRepository(env, "JSONbored/gittensory")).resolves.toMatchObject({ isRegistered: true });
+  });
+
+  it("collapses case-variant duplicates within a single snapshot to one row", async () => {
+    const env = createTestEnv();
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        {
+          "JSONbored/gittensory": { emission_share: 0.02, issue_discovery_share: 0 },
+          "jsonbored/gittensory": { emission_share: 0.03, issue_discovery_share: 0 },
+        },
+        { kind: "raw-github", url: "fixture://dup-casing" },
+        "2026-05-22T00:00:00.000Z",
+      ),
+    );
+    const rows = await env.DB.prepare("SELECT full_name FROM repositories WHERE lower(full_name) = ?").bind("jsonbored/gittensory").all();
+    expect(rows.results).toHaveLength(1);
+    await expect(getRepository(env, "JSONbored/gittensory")).resolves.toMatchObject({ isRegistered: true });
+  });
+
   it("falls back to raw GitHub when registry API probes fail", async () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
