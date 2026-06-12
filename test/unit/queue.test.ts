@@ -1092,8 +1092,17 @@ describe("queue processors", () => {
       const method = init?.method ?? "GET";
       if (url === "https://api.gittensor.io/miners") {
         calls.minerList += 1;
-        return Response.json([]);
+        // A confirmed official Gittensor contributor → the rerun renders the FULL readiness panel
+        // (which carries the rerun task); a non-registered author would get the minimal invite.
+        return Response.json([
+          { uid: 7, githubUsername: "contributor", githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1 },
+        ]);
       }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({ repositories: [{ repositoryFullName: "JSONbored/gittensory", totalPrs: "4", totalMergedPrs: "3", totalOpenPrs: "1", totalClosedPrs: "0", totalOpenIssues: "0", totalClosedIssues: "0", isEligible: true, credibility: "1.000000" }] });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
       if (url.endsWith("/users/contributor")) return Response.json({ login: "contributor", public_repos: 2, followers: 1 });
       if (url.includes("/users/contributor/repos")) return Response.json([]);
       if (url.includes("/access_tokens")) {

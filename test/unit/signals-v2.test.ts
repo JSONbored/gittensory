@@ -1601,7 +1601,7 @@ describe("v2 signal builders", () => {
       repo,
       pr: { ...pullRequests[0]!, authorLogin: undefined, linkedIssues: [] },
       profile: noLanguageProfile,
-      detection: { detected: false, reason: "none", priorPullRequests: 0, priorMergedPullRequests: 0, priorIssues: 0 },
+      detection: { detected: true, source: "github_cache" as const, reason: "cached", priorPullRequests: 0, priorMergedPullRequests: 0, priorIssues: 0 },
       queueHealth: buildQueueHealth(repo, [], [], buildCollisionReport(repo.fullName, [], [])),
       collisions: buildCollisionReport(repo.fullName, [], []),
       preflight: buildPreflightResult({ repoFullName: repo.fullName, title: "Docs", body: "No linked issue", changedFiles: ["README.md"], tests: ["manual"] }, repo, [], []),
