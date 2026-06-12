@@ -73,6 +73,7 @@ import {
   buildLocalDiffPreflightResult,
   buildPreflightResult,
   buildPreStartCheck,
+  buildPrTextLint,
   buildQueueHealth,
   buildRegistryChangeReport,
   buildRoleContext,
@@ -137,6 +138,12 @@ const checkBeforeStartShape = {
   issueNumber: z.number().int().positive().optional(),
   title: z.string().min(1).max(PREFLIGHT_LIMITS.titleChars).optional(),
   plannedPaths: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
+};
+
+const lintPrTextShape = {
+  commitMessages: z.array(z.string().max(PREFLIGHT_LIMITS.bodyChars)).max(50).optional(),
+  prBody: z.string().max(PREFLIGHT_LIMITS.bodyChars).optional(),
+  linkedIssue: z.number().int().positive().optional(),
 };
 
 const preflightShape = {
@@ -463,6 +470,15 @@ const checkBeforeStartOutputSchema = {
   report: z.unknown().optional(),
 };
 
+const lintPrTextOutputSchema = {
+  verdict: z.string().optional(),
+  score: z.number().optional(),
+  components: z.unknown().optional(),
+  fixes: z.unknown().optional(),
+  summary: z.string().optional(),
+  generatedAt: z.string().optional(),
+};
+
 export async function handleMcpRequest(c: AppContext): Promise<Response> {
   if (c.req.method === "OPTIONS") return new Response(null, { status: 204 });
   const identity = await authenticateMcpRequest(c);
@@ -706,6 +722,17 @@ export class GittensoryMcp {
         outputSchema: checkBeforeStartOutputSchema,
       },
       async (input) => this.toolResult(await this.checkBeforeStart(input)),
+    );
+
+    server.registerTool(
+      "gittensory_lint_pr_text",
+      {
+        description:
+          "Lint a commit message + PR body against the gittensor traceability/no-issue-rationale and Conventional Commit rubric, before submitting. Returns a deterministic quality verdict (strong/adequate/weak) and specific public-safe fixes. Metadata only; no source upload, no GitHub writes.",
+        inputSchema: lintPrTextShape,
+        outputSchema: lintPrTextOutputSchema,
+      },
+      async (input) => this.toolResult(this.lintPrText(input)),
     );
 
     server.registerTool(
@@ -1120,6 +1147,14 @@ export class GittensoryMcp {
         blockers: report.blockers,
         report: report as unknown as Record<string, unknown>,
       },
+    };
+  }
+
+  private lintPrText(input: { commitMessages?: string[] | undefined; prBody?: string | undefined; linkedIssue?: number | undefined }): ToolPayload {
+    const report = buildPrTextLint(input);
+    return {
+      summary: `Gittensory PR-text lint verdict: ${report.verdict}.`,
+      data: report as unknown as Record<string, unknown>,
     };
   }
 
