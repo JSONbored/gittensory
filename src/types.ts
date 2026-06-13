@@ -100,6 +100,11 @@ export type JobMessage =
       days?: number;
     }
   | {
+      type: "prune-retention";
+      requestedBy: "schedule" | "api" | "test";
+      dryRun?: boolean;
+    }
+  | {
       type: "generate-weekly-value-report";
       requestedBy: "schedule" | "api" | "test";
       variant?: WeeklyValueReportVariant;

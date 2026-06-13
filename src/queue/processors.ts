@@ -53,6 +53,7 @@ import {
   upsertPullRequestFromGitHub,
   upsertRepositoryFromGitHub,
 } from "../db/repositories";
+import { pruneExpiredRecords } from "../db/retention";
 import {
   backfillOpenPullRequestDetails,
   backfillRegisteredRepositories,
@@ -142,6 +143,22 @@ const OFFICIAL_MINER_DETECTION_TTL_MS = 5 * 60 * 1000;
 const OFFICIAL_MINER_DETECTION_UNAVAILABLE_TTL_MS = 60 * 1000;
 const PR_PUBLIC_SURFACE_ACTIONS = new Set(["opened", "reopened", "synchronize", "ready_for_review", "edited"]);
 const PR_GATE_CLOSED_ACTIONS = new Set(["closed"]);
+
+/**
+ * Run (or dry-run) the data-retention prune across the configured log/snapshot tables and audit the
+ * outcome. The per-table windows live in RETENTION_POLICY; only append-only/superseded tables are pruned.
+ */
+export async function runRetentionPrune(env: Env, requestedBy: string, dryRun: boolean): Promise<void> {
+  const results = await pruneExpiredRecords(env, { dryRun });
+  const totalDeleted = results.reduce((sum, result) => sum + result.deleted, 0);
+  await recordAuditEvent(env, {
+    eventType: "retention.prune",
+    actor: requestedBy,
+    outcome: dryRun ? "completed" : "success",
+    detail: dryRun ? `dry-run: ${totalDeleted} row(s) eligible` : `pruned ${totalDeleted} row(s)`,
+    metadata: { dryRun, totalDeleted, perTable: Object.fromEntries(results.map((r) => [r.table, r.deleted])) },
+  });
+}
 
 export async function processJob(env: Env, message: JobMessage): Promise<void> {
   switch (message.type) {
@@ -247,6 +264,9 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       return;
     case "rollup-product-usage":
       await rollupProductUsageDaily(env, { ...(message.day ? { day: message.day } : {}), ...(message.days === undefined ? {} : { days: message.days }) });
+      return;
+    case "prune-retention":
+      await runRetentionPrune(env, message.requestedBy, message.dryRun ?? false);
       return;
     case "generate-weekly-value-report":
       await generateWeeklyValueReport(env, { variant: message.variant ?? "operator", ...(message.days === undefined ? {} : { days: message.days }) });

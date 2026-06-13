@@ -93,6 +93,7 @@ import {
   upsertRepositoryAiKey,
   deleteRepositoryAiKey,
 } from "../db/repositories";
+import { pruneExpiredRecords, RETENTION_POLICY } from "../db/retention";
 import {
   backfillOpenPullRequestDetails,
   backfillRegisteredRepositories,
@@ -2478,6 +2479,13 @@ export function createApp() {
   app.get("/v1/internal/repos/:owner/:repo/ai-key", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     return c.json(await getRepositoryAiKeyStatus(c.env, fullName));
+  });
+
+  // Read-only retention preview: counts the rows the daily prune cron would delete, per table. Does NOT
+  // delete anything (dry-run); the actual prune runs on the schedule via the prune-retention job.
+  app.get("/v1/internal/retention/preview", async (c) => {
+    const results = await pruneExpiredRecords(c.env, { dryRun: true });
+    return c.json({ policy: RETENTION_POLICY, eligible: results, totalEligible: results.reduce((sum, r) => sum + r.deleted, 0) });
   });
 
   app.post("/v1/internal/repos/:owner/:repo/ai-key", async (c) => {
