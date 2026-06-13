@@ -66,8 +66,10 @@ import {
   buildContributorProfile,
   buildContributorScoringProfile,
   buildLaneAdvice,
+  buildLinkedIssueValidation,
   buildLocalDiffPreflightResult,
   buildPreflightResult,
+  buildPreStartCheck,
   buildQueueHealth,
   buildRegistryChangeReport,
   buildRoleContext,
@@ -109,6 +111,27 @@ const loginRepoShape = {
 
 const bountyShape = {
   id: z.string().min(1),
+};
+
+const validateLinkedIssueShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  issueNumber: z.number().int().positive(),
+  plannedChange: z
+    .object({
+      title: z.string().min(1).max(PREFLIGHT_LIMITS.titleChars).optional(),
+      changedFiles: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
+      contributorLogin: z.string().min(1).max(PREFLIGHT_LIMITS.contributorLoginChars).optional(),
+    })
+    .optional(),
+};
+
+const checkBeforeStartShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  issueNumber: z.number().int().positive().optional(),
+  title: z.string().min(1).max(PREFLIGHT_LIMITS.titleChars).optional(),
+  plannedPaths: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
 };
 
 const preflightShape = {
@@ -367,6 +390,30 @@ const localStatusOutputSchema = {
   supportedTools: z.unknown().optional(),
 };
 
+const validateLinkedIssueOutputSchema = {
+  status: z.string().optional(),
+  repoFullName: z.string().optional(),
+  issueNumber: z.number().optional(),
+  found: z.boolean().optional(),
+  multiplierStatus: z.string().optional(),
+  multiplierWouldApply: z.boolean().optional(),
+  blockingReason: z.string().optional(),
+  reasons: z.unknown().optional(),
+  report: z.unknown().optional(),
+};
+
+const checkBeforeStartOutputSchema = {
+  status: z.string().optional(),
+  repoFullName: z.string().optional(),
+  found: z.boolean().optional(),
+  claimStatus: z.string().optional(),
+  duplicateClusterRisk: z.string().optional(),
+  recommendation: z.string().optional(),
+  reasons: z.unknown().optional(),
+  blockers: z.unknown().optional(),
+  report: z.unknown().optional(),
+};
+
 export async function handleMcpRequest(c: AppContext): Promise<Response> {
   if (c.req.method === "OPTIONS") return new Response(null, { status: 204 });
   const identity = await authenticateMcpRequest(c);
@@ -555,6 +602,28 @@ export class GittensoryMcp {
         outputSchema: freshnessResponseOutputSchema,
       },
       async (input) => this.toolResult(await this.getIssueQuality(input)),
+    );
+
+    server.registerTool(
+      "gittensory_validate_linked_issue",
+      {
+        description:
+          "Report whether linking a given issue will actually earn the standard linked-issue scoring multiplier for a planned PR — is it open, valid, single-owner, and solvable by this PR — with the precise blocking reason if not. Public-safe; the raw multiplier value stays private. No GitHub writes.",
+        inputSchema: validateLinkedIssueShape,
+        outputSchema: validateLinkedIssueOutputSchema,
+      },
+      async (input) => this.toolResult(await this.validateLinkedIssue(input)),
+    );
+
+    server.registerTool(
+      "gittensory_check_before_start",
+      {
+        description:
+          "Before any code is written, check whether an issue is already claimed or solved, whether a duplicate cluster is forming, and whether it is a valid target. Returns a go/raise/avoid recommendation with public-safe reasons from cached metadata. No GitHub writes.",
+        inputSchema: checkBeforeStartShape,
+        outputSchema: checkBeforeStartOutputSchema,
+      },
+      async (input) => this.toolResult(await this.checkBeforeStart(input)),
     );
 
     server.registerTool(
@@ -898,6 +967,77 @@ export class GittensoryMcp {
           ? `Gittensory issue quality for ${fullName} (cached).`
           : `Gittensory issue quality for ${fullName} (computed from cached metadata).`,
       data: response as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async validateLinkedIssue(input: {
+    owner: string;
+    repo: string;
+    issueNumber: number;
+    plannedChange?: { title?: string | undefined; changedFiles?: string[] | undefined; contributorLogin?: string | undefined } | undefined;
+  }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    if (!(await this.canAccessRepo(fullName))) {
+      return {
+        summary: `Forbidden: session cannot access linked-issue validation for ${fullName}.`,
+        data: { status: "forbidden", repoFullName: fullName },
+      };
+    }
+    const [repo, issues, pullRequests, recentMergedPullRequests] = await Promise.all([
+      getRepository(this.env, fullName),
+      listIssueSignalSample(this.env, fullName),
+      listOpenPullRequests(this.env, fullName),
+      listRecentMergedPullRequests(this.env, fullName),
+    ]);
+    const report = buildLinkedIssueValidation(repo, issues, pullRequests, recentMergedPullRequests, fullName, input.issueNumber, input.plannedChange ?? {});
+    return {
+      summary: `Gittensory linked-issue validation for ${fullName}#${input.issueNumber}: multiplier ${report.multiplierWouldApply ? "would apply" : "would not apply"}.`,
+      data: {
+        status: "ok",
+        repoFullName: fullName,
+        issueNumber: report.issueNumber,
+        found: report.found,
+        multiplierStatus: report.multiplierStatus,
+        multiplierWouldApply: report.multiplierWouldApply,
+        ...(report.blockingReason === undefined ? {} : { blockingReason: report.blockingReason }),
+        reasons: report.reasons,
+        report: report as unknown as Record<string, unknown>,
+      },
+    };
+  }
+
+  private async checkBeforeStart(input: { owner: string; repo: string; issueNumber?: number | undefined; title?: string | undefined; plannedPaths?: string[] | undefined }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    if (!(await this.canAccessRepo(fullName))) {
+      return {
+        summary: `Forbidden: session cannot access pre-start checks for ${fullName}.`,
+        data: { status: "forbidden", repoFullName: fullName },
+      };
+    }
+    const [repo, issues, pullRequests, recentMergedPullRequests] = await Promise.all([
+      getRepository(this.env, fullName),
+      listIssueSignalSample(this.env, fullName),
+      listOpenPullRequests(this.env, fullName),
+      listRecentMergedPullRequests(this.env, fullName),
+    ]);
+    const report = buildPreStartCheck(repo, issues, pullRequests, recentMergedPullRequests, fullName, {
+      issueNumber: input.issueNumber,
+      title: input.title,
+      plannedPaths: input.plannedPaths,
+    });
+    return {
+      summary: `Gittensory pre-start check for ${fullName}: ${report.recommendation.toUpperCase()}.`,
+      data: {
+        status: "ok",
+        repoFullName: fullName,
+        found: report.found,
+        claimStatus: report.claimStatus,
+        duplicateClusterRisk: report.duplicateClusterRisk,
+        recommendation: report.recommendation,
+        reasons: report.reasons,
+        blockers: report.blockers,
+        report: report as unknown as Record<string, unknown>,
+      },
     };
   }
 

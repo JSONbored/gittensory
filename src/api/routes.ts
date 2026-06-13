@@ -172,10 +172,12 @@ import {
   buildContributorIntakeHealth,
   buildLabelAudit,
   buildLaneAdvice,
+  buildLinkedIssueValidation,
   buildLocalDiffPreflightResult,
   buildMaintainerCutReadiness,
   buildMaintainerLaneReport,
   buildPullRequestMaintainerPacket,
+  buildPreStartCheck,
   buildRoleContext,
   buildPreflightResult,
   buildQueueHealth,
@@ -322,6 +324,23 @@ const localDiffPreflightSchema = preflightSchema.extend({
   changedLineCount: z.number().int().min(0).optional(),
   testFiles: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
   commitMessage: z.string().max(PREFLIGHT_LIMITS.bodyChars).optional(),
+});
+
+const validateLinkedIssueSchema = z.object({
+  issueNumber: z.number().int().positive(),
+  plannedChange: z
+    .object({
+      title: z.string().min(1).max(PREFLIGHT_LIMITS.titleChars).optional(),
+      changedFiles: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
+      contributorLogin: z.string().min(1).max(PREFLIGHT_LIMITS.contributorLoginChars).optional(),
+    })
+    .optional(),
+});
+
+const checkBeforeStartSchema = z.object({
+  issueNumber: z.number().int().positive().optional(),
+  title: z.string().min(1).max(PREFLIGHT_LIMITS.titleChars).optional(),
+  plannedPaths: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
 });
 
 const skippedPrAuditQuerySchema = z
@@ -1562,6 +1581,47 @@ export function createApp() {
     return c.json(response);
   });
 
+  app.post("/v1/repos/:owner/:repo/validate-linked-issue", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- Protected middleware rejects unauthenticated private routes before route-specific repo guards. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const parsed = validateLinkedIssueSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "invalid_validate_linked_issue_request", issues: parsed.error.issues }, 400);
+    const [repo, issues, pullRequests, recentMergedPullRequests] = await Promise.all([
+      getRepository(c.env, fullName),
+      listIssueSignalSample(c.env, fullName),
+      listOpenPullRequests(c.env, fullName),
+      listRecentMergedPullRequests(c.env, fullName),
+    ]);
+    if (identity.kind === "session") {
+      const forbidden = await requireSessionRepoAccess(c, identity, fullName, repo);
+      if (forbidden) return forbidden;
+    }
+    return c.json(buildLinkedIssueValidation(repo, issues, pullRequests, recentMergedPullRequests, fullName, parsed.data.issueNumber, parsed.data.plannedChange ?? {}));
+  });
+
+  app.post("/v1/repos/:owner/:repo/check-before-start", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- Protected middleware rejects unauthenticated private routes before route-specific repo guards. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = checkBeforeStartSchema.safeParse(body ?? {});
+    if (!parsed.success) return c.json({ error: "invalid_check_before_start_request", issues: parsed.error.issues }, 400);
+    const [repo, issues, pullRequests, recentMergedPullRequests] = await Promise.all([
+      getRepository(c.env, fullName),
+      listIssueSignalSample(c.env, fullName),
+      listOpenPullRequests(c.env, fullName),
+      listRecentMergedPullRequests(c.env, fullName),
+    ]);
+    if (identity.kind === "session") {
+      const forbidden = await requireSessionRepoAccess(c, identity, fullName, repo);
+      if (forbidden) return forbidden;
+    }
+    return c.json(buildPreStartCheck(repo, issues, pullRequests, recentMergedPullRequests, fullName, parsed.data));
+  });
+
   app.get("/v1/repos/:owner/:repo/registration-readiness", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     return c.json(await buildRegistrationReadinessResponse(c.env, fullName));
@@ -2468,7 +2528,21 @@ const APP_COMMANDS = [
     endpoint: "/v1/app/commands/preview",
   },
   ...GITTENSORY_MENTION_COMMAND_CATALOG.filter(
-    (command) => !["preflight", "blockers", "packet", "queue-summary", "review-now", "needs-author", "confirmed-miners", "duplicate-clusters"].includes(command.id),
+    (command) =>
+      ![
+        "preflight",
+        "blockers",
+        "packet",
+        "queue-summary",
+        "review-now",
+        "needs-author",
+        "confirmed-miners",
+        "duplicate-clusters",
+        "burden-forecast",
+        "intake-health",
+        "outcome-patterns",
+        "noise-report",
+      ].includes(command.id),
   ).map((command) => ({
     id: command.id,
     command: `@gittensory ${command.id}`,
@@ -2515,6 +2589,38 @@ const APP_COMMANDS = [
     audience: "maintainer",
     boundary: "public-safe",
     description: "List duplicate or WIP clusters visible from cached GitHub metadata.",
+    endpoint: "/v1/app/maintainer-dashboard",
+  },
+  {
+    id: "burden-forecast",
+    command: "@gittensory burden-forecast",
+    audience: "maintainer",
+    boundary: "public-safe",
+    description: "Project maintainer review load and queue-growth risk from cached metadata.",
+    endpoint: "/v1/app/maintainer-dashboard",
+  },
+  {
+    id: "intake-health",
+    command: "@gittensory intake-health",
+    audience: "maintainer",
+    boundary: "public-safe",
+    description: "Summarize contributor-intake health from cached queue and config signals.",
+    endpoint: "/v1/app/maintainer-dashboard",
+  },
+  {
+    id: "outcome-patterns",
+    command: "@gittensory outcome-patterns",
+    audience: "maintainer",
+    boundary: "public-safe",
+    description: "Summarize what this repo actually merges vs closes from cached PR outcomes.",
+    endpoint: "/v1/app/maintainer-dashboard",
+  },
+  {
+    id: "noise-report",
+    command: "@gittensory noise-report",
+    audience: "maintainer",
+    boundary: "public-safe",
+    description: "Highlight queue noise sources maintainers should triage first.",
     endpoint: "/v1/app/maintainer-dashboard",
   },
 ] as const;
