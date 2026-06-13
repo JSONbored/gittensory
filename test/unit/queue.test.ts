@@ -29,6 +29,7 @@ import {
   upsertRepositoryFromGitHub,
 } from "../../src/db/repositories";
 import { processJob } from "../../src/queue/processors";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
 import { createTestEnv } from "../helpers/d1";
@@ -736,6 +737,8 @@ describe("queue processors", () => {
       return new Response("not found", { status: 404 });
     });
 
+    // .gittensory.yml authoritatively sets the linked-issue blocker to "block" (config-as-code).
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { linkedIssue: "block" } });
     await processJob(env, {
       type: "github-webhook",
       deliveryId: "gate-only",
@@ -801,6 +804,7 @@ describe("queue processors", () => {
       return new Response("not found", { status: 404 });
     });
 
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { linkedIssue: "block" } });
     await processJob(env, {
       type: "github-webhook",
       deliveryId: "gate-bot-public-skip",
@@ -871,6 +875,7 @@ describe("queue processors", () => {
       return new Response("not found", { status: 404 });
     });
 
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { linkedIssue: "block" } });
     await processJob(env, {
       type: "github-webhook",
       deliveryId: "gate-unconfirmed-miner-public-skip",
@@ -941,6 +946,7 @@ describe("queue processors", () => {
       return new Response("not found", { status: 404 });
     });
 
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { linkedIssue: "block" } });
     await processJob(env, {
       type: "github-webhook",
       deliveryId: "gate-confirmed-block",
@@ -960,6 +966,52 @@ describe("queue processors", () => {
     expect(calls.gateChecks).toBe(2);
     expect(gatePatchBody.conclusion).toBe("failure");
     expect(gatePatchBody.output?.title).toBe("Gittensory Gate: No linked issue detected");
+  });
+
+  it("disables the gate from .gittensory.yml (gate.enabled: false) even when repo settings enable it", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload({ "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } }, { kind: "raw-github", url: "https://example.test" }, "2026-05-23T00:00:00.000Z"),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "block",
+      requireLinkedIssue: true,
+    });
+    // Config turns the gate OFF even though repo settings have gateCheckMode: enabled.
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { enabled: false } });
+    const calls = { gateChecks: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/check-runs")) {
+        calls.gateChecks += 1;
+        return Response.json({ id: 999 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-yml-disabled",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 70, title: "No issue", state: "open", user: { login: "contributor" }, head: { sha: "ymldisabled123" }, labels: [], body: "No issue." },
+      },
+    });
+
+    // gate.enabled: false in .gittensory.yml disables the gate entirely — no Gate check is posted.
+    expect(calls.gateChecks).toBe(0);
   });
 
   it("audits opt-in gate check permission failures without blocking webhook processing", async () => {

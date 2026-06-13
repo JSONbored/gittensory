@@ -32,11 +32,12 @@ testExpectations:
 
 issueDiscoveryPolicy: discouraged
 
-# Authoritative gate blocker policy, config-as-code (layered OVER dashboard repository settings:
-# .gittensory.yml > DB settings > safe defaults). This only selects which deterministic blockers are
-# active — ONLY confirmed Gittensor contributors are ever hard-blocked (see PR #644). Turning the gate
-# itself on/off remains a repository setting (gateCheckMode).
+# Authoritative gate config, config-as-code (layered OVER dashboard repository settings:
+# .gittensory.yml > DB settings > safe defaults). ONLY confirmed Gittensor contributors are ever
+# hard-blocked (see PR #644); these fields only choose what the gate does, not who it applies to.
 gate:
+  # enabled: false             # set false to disable the gate from config (turning it on is a dashboard setting)
+  linkedIssue: advisory        # block | advisory | off — issues aren't always available; advise, don't block
   duplicates: block            # block | advisory | off — block obvious duplicate PRs
   readiness:
     mode: advisory             # block | advisory | off — readiness-score floor

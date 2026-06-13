@@ -860,7 +860,13 @@ async function maybePublishPrPublicSurface(
   webhook: { deliveryId: string; authorType?: string | undefined; action?: string | undefined },
 ): Promise<void> {
   const author = pr.authorLogin ?? null;
-  const gateEnabled = settings.gateCheckMode === "enabled" && Boolean(advisory.headSha);
+  // `.gittensory.yml` authoritatively controls the gate (yml > DB settings > defaults). It is loaded only
+  // when the gate is enabled in settings (so dormant repos stay network-free), then it refines the blocker
+  // policy and may DISABLE the gate (gate.enabled: false). It only chooses what the gate does —
+  // confirmedContributor still governs WHO can be blocked, downstream in evaluateGateCheck.
+  const gateDbEnabled = settings.gateCheckMode === "enabled" && Boolean(advisory.headSha);
+  const manifestGate = gateDbEnabled ? (await loadRepoFocusManifest(env, repoFullName)).gate : undefined;
+  const gateEnabled = gateDbEnabled && manifestGate?.enabled !== false;
   // Cheap, network-free skip checks (also avoids the miner lookup when it would be wasted).
   const prelim = decidePublicSurface({
     settings,
@@ -977,13 +983,9 @@ async function maybePublishPrPublicSurface(
   // detection) gets a neutral, non-blocking gate. Gate-only runs still verify confirmation before
   // evaluating blockers so confirmed contributors cannot bypass a required Gate check.
   const confirmedContributor = official?.status === "confirmed";
-  // Load the maintainer's `.gittensory.yml` gate config ONLY when the gate is enabled (cached; gate-off
-  // repos never pay the fetch). It authoritatively refines the blocker policy over DB settings.
-  const manifestGate = gateEnabled ? (await loadRepoFocusManifest(env, repoFullName)).gate : undefined;
-  const gateEvaluation =
-    settings.gateCheckMode === "enabled"
-      ? evaluateGateCheck(advisory, gateCheckPolicy(settings, readiness.total, confirmedContributor, manifestGate))
-      : undefined;
+  const gateEvaluation = gateEnabled
+    ? evaluateGateCheck(advisory, gateCheckPolicy(settings, readiness.total, confirmedContributor, manifestGate))
+    : undefined;
   if (gateEnabled) {
     const gateCheckResult = await createOrUpdateGateCheckRun(
       env,

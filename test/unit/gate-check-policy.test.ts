@@ -15,7 +15,7 @@ function settings(over: Partial<RepositorySettings> = {}): RepositorySettings {
 }
 
 function gate(over: Partial<FocusManifestGateConfig> = {}): FocusManifestGateConfig {
-  return { present: true, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, ...over };
+  return { present: true, enabled: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, ...over };
 }
 
 function missingIssueAdvisory(): Advisory {

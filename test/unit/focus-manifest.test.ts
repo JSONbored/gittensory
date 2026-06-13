@@ -396,7 +396,7 @@ describe("compileFocusManifestPolicy", () => {
       issueDiscoveryPolicy: "neutral",
       maintainerNotes: [],
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
-      gate: { present: false, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null },
+      gate: { present: false, enabled: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null },
       warnings: [],
     });
     expect(policy.publicSafe.entryGuidance).toContain("Keep PRs focused.");
@@ -682,7 +682,16 @@ describe("parseFocusManifest gate config", () => {
   it("parses a full gate section including the readiness block", () => {
     const m = parseFocusManifest({ gate: { linkedIssue: "block", duplicates: "advisory", readiness: { mode: "block", minScore: 70 } } });
     expect(m.present).toBe(true);
-    expect(m.gate).toEqual({ present: true, linkedIssue: "block", duplicates: "advisory", readinessMode: "block", readinessMinScore: 70 });
+    expect(m.gate).toEqual({ present: true, enabled: null, linkedIssue: "block", duplicates: "advisory", readinessMode: "block", readinessMinScore: 70 });
+  });
+
+  it("parses gate.enabled (on/off) and ignores non-boolean values with a warning", () => {
+    expect(parseFocusManifest({ gate: { enabled: true } }).gate.enabled).toBe(true);
+    expect(parseFocusManifest({ gate: { enabled: false } }).gate.enabled).toBe(false);
+    expect(parseFocusManifest({ gate: { enabled: true } }).gate.present).toBe(true);
+    const bad = parseFocusManifest({ gate: { enabled: "yes" } });
+    expect(bad.gate.enabled).toBeNull();
+    expect(bad.warnings.some((w) => /gate\.enabled/.test(w))).toBe(true);
   });
 
   it("treats a manifest with ONLY a gate section as present", () => {
@@ -727,7 +736,7 @@ describe("parseFocusManifest gate config", () => {
   });
 
   it("round-trips through gateConfigToJson + parse (the cache path) and serializes empty as null", () => {
-    const original = parseFocusManifest({ gate: { linkedIssue: "block", readiness: { mode: "advisory", minScore: 42 } } });
+    const original = parseFocusManifest({ gate: { enabled: false, linkedIssue: "block", readiness: { mode: "advisory", minScore: 42 } } });
     const reparsed = parseFocusManifest({ gate: gateConfigToJson(original.gate) });
     expect(reparsed.gate).toEqual(original.gate);
     expect(gateConfigToJson(parseFocusManifest({}).gate)).toBeNull();

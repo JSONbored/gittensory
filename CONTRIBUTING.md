@@ -195,12 +195,14 @@ Public GitHub surfaces:
 
 Gate config as code (`.gittensory.yml`):
 
-- Maintainers can declare the gate's blocker policy in `.gittensory.yml` under `gate:` —
-  `linkedIssue`, `duplicates`, and `readiness: { mode, minScore }`, each `off | advisory | block`.
+- Maintainers can declare the gate policy in `.gittensory.yml` under `gate:` — `linkedIssue`,
+  `duplicates`, and `readiness: { mode, minScore }` (each `off | advisory | block`), plus `enabled`.
 - Precedence is `.gittensory.yml` > dashboard repository settings > safe defaults; an unset field
   falls back to the next layer. The committed root `.gittensory.yml` is the worked example.
-- This only selects which deterministic blockers are active. Turning the gate on/off remains a
-  repository setting (`gateCheckMode`), and only confirmed contributors are ever hard-blocked.
+- `enabled: false` disables the gate from config; turning it on for the first time is a one-click
+  repository setting (`gateCheckMode`), so dormant repos never pay a per-PR manifest fetch.
+- This only selects what the gate does. Only confirmed Gittensor contributors are ever hard-blocked,
+  regardless of the manifest.
 
 ## Commit And PR Titles
 

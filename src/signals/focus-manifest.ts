@@ -16,6 +16,7 @@ export type FocusManifestIssueDiscoveryPolicy = "encouraged" | "neutral" | "disc
  */
 export type FocusManifestGateConfig = {
   present: boolean;
+  enabled: boolean | null;
   linkedIssue: GateRuleMode | null;
   duplicates: GateRuleMode | null;
   readinessMode: GateRuleMode | null;
@@ -80,6 +81,7 @@ export const MAX_FOCUS_MANIFEST_BYTES = 64 * 1024;
 
 const EMPTY_GATE_CONFIG: FocusManifestGateConfig = {
   present: false,
+  enabled: null,
   linkedIssue: null,
   duplicates: null,
   readinessMode: null,
@@ -165,6 +167,13 @@ function normalizeOptionalGateMode(value: JsonValue | undefined, field: string, 
   return null;
 }
 
+function normalizeOptionalBoolean(value: JsonValue | undefined, field: string, warnings: string[]): boolean | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "boolean") return value;
+  warnings.push(`Manifest gate field "${field}" must be a boolean; ignoring a ${typeof value} value.`);
+  return null;
+}
+
 function normalizeOptionalScore(value: JsonValue | undefined, field: string, warnings: string[]): number | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -192,12 +201,14 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
   }
   const gate: FocusManifestGateConfig = {
     present: false,
+    enabled: normalizeOptionalBoolean(record.enabled, "gate.enabled", warnings),
     linkedIssue: normalizeOptionalGateMode(record.linkedIssue, "gate.linkedIssue", warnings),
     duplicates: normalizeOptionalGateMode(record.duplicates, "gate.duplicates", warnings),
     readinessMode: normalizeOptionalGateMode(readinessRecord?.mode, "gate.readiness.mode", warnings),
     readinessMinScore: normalizeOptionalScore(readinessRecord?.minScore, "gate.readiness.minScore", warnings),
   };
-  gate.present = gate.linkedIssue !== null || gate.duplicates !== null || gate.readinessMode !== null || gate.readinessMinScore !== null;
+  gate.present =
+    gate.enabled !== null || gate.linkedIssue !== null || gate.duplicates !== null || gate.readinessMode !== null || gate.readinessMinScore !== null;
   return gate;
 }
 
@@ -208,6 +219,7 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
 export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
   if (!gate.present) return null;
   const out: Record<string, JsonValue> = {};
+  if (gate.enabled !== null) out.enabled = gate.enabled;
   if (gate.linkedIssue !== null) out.linkedIssue = gate.linkedIssue;
   if (gate.duplicates !== null) out.duplicates = gate.duplicates;
   if (gate.readinessMode !== null || gate.readinessMinScore !== null) {
