@@ -44,6 +44,7 @@ import {
 } from "../services/agent-orchestrator";
 import { loadContributorDecisionPackForServing, repoDecisionFromPack } from "../services/decision-pack";
 import { buildPublicPrBodyDraft } from "../services/pr-body-draft";
+import { explainScoreBreakdown } from "../services/score-breakdown";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import { buildMcpClientTelemetry } from "../services/client-telemetry";
@@ -415,6 +416,15 @@ const checkBeforeStartOutputSchema = {
   report: z.unknown().optional(),
 };
 
+const scoreBreakdownOutputSchema = {
+  repoFullName: z.string().optional(),
+  scoreabilityStatus: z.string().optional(),
+  effectiveEstimatedScore: z.number().optional(),
+  components: z.unknown().optional(),
+  gateHighlights: z.unknown().optional(),
+  highestLeverageLever: z.unknown().optional(),
+};
+
 export async function handleMcpRequest(c: AppContext): Promise<Response> {
   if (c.req.method === "OPTIONS") return new Response(null, { status: 204 });
   const identity = await authenticateMcpRequest(c);
@@ -643,6 +653,17 @@ export class GittensoryMcp {
         inputSchema: scorePreviewShape,
       },
       async (input) => this.toolResult(await this.previewScore(input)),
+    );
+
+    server.registerTool(
+      "gittensory_explain_score_breakdown",
+      {
+        description:
+          "Explain a private score preview multiplier-by-multiplier with plain-English levers and the single highest-impact improvement. Login and repo scoped; no new computation beyond the preview projection.",
+        inputSchema: scorePreviewShape,
+        outputSchema: scoreBreakdownOutputSchema,
+      },
+      async (input) => this.toolResult(await this.explainScoreBreakdown(input)),
     );
 
     server.registerTool(
@@ -1217,6 +1238,23 @@ export class GittensoryMcp {
     return {
       summary: `Private Gittensory scoring preview for ${input.repoFullName}.`,
       data: makeScorePreviewRecord(input, snapshot, result) as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async explainScoreBreakdown(input: z.infer<z.ZodObject<typeof scorePreviewShape>>): Promise<ToolPayload> {
+    if (!input.contributorLogin) throw new Error("contributorLogin is required for score breakdown.");
+    this.requireContributorAccess(input.contributorLogin);
+    await this.requireRepoAccess(input.repoFullName);
+    const [repo, snapshot, evidence] = await Promise.all([
+      getRepository(this.env, input.repoFullName),
+      getOrCreateScoringModelSnapshot(this.env),
+      getContributorEvidence(this.env, input.contributorLogin),
+    ]);
+    const preview = buildScorePreview({ input, repo, snapshot, contributorEvidence: evidence });
+    const breakdown = explainScoreBreakdown(preview);
+    return {
+      summary: `Private Gittensory score breakdown for ${input.contributorLogin} in ${input.repoFullName}. Highest leverage: ${breakdown.highestLeverageLever.component}.`,
+      data: breakdown as unknown as Record<string, unknown>,
     };
   }
 

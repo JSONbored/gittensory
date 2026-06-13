@@ -23,6 +23,7 @@ const TOOLS_WITH_OUTPUT_SCHEMA = [
   "gittensory_get_registry_changes",
   "gittensory_get_upstream_drift",
   "gittensory_local_status",
+  "gittensory_explain_score_breakdown",
 ];
 
 async function connectTestClient(env: Env = createTestEnv()) {
