@@ -966,8 +966,16 @@ async function maybePublishPrPublicSurface(
     scopedOverlapCount: unionScopedOverlapClusters(collisions, pr, preflight.collisions).length,
   });
 
+  if (gateEnabled && author && !publicSurfaceSkipped && !official) {
+    official = await getCachedOfficialMinerDetection(env, author, {
+      targetKey: `${repoFullName}#${pr.number}`,
+      deliveryId: webhook.deliveryId,
+    });
+  }
+
   // Only CONFIRMED gittensor contributors can be hard-blocked; everyone else (or an unavailable
-  // detection) gets a neutral, non-blocking gate. `official` may be null if no public output ran.
+  // detection) gets a neutral, non-blocking gate. Gate-only runs still verify confirmation before
+  // evaluating blockers so confirmed contributors cannot bypass a required Gate check.
   const confirmedContributor = official?.status === "confirmed";
   // Load the maintainer's `.gittensory.yml` gate config ONLY when the gate is enabled (cached; gate-off
   // repos never pay the fetch). It authoritatively refines the blocker policy over DB settings.
