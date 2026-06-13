@@ -923,5 +923,8 @@ export const aiUsageEvents = sqliteTable(
   (table) => ({
     featureCreated: index("ai_usage_events_feature_created_idx").on(table.feature, table.createdAt),
     actorCreated: index("ai_usage_events_actor_created_idx").on(table.actor, table.createdAt),
+    // Covers the daily-budget query (sumAiEstimatedNeuronsSince): WHERE status='ok' AND created_at >= ?.
+    // Without it that aggregate full-scans ai_usage_events, which runs on every AI review/summary.
+    statusCreated: index("ai_usage_events_status_created_idx").on(table.status, table.createdAt),
   }),
 );
