@@ -90,4 +90,23 @@ describe("buildRemediationPlan", () => {
     expect(plan.recommendedRerunCondition).toMatch(/linked issue and base branch metadata/i);
     expect(plan.recommendedRerunCondition).not.toMatch(/scoreability|multiplier/i);
   });
+
+  it("maps blocker-specific rerun conditions and fallback steps", () => {
+    const plan = buildRemediationPlan({
+      login: "miner",
+      repoFullName: "octo/demo",
+      accountStateBlockers: ["Open PR count exceeds threshold", "Contributor credibility history is still maturing"],
+      branchQualityBlockers: ["Local branch base is stale", "Linked issue is duplicate-prone", "GitHub checks need attention"],
+      scoreBlockers: ["wallet hotkey payout"],
+      recommendedRerunCondition: "Rerun after any branch, base, or PR state changes before opening/submitting.",
+    });
+
+    expect(plan.items.find((item) => item.source === "account_state" && /Open PR/i.test(item.step))?.rerunCondition).toMatch(/pending PRs merge\/close/i);
+    expect(plan.items.find((item) => /credibility history/i.test(item.step))?.rerunCondition).toMatch(/account\/queue maturity blockers clear/i);
+    expect(plan.items.find((item) => /stale/i.test(item.step))?.rerunCondition).toMatch(/git fetch origin/i);
+    expect(plan.items.find((item) => /duplicate-prone/i.test(item.step))?.rerunCondition).toMatch(/linked issue and base branch metadata/i);
+    expect(plan.items.find((item) => /GitHub checks/i.test(item.step))?.rerunCondition).toMatch(/validation evidence/i);
+    expect(plan.items.find((item) => item.source === "score")?.step).toBe("Resolve scoreability blockers before relying on this preview.");
+    expect(JSON.stringify(plan)).not.toMatch(/\bwallet\b|\bhotkey\b|\bpayout\b/i);
+  });
 });
