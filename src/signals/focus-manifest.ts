@@ -1,9 +1,26 @@
 import { parse as parseYaml } from "yaml";
-import type { JsonValue } from "../types";
+import type { GateRuleMode, JsonValue } from "../types";
 
 export type FocusManifestSource = "repo_file" | "api_record" | "none";
 export type FocusManifestLinkedIssuePolicy = "required" | "preferred" | "optional";
 export type FocusManifestIssueDiscoveryPolicy = "encouraged" | "neutral" | "discouraged";
+
+/**
+ * Maintainer-authored gate configuration declared as code in `.gittensory.yml` under `gate:`. Each
+ * field is `null` when the maintainer did not set it, so the resolver can layer the manifest OVER the
+ * DB-backed RepositorySettings (manifest > DB > safe defaults) without clobbering unset values. All
+ * of these flow through the SAME confirmed-contributor-gated `evaluateGateCheck` path — the manifest
+ * only chooses which deterministic blockers are active, never who can be blocked. Turning the gate
+ * itself on/off stays a repository setting (`gateCheckMode`); `.gittensory.yml gate:` refines the
+ * blocker policy of an already-enabled gate.
+ */
+export type FocusManifestGateConfig = {
+  present: boolean;
+  linkedIssue: GateRuleMode | null;
+  duplicates: GateRuleMode | null;
+  readinessMode: GateRuleMode | null;
+  readinessMinScore: number | null;
+};
 
 /**
  * Normalized maintainer focus manifest. Repo owners declare which work areas are wanted,
@@ -22,6 +39,7 @@ export type FocusManifest = {
   issueDiscoveryPolicy: FocusManifestIssueDiscoveryPolicy;
   maintainerNotes: string[];
   publicNotes: string[];
+  gate: FocusManifestGateConfig;
   warnings: string[];
 };
 
@@ -60,6 +78,14 @@ const MAX_LIST_ITEMS = 200;
 const MAX_ITEM_LENGTH = 300;
 export const MAX_FOCUS_MANIFEST_BYTES = 64 * 1024;
 
+const EMPTY_GATE_CONFIG: FocusManifestGateConfig = {
+  present: false,
+  linkedIssue: null,
+  duplicates: null,
+  readinessMode: null,
+  readinessMinScore: null,
+};
+
 const EMPTY_MANIFEST: FocusManifest = {
   present: false,
   source: "none",
@@ -71,6 +97,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   issueDiscoveryPolicy: "neutral",
   maintainerNotes: [],
   publicNotes: [],
+  gate: { ...EMPTY_GATE_CONFIG },
   warnings: [],
 };
 
@@ -83,7 +110,7 @@ export function isFocusManifestPublicSafe(text: string): boolean {
 }
 
 function emptyManifest(source: FocusManifestSource, warnings: string[] = []): FocusManifest {
-  return { ...EMPTY_MANIFEST, source, warnings };
+  return { ...EMPTY_MANIFEST, source, warnings, gate: { ...EMPTY_GATE_CONFIG } };
 }
 
 function normalizeStringList(value: JsonValue | undefined, field: string, warnings: string[]): string[] {
@@ -131,6 +158,67 @@ function normalizeSource(raw: FocusManifestSource | undefined, value: JsonValue 
   return normalizeEnum<FocusManifestSource>(value, "source", ["repo_file", "api_record", "none"], "api_record", warnings);
 }
 
+function normalizeOptionalGateMode(value: JsonValue | undefined, field: string, warnings: string[]): GateRuleMode | null {
+  if (value === undefined || value === null) return null;
+  if (value === "off" || value === "advisory" || value === "block") return value;
+  warnings.push(`Manifest gate field "${field}" must be one of off, advisory, block; ignoring "${String(value)}".`);
+  return null;
+}
+
+function normalizeOptionalScore(value: JsonValue | undefined, field: string, warnings: string[]): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    warnings.push(`Manifest gate field "${field}" must be a number between 0 and 100; ignoring it.`);
+    return null;
+  }
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+/**
+ * Parse the optional `gate:` mapping. Every field stays `null` when unset so the resolver can layer
+ * this OVER DB settings without clobbering. A nested `readiness: { mode, minScore }` block is accepted.
+ */
+function parseGateConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestGateConfig {
+  if (value === undefined || value === null) return { ...EMPTY_GATE_CONFIG };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push(`Manifest field "gate" must be a mapping; ignoring it.`);
+    return { ...EMPTY_GATE_CONFIG };
+  }
+  const record = value as Record<string, JsonValue>;
+  const readiness = record.readiness;
+  const readinessRecord = readiness !== null && typeof readiness === "object" && !Array.isArray(readiness) ? (readiness as Record<string, JsonValue>) : undefined;
+  if (readiness !== undefined && readiness !== null && readinessRecord === undefined) {
+    warnings.push(`Manifest gate field "gate.readiness" must be a mapping; ignoring it.`);
+  }
+  const gate: FocusManifestGateConfig = {
+    present: false,
+    linkedIssue: normalizeOptionalGateMode(record.linkedIssue, "gate.linkedIssue", warnings),
+    duplicates: normalizeOptionalGateMode(record.duplicates, "gate.duplicates", warnings),
+    readinessMode: normalizeOptionalGateMode(readinessRecord?.mode, "gate.readiness.mode", warnings),
+    readinessMinScore: normalizeOptionalScore(readinessRecord?.minScore, "gate.readiness.minScore", warnings),
+  };
+  gate.present = gate.linkedIssue !== null || gate.duplicates !== null || gate.readinessMode !== null || gate.readinessMinScore !== null;
+  return gate;
+}
+
+/**
+ * Serialize a gate config back into the parse-compatible `gate:` shape so a cached manifest snapshot
+ * round-trips through {@link parseGateConfig} unchanged. Returns null when nothing is configured.
+ */
+export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
+  if (!gate.present) return null;
+  const out: Record<string, JsonValue> = {};
+  if (gate.linkedIssue !== null) out.linkedIssue = gate.linkedIssue;
+  if (gate.duplicates !== null) out.duplicates = gate.duplicates;
+  if (gate.readinessMode !== null || gate.readinessMinScore !== null) {
+    const readiness: Record<string, JsonValue> = {};
+    if (gate.readinessMode !== null) readiness.mode = gate.readinessMode;
+    if (gate.readinessMinScore !== null) readiness.minScore = gate.readinessMinScore;
+    out.readiness = readiness;
+  }
+  return out;
+}
+
 /**
  * Tolerantly normalize an already-parsed manifest object into a {@link FocusManifest}.
  * Never throws: malformed shapes degrade to safe defaults and accumulate warnings so callers
@@ -154,6 +242,7 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     issueDiscoveryPolicy: normalizeEnum(record.issueDiscoveryPolicy, "issueDiscoveryPolicy", ["encouraged", "neutral", "discouraged"] as const, "neutral", warnings),
     maintainerNotes: normalizeStringList(record.maintainerNotes, "maintainerNotes", warnings),
     publicNotes: normalizeStringList(record.publicNotes, "publicNotes", warnings).filter(isFocusManifestPublicSafe),
+    gate: parseGateConfig(record.gate, warnings),
     warnings,
   };
   if (
@@ -164,7 +253,8 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     manifest.maintainerNotes.length === 0 &&
     manifest.publicNotes.length === 0 &&
     manifest.linkedIssuePolicy === "optional" &&
-    manifest.issueDiscoveryPolicy === "neutral"
+    manifest.issueDiscoveryPolicy === "neutral" &&
+    !manifest.gate.present
   ) {
     warnings.push("Manifest contained no recognized focus fields; falling back to deterministic signals.");
     manifest.present = false;

@@ -32,6 +32,16 @@ testExpectations:
 
 issueDiscoveryPolicy: discouraged
 
+# Authoritative gate blocker policy, config-as-code (layered OVER dashboard repository settings:
+# .gittensory.yml > DB settings > safe defaults). This only selects which deterministic blockers are
+# active — ONLY confirmed Gittensor contributors are ever hard-blocked (see PR #644). Turning the gate
+# itself on/off remains a repository setting (gateCheckMode).
+gate:
+  duplicates: block            # block | advisory | off — block obvious duplicate PRs
+  readiness:
+    mode: advisory             # block | advisory | off — readiness-score floor
+    minScore: 60
+
 publicNotes:
   - Prefer backend Workers, MCP, GitHub App, registry, and scoring work when scope allows.
   - Focused control-panel UI changes are welcome when they use live API data or honest empty/error states and tie to safety, release readiness, or operator-facing analytics.

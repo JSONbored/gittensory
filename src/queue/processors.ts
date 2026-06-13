@@ -129,6 +129,8 @@ import {
   unionScopedOverlapClusters,
 } from "../signals/engine";
 import { decidePublicSurface } from "../signals/settings-preview";
+import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
+import type { FocusManifestGateConfig } from "../signals/focus-manifest";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import type { ContributorEvidenceRecord, GitHubWebhookPayload, JobMessage, JsonValue, PullRequestRecord, RepositorySettings } from "../types";
 import { sha256Hex } from "../utils/crypto";
@@ -780,12 +782,20 @@ function shouldProcessPullRequestPublicSurface(action: string | undefined): bool
   return PR_PUBLIC_SURFACE_ACTIONS.has(action ?? "") || PR_GATE_CLOSED_ACTIONS.has(action ?? "");
 }
 
-function gateCheckPolicy(settings: RepositorySettings, readinessScore?: number | null, confirmedContributor?: boolean) {
+export function gateCheckPolicy(
+  settings: RepositorySettings,
+  readinessScore?: number | null,
+  confirmedContributor?: boolean,
+  manifestGate?: FocusManifestGateConfig | undefined,
+) {
+  // `.gittensory.yml` `gate:` config wins over DB settings where the maintainer set it (manifest > DB >
+  // defaults). It only selects which deterministic blockers are active; confirmedContributor still
+  // governs WHO can be blocked, downstream in evaluateGateCheck.
   return {
-    linkedIssueGateMode: settings.linkedIssueGateMode,
-    duplicatePrGateMode: settings.duplicatePrGateMode,
-    qualityGateMode: settings.qualityGateMode,
-    qualityGateMinScore: settings.qualityGateMinScore ?? null,
+    linkedIssueGateMode: manifestGate?.linkedIssue ?? settings.linkedIssueGateMode,
+    duplicatePrGateMode: manifestGate?.duplicates ?? settings.duplicatePrGateMode,
+    qualityGateMode: manifestGate?.readinessMode ?? settings.qualityGateMode,
+    qualityGateMinScore: manifestGate?.readinessMinScore ?? settings.qualityGateMinScore ?? null,
     readinessScore: readinessScore ?? null,
     confirmedContributor,
   };
@@ -959,15 +969,20 @@ async function maybePublishPrPublicSurface(
   // Only CONFIRMED gittensor contributors can be hard-blocked; everyone else (or an unavailable
   // detection) gets a neutral, non-blocking gate. `official` may be null if no public output ran.
   const confirmedContributor = official?.status === "confirmed";
+  // Load the maintainer's `.gittensory.yml` gate config ONLY when the gate is enabled (cached; gate-off
+  // repos never pay the fetch). It authoritatively refines the blocker policy over DB settings.
+  const manifestGate = gateEnabled ? (await loadRepoFocusManifest(env, repoFullName)).gate : undefined;
   const gateEvaluation =
-    settings.gateCheckMode === "enabled" ? evaluateGateCheck(advisory, gateCheckPolicy(settings, readiness.total, confirmedContributor)) : undefined;
+    settings.gateCheckMode === "enabled"
+      ? evaluateGateCheck(advisory, gateCheckPolicy(settings, readiness.total, confirmedContributor, manifestGate))
+      : undefined;
   if (gateEnabled) {
     const gateCheckResult = await createOrUpdateGateCheckRun(
       env,
       installationId,
       repoFullName,
       advisory,
-      gateCheckPolicy(settings, readiness.total, confirmedContributor),
+      gateCheckPolicy(settings, readiness.total, confirmedContributor, manifestGate),
       {
         checkRunId: pendingGateCheckRunId,
       },

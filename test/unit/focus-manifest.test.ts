@@ -3,6 +3,7 @@ import {
   buildFocusManifestGuidance,
   compileFocusManifestPolicy,
   deriveContributionLanes,
+  gateConfigToJson,
   isFocusManifestPublicSafe,
   matchesManifestPath,
   parseFocusManifest,
@@ -395,6 +396,7 @@ describe("compileFocusManifestPolicy", () => {
       issueDiscoveryPolicy: "neutral",
       maintainerNotes: [],
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
+      gate: { present: false, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null },
       warnings: [],
     });
     expect(policy.publicSafe.entryGuidance).toContain("Keep PRs focused.");
@@ -673,5 +675,68 @@ describe("public-safe invariant", () => {
       const guidance = buildFocusManifestGuidance({ manifest, changedPaths });
       expect(guidance.publicNextSteps.every(isFocusManifestPublicSafe)).toBe(true);
     }
+  });
+});
+
+describe("parseFocusManifest gate config", () => {
+  it("parses a full gate section including the readiness block", () => {
+    const m = parseFocusManifest({ gate: { linkedIssue: "block", duplicates: "advisory", readiness: { mode: "block", minScore: 70 } } });
+    expect(m.present).toBe(true);
+    expect(m.gate).toEqual({ present: true, linkedIssue: "block", duplicates: "advisory", readinessMode: "block", readinessMinScore: 70 });
+  });
+
+  it("treats a manifest with ONLY a gate section as present", () => {
+    const m = parseFocusManifest({ gate: { duplicates: "block" } });
+    expect(m.present).toBe(true);
+    expect(m.gate.present).toBe(true);
+    expect(m.gate.duplicates).toBe("block");
+  });
+
+  it("leaves unset gate fields null so the resolver falls back to DB settings", () => {
+    const m = parseFocusManifest({ gate: { linkedIssue: "advisory" } });
+    expect(m.gate.linkedIssue).toBe("advisory");
+    expect(m.gate.duplicates).toBeNull();
+    expect(m.gate.readinessMode).toBeNull();
+    expect(m.gate.readinessMinScore).toBeNull();
+  });
+
+  it("ignores invalid gate values with a warning rather than throwing", () => {
+    const m = parseFocusManifest({ gate: { linkedIssue: "sometimes", duplicates: 5, readiness: { mode: "nope", minScore: "high" } } });
+    expect(m.gate.linkedIssue).toBeNull();
+    expect(m.gate.duplicates).toBeNull();
+    expect(m.gate.readinessMode).toBeNull();
+    expect(m.gate.readinessMinScore).toBeNull();
+    expect(m.gate.present).toBe(false);
+    expect(m.warnings.some((w) => /gate\.linkedIssue/.test(w))).toBe(true);
+    expect(m.warnings.some((w) => /gate\.readiness\.mode/.test(w))).toBe(true);
+  });
+
+  it("clamps and rounds the readiness minScore to 0-100", () => {
+    expect(parseFocusManifest({ gate: { readiness: { minScore: 250 } } }).gate.readinessMinScore).toBe(100);
+    expect(parseFocusManifest({ gate: { readiness: { minScore: -10 } } }).gate.readinessMinScore).toBe(0);
+    expect(parseFocusManifest({ gate: { readiness: { minScore: 59.6 } } }).gate.readinessMinScore).toBe(60);
+  });
+
+  it("ignores a non-mapping gate or readiness block with a warning", () => {
+    const m1 = parseFocusManifest({ gate: ["nope"] });
+    expect(m1.gate.present).toBe(false);
+    expect(m1.warnings.some((w) => /"gate" must be a mapping/.test(w))).toBe(true);
+    const m2 = parseFocusManifest({ gate: { readiness: "nope" } });
+    expect(m2.gate.present).toBe(false);
+    expect(m2.warnings.some((w) => /"gate\.readiness" must be a mapping/.test(w))).toBe(true);
+  });
+
+  it("round-trips through gateConfigToJson + parse (the cache path) and serializes empty as null", () => {
+    const original = parseFocusManifest({ gate: { linkedIssue: "block", readiness: { mode: "advisory", minScore: 42 } } });
+    const reparsed = parseFocusManifest({ gate: gateConfigToJson(original.gate) });
+    expect(reparsed.gate).toEqual(original.gate);
+    expect(gateConfigToJson(parseFocusManifest({}).gate)).toBeNull();
+  });
+
+  it("parses the gate section from YAML content", () => {
+    const m = parseFocusManifestContent("gate:\n  duplicates: block\n  readiness:\n    mode: block\n    minScore: 80\n", "repo_file");
+    expect(m.gate.duplicates).toBe("block");
+    expect(m.gate.readinessMode).toBe("block");
+    expect(m.gate.readinessMinScore).toBe(80);
   });
 });

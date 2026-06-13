@@ -189,6 +189,18 @@ Public GitHub surfaces:
 - Keep public comments advisory, sanitized, and low-noise.
 - Keep labels limited to configured labels for officially confirmed Gittensor miner PRs.
 - Never publish private reviewability, scoring, wallet, hotkey, or reward/risk context.
+- The Gittensory Gate blocks **only confirmed Gittensor contributors**; every other author (and any
+  app/infra state) resolves to a neutral, non-blocking gate. Adding a blocker must keep it
+  confirmed-contributor-gated through `evaluateGateCheck`.
+
+Gate config as code (`.gittensory.yml`):
+
+- Maintainers can declare the gate's blocker policy in `.gittensory.yml` under `gate:` —
+  `linkedIssue`, `duplicates`, and `readiness: { mode, minScore }`, each `off | advisory | block`.
+- Precedence is `.gittensory.yml` > dashboard repository settings > safe defaults; an unset field
+  falls back to the next layer. The committed root `.gittensory.yml` is the worked example.
+- This only selects which deterministic blockers are active. Turning the gate on/off remains a
+  repository setting (`gateCheckMode`), and only confirmed contributors are ever hard-blocked.
 
 ## Commit And PR Titles
 
