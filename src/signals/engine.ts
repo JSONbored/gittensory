@@ -3859,6 +3859,8 @@ export function buildPublicPrIntelligenceComment(args: {
   settings: RepositorySettings;
   gate?: PublicPrPanelGateEvaluation | undefined;
   review?: FocusManifestReviewConfig | undefined;
+  /** Optional AI maintainer-review notes (already public-safe). Rendered as an advisory section. */
+  aiReview?: { notes: string } | undefined;
 }): string {
   const publicFindings = args.preflight.findings
     .filter((finding) => finding.severity !== "critical")
@@ -4016,6 +4018,24 @@ export function buildPublicPrIntelligenceComment(args: {
     ...(nextSteps.length > 0 ? [...new Set(nextSteps)].map((step) => `- ${step}`) : ["- Keep the PR focused and include validation evidence before maintainer review."]),
     "",
     "</details>",
+    // Optional AI maintainer review (advisory; public-safe text built upstream). The deterministic
+    // signals above remain authoritative — this is a second opinion, not an endorsement.
+    ...(args.aiReview
+      ? [
+          "",
+          "<details>",
+          "<summary>Gittensory AI review (advisory)</summary>",
+          "",
+          "_Generated from public PR metadata and the diff. Advisory only; deterministic signals remain authoritative._",
+          "",
+          // Notes are already public-safe (built via toPublicSafe upstream). Escape angle brackets so a
+          // stray tag (e.g. </details> or an HTML comment marker) cannot break the panel structure, while
+          // preserving the markdown bullet/line layout that sanitizePanelText would otherwise flatten.
+          args.aiReview.notes.replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;")).slice(0, 4000),
+          "",
+          "</details>",
+        ]
+      : []),
     "",
     `- [ ] ${PR_PANEL_RETRIGGER_MARKER} Re-run Gittensory review`,
     "",

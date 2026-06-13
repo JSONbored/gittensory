@@ -19,6 +19,9 @@ export type GateCheckPolicy = {
   duplicatePrGateMode?: GateRuleMode | undefined;
   qualityGateMode?: GateRuleMode | undefined;
   qualityGateMinScore?: number | null | undefined;
+  /** When `block`, a dual-model AI consensus defect (`ai_consensus_defect` finding) becomes a hard
+   *  blocker. Defaults to advisory — AI never blocks unless the maintainer opts in. */
+  aiReviewGateMode?: GateRuleMode | undefined;
   readinessScore?: number | null | undefined;
   /** ONLY confirmed gittensor contributors can be hard-blocked. When explicitly `false`, the gate is
    *  forced to a neutral (non-blocking) conclusion regardless of blockers — gittensory must never block
@@ -558,6 +561,10 @@ function isConfiguredGateBlocker(code: string, policy: GateCheckPolicy): boolean
   // repo explicitly opts in with linkedIssueGateMode: "block". Duplicates still default to blocking.
   if (code === "missing_linked_issue") return gateMode(policy.linkedIssueGateMode ?? "advisory") === "block";
   if (code === "duplicate_pr_risk") return gateMode(policy.duplicatePrGateMode ?? "block") === "block";
+  // A dual-model AI consensus defect blocks ONLY when the maintainer opted into aiReview: block. It is the
+  // most conservative AI signal (two independent models, high confidence) but still confirmed-contributor
+  // gated by evaluateGateCheck, and advisory by default.
+  if (code === "ai_consensus_defect") return gateMode(policy.aiReviewGateMode ?? "advisory") === "block";
   return false;
 }
 

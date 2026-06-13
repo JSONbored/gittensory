@@ -132,7 +132,8 @@ import { decidePublicSurface } from "../signals/settings-preview";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { resolveEffectiveSettings } from "../signals/focus-manifest";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
-import type { ContributorEvidenceRecord, GitHubWebhookPayload, JobMessage, JsonValue, PullRequestRecord, RepositorySettings } from "../types";
+import { runGittensoryAiReview } from "../services/ai-review";
+import type { AdvisoryFinding, ContributorEvidenceRecord, GitHubWebhookPayload, JobMessage, JsonValue, PullRequestRecord, RepositorySettings } from "../types";
 import { sha256Hex } from "../utils/crypto";
 import { errorMessage, nowIso } from "../utils/json";
 
@@ -791,6 +792,7 @@ export function gateCheckPolicy(settings: RepositorySettings, readinessScore?: n
     duplicatePrGateMode: settings.duplicatePrGateMode,
     qualityGateMode: settings.qualityGateMode,
     qualityGateMinScore: settings.qualityGateMinScore ?? null,
+    aiReviewGateMode: settings.aiReviewMode,
     readinessScore: readinessScore ?? null,
     confirmedContributor,
   };
@@ -804,6 +806,76 @@ export function gateCheckPolicy(settings: RepositorySettings, readinessScore?: n
 async function resolveRepositorySettings(env: Env, repoFullName: string): Promise<RepositorySettings> {
   const [dbSettings, manifest] = await Promise.all([getRepositorySettings(env, repoFullName), loadRepoFocusManifest(env, repoFullName)]);
   return resolveEffectiveSettings(dbSettings, manifest);
+}
+
+/** Build a bounded unified-diff string from cached PR files for the AI reviewer. Caps total size so a
+ *  huge PR cannot blow the model context or the neuron budget; each file's patch is taken from the raw
+ *  GitHub file payload when present. */
+export function buildAiReviewDiff(files: Awaited<ReturnType<typeof listPullRequestFiles>>): string {
+  const MAX_DIFF_CHARS = 60000;
+  const parts: string[] = [];
+  let total = 0;
+  for (const file of files) {
+    const patch = typeof file.payload?.patch === "string" ? file.payload.patch : "";
+    const header = `### ${file.path}${file.status ? ` (${file.status})` : ""} +${file.additions}/-${file.deletions}`;
+    const block = patch ? `${header}\n${patch}` : header;
+    if (total + block.length > MAX_DIFF_CHARS) {
+      parts.push(`… diff truncated (${files.length} files total).`);
+      break;
+    }
+    parts.push(block);
+    total += block.length;
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * Run the opt-in AI maintainer review and fold it into the gate + panel. Mutates `advisory.findings`
+ * with a dual-model consensus defect (when `aiReviewMode: block` and the free Workers-AI pair agrees with
+ * high confidence) so it can become a gate blocker BEFORE evaluateGateCheck runs — still confirmed-
+ * contributor gated. Returns the advisory notes for the public panel. Fully fail-safe: disabled / not a
+ * confirmed contributor / no head SHA / non-ok AI / any thrown error → no finding and no notes.
+ */
+export async function runAiReviewForAdvisory(
+  env: Env,
+  args: {
+    settings: RepositorySettings;
+    advisory: Awaited<ReturnType<typeof buildPullRequestAdvisory>>;
+    repoFullName: string;
+    pr: { number: number; title: string; body?: string | null | undefined };
+    author: string | null;
+    confirmedContributor: boolean;
+  },
+): Promise<{ notes: string } | undefined> {
+  if (args.settings.aiReviewMode === "off" || !args.confirmedContributor || !args.advisory.headSha) return undefined;
+  try {
+    const files = await listPullRequestFiles(env, args.repoFullName, args.pr.number);
+    const result = await runGittensoryAiReview(env, {
+      repoFullName: args.repoFullName,
+      prNumber: args.pr.number,
+      title: args.pr.title,
+      body: args.pr.body ?? undefined,
+      diff: buildAiReviewDiff(files),
+      actor: args.author,
+      mode: args.settings.aiReviewMode === "block" ? "block" : "advisory",
+      providerKey: null,
+    });
+    if (result.status !== "ok") return undefined;
+    if (result.consensusDefect) {
+      const defect: AdvisoryFinding = {
+        code: "ai_consensus_defect",
+        severity: "critical",
+        title: `AI reviewers agree on a likely critical defect: ${result.consensusDefect.title}`,
+        detail: result.consensusDefect.detail,
+        action: "Resolve the flagged defect, or override if the AI reviewers are mistaken, then re-run the gate.",
+      };
+      args.advisory.findings.push(defect);
+    }
+    return result.advisoryNotes ? { notes: result.advisoryNotes } : undefined;
+  } catch (error) {
+    console.error(JSON.stringify({ level: "warn", event: "ai_review_failed", repository: args.repoFullName, pullNumber: args.pr.number, error: errorMessage(error) }));
+    return undefined;
+  }
 }
 
 function linkedIssueDuplicatePullRequestsForGate(pr: PullRequestRecord, pullRequests: PullRequestRecord[]): number[] {
@@ -985,6 +1057,11 @@ async function maybePublishPrPublicSurface(
   // detection) gets a neutral, non-blocking gate. Gate-only runs still verify confirmation before
   // evaluating blockers so confirmed contributors cannot bypass a required Gate check.
   const confirmedContributor = official?.status === "confirmed";
+
+  // AI maintainer review (opt-in via aiReviewMode). Mutates `advisory` with a consensus defect (if any)
+  // BEFORE the gate evaluates, and returns advisory notes for the panel. Fully fail-safe.
+  const aiReview = await runAiReviewForAdvisory(env, { settings, advisory, repoFullName, pr, author, confirmedContributor });
+
   const gateEvaluation = gateEnabled ? evaluateGateCheck(advisory, gateCheckPolicy(settings, readiness.total, confirmedContributor)) : undefined;
   if (gateEnabled) {
     const gateCheckResult = await createOrUpdateGateCheckRun(
@@ -1050,7 +1127,7 @@ async function maybePublishPrPublicSurface(
     // Maintainer review-content overrides from `.gittensory.yml` (footer text, row toggles, intro note).
     // Cached, so this is a DB read after the settings resolution already loaded the manifest.
     const reviewConfig = (await loadRepoFocusManifest(env, repoFullName)).review;
-    const commentArgs = { repo, pr, profile, detection, queueHealth, collisions, preflight, settings, gate: gateEvaluation, review: reviewConfig };
+    const commentArgs = { repo, pr, profile, detection, queueHealth, collisions, preflight, settings, gate: gateEvaluation, review: reviewConfig, aiReview };
     const deterministicBody = buildPublicPrIntelligenceComment(commentArgs);
     try {
       await createOrUpdatePrIntelligenceComment(env, installationId, repoFullName, pr.number, deterministicBody);

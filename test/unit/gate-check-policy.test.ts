@@ -83,3 +83,28 @@ describe(".gittensory.yml settings override (resolveEffectiveSettings)", () => {
     expect(nonConfirmed.blockers).toEqual([]);
   });
 });
+
+describe("AI consensus defect gate blocker", () => {
+  function aiDefectAdvisory(): Advisory {
+    return { ...missingIssueAdvisory(), findings: [{ code: "ai_consensus_defect", title: "AI reviewers agree on a likely critical defect", severity: "critical", detail: "Both models flagged a null deref.", action: "Resolve it." }] };
+  }
+
+  it("is advisory by default — an AI consensus defect does NOT block when aiReview mode is off/advisory", () => {
+    expect(evaluateGateCheck(aiDefectAdvisory(), gateCheckPolicy(settings({ aiReviewMode: "off" }), null, true)).conclusion).toBe("success");
+    expect(evaluateGateCheck(aiDefectAdvisory(), gateCheckPolicy(settings({ aiReviewMode: "advisory" }), null, true)).conclusion).toBe("success");
+  });
+
+  it("blocks a confirmed contributor when the maintainer opts into aiReview: block (incl. via .gittensory.yml)", () => {
+    const blocked = evaluateGateCheck(aiDefectAdvisory(), gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true));
+    expect(blocked.conclusion).toBe("failure");
+    expect(blocked.blockers.map((f) => f.code)).toEqual(["ai_consensus_defect"]);
+    const eff = resolveEffectiveSettings(settings({ aiReviewMode: "off" }), parseFocusManifest({ gate: { aiReview: { mode: "block" } } }));
+    expect(evaluateGateCheck(aiDefectAdvisory(), gateCheckPolicy(eff, null, true)).conclusion).toBe("failure");
+  });
+
+  it("never blocks a non-confirmed contributor even with aiReview: block", () => {
+    const result = evaluateGateCheck(aiDefectAdvisory(), gateCheckPolicy(settings({ aiReviewMode: "block" }), null, false));
+    expect(result.conclusion).toBe("neutral");
+    expect(result.blockers).toEqual([]);
+  });
+});
