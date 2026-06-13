@@ -209,13 +209,23 @@ describe("focus-manifest loader", () => {
     expect(manifest.wantedPaths).toContain("apps/gittensory-ui/");
   });
 
-  it("does not persist an empty manifest from a failed fetch", async () => {
+  it("negative-caches an absent manifest so the gate path does not re-fetch every webhook", async () => {
     const env = createTestEnv();
     await loadRepoFocusManifest(env, "owner/empty", { fetcher: async () => null });
     const { listSignalSnapshots } = await import("../../src/db/repositories");
     const { REPO_FOCUS_MANIFEST_SIGNAL } = await import("../../src/signals/focus-manifest-loader");
     const snapshots = await listSignalSnapshots(env, REPO_FOCUS_MANIFEST_SIGNAL, "owner/empty");
-    expect(snapshots).toHaveLength(0);
+    expect(snapshots).toHaveLength(1);
+    // A second load returns the cached absent manifest without invoking the fetcher again.
+    let fetches = 0;
+    const cached = await loadRepoFocusManifest(env, "owner/empty", {
+      fetcher: async () => {
+        fetches += 1;
+        return null;
+      },
+    });
+    expect(fetches).toBe(0);
+    expect(cached.present).toBe(false);
   });
 
   it("treats a cached snapshot with a missing or unparseable timestamp as stale", async () => {

@@ -1,5 +1,5 @@
 import { parse as parseYaml } from "yaml";
-import type { GateRuleMode, JsonValue } from "../types";
+import type { GateRuleMode, JsonValue, RepositorySettings } from "../types";
 
 export type FocusManifestSource = "repo_file" | "api_record" | "none";
 export type FocusManifestLinkedIssuePolicy = "required" | "preferred" | "optional";
@@ -24,6 +24,37 @@ export type FocusManifestGateConfig = {
 };
 
 /**
+ * Generic repository-settings override declared in `.gittensory.yml` under `settings:`. A partial of
+ * {@link RepositorySettings} — every behaviour a maintainer can toggle in the dashboard can be set here
+ * as code. Unset fields are omitted so the resolver layers it OVER the DB-backed settings
+ * (`.gittensory.yml` > dashboard settings > safe defaults). The friendly `gate:` block is a typed alias
+ * for the gate-related subset and wins over `settings:` for those fields.
+ */
+export type FocusManifestSettings = Partial<
+  Pick<
+    RepositorySettings,
+    | "commentMode"
+    | "publicAudienceMode"
+    | "publicSignalLevel"
+    | "checkRunMode"
+    | "checkRunDetailLevel"
+    | "gateCheckMode"
+    | "linkedIssueGateMode"
+    | "duplicatePrGateMode"
+    | "qualityGateMode"
+    | "qualityGateMinScore"
+    | "autoLabelEnabled"
+    | "gittensorLabel"
+    | "createMissingLabel"
+    | "publicSurface"
+    | "includeMaintainerAuthors"
+    | "requireLinkedIssue"
+    | "backfillEnabled"
+    | "privateTrustEnabled"
+  >
+>;
+
+/**
  * Normalized maintainer focus manifest. Repo owners declare which work areas are wanted,
  * blocked, or preferred so Gittensory guidance can explain why a path is encouraged or
  * discouraged. `maintainerNotes` are private review context and must never reach a public
@@ -41,6 +72,7 @@ export type FocusManifest = {
   maintainerNotes: string[];
   publicNotes: string[];
   gate: FocusManifestGateConfig;
+  settings: FocusManifestSettings;
   warnings: string[];
 };
 
@@ -100,6 +132,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   maintainerNotes: [],
   publicNotes: [],
   gate: { ...EMPTY_GATE_CONFIG },
+  settings: {},
   warnings: [],
 };
 
@@ -112,7 +145,7 @@ export function isFocusManifestPublicSafe(text: string): boolean {
 }
 
 function emptyManifest(source: FocusManifestSource, warnings: string[] = []): FocusManifest {
-  return { ...EMPTY_MANIFEST, source, warnings, gate: { ...EMPTY_GATE_CONFIG } };
+  return { ...EMPTY_MANIFEST, source, warnings, gate: { ...EMPTY_GATE_CONFIG }, settings: {} };
 }
 
 function normalizeStringList(value: JsonValue | undefined, field: string, warnings: string[]): string[] {
@@ -231,6 +264,86 @@ export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
   return out;
 }
 
+function normalizeOptionalEnum<T extends string>(value: JsonValue | undefined, field: string, allowed: readonly T[], warnings: string[]): T | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" && (allowed as readonly string[]).includes(value)) return value as T;
+  warnings.push(`Manifest settings field "${field}" must be one of ${allowed.join(", ")}; ignoring "${String(value)}".`);
+  return null;
+}
+
+function normalizeOptionalString(value: JsonValue | undefined, field: string, warnings: string[]): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  warnings.push(`Manifest settings field "${field}" must be a non-empty string; ignoring it.`);
+  return null;
+}
+
+/**
+ * Parse the optional `settings:` mapping — a partial repository-settings override. Only recognized
+ * fields are kept; unknown/invalid values are dropped with a warning and never throw.
+ */
+function parseSettingsOverride(value: JsonValue | undefined, warnings: string[]): FocusManifestSettings {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push(`Manifest field "settings" must be a mapping; ignoring it.`);
+    return {};
+  }
+  const r = value as Record<string, JsonValue>;
+  const out: FocusManifestSettings = {};
+  const commentMode = normalizeOptionalEnum(r.commentMode, "settings.commentMode", ["off", "detected_contributors_only", "all_prs"] as const, warnings);
+  if (commentMode !== null) out.commentMode = commentMode;
+  const publicAudienceMode = normalizeOptionalEnum(r.publicAudienceMode, "settings.publicAudienceMode", ["oss_maintainer", "gittensor_only"] as const, warnings);
+  if (publicAudienceMode !== null) out.publicAudienceMode = publicAudienceMode;
+  const publicSignalLevel = normalizeOptionalEnum(r.publicSignalLevel, "settings.publicSignalLevel", ["minimal", "standard"] as const, warnings);
+  if (publicSignalLevel !== null) out.publicSignalLevel = publicSignalLevel;
+  const checkRunMode = normalizeOptionalEnum(r.checkRunMode, "settings.checkRunMode", ["off", "enabled"] as const, warnings);
+  if (checkRunMode !== null) out.checkRunMode = checkRunMode;
+  const checkRunDetailLevel = normalizeOptionalEnum(r.checkRunDetailLevel, "settings.checkRunDetailLevel", ["minimal", "standard", "deep"] as const, warnings);
+  if (checkRunDetailLevel !== null) out.checkRunDetailLevel = checkRunDetailLevel;
+  const gateCheckMode = normalizeOptionalEnum(r.gateCheckMode, "settings.gateCheckMode", ["off", "enabled"] as const, warnings);
+  if (gateCheckMode !== null) out.gateCheckMode = gateCheckMode;
+  const linkedIssueGateMode = normalizeOptionalGateMode(r.linkedIssueGateMode, "settings.linkedIssueGateMode", warnings);
+  if (linkedIssueGateMode !== null) out.linkedIssueGateMode = linkedIssueGateMode;
+  const duplicatePrGateMode = normalizeOptionalGateMode(r.duplicatePrGateMode, "settings.duplicatePrGateMode", warnings);
+  if (duplicatePrGateMode !== null) out.duplicatePrGateMode = duplicatePrGateMode;
+  const qualityGateMode = normalizeOptionalGateMode(r.qualityGateMode, "settings.qualityGateMode", warnings);
+  if (qualityGateMode !== null) out.qualityGateMode = qualityGateMode;
+  const qualityGateMinScore = normalizeOptionalScore(r.qualityGateMinScore, "settings.qualityGateMinScore", warnings);
+  if (qualityGateMinScore !== null) out.qualityGateMinScore = qualityGateMinScore;
+  const gittensorLabel = normalizeOptionalString(r.gittensorLabel, "settings.gittensorLabel", warnings);
+  if (gittensorLabel !== null) out.gittensorLabel = gittensorLabel;
+  const publicSurface = normalizeOptionalEnum(r.publicSurface, "settings.publicSurface", ["off", "comment_and_label", "comment_only", "label_only"] as const, warnings);
+  if (publicSurface !== null) out.publicSurface = publicSurface;
+  for (const key of ["autoLabelEnabled", "createMissingLabel", "includeMaintainerAuthors", "requireLinkedIssue", "backfillEnabled", "privateTrustEnabled"] as const) {
+    const flag = normalizeOptionalBoolean(r[key], `settings.${key}`, warnings);
+    if (flag !== null) out[key] = flag;
+  }
+  return out;
+}
+
+/** Serialize the settings override for the cache round-trip; returns null when nothing is set. */
+export function settingsOverrideToJson(settings: FocusManifestSettings): JsonValue {
+  if (Object.keys(settings).length === 0) return null;
+  return { ...settings } as Record<string, JsonValue>;
+}
+
+/**
+ * Resolve the EFFECTIVE repository settings a webhook should act on: `.gittensory.yml` > DB settings >
+ * safe defaults. The generic `settings:` override applies first; the friendly `gate:` alias then wins
+ * for its fields. This single resolver makes the whole gittensory configuration — gate on/off, blocker
+ * modes, comments, labels, surface, audience — controllable from the repo's `.gittensory.yml`.
+ */
+export function resolveEffectiveSettings(dbSettings: RepositorySettings, manifest: FocusManifest): RepositorySettings {
+  const effective: RepositorySettings = { ...dbSettings, ...manifest.settings };
+  const gate = manifest.gate;
+  if (gate.enabled !== null) effective.gateCheckMode = gate.enabled ? "enabled" : "off";
+  if (gate.linkedIssue !== null) effective.linkedIssueGateMode = gate.linkedIssue;
+  if (gate.duplicates !== null) effective.duplicatePrGateMode = gate.duplicates;
+  if (gate.readinessMode !== null) effective.qualityGateMode = gate.readinessMode;
+  if (gate.readinessMinScore !== null) effective.qualityGateMinScore = gate.readinessMinScore;
+  return effective;
+}
+
 /**
  * Tolerantly normalize an already-parsed manifest object into a {@link FocusManifest}.
  * Never throws: malformed shapes degrade to safe defaults and accumulate warnings so callers
@@ -255,6 +368,7 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     maintainerNotes: normalizeStringList(record.maintainerNotes, "maintainerNotes", warnings),
     publicNotes: normalizeStringList(record.publicNotes, "publicNotes", warnings).filter(isFocusManifestPublicSafe),
     gate: parseGateConfig(record.gate, warnings),
+    settings: parseSettingsOverride(record.settings, warnings),
     warnings,
   };
   if (
@@ -266,7 +380,8 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     manifest.publicNotes.length === 0 &&
     manifest.linkedIssuePolicy === "optional" &&
     manifest.issueDiscoveryPolicy === "neutral" &&
-    !manifest.gate.present
+    !manifest.gate.present &&
+    Object.keys(manifest.settings).length === 0
   ) {
     warnings.push("Manifest contained no recognized focus fields; falling back to deterministic signals.");
     manifest.present = false;

@@ -8,8 +8,11 @@ import {
   matchesManifestPath,
   parseFocusManifest,
   parseFocusManifestContent,
+  resolveEffectiveSettings,
+  settingsOverrideToJson,
   type FocusManifest,
 } from "../../src/signals/focus-manifest";
+import type { RepositorySettings } from "../../src/types";
 
 const FULL_MANIFEST = {
   source: "repo_file",
@@ -397,6 +400,7 @@ describe("compileFocusManifestPolicy", () => {
       maintainerNotes: [],
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
       gate: { present: false, enabled: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null },
+      settings: {},
       warnings: [],
     });
     expect(policy.publicSafe.entryGuidance).toContain("Keep PRs focused.");
@@ -747,5 +751,88 @@ describe("parseFocusManifest gate config", () => {
     expect(m.gate.duplicates).toBe("block");
     expect(m.gate.readinessMode).toBe("block");
     expect(m.gate.readinessMinScore).toBe(80);
+  });
+});
+
+describe("parseFocusManifest settings override + resolveEffectiveSettings", () => {
+  it("parses a comprehensive settings: block", () => {
+    const m = parseFocusManifest({
+      settings: {
+        commentMode: "all_prs",
+        publicAudienceMode: "gittensor_only",
+        publicSignalLevel: "minimal",
+        checkRunMode: "enabled",
+        checkRunDetailLevel: "deep",
+        gateCheckMode: "enabled",
+        linkedIssueGateMode: "block",
+        duplicatePrGateMode: "off",
+        qualityGateMode: "advisory",
+        qualityGateMinScore: 65,
+        autoLabelEnabled: false,
+        gittensorLabel: "gittensor",
+        createMissingLabel: true,
+        publicSurface: "comment_only",
+        includeMaintainerAuthors: true,
+        requireLinkedIssue: true,
+        backfillEnabled: false,
+        privateTrustEnabled: true,
+      },
+    });
+    expect(m.present).toBe(true);
+    expect(m.settings).toEqual({
+      commentMode: "all_prs",
+      publicAudienceMode: "gittensor_only",
+      publicSignalLevel: "minimal",
+      checkRunMode: "enabled",
+      checkRunDetailLevel: "deep",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "block",
+      duplicatePrGateMode: "off",
+      qualityGateMode: "advisory",
+      qualityGateMinScore: 65,
+      autoLabelEnabled: false,
+      gittensorLabel: "gittensor",
+      createMissingLabel: true,
+      publicSurface: "comment_only",
+      includeMaintainerAuthors: true,
+      requireLinkedIssue: true,
+      backfillEnabled: false,
+      privateTrustEnabled: true,
+    });
+  });
+
+  it("drops invalid settings values with warnings and keeps the valid ones", () => {
+    const m = parseFocusManifest({
+      settings: { commentMode: "loud", qualityGateMinScore: "high", autoLabelEnabled: "yes", gittensorLabel: "   ", publicSurface: "comment_only" },
+    });
+    expect(m.settings).toEqual({ publicSurface: "comment_only" });
+    expect(m.warnings.some((w) => /settings\.commentMode/.test(w))).toBe(true);
+    expect(m.warnings.some((w) => /settings\.qualityGateMinScore/.test(w))).toBe(true);
+    expect(m.warnings.some((w) => /settings\.autoLabelEnabled/.test(w))).toBe(true);
+    expect(m.warnings.some((w) => /settings\.gittensorLabel/.test(w))).toBe(true);
+  });
+
+  it("ignores a non-mapping settings block and treats a settings-only manifest as present", () => {
+    expect(parseFocusManifest({ settings: ["nope"] }).warnings.some((w) => /"settings" must be a mapping/.test(w))).toBe(true);
+    expect(parseFocusManifest({ settings: { commentMode: "off" } }).present).toBe(true);
+  });
+
+  it("round-trips settings through settingsOverrideToJson and serializes empty as null", () => {
+    const original = parseFocusManifest({ settings: { commentMode: "all_prs", qualityGateMinScore: 40 } });
+    const reparsed = parseFocusManifest({ settings: settingsOverrideToJson(original.settings) });
+    expect(reparsed.settings).toEqual(original.settings);
+    expect(settingsOverrideToJson(parseFocusManifest({}).settings)).toBeNull();
+  });
+
+  it("resolveEffectiveSettings overlays settings: over DB and lets gate: win for gate fields", () => {
+    const db = { commentMode: "off", gateCheckMode: "off", linkedIssueGateMode: "off", duplicatePrGateMode: "off", autoLabelEnabled: true } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(
+      db,
+      parseFocusManifest({ settings: { commentMode: "all_prs", linkedIssueGateMode: "advisory", autoLabelEnabled: false }, gate: { enabled: true, linkedIssue: "block" } }),
+    );
+    expect(eff.commentMode).toBe("all_prs"); // settings: override
+    expect(eff.autoLabelEnabled).toBe(false); // settings: override (boolean)
+    expect(eff.gateCheckMode).toBe("enabled"); // gate.enabled
+    expect(eff.linkedIssueGateMode).toBe("block"); // gate: wins over settings:
   });
 });

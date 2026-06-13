@@ -1487,6 +1487,7 @@ describe("queue processors", () => {
       issue: { number: 46, title: "Panel skip", state: "open", user: { login: "contributor" }, pull_request: {} },
     };
 
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", {});
     await processJob(env, {
       type: "github-webhook",
       deliveryId: "panel-rerun-created-ignore",
@@ -1616,6 +1617,7 @@ describe("queue processors", () => {
       return new Response("unexpected public call", { status: 500 });
     });
 
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", {});
     await processJob(env, {
       type: "github-webhook",
       deliveryId: "pr-labeled-noisy",
@@ -2093,6 +2095,7 @@ describe("queue processors", () => {
       return new Response("unexpected fetch", { status: 500 });
     });
 
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", {});
     await processJob(env, {
       type: "github-webhook",
       deliveryId: "surface-off-skip",
@@ -2611,6 +2614,7 @@ describe("queue processors", () => {
       return new Response("gittensor unavailable", { status: 503 });
     });
 
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", {});
     await expect(processJob(env, { type: "github-webhook", deliveryId: "miner-unavailable", eventName: "pull_request", payload })).resolves.toBeUndefined();
     await expect(
       processJob(env, {

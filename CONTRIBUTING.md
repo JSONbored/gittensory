@@ -193,16 +193,19 @@ Public GitHub surfaces:
   app/infra state) resolves to a neutral, non-blocking gate. Adding a blocker must keep it
   confirmed-contributor-gated through `evaluateGateCheck`.
 
-Gate config as code (`.gittensory.yml`):
+Config as code (`.gittensory.yml`) — every repository setting is controllable from the config file:
 
-- Maintainers can declare the gate policy in `.gittensory.yml` under `gate:` — `linkedIssue`,
-  `duplicates`, and `readiness: { mode, minScore }` (each `off | advisory | block`), plus `enabled`.
-- Precedence is `.gittensory.yml` > dashboard repository settings > safe defaults; an unset field
-  falls back to the next layer. The committed root `.gittensory.yml` is the worked example.
-- `enabled: false` disables the gate from config; turning it on for the first time is a one-click
-  repository setting (`gateCheckMode`), so dormant repos never pay a per-PR manifest fetch.
-- This only selects what the gate does. Only confirmed Gittensor contributors are ever hard-blocked,
-  regardless of the manifest.
+- **`settings:`** is a partial of the repository settings: any behaviour a maintainer can toggle in the
+  dashboard can be set here as code — `commentMode`, `publicAudienceMode`, `publicSurface`, `checkRunMode`,
+  `gateCheckMode`, the gate-blocker modes, `autoLabelEnabled`, `gittensorLabel`, `requireLinkedIssue`,
+  `backfillEnabled`, etc.
+- **`gate:`** is a friendly typed alias for the gate subset — `enabled` (on/off), `linkedIssue`,
+  `duplicates`, `readiness: { mode, minScore }` (each `off | advisory | block`).
+- Precedence: `.gittensory.yml` `gate:` > `.gittensory.yml` `settings:` > dashboard repository settings >
+  safe defaults; unset fields fall back to the next layer. The committed root `.gittensory.yml` is the
+  worked example. Resolved once in `resolveRepositorySettings`, so the whole app honours the file.
+- The config chooses **what** gittensory does (gate on/off, blockers, comments, labels, surface); it never
+  changes **who** can be blocked — only confirmed Gittensor contributors are ever hard-blocked.
 
 ## Commit And PR Titles
 

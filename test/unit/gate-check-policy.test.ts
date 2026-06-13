@@ -1,21 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { gateCheckPolicy } from "../../src/queue/processors";
 import { evaluateGateCheck } from "../../src/rules/advisory";
-import type { FocusManifestGateConfig } from "../../src/signals/focus-manifest";
+import { parseFocusManifest, resolveEffectiveSettings } from "../../src/signals/focus-manifest";
 import type { Advisory, RepositorySettings } from "../../src/types";
 
 function settings(over: Partial<RepositorySettings> = {}): RepositorySettings {
   return {
+    commentMode: "detected_contributors_only",
+    gateCheckMode: "enabled",
     linkedIssueGateMode: "advisory",
     duplicatePrGateMode: "block",
     qualityGateMode: "advisory",
     qualityGateMinScore: null,
     ...over,
   } as unknown as RepositorySettings;
-}
-
-function gate(over: Partial<FocusManifestGateConfig> = {}): FocusManifestGateConfig {
-  return { present: true, enabled: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, ...over };
 }
 
 function missingIssueAdvisory(): Advisory {
@@ -35,50 +33,52 @@ function missingIssueAdvisory(): Advisory {
   };
 }
 
-describe("gateCheckPolicy precedence (.gittensory.yml gate config > DB settings)", () => {
-  it("uses DB settings when no manifest gate config is provided", () => {
-    const policy = gateCheckPolicy(settings({ linkedIssueGateMode: "block" }), 80, true);
-    expect(policy.linkedIssueGateMode).toBe("block");
-    expect(policy.duplicatePrGateMode).toBe("block");
-    expect(policy.qualityGateMode).toBe("advisory");
-    expect(policy.readinessScore).toBe(80);
-    expect(policy.confirmedContributor).toBe(true);
+describe(".gittensory.yml settings override (resolveEffectiveSettings)", () => {
+  it("returns the DB settings unchanged when the manifest has no overrides", () => {
+    const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "block" }), parseFocusManifest(null));
+    expect(eff.linkedIssueGateMode).toBe("block");
+    expect(eff.duplicatePrGateMode).toBe("block");
+    expect(eff.gateCheckMode).toBe("enabled");
   });
 
-  it("lets the manifest authoritatively override each blocker mode over DB settings", () => {
-    const policy = gateCheckPolicy(
-      settings({ linkedIssueGateMode: "advisory", duplicatePrGateMode: "block", qualityGateMode: "off", qualityGateMinScore: 10 }),
-      55,
-      true,
-      gate({ linkedIssue: "block", duplicates: "off", readinessMode: "block", readinessMinScore: 70 }),
+  it("overlays the friendly gate: alias over DB settings (incl. gate.enabled -> gateCheckMode)", () => {
+    const eff = resolveEffectiveSettings(
+      settings({ gateCheckMode: "enabled", linkedIssueGateMode: "advisory", duplicatePrGateMode: "block", qualityGateMode: "off", qualityGateMinScore: 10 }),
+      parseFocusManifest({ gate: { enabled: false, linkedIssue: "block", duplicates: "off", readiness: { mode: "block", minScore: 70 } } }),
     );
-    expect(policy.linkedIssueGateMode).toBe("block"); // manifest "block" beats DB "advisory"
-    expect(policy.duplicatePrGateMode).toBe("off"); // manifest "off" beats DB "block"
-    expect(policy.qualityGateMode).toBe("block"); // manifest readiness.mode
-    expect(policy.qualityGateMinScore).toBe(70); // manifest readiness.minScore
+    expect(eff.gateCheckMode).toBe("off"); // gate.enabled: false disables from config
+    expect(eff.linkedIssueGateMode).toBe("block");
+    expect(eff.duplicatePrGateMode).toBe("off");
+    expect(eff.qualityGateMode).toBe("block");
+    expect(eff.qualityGateMinScore).toBe(70);
   });
 
-  it("falls back to DB per-field when only some manifest fields are set", () => {
-    const policy = gateCheckPolicy(settings({ linkedIssueGateMode: "advisory", duplicatePrGateMode: "block" }), null, false, gate({ linkedIssue: "block" }));
-    expect(policy.linkedIssueGateMode).toBe("block"); // overridden by manifest
-    expect(policy.duplicatePrGateMode).toBe("block"); // falls back to DB
-    expect(policy.qualityGateMode).toBe("advisory"); // falls back to DB
-    expect(policy.confirmedContributor).toBe(false);
+  it("overlays the generic settings: block over DB, and gate: wins for gate fields", () => {
+    const eff = resolveEffectiveSettings(
+      settings({ commentMode: "off", publicSurface: "off", gateCheckMode: "off", linkedIssueGateMode: "off" }),
+      parseFocusManifest({ settings: { commentMode: "all_prs", publicSurface: "comment_only", gateCheckMode: "enabled", linkedIssueGateMode: "advisory" }, gate: { linkedIssue: "block" } }),
+    );
+    expect(eff.commentMode).toBe("all_prs"); // settings: override
+    expect(eff.publicSurface).toBe("comment_only"); // settings: override
+    expect(eff.gateCheckMode).toBe("enabled"); // settings: override (config enables the gate)
+    expect(eff.linkedIssueGateMode).toBe("block"); // gate: wins over settings:
   });
 
   it("end-to-end: a manifest linkedIssue:block blocks a confirmed author's no-issue PR even when DB is advisory", () => {
-    const blocked = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(settings({ linkedIssueGateMode: "advisory" }), null, true, gate({ linkedIssue: "block" })));
+    const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "advisory" }), parseFocusManifest({ gate: { linkedIssue: "block" } }));
+    const blocked = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true));
     expect(blocked.conclusion).toBe("failure");
     expect(blocked.blockers.map((finding) => finding.code)).toEqual(["missing_linked_issue"]);
   });
 
   it("end-to-end: a manifest linkedIssue:advisory un-blocks even when DB is block (config-as-code relief)", () => {
-    const relieved = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(settings({ linkedIssueGateMode: "block" }), null, true, gate({ linkedIssue: "advisory" })));
-    expect(relieved.conclusion).toBe("success");
+    const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "block" }), parseFocusManifest({ gate: { linkedIssue: "advisory" } }));
+    expect(evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true)).conclusion).toBe("success");
   });
 
-  it("still only blocks confirmed contributors regardless of the manifest config", () => {
-    const nonConfirmed = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(settings({ linkedIssueGateMode: "advisory" }), null, false, gate({ linkedIssue: "block" })));
+  it("still only blocks confirmed contributors regardless of the config", () => {
+    const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "advisory" }), parseFocusManifest({ gate: { linkedIssue: "block" } }));
+    const nonConfirmed = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, false));
     expect(nonConfirmed.conclusion).toBe("neutral");
     expect(nonConfirmed.blockers).toEqual([]);
   });
