@@ -252,6 +252,67 @@ describe("advisory rules", () => {
     expect(evaluateGateCheck(advisory, { qualityGateMode: "block", qualityGateMinScore: Number.NaN, readinessScore: 10 }).conclusion).toBe("success");
   });
 
+  it("only blocks merge on slop risk when slop gate mode is block and risk exceeds the maximum", () => {
+    const advisory = buildPullRequestAdvisory(repo, {
+      repoFullName: repo.fullName,
+      number: 25,
+      title: "Add slop gate",
+      state: "open",
+      authorLogin: "contributor",
+      authorAssociation: "NONE",
+      headSha: "def456",
+      labels: [],
+      linkedIssues: [9],
+    });
+
+    // Advisory/off never block, and block needs both a configured max and a computed risk.
+    expect(evaluateGateCheck(advisory, { slopGateMode: "advisory", slopGateMaxRisk: 20, slopRisk: 90 }).conclusion).toBe("success");
+    expect(evaluateGateCheck(advisory, { slopGateMode: "off", slopGateMaxRisk: 20, slopRisk: 90 }).conclusion).toBe("success");
+    expect(evaluateGateCheck(advisory, { slopGateMode: "block", slopGateMaxRisk: null, slopRisk: 90 }).conclusion).toBe("success");
+    expect(evaluateGateCheck(advisory, { slopGateMode: "block", slopGateMaxRisk: 20, slopRisk: null }).conclusion).toBe("success");
+    // Risk at or below the max passes; only strictly-above blocks.
+    expect(evaluateGateCheck(advisory, { slopGateMode: "block", slopGateMaxRisk: 30, slopRisk: 30 }).conclusion).toBe("success");
+
+    const failingGate = evaluateGateCheck(advisory, { slopGateMode: "block", slopGateMaxRisk: 30, slopRisk: 60 });
+    const output = formatGateCheckOutput(failingGate);
+    expect(failingGate.conclusion).toBe("failure");
+    expect(failingGate.blockers.map((finding) => finding.code)).toEqual(["slop_risk_above_threshold"]);
+    expect(output.text).toContain("Slop risk is above the configured threshold");
+    expect(failingGate.blockers[0]?.detail).toContain("60/100");
+    expect(failingGate.blockers[0]?.detail).toContain("30/100");
+
+    expect(evaluateGateCheck(advisory, { slopGateMode: "block", slopGateMaxRisk: Number.NaN, slopRisk: 90 }).conclusion).toBe("success");
+  });
+
+  it("folds the slop blocker under the #644 confirmed-contributor gate", () => {
+    const advisory = buildPullRequestAdvisory(repo, {
+      repoFullName: repo.fullName,
+      number: 26,
+      title: "Add slop gate contributor coupling",
+      state: "open",
+      authorLogin: "contributor",
+      authorAssociation: "NONE",
+      headSha: "abc789",
+      labels: [],
+      linkedIssues: [9],
+    });
+    const blockingPolicy = { slopGateMode: "block" as const, slopGateMaxRisk: 30, slopRisk: 60 };
+
+    // A non-confirmed contributor is never hard-blocked: the slop blocker is folded into `blockers`
+    // above the #644 early-return, so the gate goes neutral and surfaces nothing as a blocker.
+    const nonConfirmed = evaluateGateCheck(advisory, { ...blockingPolicy, confirmedContributor: false });
+    expect(nonConfirmed.conclusion).toBe("neutral");
+    expect(nonConfirmed.blockers).toHaveLength(0);
+
+    // A confirmed contributor over the max is hard-blocked on the slop signal.
+    const confirmed = evaluateGateCheck(advisory, { ...blockingPolicy, confirmedContributor: true });
+    expect(confirmed.conclusion).toBe("failure");
+    expect(confirmed.blockers.map((finding) => finding.code)).toEqual(["slop_risk_above_threshold"]);
+
+    // Unknown contributor status (caller did not gate) keeps the prior behaviour: blocks on slop.
+    expect(evaluateGateCheck(advisory, blockingPolicy).conclusion).toBe("failure");
+  });
+
   it("summarizes multiple configured hard blockers without swallowing advisory warnings", () => {
     const gate = evaluateGateCheck(
       {

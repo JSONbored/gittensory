@@ -66,19 +66,19 @@ describe(".gittensory.yml settings override (resolveEffectiveSettings)", () => {
 
   it("end-to-end: a manifest linkedIssue:block blocks a confirmed author's no-issue PR even when DB is advisory", () => {
     const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "advisory" }), parseFocusManifest({ gate: { linkedIssue: "block" } }));
-    const blocked = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true));
+    const blocked = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, { confirmedContributor: true }));
     expect(blocked.conclusion).toBe("failure");
     expect(blocked.blockers.map((finding) => finding.code)).toEqual(["missing_linked_issue"]);
   });
 
   it("end-to-end: a manifest linkedIssue:advisory un-blocks even when DB is block (config-as-code relief)", () => {
     const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "block" }), parseFocusManifest({ gate: { linkedIssue: "advisory" } }));
-    expect(evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true)).conclusion).toBe("success");
+    expect(evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, { confirmedContributor: true })).conclusion).toBe("success");
   });
 
   it("still only blocks confirmed contributors regardless of the config", () => {
     const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "advisory" }), parseFocusManifest({ gate: { linkedIssue: "block" } }));
-    const nonConfirmed = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, false));
+    const nonConfirmed = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, { confirmedContributor: false }));
     expect(nonConfirmed.conclusion).toBe("neutral");
     expect(nonConfirmed.blockers).toEqual([]);
   });

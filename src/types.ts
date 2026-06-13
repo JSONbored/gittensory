@@ -367,6 +367,8 @@ export type RepositorySettings = {
   duplicatePrGateMode: GateRuleMode;
   qualityGateMode: GateRuleMode;
   qualityGateMinScore?: number | null | undefined;
+  slopGateMode: GateRuleMode;
+  slopGateMaxRisk?: number | null | undefined;
   autoLabelEnabled: boolean;
   gittensorLabel: string;
   createMissingLabel: boolean;

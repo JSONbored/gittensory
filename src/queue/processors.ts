@@ -128,6 +128,7 @@ import {
   PR_PANEL_RETRIGGER_MARKER,
   unionScopedOverlapClusters,
 } from "../signals/engine";
+import { buildSlopAssessment } from "../signals/slop";
 import { decidePublicSurface } from "../signals/settings-preview";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { resolveEffectiveSettings } from "../signals/focus-manifest";
@@ -782,7 +783,13 @@ function shouldProcessPullRequestPublicSurface(action: string | undefined): bool
   return PR_PUBLIC_SURFACE_ACTIONS.has(action ?? "") || PR_GATE_CLOSED_ACTIONS.has(action ?? "");
 }
 
-export function gateCheckPolicy(settings: RepositorySettings, readinessScore?: number | null, confirmedContributor?: boolean) {
+export type GateCheckPolicyOptions = {
+  readinessScore?: number | null | undefined;
+  slopRisk?: number | null | undefined;
+  confirmedContributor?: boolean | undefined;
+};
+
+export function gateCheckPolicy(settings: RepositorySettings, options: GateCheckPolicyOptions = {}) {
   // `settings` is already the EFFECTIVE config (`.gittensory.yml` > DB > defaults), resolved upstream by
   // resolveRepositorySettings, so the blocker modes here reflect the repo's config file directly.
   // confirmedContributor governs WHO can be blocked, downstream in evaluateGateCheck.
@@ -791,8 +798,11 @@ export function gateCheckPolicy(settings: RepositorySettings, readinessScore?: n
     duplicatePrGateMode: settings.duplicatePrGateMode,
     qualityGateMode: settings.qualityGateMode,
     qualityGateMinScore: settings.qualityGateMinScore ?? null,
-    readinessScore: readinessScore ?? null,
-    confirmedContributor,
+    slopGateMode: settings.slopGateMode,
+    slopGateMaxRisk: settings.slopGateMaxRisk ?? null,
+    slopRisk: options.slopRisk ?? null,
+    readinessScore: options.readinessScore ?? null,
+    confirmedContributor: options.confirmedContributor,
   };
 }
 
@@ -804,6 +814,19 @@ export function gateCheckPolicy(settings: RepositorySettings, readinessScore?: n
 async function resolveRepositorySettings(env: Env, repoFullName: string): Promise<RepositorySettings> {
   const [dbSettings, manifest] = await Promise.all([getRepositorySettings(env, repoFullName), loadRepoFocusManifest(env, repoFullName)]);
   return resolveEffectiveSettings(dbSettings, manifest);
+}
+
+// Deterministic slop risk for the gate, computed from real PR file metadata. The slop gate only ever
+// hard-blocks in "block" mode with an explicit max risk (mirrors buildSlopGateBlocker's guard), so we
+// skip the file fetch entirely otherwise. `loadPullRequestFiles` is shared/memoized with the check-run
+// annotations fetch so the PR files are pulled at most once per webhook.
+async function computeSlopRiskForGate(
+  settings: RepositorySettings,
+  loadPullRequestFiles: () => ReturnType<typeof listPullRequestFiles>,
+): Promise<number | null> {
+  if (settings.gateCheckMode !== "enabled" || settings.slopGateMode !== "block" || settings.slopGateMaxRisk == null) return null;
+  const files = await loadPullRequestFiles();
+  return buildSlopAssessment({ changedFiles: files.map((file) => ({ path: file.path, additions: file.additions, deletions: file.deletions })) }).slopRisk;
 }
 
 function linkedIssueDuplicatePullRequestsForGate(pr: PullRequestRecord, pullRequests: PullRequestRecord[]): number[] {
@@ -974,6 +997,8 @@ async function maybePublishPrPublicSurface(
     scopedOverlapCount: unionScopedOverlapClusters(collisions, pr, preflight.collisions).length,
   });
 
+  // Gate-only runs (no public surface) still resolve confirmation before evaluating blockers, so a
+  // confirmed contributor cannot bypass a required Gate check (#646).
   if (gateEnabled && author && !publicSurfaceSkipped && !official) {
     official = await getCachedOfficialMinerDetection(env, author, {
       targetKey: `${repoFullName}#${pr.number}`,
@@ -981,18 +1006,25 @@ async function maybePublishPrPublicSurface(
     });
   }
 
+  // Fetch the PR's changed files at most once and reuse the result for both the slop gate and the
+  // check-run annotations below (de-duped; the two call sites are separated by early returns).
+  let pullRequestFilesPromise: ReturnType<typeof listPullRequestFiles> | undefined;
+  const loadPullRequestFiles = () => (pullRequestFilesPromise ??= listPullRequestFiles(env, repoFullName, pr.number));
+
   // Only CONFIRMED gittensor contributors can be hard-blocked; everyone else (or an unavailable
   // detection) gets a neutral, non-blocking gate. Gate-only runs still verify confirmation before
   // evaluating blockers so confirmed contributors cannot bypass a required Gate check.
   const confirmedContributor = official?.status === "confirmed";
-  const gateEvaluation = gateEnabled ? evaluateGateCheck(advisory, gateCheckPolicy(settings, readiness.total, confirmedContributor)) : undefined;
+  const slopRisk = await computeSlopRiskForGate(settings, loadPullRequestFiles);
+  const gatePolicyOptions = { readinessScore: readiness.total, slopRisk, confirmedContributor };
+  const gateEvaluation = gateEnabled ? evaluateGateCheck(advisory, gateCheckPolicy(settings, gatePolicyOptions)) : undefined;
   if (gateEnabled) {
     const gateCheckResult = await createOrUpdateGateCheckRun(
       env,
       installationId,
       repoFullName,
       advisory,
-      gateCheckPolicy(settings, readiness.total, confirmedContributor),
+      gateCheckPolicy(settings, gatePolicyOptions),
       {
         checkRunId: pendingGateCheckRunId,
       },
@@ -1020,7 +1052,7 @@ async function maybePublishPrPublicSurface(
 
   if (decision.willCheckRun && advisory.headSha) {
     try {
-      const checkRunFiles = await listPullRequestFiles(env, repoFullName, pr.number);
+      const checkRunFiles = await loadPullRequestFiles();
       const checkRunResult = await createOrUpdateCheckRun(env, installationId, repoFullName, advisory, settings.checkRunDetailLevel, {
         files: checkRunFiles,
         collisions,
