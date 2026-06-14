@@ -1091,7 +1091,7 @@ export type DigestSubscriptionRecord = {
 // unless a row is `paused`).
 export type NotificationChannel = "badge" | "email";
 export type NotificationDeliveryStatus = "pending" | "delivered" | "read" | "suppressed";
-export type NotificationEventType = "pull_request_changes_requested";
+export type NotificationEventType = "pull_request_changes_requested" | "pull_request_merged";
 
 // A notification-worthy event extracted from a webhook payload (src/notifications/events.ts).
 export type DetectedNotificationEvent = {

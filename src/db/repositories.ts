@@ -1377,11 +1377,12 @@ export async function markNotificationDeliveryDelivered(env: Env, id: string): P
 export async function listNotificationDeliveriesForRecipient(
   env: Env,
   recipientLogin: string,
-  options: { channel?: NotificationChannel; unreadOnly?: boolean; limit?: number } = {},
+  options: { channel?: NotificationChannel; eventType?: string; unreadOnly?: boolean; limit?: number } = {},
 ): Promise<NotificationDeliveryRecord[]> {
   const db = getDb(env.DB);
   const conditions: SQL[] = [eq(notificationDeliveries.recipientLogin, recipientLogin.toLowerCase())];
   if (options.channel) conditions.push(eq(notificationDeliveries.channel, options.channel));
+  if (options.eventType) conditions.push(eq(notificationDeliveries.eventType, options.eventType));
   if (options.unreadOnly) conditions.push(eq(notificationDeliveries.status, "delivered"));
   const rows = await db
     .select()

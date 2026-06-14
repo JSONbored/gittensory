@@ -361,6 +361,17 @@ const notificationsOutputSchema = {
   notifications: z.unknown().optional(),
 };
 
+const prOutcomeShape = {
+  login: z.string().min(1),
+  limit: z.number().int().positive().max(100).optional(),
+};
+
+const prOutcomeOutputSchema = {
+  login: z.string().optional(),
+  count: z.number().optional(),
+  outcomes: z.unknown().optional(),
+};
+
 const predictGateShape = {
   login: z.string().min(1),
   owner: z.string().min(1),
@@ -604,6 +615,17 @@ export class GittensoryMcp {
         outputSchema: predictGateOutputSchema,
       },
       async (input) => this.toolResult(await this.predictGate(input)),
+    );
+
+    server.registerTool(
+      "gittensory_pr_outcome",
+      {
+        description:
+          "Return a contributor's own post-merge outcome records — for each merged PR, a public-safe attribution of what it did for their standing on the repo. Self-scoped: only the authenticated login's outcomes.",
+        inputSchema: prOutcomeShape,
+        outputSchema: prOutcomeOutputSchema,
+      },
+      async (input) => this.toolResult(await this.prOutcomes(input.login, input.limit)),
     );
 
     server.registerTool(
@@ -1233,6 +1255,23 @@ export class GittensoryMcp {
     return {
       summary: `Predicted Gittensory gate for ${repoFullName} under the ${verdict.pack} pack: ${verdict.conclusion}.`,
       data: verdict as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async prOutcomes(login: string, limit?: number): Promise<ToolPayload> {
+    this.requireContributorAccess(login);
+    const deliveries = await listNotificationDeliveriesForRecipient(this.env, login, { eventType: "pull_request_merged", limit: limit ?? 50 });
+    const outcomes = deliveries.map((delivery) => ({
+      repoFullName: delivery.repoFullName,
+      pullNumber: delivery.pullNumber,
+      outcome: "merged" as const,
+      attribution: delivery.body,
+      deeplink: delivery.deeplink,
+      recordedAt: delivery.createdAt,
+    }));
+    return {
+      summary: `Gittensory post-merge outcomes for ${login}: ${outcomes.length} merged PR(s).`,
+      data: { login: login.toLowerCase(), count: outcomes.length, outcomes } as unknown as Record<string, unknown>,
     };
   }
 
