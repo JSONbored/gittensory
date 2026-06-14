@@ -131,7 +131,7 @@ function ProductAnalytics() {
                 Analytics
               </div>
               <h1 className="mt-1 font-display text-token-2xl font-semibold tracking-tight">
-                Usage & value analytics
+                Usage & value analytics (preview check)
               </h1>
               <p className="mt-1 max-w-2xl text-token-sm text-muted-foreground">
                 Operator-facing adoption, activation, retention, and ecosystem value from product
