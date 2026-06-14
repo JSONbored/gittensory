@@ -88,7 +88,7 @@ describe("api routes", () => {
       status: "ok",
       service: "gittensory-api",
       minMcpVersion: "0.5.0",
-      latestRecommendedMcpVersion: "0.5.0",
+      latestRecommendedMcpVersion: "0.6.0",
     });
 
     const compatibility = await app.request("/v1/mcp/compatibility", {}, env);
@@ -101,8 +101,8 @@ describe("api routes", () => {
       mcp: {
         packageName: "@jsonbored/gittensory-mcp",
         minimumSupportedVersion: "0.5.0",
-        latestRecommendedVersion: "0.5.0",
-        latestPackageVersion: "0.5.0",
+        latestRecommendedVersion: "0.6.0",
+        latestPackageVersion: "0.6.0",
       },
       compatibilityWarnings: [],
       breakingChanges: [],
@@ -3438,7 +3438,7 @@ describe("api routes", () => {
     expect(mcpCompatibilityBody).toMatchObject({
       adoption: expect.objectContaining({
         minimumSupportedVersion: "0.5.0",
-        latestRecommendedVersion: "0.5.0",
+        latestRecommendedVersion: "0.6.0",
         staleEvents: 1,
         incompatibleEvents: 3,
         totalEvents: 4,
@@ -5147,7 +5147,7 @@ describe("api routes", () => {
             protocolVersion: "2025-03-26",
             compatibilityStatus: "incompatible",
             minimumSupportedVersion: "0.5.0",
-            latestRecommendedVersion: "0.5.0",
+            latestRecommendedVersion: "0.6.0",
           }),
         }),
       ]),
