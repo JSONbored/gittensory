@@ -155,6 +155,7 @@ import {
 } from "../services/mcp-compatibility";
 import { buildOperatorDashboardPayload } from "../services/operator-dashboard";
 import { buildSelfDogfoodRegistrationPack, resolveSelfDogfoodRepoFullName } from "../services/self-dogfood-registration-pack";
+import { buildSubnetInterfaceDescriptor } from "../services/subnet-interface";
 import {
   buildWeeklyValueReport,
   formatWeeklyValueReportMarkdown,
@@ -673,6 +674,14 @@ export function createApp() {
   app.get("/v1/mcp/compatibility", (c) => c.json(buildMcpCompatibilityMetadata(nowIso())));
   app.get("/openapi.json", (c) => c.json(buildOpenApiSpec()));
   app.all("/mcp", handleMcpRequest);
+
+  // Public SN74 contribution-interface descriptor (#695): metagraphed (and any agent) fetches this to route
+  // gittensor discovery → Gittensory. Unauthenticated product metadata; excluded from requiresApiToken below.
+  app.get("/v1/public/subnet-interface", (c) => {
+    const origin = c.env.PUBLIC_API_ORIGIN ?? new URL(c.req.url).origin;
+    c.header("Cache-Control", "public, max-age=600, stale-while-revalidate=86400");
+    return c.json(buildSubnetInterfaceDescriptor({ origin, generatedAt: nowIso(), appSlug: c.env.GITHUB_APP_SLUG, upstreamRepo: c.env.GITTENSOR_UPSTREAM_REPO }));
+  });
 
   app.get("/v1/public/github/repos/:owner/:repo/stats", async (c) => {
     try {
@@ -4144,6 +4153,7 @@ function requiresApiToken(path: string): boolean {
   if (path === "/health") return false;
   if (path === "/v1/mcp/compatibility") return false;
   if (/^\/v1\/public\/github\/repos\/[^/]+\/[^/]+\/stats$/.test(path)) return false;
+  if (path === "/v1/public/subnet-interface") return false;
   if (path === "/openapi.json") return false;
   if (path === "/mcp") return false;
   if (path.startsWith("/v1/auth/")) return false;
