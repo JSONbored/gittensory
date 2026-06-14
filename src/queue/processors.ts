@@ -1136,14 +1136,15 @@ async function maybePublishPrPublicSurface(
     // failure is caught and the gate is still finalized (never left in_progress).
     aiReview = await runAiReviewForAdvisory(env, { settings, advisory, repoFullName, pr, author, confirmedContributor });
 
-    gateEvaluation = gateEnabled ? evaluateGateCheck(advisory, gateCheckPolicy(settings, readiness.total, confirmedContributor, slopRisk)) : undefined;
+    const gatePolicy = gateCheckPolicy(settings, readiness.total, confirmedContributor, slopRisk);
+    gateEvaluation = gateEnabled ? evaluateGateCheck(advisory, gatePolicy) : undefined;
     if (gateEnabled) {
       const gateCheckResult = await createOrUpdateGateCheckRun(
         env,
         installationId,
         repoFullName,
         advisory,
-        gateCheckPolicy(settings, readiness.total, confirmedContributor),
+        gatePolicy,
         {
           checkRunId: pendingGateCheckRunId,
         },
