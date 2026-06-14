@@ -629,7 +629,7 @@ export function createApp() {
       c.header("Access-Control-Allow-Origin", allowedOrigin);
       c.header("Access-Control-Allow-Credentials", "true");
       c.header("Access-Control-Allow-Headers", "authorization, content-type, mcp-session-id, mcp-protocol-version");
-      c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      c.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
       c.header("Access-Control-Expose-Headers", "x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset, retry-after");
       c.header("Access-Control-Max-Age", "600");
       c.header("Vary", "Origin", { append: true });
