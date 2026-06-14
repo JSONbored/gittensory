@@ -197,6 +197,7 @@ import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-mo
 import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
+import { buildMaintainerActivationPreview, recommendedAdvisoryActivationSettings } from "../services/maintainer-activation";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
 import { compileFocusManifestPolicy } from "../signals/focus-manifest";
 import { loadRepoFocusManifest, upsertRepoFocusManifest } from "../signals/focus-manifest-loader";
@@ -1788,6 +1789,38 @@ export function createApp() {
     const gate = await requireRepoMaintainer(c, fullName);
     if (gate instanceof Response) return gate;
     return c.json(await getRepositorySettings(c.env, fullName));
+  });
+
+  // Maintainer activation demo (#701): a repo-specific "here's what Gittensory would have surfaced" preview
+  // over recent PRs, plus a one-click advisory ramp. Maintainer-scoped + per-repo. Deterministic (no AI run).
+  app.get("/v1/repos/:owner/:repo/activation-preview", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoMaintainer(c, fullName);
+    if (gate instanceof Response) return gate;
+    const [repo, settings, pullRequests] = await Promise.all([
+      getRepository(c.env, fullName),
+      getRepositorySettings(c.env, fullName),
+      listPullRequests(c.env, fullName),
+    ]);
+    return c.json(buildMaintainerActivationPreview({ repoFullName: fullName, repo, settings, pullRequests, generatedAt: nowIso() }));
+  });
+
+  // One-click "enable advisory mode" — turns on the gate + deterministic rules in advisory (non-blocking)
+  // mode. Merges onto current settings so unrelated fields are preserved.
+  app.post("/v1/repos/:owner/:repo/activation", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoMaintainer(c, fullName);
+    if (gate instanceof Response) return gate;
+    const current = await getRepositorySettings(c.env, fullName);
+    const updated = await upsertRepositorySettings(c.env, { ...current, ...recommendedAdvisoryActivationSettings() });
+    return c.json({
+      repoFullName: fullName,
+      gateCheckMode: updated.gateCheckMode,
+      checkRunMode: updated.checkRunMode,
+      linkedIssueGateMode: updated.linkedIssueGateMode,
+      duplicatePrGateMode: updated.duplicatePrGateMode,
+      qualityGateMode: updated.qualityGateMode,
+    });
   });
 
   // Maintainer self-serve AI-review config (non-secret: mode/byok/provider/model). Session-authenticated +
@@ -3901,6 +3934,7 @@ function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: 
   if (path.startsWith("/v1/app/")) return true;
   if (isIssueQualityPath(path)) return true;
   if (isRepoSettingsPath(path)) return true;
+  if (isRepoActivationPath(path)) return true;
   if (isRepoSettingsPreviewPath(path)) return true;
   if (isRepoOnboardingPackPreviewPath(path)) return true;
   if (isRepoFocusManifestPath(path)) return true;
@@ -3913,6 +3947,10 @@ function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: 
 
 function isRepoSettingsPath(path: string): boolean {
   return /^\/v1\/repos\/[^/]+\/[^/]+\/settings$/.test(path);
+}
+
+function isRepoActivationPath(path: string): boolean {
+  return /^\/v1\/repos\/[^/]+\/[^/]+\/activation(?:-preview)?$/.test(path);
 }
 
 function isRepoSettingsPreviewPath(path: string): boolean {
