@@ -1445,6 +1445,20 @@
             "items": {
               "type": "string"
             }
+          },
+          "multiplierTier": {
+            "type": "string",
+            "enum": [
+              "maintainer_created",
+              "community"
+            ]
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "maintainer_wip"
+            ]
           }
         },
         "required": [
@@ -1453,6 +1467,8 @@
           "fit",
           "score",
           "lane",
+          "multiplierTier",
+          "availability",
           "reasons",
           "warnings"
         ]
