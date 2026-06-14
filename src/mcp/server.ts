@@ -29,6 +29,8 @@ import {
   listRepoSyncSegments,
   listRepoSyncStates,
   listRepositories,
+  MAX_NOTIFICATION_DELIVERY_ID_LENGTH,
+  MAX_NOTIFICATION_MARK_READ_IDS,
   markNotificationDeliveriesRead,
   recordProductUsageEvent,
 } from "../db/repositories";
@@ -426,7 +428,10 @@ const listNotificationsShape = {
 
 const markNotificationsReadShape = {
   login: z.string().min(1),
-  ids: z.array(z.string().min(1)).optional(),
+  ids: z
+    .array(z.string().min(1).max(MAX_NOTIFICATION_DELIVERY_ID_LENGTH))
+    .max(MAX_NOTIFICATION_MARK_READ_IDS)
+    .optional(),
 };
 
 const explainRepoDecisionOutputSchema = {
