@@ -238,6 +238,7 @@ describe("upstream ruleset drift tracking", () => {
               defaultLabelMultiplier: 1.2,
               fixedBaseScore: 12,
               eligibilityMode: "linked_issue_required",
+              timeDecay: { gracePeriodHours: 24, sigmoidMidpointDays: 5, sigmoidSteepness: 0.4, minMultiplier: 0.05 },
             },
           ],
         },
@@ -255,6 +256,7 @@ describe("upstream ruleset drift tracking", () => {
         defaultLabelMultiplier: null,
         fixedBaseScore: null,
         eligibilityMode: null,
+        timeDecay: null,
       },
       {
         repo: "owner/policy",
@@ -266,6 +268,7 @@ describe("upstream ruleset drift tracking", () => {
         defaultLabelMultiplier: 1.2,
         fixedBaseScore: 12,
         eligibilityMode: "linked_issue_required",
+        timeDecay: { gracePeriodHours: 24, sigmoidMidpointDays: 5, sigmoidSteepness: 0.4, minMultiplier: 0.05 },
       },
     ]);
   });
@@ -455,6 +458,7 @@ describe("upstream ruleset drift tracking", () => {
               defaultLabelMultiplier: 1.2,
               fixedBaseScore: 12,
               eligibilityMode: "linked_issue_required",
+              timeDecay: { gracePeriodHours: 24, sigmoidMidpointDays: 5, sigmoidSteepness: 0.4, minMultiplier: 0.05 },
             },
           ],
         },
@@ -462,11 +466,11 @@ describe("upstream ruleset drift tracking", () => {
       base,
     );
     const allFieldsDrift = registryDriftPayload(allFields!);
-    expect(allFields).toMatchObject({ severity: "high", summary: "8 registry hyperparameter drift event(s)" });
+    expect(allFields).toMatchObject({ severity: "high", summary: "9 registry hyperparameter drift event(s)" });
     expect(allFieldsDrift).toMatchObject({
-      totalEvents: 8,
+      totalEvents: 9,
       omittedEvents: 0,
-      highImpactCount: 5,
+      highImpactCount: 6,
       affectedRepoCount: 1,
       affectedFields: [
         "emissionShare",
@@ -477,6 +481,7 @@ describe("upstream ruleset drift tracking", () => {
         "trustedLabelPipeline",
         "defaultLabelMultiplier",
         "labelMultipliers",
+        "timeDecay",
       ],
       affectedSurfaces: ["allocation", "lane_fit", "scoreability_assumptions", "maintainer_economics", "issue_discovery_behavior", "label_policy"],
     });
@@ -486,6 +491,7 @@ describe("upstream ruleset drift tracking", () => {
       "maintainerCut",
       "fixedBaseScore",
       "eligibilityMode",
+      "timeDecay",
       "trustedLabelPipeline",
       "defaultLabelMultiplier",
       "labelMultipliers",
@@ -495,8 +501,31 @@ describe("upstream ruleset drift tracking", () => {
       "Upstream registry drift is open for JSONbored/gittensory: allocation changed; affected surface(s): allocation, lane_fit.",
       "Upstream registry drift is open for JSONbored/gittensory: issue-discovery share changed; affected surface(s): issue_discovery_behavior, lane_fit.",
       "Upstream registry drift is open for JSONbored/gittensory: maintainer cut changed; affected surface(s): maintainer_economics.",
-      "2 additional high-impact upstream registry drift event(s) are open for JSONbored/gittensory.",
+      "3 additional high-impact upstream registry drift event(s) are open for JSONbored/gittensory.",
     ]);
+
+
+    const timeDecayOnly = await buildUpstreamDriftReport(
+      withPayload(base, "time-decay-only", {
+        registry: {
+          ...baseRegistry,
+          repositories: [{ ...baseRepo!, timeDecay: { gracePeriodHours: 24, sigmoidMidpointDays: 5, sigmoidSteepness: 0.4, minMultiplier: 0.05 } }],
+        },
+      }),
+      base,
+    );
+    const timeDecayDrift = registryDriftPayload(timeDecayOnly!);
+    expect(timeDecayOnly).toMatchObject({ severity: "high", affectedAreas: ["registry"], summary: "1 registry hyperparameter drift event(s)" });
+    expect(timeDecayDrift).toMatchObject({
+      totalEvents: 1,
+      highImpactCount: 1,
+      affectedFields: ["timeDecay"],
+      affectedSurfaces: ["scoreability_assumptions"],
+    });
+    expect(timeDecayDrift.events).toEqual([
+      expect.objectContaining({ field: "timeDecay", severity: "high", summary: "timeDecay changed", affectedSurfaces: ["scoreability_assumptions"] }),
+    ]);
+
     expect(registryHyperparameterDriftWarningsForRepo([allFields!], "JSONbored/gittensory").join(" ")).not.toMatch(/wallet|hotkey|raw trust score|payout|reward estimate|farming|private reviewability|public score estimate/i);
   });
 
@@ -1235,6 +1264,7 @@ function rulesetRegistry(snapshot: UpstreamRulesetSnapshotRecord): {
     defaultLabelMultiplier: number | null;
     fixedBaseScore: number | null;
     eligibilityMode: string | null;
+    timeDecay: { gracePeriodHours?: number | null; sigmoidMidpointDays?: number | null; sigmoidSteepness?: number | null; minMultiplier?: number | null } | null;
   }>;
 } {
   return rulesetPayload(snapshot).registry as ReturnType<typeof rulesetRegistry>;
@@ -1253,6 +1283,7 @@ function registryRepo(repo: string, overrides: Partial<TestRulesetRegistryRepo> 
     defaultLabelMultiplier: null,
     fixedBaseScore: null,
     eligibilityMode: null,
+    timeDecay: null,
     ...overrides,
   };
 }
