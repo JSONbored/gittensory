@@ -290,6 +290,18 @@ describe("upstream ruleset drift tracking", () => {
     });
   });
 
+  it("compacts per-repo time-decay overrides through the raw registry source (partial fields kept, absent fields null)", async () => {
+    const env = createTestEnv();
+    vi.stubGlobal("fetch", upstreamNoCommitShaFetch(fixturesWithPartialTimeDecay("58", 0.01)));
+
+    await refreshUpstreamSourceSnapshots(env);
+    const snapshot = await buildUpstreamRulesetSnapshot(env);
+
+    const byRepo = Object.fromEntries(rulesetRegistry(snapshot).repositories.map((repo) => [repo.repo, repo.timeDecay]));
+    expect(byRepo["owner/decay-a"]).toEqual({ gracePeriodHours: 24, sigmoidMidpointDays: null, sigmoidSteepness: 0.4, minMultiplier: null });
+    expect(byRepo["owner/decay-b"]).toEqual({ gracePeriodHours: null, sigmoidMidpointDays: 5, sigmoidSteepness: null, minMultiplier: 0.05 });
+  });
+
   it("records no drift when no ruleset exists and detects drift after two snapshots exist", async () => {
     const env = createTestEnv();
 
@@ -1043,6 +1055,18 @@ function invalidJsonFixtures(scale: string): Record<string, string> {
   const payload = fixtures(scale, 0.01);
   payload["gittensor/validator/weights/master_repositories.json"] = "{not-json";
   payload["gittensor/validator/weights/programming_languages.json"] = "{not-json";
+  return payload;
+}
+
+// Two complementary repos with PARTIAL per-repo time-decay overrides: each field is present in exactly one
+// repo and absent in the other, so compaction exercises both the present and the absent (-> null) path of
+// every time-decay field.
+function fixturesWithPartialTimeDecay(scale: string, emissionShare: number): Record<string, string> {
+  const payload = fixtures(scale, emissionShare);
+  payload["gittensor/validator/weights/master_repositories.json"] = JSON.stringify({
+    "owner/decay-a": { emission_share: emissionShare, issue_discovery_share: 0, maintainer_cut: 0.3, scoring: { time_decay: { grace_period_hours: 24, sigmoid_steepness: 0.4 } } },
+    "owner/decay-b": { emission_share: emissionShare, issue_discovery_share: 0, maintainer_cut: 0.3, scoring: { time_decay: { sigmoid_midpoint_days: 5, min_multiplier: 0.05 } } },
+  });
   return payload;
 }
 
