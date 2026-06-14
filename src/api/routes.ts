@@ -194,6 +194,7 @@ import {
   type RoleContext,
 } from "../signals/engine";
 import { attachDataQuality, buildCoreSignalFidelity, buildFreshnessSloReport, buildRepoDataQuality, buildSignalFidelity } from "../signals/data-quality";
+import { buildSlopRiskReport } from "../signals/slop";
 import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
@@ -333,6 +334,15 @@ const localDiffPreflightSchema = preflightSchema.extend({
   changedLineCount: z.number().int().min(0).optional(),
   testFiles: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
   commitMessage: z.string().max(PREFLIGHT_LIMITS.bodyChars).optional(),
+});
+
+const checkSlopRiskSchema = z.object({
+  changedFiles: z
+    .array(z.object({ path: z.string().min(1).max(PREFLIGHT_LIMITS.changedFileChars), additions: z.number().int().min(0).optional(), deletions: z.number().int().min(0).optional() }).strict())
+    .max(PREFLIGHT_LIMITS.changedFiles)
+    .optional(),
+  tests: z.array(z.string().max(PREFLIGHT_LIMITS.testChars)).max(PREFLIGHT_LIMITS.tests).optional(),
+  testFiles: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
 });
 
 const validateLinkedIssueSchema = z.object({
@@ -2081,6 +2091,13 @@ export function createApp() {
       loadOrComputeIssueQualityResponse(c.env, parsed.data.repoFullName),
     ]);
     return c.json(buildLocalDiffPreflightResult(parsed.data, repo, issues, pullRequests, bounties, issueQuality?.report));
+  });
+
+  app.post("/v1/lint/slop-risk", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = checkSlopRiskSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_slop_risk_request", issues: parsed.error.issues }, 400);
+    return c.json(buildSlopRiskReport(parsed.data));
   });
 
   app.post("/v1/local/branch-analysis", async (c) => {

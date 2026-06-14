@@ -79,6 +79,7 @@ import {
 } from "../signals/engine";
 import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
+import { buildSlopRiskReport } from "../signals/slop";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
 import { buildRepoDataQuality } from "../signals/data-quality";
@@ -137,6 +138,23 @@ const checkBeforeStartShape = {
   issueNumber: z.number().int().positive().optional(),
   title: z.string().min(1).max(PREFLIGHT_LIMITS.titleChars).optional(),
   plannedPaths: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
+};
+
+const checkSlopRiskShape = {
+  changedFiles: z
+    .array(
+      z
+        .object({
+          path: z.string().min(1).max(PREFLIGHT_LIMITS.changedFileChars),
+          additions: z.number().int().min(0).optional(),
+          deletions: z.number().int().min(0).optional(),
+        })
+        .strict(),
+    )
+    .max(PREFLIGHT_LIMITS.changedFiles)
+    .optional(),
+  tests: z.array(z.string().max(PREFLIGHT_LIMITS.testChars)).max(PREFLIGHT_LIMITS.tests).optional(),
+  testFiles: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
 };
 
 const preflightShape = {
@@ -450,6 +468,13 @@ const localStatusOutputSchema = {
   supportedTools: z.unknown().optional(),
 };
 
+const checkSlopRiskOutputSchema = {
+  slopRisk: z.number().optional(),
+  band: z.string().optional(),
+  signals: z.unknown().optional(),
+  rubric: z.string().optional(),
+};
+
 const validateLinkedIssueOutputSchema = {
   status: z.string().optional(),
   repoFullName: z.string().optional(),
@@ -737,6 +762,17 @@ export class GittensoryMcp {
         inputSchema: localDiffPreflightShape,
       },
       async (input) => this.toolResult(await this.preflightLocalDiff(input)),
+    );
+
+    server.registerTool(
+      "gittensory_check_slop_risk",
+      {
+        description:
+          "Score local git-diff metadata against the deterministic slop rubric before opening a PR. Returns slopRisk + band, per-signal {reason, howToFix}, and the rubric markdown so your own harness can self-audit the actual code. Metadata only; no source upload, no GitHub writes.",
+        inputSchema: checkSlopRiskShape,
+        outputSchema: checkSlopRiskOutputSchema,
+      },
+      async (input) => this.toolResult(this.checkSlopRisk(input)),
     );
 
     server.registerTool(
@@ -1142,6 +1178,14 @@ export class GittensoryMcp {
         blockers: report.blockers,
         report: report as unknown as Record<string, unknown>,
       },
+    };
+  }
+
+  private checkSlopRisk(input: { changedFiles?: Array<{ path: string; additions?: number | undefined; deletions?: number | undefined }> | undefined; tests?: string[] | undefined; testFiles?: string[] | undefined }): ToolPayload {
+    const report = buildSlopRiskReport(input);
+    return {
+      summary: `Gittensory slop risk for the local branch: ${report.band} (${report.slopRisk}/100).`,
+      data: report as unknown as Record<string, unknown>,
     };
   }
 

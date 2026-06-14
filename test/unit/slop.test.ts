@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildMissingTestEvidenceFinding,
   buildSlopAssessment,
+  buildSlopRiskReport,
   buildTrivialWhitespaceChurnFinding,
   SLOP_RUBRIC_MARKDOWN,
   SLOP_WEIGHTS,
@@ -114,6 +115,43 @@ describe("buildSlopAssessment", () => {
         ],
       }).findings.map((finding) => finding.code),
     ).toEqual(["trivial_whitespace_churn"]);
+  });
+});
+
+describe("buildSlopRiskReport", () => {
+  it("returns a clean report with no signals and the rubric", () => {
+    const report = buildSlopRiskReport({ changedFiles: [{ path: "src/api/routes.ts" }], testFiles: ["test/unit/routes.test.ts"] });
+    expect(report.slopRisk).toBe(0);
+    expect(report.band).toBe("clean");
+    expect(report.signals).toEqual([]);
+    expect(report.rubric).toBe(SLOP_RUBRIC_MARKDOWN);
+  });
+
+  it("renders each signal as a public-safe {reason, howToFix} pair", () => {
+    const report = buildSlopRiskReport({ changedFiles: [{ path: "src/api/routes.ts", additions: 5, deletions: 1 }] });
+    expect(report.slopRisk).toBe(SLOP_WEIGHTS.missingTestEvidence);
+    expect(report.band).toBe("elevated");
+    expect(report.signals).toHaveLength(1);
+    expect(report.signals[0]).toMatchObject({ code: "missing_test_evidence", reason: expect.any(String), howToFix: expect.any(String) });
+    expect(report.signals[0]!.howToFix.length).toBeGreaterThan(0);
+    expect(JSON.stringify(report)).not.toMatch(FORBIDDEN_PUBLIC_TERMS);
+  });
+
+  // Regression guard for the published CLI tool (bin/gittensory-mcp.js): the trivial_whitespace_churn
+  // signal only fires when per-file additions/deletions reach the rubric. If the bin ever flattens the
+  // local diff back to bare path strings, churn silently disappears and slopRisk caps at missing-tests
+  // only — this pins both halves of that contract so the dead-signal regression can't return unnoticed.
+  it("only fires trivial-churn when per-file additions/deletions are forwarded", () => {
+    const churnDiff = [
+      { path: "README.md", additions: 30, deletions: 20 },
+      { path: "docs/guide.md", additions: 25, deletions: 15 },
+    ];
+
+    const withLineCounts = buildSlopRiskReport({ changedFiles: churnDiff });
+    expect(withLineCounts.signals.map((signal) => signal.code)).toContain("trivial_whitespace_churn");
+
+    const barePaths = buildSlopRiskReport({ changedFiles: churnDiff.map((file) => ({ path: file.path })) });
+    expect(barePaths.signals.map((signal) => signal.code)).not.toContain("trivial_whitespace_churn");
   });
 });
 

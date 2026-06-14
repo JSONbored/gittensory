@@ -20,6 +20,7 @@ const TOOLS_WITH_OUTPUT_SCHEMA = [
   "gittensory_get_issue_quality",
   "gittensory_validate_linked_issue",
   "gittensory_check_before_start",
+  "gittensory_check_slop_risk",
   "gittensory_get_registry_changes",
   "gittensory_get_upstream_drift",
   "gittensory_local_status",
@@ -131,6 +132,21 @@ describe("MCP tool calls return schema-valid structured content", () => {
     expect(result.isError).toBeFalsy();
     const data = result.structuredContent as Record<string, unknown>;
     expect(data.repoFullName).toBe("octo/demo");
+  });
+
+  it("gittensory_check_slop_risk scores local diff metadata against the rubric", async () => {
+    const { client } = await connectTestClient();
+    const clean = await client.callTool({ name: "gittensory_check_slop_risk", arguments: { changedFiles: [{ path: "src/api/routes.ts" }], testFiles: ["test/unit/routes.test.ts"] } });
+    expect(clean.isError).toBeFalsy();
+    expect((clean.structuredContent as Record<string, unknown>).band).toBe("clean");
+
+    const risky = await client.callTool({ name: "gittensory_check_slop_risk", arguments: { changedFiles: [{ path: "src/api/routes.ts", additions: 5 }] } });
+    expect(risky.isError).toBeFalsy();
+    const data = risky.structuredContent as Record<string, unknown>;
+    expect(data.slopRisk).toBeGreaterThan(0);
+    expect(Array.isArray(data.signals)).toBe(true);
+    expect(typeof data.rubric).toBe("string");
+    expect(JSON.stringify(data)).not.toMatch(/hotkey|coldkey|wallet|payout|reward/i);
   });
 
   it("gittensory_validate_linked_issue reports multiplier eligibility for an uncached issue", async () => {
