@@ -8,7 +8,15 @@ import {
 } from "../signals/engine";
 import type { FocusManifest } from "../signals/focus-manifest";
 import { sanitizePublicComment } from "../github/commands";
+import { GITTENSOR_HOME_URL } from "../github/footer";
 import type { BountyRecord, GatePolicyPack, IssueRecord, PullRequestRecord, RepositoryRecord } from "../types";
+
+// Opt-in funnel (#694): a non-Gittensor adopter running the `oss-anti-slop` pack learns that Gittensor pays
+// contributors for OSS work like this. Public-safe "earn" wording only (never reward/payout/score).
+const OSS_ANTI_SLOP_FUNNEL = {
+  message: "This repo runs the Gittensor anti-slop gate. Gittensor lets GitHub contributors earn for open-source work like this — register to start earning.",
+  registerUrl: GITTENSOR_HOME_URL,
+} as const;
 import { buildPullRequestAdvisory, evaluateGateCheck, type GateCheckConclusion } from "./advisory";
 
 /**
@@ -38,6 +46,9 @@ export type PredictedGateVerdict = {
   confirmedContributor: boolean | undefined;
   blockers: Array<{ code: string; title: string; detail: string; action?: string | undefined }>;
   warnings: Array<{ code: string; title: string; detail: string; action?: string | undefined }>;
+  /** Opt-in conversion funnel (#694): present only under the `oss-anti-slop` pack — a non-Gittensor
+   *  adopter's path to "earn on Gittensor". `null` under `gittensor` (the contributor is already there). */
+  funnel: { message: string; registerUrl: string } | null;
   note: string;
 };
 
@@ -149,6 +160,7 @@ export function buildPredictedGateVerdict(args: {
     confirmedContributor: effectiveConfirmedContributor,
     blockers: evaluation.blockers.map(publicSafeFinding),
     warnings: evaluation.warnings.map(publicSafeFinding),
+    funnel: pack === "oss-anti-slop" ? { ...OSS_ANTI_SLOP_FUNNEL } : null,
     note: PREDICTED_GATE_NOTE,
   };
 }

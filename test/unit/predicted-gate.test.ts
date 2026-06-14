@@ -85,6 +85,15 @@ describe("pack-aware prediction (#693)", () => {
     expect(verdict({ gate: { duplicates: "block" } }).pack).toBe("gittensor");
   });
 
+  it("surfaces the earn funnel only under oss-anti-slop (#694), public-safe", () => {
+    expect(verdict({ gate: { duplicates: "block" } }).funnel).toBeNull();
+    const oss = verdict({ gate: { pack: "oss-anti-slop", duplicates: "block" } });
+    expect(oss.funnel).not.toBeNull();
+    expect(oss.funnel?.registerUrl).toBe("https://gittensor.io");
+    expect(oss.funnel?.message.toLowerCase()).toContain("earn");
+    expect(JSON.stringify(oss.funnel)).not.toMatch(/reward|payout|trust score|wallet/i);
+  });
+
   it("under oss-anti-slop, blocks ANY author — even a self-declared non-confirmed contributor", () => {
     const result = buildPredictedGateVerdict({
       input: { ...BASE_INPUT, body: "no issue", linkedIssues: [] },

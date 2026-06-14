@@ -381,6 +381,7 @@ const predictGateOutputSchema = {
   readinessScore: z.number().nullable().optional(),
   blockers: z.unknown().optional(),
   warnings: z.unknown().optional(),
+  funnel: z.unknown().optional(),
   note: z.string().optional(),
 };
 
