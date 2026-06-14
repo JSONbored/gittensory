@@ -181,6 +181,7 @@ import {
   buildLaneAdvice,
   buildLinkedIssueValidation,
   buildLocalDiffPreflightResult,
+  buildPrTextLint,
   buildMaintainerCutReadiness,
   buildMaintainerLaneReport,
   buildPullRequestMaintainerPacket,
@@ -350,6 +351,12 @@ const checkBeforeStartSchema = z.object({
   issueNumber: z.number().int().positive().optional(),
   title: z.string().min(1).max(PREFLIGHT_LIMITS.titleChars).optional(),
   plannedPaths: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
+});
+
+const lintPrTextSchema = z.object({
+  commitMessages: z.array(z.string().max(PREFLIGHT_LIMITS.bodyChars)).max(50).optional(),
+  prBody: z.string().max(PREFLIGHT_LIMITS.bodyChars).optional(),
+  linkedIssue: z.number().int().positive().optional(),
 });
 
 const skippedPrAuditQuerySchema = z
@@ -2053,6 +2060,13 @@ export function createApp() {
       decision,
       dataQuality: pack.dataQuality,
     });
+  });
+
+  app.post("/v1/lint/pr-text", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = lintPrTextSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_lint_pr_text_request", issues: parsed.error.issues }, 400);
+    return c.json(buildPrTextLint(parsed.data));
   });
 
   app.post("/v1/preflight/pr", async (c) => {
