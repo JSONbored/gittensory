@@ -5,7 +5,7 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import { ElicitResultSchema, type ServerNotification, type ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { authenticatePrivateToken, extractBearerToken, type AuthIdentity } from "../auth/security";
-import { canLoginAccessRepo, loadControlPanelAccessScope, loadControlPanelRoleSummary, type ControlPanelAccessScope } from "../services/control-panel-roles";
+import { canLoginAccessRepo, canWatchRepo, loadControlPanelAccessScope, loadControlPanelRoleSummary, type ControlPanelAccessScope } from "../services/control-panel-roles";
 import {
   countOpenIssues,
   countOpenPullRequests,
@@ -1241,6 +1241,15 @@ export class GittensoryMcp {
     throw new Error("Forbidden: session cannot access this repository.");
   }
 
+  // Issue-watch gate (#699 path B). Sessions may only watch repos they can SEE: any gittensory-tracked PUBLIC
+  // repo (the miner use case) or a PRIVATE repo they can access — never an arbitrary/private repo they cannot,
+  // so private-repo issues never fan out to them. Non-session (private-token) identities are trusted.
+  private async requireWatchableRepo(login: string, repoFullName: string): Promise<void> {
+    if (this.identity.kind !== "session") return;
+    if (await canWatchRepo(this.env, login, repoFullName)) return;
+    throw new Error("Forbidden: session cannot watch this repository.");
+  }
+
   private loadSessionAccessScope(): Promise<ControlPanelAccessScope> {
     if (this.identity.kind !== "session") throw new Error("Session access scope is only available for session identities.");
     this.accessScopePromise ??= loadControlPanelAccessScope(this.env, this.identity.actor);
@@ -1555,7 +1564,7 @@ export class GittensoryMcp {
     let changed: string | undefined;
     if (input.action === "watch" || input.action === "unwatch") {
       if (!input.repoFullName) return { summary: `${input.action} requires repoFullName.`, data: {} };
-      await this.requireRepoAccess(input.repoFullName);
+      await this.requireWatchableRepo(input.login, input.repoFullName);
       if (input.action === "watch") {
         await upsertIssueWatchSubscription(this.env, { login: input.login, repoFullName: input.repoFullName, labels: input.labels });
         changed = `watching ${input.repoFullName}${input.labels && input.labels.length > 0 ? ` (labels: ${input.labels.join(", ")})` : ""}`;

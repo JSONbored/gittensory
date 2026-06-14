@@ -2,6 +2,7 @@ import { sanitizePublicComment } from "../github/commands";
 import {
   countRecentNotificationDeliveries,
   getNotificationDeliveryById,
+  getRepository,
   insertNotificationDeliveryIfAbsent,
   listIssueWatchersForRepo,
   listNotificationSubscriptionsForLogin,
@@ -77,16 +78,23 @@ export async function detectIssueWatchEvents(env: Env, repoFullName: string, iss
   const detectedAt = nowIso();
   const issueLabels = new Set(issue.labels.map((label) => label.toLowerCase().trim()));
   const authorLogin = issue.authorLogin?.toLowerCase();
-  const authorizedWatchers = (
-    await Promise.all(
-      watchers
-        // An empty label filter matches any issue; otherwise at least one watched label must be present.
-        .filter((watcher) => watcher.labels.length === 0 || watcher.labels.some((label) => issueLabels.has(label)))
-        // Don't ping the maintainer who opened the issue about their own issue.
-        .filter((watcher) => watcher.login.toLowerCase() !== authorLogin)
-        .map(async (watcher) => ((await canLoginAccessRepo(env, watcher.login, repoFullName)) ? watcher : null)),
-    )
-  ).filter((watcher) => watcher !== null);
+  const matching = watchers
+    // An empty label filter matches any issue; otherwise at least one watched label must be present.
+    .filter((watcher) => watcher.labels.length === 0 || watcher.labels.some((label) => issueLabels.has(label)))
+    // Don't ping the maintainer who opened the issue about their own issue.
+    .filter((watcher) => watcher.login.toLowerCase() !== authorLogin);
+
+  // Access gate: a gittensory-tracked PUBLIC repo fans out to every matching watcher (the miner use case);
+  // a PRIVATE — or untracked/unknown — repo only to watchers who can access it, so private-repo issues never
+  // reach a non-collaborator. The repo is the same for all watchers, so resolve it once and only pay the
+  // per-watcher access check on the private path.
+  const repo = await getRepository(env, repoFullName);
+  const authorizedWatchers =
+    repo && !repo.isPrivate
+      ? matching
+      : (await Promise.all(matching.map(async (watcher) => ((repo && (await canLoginAccessRepo(env, watcher.login, repoFullName))) ? watcher : null)))).filter(
+          (watcher) => watcher !== null,
+        );
 
   return authorizedWatchers.map((watcher) => ({
     eventType: "issue_watch_match" as const,

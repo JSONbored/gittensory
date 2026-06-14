@@ -54,7 +54,9 @@ describe("issue-watch subscriptions (CRUD)", () => {
 
 describe("detectIssueWatchEvents", () => {
   it("fans out one event per matching watcher, skips the author, honours the label filter", async () => {
-    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "alice bob maintainer" });
+    const env = createTestEnv();
+    // owner/repo is a tracked PUBLIC repo, so any contributor may watch it (the miner use case).
+    await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" }, default_branch: "main" }, 100);
     await upsertIssueWatchSubscription(env, { login: "alice", repoFullName: "owner/repo" }); // any label
     await upsertIssueWatchSubscription(env, { login: "bob", repoFullName: "owner/repo", labels: ["bug"] }); // bug only
     await upsertIssueWatchSubscription(env, { login: "maintainer", repoFullName: "owner/repo" }); // the issue's author
@@ -72,7 +74,7 @@ describe("detectIssueWatchEvents", () => {
   });
 
   it("returns nothing for a non-grabbable issue or when there are no watchers", async () => {
-    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "alice" });
+    const env = createTestEnv();
     await upsertIssueWatchSubscription(env, { login: "alice", repoFullName: "owner/repo" });
     expect(await detectIssueWatchEvents(env, "owner/repo", issue({ authorAssociation: "NONE" }))).toEqual([]); // community-authored
     expect(await detectIssueWatchEvents(env, "owner/repo", issue({ labels: ["wip"] }))).toEqual([]); // maintainer WIP
@@ -88,8 +90,23 @@ describe("detectIssueWatchEvents", () => {
     await expect(detectIssueWatchEvents(env, "victim/private", issue({ repoFullName: "victim/private", number: 77 }))).resolves.toEqual([]);
   });
 
+  it("does not fan out for an untracked repo even if it has watchers (fail-closed on unknown visibility)", async () => {
+    const env = createTestEnv();
+    await upsertIssueWatchSubscription(env, { login: "alice", repoFullName: "ghost/repo" }); // repo never upserted
+    await expect(detectIssueWatchEvents(env, "ghost/repo", issue({ repoFullName: "ghost/repo", number: 88 }))).resolves.toEqual([]);
+  });
+
+  it("still fans out a PRIVATE-repo issue to a watcher who can access it", async () => {
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "operator" }); // operator has access to any repo
+    await upsertRepositoryFromGitHub(env, { name: "private", full_name: "acme/private", private: true, owner: { login: "acme" }, default_branch: "main" }, 555);
+    await upsertIssueWatchSubscription(env, { login: "operator", repoFullName: "acme/private" });
+    const events = await detectIssueWatchEvents(env, "acme/private", issue({ repoFullName: "acme/private", number: 90, authorLogin: "acme" }));
+    expect(events.map((event) => event.recipientLogin)).toEqual(["operator"]);
+  });
+
   it("handles an issue with no recorded author (actor falls back to 'unknown', no one is skipped)", async () => {
-    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "alice" });
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" }, default_branch: "main" }, 100);
     await upsertIssueWatchSubscription(env, { login: "alice", repoFullName: "owner/repo" });
     const events = await detectIssueWatchEvents(env, "owner/repo", issue({ number: 12, authorLogin: undefined, authorAssociation: "MEMBER" }));
     expect(events).toHaveLength(1);
@@ -145,7 +162,19 @@ describe("MCP gittensory_watch_issues", () => {
   });
 
 
-  it("blocks session actors from watching inaccessible repositories", async () => {
+  it("lets a session watch a tracked PUBLIC repo it does not maintain (the miner use case)", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" }, default_branch: "main" }, 100);
+    const { session } = await createSessionForGitHubUser(env, { login: "miner", id: 1 });
+    const client = await connect(env, { kind: "session", actor: "miner", session });
+
+    const result = await client.callTool({ name: "gittensory_watch_issues", arguments: { login: "miner", action: "watch", repoFullName: "owner/repo" } });
+
+    expect(result.isError).toBeFalsy();
+    expect((result.structuredContent as { watching: Array<{ repoFullName: string }> }).watching).toEqual([{ repoFullName: "owner/repo", labels: [] }]);
+  });
+
+  it("blocks session actors from watching inaccessible (private) repositories", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "private", full_name: "victim/private", private: true, owner: { login: "victim" }, default_branch: "main" }, 321);
     const { session } = await createSessionForGitHubUser(env, { login: "miner", id: 1 });
@@ -154,7 +183,7 @@ describe("MCP gittensory_watch_issues", () => {
     const result = await client.callTool({ name: "gittensory_watch_issues", arguments: { login: "miner", action: "watch", repoFullName: "victim/private" } });
 
     expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.content)).toContain("session cannot access this repository");
+    expect(JSON.stringify(result.content)).toContain("session cannot watch this repository");
     await expect(listIssueWatchSubscriptionsForLogin(env, "miner")).resolves.toEqual([]);
   });
 

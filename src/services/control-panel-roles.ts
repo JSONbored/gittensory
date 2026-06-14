@@ -41,6 +41,17 @@ export async function canLoginAccessRepo(env: Env, login: string, fullName: stri
   return Boolean(repo && scope.accountLogins.some((accountLogin) => accountLogin.toLowerCase() === repo.owner.toLowerCase()));
 }
 
+// Whether `login` may watch `fullName`'s issues. Issue-watch (#699 path B) is a MINER feature: miners watch
+// PUBLIC gittensor-tracked repos they don't own or maintain, so a tracked public repo is watchable by any
+// contributor. A PRIVATE repo is gated to maintainer/owner/operator scope so its issues never fan out to a
+// non-collaborator. An untracked repo (unknown visibility) is treated as not watchable (fail-closed).
+export async function canWatchRepo(env: Env, login: string, fullName: string): Promise<boolean> {
+  const repo = await getRepository(env, fullName);
+  if (!repo) return false;
+  if (!repo.isPrivate) return true;
+  return canLoginAccessRepo(env, login, fullName);
+}
+
 export async function loadControlPanelRoleSummary(env: Env, login: string): Promise<ControlPanelRoleSummary> {
   const [miner, repositories, installations, pullRequests] = await Promise.all([
     getFreshOfficialMinerDetection(env, login).catch(() => null),
