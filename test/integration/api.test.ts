@@ -942,6 +942,19 @@ describe("api routes", () => {
     expect(lintPrTextBody).toMatchObject({ verdict: "weak", fixes: expect.any(Array) });
     expect(JSON.stringify(lintPrTextBody)).not.toMatch(/hotkey|coldkey|wallet|payout|reward/i);
 
+    const { token: lintSessionToken } = await createSessionForGitHubUser(env, { login: "ordinary-mcp-user", id: 4242 });
+    const sessionLintPrText = await app.request(
+      "/v1/lint/pr-text",
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${lintSessionToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ commitMessages: ["fix: handle cache reconnect"], prBody: "Fixes #7\n\nValidated with npm test." }),
+      },
+      env,
+    );
+    expect(sessionLintPrText.status).toBe(200);
+    await expect(sessionLintPrText.json()).resolves.toMatchObject({ verdict: expect.stringMatching(/strong|adequate|weak/) });
+
     const invalidLintPrText = await app.request("/v1/lint/pr-text", { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ linkedIssue: -1 }) }, env);
     expect(invalidLintPrText.status).toBe(400);
 

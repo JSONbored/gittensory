@@ -3957,6 +3957,7 @@ function contributorEvidenceFromProfile(profile: {
 
 const EXTENSION_PULL_CONTEXT_PATH = "/v1/extension/pull-context";
 const EXTENSION_PULL_CONTEXT_SCOPE = "extension:pull_context";
+const LINT_PR_TEXT_PATH = "/v1/lint/pr-text";
 
 type ProtectedRouteContext = {
   env: Env;
@@ -3996,6 +3997,7 @@ function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: 
   if (isRepoAiConfigPath(path)) return true;
   if (isRepoCheckBeforeStartPath(path)) return true;
   if (isRepoContributorIssueDraftGeneratePath(path)) return true;
+  if (path === LINT_PR_TEXT_PATH) return true;
   if (path === EXTENSION_PULL_CONTEXT_PATH && isExtensionScopedSession(identity)) return true;
   return false;
 }
