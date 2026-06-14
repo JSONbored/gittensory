@@ -38,7 +38,7 @@ import { buildNotificationFeed } from "../notifications/service";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
 import { fetchPublicContributorProfile } from "../github/public";
 import { listLatestRegistrySnapshots } from "../registry/sync";
-import { getOrCreateScoringModelSnapshot } from "../scoring/model";
+import { getOrCreateScoringModelSnapshot, isTimeDecayEnabled } from "../scoring/model";
 import { buildScorePreview, makeScorePreviewRecord } from "../scoring/preview";
 import {
   explainBlockersWithAgent,
@@ -75,6 +75,7 @@ import {
   buildLocalDiffPreflightResult,
   buildPreflightResult,
   buildPreStartCheck,
+  buildPrTextLint,
   buildQueueHealth,
   buildRegistryChangeReport,
   buildRoleContext,
@@ -140,6 +141,12 @@ const checkBeforeStartShape = {
   issueNumber: z.number().int().positive().optional(),
   title: z.string().min(1).max(PREFLIGHT_LIMITS.titleChars).optional(),
   plannedPaths: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
+};
+
+const lintPrTextShape = {
+  commitMessages: z.array(z.string().max(PREFLIGHT_LIMITS.bodyChars)).max(50).optional(),
+  prBody: z.string().max(PREFLIGHT_LIMITS.bodyChars).optional(),
+  linkedIssue: z.number().int().positive().optional(),
 };
 
 const preflightShape = {
@@ -281,6 +288,7 @@ const scorePreviewShape = {
   testTokenScore: z.number().min(0).optional(),
   nonCodeTokenScore: z.number().min(0).optional(),
   existingContributorTokenScore: z.number().min(0).optional(),
+  prAgeHours: z.number().min(0).optional(),
   openPrCount: z.number().int().min(0).optional(),
   credibility: z.number().min(0).max(1).optional(),
   changesRequestedCount: z.number().int().min(0).optional(),
@@ -505,6 +513,15 @@ const checkBeforeStartOutputSchema = {
   reasons: z.unknown().optional(),
   blockers: z.unknown().optional(),
   report: z.unknown().optional(),
+};
+
+const lintPrTextOutputSchema = {
+  verdict: z.string().optional(),
+  score: z.number().optional(),
+  components: z.unknown().optional(),
+  fixes: z.unknown().optional(),
+  summary: z.string().optional(),
+  generatedAt: z.string().optional(),
 };
 
 export async function handleMcpRequest(c: AppContext): Promise<Response> {
@@ -783,6 +800,17 @@ export class GittensoryMcp {
         outputSchema: checkBeforeStartOutputSchema,
       },
       async (input) => this.toolResult(await this.checkBeforeStart(input)),
+    );
+
+    server.registerTool(
+      "gittensory_lint_pr_text",
+      {
+        description:
+          "Lint a commit message + PR body against the gittensor traceability/no-issue-rationale and Conventional Commit rubric, before submitting. Returns a deterministic quality verdict (strong/adequate/weak) and specific public-safe fixes. Metadata only; no source upload, no GitHub writes.",
+        inputSchema: lintPrTextShape,
+        outputSchema: lintPrTextOutputSchema,
+      },
+      async (input) => this.toolResult(this.lintPrText(input)),
     );
 
     server.registerTool(
@@ -1200,6 +1228,14 @@ export class GittensoryMcp {
     };
   }
 
+  private lintPrText(input: { commitMessages?: string[] | undefined; prBody?: string | undefined; linkedIssue?: number | undefined }): ToolPayload {
+    const report = buildPrTextLint(input);
+    return {
+      summary: `Gittensory PR-text lint verdict: ${report.verdict}.`,
+      data: report as unknown as Record<string, unknown>,
+    };
+  }
+
   private async canAccessRepo(fullName: string): Promise<boolean> {
     if (this.identity.kind !== "session") return true;
     const [scope, repo] = await Promise.all([this.loadSessionAccessScope(), getRepository(this.env, fullName)]);
@@ -1457,10 +1493,12 @@ export class GittensoryMcp {
       getOrCreateScoringModelSnapshot(this.env),
       input.contributorLogin ? getContributorEvidence(this.env, input.contributorLogin) : Promise.resolve(null),
     ]);
-    const result = buildScorePreview({ input, repo, snapshot, contributorEvidence: evidence });
+    // Time-decay (#703) is an owner-gated global, injected server-side (not caller-controllable).
+    const scoreInput = { ...input, applyTimeDecay: isTimeDecayEnabled(this.env) };
+    const result = buildScorePreview({ input: scoreInput, repo, snapshot, contributorEvidence: evidence });
     return {
       summary: `Private Gittensory scoring preview for ${input.repoFullName}.`,
-      data: makeScorePreviewRecord(input, snapshot, result) as unknown as Record<string, unknown>,
+      data: makeScorePreviewRecord(scoreInput, snapshot, result) as unknown as Record<string, unknown>,
     };
   }
 

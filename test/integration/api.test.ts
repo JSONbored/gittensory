@@ -932,6 +932,19 @@ describe("api routes", () => {
     const invalidLocalDiff = await app.request("/v1/preflight/local-diff", { method: "POST", headers: apiHeaders(env), body: JSON.stringify({}) }, env);
     expect(invalidLocalDiff.status).toBe(400);
 
+    const lintPrText = await app.request(
+      "/v1/lint/pr-text",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ commitMessages: ["wip"], prBody: "" }) },
+      env,
+    );
+    expect(lintPrText.status).toBe(200);
+    const lintPrTextBody = await lintPrText.json();
+    expect(lintPrTextBody).toMatchObject({ verdict: "weak", fixes: expect.any(Array) });
+    expect(JSON.stringify(lintPrTextBody)).not.toMatch(/hotkey|coldkey|wallet|payout|reward/i);
+
+    const invalidLintPrText = await app.request("/v1/lint/pr-text", { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ linkedIssue: -1 }) }, env);
+    expect(invalidLintPrText.status).toBe(400);
+
     const queueIntelligence = await app.request(
       "/v1/internal/queue-intelligence",
       {

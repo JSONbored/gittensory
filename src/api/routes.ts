@@ -121,7 +121,7 @@ import { handleMcpRequest } from "../mcp/server";
 import { buildOpenApiSpec } from "../openapi/spec";
 import { generateSignalSnapshots } from "../queue/processors";
 import { getLatestRegistrySnapshot, listLatestRegistrySnapshots, refreshRegistry } from "../registry/sync";
-import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
+import { getOrCreateScoringModelSnapshot, isTimeDecayEnabled, refreshScoringModelSnapshot } from "../scoring/model";
 import { buildScorePreview, makeScorePreviewRecord } from "../scoring/preview";
 import {
   explainBlockersWithAgent,
@@ -181,6 +181,7 @@ import {
   buildLaneAdvice,
   buildLinkedIssueValidation,
   buildLocalDiffPreflightResult,
+  buildPrTextLint,
   buildMaintainerCutReadiness,
   buildMaintainerLaneReport,
   buildPullRequestMaintainerPacket,
@@ -353,6 +354,12 @@ const checkBeforeStartSchema = z.object({
   plannedPaths: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
 });
 
+const lintPrTextSchema = z.object({
+  commitMessages: z.array(z.string().max(PREFLIGHT_LIMITS.bodyChars)).max(50).optional(),
+  prBody: z.string().max(PREFLIGHT_LIMITS.bodyChars).optional(),
+  linkedIssue: z.number().int().positive().optional(),
+});
+
 const skippedPrAuditQuerySchema = z
   .object({
     limit: z.coerce.number().int().optional(),
@@ -463,6 +470,7 @@ const scorePreviewSchema = z.object({
   testTokenScore: z.number().min(0).optional(),
   nonCodeTokenScore: z.number().min(0).optional(),
   existingContributorTokenScore: z.number().min(0).optional(),
+  prAgeHours: z.number().min(0).optional(),
   openPrCount: z.number().int().min(0).optional(),
   credibility: z.number().min(0).max(1).optional(),
   changesRequestedCount: z.number().int().min(0).optional(),
@@ -1424,8 +1432,10 @@ export function createApp() {
       getOrCreateScoringModelSnapshot(c.env),
       parsed.data.contributorLogin ? getContributorEvidence(c.env, parsed.data.contributorLogin) : Promise.resolve(null),
     ]);
-    const result = buildScorePreview({ input: parsed.data, repo, snapshot, contributorEvidence: evidence });
-    const record = makeScorePreviewRecord(parsed.data, snapshot, result);
+    // Time-decay (#703) is an owner-gated global, injected server-side (not caller-controllable).
+    const input = { ...parsed.data, applyTimeDecay: isTimeDecayEnabled(c.env) };
+    const result = buildScorePreview({ input, repo, snapshot, contributorEvidence: evidence });
+    const record = makeScorePreviewRecord(input, snapshot, result);
     await persistScorePreview(c.env, record);
     return c.json(record);
   });
@@ -2079,6 +2089,13 @@ export function createApp() {
       decision,
       dataQuality: pack.dataQuality,
     });
+  });
+
+  app.post("/v1/lint/pr-text", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = lintPrTextSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_lint_pr_text_request", issues: parsed.error.issues }, 400);
+    return c.json(buildPrTextLint(parsed.data));
   });
 
   app.post("/v1/preflight/pr", async (c) => {
