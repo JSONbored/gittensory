@@ -39,6 +39,7 @@
     "WORKERS_AI_SUMMARY_MODEL": "@cf/meta/llama-3.1-8b-instruct-fp8-fast",
     "AI_DAILY_NEURON_BUDGET": "10000",
     "AI_MAX_OUTPUT_TOKENS": "256",
+    "AI_GATEWAY_ID": "",
     "ADMIN_GITHUB_LOGINS": "JSONbored",
   },
   "routes": [
@@ -84,6 +85,11 @@
         "queue": "gittensory-jobs",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
+        // After max_retries failed attempts a job is dead-lettered instead of silently dropped, so a
+        // persistently-failing webhook is observable (inspect via `wrangler queues` / the dashboard)
+        // rather than vanishing. The DLQ is a landing pad with no consumer (house pattern).
+        "max_retries": 3,
+        "dead_letter_queue": "gittensory-jobs-dlq",
       },
     ],
   },

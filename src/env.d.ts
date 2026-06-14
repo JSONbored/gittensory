@@ -11,6 +11,9 @@ declare global {
     WORKERS_AI_SUMMARY_MODEL?: string;
     AI_DAILY_NEURON_BUDGET?: string;
     AI_MAX_OUTPUT_TOKENS?: string;
+    /** Optional Cloudflare AI Gateway id. When set, free Workers-AI review calls route through the gateway
+     *  for caching, rate-limiting, request logging, and fallback. Unset = direct binding calls (unchanged). */
+    AI_GATEWAY_ID?: string;
     ADMIN_GITHUB_LOGINS?: string;
     GITHUB_WEBHOOK_SECRET: string;
     GITHUB_WEBHOOK_MAX_BODY_BYTES?: string;
@@ -31,6 +34,10 @@ declare global {
     GITTENSORY_API_TOKEN: string;
     GITTENSORY_MCP_TOKEN: string;
     INTERNAL_JOB_TOKEN: string;
+    /** AES-256-GCM master secret for maintainer BYOK provider keys (encrypt/decrypt at rest). A Worker
+     *  secret (`wrangler secret put`), never a public var. When absent, BYOK is unavailable and the AI
+     *  review silently falls back to free Workers AI. */
+    TOKEN_ENCRYPTION_SECRET?: string;
     RATE_LIMIT_TRUSTED_PROXIES?: string;
     RATE_LIMIT_TRUSTED_PROXY_COUNT?: string;
   }

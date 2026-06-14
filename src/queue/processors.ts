@@ -7,6 +7,7 @@ import {
   getFreshOfficialMinerDetection,
   getPullRequest,
   getRepository,
+  getDecryptedRepositoryAiKey,
   getRepositorySettings,
   listCheckSummaries,
   listAllIssues,
@@ -52,6 +53,7 @@ import {
   upsertPullRequestFromGitHub,
   upsertRepositoryFromGitHub,
 } from "../db/repositories";
+import { pruneExpiredRecords } from "../db/retention";
 import {
   backfillOpenPullRequestDetails,
   backfillRegisteredRepositories,
@@ -61,7 +63,7 @@ import {
   refreshInstallationHealth,
 } from "../github/backfill";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot, fetchOfficialGittensorMiner, type GittensorContributorSnapshot, type OfficialGittensorMinerDetection } from "../gittensor/api";
-import { createOrUpdateCheckRun, createOrUpdateGateCheckRun, createOrUpdatePendingGateCheckRun, createOrUpdateSkippedGateCheckRun, getInstallationId, getRepositoryCollaboratorPermission } from "../github/app";
+import { createOrUpdateCheckRun, createOrUpdateErroredGateCheckRun, createOrUpdateGateCheckRun, createOrUpdatePendingGateCheckRun, createOrUpdateSkippedGateCheckRun, getInstallationId, getRepositoryCollaboratorPermission } from "../github/app";
 import { createOrUpdateAgentCommandComment, createOrUpdatePrIntelligenceComment, PR_PANEL_COMMENT_MARKER } from "../github/comments";
 import { gittensoryFooter, gittensorRepoEarnUrl } from "../github/footer";
 import {
@@ -79,6 +81,7 @@ import { fetchPublicContributorProfile } from "../github/public";
 import { refreshRegistry } from "../registry/sync";
 import { buildIssueAdvisory, buildPullRequestAdvisory, evaluateGateCheck } from "../rules/advisory";
 import { detectNotificationEvents } from "../notifications/events";
+import { deliverNotification, evaluateNotificationEvent } from "../notifications/service";
 import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
 import { buildAndPersistContributorDecisionPack, loadDecisionPackSharedInputs } from "../services/decision-pack";
 import {
@@ -128,11 +131,13 @@ import {
   PR_PANEL_RETRIGGER_MARKER,
   unionScopedOverlapClusters,
 } from "../signals/engine";
+import { buildSlopAssessment } from "../signals/slop";
 import { decidePublicSurface } from "../signals/settings-preview";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { resolveEffectiveSettings } from "../signals/focus-manifest";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
-import type { ContributorEvidenceRecord, GitHubWebhookPayload, JobMessage, JsonValue, PullRequestRecord, RepositorySettings } from "../types";
+import { runGittensoryAiReview } from "../services/ai-review";
+import type { AdvisoryFinding, ContributorEvidenceRecord, GitHubWebhookPayload, JobMessage, JsonValue, PullRequestRecord, RepositorySettings } from "../types";
 import { sha256Hex } from "../utils/crypto";
 import { errorMessage, nowIso } from "../utils/json";
 
@@ -140,6 +145,22 @@ const OFFICIAL_MINER_DETECTION_TTL_MS = 5 * 60 * 1000;
 const OFFICIAL_MINER_DETECTION_UNAVAILABLE_TTL_MS = 60 * 1000;
 const PR_PUBLIC_SURFACE_ACTIONS = new Set(["opened", "reopened", "synchronize", "ready_for_review", "edited"]);
 const PR_GATE_CLOSED_ACTIONS = new Set(["closed"]);
+
+/**
+ * Run (or dry-run) the data-retention prune across the configured log/snapshot tables and audit the
+ * outcome. The per-table windows live in RETENTION_POLICY; only append-only/superseded tables are pruned.
+ */
+export async function runRetentionPrune(env: Env, requestedBy: string, dryRun: boolean): Promise<void> {
+  const results = await pruneExpiredRecords(env, { dryRun });
+  const totalDeleted = results.reduce((sum, result) => sum + result.deleted, 0);
+  await recordAuditEvent(env, {
+    eventType: "retention.prune",
+    actor: requestedBy,
+    outcome: dryRun ? "completed" : "success",
+    detail: dryRun ? `dry-run: ${totalDeleted} row(s) eligible` : `pruned ${totalDeleted} row(s)`,
+    metadata: { dryRun, totalDeleted, perTable: Object.fromEntries(results.map((r) => [r.table, r.deleted])) },
+  });
+}
 
 export async function processJob(env: Env, message: JobMessage): Promise<void> {
   switch (message.type) {
@@ -246,11 +267,22 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
     case "rollup-product-usage":
       await rollupProductUsageDaily(env, { ...(message.day ? { day: message.day } : {}), ...(message.days === undefined ? {} : { days: message.days }) });
       return;
+    case "prune-retention":
+      await runRetentionPrune(env, message.requestedBy, message.dryRun ?? false);
+      return;
     case "generate-weekly-value-report":
       await generateWeeklyValueReport(env, { variant: message.variant ?? "operator", ...(message.days === undefined ? {} : { days: message.days }) });
       return;
     case "run-agent":
       await executeAgentRun(env, message.runId);
+      return;
+    case "notify-evaluate": {
+      const deliveries = await evaluateNotificationEvent(env, message.event);
+      await Promise.all(deliveries.map((delivery) => env.JOBS.send({ type: "notify-deliver", requestedBy: "notify-evaluate", deliveryId: delivery.id })));
+      return;
+    }
+    case "notify-deliver":
+      await deliverNotification(env, message.deliveryId);
       return;
     case "github-webhook":
       await processGitHubWebhook(env, message.deliveryId, message.eventName, message.payload);
@@ -749,6 +781,7 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
           deeplink: notificationEvent.deeplink,
         },
       });
+      await env.JOBS.send({ type: "notify-evaluate", requestedBy: "webhook", event: notificationEvent });
     }
 
     await recordWebhookEvent(env, {
@@ -782,17 +815,24 @@ function shouldProcessPullRequestPublicSurface(action: string | undefined): bool
   return PR_PUBLIC_SURFACE_ACTIONS.has(action ?? "") || PR_GATE_CLOSED_ACTIONS.has(action ?? "");
 }
 
-export function gateCheckPolicy(settings: RepositorySettings, readinessScore?: number | null, confirmedContributor?: boolean) {
+export function gateCheckPolicy(settings: RepositorySettings, readinessScore?: number | null, confirmedContributor?: boolean, slopRisk?: number | null) {
   // `settings` is already the EFFECTIVE config (`.gittensory.yml` > DB > defaults), resolved upstream by
   // resolveRepositorySettings, so the blocker modes here reflect the repo's config file directly.
-  // confirmedContributor governs WHO can be blocked, downstream in evaluateGateCheck.
+  // The `oss-anti-slop` pack (#692) is repo-agnostic: it blocks ANY author whose PR trips an opted-in
+  // deterministic rule, so it drops the confirmed-contributor gate entirely (no Gittensor coupling). The
+  // `gittensor` pack keeps the contributor gate — only confirmed contributors are hard-blocked.
+  const confirmedContributorForPack = settings.gatePack === "oss-anti-slop" ? undefined : confirmedContributor;
   return {
     linkedIssueGateMode: settings.linkedIssueGateMode,
     duplicatePrGateMode: settings.duplicatePrGateMode,
     qualityGateMode: settings.qualityGateMode,
     qualityGateMinScore: settings.qualityGateMinScore ?? null,
+    aiReviewGateMode: settings.aiReviewMode,
     readinessScore: readinessScore ?? null,
-    confirmedContributor,
+    slopGateMode: settings.slopGateMode,
+    slopGateMinScore: settings.slopGateMinScore ?? null,
+    slopRisk: slopRisk ?? null,
+    confirmedContributor: confirmedContributorForPack,
   };
 }
 
@@ -804,6 +844,85 @@ export function gateCheckPolicy(settings: RepositorySettings, readinessScore?: n
 async function resolveRepositorySettings(env: Env, repoFullName: string): Promise<RepositorySettings> {
   const [dbSettings, manifest] = await Promise.all([getRepositorySettings(env, repoFullName), loadRepoFocusManifest(env, repoFullName)]);
   return resolveEffectiveSettings(dbSettings, manifest);
+}
+
+/** Build a bounded unified-diff string from cached PR files for the AI reviewer. Caps total size so a
+ *  huge PR cannot blow the model context or the neuron budget; each file's patch is taken from the raw
+ *  GitHub file payload when present. */
+export function buildAiReviewDiff(files: Awaited<ReturnType<typeof listPullRequestFiles>>): string {
+  const MAX_DIFF_CHARS = 60000;
+  const parts: string[] = [];
+  let total = 0;
+  for (const file of files) {
+    const patch = typeof file.payload?.patch === "string" ? file.payload.patch : "";
+    const header = `### ${file.path}${file.status ? ` (${file.status})` : ""} +${file.additions}/-${file.deletions}`;
+    const block = patch ? `${header}\n${patch}` : header;
+    if (total + block.length > MAX_DIFF_CHARS) {
+      parts.push(`… diff truncated (${files.length} files total).`);
+      break;
+    }
+    parts.push(block);
+    total += block.length;
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * Run the opt-in AI maintainer review and fold it into the gate + panel. Mutates `advisory.findings`
+ * with a dual-model consensus defect (when `aiReviewMode: block` and the free Workers-AI pair agrees with
+ * high confidence) so it can become a gate blocker BEFORE evaluateGateCheck runs — still confirmed-
+ * contributor gated. Returns the advisory notes for the public panel. Fully fail-safe: disabled / not a
+ * confirmed contributor / no head SHA / non-ok AI / any thrown error → no finding and no notes.
+ */
+export async function runAiReviewForAdvisory(
+  env: Env,
+  args: {
+    settings: RepositorySettings;
+    advisory: Awaited<ReturnType<typeof buildPullRequestAdvisory>>;
+    repoFullName: string;
+    pr: { number: number; title: string; body?: string | null | undefined };
+    author: string | null;
+    confirmedContributor: boolean;
+  },
+): Promise<{ notes: string } | undefined> {
+  if (args.settings.aiReviewMode === "off" || !args.confirmedContributor || !args.advisory.headSha) return undefined;
+  try {
+    // BYOK: decrypt the maintainer's provider key only when opted in. Falls back to free Workers AI when
+    // no key is configured or the encryption secret is unavailable (getDecryptedRepositoryAiKey → null).
+    // Apply config-as-code provider/model: a declared provider must match the stored key's provider (else
+    // skip BYOK → Workers-AI fallback); a declared model overrides the stored/default model.
+    const storedKey = args.settings.aiReviewByok ? await getDecryptedRepositoryAiKey(env, args.repoFullName) : null;
+    const providerKey =
+      storedKey && (!args.settings.aiReviewProvider || args.settings.aiReviewProvider === storedKey.provider)
+        ? { provider: storedKey.provider, key: storedKey.key, model: args.settings.aiReviewModel ?? storedKey.model }
+        : null;
+    const files = await listPullRequestFiles(env, args.repoFullName, args.pr.number);
+    const result = await runGittensoryAiReview(env, {
+      repoFullName: args.repoFullName,
+      prNumber: args.pr.number,
+      title: args.pr.title,
+      body: args.pr.body ?? undefined,
+      diff: buildAiReviewDiff(files),
+      actor: args.author,
+      mode: args.settings.aiReviewMode === "block" ? "block" : "advisory",
+      providerKey,
+    });
+    if (result.status !== "ok") return undefined;
+    if (result.consensusDefect) {
+      const defect: AdvisoryFinding = {
+        code: "ai_consensus_defect",
+        severity: "critical",
+        title: `AI reviewers agree on a likely critical defect: ${result.consensusDefect.title}`,
+        detail: result.consensusDefect.detail,
+        action: "Resolve the flagged defect, or override if the AI reviewers are mistaken, then re-run the gate.",
+      };
+      args.advisory.findings.push(defect);
+    }
+    return result.advisoryNotes ? { notes: result.advisoryNotes } : undefined;
+  } catch (error) {
+    console.error(JSON.stringify({ level: "warn", event: "ai_review_failed", repository: args.repoFullName, pullNumber: args.pr.number, error: errorMessage(error) }));
+    return undefined;
+  }
 }
 
 function linkedIssueDuplicatePullRequestsForGate(pr: PullRequestRecord, pullRequests: PullRequestRecord[]): number[] {
@@ -944,62 +1063,112 @@ async function maybePublishPrPublicSurface(
     }
   }
 
-  const [repoIssues, repoPullRequests, repoBounties] = await Promise.all([
-    listIssues(env, repoFullName),
-    listPullRequests(env, repoFullName),
-    listBountiesByRepo(env, repoFullName),
-  ]);
-  const collisions = buildCollisionReport(repoFullName, repoIssues, repoPullRequests);
-  const queueHealth = buildQueueHealth(repo, repoIssues, repoPullRequests, collisions);
-  const preflight = buildPreflightResult(
-    {
-      repoFullName,
-      contributorLogin: author ?? undefined,
-      title: pr.title,
-      body: pr.body ?? undefined,
-      labels: pr.labels,
-      linkedIssues: pr.linkedIssues,
-      authorAssociation: pr.authorAssociation ?? undefined,
-    },
-    repo,
-    repoIssues,
-    repoPullRequests,
-    repoBounties,
-  );
-  const readiness = buildPublicReadinessScore({
-    pr,
-    preflight,
-    queueHealth,
-    linkedDuplicatePrs: linkedIssueDuplicatePullRequestsForGate(pr, repoPullRequests),
-    scopedOverlapCount: unionScopedOverlapClusters(collisions, pr, preflight.collisions).length,
-  });
-
-  if (gateEnabled && author && !publicSurfaceSkipped && !official) {
-    official = await getCachedOfficialMinerDetection(env, author, {
-      targetKey: `${repoFullName}#${pr.number}`,
-      deliveryId: webhook.deliveryId,
-    });
-  }
-
-  // Only CONFIRMED gittensor contributors can be hard-blocked; everyone else (or an unavailable
-  // detection) gets a neutral, non-blocking gate. Gate-only runs still verify confirmation before
-  // evaluating blockers so confirmed contributors cannot bypass a required Gate check.
-  const confirmedContributor = official?.status === "confirmed";
-  const gateEvaluation = gateEnabled ? evaluateGateCheck(advisory, gateCheckPolicy(settings, readiness.total, confirmedContributor)) : undefined;
-  if (gateEnabled) {
-    const gateCheckResult = await createOrUpdateGateCheckRun(
-      env,
-      installationId,
-      repoFullName,
-      advisory,
-      gateCheckPolicy(settings, readiness.total, confirmedContributor),
+  // The pending Gate check is now posted (status in_progress). Everything from here until the gate is
+  // completed runs inside a try so that ANY failure/timeout (a slow Gittensor or GitHub call, a D1 error)
+  // still finalizes the check to a neutral, non-blocking state instead of orphaning it in_progress forever
+  // (the cause of the multi-hour stuck Gate). External calls in this window are bounded by request timeouts
+  // (GitHub App + Gittensor API), so a hang becomes a catchable error here.
+  let collisions!: ReturnType<typeof buildCollisionReport>;
+  let queueHealth!: ReturnType<typeof buildQueueHealth>;
+  let preflight!: ReturnType<typeof buildPreflightResult>;
+  let gateEvaluation: ReturnType<typeof evaluateGateCheck> | undefined;
+  let aiReview: { notes: string } | undefined;
+  let gateFinalized = false;
+  try {
+    const [repoIssues, repoPullRequests, repoBounties] = await Promise.all([
+      listIssues(env, repoFullName),
+      listPullRequests(env, repoFullName),
+      listBountiesByRepo(env, repoFullName),
+    ]);
+    collisions = buildCollisionReport(repoFullName, repoIssues, repoPullRequests);
+    queueHealth = buildQueueHealth(repo, repoIssues, repoPullRequests, collisions);
+    preflight = buildPreflightResult(
       {
-        checkRunId: pendingGateCheckRunId,
+        repoFullName,
+        contributorLogin: author ?? undefined,
+        title: pr.title,
+        body: pr.body ?? undefined,
+        labels: pr.labels,
+        linkedIssues: pr.linkedIssues,
+        authorAssociation: pr.authorAssociation ?? undefined,
       },
+      repo,
+      repoIssues,
+      repoPullRequests,
+      repoBounties,
     );
-    if (gateCheckResult?.kind === "permission_missing") {
-      await auditGateCheckPermissionMissing(env, author, repoFullName, pr.number, webhook.deliveryId, gateCheckResult.warning);
+    const readiness = buildPublicReadinessScore({
+      pr,
+      preflight,
+      queueHealth,
+      linkedDuplicatePrs: linkedIssueDuplicatePullRequestsForGate(pr, repoPullRequests),
+      scopedOverlapCount: unionScopedOverlapClusters(collisions, pr, preflight.collisions).length,
+    });
+
+    // Anti-slop (#530/#532): only when opted in (slopGateMode !== "off"). Surface the deterministic slop
+    // findings as advisory context, and feed the score to the gate (it only blocks under slop: block + the
+    // threshold). Loads files lazily so disabled repos pay nothing.
+    let slopRisk: number | null = null;
+    if (settings.slopGateMode !== "off") {
+      const slopFiles = await listPullRequestFiles(env, repoFullName, pr.number);
+      const slop = buildSlopAssessment({
+        changedFiles: slopFiles.map((file) => ({ path: file.path, additions: file.additions, deletions: file.deletions })),
+        description: pr.body,
+      });
+      slopRisk = slop.slopRisk;
+      advisory.findings.push(...slop.findings);
     }
+
+    if (gateEnabled && author && !publicSurfaceSkipped && !official) {
+      official = await getCachedOfficialMinerDetection(env, author, {
+        targetKey: `${repoFullName}#${pr.number}`,
+        deliveryId: webhook.deliveryId,
+      });
+    }
+
+    // Only CONFIRMED gittensor contributors can be hard-blocked; everyone else (or an unavailable
+    // detection) gets a neutral, non-blocking gate. Gate-only runs still verify confirmation before
+    // evaluating blockers so confirmed contributors cannot bypass a required Gate check.
+    const confirmedContributor = official?.status === "confirmed";
+
+    // AI maintainer review (opt-in via aiReviewMode). Mutates `advisory` with a consensus defect (if any)
+    // BEFORE the gate evaluates, and returns advisory notes for the panel. Inside the try so any AI
+    // failure is caught and the gate is still finalized (never left in_progress).
+    aiReview = await runAiReviewForAdvisory(env, { settings, advisory, repoFullName, pr, author, confirmedContributor });
+
+    gateEvaluation = gateEnabled ? evaluateGateCheck(advisory, gateCheckPolicy(settings, readiness.total, confirmedContributor, slopRisk)) : undefined;
+    if (gateEnabled) {
+      const gateCheckResult = await createOrUpdateGateCheckRun(
+        env,
+        installationId,
+        repoFullName,
+        advisory,
+        gateCheckPolicy(settings, readiness.total, confirmedContributor),
+        {
+          checkRunId: pendingGateCheckRunId,
+        },
+      );
+      if (gateCheckResult?.kind === "published") gateFinalized = true;
+      if (gateCheckResult?.kind === "permission_missing") {
+        await auditGateCheckPermissionMissing(env, author, repoFullName, pr.number, webhook.deliveryId, gateCheckResult.warning);
+      }
+    }
+  } catch (error) {
+    // The pending Gate check was posted but evaluation could not finish. Finalize it to a neutral
+    // (non-blocking) terminal state so it never hangs in_progress; it re-runs on the next push. Only when
+    // the gate was enabled, a pending check id exists, and a real conclusion was not already published.
+    if (gateEnabled && pendingGateCheckRunId !== undefined && !gateFinalized) {
+      await createOrUpdateErroredGateCheckRun(env, installationId, repoFullName, advisory, { checkRunId: pendingGateCheckRunId }).catch(() => undefined);
+      await recordAuditEvent(env, {
+        eventType: "github_app.gate_finalized_on_error",
+        actor: author,
+        targetKey: `${repoFullName}#${pr.number}`,
+        outcome: "error",
+        detail: errorMessage(error),
+        metadata: { deliveryId: webhook.deliveryId, repoFullName },
+      }).catch(() => undefined);
+    }
+    throw error;
   }
 
   if (!prelimHasPublicOutput) return;
@@ -1050,7 +1219,7 @@ async function maybePublishPrPublicSurface(
     // Maintainer review-content overrides from `.gittensory.yml` (footer text, row toggles, intro note).
     // Cached, so this is a DB read after the settings resolution already loaded the manifest.
     const reviewConfig = (await loadRepoFocusManifest(env, repoFullName)).review;
-    const commentArgs = { repo, pr, profile, detection, queueHealth, collisions, preflight, settings, gate: gateEvaluation, review: reviewConfig };
+    const commentArgs = { repo, pr, profile, detection, queueHealth, collisions, preflight, settings, gate: gateEvaluation, review: reviewConfig, aiReview };
     const deterministicBody = buildPublicPrIntelligenceComment(commentArgs);
     try {
       await createOrUpdatePrIntelligenceComment(env, installationId, repoFullName, pr.number, deterministicBody);
