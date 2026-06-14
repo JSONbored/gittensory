@@ -1779,8 +1779,13 @@ export function createApp() {
     );
   });
 
+  // Repo gittensory settings (gate config, AI-review mode/provider/model — NON-secret; the BYOK key is
+  // never here). Maintainer DATA: session callers must be a verified maintainer of THIS repo (per-repo
+  // scope), so a maintainer of repo A cannot read repo B's config. Server-to-server tokens are exempt.
   app.get("/v1/repos/:owner/:repo/settings", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoMaintainer(c, fullName);
+    if (gate instanceof Response) return gate;
     return c.json(await getRepositorySettings(c.env, fullName));
   });
 
@@ -3856,10 +3861,26 @@ function isExtensionScopedSession(identity: AuthIdentity): boolean {
   return identity.kind === "session" && identity.session.scopes.includes(EXTENSION_PULL_CONTEXT_SCOPE);
 }
 
+// ─── Authorization model (the miner ⊕ maintainer boundary) ──────────────────────────────────────
+// Identity is per-LOGIN; authority is per-REPO. Two independent axes a single session can hold at once:
+//   • MINER (gittensor contributor): may read ONLY its own contributor/miner data — enforced by
+//     `requireContributorAccess` (HTTP) and `GittensoryMcp.requireContributorAccess` (MCP), which 403/throw
+//     unless `session.actor === requestedLogin`. Being a miner grants ZERO maintainer visibility.
+//   • MAINTAINER OF A SPECIFIC REPO: may read/write maintainer data ONLY for repos it is a verified
+//     maintainer of — enforced by `requireSessionRepoAccess` / `requireRepoMaintainer` (HTTP) and
+//     `GittensoryMcp.canAccessRepo` (MCP). Maintainer-of-repo-A grants ZERO access to repo B.
+// Two maintainer tiers: (a) affiliation (owns/installed the repo, or authored a PR there with a
+// maintainer association) gates maintainer-DATA reads; (b) verified write/admin/maintain permission,
+// resolved live via the installation, additionally gates the SECRET BYOK key writes (`requireRepoKeyWriteAccess`).
+// Operators (ADMIN_GITHUB_LOGINS) and server-to-server tokens bypass per-repo scope by design.
+// `canSessionAccessPath` is the coarse path allowlist that runs in the global middleware BEFORE a route
+// handler; it only decides whether a session may REACH a path — the per-route guards above enforce the
+// actual identity/repo scope. A path added here MUST be scoped by a per-route guard in its handler.
 function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: "session" }>, path: string): boolean {
   if (isAuthorizedGitHubSessionLogin(env, identity.actor)) return true;
   if (path.startsWith("/v1/app/")) return true;
   if (isIssueQualityPath(path)) return true;
+  if (isRepoSettingsPath(path)) return true;
   if (isRepoSettingsPreviewPath(path)) return true;
   if (isRepoOnboardingPackPreviewPath(path)) return true;
   if (isRepoFocusManifestPath(path)) return true;
@@ -3868,6 +3889,10 @@ function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: 
   if (isRepoContributorIssueDraftGeneratePath(path)) return true;
   if (path === EXTENSION_PULL_CONTEXT_PATH && isExtensionScopedSession(identity)) return true;
   return false;
+}
+
+function isRepoSettingsPath(path: string): boolean {
+  return /^\/v1\/repos\/[^/]+\/[^/]+\/settings$/.test(path);
 }
 
 function isRepoSettingsPreviewPath(path: string): boolean {
