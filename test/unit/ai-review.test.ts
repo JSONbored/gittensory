@@ -134,14 +134,35 @@ describe("BYOK provider dispatch", () => {
     const result = await runGittensoryAiReview(env, { ...baseInput, providerKey: { provider: "anthropic", key: "sk-ant-secret" } });
     expect(result.status === "ok" && result.advisoryNotes).toContain("BYOK review.");
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.anthropic.com/v1/messages");
+    // The provider fetch must carry a timeout signal so a hung provider can't stall the queue worker.
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.signal).toBeInstanceOf(AbortSignal);
     expect(run).not.toHaveBeenCalled(); // advisory mode + BYOK → no Workers AI call
   });
 
-  it("falls back to no notes when the provider returns a non-200", async () => {
+  it("falls back to no notes when the provider returns a non-200 and records the failure reason", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 401 })));
     const env = createTestEnv({ AI: { run: vi.fn() } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI_DAILY_NEURON_BUDGET: "100000" });
     const result = await runGittensoryAiReview(env, { ...baseInput, providerKey: { provider: "openai", key: "sk-secret" } });
     expect(result.status === "ok" && result.advisoryNotes).toBeNull();
+    // The audit event names the failure (observability) and NEVER includes key material.
+    const row = await env.DB.prepare("select metadata_json from ai_usage_events where feature = ? order by rowid desc limit 1").bind("ai_review_pr").first<{ metadata_json: string }>();
+    expect(JSON.parse(row?.metadata_json ?? "{}").byokFailure).toBe("http_error");
+    expect(row?.metadata_json ?? "").not.toContain("sk-secret");
+  });
+
+  it("records a timeout failure when the provider fetch aborts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        // Mirror AbortSignal.timeout's rejection (a TimeoutError DOMException-shaped error).
+        throw Object.assign(new Error("The operation timed out."), { name: "TimeoutError" });
+      }),
+    );
+    const env = createTestEnv({ AI: { run: vi.fn() } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI_DAILY_NEURON_BUDGET: "100000" });
+    const result = await runGittensoryAiReview(env, { ...baseInput, providerKey: { provider: "anthropic", key: "sk-ant-secret" } });
+    expect(result.status === "ok" && result.advisoryNotes).toBeNull();
+    const row = await env.DB.prepare("select metadata_json from ai_usage_events where feature = ? order by rowid desc limit 1").bind("ai_review_pr").first<{ metadata_json: string }>();
+    expect(JSON.parse(row?.metadata_json ?? "{}").byokFailure).toBe("timeout");
   });
 
   it("falls back to no notes when the provider fetch throws, and honors a model override", async () => {

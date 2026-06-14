@@ -212,8 +212,18 @@ const PROVIDER_DEFAULT_MODEL: Record<AiReviewProviderKey["provider"], string> = 
   openai: "gpt-4o",
 };
 
-/** Run the maintainer's BYOK frontier model for the advisory write-up. Never throws; null on any error. */
-async function runProviderReview(providerKey: AiReviewProviderKey, system: string, user: string, maxTokens: number): Promise<ModelReview | null> {
+/** Hard cap on a single BYOK provider request. Without it a slow/half-open Anthropic/OpenAI connection
+ *  would stall the queue worker for as long as the platform allows; a bounded timeout turns the hang into
+ *  the existing fail-safe null path. Mirrors the github/gittensor fetch-timeout convention. */
+const AI_PROVIDER_TIMEOUT_MS = 20_000;
+
+/** Why a BYOK advisory call produced no review — surfaced in the audit event for observability (never a key). */
+type ProviderFailure = "timeout" | "http_error" | "exception";
+type ProviderReviewOutcome = { review: ModelReview | null; failure?: ProviderFailure };
+
+/** Run the maintainer's BYOK frontier model for the advisory write-up. Never throws; the review is null on
+ *  any error and `failure` names the reason (timeout/http_error/exception) for the audit trail. */
+async function runProviderReview(providerKey: AiReviewProviderKey, system: string, user: string, maxTokens: number): Promise<ProviderReviewOutcome> {
   const model = providerKey.model || PROVIDER_DEFAULT_MODEL[providerKey.provider];
   try {
     let response: Response;
@@ -222,6 +232,7 @@ async function runProviderReview(providerKey: AiReviewProviderKey, system: strin
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": providerKey.key, "anthropic-version": "2023-06-01" },
         body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] }),
+        signal: AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS),
       });
     } else {
       response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -235,12 +246,15 @@ async function runProviderReview(providerKey: AiReviewProviderKey, system: strin
             { role: "user", content: user },
           ],
         }),
+        signal: AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS),
       });
     }
-    if (!response.ok) return null;
-    return parseModelReview(coerceAiText(await response.json()));
-  } catch {
-    return null;
+    if (!response.ok) return { review: null, failure: "http_error" };
+    return { review: parseModelReview(coerceAiText(await response.json())) };
+  } catch (error) {
+    // AbortSignal.timeout rejects with a TimeoutError; everything else is a network/parse exception.
+    const failure: ProviderFailure = (error as { name?: string } | null)?.name === "TimeoutError" ? "timeout" : "exception";
+    return { review: null, failure };
   }
 }
 
@@ -302,9 +316,15 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
   }
 
   // Advisory write-up: BYOK frontier model if configured, else the free Workers-AI primary (with fallback).
-  const advisoryReview = input.providerKey
-    ? await runProviderReview(input.providerKey, REVIEW_SYSTEM_PROMPT, user, maxTokens)
-    : await runWorkersOpinion(env, BEST_REVIEW_MODELS[0], RELIABLE_FALLBACK_MODELS[0], REVIEW_SYSTEM_PROMPT, user, maxTokens);
+  let byokFailure: ProviderFailure | undefined;
+  let advisoryReview: ModelReview | null;
+  if (input.providerKey) {
+    const outcome = await runProviderReview(input.providerKey, REVIEW_SYSTEM_PROMPT, user, maxTokens);
+    advisoryReview = outcome.review;
+    byokFailure = outcome.failure;
+  } else {
+    advisoryReview = await runWorkersOpinion(env, BEST_REVIEW_MODELS[0], RELIABLE_FALLBACK_MODELS[0], REVIEW_SYSTEM_PROMPT, user, maxTokens);
+  }
 
   let consensusDefect: AiConsensusDefect | null = null;
   let secondReview: ModelReview | null = null;
@@ -325,6 +345,7 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
     mode: input.mode,
     byok: Boolean(input.providerKey),
     consensus: Boolean(consensusDefect),
+    ...(byokFailure ? { byokFailure } : {}),
   });
   return { status: "ok", advisoryNotes, consensusDefect, estimatedNeurons };
 }

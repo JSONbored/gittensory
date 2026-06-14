@@ -78,6 +78,19 @@ describe("maintainer BYOK key route", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects a key whose prefix does not match the selected provider (400)", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
+    // An OpenAI-shaped key stored under Anthropic, and an Anthropic key stored under OpenAI — both rejected.
+    const wrongAnthropic = await app.request(`/v1/repos/${REPO}/ai-key`, { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ provider: "anthropic", key: "sk-openai-not-anthropic-123456" }) }, env);
+    expect(wrongAnthropic.status).toBe(400);
+    const wrongOpenai = await app.request(`/v1/repos/${REPO}/ai-key`, { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ provider: "openai", key: "sk-ant-not-openai-1234567890" }) }, env);
+    expect(wrongOpenai.status).toBe(400);
+    // An OpenAI key that doesn't start with sk- at all is also rejected.
+    const noPrefix = await app.request(`/v1/repos/${REPO}/ai-key`, { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ provider: "openai", key: "ghp-not-a-provider-key-12345" }) }, env);
+    expect(noPrefix.status).toBe(400);
+  });
+
   it("reports 503 when key storage (encryption secret) is unavailable", async () => {
     const app = createApp();
     const env = createTestEnv({});

@@ -102,8 +102,24 @@ export function AiReviewSettings({ reviewability }: { reviewability: Array<{ pr:
 
   async function saveKey() {
     if (!base) return;
-    if (keyInput.trim().length < 20) {
+    const trimmed = keyInput.trim();
+    if (trimmed.length < 20) {
       setMessage({ kind: "err", text: "Enter a valid provider API key." });
+      return;
+    }
+    // Mirror the server-side prefix check so an obvious provider/key mismatch is caught before the round-trip.
+    const matchesProvider =
+      provider === "anthropic"
+        ? trimmed.startsWith("sk-ant-")
+        : trimmed.startsWith("sk-") && !trimmed.startsWith("sk-ant-");
+    if (!matchesProvider) {
+      setMessage({
+        kind: "err",
+        text:
+          provider === "anthropic"
+            ? "Anthropic keys start with sk-ant-."
+            : "OpenAI keys start with sk- (and not sk-ant-).",
+      });
       return;
     }
     setBusy(true);
@@ -112,7 +128,7 @@ export function AiReviewSettings({ reviewability }: { reviewability: Array<{ pr:
       label: "Save provider key",
       credentials: "include",
       headers: JSON_HEADERS,
-      body: JSON.stringify({ provider, key: keyInput.trim(), model: model.trim() || null }),
+      body: JSON.stringify({ provider, key: trimmed, model: model.trim() || null }),
     });
     setBusy(false);
     if (result.ok) {

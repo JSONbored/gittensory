@@ -534,12 +534,19 @@ const repositorySettingsSchema = z.object({
 });
 
 // Maintainer BYOK provider key. Write-only: the key is encrypted at rest and never returned. A loose
-// shape check (sk-ant-… / sk-…) catches obvious paste errors without coupling to provider key formats.
-const repositoryAiKeySchema = z.object({
-  provider: z.enum(["anthropic", "openai"]),
-  key: z.string().trim().min(20).max(400),
-  model: z.string().trim().min(1).max(120).nullable().optional(),
-});
+// prefix check catches the common provider/key mismatch (e.g. pasting an OpenAI key under Anthropic)
+// without coupling to exact provider key formats: Anthropic keys start with `sk-ant-`; OpenAI keys
+// start with `sk-` but never `sk-ant-`.
+const repositoryAiKeySchema = z
+  .object({
+    provider: z.enum(["anthropic", "openai"]),
+    key: z.string().trim().min(20).max(400),
+    model: z.string().trim().min(1).max(120).nullable().optional(),
+  })
+  .refine((value) => (value.provider === "anthropic" ? value.key.startsWith("sk-ant-") : value.key.startsWith("sk-") && !value.key.startsWith("sk-ant-")), {
+    message: "API key does not match the selected provider (Anthropic keys start with sk-ant-, OpenAI keys start with sk-).",
+    path: ["key"],
+  });
 
 // Maintainer-settable AI-review config (the non-secret subset of settings). The secret key is set
 // separately via the ai-key route; never here.
