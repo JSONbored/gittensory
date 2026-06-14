@@ -199,6 +199,7 @@ import { buildPullRequestReviewability, type PullRequestReviewability } from "..
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
 import { buildMaintainerActivationPreview, recommendedAdvisoryActivationSettings } from "../services/maintainer-activation";
+import { buildMaintainerQualityDashboard, isMaintainerQualityDataStale } from "../services/maintainer-quality-dashboard";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
 import { compileFocusManifestPolicy } from "../signals/focus-manifest";
 import { loadRepoFocusManifest, upsertRepoFocusManifest } from "../signals/focus-manifest-loader";
@@ -992,6 +993,26 @@ export function createApp() {
     const openPullRequests = (
       await Promise.all(repositories.slice(0, 12).map((repo) => listOpenPullRequests(c.env, repo.fullName).then((rows) => rows.map((pull) => ({ repoFullName: repo.fullName, pull })))))
     ).flat();
+    // Quality dashboard (#557): shape cached repo data into queue-health bands, duplicate trends, and
+    // top contributors by quality band — scoped to this maintainer's repos. Reads CACHED issue/PR data
+    // (no GitHub fetch), but does derive the collision/queue signals per load; the build is capped to
+    // QUALITY_DASHBOARD_REPO_CAP repos and `truncated` discloses when there are more. The `stale` flag
+    // reflects how fresh the underlying repo sync is.
+    const QUALITY_DASHBOARD_REPO_CAP = 12;
+    const qualityRepos = repositories.slice(0, QUALITY_DASHBOARD_REPO_CAP);
+    const [qualityRepoInputs, allSyncStates] = await Promise.all([
+      Promise.all(
+        qualityRepos.map(async (repo) => {
+          const [issues, pullRequests] = await Promise.all([listIssues(c.env, repo.fullName), listPullRequests(c.env, repo.fullName)]);
+          return { repo, issues, pullRequests };
+        }),
+      ),
+      listRepoSyncStates(c.env),
+    ]);
+    const qualityRepoNames = new Set(qualityRepos.map((repo) => repo.fullName.toLowerCase()));
+    const scopedSyncCompletions = allSyncStates.filter((state) => qualityRepoNames.has(state.repoFullName.toLowerCase())).map((state) => state.lastCompletedAt);
+    const qualityStale = isMaintainerQualityDataStale({ lastCompletedAts: scopedSyncCompletions, repoCount: qualityRepos.length, nowMs: Date.parse(nowIso()) });
+    const qualityDashboard = buildMaintainerQualityDashboard({ repos: qualityRepoInputs, generatedAt: nowIso(), stale: qualityStale, repoTotal: repositories.length });
     return c.json({
       generatedAt: nowIso(),
       installations,
@@ -1013,6 +1034,7 @@ export function createApp() {
         slop: typeof pull.slopRisk === "number" && pull.slopBand ? { risk: pull.slopRisk, band: pull.slopBand } : null,
       })),
       settingsPreview: buildMaintainerSettingsPreview(),
+      qualityDashboard,
     });
   });
 

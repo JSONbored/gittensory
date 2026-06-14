@@ -1678,8 +1678,21 @@ describe("api routes", () => {
     }
     const res = await app.request("/v1/app/maintainer-dashboard", { headers: apiHeaders(env) }, env);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { metrics: Array<{ label: string; value: number }> };
+    const body = (await res.json()) as {
+      metrics: Array<{ label: string; value: number }>;
+      qualityDashboard: { generatedAt: string; stale: boolean; repoQuality: Array<{ repoFullName: string; queueBand: string }>; topContributors: Array<{ login: string; band: string }>; qualitySignals: { openPrs: number }; summary: string };
+    };
     expect(body.metrics.find((metric) => metric.label === "Open PRs cached")?.value).toBe(8);
+    // Quality dashboard (#557): shaped, scoped, public-safe trend/outcome data with bands not raw scores.
+    expect(body.qualityDashboard.generatedAt).toEqual(expect.any(String));
+    expect(typeof body.qualityDashboard.stale).toBe("boolean");
+    expect(body.qualityDashboard.repoQuality.length).toBeGreaterThan(0);
+    expect(body.qualityDashboard.repoQuality.every((entry) => ["low", "medium", "high", "critical"].includes(entry.queueBand))).toBe(true);
+    expect(body.qualityDashboard.topContributors.every((entry) => ["strong", "developing", "early"].includes(entry.band))).toBe(true);
+    expect(body.qualityDashboard.qualitySignals.openPrs).toBeGreaterThanOrEqual(0);
+    expect(body.qualityDashboard.summary).toContain("open PR(s)");
+    expect(JSON.stringify(body.qualityDashboard)).not.toMatch(FORBIDDEN_PUBLIC_REPORT_TERMS);
+    expect(JSON.stringify(body.qualityDashboard)).not.toMatch(/"burdenScore"|"credibility"/);
   });
 
   it("counts cached open PRs from sync states beyond the latest 500 rows", async () => {
