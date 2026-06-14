@@ -974,6 +974,46 @@ describe("api routes", () => {
     const invalidLintPrText = await app.request("/v1/lint/pr-text", { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ linkedIssue: -1 }) }, env);
     expect(invalidLintPrText.status).toBe(400);
 
+    // Agent-native slop self-checks (mirror the gittensory_check_slop_risk / gittensory_check_issue_slop MCP tools).
+    const slopRisk = await app.request(
+      "/v1/lint/slop-risk",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ changedFiles: [{ path: "src/widget.ts", additions: 80, deletions: 2 }], description: "" }) },
+      env,
+    );
+    expect(slopRisk.status).toBe(200);
+    const slopRiskBody = await slopRisk.json();
+    expect(slopRiskBody).toMatchObject({ slopRisk: expect.any(Number), band: expect.stringMatching(/clean|low|elevated|high/), findings: expect.any(Array), rubric: expect.any(String) });
+    expect(JSON.stringify(slopRiskBody)).not.toMatch(/hotkey|coldkey|wallet|payout|reward/i);
+
+    // Session identities (not just the API token) can reach it — it is allowlisted like the other local self-checks.
+    const { token: slopSessionToken } = await createSessionForGitHubUser(env, { login: "slop-mcp-user", id: 4343 });
+    const sessionSlopRisk = await app.request(
+      "/v1/lint/slop-risk",
+      { method: "POST", headers: { authorization: `Bearer ${slopSessionToken}`, "content-type": "application/json" }, body: JSON.stringify({ changedFiles: [] }) },
+      env,
+    );
+    expect(sessionSlopRisk.status).toBe(200);
+
+    const invalidSlopRisk = await app.request("/v1/lint/slop-risk", { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ changedFiles: [{ path: "", additions: -1 }] }) }, env);
+    expect(invalidSlopRisk.status).toBe(400);
+
+    const issueSlop = await app.request(
+      "/v1/lint/issue-slop",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ title: "Add retries", body: "" }) },
+      env,
+    );
+    expect(issueSlop.status).toBe(200);
+    await expect(issueSlop.json()).resolves.toMatchObject({ slopRisk: expect.any(Number), band: expect.stringMatching(/clean|low|elevated|high/), rubric: expect.any(String) });
+
+    const invalidIssueSlop = await app.request("/v1/lint/issue-slop", { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ title: 123 }) }, env);
+    expect(invalidIssueSlop.status).toBe(400);
+
+    // Malformed (unparseable) JSON bodies fall through the catch to a 400, not a 500.
+    const malformedSlopRisk = await app.request("/v1/lint/slop-risk", { method: "POST", headers: apiHeaders(env), body: "{not json" }, env);
+    expect(malformedSlopRisk.status).toBe(400);
+    const malformedIssueSlop = await app.request("/v1/lint/issue-slop", { method: "POST", headers: apiHeaders(env), body: "{not json" }, env);
+    expect(malformedIssueSlop.status).toBe(400);
+
     const queueIntelligence = await app.request(
       "/v1/internal/queue-intelligence",
       {
