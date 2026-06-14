@@ -39,9 +39,11 @@ function settings(overrides: Partial<RepositorySettings> = {}): RepositorySettin
     checkRunMode: "off",
     checkRunDetailLevel: "standard",
     gateCheckMode: "off",
+    gatePack: "gittensor",
     linkedIssueGateMode: "advisory",
     duplicatePrGateMode: "advisory",
     qualityGateMode: "advisory",
+    slopGateMode: "off",
     qualityGateMinScore: null,
     autoLabelEnabled: true,
     gittensorLabel: "gittensor",
@@ -51,6 +53,8 @@ function settings(overrides: Partial<RepositorySettings> = {}): RepositorySettin
     requireLinkedIssue: false,
     backfillEnabled: true,
     privateTrustEnabled: true,
+    aiReviewMode: "off",
+    aiReviewByok: false,
     ...overrides,
   };
 }

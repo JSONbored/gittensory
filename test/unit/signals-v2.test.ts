@@ -1613,9 +1613,11 @@ describe("v2 signal builders", () => {
         checkRunMode: "off",
         checkRunDetailLevel: "minimal",
         gateCheckMode: "off",
+        gatePack: "gittensor",
         linkedIssueGateMode: "advisory",
         duplicatePrGateMode: "advisory",
         qualityGateMode: "advisory",
+        slopGateMode: "off",
         qualityGateMinScore: null,
         autoLabelEnabled: true,
         gittensorLabel: "gittensor",
@@ -1625,6 +1627,8 @@ describe("v2 signal builders", () => {
         requireLinkedIssue: false,
         backfillEnabled: true,
         privateTrustEnabled: true,
+        aiReviewMode: "off",
+        aiReviewByok: false,
       },
     });
     expect(comment).toContain("Author: `unknown`");

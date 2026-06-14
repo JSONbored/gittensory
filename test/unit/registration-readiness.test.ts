@@ -42,9 +42,11 @@ function settingsFor(repoFullName: string, overrides: Partial<RepositorySettings
     checkRunMode: "enabled",
     checkRunDetailLevel: "standard",
     gateCheckMode: "off",
+    gatePack: "gittensor",
     linkedIssueGateMode: "advisory",
     duplicatePrGateMode: "advisory",
     qualityGateMode: "advisory",
+    slopGateMode: "off",
     qualityGateMinScore: null,
     autoLabelEnabled: true,
     gittensorLabel: "gittensor",
@@ -54,6 +56,8 @@ function settingsFor(repoFullName: string, overrides: Partial<RepositorySettings
     requireLinkedIssue: false,
     backfillEnabled: true,
     privateTrustEnabled: true,
+    aiReviewMode: "off",
+    aiReviewByok: false,
     ...overrides,
   };
 }
