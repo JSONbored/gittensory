@@ -358,6 +358,8 @@ export const ContributorOpportunitySchema = z
     fit: z.enum(["good", "caution", "hold"]),
     score: z.number(),
     lane: z.enum(["direct_pr", "issue_discovery", "split", "inactive", "unknown"]),
+    multiplierTier: z.enum(["maintainer_created", "community"]),
+    availability: z.enum(["ready", "maintainer_wip"]),
     reasons: z.array(z.string()),
     warnings: z.array(z.string()),
   })
