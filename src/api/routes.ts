@@ -104,6 +104,7 @@ import {
   refreshInstallationHealth,
   refreshInstallationHealthForInstallation,
 } from "../github/backfill";
+import { getRepositoryCollaboratorPermission } from "../github/app";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
 import { fetchPublicContributorProfile, fetchPublicRepoStats } from "../github/public";
 import {
@@ -1820,7 +1821,7 @@ export function createApp() {
 
   app.post("/v1/repos/:owner/:repo/ai-key", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
-    const gate = await requireRepoMaintainer(c, fullName);
+    const gate = await requireRepoKeyWriteAccess(c, fullName);
     if (gate instanceof Response) return gate;
     const parsed = repositoryAiKeySchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_ai_key", issues: parsed.error.issues }, 400);
@@ -1837,7 +1838,7 @@ export function createApp() {
 
   app.delete("/v1/repos/:owner/:repo/ai-key", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
-    const gate = await requireRepoMaintainer(c, fullName);
+    const gate = await requireRepoKeyWriteAccess(c, fullName);
     if (gate instanceof Response) return gate;
     const actor = gate.identity?.kind === "session" ? gate.identity.actor : null;
     await deleteRepositoryAiKey(c.env, fullName, actor);
@@ -3982,6 +3983,39 @@ async function requireRepoMaintainer(c: ProtectedRouteContext, fullName: string)
     if (repoForbidden) return repoForbidden;
   }
   return { identity };
+}
+
+// GitHub permissions that imply real write access to a repo (and thus authority to manage its secret
+// BYOK key). "maintain"/"write"/"admin" can push; "triage"/"read"/"none" cannot.
+const REPO_KEY_WRITE_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+
+/**
+ * Stricter gate for the secret-bearing BYOK key WRITES (POST/DELETE /ai-key). On top of the maintainer
+ * gate, a session caller must have real GitHub write access to the repo — resolved via the installation,
+ * not merely inferred from a PR author_association (which includes org MEMBER / read-only COLLABORATOR).
+ * Operators and server-to-server tokens are exempt. Fails closed (403) if write access can't be verified.
+ */
+async function requireRepoKeyWriteAccess(c: ProtectedRouteContext, fullName: string): Promise<Response | { identity: AuthIdentity | null }> {
+  const gate = await requireRepoMaintainer(c, fullName);
+  if (gate instanceof Response) return gate;
+  if (gate.identity?.kind !== "session") return gate; // server-to-server token: no per-repo push check
+  const summary = await loadControlPanelRoleSummary(c.env, gate.identity.actor);
+  if (summary.roles.includes("operator")) return gate; // operators manage any repo
+  const repo = await getRepository(c.env, fullName);
+  const installationId = repo?.installationId ?? null;
+  let permission: string | null = null;
+  if (installationId !== null) {
+    try {
+      permission = await getRepositoryCollaboratorPermission(c.env, installationId, fullName, gate.identity.actor);
+    } catch {
+      /* v8 ignore next -- defensive: a GitHub permission-check failure fails closed (→ 403 below) */
+      permission = null;
+    }
+  }
+  if (!permission || !REPO_KEY_WRITE_PERMISSIONS.has(permission)) {
+    return c.json({ error: "insufficient_repo_permission" }, 403);
+  }
+  return gate;
 }
 
 async function skippedPrAuditRepoScope(

@@ -1,8 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/api/routes";
 import { createSessionForGitHubUser } from "../../src/auth/security";
-import { getRepositorySettings, upsertInstallation, upsertRepositorySettings, upsertRepositoryFromGitHub } from "../../src/db/repositories";
+import { getRepositorySettings, upsertInstallation, upsertPullRequestFromGitHub, upsertRepositorySettings, upsertRepositoryFromGitHub } from "../../src/db/repositories";
+import { getRepositoryCollaboratorPermission } from "../../src/github/app";
 import { createTestEnv } from "../helpers/d1";
+
+// The secret-key write gate resolves real GitHub push permission via the installation; mock just that
+// call (leave the rest of github/app real) so the per-repo write check is deterministic in tests.
+vi.mock("../../src/github/app", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/github/app")>()),
+  getRepositoryCollaboratorPermission: vi.fn(),
+}));
+const mockedPermission = vi.mocked(getRepositoryCollaboratorPermission);
 
 const SECRET = "routes-byok-encryption-secret-at-least-32b";
 const REPO = "acme/widgets";
@@ -106,6 +115,7 @@ describe("maintainer route authz (session-scoped)", () => {
   // Role resolution (loadControlPanelRoleSummary) makes a miner-detection fetch; stub it so session role
   // derivation is deterministic in tests.
   afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => mockedPermission.mockReset());
   function stubMinerFetch() {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       if (input.toString().includes("gittensor.io")) return Response.json([]);
@@ -134,15 +144,71 @@ describe("maintainer route authz (session-scoped)", () => {
     expect(await res.json()).toMatchObject({ aiReviewMode: "advisory", aiReviewProvider: "anthropic" });
   });
 
-  it("allows the repo owner via session to set a BYOK key", async () => {
+  it("allows the repo owner (admin permission) via session to set a BYOK key", async () => {
     const app = createApp();
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET, ADMIN_GITHUB_LOGINS: "" });
     await seedRepo(env, "repo-owner", "owned-repo", 201);
     stubMinerFetch();
+    mockedPermission.mockResolvedValue("admin"); // real GitHub write access
     const { token } = await createSessionForGitHubUser(env, { login: "repo-owner", id: 201 });
     const res = await app.request(`${OWNED}/ai-key`, { method: "POST", headers: { cookie: `gittensory_session=${token}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "anthropic", key: "sk-ant-owner-key-4242" }) }, env);
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ configured: true, provider: "anthropic", last4: "4242" });
+  });
+
+  it("forbids a read-only collaborator (in scope via a PR, but no push) from writing the BYOK key", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET, ADMIN_GITHUB_LOGINS: "" });
+    await seedRepo(env, "repo-owner", "owned-repo", 201);
+    // "reader" authored a PR as COLLABORATOR → in maintainer scope, but only has read permission.
+    await upsertPullRequestFromGitHub(env, "repo-owner/owned-repo", { number: 5, title: "tweak", state: "open", user: { login: "reader" }, author_association: "COLLABORATOR", head: { sha: "a1", ref: "f" }, base: { ref: "main" }, labels: [] });
+    stubMinerFetch();
+    mockedPermission.mockResolvedValue("read");
+    const { token } = await createSessionForGitHubUser(env, { login: "reader", id: 777 });
+    const json = { cookie: `gittensory_session=${token}`, "content-type": "application/json" };
+    const post = await app.request(`${OWNED}/ai-key`, { method: "POST", headers: json, body: JSON.stringify({ provider: "anthropic", key: "sk-ant-reader-key-9999" }) }, env);
+    expect(post.status).toBe(403);
+    expect(await post.json()).toMatchObject({ error: "insufficient_repo_permission" });
+    // DELETE is gated the same way.
+    expect((await app.request(`${OWNED}/ai-key`, { method: "DELETE", headers: { cookie: `gittensory_session=${token}` } }, env)).status).toBe(403);
+    // The read-only collaborator can still READ the secret-free status (GET is not write-gated).
+    expect((await app.request(`${OWNED}/ai-key`, { headers: { cookie: `gittensory_session=${token}` } }, env)).status).toBe(200);
+  });
+
+  it("allows an operator to set the BYOK key without a per-repo push check", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET, ADMIN_GITHUB_LOGINS: "ops-admin" });
+    await seedRepo(env, "repo-owner", "owned-repo", 201);
+    stubMinerFetch();
+    const { token } = await createSessionForGitHubUser(env, { login: "ops-admin", id: 9 });
+    const res = await app.request(`${OWNED}/ai-key`, { method: "POST", headers: { cookie: `gittensory_session=${token}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "openai", key: "sk-openai-operator-key-123" }) }, env);
+    expect(res.status).toBe(200);
+    expect(mockedPermission).not.toHaveBeenCalled(); // operators skip the push check
+  });
+
+  it("fails closed when GitHub reports no write access (permission 'none')", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET, ADMIN_GITHUB_LOGINS: "" });
+    await seedRepo(env, "repo-owner", "owned-repo", 201);
+    stubMinerFetch();
+    mockedPermission.mockResolvedValue("none");
+    const { token } = await createSessionForGitHubUser(env, { login: "repo-owner", id: 201 });
+    const res = await app.request(`${OWNED}/ai-key`, { method: "POST", headers: { cookie: `gittensory_session=${token}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "anthropic", key: "sk-ant-owner-key-4242" }) }, env);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: "insufficient_repo_permission" });
+  });
+
+  it("fails closed when the repo has no installation to verify permission against", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET, ADMIN_GITHUB_LOGINS: "" });
+    await seedRepo(env, "repo-owner", "owned-repo", 201);
+    // Keep the repo "installed" (so the owner stays in scope) but drop the installation id.
+    await env.DB.prepare("UPDATE repositories SET installation_id = NULL WHERE full_name = ?").bind("repo-owner/owned-repo").run();
+    stubMinerFetch();
+    const { token } = await createSessionForGitHubUser(env, { login: "repo-owner", id: 201 });
+    const res = await app.request(`${OWNED}/ai-key`, { method: "POST", headers: { cookie: `gittensory_session=${token}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "anthropic", key: "sk-ant-owner-key-4242" }) }, env);
+    expect(res.status).toBe(403);
+    expect(mockedPermission).not.toHaveBeenCalled();
   });
 
   it("forbids a session with no role for the repo on every AI route (403)", async () => {
