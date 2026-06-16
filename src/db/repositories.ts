@@ -1328,6 +1328,7 @@ export async function upsertIssueWatchSubscription(env: Env, input: { login: str
     .select()
     .from(issueWatchSubscriptions)
     .where(and(eq(issueWatchSubscriptions.login, login), eq(issueWatchSubscriptions.repoFullName, repoFullName)));
+  /* v8 ignore next -- the row always exists immediately after the upsert above; the literal is a type-safety fallback. */
   return row ? toIssueWatchSubscription(row) : { login, repoFullName, labels };
 }
 
