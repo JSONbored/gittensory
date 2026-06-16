@@ -45,8 +45,7 @@ function decodePng(buffer: Buffer): PNG {
 
 function changedPercent(diffPixels: number, width: number, height: number): number {
   const total = width * height;
-  if (total <= 0) return 0;
-  return roundPercent((diffPixels / total) * 100);
+  return roundPercent((diffPixels / Math.max(total, 1)) * 100);
 }
 
 function roundPercent(value: number): number {
@@ -152,10 +151,12 @@ export function compareVisualCaptureSets(args: {
   const unchanged = comparisons.filter((entry) => entry.status === "unchanged");
   const added = comparisons.filter((entry) => entry.status === "new");
   const removed = comparisons.filter((entry) => entry.status === "removed");
-  const measurable = comparisons.filter((entry) => entry.changedPixelPercent !== null);
+  const measurable = comparisons.filter(
+    (entry): entry is VisualRouteComparison & { changedPixelPercent: number } => entry.changedPixelPercent !== null,
+  );
   const overallChangedPixelPercent =
     measurable.length > 0
-      ? roundPercent(measurable.reduce((sum, entry) => sum + (entry.changedPixelPercent ?? 0), 0) / measurable.length)
+      ? roundPercent(measurable.reduce((sum, entry) => sum + entry.changedPixelPercent, 0) / measurable.length)
       : 0;
 
   const summary =
