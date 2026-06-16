@@ -27,6 +27,9 @@ declare global {
     GITTENSOR_UPSTREAM_REPO?: string;
     GITTENSOR_UPSTREAM_REF?: string;
     GITTENSOR_REGISTRY_URL: string;
+    /** #697: metagraphed base URL. When set, subnet/netuid integration claims in PRs/issues are validated
+     *  (existence + interface health) and surfaced as ADVISORY gate evidence. Unset = feature dormant. */
+    METAGRAPHED_API_URL?: string;
     GITHUB_PUBLIC_TOKEN?: string;
     /** #703: owner-gated global to apply upstream sigmoid time-decay in score previews. Default off. */
     SCORING_TIME_DECAY_ENABLED?: string;

@@ -133,6 +133,7 @@ import {
   unionScopedOverlapClusters,
 } from "../signals/engine";
 import { buildIssueSlopAssessment, buildSlopAssessment, type SlopBand } from "../signals/slop";
+import { assessSubnetClaimFindings } from "../services/metagraphed";
 import { runGittensoryAiSlopAdvisory } from "../services/ai-slop";
 import { decidePublicSurface } from "../signals/settings-preview";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
@@ -738,6 +739,9 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
         otherOpenPullRequests,
         requireLinkedIssue: settings.requireLinkedIssue || settings.linkedIssueGateMode !== "off",
       });
+      // #697: validate any subnet/netuid integration claim against metagraphed and attach the verdict as
+      // advisory gate evidence. No-op (and no network call) unless METAGRAPHED_API_URL is configured.
+      advisory.findings.push(...(await assessSubnetClaimFindings(env, { title: pr.title, body: pr.body })));
       await persistAdvisory(env, advisory);
       if (installationId && shouldProcessPullRequestPublicSurface(payload.action)) {
         await maybePublishPrPublicSurface(env, installationId, repoFullName, pr, repo, settings, advisory, {
@@ -770,6 +774,9 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
       if (issueSettings.slopGateMode !== "off") {
         advisory.findings.push(...buildIssueSlopAssessment({ title: issue.title, body: issue.body }).findings);
       }
+      // #697: subnet/netuid claim validation also applies to issues ("integrates subnet X"). Advisory-only;
+      // dormant unless METAGRAPHED_API_URL is set.
+      advisory.findings.push(...(await assessSubnetClaimFindings(env, { title: issue.title, body: issue.body })));
       await persistAdvisory(env, advisory);
       // #699 path B: a newly opened grabbable, high-multiplier issue notifies the miners watching this repo
       // (fanned out through the same #535 pipeline below).
