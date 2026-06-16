@@ -77,6 +77,14 @@ describe("visual diff quantification", () => {
     });
   });
 
+  it("treats missing before/after captures as unchanged", () => {
+    expect(compareRouteScreenshots({ route: "/empty", before: null, after: null })).toMatchObject({
+      status: "unchanged",
+      changedPixelPercent: 0,
+      diffImagePng: null,
+    });
+  });
+
   it("summarizes mixed route sets with overall changed-pixel average", () => {
     const unchanged = createSolidPng(20, 20, [10, 10, 10, 255]);
     const beforeChanged = createSolidPng(20, 20, [255, 0, 0, 255]);

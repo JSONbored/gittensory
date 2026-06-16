@@ -1,3 +1,7 @@
+/**
+ * Agent-path visual diff utilities (Node `Buffer` + PNG decode).
+ * Must not be imported from the Worker entry (`src/index.ts`) or MCP bin bundle.
+ */
 import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
 
