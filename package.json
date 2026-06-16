@@ -91,6 +91,9 @@
     "@lovable.dev/vite-plugin-dev-server-bridge": "1.0.1",
     "@lovable.dev/vite-plugin-hmr-gate": "1.0.1",
     "esbuild": "^0.28.1",
+    "ws": "^8.21.0",
+    "tar": "^7.5.16",
+    "js-yaml": "^4.2.0",
     "lovable-tagger@1.2.0": {
       "esbuild": "^0.28.1"
     },
