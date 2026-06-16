@@ -18,6 +18,8 @@ describe("public subnet-interface descriptor route", () => {
         mcp: { endpoint: "https://gittensory-api.aethereal.dev/mcp", transport: "http" },
         githubApp: { slug: "gittensory", installUrl: "https://github.com/apps/gittensory" },
       },
+      // Cross-MCP related-tools hint (#696): links out to metagraphed for subnet discovery/invocation.
+      related: [{ name: "metagraphed", role: "subnet_discovery", site: "https://metagraph.sh" }],
     });
   });
 

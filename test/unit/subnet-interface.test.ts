@@ -23,6 +23,14 @@ describe("buildSubnetInterfaceDescriptor", () => {
     expect(toolNames).toContain("gittensory_list_notifications");
     expect(descriptor.interfaces.mcp.tools.every((tool) => tool.summary.length > 0)).toBe(true);
     expect(descriptor.onboarding.steps.length).toBeGreaterThan(0);
+
+    // Cross-MCP related-tools hint (#696): the descriptor links out to metagraphed for the adjacent
+    // subnet-discovery/validation/invocation intent — distinct scopes, link not merge.
+    const metagraphed = descriptor.related.find((sibling) => sibling.name === "metagraphed");
+    expect(metagraphed, "metagraphed sibling hint is present in the descriptor").toBeDefined();
+    expect(metagraphed?.site).toBe("https://metagraph.sh");
+    expect(metagraphed?.role).toBe("subnet_discovery");
+    expect(metagraphed?.boundary.toLowerCase()).toContain("link, don't merge");
   });
 
   it("defaults the upstream repo when not provided and contains no private/reward wording", () => {

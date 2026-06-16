@@ -55,6 +55,7 @@ import { buildPublicPrBodyDraft } from "../services/pr-body-draft";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import { buildMcpClientTelemetry } from "../services/client-telemetry";
+import { buildRelatedToolsHint } from "../services/related-mcp";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import {
@@ -506,6 +507,12 @@ const localStatusOutputSchema = {
   sourceUploadDefault: z.boolean().optional(),
   supportedEndpoint: z.string().optional(),
   supportedTools: z.unknown().optional(),
+};
+
+const relatedToolsOutputSchema = {
+  self: z.unknown().optional(),
+  related: z.unknown().optional(),
+  note: z.string().optional(),
 };
 
 const validateLinkedIssueOutputSchema = {
@@ -1144,6 +1151,17 @@ export class GittensoryMcp {
         outputSchema: agentRunBundleOutputSchema,
       },
       async (input) => this.toolResult(await this.agentPreparePrPacket(input)),
+    );
+
+    server.registerTool(
+      "gittensory_related_tools",
+      {
+        description:
+          "Point the agent to the sibling MCP for adjacent intents outside Gittensory's scope. Gittensory handles gittensor (SN74) code-contribution workflow; for subnet discovery, validation, or invocation methods (does this subnet exist, what does it do, how do I call it) it links to metagraphed. Distinct scopes — link, don't merge. No auth, no input.",
+        inputSchema: {},
+        outputSchema: relatedToolsOutputSchema,
+      },
+      async () => this.toolResult(this.relatedTools()),
     );
 
     // ── Miner planning prompts ───────────────────────────────────────────
@@ -1980,6 +1998,15 @@ export class GittensoryMcp {
       syncStates.find((state) => state.repoFullName === fullName),
       syncSegments,
     );
+  }
+
+  // Cross-MCP related-tools hint (#696): static product metadata; no env/auth/IO needed.
+  private relatedTools(): ToolPayload {
+    const hint = buildRelatedToolsHint();
+    return {
+      summary: `For subnet discovery/validation/invocation, use ${hint.related.map((sibling) => sibling.name).join(", ")} — Gittensory stays scoped to gittensor (SN74) contribution work.`,
+      data: hint as unknown as Record<string, unknown>,
+    };
   }
 
   private toolResult(payload: ToolPayload) {

@@ -92,6 +92,23 @@ describe("MCP output schema discovery", () => {
     expect(names.has("gittensory_agent_plan_next_work")).toBe(true);
     expect(names.has("gittensory_compare_pr_variants")).toBe(true);
   });
+
+  // Cross-MCP related-tools hint (#696): an agent in the Gittensory MCP is pointed to the metagraphed
+  // sibling for the adjacent subnet-discovery/validation/invocation intent — no auth, no input.
+  it("gittensory_related_tools points the agent to the metagraphed sibling", async () => {
+    const { client } = await connectTestClient();
+    const result = await client.callTool({ name: "gittensory_related_tools", arguments: {} });
+    expect(result.isError).toBeFalsy();
+
+    const data = result.structuredContent as { self?: { name?: string }; related?: Array<{ name?: string; site?: string; role?: string }>; note?: string };
+    expect(data.self?.name).toBe("gittensory");
+    const metagraphed = (data.related ?? []).find((sibling) => sibling.name === "metagraphed");
+    expect(metagraphed, "metagraphed sibling is surfaced").toBeDefined();
+    expect(metagraphed?.site).toBe("https://metagraph.sh");
+    expect(metagraphed?.role).toBe("subnet_discovery");
+    expect((data.note ?? "").toLowerCase()).toContain("link, don't merge");
+    expect(JSON.stringify(data)).not.toMatch(/hotkey|coldkey|wallet|payout|reward/i);
+  });
 });
 
 // ── Structured content validates against the declared schema ─────────────────────

@@ -1,5 +1,6 @@
 import { GITTENSOR_HOME_URL, GITTENSORY_SITE_URL } from "../github/footer";
 import { GITTENSORY_MCP_PACKAGE_NAME, LATEST_RECOMMENDED_MCP_VERSION, MINIMUM_SUPPORTED_MCP_VERSION } from "./mcp-compatibility";
+import { METAGRAPHED_RELATED_HINT, type RelatedMcpHint } from "./related-mcp";
 
 // Gittensor is Bittensor subnet 74 (the code subnet). Gittensory is its contribution interface.
 export const GITTENSOR_NETUID = 74;
@@ -42,6 +43,9 @@ export type SubnetInterfaceDescriptor = {
     };
     githubApp: { kind: "github_app"; slug: string; installUrl: string };
   };
+  // Sibling MCPs for adjacent intents — agents are pointed here (link, don't merge) instead of Gittensory
+  // growing out-of-scope tools (#696). Currently: metagraphed for subnet discovery/validation/invocation.
+  related: RelatedMcpHint[];
   onboarding: { docs: string; steps: string[] };
 };
 
@@ -83,6 +87,7 @@ export function buildSubnetInterfaceDescriptor(args: { origin: string; generated
         installUrl: `https://github.com/apps/${args.appSlug}`,
       },
     },
+    related: [METAGRAPHED_RELATED_HINT],
     onboarding: {
       docs: GITTENSORY_SITE_URL,
       steps: [...ONBOARDING_STEPS],
