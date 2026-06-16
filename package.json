@@ -65,7 +65,7 @@
     "@octokit/core": "^7.0.6",
     "agents": "^0.13.3",
     "drizzle-orm": "^0.45.0",
-    "hono": "^4.12.23",
+    "hono": "^4.12.25",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
@@ -92,6 +92,9 @@
     "@lovable.dev/vite-plugin-dev-server-bridge": "1.0.1",
     "@lovable.dev/vite-plugin-hmr-gate": "1.0.1",
     "esbuild": "^0.28.1",
+    "js-yaml": "4.2.0",
+    "tar": "^7.5.16",
+    "ws": "^8.21.0",
     "lovable-tagger@1.2.0": {
       "esbuild": "^0.28.1"
     },
