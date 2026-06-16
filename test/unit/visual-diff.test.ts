@@ -131,4 +131,37 @@ describe("visual diff quantification", () => {
     expect(result.status).toBe("changed");
     expect(result.diffImagePng).toBeNull();
   });
+
+  it("reports an unchanged-only summary when no routes materially change", () => {
+    const png = createSolidPng(16, 16, [120, 120, 120, 255]);
+    const summary = compareVisualCaptureSets({
+      before: { "/stable": png },
+      after: { "/stable": png },
+    });
+    expect(summary.changedCount).toBe(0);
+    expect(summary.overallChangedPixelPercent).toBe(0);
+    expect(summary.summary).toMatch(/1 route\(s\) unchanged; 0 new, 0 removed/i);
+  });
+
+  it("handles new-only capture sets without measurable changed-pixel averages", () => {
+    const summary = compareVisualCaptureSets({
+      before: {},
+      after: { "/new-only": createSolidPng(12, 12, [1, 2, 3, 255]) },
+    });
+    expect(summary.changedCount).toBe(0);
+    expect(summary.newCount).toBe(1);
+    expect(summary.overallChangedPixelPercent).toBe(0);
+    expect(summary.summary).toMatch(/0 route\(s\) unchanged; 1 new, 0 removed/i);
+  });
+
+  it("forwards diff options to per-route comparisons", () => {
+    const png = createSolidPng(20, 20, [255, 255, 255, 255]);
+    const tweaked = createSolidPng(20, 20, [254, 255, 255, 255]);
+    const summary = compareVisualCaptureSets({
+      before: { "/app": png },
+      after: { "/app": tweaked },
+      options: { changeThresholdPercent: 100, includeDiffImage: false },
+    });
+    expect(summary.routes[0]).toMatchObject({ status: "unchanged", diffImagePng: null });
+  });
 });
