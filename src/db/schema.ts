@@ -73,6 +73,8 @@ export const repositorySettings = sqliteTable("repository_settings", {
   commandAuthorizationJson: text("command_authorization_json").notNull().default("{}"),
   autonomyJson: text("autonomy_json").notNull().default("{}"),
   autoMaintainJson: text("auto_maintain_json").notNull().default("{}"),
+  agentPaused: integer("agent_paused", { mode: "boolean" }).notNull().default(false),
+  agentDryRun: integer("agent_dry_run", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
 });

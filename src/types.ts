@@ -465,6 +465,12 @@ export type RepositorySettings = {
   /** Auto-maintain policy (#774): merge method + approval count. Always populated by the DB layer with
    *  defaults (squash / 1 approval); optional so existing settings fixtures/callers need not be touched. */
   autoMaintain?: AutoMaintainPolicy | undefined;
+  /** Per-repo agent kill-switch (#776): when true, the action layer takes NO action on this repo (the
+   *  global env switch overrides this too). Default false. */
+  agentPaused?: boolean | undefined;
+  /** Per-repo dry-run/shadow mode (#776): when true, the action layer records what it WOULD do without
+   *  performing any GitHub mutation. Default false. */
+  agentDryRun?: boolean | undefined;
   createdAt?: string | null | undefined;
   updatedAt?: string | null | undefined;
 };

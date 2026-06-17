@@ -2215,8 +2215,8 @@ describe("api routes", () => {
       {
         method: "PUT",
         headers: ownerHeaders,
-        // #773/#774: the agent-layer config is settable here; the DB layer drops an unknown action class.
-        body: JSON.stringify({ gateCheckMode: "enabled", slopGateMode: "block", slopGateMinScore: 55, autonomy: { merge: "auto_with_approval", deploy: "auto" }, autoMaintain: { requireApprovals: 2, mergeMethod: "rebase" } }),
+        // #773/#774/#776: the agent-layer config is settable here; the DB layer drops an unknown action class.
+        body: JSON.stringify({ gateCheckMode: "enabled", slopGateMode: "block", slopGateMinScore: 55, autonomy: { merge: "auto_with_approval", deploy: "auto" }, autoMaintain: { requireApprovals: 2, mergeMethod: "rebase" }, agentPaused: true, agentDryRun: true }),
       },
       ownerEnv,
     );
@@ -2227,6 +2227,8 @@ describe("api routes", () => {
       slopGateMinScore: 55,
       autonomy: { merge: "auto_with_approval" }, // unknown action class dropped by the DB normalizer
       autoMaintain: { requireApprovals: 2, mergeMethod: "rebase" },
+      agentPaused: true, // #776 kill-switch
+      agentDryRun: true,
     });
     // requireApprovals is bounded at the API boundary — an out-of-range value is rejected, not silently clamped.
     const settingsBadApprovals = await app.request(

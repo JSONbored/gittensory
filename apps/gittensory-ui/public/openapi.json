@@ -8110,6 +8110,12 @@
               "requireApprovals",
               "mergeMethod"
             ]
+          },
+          "agentPaused": {
+            "type": "boolean"
+          },
+          "agentDryRun": {
+            "type": "boolean"
           }
         },
         "required": [

@@ -42,6 +42,8 @@ type MaintainerSettings = {
   commandAuthorization: CommandAuthorization;
   autonomy: Partial<Record<AgentActionClass, AutonomyLevel>>;
   autoMaintain: { requireApprovals: number; mergeMethod: AutoMergeMethod };
+  agentPaused: boolean;
+  agentDryRun: boolean;
 };
 
 type AutonomyLevel = "observe" | "suggest" | "propose" | "auto_with_approval" | "auto";
@@ -108,6 +110,8 @@ const EDITABLE_KEYS: Array<keyof MaintainerSettings> = [
   "commandAuthorization",
   "autonomy",
   "autoMaintain",
+  "agentPaused",
+  "agentDryRun",
 ];
 
 type SelectFieldDef = {
@@ -307,6 +311,8 @@ export function MaintainerSettings({ reviewability }: { reviewability: Array<{ p
         ? {
             ...result.data,
             autonomy: result.data.autonomy ?? {},
+            agentPaused: result.data.agentPaused ?? false,
+            agentDryRun: result.data.agentDryRun ?? false,
             autoMaintain: result.data.autoMaintain ?? {
               requireApprovals: 1,
               mergeMethod: "squash",
@@ -546,6 +552,20 @@ export function MaintainerSettings({ reviewability }: { reviewability: Array<{ p
                   <option value="rebase">rebase</option>
                 </select>
               </label>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-6">
+              <ToggleControl
+                label="Pause all agent actions (kill-switch)"
+                hint="Take no action on this repo until re-enabled"
+                value={settings.agentPaused}
+                onChange={(v) => setField("agentPaused", v)}
+              />
+              <ToggleControl
+                label="Dry-run / shadow mode"
+                hint="Record what the agent would do, without performing it"
+                value={settings.agentDryRun}
+                onChange={(v) => setField("agentDryRun", v)}
+              />
             </div>
           </div>
 
