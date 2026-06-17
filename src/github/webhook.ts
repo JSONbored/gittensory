@@ -57,7 +57,22 @@ export async function handleGitHubWebhook(c: Context<{ Bindings: Env }>): Promis
     eventName,
     payload,
   };
-  await c.env.JOBS.send(message);
+  try {
+    await c.env.JOBS.send(message);
+  } catch {
+    // Enqueue failed: flip the event to "error" so the dedup guard above lets GitHub redeliver,
+    // and return 500 so GitHub retries instead of treating the webhook as handled (#786).
+    await recordWebhookEvent(c.env, {
+      deliveryId,
+      eventName,
+      action: payload.action,
+      installationId: payload.installation?.id,
+      repositoryFullName: payload.repository?.full_name,
+      payloadHash,
+      status: "error",
+    });
+    return c.json({ error: "enqueue_failed", deliveryId }, 500);
+  }
 
   return c.json({ ok: true, deliveryId, eventName, status: "queued" }, 202);
 }

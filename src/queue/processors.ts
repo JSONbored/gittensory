@@ -296,7 +296,16 @@ async function buildContributorDecisionPacks(env: Env, login?: string): Promise<
   const logins = login ? [login] : await discoverContributorLogins(env);
   // Load the login-independent full-table datasets once, then reuse across every login instead of re-scanning per contributor.
   const shared = await loadDecisionPackSharedInputs(env);
-  for (const contributorLogin of logins) await buildAndPersistContributorDecisionPack(env, contributorLogin, shared);
+  for (const contributorLogin of logins) {
+    try {
+      await buildAndPersistContributorDecisionPack(env, contributorLogin, shared);
+    } catch (error) {
+      // Isolate per-login failures so one bad login can't fail the whole batch (which would re-run
+      // from the first login on retry and poison-pill the queue) (#787).
+      /* v8 ignore next -- defensive per-login isolation; the log-and-continue path is not exercised in tests */
+      console.error(JSON.stringify({ level: "warn", event: "decision_pack_login_failed", login: contributorLogin, error: errorMessage(error) }));
+    }
+  }
 }
 
 async function fanOutRepoSignalSnapshotJobs(env: Env, requestedBy: "schedule" | "api" | "test"): Promise<void> {
@@ -394,6 +403,9 @@ async function buildContributorEvidence(env: Env, login?: string): Promise<void>
   const logins = login ? [login] : [...new Set([...allPullRequests, ...allIssues].flatMap((record) => (record.authorLogin ? [record.authorLogin] : [])))].slice(0, 500);
   const issueQualityByRepo = await loadIssueQualityReportMap(env, repositories);
   for (const contributorLogin of logins) {
+    // Isolate each login so one failure (transient GitHub/D1 error) doesn't abort the whole
+    // 500-login batch and poison-pill the queue on retry (#787).
+    try {
     const [github, contributorPullRequests, contributorIssues, cachedRepoStats, gittensorSnapshot] = await Promise.all([
       fetchPublicContributorProfile(contributorLogin),
       listContributorPullRequests(env, contributorLogin),
@@ -487,6 +499,10 @@ async function buildContributorEvidence(env: Env, login?: string): Promise<void>
       payload: evidenceGraph as unknown as Record<string, JsonValue>,
       generatedAt: evidenceGraph.generatedAt,
     });
+    } catch (error) {
+      /* v8 ignore next -- defensive per-login isolation; the log-and-continue path is not exercised in tests */
+      console.error(JSON.stringify({ level: "warn", event: "contributor_evidence_login_failed", login: contributorLogin, error: errorMessage(error) }));
+    }
   }
 }
 
