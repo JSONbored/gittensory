@@ -1049,6 +1049,22 @@ export function createApp() {
     });
   });
 
+  // #129 in-UI "refresh decision pack" — enqueues the same contributor decision-pack rebuild the MCP job
+  // runs, so a miner can refresh from the web app instead of running MCP locally. Contributor-authed
+  // (same gate as the dashboard read); the rebuild is async, so the panel re-fetches after it lands.
+  app.post("/v1/app/miner-dashboard/refresh", async (c) => {
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- the write-protection middleware rejects unauthenticated POSTs before this handler. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const login = c.req.query("login") ?? (identity.kind === "session" ? identity.actor : "");
+    if (!login) return c.json({ error: "login_required" }, 400);
+    const unauthorized = await requireContributorAccess(c, login);
+    if (unauthorized) return unauthorized;
+    const message: JobMessage = { type: "build-contributor-decision-packs", requestedBy: "api", login };
+    await c.env.JOBS.send(message);
+    return c.json({ status: "queued", login }, 202);
+  });
+
   app.get("/v1/app/maintainer-dashboard", async (c) => {
     const identity = await authenticateRequestIdentity(c);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
