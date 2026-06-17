@@ -53,7 +53,7 @@ export async function maybeEnqueueVisualReview(env: Env, deliveryId: string, pay
       targetKey: `${repoFullName}#${pr.number}`,
       outcome: "queued",
       detail: `visual review queued for ${repoFullName}#${pr.number} @ ${headSha.slice(0, 7)}`,
-      metadata: { deliveryId, repoFullName, pullNumber: pr.number, headSha, action: payload.action ?? null },
+      metadata: { deliveryId, repoFullName, pullNumber: pr.number, headSha, action: payload.action },
     });
     return true;
   } catch (error) {

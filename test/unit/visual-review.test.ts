@@ -217,6 +217,15 @@ describe("processVisualReview", () => {
     expect(target?.status).toBe("failed");
     expect(target?.lastError).toBe("r2 down");
   });
+
+  it("completes capturing without R2 write when VISUAL_REVIEW_BUCKET binding is absent", async () => {
+    const env = createTestEnv(); // no VISUAL_REVIEW_BUCKET — graceful degradation
+    await upsertVisualReviewTarget(env, { repoFullName: "octo/demo", pullNumber: 7, headSha: "sha-a" });
+    await expect(processVisualReview(env, { deliveryId: "d1", repoFullName: "octo/demo", pullNumber: 7, headSha: "sha-a" })).resolves.toBeUndefined();
+    const target = await getVisualReviewTarget(env, "octo/demo", 7, "sha-a");
+    expect(target?.status).toBe("capturing");
+    expect(target?.attempts).toBe(1);
+  });
 });
 
 describe("visual-review constants", () => {
