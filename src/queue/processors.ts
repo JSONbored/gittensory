@@ -1784,7 +1784,6 @@ async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string
   const installationId = getInstallationId(payload);
   const commenter = payload.comment?.user?.login;
   const targetKey = repoFullName && issue ? `${repoFullName}#${issue.number}` : repoFullName;
-  const commenterAssociation = payload.comment?.author_association ?? issue?.author_association;
   if (!repoFullName || !issue || !installationId || !commenter) {
     await recordAuditEvent(env, {
       eventType: "github_app.agent_command_skipped",
@@ -1851,7 +1850,16 @@ async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string
     return true;
   }
 
-  const [repo, cachedPullRequest, settings] = await Promise.all([getRepository(env, repoFullName), getPullRequest(env, repoFullName, issue.number), resolveRepositorySettings(env, repoFullName)]);
+  // #788 write-safety: authorize @gittensory Q&A maintainer commands by the commenter's REAL repo permission
+  // (getRepositoryCollaboratorPermission via resolveRealRepoPermissionAssociation), NOT the spoofable
+  // payload.comment.author_association — an org `MEMBER` is not a maintainer of THIS repo. This matches the
+  // action-command path (#538) and closes the privilege-escalation hole before write-capable commands (#778).
+  const [repo, cachedPullRequest, settings, commenterAssociation] = await Promise.all([
+    getRepository(env, repoFullName),
+    getPullRequest(env, repoFullName, issue.number),
+    resolveRepositorySettings(env, repoFullName),
+    resolveRealRepoPermissionAssociation(env, installationId, repoFullName, commenter),
+  ]);
   const pullRequestAuthor = cachedPullRequest?.authorLogin ?? issue.user?.login ?? null;
   const needsMinerDetection = commandAuthorizationNeedsMinerDetection({
     policy: settings.commandAuthorization,
