@@ -99,6 +99,8 @@ import { commandAuthorizationAllowedRoles, commandAuthorizationNeedsMinerDetecti
 import { isAgentConfigured } from "../settings/autonomy";
 import { isGlobalAgentPause, resolveAgentActionMode } from "../settings/agent-execution";
 import { selectRegateCandidates } from "../settings/agent-sweep";
+import { planAgentMaintenanceActions } from "../settings/agent-actions";
+import { executeAgentMaintenanceActions } from "../services/agent-action-executor";
 import { loadIssueQualityReportMap } from "../services/issue-quality";
 import { generateWeeklyValueReport } from "../services/weekly-value-report";
 import { REPO_OUTCOME_PATTERNS_SIGNAL, computeRepoOutcomePatterns } from "../services/repo-outcome-patterns";
@@ -412,6 +414,77 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
     detail: `scheduled re-gate recomputed ${candidates.length} stale open PR verdict(s); ${flaggedPulls.length} flagged`,
     metadata: { repoFullName, mode, openCount: openPullRequests.length, examined: candidates.length, flagged: flaggedPulls.length, flaggedPulls, verdicts },
   });
+}
+
+/**
+ * #778 maintainer auto-maintain trigger. After the gate runs on a PR webhook, if the repo opted the agent in
+ * (an acting autonomy level), recompute the CANONICAL verdict (same inputs the gate published — confirmed-
+ * contributor status + the persisted slop score), plan the GitHub state actions, and run them through the
+ * executor's deny-toward-safety gate stack (pause → approval → write-permission → mode). Decoupled and
+ * best-effort: a failure here never affects the gate or the public surface. gittensory never acts on a
+ * non-confirmed contributor's PR — the same rule the gate uses to never block one.
+ */
+async function maybeRunAgentMaintenance(
+  env: Env,
+  args: {
+    installationId: number;
+    repoFullName: string;
+    repo: Awaited<ReturnType<typeof getRepository>>;
+    pr: PullRequestRecord;
+    settings: RepositorySettings;
+    otherOpenPullRequests: PullRequestRecord[];
+    deliveryId: string;
+  },
+): Promise<void> {
+  const { installationId, repoFullName, repo, settings, otherOpenPullRequests, deliveryId } = args;
+  if (!isAgentConfigured(settings.autonomy)) return;
+  // Re-read the stored PR so we act on the persisted slop score the gate just wrote, not the pre-gate payload.
+  const pr = await getPullRequest(env, repoFullName, args.pr.number);
+  /* v8 ignore next -- defensive: the PR was upserted earlier in this same webhook, so it is always present. */
+  if (!pr) return;
+  if (pr.state !== "open") return;
+  // gittensory never acts on a non-confirmed contributor's PR — the same rule the gate uses to never block one.
+  const confirmedContributor = pr.authorLogin
+    ? (await getCachedOfficialMinerDetection(env, pr.authorLogin, { targetKey: `${repoFullName}#${pr.number}`, deliveryId })).status === "confirmed"
+    : false;
+
+  const requireLinkedIssue = settings.requireLinkedIssue || settings.linkedIssueGateMode !== "off";
+  const advisory = buildPullRequestAdvisory(repo, pr, { otherOpenPullRequests, requireLinkedIssue });
+  const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, confirmedContributor, pr.slopRisk));
+
+  const planned = planAgentMaintenanceActions({
+    conclusion: gate.conclusion,
+    blockerTitles: gate.blockers.map((blocker) => blocker.title),
+    autonomy: settings.autonomy,
+    autoMaintain: settings.autoMaintain,
+    slopGateMinScore: settings.slopGateMinScore,
+    pr: {
+      mergeableState: pr.mergeableState,
+      reviewDecision: pr.reviewDecision,
+      slopRisk: pr.slopRisk,
+      labels: pr.labels,
+      linkedDuplicateCount: linkedIssueDuplicatePullRequestsForGate(pr, otherOpenPullRequests).length,
+    },
+  });
+  if (planned.length === 0) return;
+
+  const installation = await getInstallation(env, installationId);
+  /* v8 ignore next -- an installed-App PR webhook always carries an installation record; the null is defensive. */
+  const installationPermissions = installation?.permissions ?? null;
+  await executeAgentMaintenanceActions(
+    env,
+    {
+      installationId,
+      repoFullName,
+      pullNumber: pr.number,
+      headSha: pr.headSha,
+      autonomy: settings.autonomy,
+      agentPaused: settings.agentPaused,
+      agentDryRun: settings.agentDryRun,
+      installationPermissions,
+    },
+    planned,
+  );
 }
 
 async function repairDataFidelity(env: Env, requestedBy: "schedule" | "api" | "test"): Promise<void> {
@@ -870,6 +943,13 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
               error: errorMessage(error),
             }),
           );
+        });
+        // #778 maintainer auto-maintain: act on the PR's state (label/review/merge/close) per the repo's
+        // autonomy config, after the gate has run. The function self-guards on agent config; best-effort here
+        // so it never blocks the gate or public surface.
+        await maybeRunAgentMaintenance(env, { installationId, repoFullName, repo, pr, settings, otherOpenPullRequests, deliveryId }).catch((error) => {
+          /* v8 ignore next -- best-effort: auto-maintain failures are logged, never surfaced to the gate. */
+          console.error(JSON.stringify({ level: "warn", event: "agent_maintenance_failed", deliveryId, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
         });
       }
     }
