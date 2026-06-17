@@ -415,6 +415,10 @@ export type RepositorySettings = {
   slopGateMode: GateRuleMode;
   /** Merge-readiness gate (#merge-readiness). `off`/`advisory`/`block`. No min-score. Default `off`. */
   mergeReadinessGateMode: GateRuleMode;
+  /** First-time-contributor grace (#552). When true, a would-be BLOCK is softened to a neutral/advisory gate
+   *  for a genuine newcomer (0 merged PRs in this repo) who is NOT a repeat offender (< 3 closed-unmerged PRs).
+   *  Repeat offenders and authors with merge history are gated normally. Default false — opt-in. */
+  firstTimeContributorGrace: boolean;
   /** Slop-risk threshold (0-100) at/above which `slopGateMode: block` blocks. Default 60 (the `high` band). */
   slopGateMinScore?: number | null | undefined;
   /** AI-assisted slop advisory (the `slopAiAdvisory` capability). When true AND `slopGateMode != off`, a

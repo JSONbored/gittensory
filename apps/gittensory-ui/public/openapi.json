@@ -8014,6 +8014,9 @@
               "advisory",
               "block"
             ]
+          },
+          "firstTimeContributorGrace": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -8030,6 +8033,7 @@
           "qualityGateMode",
           "slopGateMode",
           "mergeReadinessGateMode",
+          "firstTimeContributorGrace",
           "slopAiAdvisory",
           "autoLabelEnabled",
           "gittensorLabel",
@@ -8617,6 +8621,9 @@
                   "advisory",
                   "block"
                 ]
+              },
+              "firstTimeContributorGrace": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -8633,6 +8640,7 @@
               "qualityGateMode",
               "slopGateMode",
               "mergeReadinessGateMode",
+              "firstTimeContributorGrace",
               "autoLabelEnabled",
               "gittensorLabel",
               "createMissingLabel",

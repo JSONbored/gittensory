@@ -206,3 +206,61 @@ describe("merge-readiness composite gate (#551)", () => {
     expect(result.summary).toContain("Possible duplicate PR");
   });
 });
+
+describe("first-time-contributor grace (#552)", () => {
+  // A would-be hard blocker for a confirmed contributor (linked-issue: block trips on the missing-issue PR).
+  const blockingPolicy = { linkedIssueGateMode: "block" as const, confirmedContributor: true };
+
+  it("(a) softens the block to a neutral/advisory gate for a genuine newcomer (0 merged, 0 closed-unmerged)", () => {
+    const result = evaluateGateCheck(missingIssueAdvisory(), {
+      ...blockingPolicy,
+      firstTimeContributorGrace: true,
+      authorMergedPrCount: 0,
+      authorClosedUnmergedPrCount: 0,
+    });
+    expect(result.conclusion).toBe("neutral");
+    expect(result.blockers).toEqual([]);
+    expect(result.title).toContain("first-contribution grace");
+  });
+
+  it("(b) still blocks a repeat offender (0 merged, >= 3 closed-unmerged) — grace does not apply", () => {
+    const result = evaluateGateCheck(missingIssueAdvisory(), {
+      ...blockingPolicy,
+      firstTimeContributorGrace: true,
+      authorMergedPrCount: 0,
+      authorClosedUnmergedPrCount: 3,
+    });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((finding) => finding.code)).toEqual(["missing_linked_issue"]);
+  });
+
+  it("(c) blocks normally when the grace setting is off, even for a newcomer", () => {
+    const result = evaluateGateCheck(missingIssueAdvisory(), {
+      ...blockingPolicy,
+      firstTimeContributorGrace: false,
+      authorMergedPrCount: 0,
+      authorClosedUnmergedPrCount: 0,
+    });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((finding) => finding.code)).toEqual(["missing_linked_issue"]);
+  });
+
+  it("(d) blocks an author with merge history (not a newcomer) even with grace on", () => {
+    const result = evaluateGateCheck(missingIssueAdvisory(), {
+      ...blockingPolicy,
+      firstTimeContributorGrace: true,
+      authorMergedPrCount: 2,
+      authorClosedUnmergedPrCount: 0,
+    });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((finding) => finding.code)).toEqual(["missing_linked_issue"]);
+  });
+
+  it("gateCheckPolicy threads firstTimeContributorGrace + the author's per-repo history into the policy", () => {
+    const policy = gateCheckPolicy(settings({ firstTimeContributorGrace: true }), null, true, null, { mergedPrCount: 0, closedUnmergedPrCount: 1 });
+    expect(policy.firstTimeContributorGrace).toBe(true);
+    expect(policy.authorMergedPrCount).toBe(0);
+    expect(policy.authorClosedUnmergedPrCount).toBe(1);
+    expect(evaluateGateCheck(missingIssueAdvisory(), { ...policy, linkedIssueGateMode: "block" }).conclusion).toBe("neutral");
+  });
+});

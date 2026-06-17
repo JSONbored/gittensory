@@ -857,7 +857,13 @@ function shouldProcessPullRequestPublicSurface(action: string | undefined): bool
   return PR_PUBLIC_SURFACE_ACTIONS.has(action ?? "") || PR_GATE_CLOSED_ACTIONS.has(action ?? "");
 }
 
-export function gateCheckPolicy(settings: RepositorySettings, readinessScore?: number | null, confirmedContributor?: boolean, slopRisk?: number | null) {
+export function gateCheckPolicy(
+  settings: RepositorySettings,
+  readinessScore?: number | null,
+  confirmedContributor?: boolean,
+  slopRisk?: number | null,
+  authorHistory?: { mergedPrCount: number; closedUnmergedPrCount: number },
+) {
   // `settings` is already the EFFECTIVE config (`.gittensory.yml` > DB > defaults), resolved upstream by
   // resolveRepositorySettings, so the blocker modes here reflect the repo's config file directly.
   // The `oss-anti-slop` pack (#692) is repo-agnostic: it blocks ANY author whose PR trips an opted-in
@@ -873,6 +879,9 @@ export function gateCheckPolicy(settings: RepositorySettings, readinessScore?: n
     readinessScore: readinessScore ?? null,
     slopGateMode: settings.slopGateMode,
     mergeReadinessGateMode: settings.mergeReadinessGateMode,
+    firstTimeContributorGrace: settings.firstTimeContributorGrace,
+    authorMergedPrCount: authorHistory?.mergedPrCount,
+    authorClosedUnmergedPrCount: authorHistory?.closedUnmergedPrCount,
     slopGateMinScore: settings.slopGateMinScore ?? null,
     slopRisk: slopRisk ?? null,
     confirmedContributor: confirmedContributorForPack,
@@ -1237,7 +1246,16 @@ async function maybePublishPrPublicSurface(
     // failure is caught and the gate is still finalized (never left in_progress).
     aiReview = await runAiReviewForAdvisory(env, { settings, advisory, repoFullName, pr, author, confirmedContributor });
 
-    const gatePolicy = gateCheckPolicy(settings, readiness.total, confirmedContributor, slopRisk);
+    // First-time-contributor grace (#552): the author's per-repo PR history (excluding this PR). Newcomer =
+    // 0 merged here; repeat offender = >= 3 closed-unmerged here. Cheap (in-memory over the already-loaded
+    // repo PRs) and only consulted by evaluateGateCheck when firstTimeContributorGrace is on.
+    const authorPrs = author ? repoPullRequests.filter((candidate) => candidate.authorLogin === author && candidate.number !== pr.number) : [];
+    const authorHistory = {
+      mergedPrCount: authorPrs.filter((candidate) => candidate.mergedAt || candidate.state === "merged").length,
+      closedUnmergedPrCount: authorPrs.filter((candidate) => candidate.state === "closed" && !candidate.mergedAt).length,
+    };
+
+    const gatePolicy = gateCheckPolicy(settings, readiness.total, confirmedContributor, slopRisk, authorHistory);
     gateEvaluation = gateEnabled ? evaluateGateCheck(advisory, gatePolicy) : undefined;
     if (gateEnabled) {
       const gateCheckResult = await createOrUpdateGateCheckRun(
