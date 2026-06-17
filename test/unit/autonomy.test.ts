@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_ACTION_CLASSES,
   AUTONOMY_LEVELS,
+  AUTO_MERGE_METHODS,
   DEFAULT_AUTONOMY_LEVEL,
+  DEFAULT_AUTO_MAINTAIN_POLICY,
   autonomyRequiresApproval,
   isActingAutonomyLevel,
+  normalizeAutoMaintainPolicy,
   normalizeAutonomyPolicy,
   resolveAutonomy,
 } from "../../src/settings/autonomy";
@@ -78,5 +81,29 @@ describe("normalizeAutonomyPolicy", () => {
   it("round-trips a valid policy through normalization", () => {
     const policy: AutonomyPolicy = { review: "propose", request_changes: "auto_with_approval", merge: "observe" };
     expect(normalizeAutonomyPolicy(policy)).toEqual(policy);
+  });
+});
+
+describe("normalizeAutoMaintainPolicy (#774)", () => {
+  it("fills conservative defaults (squash / 1 approval) for missing or non-object input", () => {
+    expect(normalizeAutoMaintainPolicy({})).toEqual({ requireApprovals: 1, mergeMethod: "squash" });
+    expect(normalizeAutoMaintainPolicy(null)).toEqual(DEFAULT_AUTO_MAINTAIN_POLICY);
+    expect(normalizeAutoMaintainPolicy("nope")).toEqual(DEFAULT_AUTO_MAINTAIN_POLICY);
+    expect(normalizeAutoMaintainPolicy([1])).toEqual(DEFAULT_AUTO_MAINTAIN_POLICY);
+  });
+
+  it("keeps valid fields and round-trips a full policy", () => {
+    expect(normalizeAutoMaintainPolicy({ requireApprovals: 2, mergeMethod: "rebase" })).toEqual({ requireApprovals: 2, mergeMethod: "rebase" });
+  });
+
+  it("clamps requireApprovals to [0,10] and truncates, and rejects an invalid merge method", () => {
+    expect(normalizeAutoMaintainPolicy({ requireApprovals: -3, mergeMethod: "foo" })).toEqual({ requireApprovals: 0, mergeMethod: "squash" });
+    expect(normalizeAutoMaintainPolicy({ requireApprovals: 99 }).requireApprovals).toBe(10);
+    expect(normalizeAutoMaintainPolicy({ requireApprovals: 2.9 }).requireApprovals).toBe(2);
+    expect(normalizeAutoMaintainPolicy({ requireApprovals: "two" }).requireApprovals).toBe(1); // non-number → default
+  });
+
+  it("AUTO_MERGE_METHODS is the closed set merge/squash/rebase", () => {
+    expect(AUTO_MERGE_METHODS).toEqual(["merge", "squash", "rebase"]);
   });
 });

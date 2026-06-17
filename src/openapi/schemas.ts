@@ -584,6 +584,7 @@ export const RepositorySettingsSchema = z
     autonomy: z
       .record(z.enum(["review", "request_changes", "approve", "merge", "close", "label"]), z.enum(["observe", "suggest", "propose", "auto_with_approval", "auto"]))
       .optional(),
+    autoMaintain: z.object({ requireApprovals: z.number().int(), mergeMethod: z.enum(["merge", "squash", "rebase"]) }).optional(),
     createdAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
   })

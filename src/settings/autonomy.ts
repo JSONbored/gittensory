@@ -1,4 +1,4 @@
-import type { AgentActionClass, AutonomyLevel, AutonomyPolicy } from "../types";
+import type { AgentActionClass, AutoMaintainPolicy, AutoMergeMethod, AutonomyLevel, AutonomyPolicy } from "../types";
 
 // The graduated autonomy dial (#773), ordered least → most autonomous. Every later agent-layer phase reads
 // this BEFORE acting. `observe` is the deny-by-default floor — gittensory watches but never takes an action.
@@ -47,4 +47,31 @@ export function normalizeAutonomyPolicy(input: unknown): AutonomyPolicy {
     }
   }
   return policy;
+}
+
+// Auto-maintain policy (#774): how an action behaves once its autonomy level permits acting.
+export const AUTO_MERGE_METHODS = ["merge", "squash", "rebase"] as const;
+const AUTO_MERGE_METHOD_SET = new Set<string>(AUTO_MERGE_METHODS);
+
+// Conservative defaults: squash (the tidiest history) + a single human approval before any auto-merge.
+export const DEFAULT_AUTO_MAINTAIN_POLICY: AutoMaintainPolicy = { requireApprovals: 1, mergeMethod: "squash" };
+
+// Approvals are clamped to a sane band so a malformed config can't disable the gate (negative) or stall it.
+const MAX_REQUIRE_APPROVALS = 10;
+
+/**
+ * Parse/validate an arbitrary value into an AutoMaintainPolicy, filling the conservative defaults for any
+ * missing/invalid field. `requireApprovals` is clamped to [0, 10]. Pure.
+ */
+export function normalizeAutoMaintainPolicy(input: unknown): AutoMaintainPolicy {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return { ...DEFAULT_AUTO_MAINTAIN_POLICY };
+  const record = input as Record<string, unknown>;
+  const rawApprovals = record.requireApprovals;
+  const requireApprovals =
+    typeof rawApprovals === "number" && Number.isFinite(rawApprovals)
+      ? Math.min(MAX_REQUIRE_APPROVALS, Math.max(0, Math.trunc(rawApprovals)))
+      : DEFAULT_AUTO_MAINTAIN_POLICY.requireApprovals;
+  const rawMethod = record.mergeMethod;
+  const mergeMethod = typeof rawMethod === "string" && AUTO_MERGE_METHOD_SET.has(rawMethod) ? (rawMethod as AutoMergeMethod) : DEFAULT_AUTO_MAINTAIN_POLICY.mergeMethod;
+  return { requireApprovals, mergeMethod };
 }

@@ -1,6 +1,6 @@
 import { parse as parseYaml } from "yaml";
 import type { GatePolicyPack, GateRuleMode, JsonValue, RepositorySettings } from "../types";
-import { normalizeAutonomyPolicy } from "../settings/autonomy";
+import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy } from "../settings/autonomy";
 
 export type FocusManifestSource = "repo_file" | "api_record" | "none";
 export type FocusManifestLinkedIssuePolicy = "required" | "preferred" | "optional";
@@ -68,6 +68,7 @@ export type FocusManifestSettings = Partial<
     | "backfillEnabled"
     | "privateTrustEnabled"
     | "autonomy"
+    | "autoMaintain"
   >
 >;
 
@@ -433,6 +434,11 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   if (r.autonomy !== undefined) {
     const autonomy = normalizeAutonomyPolicy(r.autonomy);
     if (Object.keys(autonomy).length > 0) out.autonomy = autonomy;
+  }
+  // Auto-maintain policy (#774): `settings.autoMaintain` declares the full policy (defaults fill any unset
+  // field) and overlays the DB value via the resolver. Only a mapping is honoured; anything else is ignored.
+  if (typeof r.autoMaintain === "object" && r.autoMaintain !== null && !Array.isArray(r.autoMaintain)) {
+    out.autoMaintain = normalizeAutoMaintainPolicy(r.autoMaintain);
   }
   return out;
 }

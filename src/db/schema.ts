@@ -72,6 +72,7 @@ export const repositorySettings = sqliteTable("repository_settings", {
   badgeEnabled: integer("badge_enabled", { mode: "boolean" }).notNull().default(false),
   commandAuthorizationJson: text("command_authorization_json").notNull().default("{}"),
   autonomyJson: text("autonomy_json").notNull().default("{}"),
+  autoMaintainJson: text("auto_maintain_json").notNull().default("{}"),
   createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
 });

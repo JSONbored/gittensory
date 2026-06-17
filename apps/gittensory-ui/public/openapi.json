@@ -8090,6 +8090,26 @@
                 ]
               }
             }
+          },
+          "autoMaintain": {
+            "type": "object",
+            "properties": {
+              "requireApprovals": {
+                "type": "integer"
+              },
+              "mergeMethod": {
+                "type": "string",
+                "enum": [
+                  "merge",
+                  "squash",
+                  "rebase"
+                ]
+              }
+            },
+            "required": [
+              "requireApprovals",
+              "mergeMethod"
+            ]
           }
         },
         "required": [

@@ -62,6 +62,7 @@ import type {
   AgentActionStatus,
   AgentActionType,
   AutonomyPolicy,
+  AutoMaintainPolicy,
   AgentCommandAnswerRecord,
   AgentCommandFeedbackRecord,
   AgentContextSnapshotRecord,
@@ -151,7 +152,7 @@ import type {
 import type { GittensorContributorSnapshot, OfficialGittensorMinerDetection } from "../gittensor/api";
 import { classifyMcpClientVersion, LATEST_RECOMMENDED_MCP_VERSION, MINIMUM_SUPPORTED_MCP_VERSION } from "../services/mcp-compatibility";
 import { DEFAULT_COMMAND_AUTHORIZATION_POLICY, normalizeCommandAuthorizationPolicy } from "../settings/command-authorization";
-import { normalizeAutonomyPolicy } from "../settings/autonomy";
+import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy, DEFAULT_AUTO_MAINTAIN_POLICY } from "../settings/autonomy";
 import { decryptSecret, encryptSecret, sha256Hex } from "../utils/crypto";
 import { jsonString, nowIso, parseJson, repoParts } from "../utils/json";
 
@@ -425,6 +426,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       badgeEnabled: false,
       commandAuthorization: normalizeCommandAuthorizationPolicy(DEFAULT_COMMAND_AUTHORIZATION_POLICY).policy,
       autonomy: {},
+      autoMaintain: { ...DEFAULT_AUTO_MAINTAIN_POLICY },
     };
   }
   return {
@@ -461,6 +463,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     badgeEnabled: row.badgeEnabled,
     commandAuthorization: parseCommandAuthorizationPolicy(row.commandAuthorizationJson),
     autonomy: parseAutonomyPolicy(row.autonomyJson),
+    autoMaintain: parseAutoMaintainPolicy(row.autoMaintainJson),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -501,6 +504,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     badgeEnabled: settings.badgeEnabled ?? false,
     commandAuthorization: normalizeCommandAuthorizationPolicy(settings.commandAuthorization).policy,
     autonomy: normalizeAutonomyPolicy(settings.autonomy),
+    autoMaintain: normalizeAutoMaintainPolicy(settings.autoMaintain),
   };
   const db = getDb(env.DB);
   await db
@@ -539,6 +543,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       badgeEnabled: resolved.badgeEnabled,
       commandAuthorizationJson: jsonString(resolved.commandAuthorization),
       autonomyJson: jsonString(resolved.autonomy),
+      autoMaintainJson: jsonString(resolved.autoMaintain),
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -578,6 +583,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         badgeEnabled: resolved.badgeEnabled,
         commandAuthorizationJson: jsonString(resolved.commandAuthorization),
         autonomyJson: jsonString(resolved.autonomy),
+        autoMaintainJson: jsonString(resolved.autoMaintain),
         updatedAt: nowIso(),
       },
     });
@@ -4970,6 +4976,10 @@ function parseCommandAuthorizationPolicy(value: string): RepositorySettings["com
 
 function parseAutonomyPolicy(value: string): AutonomyPolicy {
   return normalizeAutonomyPolicy(parseJson<unknown>(value, null));
+}
+
+function parseAutoMaintainPolicy(value: string): AutoMaintainPolicy {
+  return normalizeAutoMaintainPolicy(parseJson<unknown>(value, null));
 }
 
 function parseSyncStatus(value: string): RepoSyncStateRecord["status"] {

@@ -462,6 +462,9 @@ export type RepositorySettings = {
    *  `{}` = deny-by-default = "observe" for every class); optional so existing settings fixtures/callers
    *  need not be touched. The single source the action layer (#778) reads via `resolveAutonomy`. */
   autonomy?: AutonomyPolicy | undefined;
+  /** Auto-maintain policy (#774): merge method + approval count. Always populated by the DB layer with
+   *  defaults (squash / 1 approval); optional so existing settings fixtures/callers need not be touched. */
+  autoMaintain?: AutoMaintainPolicy | undefined;
   createdAt?: string | null | undefined;
   updatedAt?: string | null | undefined;
 };
@@ -483,6 +486,17 @@ export type AgentActionClass = "review" | "request_changes" | "approve" | "merge
 
 /** Per-action-class autonomy. An unset class resolves to `observe` (deny-by-default). */
 export type AutonomyPolicy = Partial<Record<AgentActionClass, AutonomyLevel>>;
+
+/** How the agent merges when it auto-merges (#774). */
+export type AutoMergeMethod = "merge" | "squash" | "rebase";
+
+/** Auto-maintain policy (#774): the "how" once an action is at an acting autonomy level. `requireApprovals`
+ *  is the human approval count an `auto_with_approval` action waits for (#779); `mergeMethod` is how an
+ *  auto-merge merges. Always populated by the DB layer with defaults. */
+export type AutoMaintainPolicy = {
+  requireApprovals: number;
+  mergeMethod: AutoMergeMethod;
+};
 
 export type RepoSyncStateRecord = {
   repoFullName: string;

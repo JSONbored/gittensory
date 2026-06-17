@@ -267,6 +267,12 @@ describe("data spine repositories", () => {
     await upsertRepositorySettings(env, { repoFullName: "owner/autonomyrepo", autonomy: { merge: "observe" } });
     expect((await getRepositorySettings(env, "owner/autonomyrepo")).autonomy).toEqual({ merge: "observe" }); // update persists
     expect((await getRepositorySettings(env, "owner/defaultpack")).autonomy).toEqual({}); // deny-by-default
+    // #774 autoMaintain round-trips, clamps requireApprovals, and defaults to squash/1.
+    await upsertRepositorySettings(env, { repoFullName: "owner/automaintainrepo", autoMaintain: { requireApprovals: 99, mergeMethod: "rebase" } });
+    expect((await getRepositorySettings(env, "owner/automaintainrepo")).autoMaintain).toEqual({ requireApprovals: 10, mergeMethod: "rebase" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/automaintainrepo", autoMaintain: { requireApprovals: 0, mergeMethod: "merge" } });
+    expect((await getRepositorySettings(env, "owner/automaintainrepo")).autoMaintain).toEqual({ requireApprovals: 0, mergeMethod: "merge" }); // update persists
+    expect((await getRepositorySettings(env, "owner/defaultpack")).autoMaintain).toEqual({ requireApprovals: 1, mergeMethod: "squash" }); // defaults
     expect(updated.slopAiAdvisory).toBe(false);
     expect(await getRepoSyncState(env, "missing/repo")).toBeNull();
     expect(await getPullRequest(env, "owner/repo", 404)).toBeNull();

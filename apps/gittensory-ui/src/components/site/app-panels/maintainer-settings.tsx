@@ -40,7 +40,29 @@ type MaintainerSettings = {
   requireLinkedIssue: boolean;
   badgeEnabled: boolean;
   commandAuthorization: CommandAuthorization;
+  autonomy: Partial<Record<AgentActionClass, AutonomyLevel>>;
+  autoMaintain: { requireApprovals: number; mergeMethod: AutoMergeMethod };
 };
+
+type AutonomyLevel = "observe" | "suggest" | "propose" | "auto_with_approval" | "auto";
+type AgentActionClass = "review" | "request_changes" | "approve" | "merge" | "close" | "label";
+type AutoMergeMethod = "merge" | "squash" | "rebase";
+
+const AUTONOMY_LEVELS: AutonomyLevel[] = [
+  "observe",
+  "suggest",
+  "propose",
+  "auto_with_approval",
+  "auto",
+];
+const AGENT_ACTION_CLASSES: AgentActionClass[] = [
+  "review",
+  "request_changes",
+  "approve",
+  "merge",
+  "close",
+  "label",
+];
 
 type Message = { kind: "ok" | "err"; text: string };
 
@@ -84,6 +106,8 @@ const EDITABLE_KEYS: Array<keyof MaintainerSettings> = [
   "requireLinkedIssue",
   "badgeEnabled",
   "commandAuthorization",
+  "autonomy",
+  "autoMaintain",
 ];
 
 type SelectFieldDef = {
@@ -277,7 +301,19 @@ export function MaintainerSettings({ reviewability }: { reviewability: Array<{ p
       credentials: "include",
       silentStatus: true,
     });
-    setSettings(result.ok ? result.data : null);
+    // Default the agent-layer fields defensively so the editor renders even against an older response shape.
+    setSettings(
+      result.ok
+        ? {
+            ...result.data,
+            autonomy: result.data.autonomy ?? {},
+            autoMaintain: result.data.autoMaintain ?? {
+              requireApprovals: 1,
+              mergeMethod: "squash",
+            },
+          }
+        : null,
+    );
     setLoading(false);
   }, [repoFullName]);
 
@@ -441,6 +477,76 @@ export function MaintainerSettings({ reviewability }: { reviewability: Array<{ p
                 ))}
               </dl>
             ) : null}
+          </div>
+
+          <div>
+            <h3 className={LABEL_CLASS}>Auto-maintain (agent layer)</h3>
+            <p className="mt-1 text-token-2xs text-muted-foreground">
+              Per-action autonomy: <code className="font-mono">observe</code> (watch only) →{" "}
+              <code className="font-mono">suggest</code> →{" "}
+              <code className="font-mono">propose</code> →{" "}
+              <code className="font-mono">auto_with_approval</code> →{" "}
+              <code className="font-mono">auto</code>. Deny-by-default — anything left at{" "}
+              <code className="font-mono">observe</code> never acts.
+            </p>
+            <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {AGENT_ACTION_CLASSES.map((actionClass) => (
+                <label key={actionClass} className="block">
+                  <span className={LABEL_CLASS}>{actionClass.replace(/_/g, " ")}</span>
+                  <select
+                    value={settings.autonomy[actionClass] ?? "observe"}
+                    onChange={(event) =>
+                      setField("autonomy", {
+                        ...settings.autonomy,
+                        [actionClass]: event.target.value as AutonomyLevel,
+                      })
+                    }
+                    className={FIELD_CLASS}
+                  >
+                    {AUTONOMY_LEVELS.map((level) => (
+                      <option key={level} value={level}>
+                        {level}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <label className="block">
+                <span className={LABEL_CLASS}>Approvals before auto-merge</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={settings.autoMaintain.requireApprovals}
+                  onChange={(event) =>
+                    setField("autoMaintain", {
+                      ...settings.autoMaintain,
+                      requireApprovals: Math.max(0, Math.min(10, Number(event.target.value) || 0)),
+                    })
+                  }
+                  className={FIELD_CLASS}
+                />
+              </label>
+              <label className="block">
+                <span className={LABEL_CLASS}>Merge method</span>
+                <select
+                  value={settings.autoMaintain.mergeMethod}
+                  onChange={(event) =>
+                    setField("autoMaintain", {
+                      ...settings.autoMaintain,
+                      mergeMethod: event.target.value as AutoMergeMethod,
+                    })
+                  }
+                  className={FIELD_CLASS}
+                >
+                  <option value="merge">merge</option>
+                  <option value="squash">squash</option>
+                  <option value="rebase">rebase</option>
+                </select>
+              </label>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
