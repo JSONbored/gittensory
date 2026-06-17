@@ -1487,6 +1487,82 @@ describe("queue processors", () => {
     expect(usageEvents).toEqual(expect.arrayContaining([expect.objectContaining({ surface: "github_app", eventName: "pr_panel_retriggered", outcome: "completed" })]));
   });
 
+  it("reruns the panel when a confirmed-miner PR author checks the rerun task (#824 miner-detection path)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "off",
+      includeMaintainerAuthors: true,
+      // review-now allows a confirmed miner, so a confirmed-miner PR author can retrigger their own panel.
+      commandAuthorization: { default: ["maintainer", "collaborator", "confirmed_miner"], commands: { "review-now": ["maintainer", "confirmed_miner"] } },
+    });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 48,
+      title: "Miner self-rerun",
+      state: "open",
+      user: { login: "contributor" },
+      author_association: "CONTRIBUTOR",
+      head: { sha: "panel480" },
+      labels: [],
+      body: "Validation: npm test",
+    });
+    const checkedPanel = ["<!-- gittensory-pr-panel:v1 -->", "", "- [x] <!-- gittensory-rerun-review:v1 --> Re-run Gittensory review"].join("\n");
+    const calls = { minerList: 0, permission: 0, commentPatches: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        calls.minerList += 1;
+        return Response.json([{ uid: 7, githubUsername: "contributor", githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1 }]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") return Response.json({ repositories: [{ repositoryFullName: "JSONbored/gittensory", totalPrs: "4", totalMergedPrs: "3", totalOpenPrs: "1", totalClosedPrs: "0", totalOpenIssues: "0", totalClosedIssues: "0", isEligible: true, credibility: "1.000000" }] });
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/contributor")) return Response.json({ login: "contributor", public_repos: 2, followers: 1 });
+      if (url.includes("/users/contributor/repos")) return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      // The confirmed-miner author has NO repo write/admin — authorized via confirmed_miner, not maintainer.
+      if (url.includes("/collaborators/contributor/permission")) {
+        calls.permission += 1;
+        return Response.json({ permission: "none" });
+      }
+      if (url.includes("/issues/48/comments") && method === "GET") return Response.json([{ id: 778, body: checkedPanel, user: { login: "gittensory[bot]", type: "Bot" } }]);
+      if (url.includes("/issues/comments/778") && method === "PATCH") {
+        calls.commentPatches += 1;
+        return Response.json({ id: 778 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "panel-retrigger-miner",
+      eventName: "issue_comment",
+      payload: {
+        action: "edited",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 48, title: "Miner self-rerun", state: "open", user: { login: "contributor" }, pull_request: {} },
+        comment: { id: 778, body: checkedPanel, user: { login: "gittensory[bot]", type: "Bot" } },
+        sender: { login: "contributor", type: "User" },
+      },
+    });
+
+    // The confirmed-miner detection WAS fetched (the #824 helper's miner-detection path) and the panel retriggered.
+    expect(calls.minerList).toBeGreaterThanOrEqual(1);
+    expect(calls.permission).toBe(1);
+    expect(calls.commentPatches).toBe(1);
+    const audit = await env.DB.prepare("select actor, outcome from audit_events where event_type = ? and target_key = ?")
+      .bind("github_app.pr_panel_retriggered", "JSONbored/gittensory#48")
+      .first<{ actor: string; outcome: string }>();
+    expect(audit).toMatchObject({ actor: "contributor", outcome: "completed" });
+  });
+
   it("skips PR panel reruns from users without repository write permission", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
@@ -2954,6 +3030,10 @@ describe("queue processors", () => {
         calls.token += 1;
         return Response.json({ token: "installation-token" });
       }
+      // #788: Q&A commands now authorize by REAL repo permission. The "maintainer" commenter has maintain
+      // access; everyone else has none and is authorized only as pr_author/confirmed_miner where applicable.
+      if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "maintain" });
+      if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "none" });
       if (url.includes("/issues/") && url.includes("/comments") && method === "GET") return Response.json([]);
       if (url.includes("/issues/") && url.includes("/comments") && method === "POST") {
         calls.commentsCreated += 1;
@@ -3104,7 +3184,9 @@ describe("queue processors", () => {
     });
 
     expect(calls.commentsCreated).toBe(8);
-    expect(calls.token).toBe(8);
+    // Each command now also resolves the commenter's real repo permission (#788), which fetches its own
+    // installation token — so the per-command token count is 2 (permission check + comment).
+    expect(calls.token).toBe(16);
     expect(calls.minerList).toBeGreaterThanOrEqual(1);
     const audit = await env.DB.prepare("select event_type, detail from audit_events where target_key = ? order by created_at")
       .bind("JSONbored/gittensory#77")
@@ -3178,6 +3260,7 @@ describe("queue processors", () => {
         calls.token += 1;
         return Response.json({ token: "installation-token" });
       }
+      if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "maintain" }); // #788 real-permission auth
       if (url.includes("/issues/90/comments") && method === "GET") return Response.json([]);
       if (url.includes("/issues/90/comments") && method === "POST") {
         calls.commentsCreated += 1;
@@ -3210,7 +3293,7 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ commentsCreated: 1, token: 1 });
+    expect(calls).toEqual({ commentsCreated: 1, token: 2 }); // +1 token for the #788 permission check
     const audit = await env.DB.prepare("select event_type, detail, metadata_json from audit_events where target_key = ? order by created_at")
       .bind("JSONbored/gittensory#90")
       .all<{ event_type: string; detail: string | null; metadata_json: string }>();
@@ -3252,6 +3335,7 @@ describe("queue processors", () => {
       const url = input.toString();
       const method = init?.method ?? "GET";
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "maintain" }); // #788 real-permission auth
       if (url.includes("/issues/94/comments") && method === "GET") return Response.json([]);
       if (url.includes("/issues/94/comments") && method === "POST") {
         const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string };
@@ -3311,6 +3395,8 @@ describe("queue processors", () => {
         calls.token += 1;
         return Response.json({ token: "installation-token" });
       }
+      // #788: "driveby" has no repo permission — authorized only as pr_author via the help-command override.
+      if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "none" });
       if (url.includes("/issues/") && url.includes("/comments") && method === "GET") return Response.json([]);
       if (url.includes("/issues/") && url.includes("/comments") && method === "POST") {
         calls.commentsCreated += 1;
@@ -3340,7 +3426,7 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ commentsCreated: 1, token: 1, minerList: 0 });
+    expect(calls).toEqual({ commentsCreated: 1, token: 2, minerList: 0 }); // +1 token for the #788 permission check
     const audit = await env.DB.prepare("select event_type, detail from audit_events where target_key = ? order by created_at")
       .bind("JSONbored/gittensory#91")
       .all<{ event_type: string; detail: string | null }>();
@@ -3603,6 +3689,9 @@ describe("queue processors", () => {
 
   it("records webhook errors when command replies fail before mutation", async () => {
     const env = createTestEnv();
+    // Authorize via the confirmed-miner path (PR author + cached confirmed status), which does not depend on
+    // the #788 real-permission check — that check swallows the invalid-repo error and would deny otherwise.
+    await upsertOfficialMinerDetection(env, "oktofeesh1", { status: "confirmed", snapshot: queueMinerSnapshot("oktofeesh1") }, 60_000);
     await expect(
       processJob(env, {
         type: "github-webhook",
@@ -3616,8 +3705,8 @@ describe("queue processors", () => {
           comment: {
             id: 9,
             body: "@gittensory help",
-            user: { login: "maintainer", type: "User" },
-            author_association: "OWNER",
+            user: { login: "oktofeesh1", type: "User" },
+            author_association: "NONE",
           },
         },
       }),
@@ -3729,6 +3818,53 @@ describe("queue processors", () => {
       ]),
     );
     expect(JSON.stringify(usageEvents)).not.toMatch(/deliveryId|wallet|hotkey|raw trust/i);
+  });
+
+  it("denies a maintainer Q&A command from an org member without real repo permission (#788)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 96,
+      title: "Org member tries a maintainer command",
+      state: "open",
+      user: { login: "alice" },
+      author_association: "NONE",
+      labels: [],
+      body: "",
+    });
+    const calls = { comments: 0, permission: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      // The commenter is an org MEMBER but has only READ access to THIS repo — not a maintainer/collaborator.
+      if (url.includes("/collaborators/orgmember/permission")) {
+        calls.permission += 1;
+        return Response.json({ permission: "read" });
+      }
+      if (url.includes("/issues/") && url.includes("/comments")) {
+        calls.comments += 1;
+        return Response.json([]);
+      }
+      return new Response("not found", { status: 404 });
+    });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "agent-command-org-member-no-permission",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 96, title: "Org member tries a maintainer command", state: "open", pull_request: {}, user: { login: "alice" }, author_association: "NONE" },
+        // author_association MEMBER would have granted the maintainer role pre-#788; it no longer does.
+        comment: { id: 96, body: "@gittensory queue-summary", user: { login: "orgmember", type: "User" }, author_association: "MEMBER" },
+      },
+    });
+    expect(calls.permission).toBe(1); // the REAL repo permission was consulted, not the spoofable association
+    expect(calls.comments).toBe(0); // …and the org member was denied — no maintainer reply
+    const skip = await env.DB.prepare("select detail from audit_events where event_type = ? and target_key = ?")
+      .bind("github_app.agent_command_skipped", "JSONbored/gittensory#96")
+      .first<{ detail: string }>();
+    expect(skip?.detail).toBe("not_maintainer_or_pr_author");
   });
 
   it("records command usage as an error when miner authorization cannot be checked", async () => {

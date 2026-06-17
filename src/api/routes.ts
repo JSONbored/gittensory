@@ -591,6 +591,44 @@ const repositorySettingsSchema = z.object({
     .default(DEFAULT_COMMAND_AUTHORIZATION_POLICY),
 });
 
+// #130 maintainer self-serve settings editor. A PATCH-style subset: every field optional so the maintainer
+// dashboard can save just the group it changed. Excludes the secret-bearing aiReview* group (set via the
+// dedicated /ai-review + /ai-key routes) and the operator-only scoring internals (backfillEnabled,
+// privateTrustEnabled). The handler loads current settings and merges, since upsertRepositorySettings
+// defaults any absent field rather than preserving it.
+const maintainerSettingsSchema = z
+  .object({
+    commentMode: z.enum(["off", "detected_contributors_only", "all_prs"]),
+    publicAudienceMode: z.enum(["oss_maintainer", "gittensor_only"]),
+    publicSignalLevel: z.enum(["minimal", "standard"]),
+    publicSurface: z.enum(["off", "comment_and_label", "comment_only", "label_only"]),
+    checkRunMode: z.enum(["off", "enabled"]),
+    checkRunDetailLevel: z.enum(["minimal", "standard", "deep"]),
+    gateCheckMode: z.enum(["off", "enabled"]),
+    gatePack: z.enum(["gittensor", "oss-anti-slop"]),
+    linkedIssueGateMode: z.enum(["off", "advisory", "block"]),
+    duplicatePrGateMode: z.enum(["off", "advisory", "block"]),
+    qualityGateMode: z.enum(["off", "advisory", "block"]),
+    qualityGateMinScore: z.number().int().min(0).max(100).nullable(),
+    mergeReadinessGateMode: z.enum(["off", "advisory", "block"]),
+    manifestPolicyGateMode: z.enum(["off", "advisory", "block"]),
+    firstTimeContributorGrace: z.boolean(),
+    slopGateMode: z.enum(["off", "advisory", "block"]),
+    slopGateMinScore: z.number().int().min(0).max(100).nullable(),
+    slopAiAdvisory: z.boolean(),
+    autoLabelEnabled: z.boolean(),
+    gittensorLabel: z.string().trim().min(1).max(50),
+    createMissingLabel: z.boolean(),
+    includeMaintainerAuthors: z.boolean(),
+    requireLinkedIssue: z.boolean(),
+    badgeEnabled: z.boolean(),
+    commandAuthorization: z.object({
+      default: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])).max(4).optional(),
+      commands: z.record(z.string().trim().min(1).max(64), z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])).max(4)).optional(),
+    }),
+  })
+  .partial();
+
 // Maintainer BYOK provider key. Write-only: the key is encrypted at rest and never returned. A loose
 // prefix check catches the common provider/key mismatch (e.g. pasting an OpenAI key under Anthropic)
 // without coupling to exact provider key formats: Anthropic keys start with `sk-ant-`; OpenAI keys
@@ -1047,6 +1085,22 @@ export function createApp() {
       dataQuality: pack.dataQuality,
       mcp: { snapshot: scoring?.id ?? null, drift: upstreamDrift.status, lastRun: runs[0]?.updatedAt ?? null },
     });
+  });
+
+  // #129 in-UI "refresh decision pack" — enqueues the same contributor decision-pack rebuild the MCP job
+  // runs, so a miner can refresh from the web app instead of running MCP locally. Contributor-authed
+  // (same gate as the dashboard read); the rebuild is async, so the panel re-fetches after it lands.
+  app.post("/v1/app/miner-dashboard/refresh", async (c) => {
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- the write-protection middleware rejects unauthenticated POSTs before this handler. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const login = c.req.query("login") ?? (identity.kind === "session" ? identity.actor : "");
+    if (!login) return c.json({ error: "login_required" }, 400);
+    const unauthorized = await requireContributorAccess(c, login);
+    if (unauthorized) return unauthorized;
+    const message: JobMessage = { type: "build-contributor-decision-packs", requestedBy: "api", login };
+    await c.env.JOBS.send(message);
+    return c.json({ status: "queued", login }, 202);
   });
 
   app.get("/v1/app/maintainer-dashboard", async (c) => {
@@ -1929,6 +1983,31 @@ export function createApp() {
     const gate = await requireRepoMaintainer(c, fullName);
     if (gate instanceof Response) return gate;
     return c.json(await getRepositorySettings(c.env, fullName));
+  });
+
+  // #130 maintainer settings editor: PATCH-style save of the gate / slop / label / surface / command-auth
+  // settings. Maintainer-authenticated + audited. upsertRepositorySettings defaults any absent field, so we
+  // merge the sent keys onto the current settings rather than overwriting unrelated groups. The secret
+  // aiReview key + the operator-only scoring internals are deliberately not settable here.
+  app.put("/v1/repos/:owner/:repo/settings", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoMaintainer(c, fullName);
+    if (gate instanceof Response) return gate;
+    const body = await c.req.json().catch(() => null);
+    const parsed = maintainerSettingsSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_repository_settings", issues: parsed.error.issues }, 400);
+    const current = await getRepositorySettings(c.env, fullName);
+    const changes = Object.fromEntries(Object.entries(parsed.data).filter(([, value]) => value !== undefined));
+    const updated = await upsertRepositorySettings(c.env, { ...current, ...changes, repoFullName: fullName });
+    await recordAuditEvent(c.env, {
+      eventType: "repo.settings_updated",
+      actor: gate.identity?.kind === "session" ? gate.identity.actor : null,
+      targetKey: fullName,
+      outcome: "success",
+      detail: `Updated ${Object.keys(changes).length} maintainer setting(s).`,
+      metadata: { repoFullName: fullName, fields: Object.keys(changes) },
+    });
+    return c.json(updated);
   });
 
   // Maintainer activation demo (#701): a repo-specific "here's what Gittensory would have surfaced" preview

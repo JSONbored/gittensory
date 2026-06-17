@@ -737,6 +737,18 @@ describe("api routes", () => {
     expect(botPreview.status).toBe(200);
     await expect(botPreview.json()).resolves.toMatchObject({ decision: { skipped: true, skipReason: "bot_author" }, previewComment: null });
 
+    // #130 settings PUT via the admin (non-session) auth: covers the non-session audit-actor path and the
+    // malformed-body guard.
+    const settingsAdminUpdate = await app.request(
+      "/v1/repos/entrius/allways-ui/settings",
+      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ manifestPolicyGateMode: "advisory", firstTimeContributorGrace: true }) },
+      env,
+    );
+    expect(settingsAdminUpdate.status).toBe(200);
+    await expect(settingsAdminUpdate.json()).resolves.toMatchObject({ manifestPolicyGateMode: "advisory", firstTimeContributorGrace: true });
+    const settingsMalformed = await app.request("/v1/repos/entrius/allways-ui/settings", { method: "PUT", headers: apiHeaders(env), body: "{" }, env);
+    expect(settingsMalformed.status).toBe(400);
+
     const registrationReadiness = await app.request("/v1/repos/entrius/allways-ui/registration-readiness", { headers: apiHeaders(env) }, env);
     expect(registrationReadiness.status).toBe(200);
     await expect(registrationReadiness.json()).resolves.toMatchObject({
@@ -2043,6 +2055,22 @@ describe("api routes", () => {
     expect(forbiddenMiner.status).toBe(403);
     expect((await app.request("/v1/app/maintainer-dashboard", {}, env)).status).toBe(401);
 
+    // #129 in-UI "refresh decision pack": contributor-authed enqueue of the decision-pack rebuild.
+    const refreshMissingLogin = await app.request("/v1/app/miner-dashboard/refresh", { method: "POST", headers: apiHeaders(env) }, env);
+    expect(refreshMissingLogin.status).toBe(400);
+    const refreshForbidden = await app.request("/v1/app/miner-dashboard/refresh?login=oktofeesh1", { method: "POST", headers: { cookie: `gittensory_session=${otherToken}` } }, env);
+    expect(refreshForbidden.status).toBe(403);
+    const refreshQueued = await app.request("/v1/app/miner-dashboard/refresh?login=oktofeesh1", { method: "POST", headers: apiHeaders(env) }, env);
+    expect(refreshQueued.status).toBe(202);
+    await expect(refreshQueued.json()).resolves.toMatchObject({ status: "queued", login: "oktofeesh1" });
+    // No ?login → the login resolves from the session actor (covers the session-actor fallback).
+    const refreshSelf = await app.request("/v1/app/miner-dashboard/refresh", { method: "POST", headers: { cookie: `gittensory_session=${otherToken}` } }, env);
+    expect(refreshSelf.status).toBe(202);
+    await expect(refreshSelf.json()).resolves.toMatchObject({ status: "queued", login: "other" });
+    // Unauthenticated POST is rejected by the write-protection middleware before the handler.
+    const refreshUnauth = await app.request("/v1/app/miner-dashboard/refresh", { method: "POST" }, env);
+    expect(refreshUnauth.status).toBe(401);
+
     const unknownEnv = createTestEnv({ ADMIN_GITHUB_LOGINS: "jsonbored" });
     const { token: unknownToken } = await createSessionForGitHubUser(unknownEnv, { login: "new-user", id: 2468 });
     const unknownHeaders = { cookie: `gittensory_session=${unknownToken}`, "content-type": "application/json" };
@@ -2179,6 +2207,28 @@ describe("api routes", () => {
     );
     expect(forbiddenVictimSettingsPreview.status).toBe(403);
     await expect(forbiddenVictimSettingsPreview.json()).resolves.toMatchObject({ error: "forbidden_repo" });
+
+    // #130 maintainer settings editor: PATCH-style save (maintainer-authed, audited). Only the sent keys
+    // override; unrelated groups are preserved by the load-merge in the handler.
+    const settingsUpdate = await app.request(
+      "/v1/repos/repo-owner/owned-repo/settings",
+      { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ gateCheckMode: "enabled", slopGateMode: "block", slopGateMinScore: 55 }) },
+      ownerEnv,
+    );
+    expect(settingsUpdate.status).toBe(200);
+    await expect(settingsUpdate.json()).resolves.toMatchObject({ gateCheckMode: "enabled", slopGateMode: "block", slopGateMinScore: 55 });
+    const settingsInvalid = await app.request(
+      "/v1/repos/repo-owner/owned-repo/settings",
+      { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ gateCheckMode: "nonsense" }) },
+      ownerEnv,
+    );
+    expect(settingsInvalid.status).toBe(400);
+    const settingsForbidden = await app.request(
+      "/v1/repos/victim-org/secret-repo/settings",
+      { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ gateCheckMode: "enabled" }) },
+      ownerEnv,
+    );
+    expect(settingsForbidden.status).toBe(403);
     const ownerWeeklyReport = await app.request("/v1/app/analytics/weekly-value-report", { headers: ownerHeaders }, ownerEnv);
     expect(ownerWeeklyReport.status).toBe(200);
     const ownerWeeklyReportBody = await ownerWeeklyReport.json();
