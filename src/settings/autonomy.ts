@@ -26,6 +26,15 @@ export function isActingAutonomyLevel(level: AutonomyLevel): boolean {
   return level === "auto" || level === "auto_with_approval";
 }
 
+/**
+ * True when a repo has opted into the agent layer at all — i.e. at least one action class has an acting
+ * autonomy level. The deny-by-default floor (every class `observe`) is NOT configured. The scheduled
+ * re-gate sweep (#777) uses this to skip repos that never asked the agent to act. Pure.
+ */
+export function isAgentConfigured(autonomy: AutonomyPolicy | null | undefined): boolean {
+  return AGENT_ACTION_CLASSES.some((actionClass) => isActingAutonomyLevel(resolveAutonomy(autonomy, actionClass)));
+}
+
 /** True when the action must pass a human approval gate (#779) before it executes. */
 export function autonomyRequiresApproval(level: AutonomyLevel): boolean {
   return level === "auto_with_approval";

@@ -509,6 +509,112 @@ describe("queue processors", () => {
     ]);
   });
 
+  it("agent re-gate sweep fans out only to repos that opted the agent in (#777)", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    await upsertRepositoryFromGitHub(env, { name: "agent-a", full_name: "owner/agent-a", private: false, owner: { login: "owner" } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-b", full_name: "owner/agent-b", private: false, owner: { login: "owner" } });
+    await upsertRepositoryFromGitHub(env, { name: "plain-repo", full_name: "owner/plain-repo", private: false, owner: { login: "owner" } });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-a", autonomy: { label: "auto" } });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-b", autonomy: { merge: "auto_with_approval" } });
+    await upsertRepositorySettings(env, { repoFullName: "owner/plain-repo", autonomy: { review: "observe" } }); // non-acting → not configured
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "schedule" });
+
+    expect(sent).toHaveLength(2);
+    expect(sent.every((message) => message.type === "agent-regate-sweep")).toBe(true);
+    expect(sent.map((message) => (message.type === "agent-regate-sweep" ? message.repoFullName : null)).sort()).toEqual(["owner/agent-a", "owner/agent-b"]);
+    const fanout = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("agent.sweep.fanout").first<{
+      outcome: string;
+      metadata_json: string;
+    }>();
+    expect(fanout?.outcome).toBe("queued");
+    expect(JSON.parse(fanout?.metadata_json ?? "{}")).toMatchObject({ repoCount: 2, requestedBy: "schedule" });
+  });
+
+  it("agent re-gate sweep recomputes stale open PR verdicts as an advisory audit, never publishing (#777)", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, linkedIssueGateMode: "block" });
+    // #7 has no linked issue → blocked under linkedIssueGateMode:block; #8 links one → passes. Both are stale.
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Unlinked PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "no linked issue here" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 8, title: "Linked PR", state: "open", user: { login: "contributor" }, head: { sha: "a8" }, labels: [], body: "Closes #1" });
+    // Advance past the one-hour freshness window so the just-seeded PRs read as stale.
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+
+    const audit = await env.DB.prepare("select outcome, detail, metadata_json from audit_events where event_type = ?").bind("agent.sweep.regate").first<{
+      outcome: string;
+      detail: string;
+      metadata_json: string;
+    }>();
+    expect(audit?.outcome).toBe("completed");
+    const meta = JSON.parse(audit?.metadata_json ?? "{}");
+    expect(meta).toMatchObject({ repoFullName: "owner/agent-repo", mode: "live", examined: 2, flagged: 1 });
+    expect(meta.flaggedPulls).toEqual([7]);
+    expect(meta.verdicts).toMatchObject({ "7": "failure", "8": "success" });
+    // Advisory only: the sweep enqueues no jobs and posts no check/comment/label.
+    expect(sent).toEqual([]);
+  });
+
+  it("agent re-gate sweep respects the #776 kill-switch: a paused repo records a skip and recomputes nothing (#777)", async () => {
+    const env = createTestEnv({});
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, agentPaused: true });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Stale PR", state: "open", user: { login: "contributor" }, head: { sha: "abc" }, labels: [], body: "x" });
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+
+    const audit = await env.DB.prepare("select outcome, detail, metadata_json from audit_events where event_type = ?").bind("agent.sweep.regate").first<{
+      outcome: string;
+      detail: string;
+      metadata_json: string;
+    }>();
+    expect(audit?.outcome).toBe("denied");
+    expect(audit?.detail).toMatch(/paused/i);
+    expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ mode: "paused" });
+  });
+
+  it("agent re-gate sweep no-ops safely on a missing repo arg or an un-configured repo (#777)", async () => {
+    const env = createTestEnv({});
+    // (a) a test-mode per-repo job with no repoFullName → defensive early return
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test" });
+    // (b) a repo that never opted the agent in → defensive return after settings resolve
+    await upsertRepositoryFromGitHub(env, { name: "plain-repo", full_name: "owner/plain-repo", private: false, owner: { login: "owner" } });
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/plain-repo" });
+
+    const count = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("agent.sweep.regate").first<{ n: number }>();
+    expect(count?.n).toBe(0);
+  });
+
+  it("agent re-gate sweep stays quiet when no open PR is stale enough to re-gate (#777)", async () => {
+    const env = createTestEnv({});
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" } });
+    // Seeded "now" → within the freshness window → not a candidate; no clock advance.
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Fresh PR", state: "open", user: { login: "c" }, head: { sha: "a7" }, labels: [], body: "x" });
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+
+    const count = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("agent.sweep.regate").first<{ n: number }>();
+    expect(count?.n).toBe(0);
+  });
+
   it("routes repo-scoped backfill jobs into resumable segment and detail processors", async () => {
     const sent: import("../../src/types").JobMessage[] = [];
     const env = createTestEnv({

@@ -111,6 +111,13 @@ export type JobMessage =
       days?: number;
     }
   | {
+      // Scheduled re-gate sweep (#777). No `repoFullName` = fan-out: enqueue one per agent-configured repo.
+      // With `repoFullName` = recompute the gate verdict for that repo's stale open PRs (advisory/audit only).
+      type: "agent-regate-sweep";
+      requestedBy: "schedule" | "api" | "test";
+      repoFullName?: string;
+    }
+  | {
       type: "run-agent";
       requestedBy: "api" | "mcp" | "github_comment" | "test";
       runId: string;

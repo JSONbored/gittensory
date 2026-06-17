@@ -7,6 +7,7 @@ import {
   DEFAULT_AUTO_MAINTAIN_POLICY,
   autonomyRequiresApproval,
   isActingAutonomyLevel,
+  isAgentConfigured,
   normalizeAutoMaintainPolicy,
   normalizeAutonomyPolicy,
   resolveAutonomy,
@@ -105,5 +106,20 @@ describe("normalizeAutoMaintainPolicy (#774)", () => {
 
   it("AUTO_MERGE_METHODS is the closed set merge/squash/rebase", () => {
     expect(AUTO_MERGE_METHODS).toEqual(["merge", "squash", "rebase"]);
+  });
+});
+
+describe("isAgentConfigured (#777 opt-in detection)", () => {
+  it("is true when any action class has an acting level", () => {
+    expect(isAgentConfigured({ merge: "auto" })).toBe(true);
+    expect(isAgentConfigured({ label: "auto_with_approval" })).toBe(true);
+    expect(isAgentConfigured({ review: "suggest", close: "auto" })).toBe(true);
+  });
+
+  it("is false for the deny-by-default floor (all observe / non-acting / empty / null)", () => {
+    expect(isAgentConfigured({ merge: "observe", review: "suggest", approve: "propose" })).toBe(false);
+    expect(isAgentConfigured({})).toBe(false);
+    expect(isAgentConfigured(null)).toBe(false);
+    expect(isAgentConfigured(undefined)).toBe(false);
   });
 });

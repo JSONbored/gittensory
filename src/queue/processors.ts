@@ -96,6 +96,9 @@ import {
 import { executeAgentRun, explainBlockersWithAgent, planNextWork, preflightBranchWithAgent, preparePrPacketWithAgent } from "../services/agent-orchestrator";
 import { isAuthorizedGitHubSessionLogin } from "../auth/security";
 import { commandAuthorizationAllowedRoles, commandAuthorizationNeedsMinerDetection } from "../settings/command-authorization";
+import { isAgentConfigured } from "../settings/autonomy";
+import { isGlobalAgentPause, resolveAgentActionMode } from "../settings/agent-execution";
+import { selectRegateCandidates } from "../settings/agent-sweep";
 import { loadIssueQualityReportMap } from "../services/issue-quality";
 import { generateWeeklyValueReport } from "../services/weekly-value-report";
 import { REPO_OUTCOME_PATTERNS_SIGNAL, computeRepoOutcomePatterns } from "../services/repo-outcome-patterns";
@@ -278,6 +281,13 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
     case "generate-weekly-value-report":
       await generateWeeklyValueReport(env, { variant: message.variant ?? "operator", ...(message.days === undefined ? {} : { days: message.days }) });
       return;
+    case "agent-regate-sweep":
+      if (!message.repoFullName && message.requestedBy !== "test") {
+        await fanOutAgentRegateSweepJobs(env, message.requestedBy);
+        return;
+      }
+      await sweepRepoRegate(env, message.repoFullName);
+      return;
     case "run-agent":
       await executeAgentRun(env, message.runId);
       return;
@@ -328,6 +338,79 @@ async function fanOutRepoSignalSnapshotJobs(env: Env, requestedBy: "schedule" | 
     eventType: "signals.snapshot_fanout",
     outcome: "queued",
     metadata: { repoCount: repositories.length, requestedBy },
+  });
+}
+
+// #777 scheduled re-gate sweep. The cron (index.ts) enqueues one fan-out job hourly; this enqueues a per-repo
+// sweep job for every repo that opted the agent in (an acting autonomy level). Mirrors the signal-snapshot
+// fan-out so each repo's sweep runs as its own bounded, retryable queue message.
+async function fanOutAgentRegateSweepJobs(env: Env, requestedBy: "schedule" | "api" | "test"): Promise<void> {
+  const repositories = await listRepositories(env);
+  const configured: string[] = [];
+  for (const repo of repositories) {
+    const settings = await resolveRepositorySettings(env, repo.fullName);
+    if (isAgentConfigured(settings.autonomy)) configured.push(repo.fullName);
+  }
+  await Promise.all(
+    configured.map((repoFullName, index) => {
+      const message: JobMessage = { type: "agent-regate-sweep", requestedBy, repoFullName };
+      const delaySeconds = Math.min(index * 10, 600);
+      return delaySeconds > 0 ? env.JOBS.send(message, { delaySeconds }) : env.JOBS.send(message);
+    }),
+  );
+  await recordAuditEvent(env, {
+    eventType: "agent.sweep.fanout",
+    outcome: "queued",
+    metadata: { repoCount: configured.length, requestedBy },
+  });
+}
+
+// Recompute the DETERMINISTIC gate verdict for a repo's stalest open PRs and record it as an audit event —
+// ADVISORY ONLY: nothing is published to GitHub (no check, comment, or label) and no PR is mutated. This is
+// the Phase-0 scheduling rail; the action layer (#778) is what will later turn a flagged verdict into a real
+// action. Respects the #776 safety gate: a global or per-repo pause records a skip and recomputes nothing.
+async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Promise<void> {
+  if (!repoFullName) return;
+  const settings = await resolveRepositorySettings(env, repoFullName);
+  // Defensive: a repo can lose its acting autonomy between fan-out and processing.
+  if (!isAgentConfigured(settings.autonomy)) return;
+  const mode = resolveAgentActionMode({
+    globalPaused: isGlobalAgentPause(env),
+    agentPaused: settings.agentPaused,
+    agentDryRun: settings.agentDryRun,
+  });
+  if (mode === "paused") {
+    await recordAuditEvent(env, {
+      eventType: "agent.sweep.regate",
+      actor: "gittensory",
+      targetKey: repoFullName,
+      outcome: "denied",
+      detail: "agent actions paused — re-gate sweep skipped",
+      metadata: { repoFullName, mode },
+    });
+    return;
+  }
+  const [repo, openPullRequests] = await Promise.all([getRepository(env, repoFullName), listOpenPullRequests(env, repoFullName)]);
+  const candidates = selectRegateCandidates({ pulls: openPullRequests, now: nowIso() });
+  // No stale PRs this tick — stay quiet rather than writing an empty heartbeat to the audit feed.
+  if (candidates.length === 0) return;
+  const requireLinkedIssue = settings.requireLinkedIssue || settings.linkedIssueGateMode !== "off";
+  const verdicts: Record<string, string> = {};
+  const flaggedPulls: number[] = [];
+  for (const pr of candidates) {
+    const others = openPullRequests.filter((other) => other.number !== pr.number);
+    const advisory = buildPullRequestAdvisory(repo, pr, { otherOpenPullRequests: others, requireLinkedIssue });
+    const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null));
+    verdicts[String(pr.number)] = gate.conclusion;
+    if (gate.conclusion === "failure" || gate.conclusion === "action_required") flaggedPulls.push(pr.number);
+  }
+  await recordAuditEvent(env, {
+    eventType: "agent.sweep.regate",
+    actor: "gittensory",
+    targetKey: repoFullName,
+    outcome: "completed",
+    detail: `scheduled re-gate recomputed ${candidates.length} stale open PR verdict(s); ${flaggedPulls.length} flagged`,
+    metadata: { repoFullName, mode, openCount: openPullRequests.length, examined: candidates.length, flagged: flaggedPulls.length, flaggedPulls, verdicts },
   });
 }
 
