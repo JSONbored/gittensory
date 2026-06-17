@@ -1487,6 +1487,82 @@ describe("queue processors", () => {
     expect(usageEvents).toEqual(expect.arrayContaining([expect.objectContaining({ surface: "github_app", eventName: "pr_panel_retriggered", outcome: "completed" })]));
   });
 
+  it("reruns the panel when a confirmed-miner PR author checks the rerun task (#824 miner-detection path)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "off",
+      includeMaintainerAuthors: true,
+      // review-now allows a confirmed miner, so a confirmed-miner PR author can retrigger their own panel.
+      commandAuthorization: { default: ["maintainer", "collaborator", "confirmed_miner"], commands: { "review-now": ["maintainer", "confirmed_miner"] } },
+    });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 48,
+      title: "Miner self-rerun",
+      state: "open",
+      user: { login: "contributor" },
+      author_association: "CONTRIBUTOR",
+      head: { sha: "panel480" },
+      labels: [],
+      body: "Validation: npm test",
+    });
+    const checkedPanel = ["<!-- gittensory-pr-panel:v1 -->", "", "- [x] <!-- gittensory-rerun-review:v1 --> Re-run Gittensory review"].join("\n");
+    const calls = { minerList: 0, permission: 0, commentPatches: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        calls.minerList += 1;
+        return Response.json([{ uid: 7, githubUsername: "contributor", githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1 }]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") return Response.json({ repositories: [{ repositoryFullName: "JSONbored/gittensory", totalPrs: "4", totalMergedPrs: "3", totalOpenPrs: "1", totalClosedPrs: "0", totalOpenIssues: "0", totalClosedIssues: "0", isEligible: true, credibility: "1.000000" }] });
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/contributor")) return Response.json({ login: "contributor", public_repos: 2, followers: 1 });
+      if (url.includes("/users/contributor/repos")) return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      // The confirmed-miner author has NO repo write/admin — authorized via confirmed_miner, not maintainer.
+      if (url.includes("/collaborators/contributor/permission")) {
+        calls.permission += 1;
+        return Response.json({ permission: "none" });
+      }
+      if (url.includes("/issues/48/comments") && method === "GET") return Response.json([{ id: 778, body: checkedPanel, user: { login: "gittensory[bot]", type: "Bot" } }]);
+      if (url.includes("/issues/comments/778") && method === "PATCH") {
+        calls.commentPatches += 1;
+        return Response.json({ id: 778 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "panel-retrigger-miner",
+      eventName: "issue_comment",
+      payload: {
+        action: "edited",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 48, title: "Miner self-rerun", state: "open", user: { login: "contributor" }, pull_request: {} },
+        comment: { id: 778, body: checkedPanel, user: { login: "gittensory[bot]", type: "Bot" } },
+        sender: { login: "contributor", type: "User" },
+      },
+    });
+
+    // The confirmed-miner detection WAS fetched (the #824 helper's miner-detection path) and the panel retriggered.
+    expect(calls.minerList).toBeGreaterThanOrEqual(1);
+    expect(calls.permission).toBe(1);
+    expect(calls.commentPatches).toBe(1);
+    const audit = await env.DB.prepare("select actor, outcome from audit_events where event_type = ? and target_key = ?")
+      .bind("github_app.pr_panel_retriggered", "JSONbored/gittensory#48")
+      .first<{ actor: string; outcome: string }>();
+    expect(audit).toMatchObject({ actor: "contributor", outcome: "completed" });
+  });
+
   it("skips PR panel reruns from users without repository write permission", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
