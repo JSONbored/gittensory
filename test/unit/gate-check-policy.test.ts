@@ -76,6 +76,19 @@ describe(".gittensory.yml settings override (resolveEffectiveSettings)", () => {
     expect(evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true)).conclusion).toBe("success");
   });
 
+  it("end-to-end: manifest gate.mergeReadiness:block drives the composite even when the DB sub-gate is advisory (#822)", () => {
+    const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "advisory", mergeReadinessGateMode: "off" }), parseFocusManifest({ gate: { mergeReadiness: "block" } }));
+    expect(eff.mergeReadinessGateMode).toBe("block");
+    expect(evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true)).conclusion).toBe("failure");
+  });
+
+  it("end-to-end: manifest gate.firstTimeContributorGrace:true softens a newcomer's block to advisory (#822/#552)", () => {
+    const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "block", firstTimeContributorGrace: false }), parseFocusManifest({ gate: { firstTimeContributorGrace: true } }));
+    expect(eff.firstTimeContributorGrace).toBe(true);
+    const newcomerPolicy = gateCheckPolicy(eff, null, true, null, { mergedPrCount: 0, closedUnmergedPrCount: 0 });
+    expect(evaluateGateCheck(missingIssueAdvisory(), newcomerPolicy).conclusion).toBe("neutral");
+  });
+
   it("still only blocks confirmed contributors regardless of the config", () => {
     const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "advisory" }), parseFocusManifest({ gate: { linkedIssue: "block" } }));
     const nonConfirmed = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, false));
@@ -175,5 +188,146 @@ describe("slop gate (#530/#532)", () => {
     const blocked = evaluateGateCheck(cleanAdvisory(), gateCheckPolicy(eff, null, true, 80));
     expect(blocked.conclusion).toBe("failure");
     expect(blocked.blockers.map((finding) => finding.code)).toContain("slop_risk_above_threshold");
+  });
+});
+
+describe("merge-readiness composite gate (#551)", () => {
+  it("block escalates an otherwise-advisory sub-gate (linked-issue) into a hard blocker", () => {
+    const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "advisory", mergeReadinessGateMode: "block" }), parseFocusManifest(null));
+    const result = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true));
+    expect(result.conclusion).toBe("failure");
+    expect(result.summary).toContain("No linked issue detected");
+  });
+
+  it("advisory keeps the composite non-blocking even when a sub-gate is individually set to block", () => {
+    const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "block", mergeReadinessGateMode: "advisory" }), parseFocusManifest(null));
+    expect(evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true)).conclusion).toBe("success");
+  });
+
+  it("off is a no-op: sub-gates keep their own modes (linked-issue stays advisory -> non-blocking)", () => {
+    const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "advisory", mergeReadinessGateMode: "off" }), parseFocusManifest(null));
+    expect(evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true)).conclusion).toBe("success");
+  });
+
+  it("the blocking summary lists each unmet sub-gate condition", () => {
+    const advisory = missingIssueAdvisory();
+    advisory.findings.push({ code: "duplicate_pr_risk", title: "Possible duplicate PR", severity: "warning", detail: "Overlaps #9.", action: "Close the duplicate." });
+    const eff = resolveEffectiveSettings(settings({ mergeReadinessGateMode: "block" }), parseFocusManifest(null));
+    const result = evaluateGateCheck(advisory, gateCheckPolicy(eff, null, true));
+    expect(result.conclusion).toBe("failure");
+    expect(result.summary).toContain("No linked issue detected");
+    expect(result.summary).toContain("Possible duplicate PR");
+  });
+});
+
+describe("first-time-contributor grace (#552)", () => {
+  // A would-be hard blocker for a confirmed contributor (linked-issue: block trips on the missing-issue PR).
+  const blockingPolicy = { linkedIssueGateMode: "block" as const, confirmedContributor: true };
+
+  it("(a) softens the block to a neutral/advisory gate for a genuine newcomer (0 merged, 0 closed-unmerged)", () => {
+    const result = evaluateGateCheck(missingIssueAdvisory(), {
+      ...blockingPolicy,
+      firstTimeContributorGrace: true,
+      authorMergedPrCount: 0,
+      authorClosedUnmergedPrCount: 0,
+    });
+    expect(result.conclusion).toBe("neutral");
+    expect(result.blockers).toEqual([]);
+    expect(result.title).toContain("first-contribution grace");
+  });
+
+  it("(b) still blocks a repeat offender (0 merged, >= 3 closed-unmerged) — grace does not apply", () => {
+    const result = evaluateGateCheck(missingIssueAdvisory(), {
+      ...blockingPolicy,
+      firstTimeContributorGrace: true,
+      authorMergedPrCount: 0,
+      authorClosedUnmergedPrCount: 3,
+    });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((finding) => finding.code)).toEqual(["missing_linked_issue"]);
+  });
+
+  it("(c) blocks normally when the grace setting is off, even for a newcomer", () => {
+    const result = evaluateGateCheck(missingIssueAdvisory(), {
+      ...blockingPolicy,
+      firstTimeContributorGrace: false,
+      authorMergedPrCount: 0,
+      authorClosedUnmergedPrCount: 0,
+    });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((finding) => finding.code)).toEqual(["missing_linked_issue"]);
+  });
+
+  it("(d) blocks an author with merge history (not a newcomer) even with grace on", () => {
+    const result = evaluateGateCheck(missingIssueAdvisory(), {
+      ...blockingPolicy,
+      firstTimeContributorGrace: true,
+      authorMergedPrCount: 2,
+      authorClosedUnmergedPrCount: 0,
+    });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((finding) => finding.code)).toEqual(["missing_linked_issue"]);
+  });
+
+  it("gateCheckPolicy threads firstTimeContributorGrace + the author's per-repo history into the policy", () => {
+    const policy = gateCheckPolicy(settings({ firstTimeContributorGrace: true }), null, true, null, { mergedPrCount: 0, closedUnmergedPrCount: 1 });
+    expect(policy.firstTimeContributorGrace).toBe(true);
+    expect(policy.authorMergedPrCount).toBe(0);
+    expect(policy.authorClosedUnmergedPrCount).toBe(1);
+    expect(evaluateGateCheck(missingIssueAdvisory(), { ...policy, linkedIssueGateMode: "block" }).conclusion).toBe("neutral");
+  });
+});
+
+describe("focus-manifest policy gate (#555)", () => {
+  // The three enforceable manifest-policy findings buildFocusManifestGuidance emits.
+  const POLICY_FINDINGS = {
+    manifest_blocked_path: { code: "manifest_blocked_path", title: "Change touches a maintainer-blocked area", severity: "critical" as const, detail: "Changed paths match maintainer-blocked patterns.", action: "Move out of the blocked area." },
+    manifest_linked_issue_required: { code: "manifest_linked_issue_required", title: "Maintainer requires a linked issue", severity: "warning" as const, detail: "Manifest requires a linked issue.", action: "Link the issue." },
+    manifest_missing_tests: { code: "manifest_missing_tests", title: "Maintainer test expectations unmet", severity: "warning" as const, detail: "Manifest expects test evidence.", action: "Add tests." },
+  };
+
+  function manifestAdvisory(code: keyof typeof POLICY_FINDINGS): Advisory {
+    return { ...missingIssueAdvisory(), findings: [POLICY_FINDINGS[code]] };
+  }
+
+  for (const code of Object.keys(POLICY_FINDINGS) as (keyof typeof POLICY_FINDINGS)[]) {
+    describe(code, () => {
+      it("blocks a confirmed contributor when manifestPolicy: block", () => {
+        const result = evaluateGateCheck(manifestAdvisory(code), { manifestPolicyGateMode: "block", confirmedContributor: true });
+        expect(result.conclusion).toBe("failure");
+        expect(result.blockers.map((finding) => finding.code)).toContain(code);
+      });
+
+      it("does not block when manifestPolicy: off (advisory-only)", () => {
+        expect(evaluateGateCheck(manifestAdvisory(code), { manifestPolicyGateMode: "off", confirmedContributor: true }).conclusion).toBe("success");
+      });
+
+      it("does not block when manifestPolicy: advisory (advisory != block)", () => {
+        expect(evaluateGateCheck(manifestAdvisory(code), { manifestPolicyGateMode: "advisory", confirmedContributor: true }).conclusion).toBe("success");
+      });
+
+      it("never blocks a non-confirmed contributor even with manifestPolicy: block", () => {
+        const result = evaluateGateCheck(manifestAdvisory(code), { manifestPolicyGateMode: "block", confirmedContributor: false });
+        expect(result.conclusion).toBe("neutral");
+        expect(result.blockers).toEqual([]);
+      });
+    });
+  }
+
+  it("is an INDEPENDENT dimension: mergeReadiness: block does NOT promote a manifest-policy finding (kept out of the composite)", () => {
+    const eff = resolveEffectiveSettings(settings({ manifestPolicyGateMode: "off", mergeReadinessGateMode: "block" }), parseFocusManifest(null));
+    expect(evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), gateCheckPolicy(eff, null, true)).conclusion).toBe("success");
+  });
+
+  it("gateCheckPolicy threads manifestPolicyGateMode into the policy", () => {
+    expect(gateCheckPolicy(settings({ manifestPolicyGateMode: "block" }), null, true).manifestPolicyGateMode).toBe("block");
+  });
+
+  it("end-to-end: a manifest gate.manifestPolicy: block sets effective.manifestPolicyGateMode and blocks a blockedPath PR", () => {
+    const eff = resolveEffectiveSettings(settings({ manifestPolicyGateMode: "off" }), parseFocusManifest({ gate: { manifestPolicy: "block" } }));
+    expect(eff.manifestPolicyGateMode).toBe("block");
+    const result = evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), gateCheckPolicy(eff, null, true));
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((finding) => finding.code)).toContain("manifest_blocked_path");
   });
 });

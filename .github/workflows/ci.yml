@@ -44,6 +44,7 @@ jobs:
               - 'package.json'
               - 'package-lock.json'
               - 'scripts/**'
+              - 'migrations/**'
               - '.github/workflows/**'
               - '.github/actions/**'
             ui:
@@ -77,6 +78,8 @@ jobs:
         uses: ./.github/actions/npm-setup
       - name: Lint workflows
         run: npm run actionlint
+      - name: Check migrations
+        run: npm run db:migrations:check
       - name: Typecheck
         run: npm run typecheck
 

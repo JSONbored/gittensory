@@ -52,6 +52,9 @@ export const repositorySettings = sqliteTable("repository_settings", {
   qualityGateMode: text("quality_gate_mode").notNull().default("advisory"),
   qualityGateMinScore: integer("quality_gate_min_score"),
   slopGateMode: text("slop_gate_mode").notNull().default("off"),
+  mergeReadinessGateMode: text("merge_readiness_gate_mode").notNull().default("off"),
+  manifestPolicyGateMode: text("manifest_policy_gate_mode").notNull().default("off"),
+  firstTimeContributorGrace: integer("first_time_contributor_grace", { mode: "boolean" }).notNull().default(false),
   slopGateMinScore: integer("slop_gate_min_score"),
   slopAiAdvisory: integer("slop_ai_advisory", { mode: "boolean" }).notNull().default(false),
   aiReviewMode: text("ai_review_mode").notNull().default("off"),
@@ -66,6 +69,7 @@ export const repositorySettings = sqliteTable("repository_settings", {
   requireLinkedIssue: integer("require_linked_issue", { mode: "boolean" }).notNull().default(false),
   backfillEnabled: integer("backfill_enabled", { mode: "boolean" }).notNull().default(true),
   privateTrustEnabled: integer("private_trust_enabled", { mode: "boolean" }).notNull().default(true),
+  badgeEnabled: integer("badge_enabled", { mode: "boolean" }).notNull().default(false),
   commandAuthorizationJson: text("command_authorization_json").notNull().default("{}"),
   createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
@@ -550,6 +554,30 @@ export const agentRecommendationOutcomes = sqliteTable(
     actorSource: index("agent_recommendation_outcomes_actor_source_idx").on(table.actorLogin, table.source, table.updatedAt),
     target: index("agent_recommendation_outcomes_target_idx").on(table.targetRepoFullName, table.targetPullNumber, table.targetIssueNumber),
     maintainer: index("agent_recommendation_outcomes_maintainer_idx").on(table.actorLogin, table.maintainerLane, table.updatedAt),
+  }),
+);
+
+// #554 gate false-positive telemetry: one latest gate-block row per (repo, PR). MEASUREMENT only — it lets a
+// maintainer compute a per-gate-type false-positive rate (blocked-then-merged / blocked) before promoting a
+// gate from advisory to block. Privacy: repo full name + PR number + blocker codes + timestamps ONLY — no
+// actor logins, no trust/reward internals. Mirrors agentRecommendationOutcomes (dedicated ledger + upsert).
+export const gateOutcomes = sqliteTable(
+  "gate_outcomes",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name").notNull(),
+    pullNumber: integer("pull_number").notNull(),
+    headSha: text("head_sha"),
+    // JSON array of the blocker `code`s that fired (e.g. ["missing_linked_issue","slop_risk"]).
+    blockerCodesJson: text("blocker_codes_json").notNull().default("[]"),
+    // Set true when a maintainer overrides the block via #538 — the strongest false-positive signal.
+    overridden: integer("overridden", { mode: "boolean" }).notNull().default(false),
+    blockedAt: text("blocked_at").notNull().$defaultFn(() => nowIso()),
+    updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
+  },
+  (table) => ({
+    pr: uniqueIndex("gate_outcomes_pr_unique").on(table.repoFullName, table.pullNumber),
+    repoUpdated: index("gate_outcomes_repo_updated_idx").on(table.repoFullName, table.updatedAt),
   }),
 );
 

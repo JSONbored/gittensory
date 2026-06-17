@@ -413,6 +413,16 @@ export type RepositorySettings = {
    *  score + warnings in context; `block` = ALSO hard-block when slopRisk >= slopGateMinScore (deterministic
    *  only, confirmed-contributor-gated like every blocker). Default `off` — opt-in via .gittensory.yml. */
   slopGateMode: GateRuleMode;
+  /** Merge-readiness gate (#merge-readiness). `off`/`advisory`/`block`. No min-score. Default `off`. */
+  mergeReadinessGateMode: GateRuleMode;
+  /** Focus-manifest policy gate (#555). When `block`, the focus manifest's declared policy (blocked paths,
+   *  required-linked-issue, test expectations) becomes an enforceable `Gittensory Gate` blocker. An
+   *  INDEPENDENT dimension, deliberately not folded into the merge-readiness composite. Default `off` — opt-in. */
+  manifestPolicyGateMode: GateRuleMode;
+  /** First-time-contributor grace (#552). When true, a would-be BLOCK is softened to a neutral/advisory gate
+   *  for a genuine newcomer (0 merged PRs in this repo) who is NOT a repeat offender (< 3 closed-unmerged PRs).
+   *  Repeat offenders and authors with merge history are gated normally. Default false — opt-in. */
+  firstTimeContributorGrace: boolean;
   /** Slop-risk threshold (0-100) at/above which `slopGateMode: block` blocks. Default 60 (the `high` band). */
   slopGateMinScore?: number | null | undefined;
   /** AI-assisted slop advisory (the `slopAiAdvisory` capability). When true AND `slopGateMode != off`, a
@@ -444,6 +454,9 @@ export type RepositorySettings = {
   requireLinkedIssue: boolean;
   backfillEnabled: boolean;
   privateTrustEnabled: boolean;
+  /** Opt-in for the public, unauthenticated README status badge (#541). Always populated by the DB layer
+   *  (default false); optional so existing settings fixtures/callers need not be touched. */
+  badgeEnabled?: boolean | undefined;
   commandAuthorization?: RepositoryCommandAuthorizationPolicy | undefined;
   createdAt?: string | null | undefined;
   updatedAt?: string | null | undefined;
@@ -841,6 +854,19 @@ export type AgentRecommendationOutcomeRepoSummary = {
   maintainerLaneTotal: number;
   latestOutcomeAt?: string | null | undefined;
   signal: "positive" | "negative" | "mixed" | "neutral";
+};
+
+// #554 gate false-positive telemetry. One latest gate-block row per (repo, PR). Privacy: repo + PR number +
+// blocker codes + timestamps ONLY — deliberately no actor login, no trust/reward fields.
+export type GateOutcomeRecord = {
+  id?: string | undefined;
+  repoFullName: string;
+  pullNumber: number;
+  headSha?: string | null | undefined;
+  blockerCodes: string[];
+  overridden: boolean;
+  blockedAt?: string | null | undefined;
+  updatedAt?: string | null | undefined;
 };
 
 export type AgentRecommendationOutcomeSummary = {

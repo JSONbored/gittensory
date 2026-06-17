@@ -8006,6 +8006,25 @@
           },
           "slopAiAdvisory": {
             "type": "boolean"
+          },
+          "mergeReadinessGateMode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "advisory",
+              "block"
+            ]
+          },
+          "firstTimeContributorGrace": {
+            "type": "boolean"
+          },
+          "manifestPolicyGateMode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "advisory",
+              "block"
+            ]
           }
         },
         "required": [
@@ -8021,6 +8040,9 @@
           "duplicatePrGateMode",
           "qualityGateMode",
           "slopGateMode",
+          "mergeReadinessGateMode",
+          "manifestPolicyGateMode",
+          "firstTimeContributorGrace",
           "slopAiAdvisory",
           "autoLabelEnabled",
           "gittensorLabel",
@@ -8600,6 +8622,25 @@
               "slopGateMinScore": {
                 "type": "number",
                 "nullable": true
+              },
+              "mergeReadinessGateMode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "advisory",
+                  "block"
+                ]
+              },
+              "firstTimeContributorGrace": {
+                "type": "boolean"
+              },
+              "manifestPolicyGateMode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "advisory",
+                  "block"
+                ]
               }
             },
             "required": [
@@ -8615,6 +8656,9 @@
               "duplicatePrGateMode",
               "qualityGateMode",
               "slopGateMode",
+              "mergeReadinessGateMode",
+              "manifestPolicyGateMode",
+              "firstTimeContributorGrace",
               "autoLabelEnabled",
               "gittensorLabel",
               "createMissingLabel",
