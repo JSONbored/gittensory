@@ -413,6 +413,8 @@ export type RepositorySettings = {
    *  score + warnings in context; `block` = ALSO hard-block when slopRisk >= slopGateMinScore (deterministic
    *  only, confirmed-contributor-gated like every blocker). Default `off` — opt-in via .gittensory.yml. */
   slopGateMode: GateRuleMode;
+  /** Merge-readiness gate (#merge-readiness). `off`/`advisory`/`block`. No min-score. Default `off`. */
+  mergeReadinessGateMode: GateRuleMode;
   /** Slop-risk threshold (0-100) at/above which `slopGateMode: block` blocks. Default 60 (the `high` band). */
   slopGateMinScore?: number | null | undefined;
   /** AI-assisted slop advisory (the `slopAiAdvisory` capability). When true AND `slopGateMode != off`, a

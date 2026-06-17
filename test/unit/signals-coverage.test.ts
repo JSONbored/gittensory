@@ -1530,6 +1530,7 @@ function repoSettings(repoFullName: string): RepositorySettings {
     duplicatePrGateMode: "advisory",
     qualityGateMode: "advisory",
     slopGateMode: "off",
+    mergeReadinessGateMode: "off",
     slopAiAdvisory: false,
     qualityGateMinScore: null,
     autoLabelEnabled: true,

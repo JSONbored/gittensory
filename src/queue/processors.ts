@@ -858,6 +858,7 @@ export function gateCheckPolicy(settings: RepositorySettings, readinessScore?: n
     aiReviewGateMode: settings.aiReviewMode,
     readinessScore: readinessScore ?? null,
     slopGateMode: settings.slopGateMode,
+    mergeReadinessGateMode: settings.mergeReadinessGateMode,
     slopGateMinScore: settings.slopGateMinScore ?? null,
     slopRisk: slopRisk ?? null,
     confirmedContributor: confirmedContributorForPack,

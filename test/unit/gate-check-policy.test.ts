@@ -177,3 +177,32 @@ describe("slop gate (#530/#532)", () => {
     expect(blocked.blockers.map((finding) => finding.code)).toContain("slop_risk_above_threshold");
   });
 });
+
+describe("merge-readiness composite gate (#551)", () => {
+  it("block escalates an otherwise-advisory sub-gate (linked-issue) into a hard blocker", () => {
+    const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "advisory", mergeReadinessGateMode: "block" }), parseFocusManifest(null));
+    const result = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true));
+    expect(result.conclusion).toBe("failure");
+    expect(result.summary).toContain("No linked issue detected");
+  });
+
+  it("advisory keeps the composite non-blocking even when a sub-gate is individually set to block", () => {
+    const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "block", mergeReadinessGateMode: "advisory" }), parseFocusManifest(null));
+    expect(evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true)).conclusion).toBe("success");
+  });
+
+  it("off is a no-op: sub-gates keep their own modes (linked-issue stays advisory -> non-blocking)", () => {
+    const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "advisory", mergeReadinessGateMode: "off" }), parseFocusManifest(null));
+    expect(evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true)).conclusion).toBe("success");
+  });
+
+  it("the blocking summary lists each unmet sub-gate condition", () => {
+    const advisory = missingIssueAdvisory();
+    advisory.findings.push({ code: "duplicate_pr_risk", title: "Possible duplicate PR", severity: "warning", detail: "Overlaps #9.", action: "Close the duplicate." });
+    const eff = resolveEffectiveSettings(settings({ mergeReadinessGateMode: "block" }), parseFocusManifest(null));
+    const result = evaluateGateCheck(advisory, gateCheckPolicy(eff, null, true));
+    expect(result.conclusion).toBe("failure");
+    expect(result.summary).toContain("No linked issue detected");
+    expect(result.summary).toContain("Possible duplicate PR");
+  });
+});

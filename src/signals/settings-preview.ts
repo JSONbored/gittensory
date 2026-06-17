@@ -188,6 +188,7 @@ export type RepoSettingsPreview = {
     qualityGateMode: RepositorySettings["qualityGateMode"];
     qualityGateMinScore?: number | null | undefined;
     slopGateMode: RepositorySettings["slopGateMode"];
+    mergeReadinessGateMode: RepositorySettings["mergeReadinessGateMode"];
     slopGateMinScore?: number | null | undefined;
     autoLabelEnabled: boolean;
     gittensorLabel: string;
@@ -302,6 +303,7 @@ export function buildRepoSettingsPreview(args: {
       qualityGateMode: settings.qualityGateMode,
       qualityGateMinScore: settings.qualityGateMinScore ?? null,
       slopGateMode: settings.slopGateMode,
+      mergeReadinessGateMode: settings.mergeReadinessGateMode,
       slopGateMinScore: settings.slopGateMinScore ?? null,
       autoLabelEnabled: settings.autoLabelEnabled,
       gittensorLabel: settings.gittensorLabel,

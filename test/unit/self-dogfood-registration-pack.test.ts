@@ -60,6 +60,7 @@ function settingsFor(repoFullName: string, overrides: Partial<RepositorySettings
     duplicatePrGateMode: "advisory",
     qualityGateMode: "advisory",
     slopGateMode: "off",
+    mergeReadinessGateMode: "off",
     slopAiAdvisory: false,
     qualityGateMinScore: null,
     autoLabelEnabled: true,
