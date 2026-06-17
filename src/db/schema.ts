@@ -585,6 +585,33 @@ export const gateOutcomes = sqliteTable(
   }),
 );
 
+// Agent-layer approval queue (#779). An `auto_with_approval` action the write-actions layer (#778) staged for
+// a one-tap maintainer accept/reject. At most one row per (repo, pull, action_class).
+export const agentPendingActions = sqliteTable(
+  "agent_pending_actions",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name").notNull(),
+    pullNumber: integer("pull_number").notNull(),
+    installationId: integer("installation_id").notNull(),
+    actionClass: text("action_class").notNull(),
+    autonomyLevel: text("autonomy_level").notNull(),
+    // JSON of the action payload (label / reviewBody / mergeMethod / closeComment) needed to execute on accept.
+    paramsJson: text("params_json").notNull().default("{}"),
+    reason: text("reason"),
+    // pending → accepted | rejected. A decided row is sticky (re-evaluation never re-stages it).
+    status: text("status").notNull().default("pending"),
+    decidedBy: text("decided_by"),
+    decidedAt: text("decided_at"),
+    createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
+    updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
+  },
+  (table) => ({
+    target: uniqueIndex("agent_pending_actions_target_unique").on(table.repoFullName, table.pullNumber, table.actionClass),
+    repoStatus: index("agent_pending_actions_repo_status_idx").on(table.repoFullName, table.status, table.createdAt),
+  }),
+);
+
 export const installationHealth = sqliteTable("installation_health", {
   installationId: integer("installation_id").primaryKey(),
   accountLogin: text("account_login").notNull(),

@@ -1,10 +1,10 @@
-import { recordAuditEvent } from "../db/repositories";
+import { createPendingAgentActionIfAbsent, insertNotificationDeliveryIfAbsent, recordAuditEvent } from "../db/repositories";
 import { ensurePullRequestLabel } from "../github/labels";
 import { closePullRequest, createIssueComment, createPullRequestReview, mergePullRequest } from "../github/pr-actions";
 import { resolveAutonomy } from "../settings/autonomy";
 import { buildAgentActionAudit, isGlobalAgentPause, resolveAgentActionMode, resolveAgentPermissionReadiness } from "../settings/agent-execution";
 import type { PlannedAgentAction } from "../settings/agent-actions";
-import type { AgentActionClass, AutonomyPolicy } from "../types";
+import type { AgentActionClass, AgentPendingActionParams, AutonomyLevel, AutonomyPolicy } from "../types";
 import { errorMessage } from "../utils/json";
 
 // The agent actor name on every audit record — the App acts on the maintainer's behalf per their configured
@@ -60,8 +60,10 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
       await audit("denied", "agent actions paused");
       continue;
     }
-    // 2) auto_with_approval stages the action for a maintainer instead of executing it (#779 owns the queue).
+    // 2) auto_with_approval stages the action in the approval queue (#779) for a one-tap maintainer decision
+    //    instead of executing it now.
     if (action.requiresApproval) {
+      await stageForApproval(env, ctx, action, autonomyLevel);
       await audit("queued", `awaiting maintainer approval — ${action.reason}`);
       continue;
     }
@@ -106,4 +108,48 @@ async function performAction(env: Env, ctx: AgentActionExecutionContext, action:
       await closePullRequest(env, ctx.installationId, ctx.repoFullName, ctx.pullNumber);
       return;
   }
+}
+
+/** The execute-time payload of a planned action, persisted so the approval queue (#779) can run it on accept. */
+export function actionParams(action: PlannedAgentAction): AgentPendingActionParams {
+  return {
+    ...(action.label !== undefined ? { label: action.label } : {}),
+    ...(action.reviewBody !== undefined ? { reviewBody: action.reviewBody } : {}),
+    ...(action.mergeMethod !== undefined ? { mergeMethod: action.mergeMethod } : {}),
+    ...(action.closeComment !== undefined ? { closeComment: action.closeComment } : {}),
+  };
+}
+
+/** Rebuild a PlannedAgentAction from a persisted approval-queue row so the executor can run it on accept. The
+ *  rebuilt action is `requiresApproval: false` — the maintainer's accept IS the approval. */
+export function pendingActionToPlanned(input: { actionClass: AgentActionClass; params: AgentPendingActionParams; reason?: string | null | undefined }): PlannedAgentAction {
+  return { actionClass: input.actionClass, requiresApproval: false, reason: input.reason ?? "maintainer-approved", ...input.params };
+}
+
+// Persist the staged action + notify the maintainer ONCE (on first staging, not on every re-evaluation).
+async function stageForApproval(env: Env, ctx: AgentActionExecutionContext, action: PlannedAgentAction, autonomyLevel: AutonomyLevel): Promise<void> {
+  const { created } = await createPendingAgentActionIfAbsent(env, {
+    repoFullName: ctx.repoFullName,
+    pullNumber: ctx.pullNumber,
+    installationId: ctx.installationId,
+    actionClass: action.actionClass,
+    autonomyLevel,
+    params: actionParams(action),
+    reason: action.reason,
+  });
+  if (!created) return;
+  /* v8 ignore next -- a repo full name always has an owner segment; the empty fallback is purely defensive. */
+  const recipientLogin = ctx.repoFullName.split("/")[0] ?? "";
+  await insertNotificationDeliveryIfAbsent(env, {
+    dedupKey: `agent.pending_action:${ctx.repoFullName}#${ctx.pullNumber}:${action.actionClass}`,
+    channel: "badge",
+    recipientLogin,
+    eventType: "agent.pending_action",
+    repoFullName: ctx.repoFullName,
+    pullNumber: ctx.pullNumber,
+    title: `Gittensory staged a ${action.actionClass.replace(/_/g, " ")} for your approval`,
+    body: `${action.reason}. Accept to execute it, or reject to cancel.`,
+    deeplink: `https://github.com/${ctx.repoFullName}/pull/${ctx.pullNumber}`,
+    actorLogin: AGENT_ACTOR,
+  });
 }

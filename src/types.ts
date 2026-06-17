@@ -511,6 +511,35 @@ export type AutoMaintainPolicy = {
   mergeMethod: AutoMergeMethod;
 };
 
+/** The payload needed to execute a staged action when a maintainer accepts it (#779). Only the field for the
+ *  action's class is set, mirroring PlannedAgentAction. */
+export type AgentPendingActionParams = {
+  label?: string;
+  reviewBody?: string;
+  mergeMethod?: AutoMergeMethod;
+  closeComment?: string;
+};
+
+export type AgentPendingActionStatus = "pending" | "accepted" | "rejected";
+
+/** Approval-queue row (#779): an `auto_with_approval` action the write-actions layer staged for a one-tap
+ *  maintainer accept (→ execute) or reject (→ cancel). */
+export type AgentPendingActionRecord = {
+  id: string;
+  repoFullName: string;
+  pullNumber: number;
+  installationId: number;
+  actionClass: AgentActionClass;
+  autonomyLevel: AutonomyLevel;
+  params: AgentPendingActionParams;
+  reason: string | null;
+  status: AgentPendingActionStatus;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type RepoSyncStateRecord = {
   repoFullName: string;
   status: "never_synced" | "running" | "success" | "partial" | "error" | "skipped" | "capped" | "rate_limited" | "stale";

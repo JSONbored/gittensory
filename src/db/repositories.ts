@@ -19,6 +19,7 @@ import {
   contributorScoringProfiles,
   contributors,
   digestSubscriptions,
+  agentPendingActions,
   gateOutcomes,
   githubAgentCommandAnswers,
   githubAgentCommandFeedback,
@@ -72,6 +73,11 @@ import type {
   AgentRecommendationOutcomeState,
   AgentRecommendationOutcomeSummary,
   AgentRecommendationOutcomeTargetType,
+  AgentActionClass,
+  AgentPendingActionParams,
+  AgentPendingActionRecord,
+  AgentPendingActionStatus,
+  AutonomyLevel,
   GateOutcomeRecord,
   AgentMode,
   AgentRunRecord,
@@ -3275,6 +3281,89 @@ export async function listGateOutcomes(
     .orderBy(desc(gateOutcomes.updatedAt), gateOutcomes.id)
     .limit(limit);
   return rows.map(toGateOutcomeRecord);
+}
+
+// #779 approval queue. Stage an auto_with_approval action; `created:false` when one is already staged for this
+// (repo, pull, action_class) — re-evaluation never duplicates a staged action or re-surfaces a decided one.
+export async function createPendingAgentActionIfAbsent(
+  env: Env,
+  input: { repoFullName: string; pullNumber: number; installationId: number; actionClass: AgentActionClass; autonomyLevel: AutonomyLevel; params: AgentPendingActionParams; reason?: string | null | undefined },
+): Promise<{ action: AgentPendingActionRecord; created: boolean }> {
+  const repoFullName = boundedString(input.repoFullName, 200);
+  const values = {
+    id: crypto.randomUUID(),
+    repoFullName,
+    pullNumber: input.pullNumber,
+    installationId: input.installationId,
+    actionClass: input.actionClass,
+    autonomyLevel: input.autonomyLevel,
+    paramsJson: jsonString(input.params),
+    reason: input.reason ?? null,
+    status: "pending",
+  };
+  const inserted = await getDb(env.DB)
+    .insert(agentPendingActions)
+    .values(values)
+    .onConflictDoNothing({ target: [agentPendingActions.repoFullName, agentPendingActions.pullNumber, agentPendingActions.actionClass] })
+    .returning();
+  if (inserted.length > 0 && inserted[0]) return { action: toAgentPendingActionRecord(inserted[0]), created: true };
+  // A row already exists for this target — return it unchanged (the staged/decided action is sticky).
+  const [existing] = await getDb(env.DB)
+    .select()
+    .from(agentPendingActions)
+    .where(and(eq(agentPendingActions.repoFullName, repoFullName), eq(agentPendingActions.pullNumber, input.pullNumber), eq(agentPendingActions.actionClass, input.actionClass)))
+    .limit(1);
+  /* v8 ignore next -- onConflictDoNothing only no-ops when a conflicting row exists, so the lookup always finds it. */
+  if (!existing) throw new Error(`pending action conflict had no row: ${repoFullName}#${input.pullNumber} ${input.actionClass}`);
+  return { action: toAgentPendingActionRecord(existing), created: false };
+}
+
+export async function listPendingAgentActions(
+  env: Env,
+  options: { repoFullName?: string; status?: AgentPendingActionStatus; limit?: number } = {},
+): Promise<AgentPendingActionRecord[]> {
+  const limit = clampInteger(options.limit ?? 200, 1, 2000);
+  const conditions = [];
+  if (options.repoFullName) conditions.push(eq(agentPendingActions.repoFullName, options.repoFullName));
+  if (options.status) conditions.push(eq(agentPendingActions.status, options.status));
+  const rows = await getDb(env.DB)
+    .select()
+    .from(agentPendingActions)
+    .where(conditions.length === 0 ? undefined : and(...conditions))
+    .orderBy(desc(agentPendingActions.createdAt), agentPendingActions.id)
+    .limit(limit);
+  return rows.map(toAgentPendingActionRecord);
+}
+
+export async function getPendingAgentAction(env: Env, id: string): Promise<AgentPendingActionRecord | null> {
+  const [row] = await getDb(env.DB).select().from(agentPendingActions).where(eq(agentPendingActions.id, id)).limit(1);
+  return row ? toAgentPendingActionRecord(row) : null;
+}
+
+/** Mark a staged action accepted/rejected. Idempotency is the caller's concern (it checks status === pending). */
+export async function setPendingAgentActionStatus(env: Env, id: string, update: { status: AgentPendingActionStatus; decidedBy: string | null }): Promise<void> {
+  await getDb(env.DB)
+    .update(agentPendingActions)
+    .set({ status: update.status, decidedBy: update.decidedBy, decidedAt: nowIso(), updatedAt: nowIso() })
+    .where(eq(agentPendingActions.id, id));
+}
+
+function toAgentPendingActionRecord(row: typeof agentPendingActions.$inferSelect): AgentPendingActionRecord {
+  return {
+    id: row.id,
+    repoFullName: row.repoFullName,
+    pullNumber: row.pullNumber,
+    installationId: row.installationId,
+    actionClass: row.actionClass as AgentActionClass,
+    autonomyLevel: row.autonomyLevel as AutonomyLevel,
+    params: parseJson<AgentPendingActionParams>(row.paramsJson, {}),
+    reason: row.reason,
+    status: row.status as AgentPendingActionStatus,
+    decidedBy: row.decidedBy,
+    decidedAt: row.decidedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
 }
 
 export async function getAgentRecommendationOutcomeSummary(
