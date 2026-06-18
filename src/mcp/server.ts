@@ -13,10 +13,13 @@ import {
   listBountiesByRepo,
   getContributorEvidence,
   getLatestRepoGithubTotalsSnapshot,
+  getInstallation,
   getIssue,
   getRepository,
+  getRepositorySettings,
   getRepoQueueTrendSnapshot,
   listCheckSummaries,
+  listPendingAgentActions,
   listContributorRepoStats,
   listContributorIssues,
   listContributorPullRequests,
@@ -98,6 +101,8 @@ import {
   type LocalWriteActionSpec,
 } from "./local-write-tools";
 import { applyStepResult, buildPlanDag, nextReadySteps, planProgress, validatePlanDag, type PlanDag } from "../services/plan-dag";
+import { isGlobalAgentPause, resolveAgentActionMode, resolveAgentPermissionReadiness } from "../settings/agent-execution";
+import { AGENT_ACTION_CLASSES, isActingAutonomyLevel, resolveAutonomy } from "../settings/autonomy";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
 import { buildIssueSlopAssessment, buildSlopAssessment, ISSUE_SLOP_RUBRIC_MARKDOWN, SLOP_RUBRIC_MARKDOWN } from "../signals/slop";
@@ -316,6 +321,20 @@ const planViewOutputSchema = {
     .optional(),
   readySteps: z.array(z.object({ id: z.string(), title: z.string() })).optional(),
   validation: z.object({ valid: z.boolean(), errors: z.array(z.string()) }).optional(),
+};
+
+// #784 (MCP slice) — the read side of the agent automation control surface for a repo.
+const automationStateOutputSchema = {
+  repoFullName: z.string().optional(),
+  configured: z.boolean().optional(),
+  autonomy: z.record(z.string(), z.string()).optional(),
+  autoMaintain: z.object({ requireApprovals: z.number(), mergeMethod: z.string() }).optional(),
+  agentPaused: z.boolean().optional(),
+  agentDryRun: z.boolean().optional(),
+  mode: z.string().optional(),
+  permissionReadiness: z.string().optional(),
+  actingActionClasses: z.array(z.string()).optional(),
+  pendingActionCount: z.number().optional(),
 };
 
 const localBranchAnalysisShape = {
@@ -1166,6 +1185,19 @@ export class GittensoryMcp {
       async (input) => this.toolResult(this.recordStepResult(input)),
     );
 
+    // #784 (MCP control surface, read side): a repo's agent automation posture — autonomy dial, kill-switch /
+    // dry-run mode, write-permission readiness, and the pending-approval count. Repo-access scoped.
+    server.registerTool(
+      "gittensory_get_automation_state",
+      {
+        description:
+          "Return a repo's agent automation state: the per-action autonomy levels, kill-switch / dry-run mode, GitHub write-permission readiness, and how many auto_with_approval actions are awaiting a maintainer decision.",
+        inputSchema: ownerRepoShape,
+        outputSchema: automationStateOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getAutomationState(input)),
+    );
+
     server.registerTool(
       "gittensory_explain_score_breakdown",
       {
@@ -1951,6 +1983,38 @@ export class GittensoryMcp {
   private recordStepResult(input: z.infer<z.ZodObject<typeof recordStepResultShape>>): ToolPayload {
     const plan = applyStepResult(input.plan as PlanDag, input.stepId, { outcome: input.outcome, ...(input.error !== undefined ? { error: input.error } : {}) });
     return { summary: `Recorded ${input.outcome} for step ${input.stepId}; plan is now ${planProgress(plan).status}.`, data: this.planView(plan) };
+  }
+
+  // #784 — read the agent automation state for a repo. Repo-access scoped; surfaces the count (not the
+  // details) of the approval queue — the full queue + accept/reject stay behind the maintainer-authed REST API.
+  private async getAutomationState(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoAccess(fullName);
+    const [repo, settings, pending] = await Promise.all([
+      getRepository(this.env, fullName),
+      getRepositorySettings(this.env, fullName),
+      listPendingAgentActions(this.env, { repoFullName: fullName, status: "pending" }),
+    ]);
+    const autonomy = settings.autonomy;
+    const actingActionClasses = AGENT_ACTION_CLASSES.filter((actionClass) => isActingAutonomyLevel(resolveAutonomy(autonomy, actionClass)));
+    const installation = repo?.installationId ? await getInstallation(this.env, repo.installationId) : null;
+    const mode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(this.env), agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun });
+    const permissionReadiness = resolveAgentPermissionReadiness({ autonomy, installationPermissions: installation?.permissions ?? null });
+    return {
+      summary: `Agent automation for ${fullName}: mode=${mode}, ${actingActionClasses.length} acting class(es), ${pending.length} pending approval(s).`,
+      data: {
+        repoFullName: fullName,
+        configured: actingActionClasses.length > 0,
+        autonomy,
+        autoMaintain: settings.autoMaintain,
+        agentPaused: settings.agentPaused === true,
+        agentDryRun: settings.agentDryRun === true,
+        mode,
+        permissionReadiness,
+        actingActionClasses,
+        pendingActionCount: pending.length,
+      },
+    };
   }
 
   private async explainScoreBreakdown(input: z.infer<z.ZodObject<typeof scorePreviewShape>>): Promise<ToolPayload> {
