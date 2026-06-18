@@ -72,6 +72,34 @@ describe("buildPredictedGateVerdict", () => {
     expect(result.blockers.some((b) => b.code === "missing_linked_issue")).toBe(false);
   });
 
+  it("honors public gate.mergeReadiness when predicting blockers", () => {
+    const result = verdict({
+      gate: { duplicates: "off", mergeReadiness: "block" },
+      pullRequests: [openPr(42, "Retry uploads on 5xx responses", [7])],
+    });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.some((b) => b.code === "duplicate_pr_risk")).toBe(true);
+  });
+
+  it("honors public gate.firstTimeContributorGrace with predicted author history", () => {
+    const newcomer = verdict({
+      gate: { duplicates: "block", firstTimeContributorGrace: true },
+      pullRequests: [openPr(42, "Retry uploads on 5xx responses", [7], "someone-else")],
+    });
+    expect(newcomer.conclusion).toBe("neutral");
+    expect(newcomer.blockers).toHaveLength(0);
+
+    const returning = verdict({
+      gate: { duplicates: "block", firstTimeContributorGrace: true },
+      pullRequests: [
+        openPr(42, "Retry uploads on 5xx responses", [7], "someone-else"),
+        { ...openPr(9, "Earlier fix", [], "miner1"), state: "merged", mergedAt: "2026-06-01T00:00:00.000Z" },
+      ],
+    });
+    expect(returning.conclusion).toBe("failure");
+    expect(returning.blockers.some((b) => b.code === "duplicate_pr_risk")).toBe(true);
+  });
+
   it("forces a neutral prediction for a self-declared non-confirmed contributor", () => {
     const result = buildPredictedGateVerdict({
       input: { ...BASE_INPUT, body: "no issue", linkedIssues: [] },
