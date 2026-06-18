@@ -198,6 +198,11 @@ const branchEligibilityShape = {
   stale: z.boolean().optional(),
 };
 
+const callerBranchEligibilitySchema = z
+  .object(branchEligibilityShape)
+  .strict()
+  .transform((value) => ({ ...value, status: value.status === "eligible" ? ("unknown" as const) : value.status, source: "user_supplied" as const }));
+
 // Changed-file metadata + local validation results — shared by the local-branch analysis and the #782 local
 // scorer. METADATA ONLY (paths + line counts), never source content, so the no-upload boundary holds.
 const changedFileSchema = z
@@ -381,7 +386,7 @@ const localBranchAnalysisShape = {
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).max(20).optional(),
   focusManifest: z.record(z.string(), z.unknown()).optional(),
-  branchEligibility: z.object(branchEligibilityShape).strict().optional(),
+  branchEligibility: callerBranchEligibilitySchema.optional(),
   localScorer: z
     .object({
       mode: z.enum(["metadata_only", "external_command", "gittensor_root"]),
@@ -454,7 +459,7 @@ const scorePreviewShape = {
   expectedOpenPrCountAfterMerge: z.number().int().min(0).optional(),
   projectedCredibility: z.number().min(0).max(1).optional(),
   scenarioNotes: z.array(z.string()).max(20).optional(),
-  branchEligibility: z.object(branchEligibilityShape).strict().optional(),
+  branchEligibility: callerBranchEligibilitySchema.optional(),
 };
 
 const variantsShape = {

@@ -1339,7 +1339,7 @@ describe("api routes", () => {
       repoFullName: "entrius/allways-ui",
       preflight: { localDiff: { testFileCount: 1, inferredLinkedIssues: [7] } },
       scorePreview: { privateOnly: true },
-      branchEligibility: { required: true, status: "eligible", evidence: "provided" },
+      branchEligibility: { required: true, status: "unknown", evidence: "provided", source: "user_supplied" },
       rewardRisk: { rewardUpside: { relevantLane: "direct_pr" } },
       prPacket: { titleSuggestion: "Fix dashboard cache refresh after reconnect" },
     });

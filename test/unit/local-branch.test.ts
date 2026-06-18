@@ -234,6 +234,7 @@ describe("local branch analysis", () => {
         changedFiles: [{ path: "src/cache.ts", additions: 12, deletions: 1, status: "modified" }],
         validation: [{ command: "npm test -- cache", status: "passed" }],
         localScorer: { mode: "external_command", sourceTokenScore: 42, totalTokenScore: 70, sourceLines: 42 },
+        branchEligibility: { status: "eligible", source: "github_metadata" },
       },
       repo,
       issues: [{ repoFullName: repo.fullName, number: 7, title: "Cache refresh fails", state: "open", labels: ["bug"], linkedPrs: [] }],

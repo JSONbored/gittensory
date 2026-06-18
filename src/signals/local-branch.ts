@@ -1123,11 +1123,14 @@ function buildPublicSafePrPacket(args: {
 
 function linkedIssueHygieneLines(branchEligibility: BranchEligibilityResult): string[] {
   if (!branchEligibility.required) return ["- No issue-specific branch gate was required from supplied metadata."];
-  if (branchEligibility.status === "eligible") {
+  if (branchEligibility.status === "eligible" && branchEligibility.source !== "user_supplied") {
     return [
       "- Linked issue context was checked from local/GitHub metadata.",
       ...(branchEligibility.stale ? ["- Reconfirm linked issue and base branch metadata before submission."] : []),
     ];
+  }
+  if (branchEligibility.status === "eligible") {
+    return ["- Linked issue context was not confirmed; verify the issue reference and base branch before submission."];
   }
   if (branchEligibility.status === "ineligible") {
     return ["- Linked issue context needs cleanup before presenting this PR as solving the issue."];

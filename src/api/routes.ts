@@ -469,7 +469,8 @@ const branchEligibilitySchema = z
     checkedAt: z.string().max(MAX_LOCAL_BRANCH_REF_CHARS).optional(),
     stale: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .transform((value) => ({ ...value, status: value.status === "eligible" ? ("unknown" as const) : value.status, source: "user_supplied" as const }));
 
 const localBranchAnalysisSchema = z
   .object({
