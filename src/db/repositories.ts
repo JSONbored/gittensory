@@ -3318,14 +3318,19 @@ export async function createPendingAgentActionIfAbsent(
   return { action: toAgentPendingActionRecord(existing), created: false };
 }
 
+function pendingAgentActionConditions(options: { repoFullName?: string; status?: AgentPendingActionStatus } = {}): SQL[] {
+  const conditions = [];
+  if (options.repoFullName) conditions.push(eq(agentPendingActions.repoFullName, options.repoFullName));
+  if (options.status) conditions.push(eq(agentPendingActions.status, options.status));
+  return conditions;
+}
+
 export async function listPendingAgentActions(
   env: Env,
   options: { repoFullName?: string; status?: AgentPendingActionStatus; limit?: number } = {},
 ): Promise<AgentPendingActionRecord[]> {
   const limit = clampInteger(options.limit ?? 200, 1, 2000);
-  const conditions = [];
-  if (options.repoFullName) conditions.push(eq(agentPendingActions.repoFullName, options.repoFullName));
-  if (options.status) conditions.push(eq(agentPendingActions.status, options.status));
+  const conditions = pendingAgentActionConditions(options);
   const rows = await getDb(env.DB)
     .select()
     .from(agentPendingActions)
@@ -3333,6 +3338,18 @@ export async function listPendingAgentActions(
     .orderBy(desc(agentPendingActions.createdAt), agentPendingActions.id)
     .limit(limit);
   return rows.map(toAgentPendingActionRecord);
+}
+
+export async function countPendingAgentActions(
+  env: Env,
+  options: { repoFullName?: string; status?: AgentPendingActionStatus } = {},
+): Promise<number> {
+  const conditions = pendingAgentActionConditions(options);
+  const [row] = await getDb(env.DB)
+    .select({ count: sql<number>`count(*)` })
+    .from(agentPendingActions)
+    .where(conditions.length === 0 ? undefined : and(...conditions));
+  return Number(row?.count ?? 0);
 }
 
 export async function getPendingAgentAction(env: Env, id: string): Promise<AgentPendingActionRecord | null> {

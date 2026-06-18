@@ -50,6 +50,22 @@ describe("MCP gittensory_get_automation_state (#784)", () => {
     expect(JSON.stringify(data)).not.toMatch(/wallet|hotkey|reward|payout|trust score/i);
   });
 
+  it("reports the total pending-approval count beyond the list page size", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 5);
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto_with_approval" } });
+    for (let pullNumber = 1; pullNumber <= 201; pullNumber += 1) {
+      await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber, installationId: 5, actionClass: "merge", autonomyLevel: "auto_with_approval", params: {}, reason: "x" });
+    }
+
+    const client = await connect(env);
+    const result = await client.callTool({ name: "gittensory_get_automation_state", arguments: { owner: "owner", repo: "repo" } });
+
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as State;
+    expect(data.pendingActionCount).toBe(201);
+  });
+
   it("reports unconfigured + not_required readiness for an unknown / un-onboarded repo (no repo record)", async () => {
     const env = createTestEnv();
     // no repo seeded → getRepository returns null (exercises the no-installation path) + default settings.

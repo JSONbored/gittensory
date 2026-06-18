@@ -8,6 +8,7 @@ import { authenticatePrivateToken, extractBearerToken, type AuthIdentity } from 
 import { canLoginAccessRepo, canWatchRepo, loadControlPanelAccessScope, loadControlPanelRoleSummary, type ControlPanelAccessScope } from "../services/control-panel-roles";
 import {
   countOpenIssues,
+  countPendingAgentActions,
   countOpenPullRequests,
   createPendingAgentActionIfAbsent,
   getBounty,
@@ -2030,10 +2031,10 @@ export class GittensoryMcp {
   private async getAutomationState(input: { owner: string; repo: string }): Promise<ToolPayload> {
     const fullName = `${input.owner}/${input.repo}`;
     await this.requireRepoAccess(fullName);
-    const [repo, settings, pending] = await Promise.all([
+    const [repo, settings, pendingActionCount] = await Promise.all([
       getRepository(this.env, fullName),
       getRepositorySettings(this.env, fullName),
-      listPendingAgentActions(this.env, { repoFullName: fullName, status: "pending" }),
+      countPendingAgentActions(this.env, { repoFullName: fullName, status: "pending" }),
     ]);
     const autonomy = settings.autonomy;
     const actingActionClasses = AGENT_ACTION_CLASSES.filter((actionClass) => isActingAutonomyLevel(resolveAutonomy(autonomy, actionClass)));
@@ -2041,7 +2042,7 @@ export class GittensoryMcp {
     const mode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(this.env), agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun });
     const permissionReadiness = resolveAgentPermissionReadiness({ autonomy, installationPermissions: installation?.permissions ?? null });
     return {
-      summary: `Agent automation for ${fullName}: mode=${mode}, ${actingActionClasses.length} acting class(es), ${pending.length} pending approval(s).`,
+      summary: `Agent automation for ${fullName}: mode=${mode}, ${actingActionClasses.length} acting class(es), ${pendingActionCount} pending approval(s).`,
       data: {
         repoFullName: fullName,
         configured: actingActionClasses.length > 0,
@@ -2052,7 +2053,7 @@ export class GittensoryMcp {
         mode,
         permissionReadiness,
         actingActionClasses,
-        pendingActionCount: pending.length,
+        pendingActionCount,
       },
     };
   }
