@@ -108,6 +108,7 @@ describe("worker entrypoint", () => {
       { type: "refresh-scoring-model", requestedBy: "schedule" },
       { type: "refresh-upstream-drift", requestedBy: "schedule" },
       { type: "rollup-product-usage", requestedBy: "schedule", days: 7 },
+      { type: "agent-regate-sweep", requestedBy: "schedule" },
     ]);
   });
 
@@ -133,6 +134,7 @@ describe("worker entrypoint", () => {
       { type: "refresh-scoring-model", requestedBy: "schedule" },
       { type: "refresh-upstream-drift", requestedBy: "schedule" },
       { type: "rollup-product-usage", requestedBy: "schedule", days: 7 },
+      { type: "agent-regate-sweep", requestedBy: "schedule" },
       { type: "generate-signal-snapshots", requestedBy: "schedule" },
       { type: "build-burden-forecasts", requestedBy: "schedule" },
       { type: "build-contributor-evidence", requestedBy: "schedule" },

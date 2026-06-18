@@ -1,0 +1,115 @@
+import { describe, expect, it } from "vitest";
+import { AGENT_LABEL_CHANGES, AGENT_LABEL_READY, planAgentMaintenanceActions, type AgentActionPlanInput } from "../../src/settings/agent-actions";
+import type { GateCheckConclusion } from "../../src/rules/advisory";
+
+function input(overrides: Partial<AgentActionPlanInput> & { conclusion: GateCheckConclusion }): AgentActionPlanInput {
+  return {
+    blockerTitles: [],
+    autonomy: {},
+    autoMaintain: { requireApprovals: 1, mergeMethod: "squash" },
+    slopGateMinScore: 60,
+    pr: { labels: [] },
+    ...overrides,
+  };
+}
+
+const classes = (actions: ReturnType<typeof planAgentMaintenanceActions>) => actions.map((a) => a.actionClass);
+
+describe("planAgentMaintenanceActions (#778)", () => {
+  it("plans nothing for a not-yet-evaluated verdict (neutral / skipped)", () => {
+    expect(planAgentMaintenanceActions(input({ conclusion: "neutral", autonomy: { merge: "auto", label: "auto", close: "auto" } }))).toEqual([]);
+    expect(planAgentMaintenanceActions(input({ conclusion: "skipped", autonomy: { approve: "auto" } }))).toEqual([]);
+  });
+
+  it("plans nothing when every class is at a non-acting level", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { label: "suggest", request_changes: "propose", close: "observe" }, blockerTitles: ["x"] }));
+    expect(plan).toEqual([]);
+  });
+
+  it("labels by verdict bucket and is idempotent when the label already exists", () => {
+    expect(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { label: "auto" }, blockerTitles: ["x"] }))[0]).toMatchObject({ actionClass: "label", label: AGENT_LABEL_CHANGES });
+    expect(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto" } }))[0]).toMatchObject({ actionClass: "label", label: AGENT_LABEL_READY });
+    // already labeled → not re-planned
+    expect(classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto" }, pr: { labels: [AGENT_LABEL_READY] } })))).not.toContain("label");
+  });
+
+  it("requests changes on a blocking verdict, with the blocker titles in the body, and never double-requests", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { request_changes: "auto" }, blockerTitles: ["Missing linked issue", "Slop risk"] }));
+    const rc = plan.find((a) => a.actionClass === "request_changes");
+    expect(rc?.reviewBody).toContain("Missing linked issue");
+    expect(rc?.reviewBody).toContain("Slop risk");
+    // already in CHANGES_REQUESTED → not re-requested
+    expect(classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { request_changes: "auto" }, blockerTitles: ["x"], pr: { labels: [], reviewDecision: "CHANGES_REQUESTED" } })))).not.toContain("request_changes");
+  });
+
+  it("falls back to a generic request-changes body when no blocker titles are supplied", () => {
+    const rc = planAgentMaintenanceActions(input({ conclusion: "action_required", autonomy: { request_changes: "auto" }, blockerTitles: [] })).find((a) => a.actionClass === "request_changes");
+    expect(rc?.reviewBody).toContain("The Gittensory Gate is not satisfied");
+    expect(rc?.reason).toBe("1 blocker(s)");
+  });
+
+  it("approves a passing verdict and never re-approves; never approves AND requests changes", () => {
+    expect(classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto" } })))).toContain("approve");
+    expect(classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto" }, pr: { labels: [], reviewDecision: "APPROVED" } })))).not.toContain("approve");
+    // a passing verdict never yields request_changes; a failing one never yields approve
+    const failing = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { approve: "auto", request_changes: "auto" }, blockerTitles: ["x"] })));
+    expect(failing).toContain("request_changes");
+    expect(failing).not.toContain("approve");
+  });
+
+  it("merges only a clean, approved, passing PR (reviewDecision drives the approval gate)", () => {
+    const ok = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+    expect(ok.find((a) => a.actionClass === "merge")).toMatchObject({ mergeMethod: "squash" });
+    // not mergeable-clean → no merge
+    expect(classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, pr: { labels: [], mergeableState: "blocked", reviewDecision: "APPROVED" } })))).not.toContain("merge");
+    // approvals not satisfied (requireApprovals 1, not APPROVED) → no merge
+    expect(classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, pr: { labels: [], mergeableState: "clean" } })))).not.toContain("merge");
+  });
+
+  it("requireApprovals:0 lets a clean passing PR merge without an explicit approval", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "rebase" }, pr: { labels: [], mergeableState: "clean" } }));
+    expect(plan.find((a) => a.actionClass === "merge")).toMatchObject({ mergeMethod: "rebase" });
+  });
+
+  it("applies conservative defaults when autoMaintain / slopGateMinScore are omitted", () => {
+    // no autoMaintain → requireApprovals defaults to 1 → a clean passing PR without APPROVED does NOT merge
+    expect(classes(planAgentMaintenanceActions({ conclusion: "success", blockerTitles: [], autonomy: { merge: "auto" }, pr: { labels: [], mergeableState: "clean" } }))).not.toContain("merge");
+    // no slopGateMinScore → defaults to 60 → slopRisk 70 counts as noise and closes
+    expect(classes(planAgentMaintenanceActions({ conclusion: "failure", blockerTitles: ["x"], autonomy: { close: "auto" }, pr: { labels: [], slopRisk: 70 } }))).toContain("close");
+    // ...and slopRisk 50 is below the default → no close
+    expect(classes(planAgentMaintenanceActions({ conclusion: "failure", blockerTitles: ["x"], autonomy: { close: "auto" }, pr: { labels: [], slopRisk: 50 } }))).not.toContain("close");
+  });
+
+  it("closes clear noise (high slop or duplicate) on a non-passing verdict, and never closes a passing PR", () => {
+    // high slop
+    expect(classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, blockerTitles: ["x"], slopGateMinScore: 60, pr: { labels: [], slopRisk: 80 } })))).toContain("close");
+    // duplicate
+    expect(classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, blockerTitles: ["x"], pr: { labels: [], linkedDuplicateCount: 2 } })))).toContain("close");
+    // no noise → no close
+    expect(classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, blockerTitles: ["x"], pr: { labels: [], slopRisk: 10 } })))).not.toContain("close");
+    // passing verdict is never closed even with noise present
+    expect(classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto" }, pr: { labels: [], slopRisk: 90 } })))).not.toContain("close");
+  });
+
+  it("never plans both merge and close", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", close: "auto" }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED", slopRisk: 95 } }));
+    const cls = classes(plan);
+    expect(cls).toContain("merge");
+    expect(cls).not.toContain("close");
+  });
+
+  it("flags requiresApproval for auto_with_approval and not for auto", () => {
+    const approval = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto_with_approval" } }));
+    expect(approval.find((a) => a.actionClass === "approve")?.requiresApproval).toBe(true);
+    const auto = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto" } }));
+    expect(auto.find((a) => a.actionClass === "approve")?.requiresApproval).toBe(false);
+  });
+
+  it("orders actions least → most irreversible (label, review, disposition)", () => {
+    // requireApprovals:0 lets merge fire while reviewDecision is still unset, so approve fires too.
+    const plan = planAgentMaintenanceActions(
+      input({ conclusion: "success", autonomy: { label: "auto", approve: "auto", merge: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, pr: { labels: [], mergeableState: "clean" } }),
+    );
+    expect(classes(plan)).toEqual(["label", "approve", "merge"]);
+  });
+});

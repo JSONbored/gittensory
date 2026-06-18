@@ -30,6 +30,8 @@ declare global {
     GITHUB_PUBLIC_TOKEN?: string;
     /** #703: owner-gated global to apply upstream sigmoid time-decay in score previews. Default off. */
     SCORING_TIME_DECAY_ENABLED?: string;
+    /** #776 agent-layer GLOBAL kill-switch — when truthy, halts ALL agent actions across every repo. */
+    AGENT_ACTIONS_PAUSED?: string;
     GITTENSORY_AUTO_FILE_DRIFT_ISSUES?: string;
     GITTENSORY_DRIFT_ISSUE_REPO?: string;
     GITTENSORY_DRIFT_ISSUE_TOKEN?: string;

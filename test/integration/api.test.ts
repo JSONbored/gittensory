@@ -2212,11 +2212,31 @@ describe("api routes", () => {
     // override; unrelated groups are preserved by the load-merge in the handler.
     const settingsUpdate = await app.request(
       "/v1/repos/repo-owner/owned-repo/settings",
-      { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ gateCheckMode: "enabled", slopGateMode: "block", slopGateMinScore: 55 }) },
+      {
+        method: "PUT",
+        headers: ownerHeaders,
+        // #773/#774/#776: the agent-layer config is settable here; the DB layer drops an unknown action class.
+        body: JSON.stringify({ gateCheckMode: "enabled", slopGateMode: "block", slopGateMinScore: 55, autonomy: { merge: "auto_with_approval", deploy: "auto" }, autoMaintain: { requireApprovals: 2, mergeMethod: "rebase" }, agentPaused: true, agentDryRun: true }),
+      },
       ownerEnv,
     );
     expect(settingsUpdate.status).toBe(200);
-    await expect(settingsUpdate.json()).resolves.toMatchObject({ gateCheckMode: "enabled", slopGateMode: "block", slopGateMinScore: 55 });
+    await expect(settingsUpdate.json()).resolves.toMatchObject({
+      gateCheckMode: "enabled",
+      slopGateMode: "block",
+      slopGateMinScore: 55,
+      autonomy: { merge: "auto_with_approval" }, // unknown action class dropped by the DB normalizer
+      autoMaintain: { requireApprovals: 2, mergeMethod: "rebase" },
+      agentPaused: true, // #776 kill-switch
+      agentDryRun: true,
+    });
+    // requireApprovals is bounded at the API boundary — an out-of-range value is rejected, not silently clamped.
+    const settingsBadApprovals = await app.request(
+      "/v1/repos/repo-owner/owned-repo/settings",
+      { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ autoMaintain: { requireApprovals: 99 } }) },
+      ownerEnv,
+    );
+    expect(settingsBadApprovals.status).toBe(400);
     const settingsInvalid = await app.request(
       "/v1/repos/repo-owner/owned-repo/settings",
       { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ gateCheckMode: "nonsense" }) },

@@ -238,6 +238,7 @@ describe("data spine repositories", () => {
       publicSurface: "comment_and_label",
       gatePack: "gittensor",
       slopGateMode: "off",
+      autonomy: {}, // #773 deny-by-default: no autonomy configured for a missing repo
     });
     // gatePack (#692) round-trips and defaults to gittensor.
     await upsertRepositorySettings(env, { repoFullName: "owner/repo", gatePack: "oss-anti-slop" });
@@ -260,6 +261,24 @@ describe("data spine repositories", () => {
     const updated = await getRepositorySettings(env, "owner/sloprepo");
     expect(updated.slopGateMode).toBe("advisory");
     expect(updated.slopGateMinScore).toBe(40);
+    // #773 agent autonomy round-trips (insert + update), drops invalid entries, and defaults to {}.
+    await upsertRepositorySettings(env, { repoFullName: "owner/autonomyrepo", autonomy: { merge: "auto_with_approval", label: "auto", deploy: "auto" } as never });
+    expect((await getRepositorySettings(env, "owner/autonomyrepo")).autonomy).toEqual({ merge: "auto_with_approval", label: "auto" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/autonomyrepo", autonomy: { merge: "observe" } });
+    expect((await getRepositorySettings(env, "owner/autonomyrepo")).autonomy).toEqual({ merge: "observe" }); // update persists
+    expect((await getRepositorySettings(env, "owner/defaultpack")).autonomy).toEqual({}); // deny-by-default
+    // #774 autoMaintain round-trips, clamps requireApprovals, and defaults to squash/1.
+    await upsertRepositorySettings(env, { repoFullName: "owner/automaintainrepo", autoMaintain: { requireApprovals: 99, mergeMethod: "rebase" } });
+    expect((await getRepositorySettings(env, "owner/automaintainrepo")).autoMaintain).toEqual({ requireApprovals: 10, mergeMethod: "rebase" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/automaintainrepo", autoMaintain: { requireApprovals: 0, mergeMethod: "merge" } });
+    expect((await getRepositorySettings(env, "owner/automaintainrepo")).autoMaintain).toEqual({ requireApprovals: 0, mergeMethod: "merge" }); // update persists
+    expect((await getRepositorySettings(env, "owner/defaultpack")).autoMaintain).toEqual({ requireApprovals: 1, mergeMethod: "squash" }); // defaults
+    // #776 kill-switch + dry-run round-trip (insert + update) and default false.
+    await upsertRepositorySettings(env, { repoFullName: "owner/saferepo", agentPaused: true, agentDryRun: true });
+    expect(await getRepositorySettings(env, "owner/saferepo")).toMatchObject({ agentPaused: true, agentDryRun: true });
+    await upsertRepositorySettings(env, { repoFullName: "owner/saferepo", agentPaused: false });
+    expect((await getRepositorySettings(env, "owner/saferepo")).agentPaused).toBe(false); // update persists
+    expect(await getRepositorySettings(env, "owner/defaultpack")).toMatchObject({ agentPaused: false, agentDryRun: false }); // defaults
     expect(updated.slopAiAdvisory).toBe(false);
     expect(await getRepoSyncState(env, "missing/repo")).toBeNull();
     expect(await getPullRequest(env, "owner/repo", 404)).toBeNull();

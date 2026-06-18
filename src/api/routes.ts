@@ -41,6 +41,8 @@ import {
   getRepository,
   getRepoQueueTrendSnapshot,
   getRepositorySettings,
+  getPendingAgentAction,
+  listPendingAgentActions,
   recordAuditEvent,
   getContributorEvidence,
   getProductUsageRollupStatus,
@@ -132,6 +134,7 @@ import {
   startAgentRun,
 } from "../services/agent-orchestrator";
 import { buildRemediationPlan } from "../services/remediation-plan";
+import { decidePendingAgentAction } from "../services/agent-approval-queue";
 import { explainScoreBreakdown } from "../services/score-breakdown";
 import { buildMcpClientTelemetry } from "../services/client-telemetry";
 import {
@@ -622,10 +625,16 @@ const maintainerSettingsSchema = z
     includeMaintainerAuthors: z.boolean(),
     requireLinkedIssue: z.boolean(),
     badgeEnabled: z.boolean(),
+    agentPaused: z.boolean(),
+    agentDryRun: z.boolean(),
     commandAuthorization: z.object({
       default: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])).max(4).optional(),
       commands: z.record(z.string().trim().min(1).max(64), z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])).max(4)).optional(),
     }),
+    // Agent-layer config (#773/#774). The DB layer normalizes both (autonomy: deny-by-default; autoMaintain:
+    // defaults filled), so a loose record/object here is safe — invalid entries are dropped on persist.
+    autonomy: z.record(z.string().trim().min(1).max(32), z.enum(["observe", "suggest", "propose", "auto_with_approval", "auto"])),
+    autoMaintain: z.object({ requireApprovals: z.number().int().min(0).max(10).optional(), mergeMethod: z.enum(["merge", "squash", "rebase"]).optional() }),
   })
   .partial();
 
@@ -2008,6 +2017,34 @@ export function createApp() {
       metadata: { repoFullName: fullName, fields: Object.keys(changes) },
     });
     return c.json(updated);
+  });
+
+  // #779 approval queue: the auto_with_approval actions the agent staged on this repo, awaiting a maintainer
+  // decision. Maintainer-scoped + per-repo.
+  app.get("/v1/repos/:owner/:repo/agent/pending-actions", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoMaintainer(c, fullName);
+    /* v8 ignore next -- unauthorized requests are rejected by the auth middleware before reaching the handler. */
+    if (gate instanceof Response) return gate;
+    const pending = await listPendingAgentActions(c.env, { repoFullName: fullName, status: "pending" });
+    return c.json({ repoFullName: fullName, pendingActions: pending });
+  });
+
+  // #779 one-tap decision: accept → execute the staged action live; reject → cancel. Both feed the trust loop.
+  app.post("/v1/repos/:owner/:repo/agent/pending-actions/:id/:decision", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const decision = c.req.param("decision");
+    if (decision !== "accept" && decision !== "reject") return c.json({ error: "invalid_decision", detail: "decision must be 'accept' or 'reject'" }, 400);
+    const gate = await requireRepoMaintainer(c, fullName);
+    /* v8 ignore next -- unauthorized requests are rejected by the auth middleware before reaching the handler. */
+    if (gate instanceof Response) return gate;
+    const pending = await getPendingAgentAction(c.env, c.req.param("id"));
+    // Scope the action to THIS repo so a maintainer cannot decide another repo's queue via a guessed id.
+    if (!pending || pending.repoFullName !== fullName) return c.json({ error: "pending_action_not_found" }, 404);
+    const decidedBy = gate.identity?.kind === "session" ? gate.identity.actor : "maintainer";
+    const result = await decidePendingAgentAction(c.env, { id: pending.id, decision, decidedBy });
+    if (result.status === "already_decided") return c.json({ error: "already_decided", action: result.action }, 409);
+    return c.json(result);
   });
 
   // Maintainer activation demo (#701): a repo-specific "here's what Gittensory would have surfaced" preview

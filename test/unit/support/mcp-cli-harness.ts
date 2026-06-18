@@ -223,6 +223,25 @@ export async function startFixtureServer(
       response.end(JSON.stringify(agentPacketFixture(options.packetMarkdown)));
       return;
     }
+    // #784 maintainer controls (agent approval queue + kill-switch).
+    if (request.url === "/v1/repos/owner/repo/agent/pending-actions" && request.method === "GET") {
+      response.end(JSON.stringify({ repoFullName: "owner/repo", pendingActions: [{ id: "pa-1", actionClass: "merge", pullNumber: 7, reason: "clean", status: "pending" }] }));
+      return;
+    }
+    if (request.url?.startsWith("/v1/repos/owner/repo/agent/pending-actions/") && request.method === "POST") {
+      const accepted = request.url.endsWith("/accept");
+      response.end(JSON.stringify(accepted ? { status: "accepted", executionOutcome: "completed" } : { status: "rejected" }));
+      return;
+    }
+    if (request.url === "/v1/repos/owner/repo/settings" && request.method === "GET") {
+      response.end(JSON.stringify({ repoFullName: "owner/repo", autonomy: { label: "auto" }, agentPaused: false, agentDryRun: false }));
+      return;
+    }
+    if (request.url === "/v1/repos/owner/repo/settings" && request.method === "PUT") {
+      const body = (await readJsonRequest(request)) as { agentPaused?: boolean; autonomy?: Record<string, string> };
+      response.end(JSON.stringify({ repoFullName: "owner/repo", agentPaused: body.agentPaused === true, ...(body.autonomy ? { autonomy: body.autonomy } : {}) }));
+      return;
+    }
     response.statusCode = 404;
     response.end(JSON.stringify({ error: "not_found" }));
   });
