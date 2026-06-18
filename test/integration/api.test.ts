@@ -2647,7 +2647,9 @@ describe("api routes", () => {
       labels: [],
       body: "No linked issue here.",
     });
-    // PR2: a persisted slop assessment surfaces on the dashboard row; an unassessed PR carries slop: null.
+    // PR2: a persisted slop assessment surfaces on the dashboard row only while the repo has slop enabled;
+    // an unassessed PR carries slop: null.
+    await upsertRepositorySettings(env, { repoFullName: "entrius/allways-ui", slopGateMode: "advisory" });
     await updatePullRequestSlopAssessment(env, "entrius/allways-ui", 14, { slopRisk: 80, slopBand: "high" });
     const maintainer = await app.request("/v1/app/maintainer-dashboard", { headers: apiHeaders(env) }, env);
     expect(maintainer.status).toBe(200);
@@ -2659,6 +2661,13 @@ describe("api routes", () => {
         expect.objectContaining({ pr: "entrius/allways-ui#14", author: "unknown", reason: "cached open PR without linked issue", slop: { risk: 80, band: "high" } }),
       ]),
       settingsPreview: { added: expect.any(Array), removed: expect.any(Array) },
+    });
+
+    await upsertRepositorySettings(env, { repoFullName: "entrius/allways-ui", slopGateMode: "off" });
+    const maintainerAfterSlopOff = await app.request("/v1/app/maintainer-dashboard", { headers: apiHeaders(env) }, env);
+    expect(maintainerAfterSlopOff.status).toBe(200);
+    await expect(maintainerAfterSlopOff.json()).resolves.toMatchObject({
+      reviewability: expect.arrayContaining([expect.objectContaining({ pr: "entrius/allways-ui#14", slop: null })]),
     });
 
     await upsertAgentCommandAnswer(env, {

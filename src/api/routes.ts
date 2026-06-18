@@ -1141,9 +1141,12 @@ export function createApp() {
     // capped sync-state listing that powers previews elsewhere. The per-repo PR fetch below is capped at
     // 12 only to bound the `reviewability` preview list, not the metric.
     const { totalOpenPullRequestsCached, reposWithOpenPullRequests } = await summarizeRepoSyncOpenPullRequests(c.env, repositories.map((repo) => repo.fullName));
-    const openPullRequests = (
-      await Promise.all(repositories.slice(0, 12).map((repo) => listOpenPullRequests(c.env, repo.fullName).then((rows) => rows.map((pull) => ({ repoFullName: repo.fullName, pull })))))
-    ).flat();
+    const previewRepositories = repositories.slice(0, 12);
+    const [openPullRequests, previewRepositorySettings] = await Promise.all([
+      Promise.all(previewRepositories.map((repo) => listOpenPullRequests(c.env, repo.fullName).then((rows) => rows.map((pull) => ({ repoFullName: repo.fullName, pull }))))).then((rows) => rows.flat()),
+      Promise.all(previewRepositories.map((repo) => getRepositorySettings(c.env, repo.fullName).then((settings) => [repo.fullName, settings] as const))),
+    ]);
+    const previewSettingsByRepo = new Map(previewRepositorySettings);
     // Quality dashboard (#557): shape cached repo data into queue-health bands, duplicate trends, and
     // top contributors by quality band — scoped to this maintainer's repos. Reads CACHED issue/PR data
     // (no GitHub fetch), but does derive the collision/queue signals per load; the build is capped to
@@ -1182,7 +1185,7 @@ export function createApp() {
         reason: pull.linkedIssues.length > 0 ? `linked issue #${pull.linkedIssues[0]}` : "cached open PR without linked issue",
         // Latest deterministic slop assessment for this PR (null unless the repo opted into slop). Lets the
         // maintainer panel render a per-PR slop band; never a private/scoreability signal.
-        slop: typeof pull.slopRisk === "number" && pull.slopBand ? { risk: pull.slopRisk, band: pull.slopBand } : null,
+        slop: previewSettingsByRepo.get(repoFullName)?.slopGateMode !== "off" && typeof pull.slopRisk === "number" && pull.slopBand ? { risk: pull.slopRisk, band: pull.slopBand } : null,
       })),
       settingsPreview: buildMaintainerSettingsPreview(),
       qualityDashboard,

@@ -3792,15 +3792,15 @@ function toPullRequestRecordFromRow(row: typeof pullRequests.$inferSelect): Pull
 }
 
 /**
- * Persist the latest deterministic slop assessment onto an existing cached PR row. Kept separate from the
- * GitHub-sync upsert (whose SET clause never touches these columns) so a later sync cannot clobber the
- * score. A no-op when the PR row does not exist yet — the sync upsert creates it first.
+ * Persist or clear the latest deterministic slop assessment on an existing cached PR row. Kept separate
+ * from the GitHub-sync upsert (whose SET clause never touches these columns) so a later sync cannot
+ * clobber the score. A no-op when the PR row does not exist yet — the sync upsert creates it first.
  */
 export async function updatePullRequestSlopAssessment(
   env: Env,
   repoFullName: string,
   pullNumber: number,
-  assessment: { slopRisk: number; slopBand: string },
+  assessment: { slopRisk: number | null; slopBand: string | null },
 ): Promise<void> {
   const db = getDb(env.DB);
   await db

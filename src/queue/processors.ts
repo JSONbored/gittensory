@@ -1415,9 +1415,11 @@ async function maybePublishPrPublicSurface(
       });
       slopRisk = slop.slopRisk;
       advisory.findings.push(...slop.findings);
-      // Persist the assessment so the maintainer dashboard can show a per-PR slop score row without
-      // re-fetching changed files. Best-effort: a write hiccup must not abort gate evaluation.
-      await updatePullRequestSlopAssessment(env, repoFullName, pr.number, { slopRisk: slop.slopRisk, slopBand: slop.band }).catch(() => undefined);
+      // Persist dashboard-visible slop only when the repo opted into the slop gate. Merge-readiness may
+      // still use the live score above, but disabling slop should clear any previously cached dashboard row.
+      // Best-effort: a write hiccup must not abort gate evaluation.
+      const persistedSlop = settings.slopGateMode === "off" ? { slopRisk: null, slopBand: null } : { slopRisk: slop.slopRisk, slopBand: slop.band };
+      await updatePullRequestSlopAssessment(env, repoFullName, pr.number, persistedSlop).catch(() => undefined);
       // AI-assisted slop advisory (#533, opt-in). Reuses the already-fetched files; appends at most one
       // advisory-only finding. Deliberately does NOT update slopRisk — only the deterministic core blocks.
       if (settings.slopAiAdvisory) {
