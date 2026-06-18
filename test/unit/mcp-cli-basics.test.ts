@@ -75,6 +75,30 @@ describe("gittensory-mcp CLI — basics", () => {
     }
   });
 
+  it("prints the gate-throttled miner-auto-dev profile with a plan→implement→push driving loop (#781)", () => {
+    const payload = JSON.parse(run(["init-client", "--print", "codex", "--agent-profile", "miner-auto-dev", "--json"])) as {
+      agentProfile: { id: string; title: string; recommendedTools: string[]; drivingLoop: string[]; boundaries: string[]; whenNotToUse: string };
+      notes: string[];
+    };
+    expect(payload.agentProfile.id).toBe("miner-auto-dev");
+    // the new Phase-2 tools are wired in
+    expect(payload.agentProfile.recommendedTools).toEqual(
+      expect.arrayContaining(["gittensory_run_local_scorer", "gittensory_build_plan", "gittensory_record_step_result", "gittensory_open_pr", "gittensory_check_slop_risk"]),
+    );
+    // the driving loop is present and gate-throttled, with a local-execution push step
+    expect(payload.agentProfile.drivingLoop.length).toBeGreaterThanOrEqual(4);
+    expect(payload.agentProfile.drivingLoop.join("\n")).toMatch(/anti-slop|gate-ready|preflight/i);
+    expect(payload.agentProfile.boundaries.join("\n")).toMatch(/run by YOUR harness with YOUR credentials|never performs the write/i);
+    // the note reflects local execution after the gate (NOT the human-approved framing of the other profiles)
+    expect(payload.notes.join("\n")).toMatch(/runs LOCALLY|after the Gittensory gate/i);
+    expect(payload.notes.join("\n")).not.toMatch(/keep all GitHub writes human-approved/i);
+    // the rendered markdown carries the driving loop too
+    const plain = run(["init-client", "--print", "claude", "--agent-profile", "miner-auto-dev"]);
+    expect(plain).toContain("Gittensory agent profile: Miner auto-dev");
+    expect(plain).toMatch(/Driving loop/);
+    expect(JSON.stringify(payload)).not.toMatch(/github_pat_|gh[pousr]_|PRIVATE_KEY=/);
+  });
+
   it("rejects unsupported client snippets", () => {
     expect(() => run(["init-client", "--print", "other"])).toThrow(/Unsupported client/);
   });

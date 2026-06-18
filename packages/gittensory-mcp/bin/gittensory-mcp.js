@@ -44,7 +44,7 @@ const CLI_COMMAND_SPEC = {
   agent: ["plan", "status", "explain", "packet"],
 };
 const COMPLETION_SHELLS = ["bash", "zsh", "fish"];
-const AGENT_PROFILE_IDS = ["miner-planner", "maintainer-triage", "repo-owner-intake"];
+const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage", "repo-owner-intake"];
 const AGENT_PROFILES = {
   "miner-planner": {
     id: "miner-planner",
@@ -59,6 +59,45 @@ const AGENT_PROFILES = {
       "Do not request wallets, hotkeys, coldkeys, private keys, GitHub tokens, or local source contents.",
     ],
     whenNotToUse: "Do not use this profile to chase compensation, predict public scores, or automate submissions without maintainer review.",
+  },
+  "miner-auto-dev": {
+    id: "miner-auto-dev",
+    title: "Miner auto-dev",
+    audience: "miners running a local harness (Claude Code/Codex/Cursor) for reward-aware, gate-throttled OSS auto-development",
+    purpose:
+      "Drive a plan→implement→push loop: pick reward-optimal work, plan it as a step DAG, let YOUR harness implement it locally, and push via local write-tools — always behind the Gittensory gate and the anti-slop throttle.",
+    recommendedPrompts: ["gittensory_miner_select_issue", "gittensory_miner_cleanup_first", "gittensory_miner_draft_pr_packet"],
+    recommendedTools: [
+      "gittensory_agent_plan_next_work",
+      "gittensory_run_local_scorer",
+      "gittensory_build_plan",
+      "gittensory_plan_status",
+      "gittensory_record_step_result",
+      "gittensory_preflight_current_branch",
+      "gittensory_preview_local_pr_score",
+      "gittensory_check_slop_risk",
+      "gittensory_predict_gate",
+      "gittensory_agent_prepare_pr_packet",
+      "gittensory_create_branch",
+      "gittensory_open_pr",
+      "gittensory_file_issue",
+      "gittensory_apply_labels",
+      "gittensory_post_eligibility_comment",
+      "gittensory_delete_branch",
+    ],
+    drivingLoop: [
+      "Select: pull plan-next-work to pick the highest reward-optimal action. Respect your open-PR budget, credibility floor, and time-decay — skip work that would exceed your open-PR gate or chase low-credibility submissions.",
+      "Plan: build a step DAG (gittensory_build_plan) for the chosen work and advance it with gittensory_record_step_result as each step completes; gittensory_plan_status gives the next ready steps and lets you resume.",
+      "Implement: for a code step, run gittensory_create_branch, let YOUR harness write the change locally, then run your validation suite.",
+      "Gate-check: run gittensory_run_local_scorer + gittensory_check_slop_risk + gittensory_preflight_current_branch (and gittensory_predict_gate) to confirm the change is substantive, slop-free, and gate-ready. If it trips slop or fails preflight, fix it locally or skip the step — never push it.",
+      "Push: only once the gate is satisfied, call the local write-tools (open_pr / file_issue / apply_labels / post_eligibility_comment) and run the returned command with YOUR own credentials. Gittensory supplies the content and the gate; it never performs the write and never sees your source.",
+    ],
+    boundaries: [
+      "Reward-aware throttle: respect the open-PR gate, your credibility floor, and time-decay — never push work that fails preflight, trips the anti-slop check, or exceeds your open-PR budget.",
+      "Local execution: every GitHub write is run by YOUR harness with YOUR credentials via a write-tool's returned command. Gittensory supplies content + gates only; it never performs the write and never receives your source contents.",
+      "Do not request wallets, hotkeys, coldkeys, private keys, GitHub tokens, or upload local source contents.",
+    ],
+    whenNotToUse: "Do not use this profile to bypass the gate, mass-open PRs, farm low-credibility submissions, or push changes that fail preflight or trip the anti-slop check.",
   },
   "maintainer-triage": {
     id: "maintainer-triage",
@@ -2161,7 +2200,13 @@ function initClient(options) {
       "Run `gittensory-mcp login` before starting the MCP client.",
       "Use an absolute command path if the client does not inherit your shell PATH.",
       "This command prints config only; it does not edit client files.",
-      ...(agentProfile ? [`Use the ${agentProfile.title} profile instructions as the agent system/developer prompt; keep all GitHub writes human-approved.`] : []),
+      ...(agentProfile
+        ? [
+            agentProfile.drivingLoop
+              ? `Use the ${agentProfile.title} profile instructions as the agent system/developer prompt. Every GitHub write runs LOCALLY via your harness with your own credentials, only after the Gittensory gate + anti-slop check pass — Gittensory never performs the write.`
+              : `Use the ${agentProfile.title} profile instructions as the agent system/developer prompt; keep all GitHub writes human-approved.`,
+          ]
+        : []),
     ],
   };
   if (options.json) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
@@ -2186,6 +2231,7 @@ function formatAgentProfile(profile) {
     "",
     "Recommended MCP tools:",
     ...profile.recommendedTools.map((name) => `- ${name}`),
+    ...(profile.drivingLoop ? ["", "Driving loop (plan → implement → push, gate-throttled):", ...profile.drivingLoop.map((step, index) => `${index + 1}. ${step}`)] : []),
     "",
     "Safety boundaries:",
     ...profile.boundaries.map((boundary) => `- ${boundary}`),
