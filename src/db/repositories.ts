@@ -19,6 +19,7 @@ import {
   contributorScoringProfiles,
   contributors,
   digestSubscriptions,
+  agentPendingActions,
   gateOutcomes,
   githubAgentCommandAnswers,
   githubAgentCommandFeedback,
@@ -61,6 +62,8 @@ import type {
   AgentActionRecord,
   AgentActionStatus,
   AgentActionType,
+  AutonomyPolicy,
+  AutoMaintainPolicy,
   AgentCommandAnswerRecord,
   AgentCommandFeedbackRecord,
   AgentContextSnapshotRecord,
@@ -70,6 +73,11 @@ import type {
   AgentRecommendationOutcomeState,
   AgentRecommendationOutcomeSummary,
   AgentRecommendationOutcomeTargetType,
+  AgentActionClass,
+  AgentPendingActionParams,
+  AgentPendingActionRecord,
+  AgentPendingActionStatus,
+  AutonomyLevel,
   GateOutcomeRecord,
   AgentMode,
   AgentRunRecord,
@@ -150,6 +158,7 @@ import type {
 import type { GittensorContributorSnapshot, OfficialGittensorMinerDetection } from "../gittensor/api";
 import { classifyMcpClientVersion, LATEST_RECOMMENDED_MCP_VERSION, MINIMUM_SUPPORTED_MCP_VERSION } from "../services/mcp-compatibility";
 import { DEFAULT_COMMAND_AUTHORIZATION_POLICY, normalizeCommandAuthorizationPolicy } from "../settings/command-authorization";
+import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy, DEFAULT_AUTO_MAINTAIN_POLICY } from "../settings/autonomy";
 import { decryptSecret, encryptSecret, sha256Hex } from "../utils/crypto";
 import { jsonString, nowIso, parseJson, repoParts } from "../utils/json";
 
@@ -421,7 +430,11 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       backfillEnabled: true,
       privateTrustEnabled: true,
       badgeEnabled: false,
+      agentPaused: false,
+      agentDryRun: false,
       commandAuthorization: normalizeCommandAuthorizationPolicy(DEFAULT_COMMAND_AUTHORIZATION_POLICY).policy,
+      autonomy: {},
+      autoMaintain: { ...DEFAULT_AUTO_MAINTAIN_POLICY },
     };
   }
   return {
@@ -456,7 +469,11 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     backfillEnabled: row.backfillEnabled,
     privateTrustEnabled: row.privateTrustEnabled,
     badgeEnabled: row.badgeEnabled,
+    agentPaused: row.agentPaused,
+    agentDryRun: row.agentDryRun,
     commandAuthorization: parseCommandAuthorizationPolicy(row.commandAuthorizationJson),
+    autonomy: parseAutonomyPolicy(row.autonomyJson),
+    autoMaintain: parseAutoMaintainPolicy(row.autoMaintainJson),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -495,7 +512,11 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     backfillEnabled: settings.backfillEnabled ?? true,
     privateTrustEnabled: settings.privateTrustEnabled ?? true,
     badgeEnabled: settings.badgeEnabled ?? false,
+    agentPaused: settings.agentPaused ?? false,
+    agentDryRun: settings.agentDryRun ?? false,
     commandAuthorization: normalizeCommandAuthorizationPolicy(settings.commandAuthorization).policy,
+    autonomy: normalizeAutonomyPolicy(settings.autonomy),
+    autoMaintain: normalizeAutoMaintainPolicy(settings.autoMaintain),
   };
   const db = getDb(env.DB);
   await db
@@ -532,7 +553,11 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       backfillEnabled: resolved.backfillEnabled,
       privateTrustEnabled: resolved.privateTrustEnabled,
       badgeEnabled: resolved.badgeEnabled,
+      agentPaused: resolved.agentPaused,
+      agentDryRun: resolved.agentDryRun,
       commandAuthorizationJson: jsonString(resolved.commandAuthorization),
+      autonomyJson: jsonString(resolved.autonomy),
+      autoMaintainJson: jsonString(resolved.autoMaintain),
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -570,7 +595,11 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         backfillEnabled: resolved.backfillEnabled,
         privateTrustEnabled: resolved.privateTrustEnabled,
         badgeEnabled: resolved.badgeEnabled,
+        agentPaused: resolved.agentPaused,
+        agentDryRun: resolved.agentDryRun,
         commandAuthorizationJson: jsonString(resolved.commandAuthorization),
+        autonomyJson: jsonString(resolved.autonomy),
+        autoMaintainJson: jsonString(resolved.autoMaintain),
         updatedAt: nowIso(),
       },
     });
@@ -3254,6 +3283,89 @@ export async function listGateOutcomes(
   return rows.map(toGateOutcomeRecord);
 }
 
+// #779 approval queue. Stage an auto_with_approval action; `created:false` when one is already staged for this
+// (repo, pull, action_class) — re-evaluation never duplicates a staged action or re-surfaces a decided one.
+export async function createPendingAgentActionIfAbsent(
+  env: Env,
+  input: { repoFullName: string; pullNumber: number; installationId: number; actionClass: AgentActionClass; autonomyLevel: AutonomyLevel; params: AgentPendingActionParams; reason?: string | null | undefined },
+): Promise<{ action: AgentPendingActionRecord; created: boolean }> {
+  const repoFullName = boundedString(input.repoFullName, 200);
+  const values = {
+    id: crypto.randomUUID(),
+    repoFullName,
+    pullNumber: input.pullNumber,
+    installationId: input.installationId,
+    actionClass: input.actionClass,
+    autonomyLevel: input.autonomyLevel,
+    paramsJson: jsonString(input.params),
+    reason: input.reason ?? null,
+    status: "pending",
+  };
+  const inserted = await getDb(env.DB)
+    .insert(agentPendingActions)
+    .values(values)
+    .onConflictDoNothing({ target: [agentPendingActions.repoFullName, agentPendingActions.pullNumber, agentPendingActions.actionClass] })
+    .returning();
+  if (inserted.length > 0 && inserted[0]) return { action: toAgentPendingActionRecord(inserted[0]), created: true };
+  // A row already exists for this target — return it unchanged (the staged/decided action is sticky).
+  const [existing] = await getDb(env.DB)
+    .select()
+    .from(agentPendingActions)
+    .where(and(eq(agentPendingActions.repoFullName, repoFullName), eq(agentPendingActions.pullNumber, input.pullNumber), eq(agentPendingActions.actionClass, input.actionClass)))
+    .limit(1);
+  /* v8 ignore next -- onConflictDoNothing only no-ops when a conflicting row exists, so the lookup always finds it. */
+  if (!existing) throw new Error(`pending action conflict had no row: ${repoFullName}#${input.pullNumber} ${input.actionClass}`);
+  return { action: toAgentPendingActionRecord(existing), created: false };
+}
+
+export async function listPendingAgentActions(
+  env: Env,
+  options: { repoFullName?: string; status?: AgentPendingActionStatus; limit?: number } = {},
+): Promise<AgentPendingActionRecord[]> {
+  const limit = clampInteger(options.limit ?? 200, 1, 2000);
+  const conditions = [];
+  if (options.repoFullName) conditions.push(eq(agentPendingActions.repoFullName, options.repoFullName));
+  if (options.status) conditions.push(eq(agentPendingActions.status, options.status));
+  const rows = await getDb(env.DB)
+    .select()
+    .from(agentPendingActions)
+    .where(conditions.length === 0 ? undefined : and(...conditions))
+    .orderBy(desc(agentPendingActions.createdAt), agentPendingActions.id)
+    .limit(limit);
+  return rows.map(toAgentPendingActionRecord);
+}
+
+export async function getPendingAgentAction(env: Env, id: string): Promise<AgentPendingActionRecord | null> {
+  const [row] = await getDb(env.DB).select().from(agentPendingActions).where(eq(agentPendingActions.id, id)).limit(1);
+  return row ? toAgentPendingActionRecord(row) : null;
+}
+
+/** Mark a staged action accepted/rejected. Idempotency is the caller's concern (it checks status === pending). */
+export async function setPendingAgentActionStatus(env: Env, id: string, update: { status: AgentPendingActionStatus; decidedBy: string | null }): Promise<void> {
+  await getDb(env.DB)
+    .update(agentPendingActions)
+    .set({ status: update.status, decidedBy: update.decidedBy, decidedAt: nowIso(), updatedAt: nowIso() })
+    .where(eq(agentPendingActions.id, id));
+}
+
+function toAgentPendingActionRecord(row: typeof agentPendingActions.$inferSelect): AgentPendingActionRecord {
+  return {
+    id: row.id,
+    repoFullName: row.repoFullName,
+    pullNumber: row.pullNumber,
+    installationId: row.installationId,
+    actionClass: row.actionClass as AgentActionClass,
+    autonomyLevel: row.autonomyLevel as AutonomyLevel,
+    params: parseJson<AgentPendingActionParams>(row.paramsJson, {}),
+    reason: row.reason,
+    status: row.status as AgentPendingActionStatus,
+    decidedBy: row.decidedBy,
+    decidedAt: row.decidedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 export async function getAgentRecommendationOutcomeSummary(
   env: Env,
   actorLogin: string,
@@ -4959,6 +5071,14 @@ function parsePublicSurface(value: string): RepositorySettings["publicSurface"] 
 
 function parseCommandAuthorizationPolicy(value: string): RepositorySettings["commandAuthorization"] {
   return normalizeCommandAuthorizationPolicy(parseJson<unknown>(value, null)).policy;
+}
+
+function parseAutonomyPolicy(value: string): AutonomyPolicy {
+  return normalizeAutonomyPolicy(parseJson<unknown>(value, null));
+}
+
+function parseAutoMaintainPolicy(value: string): AutoMaintainPolicy {
+  return normalizeAutoMaintainPolicy(parseJson<unknown>(value, null));
 }
 
 function parseSyncStatus(value: string): RepoSyncStateRecord["status"] {

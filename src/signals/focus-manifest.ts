@@ -1,5 +1,6 @@
 import { parse as parseYaml } from "yaml";
 import type { GatePolicyPack, GateRuleMode, JsonValue, RepositorySettings } from "../types";
+import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy } from "../settings/autonomy";
 
 export type FocusManifestSource = "repo_file" | "api_record" | "none";
 export type FocusManifestLinkedIssuePolicy = "required" | "preferred" | "optional";
@@ -66,6 +67,10 @@ export type FocusManifestSettings = Partial<
     | "requireLinkedIssue"
     | "backfillEnabled"
     | "privateTrustEnabled"
+    | "autonomy"
+    | "autoMaintain"
+    | "agentPaused"
+    | "agentDryRun"
   >
 >;
 
@@ -421,9 +426,21 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   if (gittensorLabel !== null) out.gittensorLabel = gittensorLabel;
   const publicSurface = normalizeOptionalEnum(r.publicSurface, "settings.publicSurface", ["off", "comment_and_label", "comment_only", "label_only"] as const, warnings);
   if (publicSurface !== null) out.publicSurface = publicSurface;
-  for (const key of ["aiReviewByok", "autoLabelEnabled", "createMissingLabel", "includeMaintainerAuthors", "requireLinkedIssue", "backfillEnabled", "privateTrustEnabled"] as const) {
+  for (const key of ["aiReviewByok", "autoLabelEnabled", "createMissingLabel", "includeMaintainerAuthors", "requireLinkedIssue", "backfillEnabled", "privateTrustEnabled", "agentPaused", "agentDryRun"] as const) {
     const flag = normalizeOptionalBoolean(r[key], `settings.${key}`, warnings);
     if (flag !== null) out[key] = flag;
+  }
+  // Agent-layer autonomy dial (#773): `settings.autonomy` maps each action class to a level. Only set it
+  // when at least one valid class→level pair survives normalization, so a malformed block never blanks the
+  // DB-configured policy via the resolver's `{...dbSettings, ...manifest.settings}` overlay.
+  if (r.autonomy !== undefined) {
+    const autonomy = normalizeAutonomyPolicy(r.autonomy);
+    if (Object.keys(autonomy).length > 0) out.autonomy = autonomy;
+  }
+  // Auto-maintain policy (#774): `settings.autoMaintain` declares the full policy (defaults fill any unset
+  // field) and overlays the DB value via the resolver. Only a mapping is honoured; anything else is ignored.
+  if (typeof r.autoMaintain === "object" && r.autoMaintain !== null && !Array.isArray(r.autoMaintain)) {
+    out.autoMaintain = normalizeAutoMaintainPolicy(r.autoMaintain);
   }
   return out;
 }

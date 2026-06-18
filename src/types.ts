@@ -111,6 +111,13 @@ export type JobMessage =
       days?: number;
     }
   | {
+      // Scheduled re-gate sweep (#777). No `repoFullName` = fan-out: enqueue one per agent-configured repo.
+      // With `repoFullName` = recompute the gate verdict for that repo's stale open PRs (advisory/audit only).
+      type: "agent-regate-sweep";
+      requestedBy: "schedule" | "api" | "test";
+      repoFullName?: string;
+    }
+  | {
       type: "run-agent";
       requestedBy: "api" | "mcp" | "github_comment" | "test";
       runId: string;
@@ -458,6 +465,19 @@ export type RepositorySettings = {
    *  (default false); optional so existing settings fixtures/callers need not be touched. */
   badgeEnabled?: boolean | undefined;
   commandAuthorization?: RepositoryCommandAuthorizationPolicy | undefined;
+  /** Agent-layer autonomy dial (#773): per-action-class level. Always populated by the DB layer (default
+   *  `{}` = deny-by-default = "observe" for every class); optional so existing settings fixtures/callers
+   *  need not be touched. The single source the action layer (#778) reads via `resolveAutonomy`. */
+  autonomy?: AutonomyPolicy | undefined;
+  /** Auto-maintain policy (#774): merge method + approval count. Always populated by the DB layer with
+   *  defaults (squash / 1 approval); optional so existing settings fixtures/callers need not be touched. */
+  autoMaintain?: AutoMaintainPolicy | undefined;
+  /** Per-repo agent kill-switch (#776): when true, the action layer takes NO action on this repo (the
+   *  global env switch overrides this too). Default false. */
+  agentPaused?: boolean | undefined;
+  /** Per-repo dry-run/shadow mode (#776): when true, the action layer records what it WOULD do without
+   *  performing any GitHub mutation. Default false. */
+  agentDryRun?: boolean | undefined;
   createdAt?: string | null | undefined;
   updatedAt?: string | null | undefined;
 };
@@ -467,6 +487,57 @@ export type CommandAuthorizationRole = "maintainer" | "collaborator" | "pr_autho
 export type RepositoryCommandAuthorizationPolicy = {
   default: CommandAuthorizationRole[];
   commands: Record<string, CommandAuthorizationRole[]>;
+};
+
+/** Agent-layer graduated autonomy (#773), least → most autonomous. `observe` is the deny-by-default floor:
+ *  gittensory watches but never acts. `suggest`/`propose` surface guidance/concrete proposals without
+ *  executing; `auto_with_approval` executes behind a human approval gate (#779); `auto` executes directly. */
+export type AutonomyLevel = "observe" | "suggest" | "propose" | "auto_with_approval" | "auto";
+
+/** The write-action classes the maintainer auto-maintain layer (#778) can take on a PR. */
+export type AgentActionClass = "review" | "request_changes" | "approve" | "merge" | "close" | "label";
+
+/** Per-action-class autonomy. An unset class resolves to `observe` (deny-by-default). */
+export type AutonomyPolicy = Partial<Record<AgentActionClass, AutonomyLevel>>;
+
+/** How the agent merges when it auto-merges (#774). */
+export type AutoMergeMethod = "merge" | "squash" | "rebase";
+
+/** Auto-maintain policy (#774): the "how" once an action is at an acting autonomy level. `requireApprovals`
+ *  is the human approval count an `auto_with_approval` action waits for (#779); `mergeMethod` is how an
+ *  auto-merge merges. Always populated by the DB layer with defaults. */
+export type AutoMaintainPolicy = {
+  requireApprovals: number;
+  mergeMethod: AutoMergeMethod;
+};
+
+/** The payload needed to execute a staged action when a maintainer accepts it (#779). Only the field for the
+ *  action's class is set, mirroring PlannedAgentAction. */
+export type AgentPendingActionParams = {
+  label?: string;
+  reviewBody?: string;
+  mergeMethod?: AutoMergeMethod;
+  closeComment?: string;
+};
+
+export type AgentPendingActionStatus = "pending" | "accepted" | "rejected";
+
+/** Approval-queue row (#779): an `auto_with_approval` action the write-actions layer staged for a one-tap
+ *  maintainer accept (→ execute) or reject (→ cancel). */
+export type AgentPendingActionRecord = {
+  id: string;
+  repoFullName: string;
+  pullNumber: number;
+  installationId: number;
+  actionClass: AgentActionClass;
+  autonomyLevel: AutonomyLevel;
+  params: AgentPendingActionParams;
+  reason: string | null;
+  status: AgentPendingActionStatus;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type RepoSyncStateRecord = {

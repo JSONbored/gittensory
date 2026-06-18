@@ -96,6 +96,11 @@ import {
 import { executeAgentRun, explainBlockersWithAgent, planNextWork, preflightBranchWithAgent, preparePrPacketWithAgent } from "../services/agent-orchestrator";
 import { isAuthorizedGitHubSessionLogin } from "../auth/security";
 import { commandAuthorizationAllowedRoles, commandAuthorizationNeedsMinerDetection } from "../settings/command-authorization";
+import { isAgentConfigured } from "../settings/autonomy";
+import { isGlobalAgentPause, resolveAgentActionMode } from "../settings/agent-execution";
+import { selectRegateCandidates } from "../settings/agent-sweep";
+import { planAgentMaintenanceActions } from "../settings/agent-actions";
+import { executeAgentMaintenanceActions } from "../services/agent-action-executor";
 import { loadIssueQualityReportMap } from "../services/issue-quality";
 import { generateWeeklyValueReport } from "../services/weekly-value-report";
 import { REPO_OUTCOME_PATTERNS_SIGNAL, computeRepoOutcomePatterns } from "../services/repo-outcome-patterns";
@@ -278,6 +283,13 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
     case "generate-weekly-value-report":
       await generateWeeklyValueReport(env, { variant: message.variant ?? "operator", ...(message.days === undefined ? {} : { days: message.days }) });
       return;
+    case "agent-regate-sweep":
+      if (!message.repoFullName && message.requestedBy !== "test") {
+        await fanOutAgentRegateSweepJobs(env, message.requestedBy);
+        return;
+      }
+      await sweepRepoRegate(env, message.repoFullName);
+      return;
     case "run-agent":
       await executeAgentRun(env, message.runId);
       return;
@@ -329,6 +341,150 @@ async function fanOutRepoSignalSnapshotJobs(env: Env, requestedBy: "schedule" | 
     outcome: "queued",
     metadata: { repoCount: repositories.length, requestedBy },
   });
+}
+
+// #777 scheduled re-gate sweep. The cron (index.ts) enqueues one fan-out job hourly; this enqueues a per-repo
+// sweep job for every repo that opted the agent in (an acting autonomy level). Mirrors the signal-snapshot
+// fan-out so each repo's sweep runs as its own bounded, retryable queue message.
+async function fanOutAgentRegateSweepJobs(env: Env, requestedBy: "schedule" | "api" | "test"): Promise<void> {
+  const repositories = await listRepositories(env);
+  const configured: string[] = [];
+  for (const repo of repositories) {
+    const settings = await resolveRepositorySettings(env, repo.fullName);
+    if (isAgentConfigured(settings.autonomy)) configured.push(repo.fullName);
+  }
+  await Promise.all(
+    configured.map((repoFullName, index) => {
+      const message: JobMessage = { type: "agent-regate-sweep", requestedBy, repoFullName };
+      const delaySeconds = Math.min(index * 10, 600);
+      return delaySeconds > 0 ? env.JOBS.send(message, { delaySeconds }) : env.JOBS.send(message);
+    }),
+  );
+  await recordAuditEvent(env, {
+    eventType: "agent.sweep.fanout",
+    outcome: "queued",
+    metadata: { repoCount: configured.length, requestedBy },
+  });
+}
+
+// Recompute the DETERMINISTIC gate verdict for a repo's stalest open PRs and record it as an audit event —
+// ADVISORY ONLY: nothing is published to GitHub (no check, comment, or label) and no PR is mutated. This is
+// the Phase-0 scheduling rail; the action layer (#778) is what will later turn a flagged verdict into a real
+// action. Respects the #776 safety gate: a global or per-repo pause records a skip and recomputes nothing.
+async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Promise<void> {
+  if (!repoFullName) return;
+  const settings = await resolveRepositorySettings(env, repoFullName);
+  // Defensive: a repo can lose its acting autonomy between fan-out and processing.
+  if (!isAgentConfigured(settings.autonomy)) return;
+  const mode = resolveAgentActionMode({
+    globalPaused: isGlobalAgentPause(env),
+    agentPaused: settings.agentPaused,
+    agentDryRun: settings.agentDryRun,
+  });
+  if (mode === "paused") {
+    await recordAuditEvent(env, {
+      eventType: "agent.sweep.regate",
+      actor: "gittensory",
+      targetKey: repoFullName,
+      outcome: "denied",
+      detail: "agent actions paused — re-gate sweep skipped",
+      metadata: { repoFullName, mode },
+    });
+    return;
+  }
+  const [repo, openPullRequests] = await Promise.all([getRepository(env, repoFullName), listOpenPullRequests(env, repoFullName)]);
+  const candidates = selectRegateCandidates({ pulls: openPullRequests, now: nowIso() });
+  // No stale PRs this tick — stay quiet rather than writing an empty heartbeat to the audit feed.
+  if (candidates.length === 0) return;
+  const requireLinkedIssue = settings.requireLinkedIssue || settings.linkedIssueGateMode !== "off";
+  const verdicts: Record<string, string> = {};
+  const flaggedPulls: number[] = [];
+  for (const pr of candidates) {
+    const others = openPullRequests.filter((other) => other.number !== pr.number);
+    const advisory = buildPullRequestAdvisory(repo, pr, { otherOpenPullRequests: others, requireLinkedIssue });
+    const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null));
+    verdicts[String(pr.number)] = gate.conclusion;
+    if (gate.conclusion === "failure" || gate.conclusion === "action_required") flaggedPulls.push(pr.number);
+  }
+  await recordAuditEvent(env, {
+    eventType: "agent.sweep.regate",
+    actor: "gittensory",
+    targetKey: repoFullName,
+    outcome: "completed",
+    detail: `scheduled re-gate recomputed ${candidates.length} stale open PR verdict(s); ${flaggedPulls.length} flagged`,
+    metadata: { repoFullName, mode, openCount: openPullRequests.length, examined: candidates.length, flagged: flaggedPulls.length, flaggedPulls, verdicts },
+  });
+}
+
+/**
+ * #778 maintainer auto-maintain trigger. After the gate runs on a PR webhook, if the repo opted the agent in
+ * (an acting autonomy level), recompute the CANONICAL verdict (same inputs the gate published — confirmed-
+ * contributor status + the persisted slop score), plan the GitHub state actions, and run them through the
+ * executor's deny-toward-safety gate stack (pause → approval → write-permission → mode). Decoupled and
+ * best-effort: a failure here never affects the gate or the public surface. gittensory never acts on a
+ * non-confirmed contributor's PR — the same rule the gate uses to never block one.
+ */
+async function maybeRunAgentMaintenance(
+  env: Env,
+  args: {
+    installationId: number;
+    repoFullName: string;
+    repo: Awaited<ReturnType<typeof getRepository>>;
+    pr: PullRequestRecord;
+    settings: RepositorySettings;
+    otherOpenPullRequests: PullRequestRecord[];
+    deliveryId: string;
+  },
+): Promise<void> {
+  const { installationId, repoFullName, repo, settings, otherOpenPullRequests, deliveryId } = args;
+  if (!isAgentConfigured(settings.autonomy)) return;
+  // Re-read the stored PR so we act on the persisted slop score the gate just wrote, not the pre-gate payload.
+  const pr = await getPullRequest(env, repoFullName, args.pr.number);
+  /* v8 ignore next -- defensive: the PR was upserted earlier in this same webhook, so it is always present. */
+  if (!pr) return;
+  if (pr.state !== "open") return;
+  // gittensory never acts on a non-confirmed contributor's PR — the same rule the gate uses to never block one.
+  const confirmedContributor = pr.authorLogin
+    ? (await getCachedOfficialMinerDetection(env, pr.authorLogin, { targetKey: `${repoFullName}#${pr.number}`, deliveryId })).status === "confirmed"
+    : false;
+
+  const requireLinkedIssue = settings.requireLinkedIssue || settings.linkedIssueGateMode !== "off";
+  const advisory = buildPullRequestAdvisory(repo, pr, { otherOpenPullRequests, requireLinkedIssue });
+  const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, confirmedContributor, pr.slopRisk));
+
+  const planned = planAgentMaintenanceActions({
+    conclusion: gate.conclusion,
+    blockerTitles: gate.blockers.map((blocker) => blocker.title),
+    autonomy: settings.autonomy,
+    autoMaintain: settings.autoMaintain,
+    slopGateMinScore: settings.slopGateMinScore,
+    pr: {
+      mergeableState: pr.mergeableState,
+      reviewDecision: pr.reviewDecision,
+      slopRisk: pr.slopRisk,
+      labels: pr.labels,
+      linkedDuplicateCount: linkedIssueDuplicatePullRequestsForGate(pr, otherOpenPullRequests).length,
+    },
+  });
+  if (planned.length === 0) return;
+
+  const installation = await getInstallation(env, installationId);
+  /* v8 ignore next -- an installed-App PR webhook always carries an installation record; the null is defensive. */
+  const installationPermissions = installation?.permissions ?? null;
+  await executeAgentMaintenanceActions(
+    env,
+    {
+      installationId,
+      repoFullName,
+      pullNumber: pr.number,
+      headSha: pr.headSha,
+      autonomy: settings.autonomy,
+      agentPaused: settings.agentPaused,
+      agentDryRun: settings.agentDryRun,
+      installationPermissions,
+    },
+    planned,
+  );
 }
 
 async function repairDataFidelity(env: Env, requestedBy: "schedule" | "api" | "test"): Promise<void> {
@@ -787,6 +943,13 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
               error: errorMessage(error),
             }),
           );
+        });
+        // #778 maintainer auto-maintain: act on the PR's state (label/review/merge/close) per the repo's
+        // autonomy config, after the gate has run. The function self-guards on agent config; best-effort here
+        // so it never blocks the gate or public surface.
+        await maybeRunAgentMaintenance(env, { installationId, repoFullName, repo, pr, settings, otherOpenPullRequests, deliveryId }).catch((error) => {
+          /* v8 ignore next -- best-effort: auto-maintain failures are logged, never surfaced to the gate. */
+          console.error(JSON.stringify({ level: "warn", event: "agent_maintenance_failed", deliveryId, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
         });
       }
     }

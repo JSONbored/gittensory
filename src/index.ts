@@ -49,6 +49,9 @@ async function enqueueScheduledJobs(env: Env, controller: ScheduledController): 
     jobs.push({ type: "refresh-scoring-model", requestedBy: "schedule" });
     jobs.push({ type: "refresh-upstream-drift", requestedBy: "schedule" });
     jobs.push({ type: "rollup-product-usage", requestedBy: "schedule", days: 7 });
+    // Agent layer (#777): re-gate stale open PRs hourly. Fans out to one job per agent-configured repo;
+    // webhooks don't fire when a PR's base advances, so this is what keeps those verdicts fresh.
+    jobs.push({ type: "agent-regate-sweep", requestedBy: "schedule" });
   }
   if (isHourly && scheduledAt.getUTCDay() === 1 && hour === 12) {
     jobs.push({ type: "generate-weekly-value-report", requestedBy: "schedule", variant: "operator", days: 7 });
