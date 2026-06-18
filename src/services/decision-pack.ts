@@ -353,7 +353,7 @@ export async function loadContributorDecisionPackForServing(
   };
 }
 
-async function tryEnqueueDecisionPackRebuild(env: Env, login: string): Promise<boolean> {
+export async function tryEnqueueDecisionPackRebuild(env: Env, login: string): Promise<boolean> {
   const pending = pendingDecisionPackRebuilds.get(login);
   if (pending) return pending;
   const sinceIso = new Date(Date.now() - DECISION_PACK_REBUILD_DEBOUNCE_MS).toISOString();

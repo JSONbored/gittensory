@@ -142,6 +142,7 @@ import {
   CONTRIBUTOR_DECISION_PACK_SIGNAL,
   loadContributorDecisionPackForServing,
   repoDecisionFromPack,
+  tryEnqueueDecisionPackRebuild,
 } from "../services/decision-pack";
 import {
   buildMinerDashboardNextActions,
@@ -1108,8 +1109,8 @@ export function createApp() {
     if (!login) return c.json({ error: "login_required" }, 400);
     const unauthorized = await requireContributorAccess(c, login);
     if (unauthorized) return unauthorized;
-    const message: JobMessage = { type: "build-contributor-decision-packs", requestedBy: "api", login };
-    await c.env.JOBS.send(message);
+    const queued = await tryEnqueueDecisionPackRebuild(c.env, login);
+    if (!queued) return c.json({ error: "refresh_enqueue_failed", login }, 503);
     return c.json({ status: "queued", login }, 202);
   });
 

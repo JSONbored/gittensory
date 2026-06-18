@@ -2075,6 +2075,14 @@ describe("api routes", () => {
     const refreshQueued = await app.request("/v1/app/miner-dashboard/refresh?login=oktofeesh1", { method: "POST", headers: apiHeaders(env) }, env);
     expect(refreshQueued.status).toBe(202);
     await expect(refreshQueued.json()).resolves.toMatchObject({ status: "queued", login: "oktofeesh1" });
+    const refreshDuplicate = await app.request("/v1/app/miner-dashboard/refresh?login=oktofeesh1", { method: "POST", headers: apiHeaders(env) }, env);
+    expect(refreshDuplicate.status).toBe(202);
+    const queuedRefreshRows = (
+      (await env.DB.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE event_type='decision_pack.rebuild_enqueued' AND actor='oktofeesh1'").all()) as {
+        results: Array<{ count: number }>;
+      }
+    ).results;
+    expect(queuedRefreshRows[0]?.count).toBe(1);
     // No ?login → the login resolves from the session actor (covers the session-actor fallback).
     const refreshSelf = await app.request("/v1/app/miner-dashboard/refresh", { method: "POST", headers: { cookie: `gittensory_session=${otherToken}` } }, env);
     expect(refreshSelf.status).toBe(202);
