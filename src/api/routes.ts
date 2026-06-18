@@ -1990,12 +1990,13 @@ export function createApp() {
   });
 
   // #130 maintainer settings editor: PATCH-style save of the gate / slop / label / surface / command-auth
-  // settings. Maintainer-authenticated + audited. upsertRepositorySettings defaults any absent field, so we
-  // merge the sent keys onto the current settings rather than overwriting unrelated groups. The secret
+  // settings. Write-access gated + audited because these repo-visible settings include agent autonomy
+  // controls. upsertRepositorySettings defaults any absent field, so we merge the sent keys onto the
+  // current settings rather than overwriting unrelated groups. The secret
   // aiReview key + the operator-only scoring internals are deliberately not settable here.
   app.put("/v1/repos/:owner/:repo/settings", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
-    const gate = await requireRepoMaintainer(c, fullName);
+    const gate = await requireRepoWriteAccess(c, fullName);
     if (gate instanceof Response) return gate;
     const body = await c.req.json().catch(() => null);
     const parsed = maintainerSettingsSchema.safeParse(body);
