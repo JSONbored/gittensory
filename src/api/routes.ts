@@ -1888,14 +1888,8 @@ export function createApp() {
 
   app.post("/v1/repos/:owner/:repo/focus-manifest/refresh", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
-    const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
-    if (forbidden) return forbidden;
-    const identity = await authenticateRequestIdentity(c);
-    const repo = await getRepository(c.env, fullName);
-    if (identity?.kind === "session") {
-      const repoForbidden = await requireSessionRepoAccess(c, identity, fullName, repo);
-      if (repoForbidden) return repoForbidden;
-    }
+    const gate = await requireRepoWriteAccess(c, fullName);
+    if (gate instanceof Response) return gate;
     const manifest = await loadRepoFocusManifest(c.env, fullName, { refresh: true });
     return c.json({ repoFullName: fullName, manifest, policy: compileFocusManifestPolicy(manifest) });
   });
