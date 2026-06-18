@@ -29,7 +29,7 @@ import {
   listRecentMergedPullRequests,
   updatePullRequestSlopAssessment,
   listRepoLabels,
-  listRepoPullRequestFiles,
+  listRepoPullRequestFilePaths,
   listRepoSyncStates,
   listRepoSyncSegments,
   listRepositories,
@@ -139,6 +139,7 @@ import {
   detectGittensorContributor,
   PR_PANEL_RETRIGGER_MARKER,
   unionScopedOverlapClusters,
+  type ContributorProfile,
 } from "../signals/engine";
 import { buildIssueSlopAssessment, buildSlopAssessment, type SlopBand } from "../signals/slop";
 import { runGittensoryAiSlopAdvisory } from "../services/ai-slop";
@@ -147,7 +148,7 @@ import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildFocusManifestGuidance, resolveEffectiveSettings } from "../signals/focus-manifest";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import { runGittensoryAiReview } from "../services/ai-review";
-import type { AdvisoryFinding, ContributorEvidenceRecord, DetectedNotificationEvent, GitHubWebhookPayload, JobMessage, JsonValue, PullRequestRecord, RepositorySettings } from "../types";
+import type { AdvisoryFinding, ContributorEvidenceRecord, ContributorRepoStatRecord, DetectedNotificationEvent, GitHubWebhookPayload, IssueRecord, JobMessage, JsonValue, PullRequestFilePathRecord, PullRequestRecord, RepositoryRecord, RepositorySettings } from "../types";
 import { sha256Hex } from "../utils/crypto";
 import { errorMessage, nowIso } from "../utils/json";
 
@@ -550,6 +551,41 @@ async function discoverContributorLogins(env: Env): Promise<string[]> {
   return [...new Set([...pullRequests, ...issues].flatMap((record) => (record.authorLogin ? [record.authorLogin] : [])))].slice(0, 200);
 }
 
+const CONTRIBUTOR_EVIDENCE_MAX_PR_FILE_PATHS = 2000;
+const CONTRIBUTOR_EVIDENCE_PR_FILE_PATHS_PER_REPO = 200;
+
+async function loadContributorPullRequestFilePaths(
+  env: Env,
+  args: {
+    login: string;
+    profile: ContributorProfile;
+    pullRequests: PullRequestRecord[];
+    issues: IssueRecord[];
+    repoStats: ContributorRepoStatRecord[];
+    repositories: RepositoryRecord[];
+  },
+): Promise<PullRequestFilePathRecord[]> {
+  const pullNumbersByRepo = new Map<string, Set<number>>();
+  for (const pr of args.pullRequests) {
+    if (pr.authorLogin?.toLowerCase() !== args.login.toLowerCase()) continue;
+    const key = pr.repoFullName.toLowerCase();
+    const current = pullNumbersByRepo.get(key) ?? new Set<number>();
+    current.add(pr.number);
+    pullNumbersByRepo.set(key, current);
+  }
+  const files: PullRequestFilePathRecord[] = [];
+  for (const repoFullName of evidenceGraphTouchedRepoFullNames(args)) {
+    if (files.length >= CONTRIBUTOR_EVIDENCE_MAX_PR_FILE_PATHS) break;
+    const remaining = CONTRIBUTOR_EVIDENCE_MAX_PR_FILE_PATHS - files.length;
+    const repoFiles = await listRepoPullRequestFilePaths(env, repoFullName, {
+      pullNumbers: [...(pullNumbersByRepo.get(repoFullName.toLowerCase()) ?? [])],
+      limit: Math.min(CONTRIBUTOR_EVIDENCE_PR_FILE_PATHS_PER_REPO, remaining),
+    });
+    files.push(...repoFiles);
+  }
+  return files;
+}
+
 async function buildContributorEvidence(env: Env, login?: string): Promise<void> {
   const [allPullRequests, allIssues, repositories, syncStates, allBounties, snapshot] = await Promise.all([
     listAllPullRequests(env),
@@ -574,18 +610,14 @@ async function buildContributorEvidence(env: Env, login?: string): Promise<void>
     ]);
     const repoStats = authoritativeContributorRepoStats(gittensorSnapshot, cachedRepoStats);
     const profile = buildContributorProfile(contributorLogin, github, contributorPullRequests, contributorIssues, repoStats, gittensorSnapshot);
-    const pullRequestFiles = (
-      await Promise.all(
-        evidenceGraphTouchedRepoFullNames({
-          login: contributorLogin,
-          profile,
-          pullRequests: contributorPullRequests,
-          issues: contributorIssues,
-          repoStats,
-          repositories,
-        }).map((repoFullName) => listRepoPullRequestFiles(env, repoFullName)),
-      )
-    ).flat();
+    const pullRequestFiles = await loadContributorPullRequestFilePaths(env, {
+      login: contributorLogin,
+      profile,
+      pullRequests: contributorPullRequests,
+      issues: contributorIssues,
+      repoStats,
+      repositories,
+    });
     const fit = buildContributorFit(profile, repositories, allIssues, allPullRequests, syncStates, repoStats, allBounties, issueQualityByRepo);
     const scoringProfile = buildContributorScoringProfile({ login: contributorLogin, fit, scoringSnapshot: snapshot });
     const outcomeHistory = buildContributorOutcomeHistory({ login: contributorLogin, profile, repositories, pullRequests: allPullRequests, issues: allIssues, repoStats, cachedRepoStats });

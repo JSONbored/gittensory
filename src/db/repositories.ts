@@ -129,6 +129,7 @@ import type {
   ProductUsageSurface,
   ProductUsageSurfaceActivationFunnel,
   ProductUsageSurfaceRetention,
+  PullRequestFilePathRecord,
   PullRequestFileRecord,
   PullRequestDetailSyncStateRecord,
   PullRequestRecord,
@@ -2634,6 +2635,28 @@ export async function listPullRequestFiles(env: Env, fullName: string, pullNumbe
     .where(and(eq(pullRequestFiles.repoFullName, fullName), eq(pullRequestFiles.pullNumber, pullNumber)))
     .limit(500);
   return rows.map(toPullRequestFileRecord);
+}
+
+export async function listRepoPullRequestFilePaths(
+  env: Env,
+  fullName: string,
+  options: { pullNumbers?: number[] | undefined; limit?: number | undefined } = {},
+): Promise<PullRequestFilePathRecord[]> {
+  const db = getDb(env.DB);
+  const pullNumbers = [...new Set(options.pullNumbers ?? [])].filter((number) => Number.isInteger(number) && number > 0);
+  if (options.pullNumbers && pullNumbers.length === 0) return [];
+  const where = pullNumbers.length > 0
+    ? and(eq(pullRequestFiles.repoFullName, fullName), inArray(pullRequestFiles.pullNumber, pullNumbers))
+    : eq(pullRequestFiles.repoFullName, fullName);
+  return db
+    .select({
+      repoFullName: pullRequestFiles.repoFullName,
+      pullNumber: pullRequestFiles.pullNumber,
+      path: pullRequestFiles.path,
+    })
+    .from(pullRequestFiles)
+    .where(where)
+    .limit(Math.max(0, Math.min(options.limit ?? 500, 500)));
 }
 
 export async function listRepoPullRequestFiles(env: Env, fullName: string): Promise<PullRequestFileRecord[]> {
