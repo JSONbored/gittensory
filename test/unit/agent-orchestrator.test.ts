@@ -733,6 +733,15 @@ describe("agent orchestrator", () => {
       publicSafeSummary: "Cleanup existing PRs before asking for another review.",
       safetyClass: "public_safe",
     });
+    const publicPacket = buildAgentActionExplanationCard({
+      actionType: "prepare_pr_packet",
+      status: "ready",
+      why: ["A concise packet keeps public context focused on linked work."],
+      blockedBy: [],
+      rerunWhen: "Rerun after pending PRs merge/close or after open PR count is at or below 1; projected score changes 0.2 -> 0.7.",
+      publicSafeSummary: "Prepare public PR packet after validation completes.",
+      safetyClass: "public_safe",
+    });
 
     expect(recommended.summary).toMatch(/Pursue now/);
     expect(recommended.whyNow).toMatch(/deterministic planning signals/);
@@ -762,6 +771,9 @@ describe("agent orchestrator", () => {
     expect(cleanup.risk).toMatch(/increase stale or duplicate review pressure/);
     expect(cleanup.maintainerFriction).toMatch(/reduces queue noise/);
     expect(cleanup.expectedImpact).toMatch(/Lower active review pressure/);
+    expect(publicPacket.rerunWhen).toContain("projected score changes 0.2 -> 0.7");
+    expect(publicPacket.publicSafe.rerunWhen).not.toMatch(/score|0\.2|0\.7/i);
+    expect(publicPacket.publicSafe.rerunWhen).toMatch(/private context/);
   });
 
   it("covers local action ready and blocker-free branches from prepared metadata", () => {
