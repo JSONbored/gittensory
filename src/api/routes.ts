@@ -221,7 +221,7 @@ import { loadGatePrecisionReport } from "../services/gate-precision";
 import { buildMaintainerQualityDashboard, isMaintainerQualityDataStale } from "../services/maintainer-quality-dashboard";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
 import { compileFocusManifestPolicy } from "../signals/focus-manifest";
-import { loadRepoFocusManifest, upsertRepoFocusManifest } from "../signals/focus-manifest-loader";
+import { loadPublicRepoFocusManifest, loadRepoFocusManifest, upsertRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildRepoOnboardingPackPreviewForRepo } from "../services/repo-onboarding-pack";
 import { generateContributorIssueDrafts } from "../services/contributor-issue-draft";
 import { buildRepoSettingsPreview, type PublicSurfaceSkipReason } from "../signals/settings-preview";
@@ -2471,7 +2471,7 @@ export function createApp() {
       listBountiesByRepo(c.env, parsed.data.repoFullName),
       getOrCreateScoringModelSnapshot(c.env),
       loadOrComputeIssueQualityResponse(c.env, parsed.data.repoFullName),
-      loadRepoFocusManifest(c.env, parsed.data.repoFullName),
+      loadPublicRepoFocusManifest(c.env, parsed.data.repoFullName),
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: parsed.data.login, fit, scoringSnapshot: snapshot });
@@ -2546,7 +2546,7 @@ export function createApp() {
       listBountiesByRepo(c.env, parsed.data.repoFullName),
       getOrCreateScoringModelSnapshot(c.env),
       loadOrComputeIssueQualityResponse(c.env, parsed.data.repoFullName),
-      loadRepoFocusManifest(c.env, parsed.data.repoFullName),
+      loadPublicRepoFocusManifest(c.env, parsed.data.repoFullName),
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: parsed.data.login, fit, scoringSnapshot: snapshot });
