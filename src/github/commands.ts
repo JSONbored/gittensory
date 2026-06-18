@@ -966,11 +966,6 @@ function duplicateCheckSections(bundle: AgentRunBundle | null | undefined): stri
     for (const code of action.blockedBy.slice(0, 3)) {
       lines.push(`- ${publicBlockerLabel(code)}`);
     }
-    const caution = [...action.why, action.riskImpact ?? ""]
-      .filter(isPublicDuplicateCautionLine)
-      .slice(0, 3)
-      .map((item) => `- ${publicBlockerDetail(item)}`);
-    lines.push(...caution);
   }
   return dedupeBulletLines(lines);
 }
@@ -1422,7 +1417,7 @@ function formatActionBullets(
 }
 
 function mentionsDuplicateRisk(action: AgentActionRecord): boolean {
-  return [action.publicSafeSummary, action.recommendation, action.riskImpact ?? "", ...action.why, ...action.blockedBy].some(isPublicDuplicateCautionLine);
+  return [action.publicSafeSummary, ...action.blockedBy].some(isPublicDuplicateCautionLine);
 }
 
 function mentionsDuplicateRiskText(value: string): boolean {

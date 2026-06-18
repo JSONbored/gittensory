@@ -292,7 +292,7 @@ describe("GitHub mention commands", () => {
     });
     expect(duplicateCheck).toContain("**Gittensory duplicate & WIP check**");
     expect(duplicateCheck).toContain("**Duplicate & WIP caution**");
-    expect(duplicateCheck).toContain("possible overlap with existing work");
+    expect(duplicateCheck).toContain("Possible overlap with existing work");
     expect(duplicateCheck).not.toMatch(/\blikely_duplicate\b/i);
 
     const nextAction = buildPublicAgentCommandComment({
@@ -1029,7 +1029,8 @@ describe("GitHub mention commands", () => {
       },
     });
     expect(duplicateViaRecommendation).toContain("**Duplicate & WIP caution**");
-    expect(duplicateViaRecommendation).toMatch(/overlap|WIP|Concurrent/i);
+    expect(duplicateViaRecommendation).toContain("Review linked issues before requesting detailed review.");
+    expect(duplicateViaRecommendation).not.toContain("Concurrent review pressure");
 
     const duplicateWithInjectedWhy = buildPublicAgentCommandComment({
       command: parseGittensoryMentionCommand("@gittensory duplicate-check")!,
@@ -1059,7 +1060,7 @@ describe("GitHub mention commands", () => {
         summary: "duplicate",
       },
     });
-    expect(duplicateWithInjectedWhy).toContain("PRs touching duplicate @​octo-team/ \\[click\\]\\(https://example.test\\)");
+    expect(duplicateWithInjectedWhy).not.toContain("PRs touching duplicate");
     expect(duplicateWithInjectedWhy).not.toMatch(/\n@octo-team|@octo-team|[^\\]\[click\]\(https:\/\/example\.test\)/);
 
     const preflightWithRerun = buildPublicAgentCommandComment({
