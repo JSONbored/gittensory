@@ -4284,11 +4284,18 @@ describe("queue processors", () => {
   it("detects a changes-requested review notification for the PR author", async () => {
     const enqueued: Array<{ type: string }> = [];
     const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
       JOBS: {
         async send(message: { type: string }) {
           enqueued.push(message);
         },
       } as unknown as Queue,
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/repos/JSONbored/gittensory/collaborators/maintainer/permission")) return Response.json({ permission: "maintain" });
+      return new Response("not found", { status: 404 });
     });
 
     await processJob(env, {
@@ -4339,6 +4346,55 @@ describe("queue processors", () => {
     const evaluateJob = enqueued.find((message): message is { type: "notify-evaluate"; event: { recipientLogin: string } } => message.type === "notify-evaluate");
     expect(evaluateJob).toBeDefined();
     expect(evaluateJob!.event.recipientLogin).toBe("contributor");
+  });
+
+  it("skips changes-requested review notifications from reviewers without repository write permission", async () => {
+    const enqueued: Array<{ type: string }> = [];
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      JOBS: {
+        async send(message: { type: string }) {
+          enqueued.push(message);
+        },
+      } as unknown as Queue,
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/repos/JSONbored/gittensory/collaborators/drive-by-user/permission")) return Response.json({ permission: "read" });
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "review-changes-requested-low-priv",
+      eventName: "pull_request_review",
+      payload: {
+        action: "submitted",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: {
+          number: 42,
+          title: "Add feature",
+          state: "open",
+          user: { login: "contributor", type: "User" },
+          html_url: "https://github.com/JSONbored/gittensory/pull/42",
+        },
+        review: {
+          state: "changes_requested",
+          user: { login: "drive-by-user", type: "User" },
+          submitted_at: "2026-05-28T12:00:00.000Z",
+          html_url: "https://github.com/JSONbored/gittensory/pull/42#pullrequestreview-1",
+        },
+        sender: { login: "drive-by-user", type: "User" },
+      },
+    });
+
+    const detected = await env.DB.prepare("select actor from audit_events where event_type = ?")
+      .bind("notification.event_detected")
+      .all<{ actor: string }>();
+    expect(detected.results).toEqual([]);
+    expect(enqueued).not.toContainEqual(expect.objectContaining({ type: "notify-evaluate" }));
   });
 
   it("notifies issue-watchers when a new grabbable maintainer-created issue opens (#699 path B)", async () => {

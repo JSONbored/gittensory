@@ -971,7 +971,8 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
       if (payload.action === "opened") issueWatchEvents = await detectIssueWatchEvents(env, payload.repository.full_name, issue);
     }
 
-    for (const notificationEvent of [...detectNotificationEvents(eventName, payload), ...issueWatchEvents]) {
+    const trustedReviewEvents = await filterTrustedReviewNotificationEvents(env, payload.installation?.id, detectNotificationEvents(eventName, payload));
+    for (const notificationEvent of [...trustedReviewEvents, ...issueWatchEvents]) {
       await recordAuditEvent(env, {
         eventType: "notification.event_detected",
         actor: notificationEvent.actorLogin,
@@ -1889,6 +1890,24 @@ async function resolveRealRepoPermissionAssociation(env: Env, installationId: nu
   if (permission === "admin" || permission === "maintain") return "MEMBER";
   if (permission === "write") return "COLLABORATOR";
   return null;
+}
+
+async function filterTrustedReviewNotificationEvents(
+  env: Env,
+  installationId: number | undefined,
+  events: DetectedNotificationEvent[],
+): Promise<DetectedNotificationEvent[]> {
+  const trustedEvents: DetectedNotificationEvent[] = [];
+  for (const event of events) {
+    if (event.eventType !== "pull_request_changes_requested") {
+      trustedEvents.push(event);
+      continue;
+    }
+    if (!installationId || event.actorLogin === "unknown") continue;
+    const permission = await getRepositoryCollaboratorPermission(env, installationId, event.repoFullName, event.actorLogin).catch(() => null);
+    if (permission === "admin" || permission === "maintain" || permission === "write") trustedEvents.push(event);
+  }
+  return trustedEvents;
 }
 
 // #824 the SINGLE real-permission authorization gate for @gittensory action commands (gate-override, the
