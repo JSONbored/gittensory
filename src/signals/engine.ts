@@ -4088,9 +4088,9 @@ export function buildPublicPrIntelligenceComment(args: {
           "",
           "_Generated from public PR metadata and the diff. Advisory only; deterministic signals remain authoritative._",
           "",
-          // Notes are already public-safe (built via toPublicSafe upstream). Escape angle brackets so a
-          // stray tag (e.g. </details> or an HTML comment marker) cannot break the panel structure, while
-          // preserving the markdown bullet/line layout that sanitizePanelText would otherwise flatten.
+          // Notes are already public-safe and markdown-neutralized (built via toPublicSafe upstream). Escape
+          // angle brackets as a final guard so a stray tag (e.g. </details> or an HTML comment marker) cannot
+          // break the panel structure while preserving the section/bullet layout we add ourselves.
           args.aiReview.notes.replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;")).slice(0, 4000),
           "",
           "</details>",
