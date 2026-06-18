@@ -4491,6 +4491,73 @@ describe("queue processors", () => {
     expect(overrideAdvisory ?? null).toBeNull();
   });
 
+  it("ignores gate-override commands on edited comments", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "off",
+    });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 92,
+      title: "Edited override",
+      state: "open",
+      user: { login: "contributor" },
+      author_association: "CONTRIBUTOR",
+      head: { sha: "edited-override" },
+      labels: [],
+      body: "Validation: npm test",
+    });
+    const calls = { token: 0, permission: 0, checkRuns: 0, comments: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) {
+        calls.token += 1;
+        return Response.json({ token: "installation-token" });
+      }
+      if (url.includes("/collaborators/")) {
+        calls.permission += 1;
+        return Response.json({ permission: "admin" });
+      }
+      if (url.includes("/check-runs")) {
+        calls.checkRuns += 1;
+        return Response.json({ total_count: 1, check_runs: [{ id: 556, name: "Gittensory Gate" }] });
+      }
+      if (url.includes("/comments")) {
+        calls.comments += 1;
+        return Response.json([]);
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-override-edited",
+      eventName: "issue_comment",
+      payload: {
+        action: "edited",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 92, title: "Edited override", state: "open", user: { login: "contributor" }, pull_request: {} },
+        comment: { id: 802, body: "@gittensory gate-override edited by moderator", author_association: "OWNER", user: { login: "maintainer", type: "User" } },
+        sender: { login: "moderator", type: "User" },
+      },
+    });
+
+    expect(calls.permission).toBe(0);
+    expect(calls.checkRuns).toBe(0);
+    expect(calls.comments).toBe(0);
+    const overridden = await env.DB.prepare("select id from audit_events where event_type = ?").bind("github_app.gate_overridden").first<{ id: string }>();
+    expect(overridden ?? null).toBeNull();
+    const skipped = await env.DB.prepare("select actor, detail from audit_events where event_type = ?").bind("github_app.gate_override_skipped").first<{ actor: string; detail: string }>();
+    expect(skipped).toMatchObject({ actor: "moderator", detail: "unsupported_comment_action" });
+  });
+
   it("denies gate-override from an org member without real repository write/admin (ignores author_association)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);

@@ -1701,8 +1701,12 @@ async function maybeProcessGateOverrideCommand(env: Env, deliveryId: string, pay
   const repoFullName = payload.repository?.full_name;
   const issue = payload.issue;
   const installationId = getInstallationId(payload);
-  const actor = comment?.user?.login ?? payload.sender?.login ?? null;
+  const actor = payload.sender?.login ?? comment?.user?.login ?? null;
   const targetKey = repoFullName && issue ? `${repoFullName}#${issue.number}` : repoFullName;
+  if (payload.action !== "created") {
+    await recordGateOverrideSkip(env, deliveryId, repoFullName, targetKey, actor, "unsupported_comment_action");
+    return true;
+  }
   if (comment?.user?.type === "Bot" || payload.sender?.type === "Bot" || /\[bot\]$/i.test(actor ?? "")) {
     await recordGateOverrideSkip(env, deliveryId, repoFullName, targetKey, actor, "bot_author");
     return true;
