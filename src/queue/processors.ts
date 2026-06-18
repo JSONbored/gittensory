@@ -1317,8 +1317,7 @@ async function maybePublishPrPublicSurface(
       await auditPrVisibilitySkip(env, repoFullName, pr.number, author, "miner_detection_unavailable", webhook.deliveryId);
       if (!gateEnabled) return;
       publicSurfaceSkipped = true;
-    }
-    if (requireOfficialMiner && official.status !== "confirmed") {
+    } else if (requireOfficialMiner && official.status !== "confirmed") {
       await auditPrVisibilitySkip(env, repoFullName, pr.number, author, "not_official_gittensor_miner", webhook.deliveryId);
       if (!gateEnabled) return;
       publicSurfaceSkipped = true;
