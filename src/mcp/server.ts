@@ -88,6 +88,15 @@ import {
 import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { computeLocalScorerTokens } from "../signals/local-scorer";
+import {
+  buildApplyLabelsSpec,
+  buildCreateBranchSpec,
+  buildDeleteBranchSpec,
+  buildFileIssueSpec,
+  buildOpenPrSpec,
+  buildPostEligibilityCommentSpec,
+  type LocalWriteActionSpec,
+} from "./local-write-tools";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
 import { buildIssueSlopAssessment, buildSlopAssessment, ISSUE_SLOP_RUBRIC_MARKDOWN, SLOP_RUBRIC_MARKDOWN } from "../signals/slop";
@@ -225,6 +234,45 @@ const runLocalScorerOutputSchema = {
     })
     .optional(),
   usage: z.string().optional(),
+};
+
+// #780 miner write-tools. Inputs are content/targets; the OUTPUT is an action spec the LOCAL harness runs with
+// its own creds — gittensory never performs the write.
+const WRITE_TOOL_TITLE_MAX = 400;
+const WRITE_TOOL_BODY_MAX = 60000;
+const WRITE_TOOL_BRANCH_MAX = 255;
+const openPrShape = {
+  repoFullName: z.string().min(3).max(SCENARIO_MAX_REPO_FULL_NAME_CHARS),
+  base: z.string().min(1).max(SCENARIO_MAX_BRANCH_REF_CHARS),
+  head: z.string().min(1).max(SCENARIO_MAX_BRANCH_REF_CHARS),
+  title: z.string().min(1).max(WRITE_TOOL_TITLE_MAX),
+  body: z.string().max(WRITE_TOOL_BODY_MAX),
+  draft: z.boolean().optional(),
+};
+const fileIssueShape = {
+  repoFullName: z.string().min(3).max(SCENARIO_MAX_REPO_FULL_NAME_CHARS),
+  title: z.string().min(1).max(WRITE_TOOL_TITLE_MAX),
+  body: z.string().max(WRITE_TOOL_BODY_MAX),
+  labels: z.array(z.string().min(1).max(100)).max(20).optional(),
+};
+const applyLabelsShape = {
+  repoFullName: z.string().min(3).max(SCENARIO_MAX_REPO_FULL_NAME_CHARS),
+  number: z.number().int().positive(),
+  labels: z.array(z.string().min(1).max(100)).min(1).max(20),
+};
+const postEligibilityCommentShape = {
+  repoFullName: z.string().min(3).max(SCENARIO_MAX_REPO_FULL_NAME_CHARS),
+  number: z.number().int().positive(),
+  body: z.string().min(1).max(WRITE_TOOL_BODY_MAX),
+};
+const createBranchShape = { branch: z.string().min(1).max(WRITE_TOOL_BRANCH_MAX), base: z.string().min(1).max(WRITE_TOOL_BRANCH_MAX).optional() };
+const deleteBranchShape = { branch: z.string().min(1).max(WRITE_TOOL_BRANCH_MAX), remote: z.boolean().optional() };
+const localWriteActionOutputSchema = {
+  action: z.string(),
+  description: z.string(),
+  inputs: z.record(z.string(), z.unknown()),
+  command: z.string(),
+  boundary: z.string(),
 };
 
 const localBranchAnalysisShape = {
@@ -1026,6 +1074,38 @@ export class GittensoryMcp {
       async (input) => this.toolResult(this.runLocalScorer(input)),
     );
 
+    // #780 miner write-tools — each returns a LOCAL-execution action spec; gittensory never performs the write.
+    server.registerTool(
+      "gittensory_open_pr",
+      { description: "Build a LOCAL-execution spec to open a pull request from your branch (run it with your own gh creds; gittensory never performs the write).", inputSchema: openPrShape, outputSchema: localWriteActionOutputSchema },
+      async (input) => this.toolResult(this.localWriteSpec(buildOpenPrSpec(input))),
+    );
+    server.registerTool(
+      "gittensory_file_issue",
+      { description: "Build a LOCAL-execution spec to file an issue (run it with your own gh creds; gittensory never performs the write).", inputSchema: fileIssueShape, outputSchema: localWriteActionOutputSchema },
+      async (input) => this.toolResult(this.localWriteSpec(buildFileIssueSpec(input))),
+    );
+    server.registerTool(
+      "gittensory_apply_labels",
+      { description: "Build a LOCAL-execution spec to add labels to an issue or PR (run it with your own gh creds; gittensory never performs the write).", inputSchema: applyLabelsShape, outputSchema: localWriteActionOutputSchema },
+      async (input) => this.toolResult(this.localWriteSpec(buildApplyLabelsSpec(input))),
+    );
+    server.registerTool(
+      "gittensory_post_eligibility_comment",
+      { description: "Build a LOCAL-execution spec to post an eligibility/context comment on an issue or PR (run it with your own gh creds; gittensory never performs the write).", inputSchema: postEligibilityCommentShape, outputSchema: localWriteActionOutputSchema },
+      async (input) => this.toolResult(this.localWriteSpec(buildPostEligibilityCommentSpec(input))),
+    );
+    server.registerTool(
+      "gittensory_create_branch",
+      { description: "Build a LOCAL-execution spec to create a branch (run it locally; gittensory never performs the write).", inputSchema: createBranchShape, outputSchema: localWriteActionOutputSchema },
+      async (input) => this.toolResult(this.localWriteSpec(buildCreateBranchSpec(input))),
+    );
+    server.registerTool(
+      "gittensory_delete_branch",
+      { description: "Build a LOCAL-execution spec to delete a branch (run it locally; gittensory never performs the write).", inputSchema: deleteBranchShape, outputSchema: localWriteActionOutputSchema },
+      async (input) => this.toolResult(this.localWriteSpec(buildDeleteBranchSpec(input))),
+    );
+
     server.registerTool(
       "gittensory_explain_score_breakdown",
       {
@@ -1779,6 +1859,12 @@ export class GittensoryMcp {
         usage: "Pass `tokenScores` as the `localScorer` field of gittensory_preview_local_pr_score or the analyze tools to score this branch in external_command mode (off metadata-only).",
       },
     };
+  }
+
+  // #780 — wrap a local write-action spec for return. gittensory never executes it; the harness runs `command`
+  // (or reconstructs from `inputs`) with the miner's own credentials.
+  private localWriteSpec(spec: LocalWriteActionSpec): ToolPayload {
+    return { summary: `${spec.action}: ${spec.description} ${spec.boundary}`, data: spec as unknown as Record<string, unknown> };
   }
 
   private async explainScoreBreakdown(input: z.infer<z.ZodObject<typeof scorePreviewShape>>): Promise<ToolPayload> {
