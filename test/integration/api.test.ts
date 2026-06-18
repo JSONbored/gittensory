@@ -3431,6 +3431,13 @@ describe("api routes", () => {
     });
     expect(JSON.stringify(extensionPayload)).not.toMatch(/wallet|hotkey|coldkey|raw trust|private ranking|github_pat|ghp_|payout|reward estimate|farming/i);
 
+    const pullContextAudit = await env.DB.prepare(
+      "select actor from audit_events where event_type = ? and route = ? order by created_at desc limit 1",
+    )
+      .bind("extension.pull_context_view", "/v1/extension/pull-context")
+      .first<{ actor: string }>();
+    expect(pullContextAudit?.actor).toBe("oktofeesh1");
+
     const nonMinerExtensionContext = await app.request(
       "/v1/extension/pull-context?owner=entrius&repo=allways-ui&pullNumber=13",
       { headers: { authorization: `Bearer ${extensionSessionBody.token}` } },
