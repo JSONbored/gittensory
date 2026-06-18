@@ -2102,11 +2102,11 @@ export function createApp() {
   });
 
   // Maintainer self-serve AI-review config (non-secret: mode/byok/provider/model). Session-authenticated +
-  // scoped to repos the maintainer owns/maintains. The secret provider key goes through the ai-key route.
+  // scoped to repos the maintainer has live GitHub write access to. The secret provider key goes through the ai-key route.
   // Merges onto current settings so unrelated settings are preserved.
   app.put("/v1/repos/:owner/:repo/ai-review", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
-    const gate = await requireRepoMaintainer(c, fullName);
+    const gate = await requireRepoWriteAccess(c, fullName);
     if (gate instanceof Response) return gate;
     const parsed = repositoryAiReviewSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_ai_review_config", issues: parsed.error.issues }, 400);
@@ -2127,11 +2127,11 @@ export function createApp() {
     });
   });
 
-  // Maintainer self-serve BYOK provider key. Write-only + maintainer-scoped. GET returns only
+  // Maintainer self-serve BYOK provider key. Write-only + live GitHub write-access scoped. GET returns only
   // {configured, provider, last4, model}; the key is never returned, logged, or surfaced.
   app.get("/v1/repos/:owner/:repo/ai-key", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
-    const gate = await requireRepoMaintainer(c, fullName);
+    const gate = await requireRepoWriteAccess(c, fullName);
     if (gate instanceof Response) return gate;
     return c.json(await getRepositoryAiKeyStatus(c.env, fullName));
   });
@@ -4552,7 +4552,7 @@ async function requireRepoMaintainer(c: ProtectedRouteContext, fullName: string)
 const REPO_WRITE_PERMISSIONS = new Set(["admin", "maintain", "write"]);
 
 /**
- * Stricter gate for repo-visible settings/secret WRITES. On top of the maintainer gate, a session caller
+ * Stricter gate for repo-visible settings and secret-key status/writes. On top of the maintainer gate, a session caller
  * must have real GitHub write access to the repo — resolved via the installation, not merely inferred
  * from a PR author_association (which includes org MEMBER / read-only COLLABORATOR). Operators and
  * server-to-server tokens are exempt. Fails closed (403) if write access can't be verified.
