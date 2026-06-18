@@ -1969,6 +1969,10 @@ export function createApp() {
     if (parsed.data.create && parsed.data.dryRun !== false) {
       return c.json({ error: "explicit_create_requires_dry_run_false" }, 400);
     }
+    if (parsed.data.create && parsed.data.dryRun === false) {
+      const writeForbidden = await requireRepoWriteAccess(c, fullName);
+      if (writeForbidden instanceof Response) return writeForbidden;
+    }
     return c.json(
       await generateContributorIssueDrafts(c.env, fullName, {
         dryRun: parsed.data.dryRun,
