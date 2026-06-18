@@ -20,6 +20,8 @@ describe("crypto helpers", () => {
     expect(timingSafeEqualHex("abc", "def")).toBe(false);
     expect(timingSafeEqualHex("", "00")).toBe(false);
     expect(timingSafeEqualHex("00", "")).toBe(false);
+    expect(timingSafeEqualHex("0x12", "0012")).toBe(false);
+    expect(timingSafeEqualHex("12gh", "12gh")).toBe(false);
   });
 
   it("base64url-encodes strings and byte arrays without padding", () => {
@@ -46,6 +48,9 @@ describe("webhook signature verification", () => {
     await expect(verifyGitHubSignature(body, `sha256=${signature}`, "")).resolves.toBe(false);
     await expect(verifyGitHubSignature(body, "sha256=abc", secret)).resolves.toBe(false);
     await expect(verifyGitHubSignature(body, "sha256=zz", secret)).resolves.toBe(false);
+    await expect(
+      verifyGitHubSignature(body, `sha256=${"a".repeat(63)}`, secret),
+    ).resolves.toBe(false);
   });
 
   it("uses timing-safe token comparisons and one-way token hashes", async () => {
