@@ -97,6 +97,7 @@ import {
   buildPostEligibilityCommentSpec,
   type LocalWriteActionSpec,
 } from "./local-write-tools";
+import { applyStepResult, buildPlanDag, nextReadySteps, planProgress, validatePlanDag, type PlanDag } from "../services/plan-dag";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
 import { buildIssueSlopAssessment, buildSlopAssessment, ISSUE_SLOP_RUBRIC_MARKDOWN, SLOP_RUBRIC_MARKDOWN } from "../signals/slop";
@@ -273,6 +274,48 @@ const localWriteActionOutputSchema = {
   inputs: z.record(z.string(), z.unknown()),
   command: z.string(),
   boundary: z.string(),
+};
+
+// #783 plan DAG — STATELESS: the harness holds the plan and passes it back each call; these tools only advance
+// the state machine, so gittensory keeps no record of the miner's plan.
+const planStepStatusEnum = z.enum(["pending", "running", "completed", "failed", "skipped"]);
+const rawPlanStepSchema = z
+  .object({
+    id: z.string().min(1).max(100),
+    title: z.string().min(1).max(300),
+    actionClass: z.string().min(1).max(60).optional(),
+    dependsOn: z.array(z.string().min(1).max(100)).max(50).optional(),
+    maxAttempts: z.number().int().min(1).max(10).optional(),
+  })
+  .strict();
+const planStepSchema = z
+  .object({
+    id: z.string().min(1).max(100),
+    title: z.string().min(1).max(300),
+    actionClass: z.string().min(1).max(60).optional(),
+    dependsOn: z.array(z.string().min(1).max(100)).max(50),
+    status: planStepStatusEnum,
+    attempts: z.number().int().min(0),
+    maxAttempts: z.number().int().min(1).max(10),
+    lastError: z.string().max(2000).nullable().optional(),
+  })
+  .strict();
+const planDagSchema = z.object({ steps: z.array(planStepSchema).max(100) }).strict();
+const buildPlanShape = { steps: z.array(rawPlanStepSchema).min(1).max(100) };
+const planStatusShape = { plan: planDagSchema };
+const recordStepResultShape = {
+  plan: planDagSchema,
+  stepId: z.string().min(1).max(100),
+  outcome: z.enum(["completed", "failed", "skipped"]),
+  error: z.string().max(2000).optional(),
+};
+const planViewOutputSchema = {
+  plan: planDagSchema.optional(),
+  progress: z
+    .object({ total: z.number(), completed: z.number(), failed: z.number(), running: z.number(), pending: z.number(), skipped: z.number(), status: z.string() })
+    .optional(),
+  readySteps: z.array(z.object({ id: z.string(), title: z.string() })).optional(),
+  validation: z.object({ valid: z.boolean(), errors: z.array(z.string()) }).optional(),
 };
 
 const localBranchAnalysisShape = {
@@ -1106,6 +1149,23 @@ export class GittensoryMcp {
       async (input) => this.toolResult(this.localWriteSpec(buildDeleteBranchSpec(input))),
     );
 
+    // #783 multi-step plan DAG — stateless: pass the plan back each call.
+    server.registerTool(
+      "gittensory_build_plan",
+      { description: "Normalize raw steps into a validated multi-step plan DAG (per-step state + retries). Returns the plan to hold and pass back to the other plan tools.", inputSchema: buildPlanShape, outputSchema: planViewOutputSchema },
+      async (input) => this.toolResult(this.buildPlan(input)),
+    );
+    server.registerTool(
+      "gittensory_plan_status",
+      { description: "Return a plan's progress, validation, and the steps ready to run now (all dependencies met).", inputSchema: planStatusShape, outputSchema: planViewOutputSchema },
+      async (input) => this.toolResult(this.planStatusTool(input)),
+    );
+    server.registerTool(
+      "gittensory_record_step_result",
+      { description: "Record a step's outcome (completed / failed / skipped). A failure retries until maxAttempts is exhausted. Returns the advanced plan + the next ready steps.", inputSchema: recordStepResultShape, outputSchema: planViewOutputSchema },
+      async (input) => this.toolResult(this.recordStepResult(input)),
+    );
+
     server.registerTool(
       "gittensory_explain_score_breakdown",
       {
@@ -1865,6 +1925,32 @@ export class GittensoryMcp {
   // (or reconstructs from `inputs`) with the miner's own credentials.
   private localWriteSpec(spec: LocalWriteActionSpec): ToolPayload {
     return { summary: `${spec.action}: ${spec.description} ${spec.boundary}`, data: spec as unknown as Record<string, unknown> };
+  }
+
+  // #783 plan DAG — pure, stateless transforms over the caller's plan.
+  private planView(plan: PlanDag): Record<string, unknown> {
+    return {
+      plan: plan as unknown as Record<string, unknown>,
+      progress: planProgress(plan),
+      readySteps: nextReadySteps(plan).map((step) => ({ id: step.id, title: step.title })),
+      validation: validatePlanDag(plan),
+    };
+  }
+
+  private buildPlan(input: z.infer<z.ZodObject<typeof buildPlanShape>>): ToolPayload {
+    const plan = buildPlanDag(input.steps);
+    const validation = validatePlanDag(plan);
+    return { summary: `Built a ${plan.steps.length}-step plan (${validation.valid ? "valid DAG" : `INVALID: ${validation.errors.join("; ")}`}).`, data: this.planView(plan) };
+  }
+
+  private planStatusTool(input: z.infer<z.ZodObject<typeof planStatusShape>>): ToolPayload {
+    const plan = input.plan as PlanDag;
+    return { summary: `Plan status: ${planProgress(plan).status}.`, data: this.planView(plan) };
+  }
+
+  private recordStepResult(input: z.infer<z.ZodObject<typeof recordStepResultShape>>): ToolPayload {
+    const plan = applyStepResult(input.plan as PlanDag, input.stepId, { outcome: input.outcome, ...(input.error !== undefined ? { error: input.error } : {}) });
+    return { summary: `Recorded ${input.outcome} for step ${input.stepId}; plan is now ${planProgress(plan).status}.`, data: this.planView(plan) };
   }
 
   private async explainScoreBreakdown(input: z.infer<z.ZodObject<typeof scorePreviewShape>>): Promise<ToolPayload> {
