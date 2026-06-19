@@ -17,7 +17,9 @@ export const DEFAULT_COMMAND_AUTHORIZATION_POLICY: RepositoryCommandAuthorizatio
 };
 
 const COMMAND_AUTHORIZATION_ROLES = new Set<CommandAuthorizationRole>(["maintainer", "collaborator", "pr_author", "confirmed_miner"]);
-const MAINTAINER_COMMAND_AUTHORIZATION_ROLES = new Set<CommandAuthorizationRole>(["maintainer", "collaborator"]);
+// Roles that may remain configured on a maintainer-only command. The clamp drops only the spoofable
+// plain `pr_author` role; `confirmed_miner` survives so a detected miner can self-trigger reruns (#824).
+const MAINTAINER_COMMAND_AUTHORIZATION_ROLES = new Set<CommandAuthorizationRole>(["maintainer", "collaborator", "confirmed_miner"]);
 const MAINTAINER_ONLY_DEFAULT_COMMANDS = new Set(Object.keys(DEFAULT_COMMAND_AUTHORIZATION_POLICY.commands));
 
 export type CommandAuthorizationDecision = {
