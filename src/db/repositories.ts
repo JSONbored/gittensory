@@ -432,6 +432,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       badgeEnabled: false,
       agentPaused: false,
       agentDryRun: false,
+      newcomerGuideMode: "off",
       commandAuthorization: normalizeCommandAuthorizationPolicy(DEFAULT_COMMAND_AUTHORIZATION_POLICY).policy,
       autonomy: {},
       autoMaintain: { ...DEFAULT_AUTO_MAINTAIN_POLICY },
@@ -471,6 +472,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     badgeEnabled: row.badgeEnabled,
     agentPaused: row.agentPaused,
     agentDryRun: row.agentDryRun,
+    newcomerGuideMode: parseNewcomerGuideMode(row.newcomerGuideMode),
     commandAuthorization: parseCommandAuthorizationPolicy(row.commandAuthorizationJson),
     autonomy: parseAutonomyPolicy(row.autonomyJson),
     autoMaintain: parseAutoMaintainPolicy(row.autoMaintainJson),
@@ -514,6 +516,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     badgeEnabled: settings.badgeEnabled ?? false,
     agentPaused: settings.agentPaused ?? false,
     agentDryRun: settings.agentDryRun ?? false,
+    newcomerGuideMode: settings.newcomerGuideMode ?? "off",
     commandAuthorization: normalizeCommandAuthorizationPolicy(settings.commandAuthorization).policy,
     autonomy: normalizeAutonomyPolicy(settings.autonomy),
     autoMaintain: normalizeAutoMaintainPolicy(settings.autoMaintain),
@@ -555,6 +558,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       badgeEnabled: resolved.badgeEnabled,
       agentPaused: resolved.agentPaused,
       agentDryRun: resolved.agentDryRun,
+      newcomerGuideMode: resolved.newcomerGuideMode,
       commandAuthorizationJson: jsonString(resolved.commandAuthorization),
       autonomyJson: jsonString(resolved.autonomy),
       autoMaintainJson: jsonString(resolved.autoMaintain),
@@ -597,6 +601,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         badgeEnabled: resolved.badgeEnabled,
         agentPaused: resolved.agentPaused,
         agentDryRun: resolved.agentDryRun,
+        newcomerGuideMode: resolved.newcomerGuideMode,
         commandAuthorizationJson: jsonString(resolved.commandAuthorization),
         autonomyJson: jsonString(resolved.autonomy),
         autoMaintainJson: jsonString(resolved.autoMaintain),
@@ -5048,6 +5053,10 @@ function parseGateCheckMode(value: string): RepositorySettings["gateCheckMode"] 
 
 function parseGatePack(value: string | null | undefined): RepositorySettings["gatePack"] {
   return value === "oss-anti-slop" ? "oss-anti-slop" : "gittensor";
+}
+
+function parseNewcomerGuideMode(value: string): RepositorySettings["newcomerGuideMode"] {
+  return value === "enabled" ? "enabled" : "off";
 }
 
 function parseGateRuleMode(value: string): RepositorySettings["linkedIssueGateMode"] {

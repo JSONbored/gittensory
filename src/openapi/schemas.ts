@@ -587,6 +587,7 @@ export const RepositorySettingsSchema = z
     autoMaintain: z.object({ requireApprovals: z.number().int(), mergeMethod: z.enum(["merge", "squash", "rebase"]) }).optional(),
     agentPaused: z.boolean().optional(),
     agentDryRun: z.boolean().optional(),
+    newcomerGuideMode: z.enum(["off", "enabled"]),
     createdAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
   })
@@ -619,6 +620,7 @@ export const RepoSettingsPreviewSchema = z
       createMissingLabel: z.boolean(),
       includeMaintainerAuthors: z.boolean(),
       requireLinkedIssue: z.boolean(),
+      newcomerGuideMode: z.enum(["off", "enabled"]),
       commandAuthorization: z.object({
         defaultAllowed: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])),
         commandOverrides: z.array(

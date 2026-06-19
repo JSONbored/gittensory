@@ -4,6 +4,7 @@ import { createInstallationToken } from "./app";
 export const PR_PANEL_COMMENT_MARKER = "<!-- gittensory-pr-panel:v1 -->";
 export const PR_INTELLIGENCE_COMMENT_MARKER = PR_PANEL_COMMENT_MARKER;
 export const AGENT_COMMAND_COMMENT_MARKER = PR_PANEL_COMMENT_MARKER;
+export const NEWCOMER_GUIDE_COMMENT_MARKER = "<!-- gittensory-newcomer-guide:v1 -->";
 const LEGACY_PR_INTELLIGENCE_COMMENT_MARKER = "<!-- gittensory-pr-intelligence -->";
 const LEGACY_AGENT_COMMAND_COMMENT_MARKER = "<!-- gittensory-agent-command -->";
 
@@ -36,6 +37,17 @@ export async function createOrUpdateAgentCommandComment(
   body: string,
 ): Promise<{ id: number; html_url?: string } | null> {
   return createOrUpdateIssueCommentWithMarker(env, installationId, repoFullName, issueNumber, body, AGENT_COMMAND_COMMENT_MARKER);
+}
+
+export async function createOrUpdateNewcomerGuideComment(
+  env: Env,
+  installationId: number,
+  repoFullName: string,
+  pullNumber: number,
+  body: string,
+  options: { createIfMissing?: boolean | undefined } = {},
+): Promise<{ id: number; html_url?: string } | null> {
+  return createOrUpdateIssueCommentWithMarker(env, installationId, repoFullName, pullNumber, body, NEWCOMER_GUIDE_COMMENT_MARKER, options);
 }
 
 async function createOrUpdateIssueCommentWithMarker(

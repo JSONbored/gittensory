@@ -33,6 +33,7 @@ export type FocusManifestGateConfig = {
   mergeReadiness: GateRuleMode | null;
   manifestPolicy: GateRuleMode | null;
   firstTimeContributorGrace: boolean | null;
+  newcomerGuide: "off" | "enabled" | null;
 };
 
 /**
@@ -71,6 +72,7 @@ export type FocusManifestSettings = Partial<
     | "autoMaintain"
     | "agentPaused"
     | "agentDryRun"
+    | "newcomerGuideMode"
   >
 >;
 
@@ -168,6 +170,7 @@ const EMPTY_GATE_CONFIG: FocusManifestGateConfig = {
   mergeReadiness: null,
   manifestPolicy: null,
   firstTimeContributorGrace: null,
+  newcomerGuide: null,
 };
 
 const EMPTY_MANIFEST: FocusManifest = {
@@ -311,6 +314,7 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     mergeReadiness: normalizeOptionalGateMode(record.mergeReadiness, "gate.mergeReadiness", warnings),
     manifestPolicy: normalizeOptionalGateMode(record.manifestPolicy, "gate.manifestPolicy", warnings),
     firstTimeContributorGrace: normalizeOptionalBoolean(record.firstTimeContributorGrace, "gate.firstTimeContributorGrace", warnings),
+    newcomerGuide: normalizeOptionalEnum(record.newcomerGuide, "gate.newcomerGuide", ["off", "enabled"] as const, warnings),
   };
   gate.present =
     gate.enabled !== null ||
@@ -328,7 +332,8 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     gate.aiReviewModel !== null ||
     gate.mergeReadiness !== null ||
     gate.manifestPolicy !== null ||
-    gate.firstTimeContributorGrace !== null;
+    gate.firstTimeContributorGrace !== null ||
+    gate.newcomerGuide !== null;
   return gate;
 }
 
@@ -367,6 +372,7 @@ export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
   if (gate.mergeReadiness !== null) out.mergeReadiness = gate.mergeReadiness;
   if (gate.manifestPolicy !== null) out.manifestPolicy = gate.manifestPolicy;
   if (gate.firstTimeContributorGrace !== null) out.firstTimeContributorGrace = gate.firstTimeContributorGrace;
+  if (gate.newcomerGuide !== null) out.newcomerGuide = gate.newcomerGuide;
   return out;
 }
 
@@ -408,6 +414,8 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   if (checkRunDetailLevel !== null) out.checkRunDetailLevel = checkRunDetailLevel;
   const gateCheckMode = normalizeOptionalEnum(r.gateCheckMode, "settings.gateCheckMode", ["off", "enabled"] as const, warnings);
   if (gateCheckMode !== null) out.gateCheckMode = gateCheckMode;
+  const newcomerGuideMode = normalizeOptionalEnum(r.newcomerGuideMode, "settings.newcomerGuideMode", ["off", "enabled"] as const, warnings);
+  if (newcomerGuideMode !== null) out.newcomerGuideMode = newcomerGuideMode;
   const linkedIssueGateMode = normalizeOptionalGateMode(r.linkedIssueGateMode, "settings.linkedIssueGateMode", warnings);
   if (linkedIssueGateMode !== null) out.linkedIssueGateMode = linkedIssueGateMode;
   const duplicatePrGateMode = normalizeOptionalGateMode(r.duplicatePrGateMode, "settings.duplicatePrGateMode", warnings);
@@ -527,6 +535,7 @@ export function resolveEffectiveSettings(dbSettings: RepositorySettings, manifes
   if (gate.mergeReadiness !== null) effective.mergeReadinessGateMode = gate.mergeReadiness;
   if (gate.manifestPolicy !== null) effective.manifestPolicyGateMode = gate.manifestPolicy;
   if (gate.firstTimeContributorGrace !== null) effective.firstTimeContributorGrace = gate.firstTimeContributorGrace;
+  if (gate.newcomerGuide !== null) effective.newcomerGuideMode = gate.newcomerGuide;
   return effective;
 }
 

@@ -478,6 +478,11 @@ export type RepositorySettings = {
   /** Per-repo dry-run/shadow mode (#776): when true, the action layer records what it WOULD do without
    *  performing any GitHub mutation. Default false. */
   agentDryRun?: boolean | undefined;
+  /** Advisory newcomer-PR auto-guide (#803, Phase-1-lite). When `"enabled"`, the webhook posts a one-time
+   *  welcoming advisory comment on first-time-contributor PRs (0 merged PRs in this repo). Advisory only —
+   *  never blocks, never auto-merges. Reuses the #552 newcomer detection (`authorMergedPrCount === 0`).
+   *  Default `"off"` — opt-in. */
+  newcomerGuideMode?: "off" | "enabled" | undefined;
   createdAt?: string | null | undefined;
   updatedAt?: string | null | undefined;
 };

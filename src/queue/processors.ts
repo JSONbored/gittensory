@@ -67,7 +67,7 @@ import {
 } from "../github/backfill";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot, fetchOfficialGittensorMiner, type GittensorContributorSnapshot, type OfficialGittensorMinerDetection } from "../gittensor/api";
 import { createOrUpdateCheckRun, createOrUpdateErroredGateCheckRun, createOrUpdateGateCheckRun, createOrUpdateOverriddenGateCheckRun, createOrUpdatePendingGateCheckRun, createOrUpdateSkippedGateCheckRun, getInstallationId, getRepositoryCollaboratorPermission } from "../github/app";
-import { AGENT_COMMAND_COMMENT_MARKER, createOrUpdateAgentCommandComment, createOrUpdatePrIntelligenceComment, PR_PANEL_COMMENT_MARKER } from "../github/comments";
+import { AGENT_COMMAND_COMMENT_MARKER, createOrUpdateAgentCommandComment, createOrUpdateNewcomerGuideComment, createOrUpdatePrIntelligenceComment, PR_PANEL_COMMENT_MARKER } from "../github/comments";
 import { gittensoryFooter, gittensorRepoEarnUrl } from "../github/footer";
 import {
   buildMaintainerQueueDigest,
@@ -84,6 +84,7 @@ import { ensurePullRequestLabel } from "../github/labels";
 import { fetchPublicContributorProfile } from "../github/public";
 import { refreshRegistry } from "../registry/sync";
 import { buildIssueAdvisory, buildPullRequestAdvisory, evaluateGateCheck, isTestPath } from "../rules/advisory";
+import { buildNewcomerGuideComment } from "../signals/newcomer-guide";
 import { detectNotificationEvents } from "../notifications/events";
 import { deliverNotification, detectIssueWatchEvents, evaluateNotificationEvent } from "../notifications/service";
 import { getOrCreateScoringModelSnapshot, refreshScoringModelSnapshot } from "../scoring/model";
@@ -1354,6 +1355,7 @@ async function maybePublishPrPublicSurface(
   let gateEvaluation: ReturnType<typeof evaluateGateCheck> | undefined;
   let aiReview: { notes: string } | undefined;
   let gateFinalized = false;
+  let authorHistory: { mergedPrCount: number; closedUnmergedPrCount: number } | undefined;
   try {
     const [repoIssues, repoPullRequests, repoBounties] = await Promise.all([
       listIssues(env, repoFullName),
@@ -1461,7 +1463,7 @@ async function maybePublishPrPublicSurface(
     // 0 merged here; repeat offender = >= 3 closed-unmerged here. Cheap (in-memory over the already-loaded
     // repo PRs) and only consulted by evaluateGateCheck when firstTimeContributorGrace is on.
     const authorPrs = author ? repoPullRequests.filter((candidate) => candidate.authorLogin === author && candidate.number !== pr.number) : [];
-    const authorHistory = {
+    authorHistory = {
       mergedPrCount: authorPrs.filter((candidate) => candidate.mergedAt || candidate.state === "merged").length,
       closedUnmergedPrCount: authorPrs.filter((candidate) => candidate.state === "closed" && !candidate.mergedAt).length,
     };
@@ -1523,6 +1525,42 @@ async function maybePublishPrPublicSurface(
       }).catch(() => undefined);
     }
     throw error;
+  }
+
+  // Advisory newcomer-PR auto-guide (#803, Phase-1-lite): when enabled and the author is a genuine
+  // newcomer (0 merged PRs in this repo), post a one-time welcoming advisory comment with specific
+  // guidance derived from the gate findings. Advisory only — never blocks, never auto-merges.
+  // Independent of the public-surface decision so it fires even when commentMode is off.
+  if (settings.newcomerGuideMode === "enabled" && author && authorHistory.mergedPrCount === 0 && pr.state === "open" && webhook.action !== "closed") {
+    try {
+      const guideBody = buildNewcomerGuideComment({
+        authorLogin: author,
+        pullNumber: pr.number,
+        title: pr.title ?? "your contribution",
+        repoFullName,
+        advisory,
+        gateBlocking: gateEvaluation?.conclusion === "failure",
+      });
+      if (guideBody) {
+        await createOrUpdateNewcomerGuideComment(env, installationId, repoFullName, pr.number, guideBody);
+        await recordAuditEvent(env, {
+          eventType: "github_app.newcomer_guide_posted",
+          actor: author,
+          targetKey: `${repoFullName}#${pr.number}`,
+          outcome: "completed",
+          metadata: { deliveryId: webhook.deliveryId, repoFullName },
+        }).catch(() => undefined);
+      }
+    } catch (error) {
+      await recordAuditEvent(env, {
+        eventType: "github_app.newcomer_guide_failed",
+        actor: author,
+        targetKey: `${repoFullName}#${pr.number}`,
+        outcome: "error",
+        detail: errorMessage(error),
+        metadata: { deliveryId: webhook.deliveryId, repoFullName },
+      }).catch(() => undefined);
+    }
   }
 
   if (!prelimHasPublicOutput) return;

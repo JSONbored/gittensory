@@ -8116,6 +8116,10 @@
           },
           "agentDryRun": {
             "type": "boolean"
+          },
+          "newcomerGuideMode": {
+            "type": "string",
+            "enum": ["off", "enabled"]
           }
         },
         "required": [
@@ -8143,7 +8147,8 @@
           "requireLinkedIssue",
           "backfillEnabled",
           "privateTrustEnabled",
-          "commandAuthorization"
+          "commandAuthorization",
+          "newcomerGuideMode"
         ]
       },
       "InstallationRepair": {
@@ -8618,6 +8623,10 @@
               },
               "requireLinkedIssue": {
                 "type": "boolean"
+              },
+              "newcomerGuideMode": {
+                "type": "string",
+                "enum": ["off", "enabled"]
               },
               "commandAuthorization": {
                 "type": "object",

@@ -198,6 +198,7 @@ export type RepoSettingsPreview = {
     includeMaintainerAuthors: boolean;
     requireLinkedIssue: boolean;
     badgeEnabled: boolean;
+    newcomerGuideMode: RepositorySettings["newcomerGuideMode"];
     commandAuthorization: {
       defaultAllowed: CommandAuthorizationRole[];
       commandOverrides: Array<{ command: string; allowedRoles: CommandAuthorizationRole[] }>;
@@ -316,6 +317,7 @@ export function buildRepoSettingsPreview(args: {
       includeMaintainerAuthors: settings.includeMaintainerAuthors,
       requireLinkedIssue: settings.requireLinkedIssue,
       badgeEnabled: settings.badgeEnabled ?? false,
+      newcomerGuideMode: settings.newcomerGuideMode,
       commandAuthorization: summarizeCommandAuthorizationPolicy(settings.commandAuthorization),
     },
     commandAuthorizationPreview,
