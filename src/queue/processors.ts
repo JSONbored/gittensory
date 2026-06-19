@@ -1168,11 +1168,11 @@ export async function runAiReviewForAdvisory(
   const packAllowsAnyAuthorBlockingReview = args.settings.gatePack === "oss-anti-slop" && args.settings.aiReviewMode === "block";
   if (args.settings.aiReviewMode === "off" || (!args.confirmedContributor && !packAllowsAnyAuthorBlockingReview) || !args.advisory.headSha) return undefined;
   try {
-    // BYOK: decrypt the maintainer's provider key only when opted in. Falls back to free Workers AI when
+    // BYOK: decrypt the maintainer's provider key only for confirmed contributors when opted in. Falls back to free Workers AI when
     // no key is configured or the encryption secret is unavailable (getDecryptedRepositoryAiKey → null).
     // Apply config-as-code provider/model: a declared provider must match the stored key's provider (else
     // skip BYOK → Workers-AI fallback); a declared model overrides the stored/default model.
-    const storedKey = args.settings.aiReviewByok ? await getDecryptedRepositoryAiKey(env, args.repoFullName) : null;
+    const storedKey = args.confirmedContributor && args.settings.aiReviewByok ? await getDecryptedRepositoryAiKey(env, args.repoFullName) : null;
     const providerKey =
       storedKey && (!args.settings.aiReviewProvider || args.settings.aiReviewProvider === storedKey.provider)
         ? { provider: storedKey.provider, key: storedKey.key, model: args.settings.aiReviewModel ?? storedKey.model }

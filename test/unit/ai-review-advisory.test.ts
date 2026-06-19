@@ -156,6 +156,35 @@ describe("runAiReviewForAdvisory", () => {
     expect(result).toBeUndefined();
   });
 
+  it("does not use the maintainer's BYOK key for non-confirmed oss-anti-slop blocking reviews", async () => {
+    const run = vi.fn(async () => ({ response: defectJson() }));
+    const env = createTestEnv({
+      AI: { run } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+      TOKEN_ENCRYPTION_SECRET: "advisory-test-encryption-secret-32bytes",
+    });
+    await upsertRepositoryAiKey(env, { repoFullName: "acme/widgets", provider: "anthropic", key: "sk-ant-byok-key-9999", model: null });
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ content: [{ type: "text", text: notesOnlyJson() }] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const adv = advisory();
+
+    const result = await runAiReviewForAdvisory(env, {
+      settings: { aiReviewMode: "block", gatePack: "oss-anti-slop", aiReviewByok: true } as RepositorySettings,
+      advisory: adv,
+      repoFullName: "acme/widgets",
+      pr,
+      author: "alice",
+      confirmedContributor: false,
+    });
+
+    expect(result?.notes).toContain("Likely crash.");
+    expect(adv.findings.map((f) => f.code)).toEqual(["ai_consensus_defect"]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalled();
+  });
+
   it("uses the maintainer's BYOK provider key when aiReviewByok is on and a key is configured", async () => {
     const env = createTestEnv({
       AI: { run: async () => ({ response: notesOnlyJson() }) } as unknown as Ai,
