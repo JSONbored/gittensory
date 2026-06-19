@@ -1030,6 +1030,10 @@ export function shouldCollectSlopEvidence(settings: Pick<RepositorySettings, "sl
   return settings.slopGateMode !== "off" || mergeReadinessGateEnabled(settings);
 }
 
+export function shouldRunSlopAiAdvisory(settings: Pick<RepositorySettings, "slopAiAdvisory" | "slopGateMode">): boolean {
+  return settings.slopAiAdvisory && settings.slopGateMode !== "off";
+}
+
 function shouldProcessPullRequestPublicSurface(action: string | undefined): boolean {
   return PR_PUBLIC_SURFACE_ACTIONS.has(action ?? "") || PR_GATE_CLOSED_ACTIONS.has(action ?? "");
 }
@@ -1420,7 +1424,7 @@ async function maybePublishPrPublicSurface(
       await updatePullRequestSlopAssessment(env, repoFullName, pr.number, { slopRisk: slop.slopRisk, slopBand: slop.band }).catch(() => undefined);
       // AI-assisted slop advisory (#533, opt-in). Reuses the already-fetched files; appends at most one
       // advisory-only finding. Deliberately does NOT update slopRisk — only the deterministic core blocks.
-      if (settings.slopAiAdvisory) {
+      if (shouldRunSlopAiAdvisory(settings)) {
         await runAiSlopForAdvisory(env, { settings, advisory, repoFullName, pr, author, files: slopFiles, deterministicBand: slop.band, confirmedContributor });
       }
     }
