@@ -72,8 +72,8 @@ const FINDING_GUIDANCE: Record<string, { title: string; tip: string }> = {
   },
 };
 
-/** Build the newcomer guide comment body. Returns null when no guidance is warranted (no findings). */
-export function buildNewcomerGuideComment(input: NewcomerGuideInput): string | null {
+/** Build the newcomer guide comment body. `filterActionableFindings` already guarantees every listed finding has matching guidance, so there is no null return path. */
+export function buildNewcomerGuideComment(input: NewcomerGuideInput): string {
   const actionableFindings = filterActionableFindings(input.advisory.findings);
   const lines: string[] = [];
 
@@ -88,12 +88,10 @@ export function buildNewcomerGuideComment(input: NewcomerGuideInput): string | n
   if (actionableFindings.length > 0) {
     lines.push("");
     for (const finding of actionableFindings) {
-      const guidance = FINDING_GUIDANCE[finding.code];
-      if (guidance) {
-        lines.push(`### ${guidance.title}`);
-        lines.push(guidance.tip);
-        lines.push("");
-      }
+      const guidance = FINDING_GUIDANCE[finding.code]!;
+      lines.push(`### ${guidance.title}`);
+      lines.push(guidance.tip);
+      lines.push("");
     }
   }
 

@@ -1589,19 +1589,17 @@ async function maybePublishPrPublicSurface(
         advisory,
         gateBlocking: gateEvaluation?.conclusion === "failure",
       });
-      if (guideBody) {
-        await createOrUpdateNewcomerGuideComment(env, installationId, repoFullName, pr.number, guideBody);
-        await recordAuditEvent(env, {
-          eventType: "github_app.newcomer_guide_posted",
-          actor: author,
-          targetKey: `${repoFullName}#${pr.number}`,
-          outcome: "completed",
-          metadata: { deliveryId: webhook.deliveryId, repoFullName },
-        }).catch(() => {
-          /* v8 ignore next -- best-effort: the posted audit is advisory; a D1 write failure is swallowed so it never aborts the webhook. */
-          return undefined;
-        });
-      }
+      await createOrUpdateNewcomerGuideComment(env, installationId, repoFullName, pr.number, guideBody);
+      await recordAuditEvent(env, {
+        eventType: "github_app.newcomer_guide_posted",
+        actor: author,
+        targetKey: `${repoFullName}#${pr.number}`,
+        outcome: "completed",
+        metadata: { deliveryId: webhook.deliveryId, repoFullName },
+      }).catch(() => {
+        /* v8 ignore next -- best-effort: the posted audit is advisory; a D1 write failure is swallowed so it never aborts the webhook. */
+        return undefined;
+      });
     } catch (error) {
       await recordAuditEvent(env, {
         eventType: "github_app.newcomer_guide_failed",
