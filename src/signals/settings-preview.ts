@@ -198,6 +198,10 @@ export type RepoSettingsPreview = {
     includeMaintainerAuthors: boolean;
     requireLinkedIssue: boolean;
     badgeEnabled: boolean;
+    aiReviewMode: RepositorySettings["aiReviewMode"];
+    aiReviewByok: boolean;
+    aiReviewProvider: string | null;
+    aiReviewModel: string | null;
     commandAuthorization: {
       defaultAllowed: CommandAuthorizationRole[];
       commandOverrides: Array<{ command: string; allowedRoles: CommandAuthorizationRole[] }>;

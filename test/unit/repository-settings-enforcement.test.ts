@@ -67,8 +67,7 @@ describe("repository settings enforcement audit (#797)", () => {
 
   it("blocks confirmed contributors when requireLinkedIssue is enabled via the boolean alone", () => {
     const effective = resolveEffectiveSettings(settings({ requireLinkedIssue: true, linkedIssueGateMode: "off" }), parseFocusManifest(null));
-    const policy = gateCheckPolicy(effective);
-    const result = evaluateGateCheck(missingIssueAdvisory(), policy, { confirmedContributor: true });
+    const result = evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(effective, null, true));
     expect(result.conclusion).toBe("failure");
   });
 
