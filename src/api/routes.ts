@@ -42,6 +42,7 @@ import {
   getRepoQueueTrendSnapshot,
   getRepositorySettings,
   getPendingAgentAction,
+  listAgentAuditEvents,
   listPendingAgentActions,
   recordAuditEvent,
   getContributorEvidence,
@@ -2062,6 +2063,23 @@ export function createApp() {
     const result = await decidePendingAgentAction(c.env, { id: pending.id, decision, decidedBy });
     if (result.status === "already_decided") return c.json({ error: "already_decided", action: result.action }, 409);
     return c.json(result);
+  });
+
+  // #784 audit feed: the agent's executed actions + approval-queue decisions for this repo. Maintainer-scoped,
+  // read-only, public-safe (action posture only — no trust/score metadata). `?since=ISO&limit=N` (max 200).
+  app.get("/v1/repos/:owner/:repo/agent/audit-feed", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoMaintainer(c, fullName);
+    /* v8 ignore next -- unauthorized requests are rejected by the auth middleware before reaching the handler. */
+    if (gate instanceof Response) return gate;
+    const since = c.req.query("since");
+    const limit = Number(c.req.query("limit") ?? "");
+    const events = await listAgentAuditEvents(c.env, {
+      repoFullName: fullName,
+      ...(since ? { sinceIso: since } : {}),
+      ...(Number.isInteger(limit) && limit > 0 ? { limit } : {}),
+    });
+    return c.json({ repoFullName: fullName, events });
   });
 
   // Maintainer activation demo (#701): a repo-specific "here's what Gittensory would have surfaced" preview

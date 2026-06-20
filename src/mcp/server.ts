@@ -20,6 +20,7 @@ import {
   getRepository,
   getRepositorySettings,
   getRepoQueueTrendSnapshot,
+  listAgentAuditEvents,
   listCheckSummaries,
   listPendingAgentActions,
   listContributorRepoStats,
@@ -368,6 +369,30 @@ const automationStateOutputSchema = {
   permissionReadiness: z.string().optional(),
   actingActionClasses: z.array(z.string()).optional(),
   pendingActionCount: z.number().optional(),
+};
+
+// #784 (MCP slice) — the agent audit feed: executed actions + approval decisions for a repo.
+const auditFeedShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  since: z.string().min(1).optional(),
+  limit: z.number().int().positive().max(200).optional(),
+};
+
+const auditFeedOutputSchema = {
+  repoFullName: z.string().optional(),
+  events: z
+    .array(
+      z.object({
+        eventType: z.string(),
+        pullNumber: z.number().nullable(),
+        outcome: z.string(),
+        actor: z.string().nullable(),
+        detail: z.string().nullable(),
+        createdAt: z.string(),
+      }),
+    )
+    .optional(),
 };
 
 const focusManifestInputSchema = z
@@ -1257,6 +1282,17 @@ export class GittensoryMcp {
     );
 
     server.registerTool(
+      "gittensory_get_agent_audit_feed",
+      {
+        description:
+          "Return a repo's agent audit feed: executed actions (agent.action.*) and approval-queue decisions (accepted/rejected), newest first. Read-only and public-safe (action posture only). Maintainer access required.",
+        inputSchema: auditFeedShape,
+        outputSchema: auditFeedOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getAgentAuditFeed(input)),
+    );
+
+    server.registerTool(
       "gittensory_explain_score_breakdown",
       {
         description:
@@ -2118,6 +2154,22 @@ export class GittensoryMcp {
     return {
       summary: `${created ? "Staged" : "Already staged"} a ${input.actionClass} on ${fullName}#${input.pullNumber} for maintainer approval.`,
       data: { created, action: { id: action.id, actionClass: action.actionClass, pullNumber: action.pullNumber, status: action.status, reason: action.reason } },
+    };
+  }
+
+  // #784 — the agent audit feed: executed actions + approval decisions for a repo, newest first.
+  // Maintainer-manage scoped; read-only and public-safe (action posture only — no trust/score metadata).
+  private async getAgentAuditFeed(input: z.infer<z.ZodObject<typeof auditFeedShape>>): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoManageAccess(fullName);
+    const events = await listAgentAuditEvents(this.env, {
+      repoFullName: fullName,
+      ...(input.since !== undefined ? { sinceIso: input.since } : {}),
+      ...(input.limit !== undefined ? { limit: input.limit } : {}),
+    });
+    return {
+      summary: `${events.length} recent agent audit event(s) for ${fullName}.`,
+      data: { repoFullName: fullName, events },
     };
   }
 
