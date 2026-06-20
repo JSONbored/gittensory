@@ -112,6 +112,30 @@ describe("control panel role summaries", () => {
     });
   });
 
+  it("drops an owner's repo from scope when their installation is suspended (suspend revokes access)", () => {
+    // Suspending the App revokes its access; the owner-match scope branch must honor that, not just the
+    // installation-id branch — otherwise a repo owner keeps reading their repo's private data post-suspend.
+    const args = {
+      login: "repo-owner",
+      generatedAt: "2026-06-01T12:00:00.000Z",
+      confirmedMiner: false,
+      operator: false,
+      repositories: [repo("repo-owner/owned-repo", "repo-owner", 21)],
+      installations: [{ ...installation(21, "repo-owner"), suspendedAt: "2026-06-02T00:00:00.000Z" }],
+      pullRequests: [],
+    } as const;
+
+    const scope = buildControlPanelAccessScope(args);
+    expect(scope.repositoryFullNames).toEqual([]);
+    expect(scope.installationIds).toEqual([]);
+    expect(scope.accountLogins).toEqual([]);
+
+    // The role summary uses the same owner-scope logic; a suspended owner must not be granted owner/maintainer.
+    const summary = buildControlPanelRoleSummary(args);
+    expect(summary.roles).not.toContain("owner");
+    expect(summary.roles).not.toContain("maintainer");
+  });
+
   it("includes installed maintainer repositories from cached PR evidence", () => {
     const scope = buildControlPanelAccessScope({
       login: "maintainer",

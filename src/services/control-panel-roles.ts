@@ -74,7 +74,14 @@ export function buildControlPanelAccessScope(args: RoleSummaryInputs): ControlPa
   const installedRepos = args.repositories.filter((repo) => repo.isInstalled);
   const accountInstallations = args.installations.filter((installation) => !installation.suspendedAt && sameLogin(installation.accountLogin, args.login));
   const accountInstallationIds = new Set(accountInstallations.map((installation) => installation.id));
-  const ownedInstalledRepos = installedRepos.filter((repo) => sameLogin(repo.owner, args.login) || (repo.installationId !== undefined && repo.installationId !== null && accountInstallationIds.has(repo.installationId)));
+  // Suspending the App revokes its access, so an owned repo whose installation is suspended must drop out
+  // of scope — the owner-match fallback below previously ignored suspendedAt. We still keep the permissive
+  // owner-match for repos with no/unknown installation linkage; only a *suspended* installation excludes.
+  const suspendedInstallationIds = new Set(args.installations.filter((installation) => installation.suspendedAt).map((installation) => installation.id));
+  const ownedInstalledRepos = installedRepos.filter((repo) => {
+    if (repo.installationId !== undefined && repo.installationId !== null && suspendedInstallationIds.has(repo.installationId)) return false;
+    return sameLogin(repo.owner, args.login) || (repo.installationId !== undefined && repo.installationId !== null && accountInstallationIds.has(repo.installationId));
+  });
   const maintainerRepos = uniqueRepoNames(
     args.pullRequests
       .filter((pull) => sameLogin(pull.authorLogin, args.login) && isMaintainerAssociation(pull.authorAssociation))
@@ -101,7 +108,14 @@ export function buildControlPanelRoleSummary(args: RoleSummaryInputs): ControlPa
   const installedRepos = args.repositories.filter((repo) => repo.isInstalled);
   const accountInstallations = args.installations.filter((installation) => !installation.suspendedAt && sameLogin(installation.accountLogin, args.login));
   const accountInstallationIds = new Set(accountInstallations.map((installation) => installation.id));
-  const ownedInstalledRepos = installedRepos.filter((repo) => sameLogin(repo.owner, args.login) || (repo.installationId !== undefined && repo.installationId !== null && accountInstallationIds.has(repo.installationId)));
+  // Suspending the App revokes its access, so an owned repo whose installation is suspended must drop out
+  // of scope — the owner-match fallback below previously ignored suspendedAt. We still keep the permissive
+  // owner-match for repos with no/unknown installation linkage; only a *suspended* installation excludes.
+  const suspendedInstallationIds = new Set(args.installations.filter((installation) => installation.suspendedAt).map((installation) => installation.id));
+  const ownedInstalledRepos = installedRepos.filter((repo) => {
+    if (repo.installationId !== undefined && repo.installationId !== null && suspendedInstallationIds.has(repo.installationId)) return false;
+    return sameLogin(repo.owner, args.login) || (repo.installationId !== undefined && repo.installationId !== null && accountInstallationIds.has(repo.installationId));
+  });
   const maintainerRepos = uniqueRepos(
     args.pullRequests
       .filter((pull) => sameLogin(pull.authorLogin, args.login) && isMaintainerAssociation(pull.authorAssociation))
