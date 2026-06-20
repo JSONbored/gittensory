@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDuplicateClusterFinding,
   buildEmptyIssueBodyFinding,
   buildIssueSlopAssessment,
   buildLowQualityCommitMessageFinding,
@@ -15,6 +16,18 @@ import {
 
 const FORBIDDEN_PUBLIC_TERMS =
   /wallet|hotkey|coldkey|mnemonic|reward|payout|raw trust|trust score|scoreability|private reviewability|\/Users|\/home|\/tmp/i;
+
+// Minimal CollisionReport fixtures for the duplicate-cluster signal (#563).
+type ClusterRisk = "low" | "medium" | "high";
+const item = (type: "pull_request" | "issue", number: number) => ({ type, number, title: `item ${number}` });
+const pr = (number: number) => item("pull_request", number);
+const issue = (number: number) => item("issue", number);
+const collisionReport = (clusters: Array<{ id: string; risk: ClusterRisk; reason: string; items: ReturnType<typeof item>[] }>) => ({
+  repoFullName: "owner/repo",
+  generatedAt: "2026-06-18T00:00:00.000Z",
+  summary: { clusterCount: clusters.length, highRiskCount: clusters.filter((cluster) => cluster.risk === "high").length, itemsReviewed: clusters.reduce((total, cluster) => total + cluster.items.length, 0) },
+  clusters,
+});
 
 describe("buildSlopAssessment", () => {
   it("exports rubric bands and a deterministic assessment shell", () => {
@@ -48,6 +61,29 @@ describe("buildSlopAssessment", () => {
     expect(empty?.detail).toMatch(/empty/i);
     // leading blanks are skipped; the first real subject ("update") is what gets judged.
     expect(buildLowQualityCommitMessageFinding({ commitMessages: ["", "update"] })?.detail).toMatch(/generic/i);
+  });
+
+  it("raises duplicate-cluster slop when the PR sits in a high-risk cluster with 2+ open PRs (#563)", () => {
+    const collisions = collisionReport([
+      { id: "c1", risk: "high", reason: "overlap", items: [pr(7), pr(8), issue(3)] },
+    ]);
+    const result = buildSlopAssessment({ collisions, pullNumber: 7 });
+    expect(result.slopRisk).toBe(SLOP_WEIGHTS.duplicateClusterMembership);
+    expect(result.band).toBe("low");
+    expect(result.findings).toEqual([expect.objectContaining({ code: "duplicate_cluster_membership", severity: "warning" })]);
+    expect(JSON.stringify(result)).not.toMatch(FORBIDDEN_PUBLIC_TERMS);
+  });
+
+  it("does not raise duplicate-cluster slop without a 2+-PR high-risk cluster containing this PR (#563)", () => {
+    // missing context → no signal
+    expect(buildDuplicateClusterFinding({})).toBeNull();
+    expect(buildDuplicateClusterFinding({ collisions: collisionReport([]) })).toBeNull();
+    // high-risk but only this PR + an issue (healthy linkage) → not a duplicate-PR cluster
+    expect(buildDuplicateClusterFinding({ collisions: collisionReport([{ id: "c", risk: "high", reason: "r", items: [pr(7), issue(3)] }]), pullNumber: 7 })).toBeNull();
+    // two PRs but the cluster is not high-risk
+    expect(buildDuplicateClusterFinding({ collisions: collisionReport([{ id: "c", risk: "medium", reason: "r", items: [pr(7), pr(8)] }]), pullNumber: 7 })).toBeNull();
+    // high-risk 2-PR cluster, but this PR is not a member
+    expect(buildDuplicateClusterFinding({ collisions: collisionReport([{ id: "c", risk: "high", reason: "r", items: [pr(8), pr(9)] }]), pullNumber: 7 })).toBeNull();
   });
 
   it("raises missing-test-evidence slop for code-only diffs without tests", () => {
