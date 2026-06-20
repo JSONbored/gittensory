@@ -18,6 +18,8 @@ import { apiFetch } from "@/lib/api/request";
 import { getApiOrigin } from "@/lib/api/origin";
 import { useApiResource } from "@/lib/api/use-api-resource";
 import { useSession } from "@/lib/api/session";
+import { useDevMockMode } from "@/lib/dev-mock-mode";
+import { MINER_DASHBOARD_MOCK } from "@/lib/dev-panel-mocks";
 import {
   buildMinerCommandActions,
   type MinerCommandAction,
@@ -91,12 +93,16 @@ type MinerDashboard = {
 
 export function MinerPanel() {
   const { session } = useSession();
+  const mockMode = useDevMockMode();
   const login = session?.login ?? "";
   const dashboard = useApiResource<MinerDashboard>(
     `/v1/app/miner-dashboard?login=${encodeURIComponent(login)}`,
     "Miner dashboard",
     undefined,
-    { enabled: Boolean(login) },
+    {
+      enabled: mockMode || Boolean(login),
+      mockData: mockMode ? MINER_DASHBOARD_MOCK : undefined,
+    },
   );
   const data = dashboard.status === "ready" ? dashboard.data : null;
   const blockerCount = data?.blockers.reduce((count, group) => count + group.items.length, 0) ?? 0;

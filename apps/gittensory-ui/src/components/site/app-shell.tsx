@@ -33,6 +33,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { GittensoryMark } from "./mark";
+import { DevMockBanner } from "./dev-mock-banner";
 import { ThemeToggle } from "./theme-toggle";
 import { StatusPill, type Status } from "./control-primitives";
 import { LoadingState } from "./state-views";
@@ -307,6 +308,7 @@ export function AppShell() {
           </div>
         </header>
         <div className="min-w-0 px-4 py-6 sm:px-6 lg:px-8">
+          <DevMockBanner />
           <Outlet />
         </div>
       </SidebarInset>

@@ -8,6 +8,12 @@ import {
 } from "@/components/site/control-primitives";
 import { StateBoundary } from "@/components/site/state-views";
 import { Input } from "@/components/ui/input";
+import { useDevMockMode } from "@/lib/dev-mock-mode";
+import {
+  MOCK_OWNER_REPO,
+  OWNER_CONFIG_RECOMMENDATION_MOCK,
+  OWNER_REGISTRATION_READINESS_MOCK,
+} from "@/lib/dev-panel-mocks";
 import { useApiResource } from "@/lib/api/use-api-resource";
 import {
   buildRegistrationWorkspaceView,
@@ -40,7 +46,8 @@ const WORKFLOW_STATUS_MAP: Record<OwnerWorkflowState, Status> = {
 };
 
 export function OwnerPanel() {
-  const [repo, setRepo] = useState("entrius/gittensor");
+  const mockMode = useDevMockMode();
+  const [repo, setRepo] = useState(mockMode ? MOCK_OWNER_REPO : "entrius/gittensor");
   const parts = splitRepoFullName(repo.trim());
   const repoPath = parts
     ? `/v1/repos/${encodeURIComponent(parts.owner)}/${encodeURIComponent(parts.repo)}`
@@ -49,13 +56,19 @@ export function OwnerPanel() {
     `${repoPath ?? "/v1/repos/__invalid__/__invalid__"}/registration-readiness`,
     "Registration readiness",
     undefined,
-    { enabled: Boolean(repoPath) },
+    {
+      enabled: Boolean(repoPath),
+      mockData: mockMode ? OWNER_REGISTRATION_READINESS_MOCK : undefined,
+    },
   );
   const config = useApiResource<GittensorConfigRecommendationPayload>(
     `${repoPath ?? "/v1/repos/__invalid__/__invalid__"}/gittensor-config-recommendation`,
     "Config recommendation",
     undefined,
-    { enabled: Boolean(repoPath) },
+    {
+      enabled: Boolean(repoPath),
+      mockData: mockMode ? OWNER_CONFIG_RECOMMENDATION_MOCK : undefined,
+    },
   );
 
   const workspace = useMemo(() => {

@@ -8,17 +8,20 @@ type ResourceState<T> =
   | { status: "ready"; data: T; error: null }
   | { status: "error"; data: null; error: string };
 
-type UseApiResourceOptions = {
+type UseApiResourceOptions<T> = {
   enabled?: boolean;
+  /** Dev-only fixture; when set, skips the network and serves mock data immediately. */
+  mockData?: T;
 };
 
 export function useApiResource<T>(
   path: string,
   label: string,
   token?: string,
-  options: UseApiResourceOptions = {},
+  options: UseApiResourceOptions<T> = {},
 ) {
   const enabled = options.enabled ?? true;
+  const mockData = options.mockData;
   const [state, setState] = useState<ResourceState<T>>({
     status: "loading",
     data: null,
@@ -28,6 +31,10 @@ export function useApiResource<T>(
   const load = useCallback(async () => {
     if (!enabled) {
       setState({ status: "error", data: null, error: "disabled" });
+      return;
+    }
+    if (import.meta.env.DEV && mockData !== undefined) {
+      setState({ status: "ready", data: mockData, error: null });
       return;
     }
     setState({ status: "loading", data: null, error: null });
@@ -43,7 +50,7 @@ export function useApiResource<T>(
     } else {
       setState({ status: "error", data: null, error: result.message });
     }
-  }, [enabled, label, path, token]);
+  }, [enabled, label, mockData, path, token]);
 
   useEffect(() => {
     if (!enabled) {

@@ -26,6 +26,8 @@ import { apiFetch } from "@/lib/api/request";
 import { getApiOrigin } from "@/lib/api/origin";
 import { useApiResource } from "@/lib/api/use-api-resource";
 import { useSession } from "@/lib/api/session";
+import { useDevMockMode } from "@/lib/dev-mock-mode";
+import { MAINTAINER_DASHBOARD_MOCK } from "@/lib/dev-panel-mocks";
 import {
   PREVIEW_SCENARIOS,
   buildSettingsPreviewRequest,
@@ -183,9 +185,12 @@ export function MaintainerPanel() {
 }
 
 function MaintainerDashboardView() {
+  const mockMode = useDevMockMode();
   const dashboard = useApiResource<MaintainerDashboard>(
     "/v1/app/maintainer-dashboard",
     "Maintainer dashboard",
+    undefined,
+    { mockData: mockMode ? MAINTAINER_DASHBOARD_MOCK : undefined },
   );
   const data = dashboard.status === "ready" ? dashboard.data : null;
   const isEmpty = data !== null && data.health.length === 0 && data.reviewability.length === 0;
