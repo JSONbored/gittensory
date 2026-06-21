@@ -944,22 +944,16 @@ export async function listRepoGithubTotalsSnapshotHistory(
 
 export async function listLatestRepoGithubTotalsSnapshots(env: Env): Promise<RepoGithubTotalsSnapshotRecord[]> {
   const db = getDb(env.DB);
-  const latestRows = await db
-    .select({
-      repoFullName: repoGithubTotalsSnapshots.repoFullName,
-      fetchedAt: sql<string>`max(${repoGithubTotalsSnapshots.fetchedAt})`,
-    })
+  const rows = await db
+    .select()
     .from(repoGithubTotalsSnapshots)
-    .groupBy(repoGithubTotalsSnapshots.repoFullName);
-  const rows = [];
-  for (const latest of latestRows) {
-    const [row] = await db
-      .select()
-      .from(repoGithubTotalsSnapshots)
-      .where(and(eq(repoGithubTotalsSnapshots.repoFullName, latest.repoFullName), eq(repoGithubTotalsSnapshots.fetchedAt, latest.fetchedAt)))
-      .limit(1);
-    if (row) rows.push(row);
-  }
+    .where(
+      sql`${repoGithubTotalsSnapshots.fetchedAt} = (
+        select max(latest.fetched_at)
+        from repo_github_totals_snapshots latest
+        where latest.repo_full_name = ${repoGithubTotalsSnapshots.repoFullName}
+      )`,
+    );
   return rows.map(toRepoGithubTotalsSnapshotRecord).sort((left, right) => left.repoFullName.localeCompare(right.repoFullName));
 }
 
@@ -1394,10 +1388,8 @@ export async function listIssueWatchSubscriptionsForLogin(env: Env, login: strin
 export async function deleteIssueWatchSubscription(env: Env, login: string, repoFullName: string): Promise<boolean> {
   const db = getDb(env.DB);
   const where = and(eq(issueWatchSubscriptions.login, login.toLowerCase()), eq(issueWatchSubscriptions.repoFullName, repoFullName.toLowerCase()));
-  const existing = await db.select({ id: issueWatchSubscriptions.id }).from(issueWatchSubscriptions).where(where);
-  if (existing.length === 0) return false;
-  await db.delete(issueWatchSubscriptions).where(where);
-  return true;
+  const deleted = await db.delete(issueWatchSubscriptions).where(where).returning({ id: issueWatchSubscriptions.id });
+  return deleted.length > 0;
 }
 
 /** All miners watching a repo — the candidate recipients when a new grabbable issue opens there. */
