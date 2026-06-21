@@ -271,6 +271,58 @@ describe("MCP tool calls return schema-valid structured content", () => {
     expect(data.highestLeverageLever).toBeTruthy();
   });
 
+  it("gittensory_explain_score_breakdown applies trusted open-issue counts", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "demo", full_name: "octo/demo", private: false, owner: { login: "octo" }, default_branch: "main" });
+    for (const number of [1, 2, 3]) {
+      await upsertIssueFromGitHub(env, "octo/demo", {
+        number,
+        title: `Open contributor issue ${number}`,
+        state: "open",
+        user: { login: "alice" },
+        labels: [],
+        body: "Issue body",
+      });
+    }
+    await upsertIssueFromGitHub(env, "octo/other", {
+      number: 99,
+      title: "Other repo issue",
+      state: "open",
+      user: { login: "alice" },
+      labels: [],
+      body: "Issue body",
+    });
+    await upsertIssueFromGitHub(env, "octo/demo", {
+      number: 4,
+      title: "Closed contributor issue",
+      state: "closed",
+      user: { login: "alice" },
+      labels: [],
+      body: "Issue body",
+    });
+
+    const { client } = await connectTestClient(env);
+    const result = await client.callTool({
+      name: "gittensory_explain_score_breakdown",
+      arguments: {
+        repoFullName: "octo/demo",
+        contributorLogin: "alice",
+        sourceTokenScore: 40,
+        totalTokenScore: 60,
+        sourceLines: 80,
+        openPrCount: 0,
+        credibility: 1,
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.effectiveEstimatedScore).toBe(0);
+    expect(data.gateHighlights).toEqual(
+      expect.arrayContaining([expect.objectContaining({ gate: "open_issue_threshold" })]),
+    );
+  });
+
   it("gittensory_explain_score_breakdown requires contributorLogin", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "demo", full_name: "octo/demo", private: false, owner: { login: "octo" }, default_branch: "main" });

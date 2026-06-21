@@ -2346,13 +2346,15 @@ export class GittensoryMcp {
     if (!input.contributorLogin) throw new Error("contributorLogin is required for score breakdown.");
     this.requireContributorAccess(input.contributorLogin);
     await this.requireRepoAccess(input.repoFullName);
-    const [repo, snapshot, evidence] = await Promise.all([
+    const [repo, snapshot, evidence, contributorIssues] = await Promise.all([
       getRepository(this.env, input.repoFullName),
       getOrCreateScoringModelSnapshot(this.env),
       getContributorEvidence(this.env, input.contributorLogin),
+      listContributorIssues(this.env, input.contributorLogin),
     ]);
+    const openIssueCount = contributorOpenIssueCount(contributorIssues, input.repoFullName);
     // Time-decay (#703) is an owner-gated global, injected server-side (not caller-controllable).
-    const scoreInput = { ...input, applyTimeDecay: isTimeDecayEnabled(this.env) };
+    const scoreInput = { ...input, openIssueCount, applyTimeDecay: isTimeDecayEnabled(this.env) };
     const preview = buildScorePreview({ input: scoreInput, repo, snapshot, contributorEvidence: evidence });
     const breakdown = explainScoreBreakdown(preview);
     return {
