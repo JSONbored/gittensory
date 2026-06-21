@@ -952,7 +952,6 @@ export async function listLatestRepoGithubTotalsSnapshots(env: Env): Promise<Rep
     .from(repoGithubTotalsSnapshots)
     .groupBy(repoGithubTotalsSnapshots.repoFullName);
   if (latestRows.length === 0) return [];
-  // Fetch all latest rows in one query instead of one per repo (avoids the previous N+1 loop).
   const conditions = latestRows.map((latest) =>
     and(eq(repoGithubTotalsSnapshots.repoFullName, latest.repoFullName), eq(repoGithubTotalsSnapshots.fetchedAt, latest.fetchedAt)),
   );
