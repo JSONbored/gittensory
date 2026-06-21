@@ -10,6 +10,8 @@ import {
   buildSlopAssessment,
   buildTrivialWhitespaceChurnFinding,
   buildUnfilledIssueTemplateFinding,
+  type SlopAssessmentInput,
+  type SlopBand,
   ISSUE_SLOP_WEIGHTS,
   SLOP_RUBRIC_MARKDOWN,
   SLOP_WEIGHTS,
@@ -403,5 +405,48 @@ describe("buildNonSubstantivePaddingFinding (#561 path-matcher signal)", () => {
     expect(result.slopRisk).toBe(SLOP_WEIGHTS.nonSubstantivePadding);
     expect(result.band).toBe("elevated");
     expect(JSON.stringify(result)).not.toMatch(FORBIDDEN);
+  });
+});
+
+describe("slop golden fixtures & determinism (#565)", () => {
+  const goldenFixtures: Array<{ name: string; input: SlopAssessmentInput; slopRisk: number; band: SlopBand; codes: string[] }> = [
+    { name: "clean — no metadata", input: {}, slopRisk: 0, band: "clean", codes: [] },
+    { name: "low — generic commit subject", input: { commitMessages: ["wip"] }, slopRisk: 15, band: "low", codes: ["low_quality_commit_message"] },
+    { name: "low — no linked issue and no rationale", input: { hasLinkedIssue: false }, slopRisk: 15, band: "low", codes: ["no_linked_issue_without_rationale"] },
+    {
+      name: "elevated — code change without test evidence",
+      input: { changedFiles: [{ path: "src/svc.ts", additions: 12, deletions: 3 }], description: "Add retry logic to the sync client." },
+      slopRisk: 30,
+      band: "elevated",
+      codes: ["missing_test_evidence"],
+    },
+    {
+      name: "elevated — untested code change inside a duplicate cluster",
+      input: { changedFiles: [{ path: "src/svc.ts", additions: 12, deletions: 3 }], description: "Add retry logic to the sync client.", inDuplicateCluster: true },
+      slopRisk: 45,
+      band: "elevated",
+      codes: ["duplicate_cluster_membership", "missing_test_evidence"],
+    },
+    {
+      name: "high — whitespace churn, untested code, and empty description",
+      input: { changedFiles: [{ path: "src/x.ts", additions: 2, deletions: 1 }, { path: "src/state.snap", additions: 60, deletions: 40 }], description: "" },
+      slopRisk: 75,
+      band: "high",
+      codes: ["empty_pr_description", "missing_test_evidence", "trivial_whitespace_churn"],
+    },
+  ];
+
+  it.each(goldenFixtures)("scores the $name fixture to its documented band", (fixture) => {
+    const result = buildSlopAssessment(fixture.input);
+    expect(result.slopRisk).toBe(fixture.slopRisk);
+    expect(result.band).toBe(fixture.band);
+    expect(result.findings.map((finding) => finding.code).sort()).toEqual(fixture.codes);
+    expect(JSON.stringify(result)).not.toMatch(FORBIDDEN_PUBLIC_TERMS);
+  });
+
+  it("returns identical slopRisk and findings for identical metadata (determinism)", () => {
+    for (const fixture of goldenFixtures) {
+      expect(buildSlopAssessment(fixture.input)).toEqual(buildSlopAssessment(fixture.input));
+    }
   });
 });

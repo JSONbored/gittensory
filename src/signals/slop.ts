@@ -436,6 +436,9 @@ function ensurePublicSafeText(text: string, fallback: string): string {
   return isFocusManifestPublicSafe(text) ? text : fallback;
 }
 
+// Documented thresholds (#565): the deterministic slopRisk (0-100) maps to fixed bands — clean = 0,
+// low = 1-24, elevated = 25-59, high = 60-100. Strong signals weigh 30 (any two reach `high`); weak/
+// traceability signals weigh 15. Identical metadata always yields an identical band (see golden fixtures).
 function slopBandFor(slopRisk: number): SlopBand {
   if (slopRisk <= 0) return "clean";
   if (slopRisk < 25) return "low";
