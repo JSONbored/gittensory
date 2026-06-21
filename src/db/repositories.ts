@@ -951,15 +951,14 @@ export async function listLatestRepoGithubTotalsSnapshots(env: Env): Promise<Rep
     })
     .from(repoGithubTotalsSnapshots)
     .groupBy(repoGithubTotalsSnapshots.repoFullName);
-  const rows = [];
-  for (const latest of latestRows) {
-    const [row] = await db
-      .select()
-      .from(repoGithubTotalsSnapshots)
-      .where(and(eq(repoGithubTotalsSnapshots.repoFullName, latest.repoFullName), eq(repoGithubTotalsSnapshots.fetchedAt, latest.fetchedAt)))
-      .limit(1);
-    if (row) rows.push(row);
-  }
+  if (latestRows.length === 0) return [];
+  const conditions = latestRows.map((latest) =>
+    and(eq(repoGithubTotalsSnapshots.repoFullName, latest.repoFullName), eq(repoGithubTotalsSnapshots.fetchedAt, latest.fetchedAt)),
+  );
+  const rows = await db
+    .select()
+    .from(repoGithubTotalsSnapshots)
+    .where(or(...conditions));
   return rows.map(toRepoGithubTotalsSnapshotRecord).sort((left, right) => left.repoFullName.localeCompare(right.repoFullName));
 }
 
