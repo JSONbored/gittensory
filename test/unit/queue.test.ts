@@ -3461,6 +3461,67 @@ describe("queue processors", () => {
       .first<{ outcome: string; detail: string }>();
     expect(event).toMatchObject({ outcome: "error", detail: "miner_detection_unavailable" });
   });
+
+  it("records PMF funnel events when a comment is published for an eligible first-time contributor on a registered repo", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicAudienceMode: "oss_maintainer",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      // No miners — author is non-confirmed.
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.endsWith("/users/first-timer")) return Response.json({ login: "first-timer", public_repos: 2, followers: 1 });
+      if (url.includes("/users/first-timer/repos")) return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/issues/99/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/99/comments") && method === "POST") return Response.json({ id: 99 }, { status: 201 });
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "pmf-first-timer",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: {
+          number: 99,
+          title: "First contribution",
+          state: "open",
+          user: { login: "first-timer" },
+          author_association: "FIRST_TIME_CONTRIBUTOR",
+          labels: [],
+          body: "Fixes #1\n\nValidation: npm test",
+        },
+      },
+    });
+
+    const events = await listProductUsageEvents(env, { limit: 20 });
+    const funnelEvents = events.filter((e) => e.eventName.startsWith("pmf_funnel."));
+    const hookEvent = funnelEvents.find((e) => e.eventName === "pmf_funnel.conversion_hook_shown");
+    const advisoryEvent = funnelEvents.find((e) => e.eventName === "pmf_funnel.newcomer_advisory_posted");
+    expect(hookEvent).toBeDefined();
+    expect(advisoryEvent).toBeDefined();
+    expect(hookEvent?.repoFullName).toBe("JSONbored/gittensory");
+    expect(advisoryEvent?.repoFullName).toBe("JSONbored/gittensory");
+  });
 });
 
 function completeSegment(repoFullName: string, segment: "labels" | "open_issues" | "open_pull_requests") {

@@ -4175,6 +4175,8 @@ describe("api routes", () => {
     );
     expect(decisionBuild.status).toBe(200);
 
+    // No-account mode: unauthenticated MCP requests proceed as public identity (no 401).
+    // Missing content-type causes the MCP transport to reject with a non-auth error.
     const unauthorized = await app.request(
       "/mcp",
       {
@@ -4183,7 +4185,8 @@ describe("api routes", () => {
       },
       env,
     );
-    expect(unauthorized.status).toBe(401);
+    expect(unauthorized.status).not.toBe(401);
+    // Sessions with no roles are downgraded to public identity and allowed through.
     const { token: noRoleMcpToken } = await createSessionForGitHubUser(env, { login: "new-user", id: 222 });
     const noRoleMcp = await app.request(
       "/mcp",
@@ -4194,7 +4197,7 @@ describe("api routes", () => {
       },
       env,
     );
-    expect(noRoleMcp.status).toBe(401);
+    expect(noRoleMcp.status).not.toBe(401);
 
     const { token: operatorMcpToken } = await createSessionForGitHubUser(env, { login: "jsonbored", id: 12345 });
     const forbiddenContributorMcp = await app.request(
@@ -4212,6 +4215,51 @@ describe("api routes", () => {
         isError: true,
         content: [expect.objectContaining({ text: expect.stringContaining("authenticated GitHub login") })],
       },
+    });
+
+    // Public identity (no auth token) calling gittensor-native tools: requireAuthenticated() fires.
+    const publicMcpHeaders = { ...mcpHeaders(env) };
+    delete (publicMcpHeaders as Record<string, string>)["authorization"];
+    const publicPreviewScore = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: publicMcpHeaders,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "public-preview-score",
+          method: "tools/call",
+          params: {
+            name: "gittensory_preview_local_pr_score",
+            arguments: { repoFullName: "owner/stable", targetKey: "anon-pr", sourceTokenScore: 30, totalTokenScore: 50, sourceLines: 10 },
+          },
+        }),
+      },
+      env,
+    );
+    expect(publicPreviewScore.status).toBe(200);
+    await expect(mcpJson(publicPreviewScore)).resolves.toMatchObject({
+      result: { isError: true, content: [expect.objectContaining({ text: expect.stringContaining("Register on Gittensory") })] },
+    });
+
+    // Public identity calling contributor-scoped tools: requireContributorAccess() fires.
+    const publicDecisionPack = await app.request(
+      "/mcp",
+      {
+        method: "POST",
+        headers: publicMcpHeaders,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "public-decision-pack",
+          method: "tools/call",
+          params: { name: "gittensory_get_decision_pack", arguments: { login: "oktofeesh1" } },
+        }),
+      },
+      env,
+    );
+    expect(publicDecisionPack.status).toBe(200);
+    await expect(mcpJson(publicDecisionPack)).resolves.toMatchObject({
+      result: { isError: true, content: [expect.objectContaining({ text: expect.stringContaining("Register on Gittensory") })] },
     });
 
     const malformedMcp = await app.request(

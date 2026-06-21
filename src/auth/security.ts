@@ -10,7 +10,8 @@ import { nowIso } from "../utils/json";
 
 export type AuthIdentity =
   | { kind: "static"; actor: "api" | "mcp" | "internal" }
-  | { kind: "session"; actor: string; session: AuthSessionRecord };
+  | { kind: "session"; actor: string; session: AuthSessionRecord }
+  | { kind: "public"; actor: "anonymous" };
 
 export const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 export const BROWSER_SESSION_COOKIE = "gittensory_session";

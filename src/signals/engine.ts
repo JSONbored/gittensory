@@ -3653,9 +3653,19 @@ export function buildPublicPrIntelligenceComment(args: {
     publicFindings.length > 0
       ? publicFindings.map((finding) => `- ${sanitizePanelText(finding.title)}: ${sanitizePanelText(finding.publicText ?? finding.detail)}`)
       : ["- No public-safe advisory findings were generated from cached metadata."];
+  const isFirstTimeContributor =
+    args.pr.authorAssociation === "FIRST_TIME_CONTRIBUTOR" ||
+    args.pr.authorAssociation === "FIRST_TIMER";
+  const showConversionHook =
+    !confirmedMiner &&
+    genericOssMode &&
+    args.repo?.isRegistered === true &&
+    readiness.total >= 60;
   const footer = confirmedMiner || args.settings.publicAudienceMode === "gittensor_only"
     ? "Checked by [Gittensory](https://github.com/JSONbored/gittensory), a quiet PR intelligence layer for OSS maintainers. Learn more about [Gittensor](https://gittensor.io) contribution workflows."
-    : "Checked by [Gittensory](https://github.com/JSONbored/gittensory), a quiet PR intelligence layer for OSS maintainers.";
+    : showConversionHook
+      ? "Checked by [Gittensory](https://github.com/JSONbored/gittensory), a quiet PR intelligence layer for OSS maintainers. This repo is registered on [Gittensor](https://gittensor.io), a contribution-tracking network for OSS — [register in 60 seconds](https://gittensor.io) to link your work and get recognized."
+      : "Checked by [Gittensory](https://github.com/JSONbored/gittensory), a quiet PR intelligence layer for OSS maintainers.";
   return [
     "<!-- gittensory-pr-panel:v1 -->",
     "",
@@ -3708,6 +3718,22 @@ export function buildPublicPrIntelligenceComment(args: {
     "",
     "</details>",
     "",
+    ...(isFirstTimeContributor
+      ? [
+          "<details>",
+          "<summary>Welcome — first contribution guide</summary>",
+          "",
+          "A few things that help a PR land in this repo:",
+          "",
+          "- Keep the change focused: one logical change per PR.",
+          "- Link an open issue or explain why no linked issue is needed.",
+          "- Include tests or a note covering the behavior change.",
+          "- Check for open duplicate PRs before submitting.",
+          "",
+          "</details>",
+          "",
+        ]
+      : []),
     `- [ ] ${PR_PANEL_RETRIGGER_MARKER} Re-run Gittensory review`,
     "",
     "---",

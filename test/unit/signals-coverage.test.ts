@@ -723,7 +723,9 @@ describe("signal coverage edge cases", () => {
     expect(collisionComment).not.toContain("possible overlaps");
     expect(collisionComment).not.toContain("Cached OSS contributor activity");
     expect(collisionComment).not.toContain("Cached prior PRs/issues");
-    expect(collisionComment).not.toContain("gittensor.io");
+    // Conversion hook is shown: non-confirmed contributor, oss_maintainer mode, registered repo, readiness >= 60.
+    expect(collisionComment).toContain("gittensor.io");
+    expect(collisionComment).toContain("register in 60 seconds");
 
     const repoBlockedComment = buildPublicPrIntelligenceComment({
       repo: null,

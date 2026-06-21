@@ -1053,6 +1053,35 @@ async function maybePublishPrPublicSurface(
       failedOutputs,
     },
   });
+  if (publishedOutputs.includes("comment")) {
+    if (
+      official.status !== "confirmed" &&
+      settings.publicAudienceMode === "oss_maintainer" &&
+      repo?.isRegistered === true &&
+      readiness.total >= 60
+    ) {
+      await recordProductUsageEvent(env, {
+        surface: "github_app",
+        eventName: "pmf_funnel.conversion_hook_shown",
+        actor: author,
+        repoFullName,
+        targetKey: `${repoFullName}#${pr.number}`,
+        outcome: "completed",
+        metadata: { deliveryId: webhook.deliveryId, readinessTotal: readiness.total, authorAssociation: pr.authorAssociation },
+      }).catch(() => undefined);
+    }
+    if (pr.authorAssociation === "FIRST_TIME_CONTRIBUTOR" || pr.authorAssociation === "FIRST_TIMER") {
+      await recordProductUsageEvent(env, {
+        surface: "github_app",
+        eventName: "pmf_funnel.newcomer_advisory_posted",
+        actor: author,
+        repoFullName,
+        targetKey: `${repoFullName}#${pr.number}`,
+        outcome: "completed",
+        metadata: { deliveryId: webhook.deliveryId, authorAssociation: pr.authorAssociation },
+      }).catch(() => undefined);
+    }
+  }
 }
 
 async function recordPublicSurfaceOutputFailure(

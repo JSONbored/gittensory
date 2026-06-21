@@ -979,6 +979,7 @@ describe("api route guards and error branches", () => {
         },
       } as never),
     ).rejects.toThrow("static raw request unavailable");
+    // No-account mode: invalid tokens fall back to public identity and proceed (no 401).
     expect(
       (
         await app.request(
@@ -987,7 +988,7 @@ describe("api route guards and error branches", () => {
           env,
         )
       ).status,
-    ).toBe(401);
+    ).not.toBe(401);
 
     const snapshot = await app.request("/v1/registry/snapshot", { headers: apiHeaders(env) }, env);
     expect(snapshot.status).toBe(200);

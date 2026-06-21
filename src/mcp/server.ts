@@ -370,7 +370,6 @@ const localStatusOutputSchema = {
 export async function handleMcpRequest(c: AppContext): Promise<Response> {
   if (c.req.method === "OPTIONS") return new Response(null, { status: 204 });
   const identity = await authenticateMcpRequest(c);
-  if (!identity) return c.json({ error: "unauthorized" }, 401);
 
   const telemetry = buildMcpClientTelemetry(c.req.raw.headers, { defaultClientName: "mcp" })!;
   const usageMetadata = await describeMcpUsageRequest(c.req.raw, telemetry.metadata);
@@ -815,8 +814,17 @@ export class GittensoryMcp {
   }
 
   private requireContributorAccess(login: string): void {
+    if (this.identity.kind === "public") {
+      throw new Error("Register on Gittensory to access contributor-specific insights. Run anti-slop and preflight checks without an account; unlock contributor context after signing in.");
+    }
     if (this.identity.kind === "session" && this.identity.actor.toLowerCase() !== login.toLowerCase()) {
       throw new Error("Forbidden: session can only access the authenticated GitHub login.");
+    }
+  }
+
+  private requireAuthenticated(): void {
+    if (this.identity.kind === "public") {
+      throw new Error("Register on Gittensory to unlock gittensor-specific features like score preview, credibility, and decision context. Anti-slop preflight is available without an account.");
     }
   }
 
@@ -902,7 +910,7 @@ export class GittensoryMcp {
   }
 
   private async canAccessRepo(fullName: string): Promise<boolean> {
-    if (this.identity.kind !== "session") return true;
+    if (this.identity.kind !== "session") return true; // static and public modes access any repo
     const [scope, repo] = await Promise.all([this.loadSessionAccessScope(), getRepository(this.env, fullName)]);
     if (scope.operator) return true;
     const requestedRepo = fullName.toLowerCase();
@@ -1065,6 +1073,7 @@ export class GittensoryMcp {
   }
 
   private async previewScore(input: z.infer<z.ZodObject<typeof scorePreviewShape>>): Promise<ToolPayload> {
+    this.requireAuthenticated();
     if (input.contributorLogin) this.requireContributorAccess(input.contributorLogin);
     await this.requireRepoAccess(input.repoFullName);
     const [repo, snapshot, evidence] = await Promise.all([
@@ -1404,11 +1413,14 @@ function authoritativeContributorRepoStats(
   return officialRepoStats.length > 0 ? officialRepoStats : cachedRepoStats;
 }
 
-async function authenticateMcpRequest(c: AppContext): Promise<AuthIdentity | null> {
-  const identity = await authenticatePrivateToken(c.env, extractBearerToken(c.req.header("authorization")));
-  if (!identity || identity.kind !== "session") return identity;
+async function authenticateMcpRequest(c: AppContext): Promise<AuthIdentity> {
+  const token = extractBearerToken(c.req.header("authorization"));
+  if (!token) return { kind: "public", actor: "anonymous" };
+  const identity = await authenticatePrivateToken(c.env, token);
+  if (!identity) return { kind: "public", actor: "anonymous" };
+  if (identity.kind !== "session") return identity;
   const summary = await loadControlPanelRoleSummary(c.env, identity.actor);
-  return summary.roles.length > 0 ? identity : null;
+  return summary.roles.length > 0 ? identity : { kind: "public", actor: "anonymous" };
 }
 
 function getExecutionContext(c: AppContext): ExecutionContext<unknown> {

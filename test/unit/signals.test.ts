@@ -1104,6 +1104,103 @@ describe("world-class backend signals", () => {
     expect(changeReport).toMatchObject({ addedRepos: ["owner/added"], removedRepos: ["owner/removed"] });
     expect(changeReport.changedRepos[0]?.changes).toEqual(expect.arrayContaining(["label_multipliers changed", "trusted_label_pipeline false -> true"]));
   });
+
+  it("shows newcomer advisory section for first-time contributors and omits it for regular authors", () => {
+    const baseSettings: RepositorySettings = {
+      repoFullName: repo.fullName,
+      commentMode: "all_prs",
+      publicAudienceMode: "oss_maintainer",
+      publicSignalLevel: "standard",
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      gateCheckMode: "off",
+      linkedIssueGateMode: "advisory",
+      duplicatePrGateMode: "advisory",
+      qualityGateMode: "advisory",
+      qualityGateMinScore: null,
+      autoLabelEnabled: false,
+      gittensorLabel: "gittensor",
+      createMissingLabel: false,
+      publicSurface: "comment_and_label",
+      includeMaintainerAuthors: false,
+      requireLinkedIssue: false,
+      backfillEnabled: true,
+      privateTrustEnabled: true,
+    };
+    const baseArgs = {
+      repo,
+      detection: detectGittensorContributor("newcomer", pullRequests[0]!, [], []),
+      queueHealth: buildQueueHealth(repo, issues, pullRequests, buildCollisionReport(repo.fullName, issues, pullRequests)),
+      collisions: buildCollisionReport(repo.fullName, issues, pullRequests),
+      preflight: buildPreflightResult({ repoFullName: repo.fullName, title: "Fix cache", linkedIssues: [7] }, repo, issues, pullRequests),
+      profile: buildContributorProfile("newcomer", { login: "newcomer", topLanguages: [], source: "github" }, [], []),
+      settings: baseSettings,
+    };
+
+    const firstTimePr: PullRequestRecord = { ...pullRequests[0]!, authorLogin: "newcomer", authorAssociation: "FIRST_TIME_CONTRIBUTOR" };
+    const firstTimerPr: PullRequestRecord = { ...pullRequests[0]!, authorLogin: "newcomer", authorAssociation: "FIRST_TIMER" };
+    const regularPr: PullRequestRecord = { ...pullRequests[0]!, authorLogin: "newcomer", authorAssociation: "NONE" };
+
+    const firstTimeComment = buildPublicPrIntelligenceComment({ ...baseArgs, pr: firstTimePr });
+    const firstTimerComment = buildPublicPrIntelligenceComment({ ...baseArgs, pr: firstTimerPr });
+    const regularComment = buildPublicPrIntelligenceComment({ ...baseArgs, pr: regularPr });
+
+    expect(firstTimeComment).toContain("Welcome — first contribution guide");
+    expect(firstTimeComment).toContain("Keep the change focused: one logical change per PR.");
+    expect(firstTimerComment).toContain("Welcome — first contribution guide");
+    expect(regularComment).not.toContain("Welcome — first contribution guide");
+    // Advisory content must be public-safe.
+    expect(firstTimeComment).not.toMatch(/reward|wallet|hotkey|payout|farming/i);
+  });
+
+  it("shows conversion hook for non-confirmed contributors on registered repos with good readiness, and suppresses it otherwise", () => {
+    const ossSettings: RepositorySettings = {
+      repoFullName: repo.fullName,
+      commentMode: "all_prs",
+      publicAudienceMode: "oss_maintainer",
+      publicSignalLevel: "standard",
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      gateCheckMode: "off",
+      linkedIssueGateMode: "advisory",
+      duplicatePrGateMode: "advisory",
+      qualityGateMode: "advisory",
+      qualityGateMinScore: null,
+      autoLabelEnabled: false,
+      gittensorLabel: "gittensor",
+      createMissingLabel: false,
+      publicSurface: "comment_and_label",
+      includeMaintainerAuthors: false,
+      requireLinkedIssue: false,
+      backfillEnabled: true,
+      privateTrustEnabled: true,
+    };
+    const qualityPr: PullRequestRecord = { ...pullRequests[0]!, authorLogin: "outsider", authorAssociation: "NONE", linkedIssues: [7] };
+    const unregisteredRepo: RepositoryRecord = { ...repo, isRegistered: false };
+    const confirmedDetection = { ...detectGittensorContributor("outsider", qualityPr, [], []), source: "official_gittensor_api" as const };
+    const unconfirmedDetection = detectGittensorContributor("outsider", qualityPr, [], []);
+    const profile = buildContributorProfile("outsider", { login: "outsider", topLanguages: [], source: "github" }, [], []);
+    const collisions = buildCollisionReport(repo.fullName, issues, [qualityPr]);
+    const queueHealth = buildQueueHealth(repo, issues, [qualityPr], collisions);
+    const preflight = buildPreflightResult({ repoFullName: repo.fullName, title: qualityPr.title, linkedIssues: [7] }, repo, issues, [qualityPr]);
+
+    const hookShown = buildPublicPrIntelligenceComment({ repo, pr: qualityPr, profile, detection: unconfirmedDetection, queueHealth, collisions, preflight, settings: ossSettings });
+    const confirmedMinerNoHook = buildPublicPrIntelligenceComment({ repo, pr: qualityPr, profile, detection: confirmedDetection, queueHealth, collisions, preflight, settings: ossSettings });
+    const unregisteredNoHook = buildPublicPrIntelligenceComment({ repo: unregisteredRepo, pr: qualityPr, profile, detection: unconfirmedDetection, queueHealth, collisions, preflight, settings: ossSettings });
+    const gittensorOnlyNoHook = buildPublicPrIntelligenceComment({ repo, pr: qualityPr, profile, detection: unconfirmedDetection, queueHealth, collisions, preflight, settings: { ...ossSettings, publicAudienceMode: "gittensor_only" } });
+
+    // Conversion hook appears for non-confirmed contributor on registered repo with sufficient readiness.
+    expect(hookShown).toContain("register in 60 seconds");
+    expect(hookShown).toContain("gittensor.io");
+    // Confirmed miners already belong to Gittensor — no conversion hook.
+    expect(confirmedMinerNoHook).not.toContain("register in 60 seconds");
+    // Unregistered repos cannot offer Gittensor contribution tracking.
+    expect(unregisteredNoHook).not.toContain("register in 60 seconds");
+    // gittensor_only mode already filters to confirmed miners — no conversion hook needed.
+    expect(gittensorOnlyNoHook).not.toContain("register in 60 seconds");
+    // Conversion hook text must be public-safe.
+    expect(hookShown).not.toMatch(/reward|wallet|hotkey|payout|farming|estimated score/i);
+  });
 });
 
 function scoringModelSnapshot(): ScoringModelSnapshotRecord {

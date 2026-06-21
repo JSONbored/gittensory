@@ -3636,6 +3636,7 @@ async function authenticateRequestIdentity(c: ProtectedRouteContext): Promise<Au
 
 async function getRoleSummaryForIdentity(env: Env, identity: AuthIdentity) {
   if (identity.kind === "session") return loadControlPanelRoleSummary(env, identity.actor);
+  if (identity.kind === "public") return buildStaticControlPanelRoleSummary("mcp");
   return buildStaticControlPanelRoleSummary(identity.actor);
 }
 

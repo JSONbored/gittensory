@@ -147,4 +147,40 @@ describe("MCP server telemetry", () => {
       }),
     ]);
   });
+
+  it("allows unauthenticated (no-account) MCP requests through as public identity", async () => {
+    vi.resetModules();
+    vi.doMock("agents/mcp", () => ({
+      createMcpHandler: () => () => Response.json({ ok: true }),
+    }));
+    const { handleMcpRequest } = await import("../../src/mcp/server");
+    const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "mcp-public-test-salt" });
+    const request = new Request("https://api.test/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: "anon-ping", method: "ping" }),
+    });
+
+    const response = await handleMcpRequest({
+      env,
+      executionCtx: { waitUntil() {}, passThroughOnException() {} },
+      req: {
+        method: "POST",
+        raw: request,
+        header: (name: string) => request.headers.get(name) ?? undefined,
+      },
+      json: (body: unknown, status?: number) => Response.json(body, status === undefined ? undefined : { status }),
+    } as never);
+
+    // Public identity is allowed through — no 401.
+    expect(response.status).toBe(200);
+    // Telemetry is recorded for anonymous sessions too.
+    await expect(listProductUsageEvents(env, { limit: 5 })).resolves.toEqual([
+      expect.objectContaining({
+        surface: "mcp",
+        eventName: "mcp_request",
+        outcome: "success",
+      }),
+    ]);
+  });
 });
