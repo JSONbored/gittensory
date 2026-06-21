@@ -1394,10 +1394,8 @@ export async function listIssueWatchSubscriptionsForLogin(env: Env, login: strin
 export async function deleteIssueWatchSubscription(env: Env, login: string, repoFullName: string): Promise<boolean> {
   const db = getDb(env.DB);
   const where = and(eq(issueWatchSubscriptions.login, login.toLowerCase()), eq(issueWatchSubscriptions.repoFullName, repoFullName.toLowerCase()));
-  const existing = await db.select({ id: issueWatchSubscriptions.id }).from(issueWatchSubscriptions).where(where);
-  if (existing.length === 0) return false;
-  await db.delete(issueWatchSubscriptions).where(where);
-  return true;
+  const deleted = await db.delete(issueWatchSubscriptions).where(where).returning({ id: issueWatchSubscriptions.id });
+  return deleted.length > 0;
 }
 
 /** All miners watching a repo — the candidate recipients when a new grabbable issue opens there. */
