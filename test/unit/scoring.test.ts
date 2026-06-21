@@ -191,6 +191,18 @@ MAX_CODE_DENSITY_MULTIPLIER = 1.15
     expect(unmodeled).not.toContain("TIME_DECAY_GRACE_PERIOD_HOURS"); // modeled as of #703
   });
 
+  it("does not report upstream operational/infrastructure constants as unmodeled scoring drift (#809)", () => {
+    // These are timeouts, byte-size limits, retry budgets, time-unit helpers, and UID sentinels — not scoring
+    // parameters — so they must NOT surface as \"unmodeled scoring constant\" drift warnings.
+    expect(
+      findUnmodeledUpstreamConstants(
+        "SECONDS_PER_DAY = 86400\nGITHUB_HTTP_TIMEOUT_SECONDS = 15\nMAX_FILE_SIZE_BYTES = 1_000_000\nRECYCLE_UID = 0\nTREE_SITTER_PARSE_TIMEOUT_MICROS = 2_000_000\n",
+      ),
+    ).toEqual([]);
+    // A genuinely scoring-shaped unknown constant is still flagged alongside the ignored infra one.
+    expect(findUnmodeledUpstreamConstants("SECONDS_PER_DAY = 86400\nNOVELTY_BONUS_SCALAR = 3\n")).toEqual(["NOVELTY_BONUS_SCALAR"]);
+  });
+
   it("warns on the snapshot when upstream defines an unmodeled scoring dimension", async () => {
     const env = createTestEnv({
       GITTENSOR_UPSTREAM_REPO: "custom/upstream",
