@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDuplicateClusterFinding,
+  buildEmptyDescriptionFinding,
   buildEmptyIssueBodyFinding,
   buildIssueSlopAssessment,
   buildLowQualityCommitMessageFinding,
@@ -244,6 +245,27 @@ describe("buildSlopAssessment", () => {
     });
     expect(high.slopRisk).toBeGreaterThanOrEqual(60);
     expect(high.band).toBe("high");
+  });
+});
+
+describe("buildEmptyDescriptionFinding — single-pass code-file detection", () => {
+  it("ignores empty-path entries and non-code files when counting changed code files", () => {
+    // blank path and docs/markdown files must not count toward the code-file total
+    expect(buildEmptyDescriptionFinding({ changedFiles: [{ path: "" }, { path: "README.md" }, { path: "docs/guide.mdx" }], description: "" })).toBeNull();
+  });
+
+  it("fires for a real code change with an empty description and reports the code-file count", () => {
+    const finding = buildEmptyDescriptionFinding({
+      changedFiles: [{ path: "" }, { path: "src/a.ts" }, { path: "README.md" }, { path: "src/b.ts" }],
+      description: "   ",
+    });
+    expect(finding).toMatchObject({ code: "empty_pr_description", severity: "warning" });
+    expect(finding?.detail).toContain("2 code file(s)");
+    expect(JSON.stringify(finding)).not.toMatch(FORBIDDEN_PUBLIC_TERMS);
+  });
+
+  it("does not fire when the code change has a non-empty description", () => {
+    expect(buildEmptyDescriptionFinding({ changedFiles: [{ path: "src/a.ts" }], description: "Real change." })).toBeNull();
   });
 });
 
