@@ -102,6 +102,38 @@ describe("GitHub PR intelligence comments", () => {
     expect(calls.some((call) => call.startsWith("POST ") && call.includes("/issues/12/comments"))).toBe(false);
   });
 
+
+  it("bounds sticky comment lookup to protect comment publication from unbounded pagination", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    const commentListCalls: number[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/issues/12/comments") && (init?.method ?? "GET") === "GET") {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        commentListCalls.push(page);
+        return Response.json(
+          Array.from({ length: 100 }, (_, i) => ({ id: page * 100 + i, body: `human comment ${page}-${i}`, user: { login: "contributor", type: "User" } })),
+        );
+      }
+      if (url.includes("/issues/12/comments") && init?.method === "POST") {
+        return Response.json({ id: 303, html_url: "https://github.com/comment/303" });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await createOrUpdatePrIntelligenceComment(
+      createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }),
+      123,
+      "JSONbored/gittensory",
+      12,
+      `${PR_INTELLIGENCE_COMMENT_MARKER}\nnew body`,
+    );
+
+    expect(result?.id).toBe(303);
+    expect(commentListCalls).toEqual([1, 2, 3]);
+  });
+
   it("updates a legacy PR intelligence comment into the unified panel", async () => {
     const privateKey = await generatePrivateKeyPem();
     const calls: string[] = [];
