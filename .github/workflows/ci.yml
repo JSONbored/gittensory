@@ -11,10 +11,10 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  # Cancel only superseded PR runs (keep the newest). NEVER cancel main-branch push CI:
-  # back-to-back merges share group `ci-refs/heads/main`, and cancel-in-progress racing during
-  # startup turns those runs into `startup_failure` instead of giving each merge a complete run.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # NB: keep this a literal boolean. An expression here (cancel-in-progress: ${{ ... }}) made GitHub
+  # fail the workflow at startup (startup_failure), so `validate` never reported. Avoid merging multiple
+  # PRs within seconds instead — racing main-push runs in this group can cancel each other on startup.
+  cancel-in-progress: true
 
 jobs:
   # Detect which areas a PR touches so the heavy jobs can skip when irrelevant.
