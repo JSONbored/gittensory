@@ -163,12 +163,17 @@ function buildPaddingFinding(changedLineCount: number, paddingLineCount: number)
 // Fires only when a real code change ships with an empty / whitespace-only description — a high-precision
 // weak-effort signal. A non-empty description (even a terse one) never trips it, to avoid false positives.
 export function buildEmptyDescriptionFinding(input: SlopAssessmentInput): SignalFinding | null {
-  const codePaths = (input.changedFiles ?? []).map((file) => file.path).filter(Boolean).filter(isCodeFile);
-  if (codePaths.length === 0) return null;
+  // Single pass over changedFiles instead of map().filter(Boolean).filter(isCodeFile) building three
+  // intermediate arrays: count changed code-file paths directly.
+  let codeFileCount = 0;
+  for (const file of input.changedFiles ?? []) {
+    if (file.path && isCodeFile(file.path)) codeFileCount += 1;
+  }
+  if (codeFileCount === 0) return null;
   if ((input.description ?? "").trim().length > 0) return null;
 
   const detail = ensurePublicSafeText(
-    `${codePaths.length} code file(s) changed with an empty pull request description.`,
+    `${codeFileCount} code file(s) changed with an empty pull request description.`,
     "Code changed with an empty pull request description.",
   );
   return {
