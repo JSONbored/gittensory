@@ -36,3 +36,7 @@ export function isConvergenceRepoAllowed(env: { GITTENSORY_REVIEW_REPOS?: string
   }
   return false;
 }
+
+// Cross-reference: callers AND this with the feature's own global flag — see the per-feature *-wire.ts modules
+// (safety-wire, grounding-wire, rag-wire, reputation-wire, visual-wire) for the canonical
+// `isXEnabled(env) && isConvergenceRepoAllowed(env, repo)` pattern.
