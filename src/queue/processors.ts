@@ -156,6 +156,8 @@ import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import { runGittensoryAiReview } from "../services/ai-review";
 import { isSafetyEnabled, secretLeakFinding } from "../review/safety";
 import { buildReviewGroundingText, isGroundingEnabled } from "../review/grounding-wire";
+import { isReputationEnabled, recordReputationOutcome, shouldSkipAiForReputation } from "../review/reputation-wire";
+import type { SubmissionOutcome } from "../review/submitter-reputation";
 import type { AdvisoryFinding, ContributorEvidenceRecord, ContributorRepoStatRecord, DetectedNotificationEvent, GitHubWebhookPayload, IssueRecord, JobMessage, JsonValue, PullRequestFilePathRecord, PullRequestRecord, RepositoryRecord, RepositorySettings } from "../types";
 import { sha256Hex } from "../utils/crypto";
 import { errorMessage, nowIso } from "../utils/json";
@@ -989,6 +991,18 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
           /* v8 ignore next -- best-effort: auto-maintain failures are logged, never surfaced to the gate. */
           console.error(JSON.stringify({ level: "warn", event: "agent_maintenance_failed", deliveryId, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
         });
+        // Reputation (convergence, flag-gated by REVIEWBOT_REPUTATION). After the gate decides, record this
+        // submitter's terminal outcome (merged / closed / manual) so the INTERNAL reputation stays current. The
+        // outcome is derived ONLY from the PR's realized terminal state + the gate verdict (no PR content);
+        // nothing is ever surfaced publicly. Flag-OFF (default) is an immediate no-op (nothing recorded), so the
+        // path is byte-identical. Best-effort: a record failure must never affect the gate or the public surface.
+        const reputationOutcome = isReputationEnabled(env) ? reputationOutcomeFromTerminalState(pr, payload.pull_request, gate) : undefined;
+        if (reputationOutcome) {
+          await recordReputationOutcome(env, { project: repoFullName, submitter: pr.authorLogin ?? null, outcome: reputationOutcome }).catch((error) => {
+            /* v8 ignore next -- best-effort: a reputation-record failure is logged, never surfaced to the gate. */
+            console.error(JSON.stringify({ level: "warn", event: "reputation_record_failed", deliveryId, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
+          });
+        }
       }
     }
 
@@ -1163,6 +1177,14 @@ export async function runAiReviewForAdvisory(
 ): Promise<{ notes: string } | undefined> {
   const packAllowsAnyAuthorBlockingReview = args.settings.gatePack === "oss-anti-slop" && args.settings.aiReviewMode === "block";
   if (args.settings.aiReviewMode === "off" || (!args.confirmedContributor && !packAllowsAnyAuthorBlockingReview) || !args.advisory.headSha) return undefined;
+  // Reputation anti-abuse (convergence, flag-gated by REVIEWBOT_REPUTATION). Extends the AI-spend gate above:
+  // an INTERNAL low-reputation / burst / new submitter is downgraded to a DETERMINISTIC-ONLY review — the
+  // (paid) AI neurons are skipped here exactly as they are for an unconfirmed contributor, so a serial abuser
+  // can't make the project spend AI on a flood of low-quality PRs. STRICTLY INTERNAL: the reputation is never
+  // surfaced — this only routes the private AI-spend decision. Flag-OFF (default) is an immediate no-op (no DB
+  // read, no new branch) → the AI-spend gate is byte-identical to today. Fail-safe (the read degrades to
+  // neutral → false on any error).
+  if (isReputationEnabled(env) && (await shouldSkipAiForReputation(env, { project: args.repoFullName, submitter: args.author }))) return undefined;
   try {
     // BYOK: decrypt the maintainer's provider key only for confirmed contributors when opted in. Falls back to free Workers AI when
     // no key is configured or the encryption secret is unavailable (getDecryptedRepositoryAiKey → null).
@@ -1340,6 +1362,27 @@ function buildClosedPrPanelUpdate(repoFullName: string, pullNumber: number): str
     "---",
     gittensoryFooter({ earnUrl: gittensorRepoEarnUrl(repoFullName) }),
   ].join("\n");
+}
+
+/**
+ * Map a PR's realized terminal state + the gate verdict to the {@link SubmissionOutcome} the reputation table
+ * records — or `undefined` when there is no terminal signal to record yet. Pure + total; uses ONLY the PR
+ * state / merged flag and the gate conclusion (no PR content):
+ *   • merged (the webhook payload's merged_at, or the persisted mergedAt) → "merged" (ground-truth success).
+ *   • closed without merge → "closed".
+ *   • still open but the gate routed it to manual review (failure / action_required) → "manual".
+ *   • still open and the gate did not flag it → undefined (no terminal outcome — nothing to record).
+ * Internal-only; the result is never surfaced. Used only when REVIEWBOT_REPUTATION is ON.
+ */
+export function reputationOutcomeFromTerminalState(
+  pr: { state: string; mergedAt?: string | null | undefined },
+  payload: { merged_at?: string | null | undefined } | undefined,
+  gate: ReturnType<typeof evaluateGateCheck> | undefined,
+): SubmissionOutcome | undefined {
+  const merged = Boolean(payload?.merged_at) || Boolean(pr.mergedAt);
+  if (pr.state !== "open") return merged ? "merged" : "closed";
+  if (gate && (gate.conclusion === "failure" || gate.conclusion === "action_required")) return "manual";
+  return undefined;
 }
 
 async function maybePublishPrPublicSurface(

@@ -74,6 +74,13 @@ declare global {
      *  claims against reality instead of predicting CI / flagging symbols defined just outside the hunk.
      *  Default OFF — unset/false keeps the reviewer prompt byte-identical and makes no extra GitHub fetch. */
     REVIEWBOT_GROUNDING?: string;
+    /** Convergence (reputation): when truthy, the INTERNAL-only ported submitter-reputation signal extends the
+     *  AI-spend gate — a new / burst / low-reputation submitter is downgraded to a deterministic-only review
+     *  (the AI neurons are skipped), and the per-(project, submitter) outcome is recorded after the gate
+     *  decides. STRICTLY INTERNAL: the reputation never appears in any public comment/check. Default OFF —
+     *  unset/false reads NO reputation, records NOTHING, and leaves the AI-spend gate byte-identical (the new
+     *  branch is unreachable when off). */
+    REVIEWBOT_REPUTATION?: string;
   }
 }
 

@@ -57,6 +57,12 @@
     // post-change content of the changed files, so a non-frontier model verifies claims instead of guessing.
     // Default OFF — flag-OFF keeps the reviewer prompt byte-identical and makes no extra GitHub fetch.
     "REVIEWBOT_GROUNDING": "false",
+    // Convergence (reputation): factor the INTERNAL-only ported submitter-reputation signal into the AI-spend
+    // gate — a new / burst / low-reputation submitter is downgraded to a deterministic-only review (AI neurons
+    // skipped), and the per-(project, submitter) outcome is recorded after the gate decides. The reputation is
+    // NEVER surfaced publicly. Default OFF — flag-OFF reads nothing, records nothing, and leaves the AI-spend
+    // gate byte-identical.
+    "REVIEWBOT_REPUTATION": "false",
   },
   "routes": [
     {
