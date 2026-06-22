@@ -2693,8 +2693,7 @@ export async function listPullRequestFiles(env: Env, fullName: string, pullNumbe
   const rows = await db
     .select()
     .from(pullRequestFiles)
-    .where(and(eq(pullRequestFiles.repoFullName, fullName), eq(pullRequestFiles.pullNumber, pullNumber)))
-    .limit(500);
+    .where(and(eq(pullRequestFiles.repoFullName, fullName), eq(pullRequestFiles.pullNumber, pullNumber)));
   return rows.map(toPullRequestFileRecord);
 }
 

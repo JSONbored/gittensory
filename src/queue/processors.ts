@@ -453,6 +453,15 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
   });
 }
 
+export function changedPathsForGuardrail(files: Awaited<ReturnType<typeof listPullRequestFiles>>): string[] {
+  const paths = new Set<string>();
+  for (const file of files) {
+    if (file.path.length > 0) paths.add(file.path);
+    if (file.previousFilename && file.previousFilename.length > 0) paths.add(file.previousFilename);
+  }
+  return [...paths];
+}
+
 /**
  * #778 maintainer auto-maintain trigger. After the gate runs on a PR webhook, if the repo opted the agent in
  * (an acting autonomy level), reuse the CANONICAL verdict produced by the full gate evaluation, plan the
@@ -489,7 +498,7 @@ async function maybeRunAgentMaintenance(
     listPullRequestFiles(env, repoFullName, pr.number),
     loadHardGuardrailGlobs(env, repoFullName),
   ]);
-  const changedPaths = changedFiles.map((file) => file.path).filter((path) => path.length > 0);
+  const changedPaths = changedPathsForGuardrail(changedFiles);
   const repoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")) : "";
   const authorLogin = pr.authorLogin ?? "";
   const authorIsOwner = authorLogin.length > 0 && authorLogin.toLowerCase() === repoOwner.toLowerCase();
@@ -1004,7 +1013,7 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
       });
       await persistAdvisory(env, advisory);
       if (installationId && shouldProcessPullRequestPublicSurface(payload.action)) {
-        if (shouldCollectSlopEvidence(settings) || settings.manifestPolicyGateMode !== "off") {
+        if (shouldCollectSlopEvidence(settings) || settings.manifestPolicyGateMode !== "off" || isAgentConfigured(settings.autonomy)) {
           await refreshPullRequestDetails(env, repoFullName, pr.number);
         }
         const gate = await maybePublishPrPublicSurface(env, installationId, repoFullName, pr, repo, settings, advisory, {
