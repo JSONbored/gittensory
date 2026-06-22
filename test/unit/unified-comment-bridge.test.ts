@@ -10,6 +10,7 @@ import {
   PR_PANEL_COMMENT_MARKER,
 } from "../../src/review/unified-comment-bridge";
 import { PR_PANEL_COMMENT_MARKER as MARKER_FROM_COMMENTS } from "../../src/github/comments";
+import { deriveUnifiedStatus, type UnifiedCommentStatus } from "../../src/review/unified-comment";
 import type { GateCheckEvaluation } from "../../src/rules/advisory";
 import type { AdvisoryFinding } from "../../src/types";
 import type { PublicPrPanelSignalRow } from "../../src/signals/engine";
@@ -163,6 +164,124 @@ describe("buildUnifiedCommentBody", () => {
     });
     expect(body).not.toContain("Confirmed Gittensor contributor");
     expect(body).toContain("Gate result"); // a visible row is still present
+  });
+});
+
+// ── Reconciliation invariant (#1016): comment-verdict ↔ gate-conclusion alignment ──────────────────
+//
+// The two-gate reconciliation makes gittensory's `evaluateGateCheck` conclusion AUTHORITATIVE for the
+// unified comment's headline tone. `buildUnifiedCommentBody` maps the gate conclusion → a Verdict
+// (`gateConclusionToVerdict`) and feeds it as the renderer `decision`, which `deriveUnifiedStatus` honors
+// FIRST — before any reviewer recommendation. So the comment's alert/headline can NEVER contradict the
+// Gate check-run conclusion, even when the AI reviewer disagrees. This pins that contract across every
+// gate conclusion (success/failure/action_required/neutral/skipped) so a future renderer/bridge change
+// that let a reviewer rec override the gate would fail here.
+describe("reconciliation invariant: comment tone is pinned to the gate conclusion (#1016)", () => {
+  // gate conclusion → the alert + the verbatim headline phrase the renderer must emit for that conclusion.
+  const cases: Array<{ conclusion: GateCheckEvaluation["conclusion"]; alert: string; headline: RegExp }> = [
+    { conclusion: "success", alert: "> [!TIP]", headline: /Approved/ }, // success → merge → ready
+    { conclusion: "failure", alert: "> [!CAUTION]", headline: /Closed|Blocked/ }, // failure → close → blocked
+    { conclusion: "action_required", alert: "> [!WARNING]", headline: /Held for maintainer review/ }, // → manual → held
+    { conclusion: "neutral", alert: "> [!WARNING]", headline: /Held for maintainer review/ }, // → manual → held
+    { conclusion: "skipped", alert: "> [!NOTE]", headline: /Advisory only/ }, // → comment → advisory
+  ];
+
+  for (const { conclusion, alert, headline } of cases) {
+    it(`${conclusion} → ${alert} (gate conclusion drives the headline, not the reviewer)`, () => {
+      const body = buildUnifiedCommentBody({
+        gate: gate({ conclusion }),
+        // An upbeat, recommend-merge reviewer assessment — the OPPOSITE of a block — to prove the gate, not
+        // the reviewer, sets the tone. If the reviewer rec ever leaked through, a failure/neutral case below
+        // would render the ready (TIP/Approved) tone and this would fail.
+        aiReview: { notes: "Looks great to me, recommend merge." },
+        panelRows,
+        readinessTotal: 50,
+        changedFiles: 2,
+        footerMarkdown: footer,
+      });
+      expect(body, `${conclusion} must use the ${alert} alert`).toContain(alert);
+      expect(body, `${conclusion} headline phrase`).toMatch(headline);
+      // Cross-check: every other conclusion's alert is ABSENT (exactly one tone, never two).
+      for (const other of cases) {
+        if (other.alert === alert) continue;
+        expect(body, `${conclusion} must NOT also carry ${other.alert}`).not.toContain(other.alert);
+      }
+    });
+  }
+
+  it("the comment tone matches gateConclusionToVerdict → deriveUnifiedStatus for EVERY conclusion (no divergence)", () => {
+    // The status the renderer derives from the gate-mapped verdict, computed directly, must equal the tone
+    // the assembled body shows — proving the body cannot diverge from the gate's own decision path.
+    const expectedStatus: Record<GateCheckEvaluation["conclusion"], UnifiedCommentStatus> = {
+      success: "ready",
+      failure: "blocked",
+      action_required: "held",
+      neutral: "held",
+      skipped: "advisory",
+    };
+    const alertFor: Record<UnifiedCommentStatus, string> = {
+      ready: "> [!TIP]",
+      advisory: "> [!NOTE]",
+      held: "> [!WARNING]",
+      blocked: "> [!CAUTION]",
+    };
+    for (const conclusion of Object.keys(expectedStatus) as GateCheckEvaluation["conclusion"][]) {
+      // deriveUnifiedStatus over the gate-mapped verdict alone agrees with the table above…
+      const derived = deriveUnifiedStatus({ changedFiles: 0, reviewerCount: 0, recommendations: [], summary: "", decision: gateConclusionToVerdict(conclusion) });
+      expect(derived, `derived status for ${conclusion}`).toBe(expectedStatus[conclusion]);
+      // …and the full rendered body carries that same status' alert.
+      const body = buildUnifiedCommentBody({ gate: gate({ conclusion }), panelRows, readinessTotal: 50, changedFiles: 2, footerMarkdown: footer });
+      expect(body, `body tone for ${conclusion}`).toContain(alertFor[expectedStatus[conclusion]]);
+    }
+  });
+});
+
+// ── Single AI pass + single surfacing of the consensus defect (#1016) ───────────────────────────────
+//
+// The processor runs ONE AI review (`runAiReviewForAdvisory` → one `runGittensoryAiReview`) whose result
+// feeds BOTH the gate (it mutates `advisory.findings` with the `ai_consensus_defect`, which
+// `evaluateGateCheck` reads) AND the comment (the same finding is RECOVERED from `advisory.findings` by
+// the bridge — never a second model call/synthesis). These bridge-level tests pin the "recover, don't
+// re-derive" contract that makes the single pass sufficient, and that the recovered defect is surfaced
+// exactly once (as the Code-review blocker, NOT also re-printed in the gate signal row).
+describe("single AI pass: the bridge RECOVERS the consensus defect, never re-derives it (#1016)", () => {
+  it("surfaces the gate's ai_consensus_defect exactly once — as the Code-review blocker, not also in the Gate row", () => {
+    const defectTitle = "Use-after-free in the request handler";
+    const body = buildUnifiedCommentBody({
+      gate: gate({
+        conclusion: "failure",
+        title: "Gittensory Gate: blocked",
+        summary: "A hard blocker was found.",
+        // The gate's own blockers list carries the defect (as evaluateGateCheck produced it)…
+        blockers: [{ code: "ai_consensus_defect", severity: "critical", title: defectTitle, detail: "Both models agree." }],
+      }),
+      aiReview: { notes: "The change is risky." },
+      // …and the bridge recovers the SAME finding from advisory.findings — it does not run a second pass.
+      advisoryFindings: [{ code: "ai_consensus_defect", severity: "critical", title: defectTitle, detail: "Both models agree." }],
+      panelRows,
+      readinessTotal: 30,
+      changedFiles: 4,
+      footerMarkdown: footer,
+    });
+    // The defect title appears EXACTLY ONCE in the whole comment (the Code-review blocker bullet), never
+    // duplicated into the gate signal row (which only renders the conclusion-derived "Blocking" status text).
+    const occurrences = body.split(defectTitle).length - 1;
+    expect(occurrences, "consensus defect title must appear exactly once").toBe(1);
+    // It is rendered under the blocked-reasons heading (the Code-review side), confirming where the one copy lives.
+    expect(body).toMatch(/Why this is blocked|Concerns raised/);
+  });
+
+  it("a SINGLE reviewer note is produced (one AI pass), not two — the renderer shows one synthesized review", () => {
+    // buildDualReviewNotes folds the single AI pass (assessment + consensus blocker + nits) into ONE note;
+    // the renderer's reviewer count is 1. A second pass would surface as a second note / reviewerCount 2.
+    const reviews = buildDualReviewNotes({
+      aiReview: { notes: "Single synthesized assessment." },
+      consensusDefect: { title: "Real defect", detail: "..." },
+      warnings: [{ code: "w", severity: "warning", title: "Nit", detail: "...", action: "fix" }],
+      recommendation: "close",
+      verdict: "close",
+    });
+    expect(reviews).toHaveLength(1);
   });
 });
 

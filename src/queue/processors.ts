@@ -1722,6 +1722,20 @@ async function maybePublishPrPublicSurface(
     // (gittensory shape + reviewbot's review folded in). The gate stays authoritative (passed as `decision`),
     // and the body carries the SAME panel marker so the upsert updates in place. Flag-OFF (default) keeps the
     // legacy panel byte-identical. Only the comment lane is affected; the gate check-run/labels/audit are not.
+    //
+    // RECONCILIATION INVARIANT (#1016 — two-gate → one authoritative path; pinned by
+    // test/unit/unified-comment-bridge.test.ts "reconciliation invariant"):
+    //   1. ONE AI pass. `runAiReviewForAdvisory` ran exactly once above (line ~1600) and its result feeds
+    //      BOTH surfaces: it mutated `advisory.findings` with the `ai_consensus_defect` (which the SAME
+    //      `gateEvaluation` already read via evaluateGateCheck) AND returned `aiReview.notes`. We pass that
+    //      same `advisory.findings` here so the bridge RECOVERS the consensus defect (consensusDefectFromFindings)
+    //      — it never makes a second model call or a divergent second synthesis.
+    //   2. The gate is AUTHORITATIVE for the comment's color/headline: `buildUnifiedCommentBody` maps
+    //      `gateEvaluation.conclusion` → a Verdict and feeds it as the renderer `decision`, which
+    //      deriveUnifiedStatus honors BEFORE any reviewer recommendation. So the comment's tone can never
+    //      contradict the Gittensory Gate check-run conclusion.
+    //   3. The `ai_consensus_defect` surfaces exactly ONCE — as the Code-review blocker — never also in the
+    //      gate signal row (which renders only the conclusion-derived status text, not the defect string).
     if (isUnifiedReviewCommentEnabled(env) && gateEvaluation) {
       const { rows, readinessTotal } = buildPublicPrPanelSignalRows({ repo, pr, profile, detection, queueHealth, collisions, preflight, settings, gate: gateEvaluation });
       const unifiedFiles = await listPullRequestFiles(env, repoFullName, pr.number);
