@@ -11,7 +11,10 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel only superseded PR runs (keep the newest). NEVER cancel main-branch push CI:
+  # back-to-back merges share group `ci-refs/heads/main`, and cancel-in-progress racing during
+  # startup turns those runs into `startup_failure` instead of giving each merge a complete run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Detect which areas a PR touches so the heavy jobs can skip when irrelevant.
