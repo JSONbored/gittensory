@@ -90,6 +90,14 @@ declare global {
      *  byte-identical to today. NOTE: this is read-only OBSERVABILITY only; the auto-tune / config-mutation
      *  self-improve loop (src/review/auto-apply.ts) is deliberately NOT wired here — see ops-wire.ts. */
     REVIEWBOT_OPS?: string;
+    /** Convergence (RAG retrieval): when truthy, the AI reviewer prompt gains a RELEVANT EXISTING CODE / DOCS
+     *  section — at review time the codebase vector index is queried for code/docs semantically related to the
+     *  PR's changed files (callers, related modules, existing conventions) and appended as additive reference
+     *  context, exactly like grounding (see review/rag-wire). Default OFF — unset/false performs NO retrieval,
+     *  uses NO adapter, makes NO vector query, and keeps the reviewer prompt byte-identical (the new branch is
+     *  unreachable when off). Even when ON, retrieval is INERT until a vector index exists for the repo (a
+     *  cold/missing index degrades to no context) — the index-population job is a deploy-time follow-up. */
+    REVIEWBOT_RAG?: string;
   }
 }
 

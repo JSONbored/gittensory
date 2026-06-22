@@ -156,6 +156,7 @@ import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import { runGittensoryAiReview } from "../services/ai-review";
 import { isSafetyEnabled, secretLeakFinding } from "../review/safety";
 import { buildReviewGroundingText, isGroundingEnabled } from "../review/grounding-wire";
+import { buildReviewRagContext, isRagEnabled } from "../review/rag-wire";
 import { isReputationEnabled, recordReputationOutcome, shouldSkipAiForReputation } from "../review/reputation-wire";
 import { isOpsEnabled, runOpsAlerts } from "../review/ops-wire";
 import type { SubmissionOutcome } from "../review/submitter-reputation";
@@ -1216,6 +1217,16 @@ export async function runAiReviewForAdvisory(
           installationId: (await getRepository(env, args.repoFullName))?.installationId ?? null,
         })
       : undefined;
+    // RAG retrieval (convergence, flag-gated by REVIEWBOT_RAG). Query the codebase vector index for code/docs
+    // semantically related to the changed files and append them as additive reference context — exactly like
+    // grounding. Flag-OFF (default) → NO new branch: no adapter use, no vector query, and `ragContext` is left
+    // undefined so the prompt is byte-identical to today. Fully fail-safe (a missing/cold index degrades to "").
+    const ragContext = isRagEnabled(env)
+      ? await buildReviewRagContext(env, {
+          repoFullName: args.repoFullName,
+          files: files.map((file) => ({ path: file.path, patch: typeof file.payload?.patch === "string" ? file.payload.patch : undefined })),
+        })
+      : undefined;
     const result = await runGittensoryAiReview(env, {
       repoFullName: args.repoFullName,
       prNumber: args.pr.number,
@@ -1226,6 +1237,7 @@ export async function runAiReviewForAdvisory(
       mode: args.settings.aiReviewMode === "block" ? "block" : "advisory",
       providerKey,
       grounding,
+      ragContext,
     });
     if (result.status !== "ok") return undefined;
     if (result.consensusDefect) {

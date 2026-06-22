@@ -75,6 +75,15 @@ export type GittensoryAiReviewInput = {
    * + FULL FILE CONTENT blocks. Empty strings behave the same as absent.
    */
   grounding?: { systemSuffix?: string | undefined; promptSection?: string | undefined } | null | undefined;
+  /**
+   * Convergence (RAG retrieval, flag-gated by REVIEWBOT_RAG). The caller builds this by querying the
+   * codebase vector index for code/docs semantically related to the PR's changed files (see
+   * `review/rag-wire`); it is the engine's pre-formatted "RELEVANT EXISTING CODE / DOCS" block, appended to
+   * the USER prompt as additive reference context (callers, related modules, existing conventions) — exactly
+   * like grounding. When ABSENT (the default, flag-OFF) or an empty string, the user prompt is byte-identical
+   * to today — no section is appended.
+   */
+  ragContext?: string | null | undefined;
 };
 
 /** A consensus critical defect, already public-safe, ready to become a gate blocker finding. */
@@ -207,6 +216,10 @@ function buildUserPrompt(input: GittensoryAiReviewInput): string {
   // (flag REVIEWBOT_GROUNDING on). Absent/empty (the default) → the prompt is byte-identical to today.
   const groundingSection = input.grounding?.promptSection;
   if (groundingSection) lines.push("", groundingSection);
+  // Convergence (RAG retrieval): append the retrieved RELEVANT EXISTING CODE / DOCS block when the caller
+  // supplied one (flag REVIEWBOT_RAG on AND an index exists). Absent/empty (the default) → byte-identical.
+  const ragSection = input.ragContext;
+  if (ragSection) lines.push("", ragSection);
   return lines.join("\n");
 }
 

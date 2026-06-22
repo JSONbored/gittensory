@@ -69,6 +69,13 @@
     // aggregate. Read-only observability; the auto-tune/config-mutation self-improve loop is NOT wired here.
     // Default OFF — flag-OFF the cron enqueues no ops job and the endpoint 404s, byte-identical to today.
     "REVIEWBOT_OPS": "false",
+    // Convergence (RAG retrieval): at review time, query the codebase vector index for code/docs semantically
+    // related to the PR's changed files and append a RELEVANT EXISTING CODE / DOCS section to the reviewer
+    // prompt — additive reference context (callers, related modules, conventions), exactly like grounding.
+    // Default OFF — flag-OFF performs no retrieval, uses no adapter, makes no vector query, and keeps the
+    // reviewer prompt byte-identical. Even when ON it is inert until a repo's vector index is populated (the
+    // index-population job + cron is a deploy-time follow-up; a cold/missing index degrades to no context).
+    "REVIEWBOT_RAG": "false",
   },
   "routes": [
     {
