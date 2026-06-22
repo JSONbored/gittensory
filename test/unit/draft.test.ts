@@ -1215,9 +1215,17 @@ describe("handleDraftStatus — flag-off guard + populated optional columns", ()
   });
 });
 
-describe("processSubmitDraft — fork-readiness retry loop (fake timers)", () => {
+describe("processSubmitDraft — fork-readiness retry loop (instant backoff)", () => {
   it("polls again after the fork is initially absent, then proceeds once it appears (no real sleep)", async () => {
-    vi.useFakeTimers();
+    // The fork-readiness backoff is sleep(3000) = setTimeout(resolve, 3000). Make it INSTANT (fire on a real
+    // 0ms tick) so the whole flow runs to completion on the real event loop — no 3s wait, and no fake-timer
+    // pump to race the interleaved real async (WebCrypto token-decrypt + the async D1/fetch mocks). The old
+    // fake-timer drive intermittently HUNG under CI coverage load (a real macrotask lagged the microtask flush
+    // the pump relied on, so the scheduled sleep was never fired and the test timed out).
+    const realSetTimeout = globalThis.setTimeout;
+    const timerSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation(((cb: (...a: unknown[]) => void, _ms?: number, ...args: unknown[]) => realSetTimeout(cb, 0, ...args)) as unknown as typeof globalThis.setTimeout);
     try {
       const env = draftEnv();
       const id = await seedQueuedDraftWithToken(env);
@@ -1248,28 +1256,16 @@ describe("processSubmitDraft — fork-readiness retry loop (fake timers)", () =>
         return routes(input, init);
       });
 
-      let settled = false;
-      const done = processSubmitDraft(env, id).then(() => {
-        settled = true;
-      });
-      // Drive the flow to completion deterministically. The flow interleaves ~15 real-async mocked-fetch/D1
-      // microtasks with the ONE fork-readiness setTimeout(sleep 3000). Each pass drains the whole timer queue
-      // (runAllTimersAsync flushes microtasks between firings, so the sleep runs the instant it is scheduled)
-      // and the microtask yield lets a just-scheduled timer register before the next drain. This replaces a
-      // fixed advanceTimersByTime(3000) pump that intermittently under-flushed the microtask chain on a bad
-      // interleave, exiting the loop with the flow still awaiting the unfired sleep → real-time 15s timeout.
-      for (let i = 0; i < 100 && !settled; i += 1) {
-        await vi.runAllTimersAsync();
-        await Promise.resolve();
-      }
-      await done;
+      // sleep() is now instant, so the flow runs straight through (probe 404 → instant backoff → probe 200 →
+      // open the PR). Just await it — no pump loop, no fake-timer race.
+      await processSubmitDraft(env, id);
       fetchSpy.mockRestore();
 
       expect(forkProbe).toBe(2); // probed once (absent), slept, probed again (present)
       const row = await env.DB.prepare("SELECT status, pull_request_number FROM submission_drafts WHERE id = ?").bind(id).first<{ status: string; pull_request_number: number }>();
       expect(row).toMatchObject({ status: "pr_open", pull_request_number: 808 });
     } finally {
-      vi.useRealTimers();
+      timerSpy.mockRestore();
     }
   });
 });
