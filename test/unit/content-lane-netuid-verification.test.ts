@@ -35,6 +35,13 @@ describe("fetchSubnetRecord (public registry — no API key)", () => {
     expect((await fetchSubnetRecord({}, 5, f)).status).toBe("missing");
   });
 
+  it("reports missing on an unparseable 200 body (json().catch → null payload, line 94)", async () => {
+    // A 200 with a body that is not valid JSON → res.json() throws → .catch(() => null) → !payload → missing.
+    const f = (async () =>
+      new Response("<<<not json>>>", { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    expect((await fetchSubnetRecord({}, 6, f)).status).toBe("missing");
+  });
+
   it("fails SAFE to error on a 500 (→ manual upstream)", async () => {
     const f = jsonFetch([{ match: "/subnets/14", status: 500 }]);
     // 500 is retried then surfaces as error (fail-safe).
@@ -173,5 +180,59 @@ describe("fetchSubnetRecord — array-shaped data envelope", () => {
   it("reports missing from an empty array data envelope", async () => {
     const f = jsonFetch([{ match: "/subnets/23", body: { data: [] } }]);
     expect((await fetchSubnetRecord({}, 23, f)).status).toBe("missing");
+  });
+
+  it("reports exists with a null record from a [null]-element array envelope (data[0] ?? null fallback, line 104)", async () => {
+    // length > 0 but the first element is null → the `data[0] ?? null` fallback yields null.
+    const f = jsonFetch([{ match: "/subnets/24", body: { data: [null] } }]);
+    const r = await fetchSubnetRecord({}, 24, f);
+    expect(r.status).toBe("exists");
+    expect(r.record).toBeNull();
+  });
+});
+
+describe("fetchSubnetRecord — object data envelope shape edges", () => {
+  it("falls back to the whole payload when there is no `data` key (data ?? payload, line 100)", async () => {
+    // No `data` envelope: `payload.data` is undefined → `?? payload` uses the top-level object,
+    // which echoes the netuid → exists.
+    const f = jsonFetch([{ match: "/subnets/30", body: { netuid: 30, name: "TopLevel" } }]);
+    const r = await fetchSubnetRecord({}, 30, f);
+    expect(r.status).toBe("exists");
+    expect(r.record).toMatchObject({ name: "TopLevel" });
+  });
+
+  it("reports missing when `data` is a non-object scalar (typeof data !== 'object', line 101)", async () => {
+    // `payload.data` is a truthy non-object → `data` is a string → fails the object guard.
+    const f = jsonFetch([{ match: "/subnets/31", body: { data: "not an object" } }]);
+    expect((await fetchSubnetRecord({}, 31, f)).status).toBe("missing");
+  });
+
+  it("reports missing on a nested error envelope inside `data` (\"error\" in data, line 107)", async () => {
+    // Top-level payload has no `error`, but the nested `data` object does → missing.
+    const f = jsonFetch([{ match: "/subnets/32", body: { data: { error: "nested not found" } } }]);
+    expect((await fetchSubnetRecord({}, 32, f)).status).toBe("missing");
+  });
+
+  it("reports missing when the record neither echoes the netuid nor carries known fields (line 115 both sides)", async () => {
+    // data is a real object (no error key, no subnet), but its netuid mismatches the query and it
+    // has none of the recordFields → !echoesNetuid && !hasRecordFields → missing.
+    const f = jsonFetch([{ match: "/subnets/14", body: { data: { netuid: 999, unrelated: "junk" } } }]);
+    expect((await fetchSubnetRecord({}, 14, f)).status).toBe("missing");
+  });
+
+  it("reports exists when the netuid echoes even without record fields (echoesNetuid short-circuits line 115)", async () => {
+    // echoesNetuid true → !echoesNetuid false → the && does NOT evaluate the right side; exists.
+    const f = jsonFetch([{ match: "/subnets/15", body: { data: { netuid: 15 } } }]);
+    const r = await fetchSubnetRecord({}, 15, f);
+    expect(r.status).toBe("exists");
+    expect(r.record).toMatchObject({ netuid: 15 });
+  });
+
+  it("reports exists via a record field even when the netuid does not echo (hasRecordFields side, line 115)", async () => {
+    // echoesNetuid false (mismatched netuid) but a known recordField present → !hasRecordFields false → exists.
+    const f = jsonFetch([{ match: "/subnets/16", body: { data: { netuid: 777, owner: "0xabc" } } }]);
+    const r = await fetchSubnetRecord({}, 16, f);
+    expect(r.status).toBe("exists");
+    expect(r.record).toMatchObject({ owner: "0xabc" });
   });
 });
