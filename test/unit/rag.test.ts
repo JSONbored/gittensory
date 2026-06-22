@@ -183,6 +183,22 @@ describe("rag: fail-safe (never throws; degrades to no context)", () => {
     expect(queried).toBe(false); // never spent a vector query / inference call on an empty namespace
   });
 
+  it("returns '' via the COLD-INDEX guard for a LONG query against an empty namespace (the hasIndexedChunks=false return)", async () => {
+    // A query >= MIN_QUERY_CHARS so it clears the short-query guard and reaches `if (!(await hasIndexedChunks(...)))`.
+    // A unique project/repo (never warmed by another test) guarantees the module-level positive cache has no entry,
+    // so hasIndexedChunks does the real COUNT(*)=0 → false → the `return ""` cold-index branch runs.
+    let queried = false;
+    const vector = { query: async () => { queried = true; return { matches: [] }; } } as unknown as VectorAdapter;
+    const infra: RagInfra = { storage: storageStub({ count: 0 }), vector, inference: ai1024 };
+    const out = await retrieveContext(infra, {
+      project: "cold-unique-proj",
+      repo: "o/cold-unique-repo",
+      queryText: "this query is comfortably past the forty character minimum so the cold-index guard is what stops it",
+    });
+    expect(out).toBe("");
+    expect(queried).toBe(false); // cold index → no vector query spent
+  });
+
   it("skips a trivially-short query without any embed/query (#cloud-opt min-length guard)", async () => {
     let aiCalled = false;
     const inference: InferenceAdapter = { run: async () => { aiCalled = true; return { data: [[0.1]] }; } };
@@ -307,6 +323,18 @@ describe("rag: deleteChunksForPaths (incremental re-index of changed files)", ()
     const storage = { prepare: () => { throw new Error("d1 down"); }, batch: async () => undefined } as unknown as StorageAdapter;
     await expect(deleteChunksForPaths({ storage }, "p", "o/r", ["src/a.ts"])).resolves.toBeUndefined();
   });
+
+  it("treats a SELECT result with NO `results` key as zero ids (the `rows.results ?? []` fallback)", async () => {
+    // all() returns {} (no `results` property) → `rows.results ?? []` yields [] → no ids resolve → early return, no vector/storage delete
+    let deleted = false;
+    const vector = { deleteByIds: async () => { deleted = true; } } as unknown as VectorAdapter;
+    const storage = {
+      prepare: () => ({ bind: () => ({ all: async () => ({}), run: async () => undefined }) }),
+      batch: async () => undefined,
+    } as unknown as StorageAdapter;
+    await expect(deleteChunksForPaths({ storage, vector }, "p", "o/r", ["src/a.ts"])).resolves.toBeUndefined();
+    expect(deleted).toBe(false); // no ids → nothing deleted
+  });
 });
 
 // ── countRepoChunks / embedTexts / readChunkTexts catch paths ────────────────────────────────────────
@@ -329,6 +357,16 @@ describe("rag: storage/inference catch paths return their fail-safe defaults", (
 
   it("readChunkTexts short-circuits on an empty id list", async () => {
     expect((await readChunkTexts(storageStub(), [])).size).toBe(0);
+  });
+
+  it("readChunkTexts yields an empty Map when the SELECT returns no `results` key (the `rows.results ?? []` fallback)", async () => {
+    // all() returns {} (no `results`) → `rows.results ?? []` → [] → nothing added to the map
+    const storage = {
+      prepare: () => ({ bind: () => ({ all: async () => ({}) }) }),
+      batch: async () => undefined,
+    } as unknown as StorageAdapter;
+    const map = await readChunkTexts(storage, ["id-1", "id-2"]);
+    expect(map.size).toBe(0);
   });
 });
 
@@ -523,6 +561,13 @@ describe("rag: retrieveContext inner branches", () => {
     expect(await retrieveContext(infra, { project: "p", repo: "o/r", queryText: longQuery })).toBe("");
   });
 
+  it("returns '' when the vector query result has NO `matches` key (the `res?.matches ?? []` fallback)", async () => {
+    // query() resolves to {} (no `matches` property) → `res?.matches ?? []` → [] → no candidates → ''
+    const vector = { query: async () => ({}) } as unknown as VectorAdapter;
+    const infra: RagInfra = { storage: storageStub({ count: 2, rows: [] }), vector, inference: ai1024 };
+    expect(await retrieveContext(infra, { project: "p", repo: "o/r", queryText: longQuery })).toBe("");
+  });
+
   it("applies the BM25 reranker (opts.reranker='bm25' with >1 kept chunk) — reranked path", async () => {
     const matches = [
       { id: "palette.ts::0", score: 0.95, metadata: { path: "palette.ts" } }, // higher cosine but unrelated terms
@@ -648,6 +693,15 @@ describe("rag: bm25Scores edge branches", () => {
     const custom = bm25Scores("auth", docs, 2.0, 0.5);
     expect(custom).toHaveLength(2);
     expect(custom[0]).not.toBe(def[0]); // different k1/b → different score
+  });
+
+  it("handles a doc that tokenizes to NOTHING (the tokenizer `?? []` + the per-doc `len = d.length || 1` guards)", () => {
+    // doc 1 is pure punctuation/single chars → bm25Tokenize's regex `.match()` returns null → `?? []` → []
+    // an empty token list then drives `const len = d.length || 1` to take the `|| 1` fallback (no divide-by-zero)
+    const scores = bm25Scores("auth token", ["!!! @@@ a b", "verify the auth token here"]);
+    expect(scores).toHaveLength(2);
+    expect(scores[0]).toBe(0); // the empty-token doc shares no query terms → scores 0, no NaN/throw
+    expect(scores[1]!).toBeGreaterThan(0); // the real doc still scores
   });
 });
 

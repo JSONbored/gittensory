@@ -182,6 +182,8 @@ function chunkJsTs(path: string, text: string, kind: RagKind, namespace: string,
     current += `${line}\n`;
     started = true;
   }
+  // unreachable implicit-else: the loop always appends `${line}\n` to `current`, so after a non-empty text it is never falsy
+  /* v8 ignore else */
   if (current) segments.push(current);
   if (segments.length <= 1) return null; // no useful boundaries → newline fallback
   const chunks: RagChunk[] = [];
@@ -189,7 +191,10 @@ function chunkJsTs(path: string, text: string, kind: RagKind, namespace: string,
   let idx = 0;
   const flush = () => {
     if (!buf) return;
+    // noUncheckedIndexedAccess fallback: String.split always yields index 0; buf is non-empty (flush early-returns on !buf)
+    /* v8 ignore start */
     const firstLine = buf.split("\n", 1)[0] ?? "";
+    /* v8 ignore stop */
     chunks.push({ id: chunkId(namespace, path, idx), path, chunkIndex: idx, kind, text: buf, boundary: boundaryKind(firstLine) });
     idx += 1;
     buf = "";
@@ -205,7 +210,8 @@ function chunkJsTs(path: string, text: string, kind: RagKind, namespace: string,
     buf += seg;
   }
   flush();
-  return chunks.length > 0 ? chunks : null;
+  // unreachable :null leg — reached only when segments.length > 1, and non-empty segments always pack/flush ≥1 chunk
+  return chunks.length > 0 ? chunks : /* v8 ignore next */ null;
 }
 
 /** The original behaviour: one chunk for a small file, else newline-boundary splits with overlap. */
@@ -371,7 +377,13 @@ export async function retrieveContext(
     });
     const texts = matches.length > 0 ? await readChunkTexts(storage, matches.map((m) => m.id)) : new Map<string, string>();
     let chunks = matches
-      .map((m) => ({ path: (m.metadata?.path as string) ?? "", text: texts.get(m.id) ?? "" }))
+      .map((m) => ({
+        // the `path ?? ""` leg is unreachable — surviving matches already passed the filter's `p && …` so metadata.path is a truthy string here
+        /* v8 ignore start */
+        path: (m.metadata?.path as string) ?? "",
+        /* v8 ignore stop */
+        text: texts.get(m.id) ?? "",
+      }))
       .filter((c) => c.text);
     // Optional BM25 rerank: rescore the cosine candidates by exact-term overlap to demote vector-accident
     // matches (high cosine but no real term overlap with the query). (#283)
@@ -422,7 +434,10 @@ export function bm25Scores(query: string, docs: string[], k1 = 1.5, b = 0.75): n
     for (const t of qTerms) {
       const f = tf.get(t) ?? 0;
       if (f === 0) continue;
+      // `t` iterates qTerms, the same set that populated `df` above, so df.get(t) is always defined (noUncheckedIndexedAccess fallback)
+      /* v8 ignore start */
       const n = df.get(t) ?? 0;
+      /* v8 ignore stop */
       const idf = Math.log(1 + (N - n + 0.5) / (n + 0.5));
       score += (idf * (f * (k1 + 1))) / (f + k1 * (1 - b + (b * len) / avgdl));
     }
@@ -434,7 +449,13 @@ export function bm25Scores(query: string, docs: string[], k1 = 1.5, b = 0.75): n
 export function bm25Rerank<T extends { text: string }>(query: string, chunks: T[]): T[] {
   if (chunks.length <= 1) return chunks;
   const scores = bm25Scores(query, chunks.map((c) => c.text));
-  return chunks.map((c, i) => ({ c, i, s: scores[i] ?? 0 })).sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.c);
+  return chunks
+    // `scores` has exactly chunks.length entries (bm25Scores maps over chunks), so scores[i] is always defined here (noUncheckedIndexedAccess fallback)
+    /* v8 ignore start */
+    .map((c, i) => ({ c, i, s: scores[i] ?? 0 }))
+    /* v8 ignore stop */
+    .sort((a, b) => b.s - a.s || a.i - b.i)
+    .map((x) => x.c);
 }
 
 export function formatRetrievedContext(chunks: Array<{ path: string; text: string }>): string {
