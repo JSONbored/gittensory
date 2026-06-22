@@ -15,6 +15,11 @@ declare global {
     /** Convergence (infra): Browser Rendering binding for visual (before/after screenshot) capture. Optional —
      *  absent ⇒ no visual capture. Unused until the per-module wiring chunk; an unbound deploy is inert. */
     BROWSER?: Fetcher;
+    /** Convergence (infra): the shared REVIEW_CONFIG KV (reviewbot's per-repo config, keyed by repo slug).
+     *  The converged auto-maintain path resolves each repo's `hardGuardrailGlobs` from it so guarded paths
+     *  force MANUAL review (no auto-merge / auto-close). Optional — absent ⇒ the conservative
+     *  DEFAULT_CRUCIAL_GUARDRAIL_GLOBS fallback applies (CI workflows + scripts still guarded). */
+    REVIEW_CONFIG?: KVNamespace;
     /** TODO (convergence follow-up): a per-PR LOCK Durable Object (`SubmissionLock` mutex) is a separate,
      *  more-involved sub-task — it needs the ported DO class + its own migration tag, not just a binding here.
      *  Deliberately NOT declared in this chunk; the review path keeps its current concurrency behavior. */
@@ -69,6 +74,17 @@ declare global {
      *  the PR diff is scanned for leaked secrets, surfacing a `secret_leak` blocker. Default OFF —
      *  unset/false keeps the review path byte-identical (no new branch is taken). */
     GITTENSORY_REVIEW_SAFETY?: string;
+    /** Convergence (visual capture): when truthy, the review path captures a before/after screenshot for
+     *  PRs that touch WEB-VISIBLE files (frontend pages / public OG images — see review/visual/paths.ts
+     *  isVisualPath). "before" = production (PUBLIC_SITE_ORIGIN); "after" = the PR's preview deploy. Each shot
+     *  is rendered via the BROWSER (Browser Rendering) binding, stored in the REVIEW_AUDIT R2 bucket, and
+     *  embedded in the unified PR comment as a "Visual preview" table served from the PUBLIC /gittensory/shot
+     *  route. Needs the BROWSER + REVIEW_AUDIT bindings; degrades gracefully (placeholders / dashes) without
+     *  them. Backend .ts/.md/.json/.py PRs NEVER trigger capture. Capture runs for a repo ONLY IF this flag is
+     *  ON *AND* the repo is in GITTENSORY_REVIEW_REPOS (the per-repo cutover allowlist) — see
+     *  review/visual-wire.ts screenshotsAllowed. Default OFF — unset/false captures nothing (no render, no R2
+     *  write, no comment change) so the review path is byte-identical to today. */
+    GITTENSORY_REVIEW_SCREENSHOTS?: string;
     /** Convergence (grounding): when truthy, the AI reviewer prompt is GROUNDED — the PR's finished CI status
      *  + the FULL post-change content of the changed files are appended so a non-frontier model verifies its
      *  claims against reality instead of predicting CI / flagging symbols defined just outside the hunk.
