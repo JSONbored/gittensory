@@ -36,9 +36,39 @@ describe("isSafeHttpUrl", () => {
     expect(isSafeHttpUrl("https://[fe80::1]")).toBe(false);
   });
 
+  it("rejects the all-zeros IPv6 unspecified address [::]", () => {
+    // [::] is NOT caught by hostIsPrivateOrLocal's literal "::1"/"[::1]" guard (line 69),
+    // so it falls through to ipv6IsPrivateOrLocal where `addr === "::"` matches (line 51).
+    // The fd-prefix check would also pass it, but the "::" equality fires first.
+    expect(isSafeHttpUrl("https://[::]")).toBe(false);
+    expect(isSafeEndpointUrl("wss://[::]")).toBe(false);
+  });
+
+  it("accepts an fd00-prefixed ULA only when... it never does — fd is always private", () => {
+    // fd00::/8 (ULA) — first hextet starts with "fd" → ipv6IsPrivateOrLocal line 61 true.
+    expect(isSafeHttpUrl("https://[fd12:3456:789a::1]")).toBe(false);
+  });
+
   it("returns false for unparseable input", () => {
     expect(isSafeHttpUrl("not a url")).toBe(false);
     expect(isSafeHttpUrl("")).toBe(false);
+  });
+
+  it("treats hex/octal-prefixed labels in a non-IP host as a public domain", () => {
+    // `0x7f.example` survives the WHATWG parser as a hostname (not a whole-IP), so it reaches
+    // ipv4ToInt: the first label exercises parseIpv4Component's hex branch (line 12), the second
+    // ("example") returns null and ipv4ToInt bails — host is not a private IP literal → public.
+    expect(isSafeHttpUrl("https://0x7f.example")).toBe(true);
+    // `0177.example` exercises the octal branch (line 13) the same way.
+    expect(isSafeHttpUrl("https://0177.example")).toBe(true);
+    // A large hex label still bails on the trailing non-numeric label → public domain.
+    expect(isSafeHttpUrl("https://0xffffffff.example")).toBe(true);
+  });
+
+  it("rejects nothing for a 5-label host (ipv4ToInt's >4-parts guard)", () => {
+    // `a.b.c.d.e` has 5 dot-separated labels → ipv4ToInt returns null at the parts.length>4
+    // guard (line 20) → not a private IP literal → treated as a public host.
+    expect(isSafeHttpUrl("https://a.b.c.d.e")).toBe(true);
   });
 
   it("accepts public IPv4 literals (the non-private fall-through)", () => {

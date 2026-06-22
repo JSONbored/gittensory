@@ -25,12 +25,19 @@ function ipv4ToInt(host: string): number | null {
     vals.push(v);
   }
   const n = vals.length;
+  // Byte-faithful overflow guards from reviewbot's core/source-url.ts. Unreachable via the public
+  // isSafe*Url entry points: a host reaches here only after `new URL()`, and the WHATWG parser
+  // rejects any all-numeric dotted host whose components overflow (so the >0xff / >lastMax / >2^32
+  // cases never arrive), while a host that survives parsing as a domain has a non-numeric label that
+  // makes parseIpv4Component bail (line 24) before these run. Retained for source parity + defense.
+  /* v8 ignore start -- @preserve unreachable through new URL() host normalization (see note above) */
   for (let i = 0; i < n - 1; i += 1) if ((vals[i] as number) > 0xff) return null;
   const lastMax = [0xffffffff, 0xffffff, 0xffff, 0xff][n - 1] as number;
   if ((vals[n - 1] as number) > lastMax) return null;
   let result = vals[n - 1] as number;
   for (let i = 0; i < n - 1; i += 1) result += (vals[i] as number) * 256 ** (3 - i);
   return result > 0xffffffff ? null : result >>> 0;
+  /* v8 ignore stop */
 }
 
 function ipv4IsPrivateOrLocal(host: string): boolean {
@@ -47,9 +54,16 @@ function ipv4IsPrivateOrLocal(host: string): boolean {
 
 function ipv6IsPrivateOrLocal(host: string): boolean {
   const addr = host.replace(/^\[|\]$/g, "");
+  // Caller (hostIsPrivateOrLocal) only invokes this when the host contains ":", and bracket
+  // stripping never removes an interior colon — so the no-colon guard's true side is unreachable.
+  /* v8 ignore next -- @preserve true side unreachable: caller guards host.includes(":") */
   if (!addr.includes(":")) return false;
   if (addr === "::1" || addr === "::") return true;
+  // `new URL()` collapses the dotted IPv4-mapped form (::ffff:127.0.0.1) to the hex form
+  // (::ffff:7f00:1), so this dotted-quad regex never matches via the public entry points; the hex
+  // branch below carries the IPv4-mapped case. Retained for source parity.
   const dotted = addr.match(/::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  /* v8 ignore next -- @preserve dotted ::ffff:N.N.N.N is normalized to hex by new URL() */
   if (dotted) return ipv4IsPrivateOrLocal(dotted[1] as string);
   const hex = addr.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
   if (hex) {
