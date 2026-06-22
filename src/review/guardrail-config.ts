@@ -34,3 +34,7 @@ export async function loadHardGuardrailGlobs(env: Env, repoFullName: string): Pr
     return DEFAULT_CRUCIAL_GUARDRAIL_GLOBS;
   }
 }
+
+// Note: the per-repo guardrail globs are operator tuning and live ONLY in the REVIEW_CONFIG KV (keyed by repo
+// slug) — never committed here — so they can be retuned at runtime without a redeploy. This module is just the
+// fail-safe reader + the conservative code-floor default.
