@@ -107,6 +107,43 @@ describe("detectAnomalies", () => {
     const line = detectAnomalies({ ...healthy, failed: 12, failedTargets: many }).find((a) => /permanently failed/.test(a)) ?? "";
     expect(line).toContain("(+4 more)"); // 12 - MAX_LISTED(8)
   });
+  it("flags the accuracy circuit-breaker (holdOnly) FIRST and on its own", () => {
+    const out = detectAnomalies({ ...healthy, holdOnly: true });
+    expect(out[0]).toMatch(/auto-merge DISABLED by the accuracy circuit-breaker/);
+  });
+  it("renders calibration drift with a '?' when revertedMaxConfidence is null but a floor is recommended", () => {
+    // recommendedFloor != null fires the drift line, but revertedMaxConfidence == null → the "?" else arm.
+    const cal: Calibration = { currentFloor: 0.9, mergedCount: 50, revertedCount: 1, keptAvgConfidence: 0.95, revertedMaxConfidence: null, recommendedFloor: 0.92, note: "raise", closesByReason: [], disputedCloseCount: 0 };
+    const line = detectAnomalies(healthy, cal).find((a) => /calibration drift/.test(a)) ?? "";
+    expect(line).toMatch(/the highest at \? — above/);
+  });
+  it("omits the '· error' suffix on a DEAD-LETTERED PR with no lastError", () => {
+    const out = detectAnomalies({
+      ...healthy,
+      dlqCount: 3,
+      dlqTargets: [{ number: 700, repo: "o/r", verdict: null, lastError: null }],
+    });
+    const line = out.find((a) => /DEAD-LETTERED/.test(a)) ?? "";
+    expect(line).toContain("[#700](https://github.com/o/r/pull/700)");
+    expect(line).not.toContain("·"); // lastError null → no " · <err>" suffix
+  });
+  it("omits the '· error' suffix on a permanently-failed PR with no lastError", () => {
+    const out = detectAnomalies({
+      ...healthy,
+      failed: 1,
+      failedTargets: [{ number: 800, repo: "o/r", verdict: "merge", lastError: null }],
+    });
+    const line = out.find((a) => /permanently failed/.test(a)) ?? "";
+    expect(line).toContain("(merge)"); // verdict present, but no " · <err>"
+    expect(line).not.toContain("·");
+  });
+  it("treats an undefined dlqCount as 0 (no DLQ line on a hand-built health object)", () => {
+    // dlqCount is the noUncheckedIndexedAccess-style defensive `?? 0` — a hand-built health snapshot may omit it.
+    const partial = { ...healthy } as Partial<AgentHealth>;
+    delete partial.dlqCount;
+    const out = detectAnomalies(partial as AgentHealth);
+    expect(out.some((a) => /DEAD-LETTERED/.test(a))).toBe(false);
+  });
 });
 
 describe("runAnomalyAlerts guards", () => {
@@ -250,5 +287,77 @@ describe("runAnomalyAlerts — send path", () => {
     await runAnomalyAlerts(claimEnv(), config, deps);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(computed).toBe(false); // bailed at the webhook-validity guard, never reached the claim/health
+  });
+
+  it("no-ops when neither a named secret nor discordWebhookUrl is set (resolveWebhook → '')", async () => {
+    // secrets.discordWebhook absent AND discordWebhookUrl absent → resolveWebhook falls through to the `?? ""`
+    // empty-string arm, which the `!webhookUrl` guard then rejects before any claim/health work.
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const config = { slug: "ac", features: { discordNotify: true }, secrets: {} } as AlertAgentConfig;
+    let computed = false;
+    const deps: AnomalyAlertDeps = { computeAgentHealth: async () => { computed = true; return anomalousHealth; }, computeCalibration: async () => driftCal };
+    await runAnomalyAlerts(claimEnv(), config, deps);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(computed).toBe(false);
+  });
+
+  it("treats a non-string env value for the named secret as '' (readSecret else arm) → no-ops", async () => {
+    // secrets.discordWebhook points at an env key whose value is NOT a string → readSecret returns "" →
+    // the `!webhookUrl` guard bails. Exercises the `typeof value === "string" ? value : ""` else arm.
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const config = { slug: "mg", features: { discordNotify: true }, secrets: { discordWebhook: "MG_DISCORD" } } as AlertAgentConfig;
+    const env = claimEnv({ MG_DISCORD: 12345 }); // numeric, not a string
+    let computed = false;
+    const deps: AnomalyAlertDeps = { computeAgentHealth: async () => { computed = true; return anomalousHealth; }, computeCalibration: async () => driftCal };
+    await runAnomalyAlerts(env, config, deps);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(computed).toBe(false);
+  });
+
+  it("short-circuits at the per-hour HEALTHCHECK claim when runChanges falls back to 0 (run result lacks meta)", async () => {
+    // A run() result with no `meta.changes` → runChanges' `?? 0` fallback fires → the healthcheck claim reads
+    // as already-taken → returns before computing health. Exercises the `?.meta?.changes ?? 0` else arm.
+    const fetchSpy = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const noMetaEnv = {
+      DB: {
+        prepare: (_sql: string) => ({
+          bind: (..._binds: unknown[]) => ({
+            run: async () => ({}), // no meta → runChanges() === 0
+          }),
+        }),
+      },
+    } as unknown as Env;
+    const config = { slug: "ac", features: { discordNotify: true }, secrets: {}, discordWebhookUrl: WEBHOOK } as AlertAgentConfig;
+    let computed = false;
+    const deps: AnomalyAlertDeps = { computeAgentHealth: async () => { computed = true; return anomalousHealth; }, computeCalibration: async () => driftCal };
+    await runAnomalyAlerts(noMetaEnv, config, deps);
+    expect(computed).toBe(false); // healthcheck claim read as taken → bailed before computing health
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("short-circuits at the ANOMALY claim when that specific claim conflicts (already alerted this hour)", async () => {
+    // Health check claim succeeds (changes=1) but the anomaly claim conflicts (changes=0) → the
+    // `if (runChanges(claim) === 0) return` early-return fires AFTER computing health, before the POST.
+    const fetchSpy = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const env = {
+      DB: {
+        prepare: (sql: string) => ({
+          bind: (..._binds: unknown[]) => ({
+            // healthcheck INSERT targets '__healthcheck__' → succeed; anomaly INSERT targets '__anomaly__' → conflict.
+            run: async () => ({ meta: { changes: sql.includes("__anomaly__") ? 0 : 1 } }),
+          }),
+        }),
+      },
+    } as unknown as Env;
+    const config = { slug: "ac", features: { discordNotify: true }, secrets: {}, discordWebhookUrl: WEBHOOK } as AlertAgentConfig;
+    let computed = false;
+    const deps: AnomalyAlertDeps = { computeAgentHealth: async () => { computed = true; return anomalousHealth; }, computeCalibration: async () => driftCal };
+    await runAnomalyAlerts(env, config, deps);
+    expect(computed).toBe(true); // health WAS computed (healthcheck claim succeeded)
+    expect(fetchSpy).not.toHaveBeenCalled(); // but the anomaly claim conflicted → no POST
   });
 });
