@@ -153,10 +153,12 @@ export async function getOrCreateScoringModelSnapshot(env: Env): Promise<Scoring
 export function parsePythonNumberConstants(source: string, options: { knownOnly?: boolean } = { knownOnly: true }): Record<string, number> {
   const constants: Record<string, number> = {};
   for (const line of source.split("\n")) {
-    // Match Python numeric literals including underscore separators (1_000_000), floats, and exponents
-    // (1e-9, 5.8e1). The previous /[-+]?\d+(?:\.\d+)?/ stopped at `_`/`e`, truncating 1_000_000 -> 1 and
-    // 1e-9 -> 1, which silently misparsed any such upstream constant and polluted the unmodeled list (#810).
-    const match = line.match(/^([A-Z][A-Z0-9_]+)\s*=\s*([-+]?(?:\d[\d_]*\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/);
+    // Match Python numeric literals including underscore separators (1_000_000, 0.000_001), floats, and
+    // exponents (1e-9, 5.8e1). PEP 515 allows underscores between digits in ANY part of the literal, so the
+    // fractional digits accept `_` too — the previous frac classes (`\d*`/`\.\d+`) stopped at the first
+    // fractional underscore, truncating 0.000_001 -> 0. The earlier /[-+]?\d+(?:\.\d+)?/ also stopped at
+    // `_`/`e` (1_000_000 -> 1, 1e-9 -> 1). Both silently misparsed upstream constants (#810).
+    const match = line.match(/^([A-Z][A-Z0-9_]+)\s*=\s*([-+]?(?:\d[\d_]*\.?[\d_]*|\.\d[\d_]*)(?:[eE][-+]?\d+)?)/);
     if (!match) continue;
     const name = match[1]!;
     const raw = match[2]!;

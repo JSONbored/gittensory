@@ -86,6 +86,21 @@ OSS_EMISSION_SHARE = 0.90
     expect(parsed.OSS_EMISSION_SHARE).toBe(0.9);
   });
 
+  it("parses underscores in the FRACTIONAL part (PEP 515) without truncating to zero", () => {
+    const parsed = parsePythonNumberConstants(
+      `
+SMALL_RATE = 0.000_001
+PRECISE_SCALE = 3.14_15
+MIXED_GROUPED = 1_000.000_5
+`,
+      { knownOnly: false },
+    );
+    // Frac classes were \\d*/\\.\\d+ (no `_`), so 0.000_001 stopped at "0.000" -> 0 (a divide/multiply hazard).
+    expect(parsed.SMALL_RATE).toBe(0.000001);
+    expect(parsed.PRECISE_SCALE).toBe(3.1415);
+    expect(parsed.MIXED_GROUPED).toBe(1000.0005);
+  });
+
   it("flags only scoring snapshots older than the freshness window as stale (#810)", () => {
     const now = Date.parse("2026-06-21T12:00:00.000Z");
     const justFresh = new Date(now - SCORING_SNAPSHOT_STALE_MS + 60_000).toISOString();
