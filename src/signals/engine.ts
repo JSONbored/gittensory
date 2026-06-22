@@ -4144,6 +4144,59 @@ type PublicPrPanelGateEvaluation = {
   summary: string;
 };
 
+/** One readiness signal row of the public PR panel, with the cells the legacy table renders. The
+ *  unified-comment bridge (convergence) consumes these — `result` carries the leading ✅/⚠️/❌ icon so
+ *  the bridge can derive an ok/warn/fail state without re-running the readiness math. */
+export type PublicPrPanelSignalRow = { key: ReviewFieldKey; cells: [string, string, string, string] };
+
+/**
+ * Build the public PR panel's readiness signal rows (the `allRows` table) as a PURE function, from the
+ * SAME inputs `buildPublicPrIntelligenceComment` uses. It calls the same private panel helpers, so the rows
+ * are byte-identical to the legacy panel's. Exposed for the unified-comment bridge (convergence) so the
+ * converged comment surfaces gittensory's exact signals; the legacy path is unchanged. The `key` lets the
+ * caller honor `.gittensory.yml review.fields` visibility the same way the legacy renderer does.
+ */
+export function buildPublicPrPanelSignalRows(args: {
+  repo: RepositoryRecord | null;
+  pr: PullRequestRecord;
+  profile: ContributorProfile;
+  detection: ContributorDetection;
+  queueHealth: QueueHealth;
+  collisions: CollisionReport;
+  preflight: PreflightResult;
+  settings: RepositorySettings;
+  gate?: PublicPrPanelGateEvaluation | undefined;
+}): { rows: PublicPrPanelSignalRow[]; readinessTotal: number } {
+  const prCollisionClusters = pullRequestSpecificCollisionClusters(args.collisions, args.pr);
+  const linkedDuplicatePrs = linkedIssueDuplicatePullRequests(args.pr, prCollisionClusters);
+  const scopedOverlapClusters = unionScopedOverlapClusters(args.collisions, args.pr, args.preflight.collisions);
+  const scopedOverlapCount = scopedOverlapClusters.length;
+  const readiness = buildPublicReadinessScore({ pr: args.pr, preflight: args.preflight, queueHealth: args.queueHealth, linkedDuplicatePrs, scopedOverlapCount });
+  const linkedIssueResult = linkedIssuePanelResult(args.pr);
+  const relatedWorkResult = relatedWorkPanelResult(linkedDuplicatePrs, scopedOverlapCount);
+  const gateEnabled = args.settings.gateCheckMode === "enabled";
+  const hardLinkedIssueBlock = args.settings.linkedIssueGateMode === "block" && args.pr.linkedIssues.length === 0 && !hasClearNoIssueRationale(args.pr);
+  const hardDuplicateBlock = args.settings.duplicatePrGateMode === "block" && linkedDuplicatePrs.length > 0;
+  const fallbackGateConclusion = !gateEnabled ? "success" : !args.repo ? "neutral" : hardLinkedIssueBlock || hardDuplicateBlock ? "failure" : "success";
+  const gateConclusion = args.gate?.conclusion ?? fallbackGateConclusion;
+  const confirmedMiner = isOfficialContributorDetection(args.detection);
+  const readinessByKey = new Map(readiness.components.map((component) => [component.key, component]));
+  const validationComponent = readinessByKey.get("validation");
+  const changeScopeComponent = readinessByKey.get("change_scope");
+  const queueComponent = readinessByKey.get("queue_pressure");
+  const contributorContext = contributorContextPanelResult(args.pr, args.profile, args.detection, confirmedMiner);
+  const rows: PublicPrPanelSignalRow[] = [
+    { key: "linkedIssue", cells: ["Linked issue", linkedIssueResult.result, linkedIssueResult.evidence, linkedIssueResult.action] },
+    { key: "relatedWork", cells: ["Related work", relatedWorkResult.result, relatedWorkResult.evidence, relatedWorkResult.action] },
+    { key: "reviewLoad", cells: ["Review load", scoreResultIcon(changeScopeComponent), changeScopeComponent?.evidence ?? "No public scope metadata found.", changeScopeComponent?.action ?? "No action."] },
+    { key: "validationEvidence", cells: ["Validation evidence", scoreResultIcon(validationComponent), validationComponent?.evidence ?? "No validation signal found.", validationComponent?.action ?? "Add validation note."] },
+    { key: "openPrQueue", cells: ["Open PR queue", scoreResultIcon(queueComponent), queueComponent?.evidence ?? "Open PR queue unavailable.", queueComponent?.action ?? "No action."] },
+    { key: "contributorContext", cells: ["Contributor context", contributorContext.result, contributorContext.evidence, contributorContext.action] },
+    { key: "gateResult", cells: ["Gate result", gateStatus(gateEnabled, gateConclusion), gateEnabled ? gateAction(gateConclusion) : "Advisory only.", gateEnabled ? gateNextAction(gateConclusion) : "No action."] },
+  ];
+  return { rows, readinessTotal: readiness.total };
+}
+
 function isOfficialContributorDetection(detection: ContributorDetection): boolean {
   return detection.source === "official_gittensor_api";
 }

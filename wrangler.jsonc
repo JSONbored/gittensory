@@ -46,6 +46,9 @@
     "AI_MAX_OUTPUT_TOKENS": "256",
     "AI_GATEWAY_ID": "",
     "ADMIN_GITHUB_LOGINS": "JSONbored",
+    // Convergence (Stage D): render the public PR comment via the unified-comment bridge. Default OFF —
+    // flag-OFF keeps the legacy buildPublicPrIntelligenceComment panel byte-identical.
+    "UNIFIED_REVIEW_COMMENT": "false",
   },
   "routes": [
     {

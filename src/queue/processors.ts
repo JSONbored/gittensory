@@ -136,6 +136,7 @@ import {
   buildMaintainerLaneReport,
   buildPreflightResult,
   buildPublicPrIntelligenceComment,
+  buildPublicPrPanelSignalRows,
   buildPublicReadinessScore,
   buildQueueHealth,
   buildRoleContext,
@@ -144,6 +145,7 @@ import {
   unionScopedOverlapClusters,
   type ContributorProfile,
 } from "../signals/engine";
+import { buildUnifiedCommentBody, isUnifiedReviewCommentEnabled } from "../review/unified-comment-bridge";
 import { buildIssueSlopAssessment, buildSlopAssessment, type SlopBand } from "../signals/slop";
 import { runGittensoryAiSlopAdvisory } from "../services/ai-slop";
 import { decidePublicSurface } from "../signals/settings-preview";
@@ -1616,7 +1618,31 @@ async function maybePublishPrPublicSurface(
     // Cached, so this is a DB read after the settings resolution already loaded the manifest.
     const reviewConfig = (await loadRepoFocusManifest(env, repoFullName)).review;
     const commentArgs = { repo, pr, profile, detection, queueHealth, collisions, preflight, settings, gate: gateEvaluation, review: reviewConfig, aiReview };
-    const deterministicBody = buildPublicPrIntelligenceComment(commentArgs);
+    let deterministicBody: string;
+    // Convergence (Stage D): when the unified-review-comment flag is ON, render the single converged comment
+    // (gittensory shape + reviewbot's review folded in). The gate stays authoritative (passed as `decision`),
+    // and the body carries the SAME panel marker so the upsert updates in place. Flag-OFF (default) keeps the
+    // legacy panel byte-identical. Only the comment lane is affected; the gate check-run/labels/audit are not.
+    if (isUnifiedReviewCommentEnabled(env) && gateEvaluation) {
+      const { rows, readinessTotal } = buildPublicPrPanelSignalRows({ repo, pr, profile, detection, queueHealth, collisions, preflight, settings, gate: gateEvaluation });
+      const unifiedFiles = await listPullRequestFiles(env, repoFullName, pr.number);
+      deterministicBody = buildUnifiedCommentBody({
+        gate: gateEvaluation,
+        ...(aiReview !== undefined ? { aiReview } : {}),
+        advisoryFindings: advisory.findings,
+        panelRows: rows,
+        ...(reviewConfig?.fields !== undefined ? { reviewFields: reviewConfig.fields } : {}),
+        readinessTotal,
+        changedFiles: unifiedFiles.length,
+        footerMarkdown: gittensoryFooter({
+          earnUrl: repo?.isRegistered ? gittensorRepoEarnUrl(repoFullName) : undefined,
+          ...(reviewConfig?.footerText ? { customText: reviewConfig.footerText } : {}),
+        }),
+        reRunLabel: `${PR_PANEL_RETRIGGER_MARKER} Re-run Gittensory review`,
+      });
+    } else {
+      deterministicBody = buildPublicPrIntelligenceComment(commentArgs);
+    }
     try {
       await createOrUpdatePrIntelligenceComment(env, installationId, repoFullName, pr.number, deterministicBody);
       publishedOutputs.push("comment");

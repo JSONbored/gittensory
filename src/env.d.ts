@@ -46,6 +46,10 @@ declare global {
     TOKEN_ENCRYPTION_SECRET?: string;
     RATE_LIMIT_TRUSTED_PROXIES?: string;
     RATE_LIMIT_TRUSTED_PROXY_COUNT?: string;
+    /** Convergence (Stage D): when truthy, the public PR comment is rendered by the unified-comment bridge
+     *  (ONE in-place comment in the converged shape) instead of the legacy `buildPublicPrIntelligenceComment`
+     *  panel. Default OFF — unset/false keeps the legacy panel byte-identical. */
+    UNIFIED_REVIEW_COMMENT?: string;
   }
 }
 
