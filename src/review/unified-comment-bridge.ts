@@ -131,15 +131,32 @@ export function buildDualReviewNotes(args: {
   aiReview?: { notes: string } | undefined;
   consensusDefect?: { title: string; detail: string } | undefined;
   warnings?: AdvisoryFinding[] | undefined;
+  /** The gate's hard blockers (GateCheckEvaluation.blockers). Folded into the reviewer blockers so a NON-AI
+   *  gate failure (missing linked issue, slop, manifest, secret leak, …) renders a populated "Why this is
+   *  blocked" list — not just an empty one driven by the AI consensus defect (FIX D1). The `ai_consensus_defect`
+   *  is EXCLUDED here because it is already surfaced via `consensusDefect` (so it appears exactly once). Each is
+   *  scrubbed through the same public-safe boundary as Nits (defense-in-depth) before reaching the comment. */
+  gateBlockers?: AdvisoryFinding[] | undefined;
   recommendation: ReviewRecommendation;
   verdict: Verdict;
   reviewerModel?: string;
 }): DualReviewNote[] {
   const assessment = args.aiReview?.notes?.trim() ?? "";
-  const blockers = args.consensusDefect ? [`${args.consensusDefect.title}${args.consensusDefect.detail ? `: ${args.consensusDefect.detail}` : ""}`.trim()] : [];
+  const consensusBlocker = args.consensusDefect ? [`${args.consensusDefect.title}${args.consensusDefect.detail ? `: ${args.consensusDefect.detail}` : ""}`.trim()] : [];
+  // FIX D1: fold the gate's own hard blockers into the reviewer blockers (so a non-AI gate failure populates
+  // "Why this is blocked"). Exclude `ai_consensus_defect` (already surfaced via consensusDefect → appears once)
+  // and scrub each through the same public-safe boundary as Nits, DROPPING any that still leaks a private term.
+  const gateBlockerLines = (args.gateBlockers ?? [])
+    .filter((finding) => finding.code !== "ai_consensus_defect")
+    .map((finding) => `${finding.title}${finding.action ? ` — ${finding.action}` : ""}`.trim())
+    .filter(Boolean)
+    .map((line) => publicSafeNit(line))
+    .filter((line): line is string => line !== null);
+  const blockers = [...consensusBlocker, ...gateBlockerLines];
   // Nits are the only renderer input not already routed through an existing public-safe filter (the gate's
   // raw warning findings). Scrub each with the private-term boundary and DROP any that still leaks. See
-  // PRIVATE_FORBIDDEN_TERMS above. (Blockers come from the consensus defect, already public-safe via toPublicSafe.)
+  // PRIVATE_FORBIDDEN_TERMS above. (The consensus-defect blocker is already public-safe via toPublicSafe; the
+  // gate blockers above go through the SAME scrub as Nits.)
   const nits = (args.warnings ?? [])
     .map((warning) => `${warning.title}${warning.action ? ` — ${warning.action}` : ""}`.trim())
     .filter(Boolean)
@@ -246,13 +263,24 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
     aiReview: args.aiReview,
     consensusDefect,
     warnings: args.gate.warnings,
+    // FIX D1: hand the gate's own hard blockers to the reviewer note so a non-AI gate failure populates the
+    // "Why this is blocked" list (the consensus defect alone left it empty for those PRs).
+    gateBlockers: args.gate.blockers,
     recommendation: verdictToRecommendation(verdict),
     verdict,
   });
+  // FIX D2: carry the gate's authoritative reason onto the held/blocked/closed verdict headline. The gate
+  // summary is the human-readable "why" (e.g. "A hard blocker was found."); fall back to the title. Public-safe
+  // by construction (gate summary/title are author-facing) and angle-escaped by the renderer's verdictLine.
+  // Only attached for a NON-merge verdict: a passing (merge → ready) PR keeps its positive "safe to merge" /
+  // "all checks passed" wording rather than being overwritten by the gate's "no blocker found" summary.
+  const gateReason = args.gate.summary?.trim() || args.gate.title?.trim() || undefined;
+  const verdictReason = verdict !== "merge" ? gateReason : undefined;
   const input = buildUnifiedReviewInput({
     changedFiles: args.changedFiles,
     reviews,
     decision: verdict,
+    ...(verdictReason !== undefined ? { verdictReason } : {}),
     ...(args.mergeReadiness !== undefined ? { readiness: args.mergeReadiness } : {}),
     ...(args.merged !== undefined ? { merged: args.merged } : {}),
   });
