@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_LABEL_CHANGES, AGENT_LABEL_READY, planAgentMaintenanceActions, type AgentActionPlanInput } from "../../src/settings/agent-actions";
+import { AGENT_LABEL_CHANGES, AGENT_LABEL_READY, isProtectedAutomationAuthor, planAgentMaintenanceActions, type AgentActionPlanInput } from "../../src/settings/agent-actions";
 import type { GateCheckConclusion } from "../../src/rules/advisory";
 
 function input(overrides: Partial<AgentActionPlanInput> & { conclusion: GateCheckConclusion }): AgentActionPlanInput {
@@ -11,6 +11,7 @@ function input(overrides: Partial<AgentActionPlanInput> & { conclusion: GateChec
     changedPaths: [],
     hardGuardrailGlobs: [],
     authorIsOwner: false,
+    authorIsAutomationBot: false,
     pr: { labels: [] },
     ...overrides,
   };
@@ -76,11 +77,11 @@ describe("planAgentMaintenanceActions (#778)", () => {
 
   it("applies conservative defaults when autoMaintain / slopGateMinScore are omitted", () => {
     // no autoMaintain → requireApprovals defaults to 1 → a clean passing PR without APPROVED does NOT merge
-    expect(classes(planAgentMaintenanceActions({ conclusion: "success", blockerTitles: [], autonomy: { merge: "auto" }, changedPaths: [], hardGuardrailGlobs: [], authorIsOwner: false, pr: { labels: [], mergeableState: "clean" } }))).not.toContain("merge");
+    expect(classes(planAgentMaintenanceActions({ conclusion: "success", blockerTitles: [], autonomy: { merge: "auto" }, changedPaths: [], hardGuardrailGlobs: [], authorIsOwner: false, authorIsAutomationBot: false, pr: { labels: [], mergeableState: "clean" } }))).not.toContain("merge");
     // no slopGateMinScore → defaults to 60 → slopRisk 70 counts as noise and closes
-    expect(classes(planAgentMaintenanceActions({ conclusion: "failure", blockerTitles: ["x"], autonomy: { close: "auto" }, changedPaths: [], hardGuardrailGlobs: [], authorIsOwner: false, pr: { labels: [], slopRisk: 70 } }))).toContain("close");
+    expect(classes(planAgentMaintenanceActions({ conclusion: "failure", blockerTitles: ["x"], autonomy: { close: "auto" }, changedPaths: [], hardGuardrailGlobs: [], authorIsOwner: false, authorIsAutomationBot: false, pr: { labels: [], slopRisk: 70 } }))).toContain("close");
     // ...and slopRisk 50 is below the default → no close
-    expect(classes(planAgentMaintenanceActions({ conclusion: "failure", blockerTitles: ["x"], autonomy: { close: "auto" }, changedPaths: [], hardGuardrailGlobs: [], authorIsOwner: false, pr: { labels: [], slopRisk: 50 } }))).not.toContain("close");
+    expect(classes(planAgentMaintenanceActions({ conclusion: "failure", blockerTitles: ["x"], autonomy: { close: "auto" }, changedPaths: [], hardGuardrailGlobs: [], authorIsOwner: false, authorIsAutomationBot: false, pr: { labels: [], slopRisk: 50 } }))).not.toContain("close");
   });
 
   it("closes clear noise (high slop or duplicate) on a non-passing verdict, and never closes a passing PR", () => {
@@ -153,7 +154,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("DOES auto-close the same noisy PR when the author is not the owner", () => {
-      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, blockerTitles: ["x"], authorIsOwner: false, pr: { labels: [], slopRisk: 95 } })));
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, blockerTitles: ["x"], authorIsOwner: false, authorIsAutomationBot: false, pr: { labels: [], slopRisk: 95 } })));
       expect(plan).toContain("close");
     });
 
@@ -161,5 +162,33 @@ describe("planAgentMaintenanceActions (#778)", () => {
       const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, authorIsOwner: true, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } })));
       expect(plan).toContain("merge");
     });
+  });
+
+  describe("automation-bot guard: never auto-close maintainer-managed accumulator/dependency PRs", () => {
+    it("does NOT auto-close a noisy failing PR authored by an automation bot (e.g. the readme-refresh accumulator)", () => {
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, blockerTitles: ["x"], authorIsAutomationBot: true, pr: { labels: [], slopRisk: 95, linkedDuplicateCount: 3 } })));
+      expect(plan).not.toContain("close");
+    });
+
+    it("still auto-merges a clean+approved automation-bot PR (the guard blocks only close, never merge)", () => {
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, authorIsAutomationBot: true, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } })));
+      expect(plan).toContain("merge");
+    });
+  });
+});
+
+describe("isProtectedAutomationAuthor", () => {
+  it("matches the maintainer-managed automation accounts (case-insensitive)", () => {
+    expect(isProtectedAutomationAuthor("github-actions[bot]")).toBe(true);
+    expect(isProtectedAutomationAuthor("GitHub-Actions[bot]")).toBe(true);
+    expect(isProtectedAutomationAuthor("dependabot[bot]")).toBe(true);
+    expect(isProtectedAutomationAuthor("renovate[bot]")).toBe(true);
+  });
+
+  it("does not match human authors or null", () => {
+    expect(isProtectedAutomationAuthor("JSONbored")).toBe(false);
+    expect(isProtectedAutomationAuthor("some-contributor")).toBe(false);
+    expect(isProtectedAutomationAuthor(null)).toBe(false);
+    expect(isProtectedAutomationAuthor(undefined)).toBe(false);
   });
 });

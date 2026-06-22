@@ -101,7 +101,7 @@ import { commandAuthorizationAllowedRoles, commandAuthorizationNeedsMinerDetecti
 import { isAgentConfigured } from "../settings/autonomy";
 import { isGlobalAgentPause, resolveAgentActionMode } from "../settings/agent-execution";
 import { selectRegateCandidates } from "../settings/agent-sweep";
-import { planAgentMaintenanceActions } from "../settings/agent-actions";
+import { isProtectedAutomationAuthor, planAgentMaintenanceActions } from "../settings/agent-actions";
 import { executeAgentMaintenanceActions } from "../services/agent-action-executor";
 import { processSubmitDraft } from "../services/draft";
 import { loadIssueQualityReportMap } from "../services/issue-quality";
@@ -493,6 +493,7 @@ async function maybeRunAgentMaintenance(
   const repoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")) : "";
   const authorLogin = pr.authorLogin ?? "";
   const authorIsOwner = authorLogin.length > 0 && authorLogin.toLowerCase() === repoOwner.toLowerCase();
+  const authorIsAutomationBot = isProtectedAutomationAuthor(pr.authorLogin);
 
   const planned = planAgentMaintenanceActions({
     conclusion: gate.conclusion,
@@ -503,6 +504,7 @@ async function maybeRunAgentMaintenance(
     changedPaths,
     hardGuardrailGlobs,
     authorIsOwner,
+    authorIsAutomationBot,
     pr: {
       mergeableState: pr.mergeableState,
       reviewDecision: pr.reviewDecision,

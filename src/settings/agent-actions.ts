@@ -17,6 +17,15 @@ const DEFAULT_SLOP_GATE_MIN_SCORE = 60;
 export const AGENT_LABEL_READY = "gittensory:ready-to-merge";
 export const AGENT_LABEL_CHANGES = "gittensory:changes-requested";
 
+// Maintainer-managed automation accounts whose PRs are never auto-closed. A recurring accumulator (e.g.
+// github-actions[bot] opening automation/readme-refresh) or a dependency PR must not be killed by a duplicate
+// or slop heuristic — the maintainer owns its lifecycle. (reviewbot wrongly auto-closed such an accumulator,
+// awesome-claude #4192.) Still eligible for auto-merge when clean + passing.
+const PROTECTED_AUTOCLOSE_AUTHORS = new Set(["github-actions[bot]", "dependabot[bot]", "renovate[bot]"]);
+export function isProtectedAutomationAuthor(login: string | null | undefined): boolean {
+  return login != null && PROTECTED_AUTOCLOSE_AUTHORS.has(login.toLowerCase());
+}
+
 export type PlannedAgentAction = {
   actionClass: AgentActionClass;
   // auto_with_approval → the action is staged for a human approval (the #779 queue) instead of executing now.
@@ -44,6 +53,10 @@ export type AgentActionPlanInput = {
   // True when the PR author is the repo owner (e.g. JSONbored). Standing rule: owner PRs are NEVER
   // auto-closed. They may still auto-merge when clean + passing.
   authorIsOwner: boolean;
+  // True when the PR author is a maintainer-managed automation account (e.g. github-actions[bot] opening an
+  // accumulator like automation/readme-refresh, or dependabot/renovate). These are NEVER auto-closed — a noise
+  // heuristic (duplicate/slop) must not kill a recurring maintainer-managed PR. They may still auto-merge.
+  authorIsAutomationBot: boolean;
   pr: {
     mergeableState?: string | null | undefined;
     reviewDecision?: string | null | undefined;
@@ -125,7 +138,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       reason: `gate passed, mergeable, ${autoMaintain.requireApprovals} approval(s) satisfied`,
       mergeMethod: autoMaintain.mergeMethod,
     });
-  } else if (acting("close") && !passing && !guardrailHit && !input.authorIsOwner) {
+  } else if (acting("close") && !passing && !guardrailHit && !input.authorIsOwner && !input.authorIsAutomationBot) {
     const noiseReasons: string[] = [];
     if (input.pr.slopRisk != null && input.pr.slopRisk >= slopGateMinScore) noiseReasons.push(`slop score ${input.pr.slopRisk} ≥ ${slopGateMinScore}`);
     if ((input.pr.linkedDuplicateCount ?? 0) > 0) noiseReasons.push("duplicate of another open PR");
