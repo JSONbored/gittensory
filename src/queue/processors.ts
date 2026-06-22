@@ -163,6 +163,7 @@ import { runGittensoryAiReview } from "../services/ai-review";
 import { isSafetyEnabled, secretLeakFinding } from "../review/safety";
 import { buildReviewGroundingText, isGroundingEnabled } from "../review/grounding-wire";
 import { buildReviewRagContext, isRagEnabled } from "../review/rag-wire";
+import { indexRepo, reindexChangedPaths } from "../review/rag-index";
 import { isReputationEnabled, recordReputationOutcome, shouldSkipAiForReputation } from "../review/reputation-wire";
 import { isConvergenceRepoAllowed } from "../review/cutover-gate";
 import { loadHardGuardrailGlobs } from "../review/guardrail-config";
@@ -337,6 +338,12 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       // the queue (runSelfTune fails safe).
       if (isSelfTuneEnabled(env)) await runSelfTune(env);
       return;
+    case "rag-index-repo":
+      // Convergence (RAG / codebase index, flag GITTENSORY_REVIEW_RAG). Defense-in-depth: the cron + webhook only
+      // ENQUEUE this when the flag is ON, but a stale in-flight job that lands after a flag-flip must still no-op,
+      // so flag-OFF does zero work here too. indexRepo / reindexChangedPaths are fully fail-safe (never throw).
+      if (isRagEnabled(env)) await runRagIndexJob(env, message.requestedBy, message.repoFullName, message.paths);
+      return;
     case "github-webhook":
       await processGitHubWebhook(env, message.deliveryId, message.eventName, message.payload);
       return;
@@ -405,6 +412,87 @@ async function fanOutAgentRegateSweepJobs(env: Env, requestedBy: "schedule" | "a
     outcome: "queued",
     metadata: { repoCount: configured.length, requestedBy },
   });
+}
+
+// Convergence (RAG / codebase index, flag GITTENSORY_REVIEW_RAG). The dispatch for the `rag-index-repo` job.
+// Caller already gated on isRagEnabled(env).
+//   - No repoFullName → cron fan-out: enqueue one FULL re-index job per registered + cutover-allowlisted repo.
+//   - repoFullName + paths → INCREMENTAL re-index of those changed paths (the push / merged-PR path).
+//   - repoFullName + no paths → FULL re-index of that one repo's code.
+// Fully fail-safe — indexRepo / reindexChangedPaths never throw; this only delegates.
+async function runRagIndexJob(
+  env: Env,
+  requestedBy: "schedule" | "api" | "webhook" | "test",
+  repoFullName: string | undefined,
+  paths: string[] | undefined,
+): Promise<void> {
+  if (!repoFullName && requestedBy !== "test") {
+    await fanOutRagIndexJobs(env, requestedBy);
+    return;
+  }
+  if (!repoFullName) return;
+  // Defensive: a repo can drop out of the allowlist between fan-out and processing. Only index converged repos.
+  if (!isConvergenceRepoAllowed(env, repoFullName)) return;
+  const repo = await getRepository(env, repoFullName);
+  /* v8 ignore next -- defensive: a fanned-out repo is always present; the null is belt-and-suspenders. */
+  if (!repo) return;
+  const project = repoFullName;
+  if (paths && paths.length > 0) {
+    await reindexChangedPaths(env, project, repo, paths);
+    return;
+  }
+  await indexRepo(env, project, repo);
+}
+
+// Enqueue one per-repo FULL re-index job for every registered + cutover-allowlisted repo (mirrors the
+// signal-snapshot / agent-regate fan-out: a delayed per-repo queue message so each repo's index runs as its own
+// bounded, retryable job rather than one giant tick). Only allowlisted repos are indexed — retrieval is gated the
+// same way, so indexing a non-converged repo would only burn the free-tier vector budget for no benefit.
+async function fanOutRagIndexJobs(env: Env, requestedBy: "schedule" | "api" | "webhook" | "test"): Promise<void> {
+  const repositories = (await listRepositories(env)).filter((repo) => repo.isRegistered && isConvergenceRepoAllowed(env, repo.fullName));
+  await Promise.all(
+    repositories.map((repo, index) => {
+      const message: JobMessage = { type: "rag-index-repo", requestedBy, repoFullName: repo.fullName };
+      const delaySeconds = Math.min(index * 30, 900);
+      return delaySeconds > 0 ? env.JOBS.send(message, { delaySeconds }) : env.JOBS.send(message);
+    }),
+  );
+  await recordAuditEvent(env, {
+    eventType: "rag.index.fanout",
+    outcome: "queued",
+    metadata: { repoCount: repositories.length, requestedBy },
+  });
+}
+
+// Cap on changed paths fed to one incremental re-index job (a huge merge re-indexes its first N changed files;
+// the slow-cadence full re-index catches the long tail). Bounds the per-job GitHub fetch + embed cost.
+const RAG_REINDEX_MAX_PATHS = 100;
+
+/**
+ * Convergence (RAG / codebase index, flag GITTENSORY_REVIEW_RAG). On a MERGED PR into an allowlisted repo, enqueue
+ * an incremental re-index of the PR's changed files so the index reflects the new default-branch state. No-op when
+ * the flag is off, the repo isn't allowlisted, the action isn't a merge-close, or there are no changed paths.
+ *
+ * INCREMENTAL TRIGGER NOTE: gittensory does not (yet) subscribe to raw `push` events — the merged-PR close is the
+ * available signal that "code landed on the default branch". If a `push` handler is added later, that is the
+ * stronger trigger (it also catches direct-to-default-branch commits); enqueue the same `rag-index-repo` job with
+ * the pushed paths there. The slow-cadence cron full re-index (index.ts) is the backstop that catches anything
+ * the incremental path misses.
+ */
+async function maybeEnqueueRagReindexForMergedPr(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number,
+  action: string | undefined,
+  mergedAt: string | null | undefined,
+): Promise<void> {
+  if (!isRagEnabled(env) || !isConvergenceRepoAllowed(env, repoFullName)) return;
+  // A PR that merged: closed action + a merged_at timestamp. (A closed-unmerged PR changed nothing on the base.)
+  if (!PR_GATE_CLOSED_ACTIONS.has(action ?? "") || !mergedAt) return;
+  const files = await listPullRequestFiles(env, repoFullName, pullNumber);
+  const paths = files.map((file) => file.path).filter((path) => path.length > 0).slice(0, RAG_REINDEX_MAX_PATHS);
+  if (paths.length === 0) return;
+  await env.JOBS.send({ type: "rag-index-repo", requestedBy: "webhook", repoFullName, paths });
 }
 
 // Recompute the DETERMINISTIC gate verdict for a repo's stalest open PRs and record it as an audit event —
@@ -1049,6 +1137,15 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
             console.error(JSON.stringify({ level: "warn", event: "reputation_record_failed", deliveryId, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
           });
         }
+        // RAG incremental index (convergence, flag-gated by GITTENSORY_REVIEW_RAG + the per-repo cutover allowlist).
+        // When a PR MERGES into an allowlisted repo, its changes have landed on the default branch — enqueue an
+        // incremental re-index of just the changed files (reindexChangedPaths) so the index stays fresh without a
+        // full re-crawl. Enqueued (not run inline) so the webhook stays fast + the index work is its own retryable
+        // job. Flag-OFF (default) is a no-op (the job is never enqueued AND the processor no-ops). Best-effort.
+        await maybeEnqueueRagReindexForMergedPr(env, repoFullName, pr.number, payload.action, payload.pull_request.merged_at).catch((error) => {
+          /* v8 ignore next -- best-effort: a RAG re-index enqueue failure is logged, never surfaced to the gate. */
+          console.error(JSON.stringify({ level: "warn", event: "rag_reindex_enqueue_failed", deliveryId, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
+        });
       }
     }
 
