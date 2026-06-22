@@ -1269,3 +1269,188 @@ describe("processSubmitDraft — fork-readiness retry loop (fake timers)", () =>
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Second coverage pass: the remaining one-sided PARTIAL branches — the
+// `?? ""` nullish arms of draftSecrets (props genuinely UNDEFINED, not ""),
+// the oneLine/description `||` fallbacks, the createUserForkContentPr fork-name
+// composition fallbacks, the content-type `|| ""` arm, the non-object JSON.parse
+// arm, and the parseRepo invalid-repo throw.
+// ---------------------------------------------------------------------------
+
+describe("draftSecrets — `?? \"\"` nullish arms (env props genuinely undefined)", () => {
+  it("returns 503 when GITHUB_OAUTH_CLIENT_ID is undefined (not just empty) — clientId `?? \"\"` arm", async () => {
+    // createTestEnv never sets GITHUB_OAUTH_CLIENT_ID → property is genuinely undefined,
+    // so `env.GITHUB_OAUTH_CLIENT_ID ?? ""` takes the nullish-coalescing fallback.
+    const env = createTestEnv({
+      REVIEWBOT_DRAFT: "true",
+      DRAFT_TOKEN_ENCRYPTION_SECRET: DRAFT_SECRET,
+      // GITHUB_OAUTH_CLIENT_ID intentionally omitted (undefined)
+    });
+    const res = await handleDraftCreate(new Request(`${ORIGIN}/v1/drafts`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify(SAMPLE_FIELDS) }), env);
+    expect(res.status).toBe(503);
+    expect((await res.json()) as { error: string }).toMatchObject({ error: "draft_flow_not_configured" });
+  });
+
+  it("returns 503 when DRAFT_TOKEN_ENCRYPTION_SECRET is undefined — encKey `?? \"\"` arm", async () => {
+    const env = createTestEnv({
+      REVIEWBOT_DRAFT: "true",
+      GITHUB_OAUTH_CLIENT_ID: "Iv-test-client-id",
+      // DRAFT_TOKEN_ENCRYPTION_SECRET intentionally omitted (undefined)
+    });
+    const res = await handleDraftCreate(new Request(`${ORIGIN}/v1/drafts`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify(SAMPLE_FIELDS) }), env);
+    expect(res.status).toBe(503);
+    expect((await res.json()) as { error: string }).toMatchObject({ error: "draft_flow_not_configured" });
+  });
+
+  it("returns 503 from the OAuth callback when GITHUB_OAUTH_CLIENT_SECRET is undefined — clientSecret `?? \"\"` arm", async () => {
+    // Create a draft with full secrets so a valid state exists, then run the callback against an
+    // env whose CLIENT_SECRET is genuinely undefined → draftSecrets clientSecret = "" → 503.
+    const fullEnv = draftEnv();
+    const app = createApp();
+    const created = (await (await app.request("/v1/drafts", { method: "POST", headers: jsonHeaders(), body: JSON.stringify(SAMPLE_FIELDS) }, fullEnv)).json()) as { authUrl: string };
+    const state = new URL(created.authUrl).searchParams.get("state") ?? "";
+
+    // Re-point the SAME D1 instance into an env missing the client secret (undefined, not "").
+    const env = createTestEnv({
+      REVIEWBOT_DRAFT: "true",
+      GITHUB_OAUTH_CLIENT_ID: "Iv-test-client-id",
+      DRAFT_TOKEN_ENCRYPTION_SECRET: DRAFT_SECRET,
+      DB: fullEnv.DB,
+      // GITHUB_OAUTH_CLIENT_SECRET intentionally omitted (undefined)
+    });
+    const res = await handleDraftOAuthCallback(new Request(`${ORIGIN}/v1/drafts/auth/callback?code=valid&state=${encodeURIComponent(state)}`), env);
+    expect(res.status).toBe(503);
+    expect(await res.text()).toBe("Draft flow not configured.");
+  });
+});
+
+describe("buildContributorMdx — description/oneLine `||` fallback arms", () => {
+  it("derives cardDescription/seoDescription from card_description when description is empty (description `||` right arm + oneLine fallback)", () => {
+    // No description → `fields.description || fields.card_description` takes card_description, and
+    // oneLine(description) receives "" → `value || fallback` evaluates the (default empty) fallback.
+    const mdx = buildContributorMdx(
+      { category: "skills", name: "No Description", description: "", card_description: "Card only text." },
+      "octocat",
+      "2026-06-22T00:00:00.000Z",
+      CONFIG,
+    );
+    // description frontmatter is the card_description value (the `||` right operand).
+    expect(mdx).toContain('description: "Card only text."');
+    // seoDescription = fields.seo_title? no → fields.seo_description? no → oneLine(description) where
+    // description is now "Card only text." Actually description resolves to card_description here, so
+    // assert the oneLine-derived seoDescription is present and non-empty.
+    expect(mdx).toContain('seoDescription: "Card only text."');
+  });
+
+  it("emits empty derived cardDescription/seoDescription when description AND card_description are both blank (oneLine empty-value fallback)", () => {
+    // description "" and card_description "" → description resolves to "" → oneLine("") hits its
+    // `value || fallback` right arm (fallback defaults to "") → empty string output.
+    const mdx = buildContributorMdx({ category: "skills", name: "Totally Bare", description: "" }, "octocat", "2026-06-22T00:00:00.000Z", CONFIG);
+    expect(mdx).toContain('cardDescription: ""');
+    expect(mdx).toContain('seoDescription: ""');
+  });
+});
+
+describe("handleDraftCreate — content-type `|| \"\"` arm + non-object JSON.parse arm", () => {
+  it("rejects a request with NO content-type header at all (415, content-type `|| \"\"` right arm)", async () => {
+    const env = draftEnv();
+    // A POST with no body sets no auto content-type → headers.get("content-type") is null, so
+    // `request.headers.get("content-type") || ""` takes the "" fallback → no "application/json" → 415.
+    const req = new Request(`${ORIGIN}/v1/drafts`, { method: "POST" });
+    expect(req.headers.get("content-type")).toBeNull();
+    const res = await handleDraftCreate(req, env);
+    expect(res.status).toBe(415);
+    expect((await res.json()) as { error: string }).toMatchObject({ error: "expected_json" });
+  });
+
+  it("treats a valid-JSON non-object body as an empty fields object (JSON.parse ternary `{}` arm → 400 slug)", async () => {
+    const env = draftEnv();
+    // `42` is valid JSON but not an object → `typeof parsed === "object" && parsed` is false →
+    // body = {} (the ternary false arm). fields = {} → buildTarget throws "Unsupported category." → 400.
+    const res = await handleDraftCreate(new Request(`${ORIGIN}/v1/drafts`, { method: "POST", headers: { "content-type": "application/json" }, body: "42" }), env);
+    expect(res.status).toBe(400);
+    expect((await res.json()) as { error: string }).toMatchObject({ error: "Unsupported category." });
+  });
+
+  it("treats a JSON `null` body as an empty fields object (parsed falsy → `{}` arm)", async () => {
+    const env = draftEnv();
+    // `null` parses to null → `typeof null === "object"` is true but `&& parsed` is falsy → body = {}.
+    const res = await handleDraftCreate(new Request(`${ORIGIN}/v1/drafts`, { method: "POST", headers: { "content-type": "application/json" }, body: "null" }), env);
+    expect(res.status).toBe(400);
+    expect((await res.json()) as { error: string }).toMatchObject({ error: "Unsupported category." });
+  });
+});
+
+describe("createUserForkContentPr — fork-name + default-branch `||` fallback arms (via processSubmitDraft)", () => {
+  it("composes the fork login from the authenticated user when POST /forks omits owner.login (line 423 `|| user.login` arm)", async () => {
+    const env = draftEnv();
+    const id = await seedQueuedDraftWithToken(env);
+    // POST /forks returns NEITHER full_name NOR owner.login NOR name → forkRepo is composed as
+    // `${user.login}/${upstream.repo}` = "octocat/awesome-claude" (both `||` right arms on line 423).
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      makeGithubFetch([
+        { method: "GET", url: "https://api.github.com/user", respond: () => ok({ login: "octocat" }) },
+        { method: "POST", url: `/repos/${UPSTREAM}/forks`, respond: () => ok({ default_branch: "main" }) }, // no full_name/name/owner
+        { method: "GET", url: "https://api.github.com/repos/octocat/awesome-claude", respond: () => ok({ full_name: "octocat/awesome-claude", default_branch: "main" }) },
+        { method: "GET", url: `/repos/${UPSTREAM}/pulls`, respond: () => ok([]) },
+        { method: "GET", url: "/git/ref/heads/main", respond: () => ok({ object: { sha: "basesha" } }) },
+        { method: "GET", url: "/git/ref/heads/heyclaude/submit-skills-example-skill", respond: () => notFound() },
+        { method: "POST", url: "/git/refs", respond: () => ok({ ref: "refs/heads/x" }) },
+        { method: "GET", url: "/contents/content/skills/example-skill.mdx?ref=", respond: () => notFound() },
+        { method: "PUT", url: "/contents/content/skills/example-skill.mdx", respond: () => ok({ content: { sha: "filesha" } }) },
+        { method: "POST", url: `/repos/${UPSTREAM}/pulls`, respond: () => ok({ number: 21, html_url: "https://github.com/JSONbored/awesome-claude/pull/21" }) },
+      ]),
+    );
+
+    await processSubmitDraft(env, id);
+    fetchSpy.mockRestore();
+
+    const row = await env.DB.prepare("SELECT status, fork_full_name, pull_request_number FROM submission_drafts WHERE id = ?").bind(id).first<{ status: string; fork_full_name: string; pull_request_number: number }>();
+    expect(row).toMatchObject({ status: "pr_open", fork_full_name: "octocat/awesome-claude", pull_request_number: 21 });
+  });
+
+  it("falls back to params.baseRef for forkDefaultBranch when POST /forks omits default_branch (line 424 `|| params.baseRef` arm)", async () => {
+    const env = draftEnv();
+    const id = await seedQueuedDraftWithToken(env);
+    // POST /forks returns full_name but NO default_branch → forkDefaultBranch = params.baseRef ("main").
+    // The fork-existence GET ALSO omits default_branch → line 433 keeps the existing forkDefaultBranch.
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      makeGithubFetch([
+        { method: "GET", url: "https://api.github.com/user", respond: () => ok({ login: "octocat" }) },
+        { method: "POST", url: `/repos/${UPSTREAM}/forks`, respond: () => ok({ full_name: "octocat/awesome-claude" }) }, // no default_branch
+        { method: "GET", url: "https://api.github.com/repos/octocat/awesome-claude", respond: () => ok({ full_name: "octocat/awesome-claude" }) }, // no default_branch (line 433 right arm)
+        { method: "GET", url: `/repos/${UPSTREAM}/pulls`, respond: () => ok([]) },
+        { method: "GET", url: "/git/ref/heads/main", respond: () => ok({ object: { sha: "basesha" } }) },
+        { method: "GET", url: "/git/ref/heads/heyclaude/submit-skills-example-skill", respond: () => notFound() },
+        { method: "POST", url: "/git/refs", respond: () => ok({ ref: "refs/heads/x" }) },
+        { method: "GET", url: "/contents/content/skills/example-skill.mdx?ref=", respond: () => notFound() },
+        { method: "PUT", url: "/contents/content/skills/example-skill.mdx", respond: () => ok({ content: { sha: "filesha" } }) },
+        { method: "POST", url: `/repos/${UPSTREAM}/pulls`, respond: () => ok({ number: 22, html_url: "https://github.com/JSONbored/awesome-claude/pull/22" }) },
+      ]),
+    );
+
+    await processSubmitDraft(env, id);
+    fetchSpy.mockRestore();
+
+    const row = await env.DB.prepare("SELECT status, pull_request_number FROM submission_drafts WHERE id = ?").bind(id).first<{ status: string; pull_request_number: number }>();
+    expect(row).toMatchObject({ status: "pr_open", pull_request_number: 22 });
+  });
+
+  it("marks the draft error when DRAFT_PUBLIC_REPO is not owner/repo (parseRepo throw — line 324)", async () => {
+    // An invalid public repo (no slash) makes parseRepo throw "Expected owner/repo repository name.",
+    // which the processSubmitDraft outer catch records as the draft error. Exercises the if-throw arm.
+    const env = draftEnv({ DRAFT_PUBLIC_REPO: "not-a-valid-repo" });
+    const id = await seedQueuedDraftWithToken(env);
+    // parseRepo(params.publicRepo) runs BEFORE the first fetch, so the throw happens with no network call.
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    await processSubmitDraft(env, id);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+
+    const row = await env.DB.prepare("SELECT status, last_error FROM submission_drafts WHERE id = ?").bind(id).first<{ status: string; last_error: string }>();
+    expect(row?.status).toBe("error");
+    expect(row?.last_error).toBe("Expected owner/repo repository name.");
+  });
+});

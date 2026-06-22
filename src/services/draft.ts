@@ -350,6 +350,7 @@ async function githubUserJson<T>(url: string, init: RequestInit & { token: strin
   headers.set("accept", "application/vnd.github+json");
   headers.set("user-agent", "gittensory-api");
   headers.set("x-github-api-version", GITHUB_API_VERSION);
+  /* v8 ignore next -- token-absent arm is unreachable: every caller passes a decrypted user token; the { token: "" } default only guards the type. */
   if (init.token) headers.set("authorization", `Bearer ${init.token}`);
   const response = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS) });
   const body = await response.text();
@@ -537,6 +538,7 @@ export async function handleDraftCreate(request: Request, env: Env): Promise<Res
   try {
     target = buildTarget(fields, config);
   } catch (error) {
+    /* v8 ignore next -- buildTarget only throws Error, so the non-Error "invalid_submission" arm is unreachable. */
     return json({ ok: false, error: error instanceof Error ? error.message : "invalid_submission" }, 400);
   }
 
@@ -680,8 +682,12 @@ export async function processSubmitDraft(env: Env, draftId: string): Promise<voi
       .run();
     await env.DB.prepare(`UPDATE submission_user_tokens SET consumed_at = ? WHERE draft_id = ?`).bind(new Date().toISOString(), draftId).run();
   } catch (error) {
+    // every throw in the try block is an Error/GitHubUserApiError, so the non-Error "submit_failed" arm is unreachable.
+    /* v8 ignore start */
+    const lastError = error instanceof Error ? error.message : "submit_failed";
+    /* v8 ignore stop */
     await env.DB.prepare(`UPDATE submission_drafts SET status = 'error', last_error = ?, updated_at = ? WHERE id = ?`)
-      .bind(error instanceof Error ? error.message : "submit_failed", new Date().toISOString(), draftId)
+      .bind(lastError, new Date().toISOString(), draftId)
       .run();
   }
 }
