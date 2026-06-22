@@ -1,3 +1,5 @@
+// (verification touch) This file is under a hard-guardrail glob (src/scoring/**); a change here must force
+// MANUAL review — gittensory must NOT auto-merge it, and should surface a needs-human-review hold.
 import {
   getLatestScoringModelSnapshot,
   persistScoringModelSnapshot,
