@@ -1252,11 +1252,15 @@ describe("processSubmitDraft — fork-readiness retry loop (fake timers)", () =>
       const done = processSubmitDraft(env, id).then(() => {
         settled = true;
       });
-      // The loop interleaves real-async D1/fetch work with the one fake setTimeout(sleep 3000).
-      // Pump fake timers repeatedly (flushing pending real microtasks each pass) until the whole
-      // flow settles, so the sleep advances the instant it is scheduled — and never runs for real.
-      for (let i = 0; i < 50 && !settled; i += 1) {
-        await vi.advanceTimersByTimeAsync(3000);
+      // Drive the flow to completion deterministically. The flow interleaves ~15 real-async mocked-fetch/D1
+      // microtasks with the ONE fork-readiness setTimeout(sleep 3000). Each pass drains the whole timer queue
+      // (runAllTimersAsync flushes microtasks between firings, so the sleep runs the instant it is scheduled)
+      // and the microtask yield lets a just-scheduled timer register before the next drain. This replaces a
+      // fixed advanceTimersByTime(3000) pump that intermittently under-flushed the microtask chain on a bad
+      // interleave, exiting the loop with the flow still awaiting the unfired sleep → real-time 15s timeout.
+      for (let i = 0; i < 100 && !settled; i += 1) {
+        await vi.runAllTimersAsync();
+        await Promise.resolve();
       }
       await done;
       fetchSpy.mockRestore();
