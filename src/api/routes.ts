@@ -4,6 +4,7 @@ import { analyzePRQueue, type AuthorRole, type ChecksStatus } from "../queue-int
 import { completeGitHubWebOAuth, createSessionFromGitHubToken, pollGitHubDeviceFlow, startGitHubDeviceFlow, startGitHubWebOAuth } from "../auth/github-oauth";
 import { enforceRateLimit, routeClassForPath } from "../auth/rate-limit";
 import { handleShot } from "../review/visual/shot";
+import { isScreenshotsEnabled } from "../review/visual-wire";
 import {
   BROWSER_SESSION_COOKIE,
   GITHUB_OAUTH_STATE_COOKIE,
@@ -863,11 +864,15 @@ export function createApp() {
   // GITTENSORY_REVIEW_SCREENSHOTS off nothing ever writes shots to R2, so ?key= 404s and ?url= still requires
   // an allowlisted public host. The route's own Cache-Control headers (per mode) are set inside handleShot;
   // the rate-limit middleware classifies it as 'normal' (a sane public class) via routeClassForPath.
-  app.get("/gittensory/shot", (c) =>
-    handleShot(c.req.raw, c.env, {
+  // Flag-OFF = TRULY inert: when GITTENSORY_REVIEW_SCREENSHOTS is off nothing references this route (no comment
+  // carries a /gittensory/shot URL), so 404 it outright — that removes the on-demand `?url=` render surface
+  // entirely until the feature is deliberately enabled, rather than relying on the host allowlist alone.
+  app.get("/gittensory/shot", (c) => {
+    if (!isScreenshotsEnabled(c.env)) return c.notFound();
+    return handleShot(c.req.raw, c.env, {
       ...(c.env.PUBLIC_SITE_ORIGIN ? { productionUrl: c.env.PUBLIC_SITE_ORIGIN } : {}),
-    }),
-  );
+    });
+  });
 
   app.get("/v1/auth/github/start", async (c) => {
     try {
