@@ -50,6 +50,11 @@ declare global {
      *  (ONE in-place comment in the converged shape) instead of the legacy `buildPublicPrIntelligenceComment`
      *  panel. Default OFF — unset/false keeps the legacy panel byte-identical. */
     UNIFIED_REVIEW_COMMENT?: string;
+    /** Convergence (safety): when truthy, the ported safety scan runs in the review path — (1) untrusted PR
+     *  title/body/diff is defanged (prompt-injection neutralized) before it reaches the AI reviewer, and (2)
+     *  the PR diff is scanned for leaked secrets, surfacing a `secret_leak` blocker. Default OFF —
+     *  unset/false keeps the review path byte-identical (no new branch is taken). */
+    REVIEWBOT_SAFETY?: string;
   }
 }
 

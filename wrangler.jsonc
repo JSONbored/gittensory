@@ -49,6 +49,10 @@
     // Convergence (Stage D): render the public PR comment via the unified-comment bridge. Default OFF —
     // flag-OFF keeps the legacy buildPublicPrIntelligenceComment panel byte-identical.
     "UNIFIED_REVIEW_COMMENT": "false",
+    // Convergence (safety): run the ported safety scan in the review path — defang untrusted PR
+    // title/body/diff before the AI reviewer sees it, and surface a secret-leak blocker from the diff.
+    // Default OFF — flag-OFF keeps the review path byte-identical.
+    "REVIEWBOT_SAFETY": "false",
   },
   "routes": [
     {

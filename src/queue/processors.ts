@@ -154,6 +154,7 @@ import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import { runGittensoryAiReview } from "../services/ai-review";
+import { isSafetyEnabled, secretLeakFinding } from "../review/safety";
 import type { AdvisoryFinding, ContributorEvidenceRecord, ContributorRepoStatRecord, DetectedNotificationEvent, GitHubWebhookPayload, IssueRecord, JobMessage, JsonValue, PullRequestFilePathRecord, PullRequestRecord, RepositoryRecord, RepositorySettings } from "../types";
 import { sha256Hex } from "../utils/crypto";
 import { errorMessage, nowIso } from "../utils/json";
@@ -1201,6 +1202,34 @@ export async function runAiReviewForAdvisory(
 }
 
 /**
+ * Safety secrets-scan (convergence, flag-gated by REVIEWBOT_SAFETY). Scans the PR diff for leaked secrets and,
+ * on a hit, appends ONE critical `secret_leak` finding to the advisory BEFORE evaluateGateCheck runs — the
+ * gate treats that code as a hard blocker (rules/advisory.ts), so a committed credential holds the PR. Reuses
+ * the already-loaded gate files when present, else loads them lazily. Flag-OFF (default) returns immediately:
+ * no finding is produced and the advisory/gate is byte-identical to today. Fail-safe: a load error is
+ * swallowed so it can never destabilize the gate.
+ */
+export async function maybeAddSecretLeakFinding(
+  env: Env,
+  args: {
+    advisory: Awaited<ReturnType<typeof buildPullRequestAdvisory>>;
+    repoFullName: string;
+    pullNumber: number;
+    files: Awaited<ReturnType<typeof listPullRequestFiles>> | null;
+  },
+): Promise<void> {
+  if (!isSafetyEnabled(env)) return;
+  try {
+    const files = args.files ?? (await listPullRequestFiles(env, args.repoFullName, args.pullNumber));
+    const finding = secretLeakFinding(buildAiReviewDiff(files));
+    if (finding) args.advisory.findings.push(finding);
+  } catch (error) {
+    /* v8 ignore next -- fail-safe: a file-load error never destabilizes the gate. */
+    console.error(JSON.stringify({ level: "warn", event: "secret_scan_failed", repository: args.repoFullName, pullNumber: args.pullNumber, error: errorMessage(error) }));
+  }
+}
+
+/**
  * AI-assisted slop advisory (opt-in `slopAiAdvisory`). Appends at most one ADVISORY-only `ai_slop_advisory`
  * finding to the advisory; NEVER touches slopRisk or the gate (only the deterministic core can block). The
  * caller gates on `settings.slopAiAdvisory` and reuses the already-fetched changed files. Like the AI review
@@ -1504,6 +1533,11 @@ async function maybePublishPrPublicSurface(
     // BEFORE the gate evaluates, and returns advisory notes for the panel. Inside the try so any AI
     // failure is caught and the gate is still finalized (never left in_progress).
     aiReview = await runAiReviewForAdvisory(env, { settings, advisory, repoFullName, pr, author, confirmedContributor });
+
+    // Safety secrets-scan (convergence, flag-gated by REVIEWBOT_SAFETY). Scans the diff and, on a hit,
+    // appends a critical `secret_leak` blocker BEFORE the gate evaluates. Reuses the already-loaded gate
+    // files when present. Flag-OFF (default) is an immediate no-op → the advisory/gate is byte-identical.
+    await maybeAddSecretLeakFinding(env, { advisory, repoFullName, pullNumber: pr.number, files: gateFiles });
 
     // First-time-contributor grace (#552): compute the author's complete per-repo PR history
     // (excluding this PR) with an aggregate DB query. Do not derive policy-enforcement history from

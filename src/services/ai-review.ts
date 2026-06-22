@@ -18,6 +18,7 @@
 // are audited via `recordAiUsageEvent`.
 import { countByokAiEventsForRepoSince, recordAiUsageEvent, sumAiEstimatedNeuronsSince } from "../db/repositories";
 import { sanitizePublicComment } from "../queue-intelligence";
+import { defangReviewInput, isSafetyEnabled } from "../review/safety";
 
 /**
  * The best free Workers-AI model pair for review accuracy — two different families for independence,
@@ -344,7 +345,12 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
   if (!env.AI) return { status: "unavailable", reason: "Workers AI binding is not configured." };
 
   const maxTokens = clampNumber(Number(env.AI_MAX_OUTPUT_TOKENS || 256), 256, 1024);
-  const user = buildUserPrompt(input);
+  // Safety (convergence, flag-gated): defang the UNTRUSTED, author-controlled title/body/diff so a
+  // prompt-injection payload never reaches the model verbatim. Flag-OFF (default) passes `input` through
+  // unchanged → the prompt is byte-identical to today. Only the title/body/diff fed to buildUserPrompt are
+  // affected; this NEVER changes the verdict (a redaction is data, not a finding).
+  const promptInput = isSafetyEnabled(env) ? { ...input, ...defangReviewInput(input) } : input;
+  const user = buildUserPrompt(promptInput);
   // The daily neuron budget governs FREE Workers-AI spend only. BYOK advisory calls bill the maintainer's
   // own provider account, so they are not counted here (and a BYOK advisory still runs when the free
   // budget is exhausted). Free calls = the consensus pair in block mode (always Workers AI), plus the
