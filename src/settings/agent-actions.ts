@@ -16,6 +16,20 @@ const DEFAULT_SLOP_GATE_MIN_SCORE = 60;
 // them and they never collide with project labels.
 export const AGENT_LABEL_READY = "gittensory:ready-to-merge";
 export const AGENT_LABEL_CHANGES = "gittensory:changes-requested";
+// A PR that PASSES the gate but touches a hard-guardrail path is NOT ready to auto-merge — it is withheld
+// for a human (the merge/approve/close dispositions are suppressed below). Labeling it `ready-to-merge`
+// would be misleading (the label promises an auto-merge that never happens), so a guarded passing PR gets
+// this distinct "needs a human" label instead. Blocking verdicts keep AGENT_LABEL_CHANGES.
+export const AGENT_LABEL_NEEDS_REVIEW = "gittensory:needs-human-review";
+
+// Maintainer-managed automation accounts whose PRs are never auto-closed. A recurring accumulator (e.g.
+// github-actions[bot] opening automation/readme-refresh) or a dependency PR must not be killed by a duplicate
+// or slop heuristic — the maintainer owns its lifecycle. (reviewbot wrongly auto-closed such an accumulator,
+// awesome-claude #4192.) Still eligible for auto-merge when clean + passing.
+const PROTECTED_AUTOCLOSE_AUTHORS = new Set(["github-actions[bot]", "dependabot[bot]", "renovate[bot]"]);
+export function isProtectedAutomationAuthor(login: string | null | undefined): boolean {
+  return login != null && PROTECTED_AUTOCLOSE_AUTHORS.has(login.toLowerCase());
+}
 
 export type PlannedAgentAction = {
   actionClass: AgentActionClass;
@@ -44,6 +58,10 @@ export type AgentActionPlanInput = {
   // True when the PR author is the repo owner (e.g. JSONbored). Standing rule: owner PRs are NEVER
   // auto-closed. They may still auto-merge when clean + passing.
   authorIsOwner: boolean;
+  // True when the PR author is a maintainer-managed automation account (e.g. github-actions[bot] opening an
+  // accumulator like automation/readme-refresh, or dependabot/renovate). These are NEVER auto-closed — a noise
+  // heuristic (duplicate/slop) must not kill a recurring maintainer-managed PR. They may still auto-merge.
+  authorIsAutomationBot: boolean;
   pr: {
     mergeableState?: string | null | undefined;
     reviewDecision?: string | null | undefined;
@@ -89,11 +107,15 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   const guardrailHit = changedPathsHittingGuardrail(input.changedPaths, input.hardGuardrailGlobs).length > 0;
 
   // 1) label — reflect the verdict bucket. After the neutral/skipped return above, a non-blocking verdict is
-  // necessarily `success`. Idempotent: skip if the PR already carries the label.
+  // necessarily `success`. A passing PR that hit a hard guardrail is NOT auto-merge-ready (the irreversible
+  // dispositions below are all suppressed for it) — labeling it `ready-to-merge` would promise an auto-merge
+  // that never happens, so it gets `needs-human-review` instead. Idempotent: skip if the PR already carries
+  // the chosen label.
   if (acting("label")) {
-    const label = blocking ? AGENT_LABEL_CHANGES : AGENT_LABEL_READY;
+    const label = blocking ? AGENT_LABEL_CHANGES : guardrailHit ? AGENT_LABEL_NEEDS_REVIEW : AGENT_LABEL_READY;
+    const reason = !blocking && guardrailHit ? `verdict=${input.conclusion}; guarded path forces human review` : `verdict=${input.conclusion}`;
     if (!hasLabel(input.pr.labels, label)) {
-      actions.push({ actionClass: "label", requiresApproval: approval("label"), reason: `verdict=${input.conclusion}`, label });
+      actions.push({ actionClass: "label", requiresApproval: approval("label"), reason, label });
     }
   }
 
@@ -125,7 +147,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       reason: `gate passed, mergeable, ${autoMaintain.requireApprovals} approval(s) satisfied`,
       mergeMethod: autoMaintain.mergeMethod,
     });
-  } else if (acting("close") && !passing && !guardrailHit && !input.authorIsOwner) {
+  } else if (acting("close") && !passing && !guardrailHit && !input.authorIsOwner && !input.authorIsAutomationBot) {
     const noiseReasons: string[] = [];
     if (input.pr.slopRisk != null && input.pr.slopRisk >= slopGateMinScore) noiseReasons.push(`slop score ${input.pr.slopRisk} ≥ ${slopGateMinScore}`);
     if ((input.pr.linkedDuplicateCount ?? 0) > 0) noiseReasons.push("duplicate of another open PR");
