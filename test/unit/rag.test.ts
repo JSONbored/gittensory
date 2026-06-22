@@ -392,3 +392,318 @@ describe("rag: formatRetrievedContext budget omission", () => {
     expect(out).not.toContain("src/c.ts"); // never reached after the budget break
   });
 });
+
+// ── embedTexts: the remaining validation branches in the OR-guard (#abc-verify) ───────────────────────
+describe("rag: embedTexts validation branches", () => {
+  it("returns null when `data` is missing entirely (not an array)", async () => {
+    // res.data === undefined → !Array.isArray(data) is the FIRST OR clause
+    expect(await embedTexts(aiThatReturns(undefined), ["hi"])).toBeNull();
+  });
+
+  it("returns null on a COUNT mismatch (fewer vectors than inputs)", async () => {
+    // data.length(1) !== batch.length(2) → the SECOND OR clause; both vectors are correctly 1024-d
+    const ai = aiThatReturns([Array(1024).fill(0.1)]);
+    expect(await embedTexts(ai, ["one", "two"])).toBeNull();
+  });
+
+  it("returns null when an inner element is not an array (the `!Array.isArray(v)` leg)", async () => {
+    // a structurally-valid response whose single 'vector' is a number, not an array
+    expect(await embedTexts(aiThatReturns([42]), ["hi"])).toBeNull();
+  });
+
+  it("embeds ACROSS multiple batches (>EMBED_BATCH=96 inputs → the for-loop iterates more than once)", async () => {
+    const calls: number[] = [];
+    const inference: InferenceAdapter = {
+      run: async (_model, options) => {
+        const batch = (options as { text: string[] }).text;
+        calls.push(batch.length);
+        return { data: batch.map(() => Array(1024).fill(0.1)) };
+      },
+    };
+    const texts = Array.from({ length: 150 }, (_, i) => `t${i}`); // 150 > 96 → two batches (96 + 54)
+    const out = await embedTexts(inference, texts);
+    expect(out).not.toBeNull();
+    expect(out?.length).toBe(150);
+    expect(calls).toEqual([96, 54]); // proves the batching loop ran twice
+  });
+
+  it("fails the WHOLE embed when a LATER batch is malformed (early-return mid-loop)", async () => {
+    let call = 0;
+    const inference: InferenceAdapter = {
+      run: async (_model, options) => {
+        const batch = (options as { text: string[] }).text;
+        call += 1;
+        // first batch good (1024-d), second batch wrong width (2-d) → returns null from inside the loop
+        return { data: batch.map(() => (call === 1 ? Array(1024).fill(0.1) : [0.1, 0.2])) };
+      },
+    };
+    const texts = Array.from({ length: 150 }, (_, i) => `t${i}`);
+    expect(await embedTexts(inference, texts)).toBeNull();
+  });
+});
+
+// ── countRepoChunks: the `row?.n ?? 0` nullish branches ───────────────────────────────────────────────
+describe("rag: countRepoChunks nullish coalescing", () => {
+  it("returns 0 when the COUNT row is null (no row at all)", async () => {
+    const storage = {
+      prepare: () => ({ bind: () => ({ first: async () => null }) }),
+      batch: async () => undefined,
+    } as unknown as StorageAdapter;
+    expect(await countRepoChunks(storage, "p", "o/r")).toBe(0); // row === null → row?.n is undefined → ?? 0
+  });
+
+  it("returns 0 when the row exists but n is null", async () => {
+    const storage = {
+      prepare: () => ({ bind: () => ({ first: async () => ({ n: null }) }) }),
+      batch: async () => undefined,
+    } as unknown as StorageAdapter;
+    expect(await countRepoChunks(storage, "p", "o/r")).toBe(0); // row.n === null → ?? 0
+  });
+
+  it("returns the count when the row carries a real number", async () => {
+    expect(await countRepoChunks(storageStub({ count: 7 }), "p", "o/r")).toBe(7);
+  });
+});
+
+// ── retrieveContext: the inner filter / default / rerank branches ─────────────────────────────────────
+describe("rag: retrieveContext inner branches", () => {
+  const longQuery = "this is a sufficiently long query to clear the min-length guard and reach the vector store";
+
+  it("returns '' when the query embedding comes back empty (vec is undefined)", async () => {
+    // inference returns a structurally-valid-but-empty data array → embedTexts returns [] (length 0 === batch.length 1? no)
+    // Use a degraded response that makes embedTexts return null → embedded?.[0] is undefined → `if (!vec) return ""`.
+    const inference: InferenceAdapter = { run: async () => ({ data: null }) };
+    const vector = { query: async () => ({ matches: [] }) } as unknown as VectorAdapter;
+    const infra: RagInfra = { storage: storageStub({ count: 5 }), vector, inference };
+    expect(await retrieveContext(infra, { project: "p", repo: "o/r", queryText: longQuery })).toBe("");
+  });
+
+  it("drops a match with NO metadata.path (the `(m.metadata?.path) ?? ''` → falsy → filtered)", async () => {
+    const matches = [
+      { id: "src/nopath::0", score: 0.9, metadata: {} }, // no path → empty string → dropped
+      { id: "src/ok.ts::0", score: 0.9, metadata: { path: "src/ok.ts" } },
+    ];
+    const vector = { query: async () => ({ matches }) } as unknown as VectorAdapter;
+    const infra: RagInfra = {
+      storage: storageStub({ count: 2, rows: [{ id: "src/ok.ts::0", text: "good code" }] }),
+      vector,
+      inference: ai1024,
+    };
+    const out = await retrieveContext(infra, { project: "p", repo: "o/r", queryText: longQuery });
+    expect(out).toContain("src/ok.ts");
+    expect(out).toContain("good code");
+  });
+
+  it("KEEPS a match whose score is NOT a number (the `typeof m.score !== 'number'` leg passes the minScore filter)", async () => {
+    const matches = [
+      { id: "src/x.ts::0", score: undefined as unknown as number, metadata: { path: "src/x.ts" } },
+    ];
+    const vector = { query: async () => ({ matches }) } as unknown as VectorAdapter;
+    const infra: RagInfra = {
+      storage: storageStub({ count: 2, rows: [{ id: "src/x.ts::0", text: "kept despite no numeric score" }] }),
+      vector,
+      inference: ai1024,
+    };
+    // minScore 0.99 would drop a numeric-scored match, but a non-numeric score bypasses the threshold
+    const out = await retrieveContext(infra, { project: "p", repo: "o/r", queryText: longQuery, minScore: 0.99 });
+    expect(out).toContain("src/x.ts");
+  });
+
+  it("returns '' when a match's chunk text is missing (texts.get → '' → filtered → no chunks)", async () => {
+    const matches = [{ id: "src/gone.ts::0", score: 0.9, metadata: { path: "src/gone.ts" } }];
+    const vector = { query: async () => ({ matches }) } as unknown as VectorAdapter;
+    // storage SELECT returns NO rows for the id → texts map is empty → chunk text '' → filtered out → no chunks → ''
+    const infra: RagInfra = { storage: storageStub({ count: 2, rows: [] }), vector, inference: ai1024 };
+    expect(await retrieveContext(infra, { project: "p", repo: "o/r", queryText: longQuery })).toBe("");
+  });
+
+  it("returns '' when NO matches survive (matches.length === 0 → skips readChunkTexts, empty texts map)", async () => {
+    const vector = { query: async () => ({ matches: [] }) } as unknown as VectorAdapter;
+    const infra: RagInfra = { storage: storageStub({ count: 2, rows: [] }), vector, inference: ai1024 };
+    expect(await retrieveContext(infra, { project: "p", repo: "o/r", queryText: longQuery })).toBe("");
+  });
+
+  it("applies the BM25 reranker (opts.reranker='bm25' with >1 kept chunk) — reranked path", async () => {
+    const matches = [
+      { id: "palette.ts::0", score: 0.95, metadata: { path: "palette.ts" } }, // higher cosine but unrelated terms
+      { id: "auth.ts::0", score: 0.9, metadata: { path: "auth.ts" } },
+    ];
+    const vector = { query: async () => ({ matches }) } as unknown as VectorAdapter;
+    const infra: RagInfra = {
+      storage: storageStub({
+        count: 2,
+        rows: [
+          { id: "palette.ts::0", text: "export const palette = ['red','green'];" },
+          { id: "auth.ts::0", text: "export function verifyAuthToken(token){ return decode(token); }" },
+        ],
+      }),
+      vector,
+      inference: ai1024,
+    };
+    const out = await retrieveContext(infra, {
+      project: "p",
+      repo: "o/r",
+      queryText: "verify the auth token decode logic in the authentication module here",
+      reranker: "bm25",
+    });
+    // BM25 promotes the term-overlapping auth.ts ahead of the higher-cosine palette.ts
+    expect(out.indexOf("auth.ts")).toBeLessThan(out.indexOf("palette.ts"));
+  });
+
+  it("does NOT rerank when reranker='bm25' but only ONE chunk survives (chunks.length > 1 is false)", async () => {
+    const matches = [{ id: "only.ts::0", score: 0.9, metadata: { path: "only.ts" } }];
+    const vector = { query: async () => ({ matches }) } as unknown as VectorAdapter;
+    const infra: RagInfra = {
+      storage: storageStub({ count: 2, rows: [{ id: "only.ts::0", text: "single chunk" }] }),
+      vector,
+      inference: ai1024,
+    };
+    const out = await retrieveContext(infra, { project: "p", repo: "o/r", queryText: "the single chunk query that is plenty long enough", reranker: "bm25" });
+    expect(out).toContain("only.ts");
+  });
+
+  it("clamps a too-large topK to RAG_MAX_TOPK=20 and applies the default minScore/excludePaths", async () => {
+    let seenTopK = -1;
+    const matches = [{ id: "k.ts::0", score: 0.5, metadata: { path: "k.ts" } }];
+    const vector = {
+      query: async (_v: number[], o: { topK: number }) => {
+        seenTopK = o.topK;
+        return { matches };
+      },
+    } as unknown as VectorAdapter;
+    const infra: RagInfra = { storage: storageStub({ count: 2, rows: [{ id: "k.ts::0", text: "code" }] }), vector, inference: ai1024 };
+    const out = await retrieveContext(infra, { project: "p", repo: "o/r", queryText: "a long enough query to pass the min length guard for topk", topK: 999 });
+    expect(seenTopK).toBe(20); // Math.min(999, RAG_MAX_TOPK)
+    expect(out).toContain("k.ts"); // default minScore=0 keeps the 0.5-scored match; default excludePaths=[] excludes nothing
+  });
+});
+
+// ── hasIndexedChunks: the warm-cache hit path (skips the storage COUNT on a hot repo) ─────────────────
+describe("rag: hasIndexedChunks positive-cache memoization", () => {
+  it("skips the per-review storage COUNT on the SECOND call for a hot repo (cache hit within TTL)", async () => {
+    let prepareCalls = 0;
+    const matches = [{ id: "c.ts::0", score: 0.9, metadata: { path: "c.ts" } }];
+    // COUNT(*) returns a positive n on the first call; thereafter prepare() throws so a second COUNT would surface.
+    const storage = {
+      prepare: (sql: string) => {
+        if (sql.startsWith("SELECT COUNT")) {
+          prepareCalls += 1;
+          if (prepareCalls > 1) throw new Error("COUNT should be cached, not re-run");
+        }
+        return {
+          bind: () => ({
+            first: async () => ({ n: 3 }),
+            all: async () => ({ results: [{ id: "c.ts::0", text: "cached-repo code" }] }),
+            run: async () => undefined,
+          }),
+        };
+      },
+      batch: async () => undefined,
+    } as unknown as StorageAdapter;
+    const vector = { query: async () => ({ matches }) } as unknown as VectorAdapter;
+    const infra: RagInfra = { storage, vector, inference: ai1024 };
+    const opts = { project: "hot", repo: "o/hot-repo", queryText: "a sufficiently long query to clear the min length guard for the cache test" };
+    const first = await retrieveContext(infra, opts);
+    const second = await retrieveContext(infra, opts); // would throw if it re-ran the COUNT
+    expect(first).toContain("c.ts");
+    expect(second).toContain("c.ts");
+    expect(prepareCalls).toBe(1); // COUNT ran exactly once across both reviews
+  });
+});
+
+// ── deleteChunksForPaths: the `if (vec)` false branch (storage delete only, no vector adapter) ─────────
+describe("rag: deleteChunksForPaths without a vector adapter", () => {
+  it("deletes from storage only when no vector adapter is injected (the `if (vec)` false leg)", async () => {
+    let deleteRuns = 0;
+    const storage = {
+      prepare: (sql: string) => ({
+        bind: () => ({
+          all: async () => ({ results: sql.includes("SELECT id") ? [{ id: "ns|src/a.ts::0" }] : [] }),
+          run: async () => {
+            if (sql.startsWith("DELETE")) deleteRuns += 1;
+          },
+        }),
+      }),
+      batch: async () => undefined,
+    } as unknown as StorageAdapter;
+    await deleteChunksForPaths({ storage }, "p", "o/r", ["src/a.ts"]); // no `vector` key → if (vec) is false
+    expect(deleteRuns).toBe(1); // storage DELETE still ran
+  });
+});
+
+// ── bm25Scores: empty corpus + zero-frequency-term branches ───────────────────────────────────────────
+describe("rag: bm25Scores edge branches", () => {
+  it("returns [] for an empty doc set (the `docs.length || 1` and `avgdl || 1` guards don't divide by zero)", () => {
+    expect(bm25Scores("anything", [])).toEqual([]);
+  });
+
+  it("scores 0 for a doc that shares NO query terms (every term's tf is 0 → continue)", () => {
+    const scores = bm25Scores("auth token verify", ["completely unrelated words here only"]);
+    expect(scores[0]).toBe(0); // no overlapping term contributes → score stays 0
+  });
+
+  it("accepts custom k1/b parameters (the defaulted-param path is overridden)", () => {
+    const docs = ["auth token auth token", "single auth"];
+    const def = bm25Scores("auth", docs);
+    const custom = bm25Scores("auth", docs, 2.0, 0.5);
+    expect(custom).toHaveLength(2);
+    expect(custom[0]).not.toBe(def[0]); // different k1/b → different score
+  });
+});
+
+// ── bm25Rerank: the `scores[i] ?? 0` nullish leg via a mismatched-length score array is internal; ─────
+// exercise the stable-tie ordering (a.i - b.i tiebreak) and the ≤1 short-circuit.
+describe("rag: bm25Rerank stable ordering", () => {
+  it("keeps the original (cosine) order on a tie (the `a.i - b.i` secondary sort key)", () => {
+    // two docs that produce identical BM25 scores (neither shares a query term) → stable: input order preserved
+    const chunks = [
+      { path: "first.ts", text: "zzz qqq" },
+      { path: "second.ts", text: "www eee" },
+    ];
+    const out = bm25Rerank("nomatch term", chunks);
+    expect(out.map((c) => c.path)).toEqual(["first.ts", "second.ts"]);
+  });
+});
+
+// ── newlineChunks: the short-newline branch (a newline too close to start is NOT used as the cut) ─────
+describe("rag: newlineChunks newline-boundary selection", () => {
+  it("does NOT snap to a newline that falls in the first half of the chunk window (keeps the char cut)", () => {
+    // One early newline near the very start, then a long unbroken run > chunkChars. The lastIndexOf('\n', end)
+    // lands at the early newline (< start + chunkChars/2), so the `if (nl > start + chunkChars/2)` is FALSE and
+    // the chunk is cut at the char budget, not the newline.
+    const text = `a\n${"b".repeat(5000)}`; // newline at index 1, then 5000 chars with no newline
+    const chunks = chunkFile("src/n.py", text, "", { chunkChars: 100, chunkOverlap: 10 });
+    expect(chunks.length).toBeGreaterThan(1);
+    // first chunk is ~100 chars (the budget), NOT cut back to the early newline at index 1
+    expect(chunks[0]!.text.length).toBeGreaterThan(50);
+    expect(chunks.every((c) => c.text.length > 0)).toBe(true);
+  });
+
+  it("snaps to a newline past the half-window (the `nl > start + chunkChars/2` TRUE branch)", () => {
+    // chunkChars 100; place a newline at ~index 80 (> 50) so the cut snaps back to it.
+    const text = `${"a".repeat(80)}\n${"b".repeat(200)}`;
+    const chunks = chunkFile("src/n2.py", text, "", { chunkChars: 100, chunkOverlap: 10 });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0]!.text.endsWith("\n")).toBe(true); // cut snapped to the newline → chunk ends at it
+  });
+});
+
+// ── chunkFile / chunkJsTs: the `if (logical) return logical` true-vs-null fallback + boundaryKind legs ─
+describe("rag: chunkFile JS/TS logical-vs-newline fallback", () => {
+  it("falls back to the newline chunker when a JS/TS file has NO boundaries (chunkJsTs returns null → file boundary)", () => {
+    // a JS file with no function/class/const-arrow/type/interface lines → segments.length <= 1 → null → newlineChunks
+    const chunks = chunkFile("src/plain.js", "const a = 1;\n".replace("const a = 1;", "just some text\nmore text"));
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.boundary).toBe("file"); // newline-chunker tags whole small file as 'file'
+  });
+
+  it("tags a non-exported `type X =` unit boundary as 'function' (not class, not export)", () => {
+    // ~9k chars per unit → each under CHUNK_CHARS(16000) but the two together exceed it → packs into >1 chunk.
+    const pad = (c: string) => Array.from({ length: 200 }, (_, i) => `  ${c}${i}: string; // padding aaaaaaaaaaaaaaaaaaaaaaaaaaaa`).join("\n");
+    // first unit a `type` alias (non-export, non-class) → boundaryKind → 'function'; a second padded unit forces >1 chunk
+    const text = `type Big = {\n${pad("k")}\n};\nfunction other() {\n${pad("v")}\n}\n`;
+    const chunks = chunkFile("src/types.ts", text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0]?.boundary).toBe("function"); // `type Big =` → neither export nor class → function
+  });
+});
