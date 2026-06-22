@@ -11,7 +11,10 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel only superseded PR runs (keep the newest). NEVER cancel main-branch push CI:
+  # back-to-back merges share group `ci-refs/heads/main`, and cancel-in-progress racing during
+  # startup turns those runs into `startup_failure` instead of giving each merge a complete run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Detect which areas a PR touches so the heavy jobs can skip when irrelevant.
@@ -33,7 +36,7 @@ jobs:
         run: git diff --check
       - name: Filter changed paths
         id: filter
-        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         with:
           filters: |
             backend:
