@@ -131,21 +131,26 @@ export function parseSimpleFrontmatter(source: string): Record<string, string> {
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(String(source || ""));
   const fields: Record<string, string> = {};
   if (!match) return fields;
+  /* v8 ignore next -- noUncheckedIndexedAccess fallback: capture group 1 always participates when the regex matches, so match[1] is never undefined */
   const lines = (match[1] ?? "").split(/\r?\n/);
   let i = 0;
   while (i < lines.length) {
+    /* v8 ignore next -- noUncheckedIndexedAccess fallback: i < lines.length guards the index and split() never yields undefined elements */
     const head = /^([A-Za-z][A-Za-z0-9_]*):(.*)$/.exec(lines[i] ?? "");
     if (!head) {
       i += 1;
       continue;
     }
     const key = head[1] as string;
+    /* v8 ignore next -- noUncheckedIndexedAccess fallback: capture group 2 (.*) always participates when head matches, so head[2] is never undefined */
     const inline = (head[2] ?? "").trim();
     i += 1;
     if (/^[|>][+-]?\d*$/.test(inline)) {
       // Block literal (`|`) / folded (`>`) scalar: gather the indented block that follows.
       const block: string[] = [];
+      /* v8 ignore next -- noUncheckedIndexedAccess fallback: i < lines.length guards the index; split() elements are always strings */
       while (i < lines.length && ((lines[i] ?? "").trim() === "" || /^\s/.test(lines[i] ?? ""))) {
+        /* v8 ignore next -- noUncheckedIndexedAccess fallback: loop guard keeps i in bounds; split() elements are always strings */
         block.push((lines[i] ?? "").replace(/^\s+/, ""));
         i += 1;
       }
@@ -153,7 +158,9 @@ export function parseSimpleFrontmatter(source: string): Record<string, string> {
     } else if (inline === "") {
       // Block/flow sequence or nested map on the following indented lines.
       const items: string[] = [];
+      /* v8 ignore next -- noUncheckedIndexedAccess fallback: the second lines[i] reuses the same in-bounds index already validated by /^\s/.test above */
       while (i < lines.length && /^\s/.test(lines[i] ?? "") && (lines[i] ?? "").trim() !== "") {
+        /* v8 ignore next -- noUncheckedIndexedAccess fallback: loop guard keeps i in bounds; split() elements are always strings */
         items.push((lines[i] ?? "").replace(/^\s*-\s*/, "").trim());
         i += 1;
       }
@@ -175,11 +182,13 @@ export function parseSimpleFrontmatter(source: string): Record<string, string> {
 export function findDuplicateFrontmatterKeys(source: string): string[] {
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(String(source || ""));
   if (!match) return [];
+  /* v8 ignore next -- noUncheckedIndexedAccess fallback: capture group 1 always participates when the regex matches, so match[1] is never undefined */
   const lines = (match[1] ?? "").split(/\r?\n/);
   const seen = new Set<string>();
   const dupes = new Set<string>();
   let i = 0;
   while (i < lines.length) {
+    /* v8 ignore next -- noUncheckedIndexedAccess fallback: i < lines.length guards the index and split() never yields undefined elements */
     const head = /^([A-Za-z][A-Za-z0-9_]*):(.*)$/.exec(lines[i] ?? "");
     if (!head) {
       i += 1;
@@ -188,11 +197,14 @@ export function findDuplicateFrontmatterKeys(source: string): string[] {
     const key = head[1] as string;
     if (seen.has(key)) dupes.add(key);
     else seen.add(key);
+    /* v8 ignore next -- noUncheckedIndexedAccess fallback: capture group 2 (.*) always participates when head matches, so head[2] is never undefined */
     const inline = (head[2] ?? "").trim();
     i += 1;
     if (/^[|>][+-]?\d*$/.test(inline)) {
+      /* v8 ignore next -- noUncheckedIndexedAccess fallback: i < lines.length guards the index; split() elements are always strings */
       while (i < lines.length && ((lines[i] ?? "").trim() === "" || /^\s/.test(lines[i] ?? ""))) i += 1;
     } else if (inline === "") {
+      /* v8 ignore next -- noUncheckedIndexedAccess fallback: the second lines[i] reuses the same in-bounds index already validated by /^\s/.test */
       while (i < lines.length && /^\s/.test(lines[i] ?? "") && (lines[i] ?? "").trim() !== "") i += 1;
     }
   }
@@ -273,8 +285,8 @@ function normalizeUrl(value: unknown): string {
 function domainFromUrl(value: string): string {
   try {
     return normalizeHostname(new URL(value).hostname);
-    /* v8 ignore next 3 -- unreachable: callers only pass already-normalized valid http(s) URLs, so new URL never throws here */
   } catch {
+    /* v8 ignore next -- unreachable: callers only pass already-normalized valid http(s) URLs, so new URL never throws here */
     return "";
   }
 }

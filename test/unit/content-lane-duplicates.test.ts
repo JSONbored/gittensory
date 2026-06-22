@@ -65,6 +65,13 @@ describe("findDuplicateFrontmatterKeys", () => {
   it("returns [] when keys are unique", () => {
     expect(findDuplicateFrontmatterKeys(mdx({ title: "A", slug: "a" }))).toEqual([]);
   });
+
+  it("returns [] for falsy/empty source (source || \"\" fallback, no frontmatter match)", () => {
+    // Exercises the `String(source || "")` falsy branch on the empty string and a coerced-falsy value.
+    expect(findDuplicateFrontmatterKeys("")).toEqual([]);
+    expect(findDuplicateFrontmatterKeys(undefined as unknown as string)).toEqual([]);
+    expect(findDuplicateFrontmatterKeys(0 as unknown as string)).toEqual([]);
+  });
 });
 
 describe("protectedFrontmatterChanges", () => {
