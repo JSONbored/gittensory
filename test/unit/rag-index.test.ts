@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { indexRepo, reindexChangedPaths } from "../../src/review/rag-index";
-import { MAX_CHUNKS_PER_REPO, RAG_DIMENSIONS, ragNamespace } from "../../src/review/rag";
+import { MAX_CHUNKS_PER_REPO, MAX_FILE_BYTES, RAG_DIMENSIONS, ragNamespace } from "../../src/review/rag";
 import { processJob } from "../../src/queue/processors";
 import { upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { createTestEnv, TestD1Database } from "../helpers/d1";
@@ -202,6 +202,66 @@ describe("reindexChangedPaths: delete + re-upsert only the changed paths", () =>
     expect(vec.upserted).toContain(`${ns}|src/a.ts::0`);
     // src/b.ts was never touched (not in the changed set).
     expect(vec.deleted).not.toContain(`${ns}|src/b.ts::0`);
+  });
+
+
+  it("skips oversized changed files before chunking/upserting", async () => {
+    const { env, vec } = indexEnv();
+    const ns = ragNamespace(PROJECT, "gittensory");
+    await env.DB.prepare("INSERT INTO repo_chunks (id, project, repo, path, chunk_index, kind, text) VALUES (?,?,?,?,?,?,?)")
+      .bind(`${ns}|src/huge.ts::0`, PROJECT, "gittensory", "src/huge.ts", 0, "code", "old")
+      .run();
+    stubGithub({ files: { "src/huge.ts": "x".repeat(MAX_FILE_BYTES + 1) } });
+
+    const result = await reindexChangedPaths(env, PROJECT, REPO, ["src/huge.ts"]);
+
+    expect(result).toEqual({ indexed: 0, files: 0, capped: false });
+    expect(await countChunks(env, PROJECT, "gittensory")).toBe(0);
+    expect(vec.deleted).toContain(`${ns}|src/huge.ts::0`);
+    expect(vec.upserted.length).toBe(0);
+  });
+
+  it("caps incremental reindex upserts at MAX_CHUNKS_PER_REPO", async () => {
+    const { env, vec } = indexEnv();
+    const overCap = MAX_CHUNKS_PER_REPO + 25;
+    const files: Record<string, string> = {};
+    const paths = Array.from({ length: overCap }, (_, i) => `src/f${i}.ts`);
+    for (const path of paths) files[path] = `export const ${path.replace(/\W/g, "_")} = 1;\n`;
+    stubGithub({ files });
+
+    const result = await reindexChangedPaths(env, PROJECT, REPO, paths);
+
+    expect(result.capped).toBe(true);
+    expect(result.indexed).toBe(MAX_CHUNKS_PER_REPO);
+    expect(vec.upserted.length).toBe(MAX_CHUNKS_PER_REPO);
+    expect(await countChunks(env, PROJECT, "gittensory")).toBe(MAX_CHUNKS_PER_REPO);
+  });
+
+
+  it("counts existing repo chunks when capping incremental reindex", async () => {
+    const { env, vec } = indexEnv();
+    const ns = ragNamespace(PROJECT, "gittensory");
+    await env.DB.batch(
+      Array.from({ length: MAX_CHUNKS_PER_REPO - 1 }, (_, i) =>
+        env.DB.prepare("INSERT INTO repo_chunks (id, project, repo, path, chunk_index, kind, text) VALUES (?,?,?,?,?,?,?)").bind(
+          `${ns}|src/existing${i}.ts::0`,
+          PROJECT,
+          "gittensory",
+          `src/existing${i}.ts`,
+          0,
+          "code",
+          "old",
+        ),
+      ),
+    );
+    stubGithub({ files: { "src/new-a.ts": "export const a = 1;\n", "src/new-b.ts": "export const b = 1;\n" } });
+
+    const result = await reindexChangedPaths(env, PROJECT, REPO, ["src/new-a.ts", "src/new-b.ts"]);
+
+    expect(result.capped).toBe(true);
+    expect(result.indexed).toBe(1);
+    expect(vec.upserted.length).toBe(1);
+    expect(await countChunks(env, PROJECT, "gittensory")).toBe(MAX_CHUNKS_PER_REPO);
   });
 
   it("a deleted file (404 at head) is removed and not re-added", async () => {
