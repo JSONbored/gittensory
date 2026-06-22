@@ -471,6 +471,7 @@ function buildLocalScoreInput(args: {
     sourceLines: scorer?.sourceLines ?? Math.max(1, sourceLineCount || args.changedLineCount || 1),
     testTokenScore: scorer?.testTokenScore ?? testLineCount,
     nonCodeTokenScore: scorer?.nonCodeTokenScore ?? nonCodeLineCount,
+    nonCodeLines: nonCodeLineCount,
     openPrCount: args.outcomeHistory.totals.openPullRequests,
     openIssueCount: args.repoOutcome?.openIssues ?? args.outcomeHistory.totals.openIssues,
     credibility: args.repoOutcome?.credibility ?? args.outcomeHistory.totals.credibility,

@@ -7,6 +7,8 @@ import { syncUnmodeledScoringConstantDrift } from "../upstream/unmodeled-scoring
 import type { JsonValue, ScoringModelSnapshotRecord } from "../types";
 import { errorMessage, nowIso } from "../utils/json";
 
+export const DEFAULT_ISSUE_DISCOVERY_SHARE = 0.5;
+
 export const DEFAULT_SCORING_CONSTANTS: Record<string, number> = {
   OSS_EMISSION_SHARE: 0.9,
   // Upstream name is ISSUES_TREASURY_EMISSION_SHARE (plural). The prior singular spelling never matched
@@ -34,6 +36,9 @@ export const DEFAULT_SCORING_CONSTANTS: Record<string, number> = {
   OPEN_ISSUE_SPAM_TOKEN_SCORE_PER_SLOT: 300,
   MAX_OPEN_ISSUE_THRESHOLD: 30,
   OPEN_PR_COLLATERAL_PERCENT: 0.2,
+  MAX_OPEN_PR_REVIEW_COLLATERAL_MULTIPLIER: 2.0,
+  MAX_LINES_SCORED_FOR_NON_CODE_EXT: 300,
+  DEFAULT_ISSUE_DISCOVERY_SHARE,
   REVIEW_PENALTY_RATE: 0.15,
   STANDARD_ISSUE_MULTIPLIER: 1.33,
   MAINTAINER_ISSUE_MULTIPLIER: 1.66,
