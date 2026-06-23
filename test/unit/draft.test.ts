@@ -549,6 +549,26 @@ describe("handleDraftOAuthCallback — success + error paths", () => {
     fetchSpy.mockRestore();
   });
 
+  it("treats a malformed draft cookie as absent (covers the cookie-parser empty-name + decode-failure arms)", async () => {
+    const env = draftEnv();
+    const { state } = await createDraftState(env);
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    // One Cookie header that drives both parseCookieHeader fallbacks:
+    //  • " =lead"                  → whitespace-only name (eq > 0 but name trims to "") → `if (!name) continue`
+    //  • gittensory_draft_oauth=%  → a lone-percent value makes decodeURIComponent throw → decoded as ""
+    // The draft cookie therefore resolves to "", cannot match the URL state, and the callback rejects (no exchange).
+    const res = await handleDraftOAuthCallback(
+      new Request(`${ORIGIN}/v1/drafts/auth/callback?code=valid-code&state=${encodeURIComponent(state)}`, {
+        headers: { cookie: " =lead; gittensory_draft_oauth=%" },
+      }),
+      env,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("Invalid or expired submission state.");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
   it("exchanges the code, stores an encrypted token, flips the draft to queued, and returns meta-refresh HTML", async () => {
     const env = draftEnv();
     const { draftId, state, cookie } = await createDraftState(env);
