@@ -182,6 +182,9 @@ export interface UnifiedSignalRow {
 export interface UnifiedCollapsible {
   title: string;
   body: string;
+  /** When true the body is TRUSTED raw HTML and is NOT angle-escaped — used only by the visual before/after
+   *  table (a table of `<a href><img>` clickable thumbnails the bridge builds from first-party shot URLs). */
+  rawHtml?: boolean;
 }
 
 /** The host (gittensory) side: brand, readiness score, signals, sections, re-run, footer. */
@@ -215,26 +218,38 @@ const SIGNAL_ICON: Record<UnifiedSignalRow["state"], string> = { ok: "✅", warn
 export function deriveUnifiedStatus(input: UnifiedReviewInput, ctx: UnifiedCommentContext = {}): UnifiedCommentStatus {
   if (ctx.statusOverride) return ctx.statusOverride;
   // An explicit gate verdict is authoritative — it already weighed the reviewers + guardrails.
+  let status: UnifiedCommentStatus | undefined;
   switch (input.decision) {
     case "merge":
-      return "ready";
+      status = "ready";
+      break;
     case "close":
-      return "blocked";
+      status = "blocked";
+      break;
     case "manual":
-      return "held";
+      status = "held";
+      break;
     case "comment":
     case "ignore":
-      return "advisory";
+      status = "advisory";
+      break;
   }
   // No explicit decision → mirror reviewbot's unifiedStatus over the reviewers: a consensus blocker / close →
   // blocked; a lone blocker, a split, or a partial (failed) review → held; an empty review → advisory; all-merge → ready.
-  const recs = input.recommendations ?? [];
-  const hasConsensusBlocker = input.consensusBlocker ?? (input.blockers ?? []).length > 0;
-  if (recs.includes("close") || hasConsensusBlocker) return "blocked";
-  if (input.readiness?.ciState === "failed") return "held";
-  if (recs.length === 0) return "advisory";
-  if ((input.failedCount ?? 0) > 0 || recs.some((r) => r !== "merge")) return "held";
-  return "ready";
+  if (!status) {
+    const recs = input.recommendations ?? [];
+    const hasConsensusBlocker = input.consensusBlocker ?? (input.blockers ?? []).length > 0;
+    if (recs.includes("close") || hasConsensusBlocker) status = "blocked";
+    else if (recs.length === 0) status = "advisory";
+    else if ((input.failedCount ?? 0) > 0 || recs.some((r) => r !== "merge")) status = "held";
+    else status = "ready";
+  }
+  // CI gate — a PR is "safe to merge" ONLY when CI is GREEN. Apply this only to otherwise-ready statuses so
+  // pending/unverified CI cannot mask an authoritative close/block decision from the gate.
+  if (status === "ready" && input.readiness && input.readiness.ciState !== "passed") {
+    return input.readiness.ciState === "failed" ? "blocked" : "held";
+  }
+  return status;
 }
 
 function verb(status: UnifiedCommentStatus, input: UnifiedReviewInput): string {
@@ -313,6 +328,29 @@ function bullets(items: string[]): string {
     .join("\n");
 }
 
+/** Render the failing CI checks as a bullet list of `name — reason` (reason only when the check carried one),
+ *  preferring failingDetails (which pairs each name with its WHY: codecov %/test/lint reason) and falling back
+ *  to the bare failingChecks names. Public-safe: only check names + their already-public short summary, both
+ *  angle-escaped. "" when there is nothing to list, so the caller omits the section entirely. */
+function failingChecksBlock(readiness: MergeReadiness | undefined): string {
+  if (!readiness || readiness.ciState !== "failed") return "";
+  const details = readiness.failingDetails ?? [];
+  if (details.length > 0) {
+    const lines = details
+      .map((detail) => {
+        const name = escapePublicHtmlAngles(detail.name.trim());
+        if (!name) return "";
+        const reason = detail.summary?.trim() ? ` — ${escapePublicHtmlAngles(detail.summary.trim())}` : "";
+        return `- ${name}${reason}`;
+      })
+      .filter((line) => line.length > 0);
+    if (lines.length) return lines.join("\n");
+  }
+  const names = (readiness.failingChecks ?? []).map((name) => name.trim()).filter((name) => name.length > 0);
+  if (names.length === 0) return "";
+  return [...new Set(names)].map((name) => `- ${escapePublicHtmlAngles(name)}`).join("\n");
+}
+
 function signalTable(input: UnifiedReviewInput, ctx: UnifiedCommentContext): string {
   const blockerCount = (input.blockers ?? []).length;
   const codeRow: UnifiedSignalRow = {
@@ -336,6 +374,13 @@ function details(title: string, body: string, sub?: string): string {
   const safeTitle = escapePublicHtmlAngles(title);
   const safeSub = sub ? ` — ${escapePublicHtmlAngles(sub)}` : "";
   return `<details><summary><b>${safeTitle}</b>${safeSub}</summary>\n\n${escapePublicHtmlAngles(body)}\n</details>`;
+}
+
+/** Like details(), but the body is TRUSTED raw HTML and is NOT angle-escaped. Used only for the visual
+ *  before/after table, whose body is built solely from first-party minted shot URLs + route paths (see
+ *  buildBeforeAfterCollapsible). The title is still escaped. */
+function detailsRaw(title: string, body: string): string {
+  return `<details><summary><b>${escapePublicHtmlAngles(title)}</b></summary>\n\n${body}\n</details>`;
 }
 
 /** Wrap the assembled body in a GitHub alert blockquote — this is the full-comment colored sidebar. */
@@ -372,18 +417,34 @@ export function renderUnifiedReviewComment(input: UnifiedReviewInput, ctx: Unifi
     blocks.push(`**${heading}**\n${bullets(blockers)}`);
   }
 
+  // Failing CI checks — list WHICH checks failed and WHY (codecov %/test/lint reason) under the "CI failing"
+  // chip, instead of leaving the chip as the only signal. Only when CI actually failed (failingChecksBlock
+  // guards on ciState === "failed"); public-safe (names + short reasons only).
+  const failingChecks = failingChecksBlock(input.readiness);
+  if (failingChecks) blocks.push(`**CI checks failing**\n${failingChecks}`);
+
   blocks.push(signalTable(input, ctx));
 
   const nits = dedupeLines(input.nits ?? []);
   if (nits.length) blocks.push(details("Nits", bullets(nits), `${nits.length} non-blocking`));
   for (const c of ctx.extraCollapsibles ?? []) {
-    if (c.body.trim()) blocks.push(details(c.title, c.body.trim()));
+    if (c.body.trim()) blocks.push(c.rawHtml ? detailsRaw(c.title, c.body.trim()) : details(c.title, c.body.trim()));
   }
 
-  if (ctx.reRunLabel) blocks.push(`- [ ] ${ctx.reRunLabel}`);
+  // Color-coded status legend (key) — a quiet footer mapping each headline color/icon to its meaning, so a
+  // reader can tell at a glance what "this PR's status" means. Squares are the SAME ones used in the headline.
+  blocks.push(
+    `<sub>${STATUS_META.ready.square} Safe / merged · ${STATUS_META.advisory.square} Advisory · ${STATUS_META.held.square} Held for review · ${STATUS_META.blocked.square} Blocked / closed</sub>`,
+  );
   if (ctx.footerMarkdown?.trim()) blocks.push(`---\n${ctx.footerMarkdown.trim()}`);
 
-  return asAlert(meta.alert, blocks.join("\n\n"));
+  // The re-run checkbox MUST render at top level, OUTSIDE the alert blockquote. GitHub disables interactive
+  // task-list checkboxes inside a blockquote (every line `> `-prefixed by asAlert), so a checkbox emitted via
+  // asAlert can never be ticked — no issue_comment.edited fires and maybeProcessPrPanelRetrigger never runs.
+  // Appending it after the alert keeps the box clickable AND keeps the checked-marker regex matching a non-
+  // quoted `- [x] <marker> …` line. The PR_PANEL_COMMENT_MARKER prepended by the bridge still leads the body.
+  const alerted = asAlert(meta.alert, blocks.join("\n\n"));
+  return ctx.reRunLabel ? `${alerted}\n\n- [ ] ${ctx.reRunLabel}` : alerted;
 }
 
 /**

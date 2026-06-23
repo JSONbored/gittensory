@@ -21,6 +21,7 @@
 import type { AdvisoryFinding } from "../types";
 import type { GateCheckConclusion, GateCheckEvaluation } from "../rules/advisory";
 import type { PublicPrPanelSignalRow } from "../signals/engine";
+import type { CaptureRoute } from "./visual/capture";
 // Single-source the panel marker from its canonical home (the upsert reads it there); re-export so existing
 // importers of `PR_PANEL_COMMENT_MARKER` from this module keep working. The unified body MUST prepend this
 // verbatim or `createOrUpdatePrIntelligenceComment` posts a DUPLICATE instead of updating in place.
@@ -130,15 +131,32 @@ export function buildDualReviewNotes(args: {
   aiReview?: { notes: string } | undefined;
   consensusDefect?: { title: string; detail: string } | undefined;
   warnings?: AdvisoryFinding[] | undefined;
+  /** The gate's hard blockers (GateCheckEvaluation.blockers). Folded into the reviewer blockers so a NON-AI
+   *  gate failure (missing linked issue, slop, manifest, secret leak, …) renders a populated "Why this is
+   *  blocked" list — not just an empty one driven by the AI consensus defect (FIX D1). The `ai_consensus_defect`
+   *  is EXCLUDED here because it is already surfaced via `consensusDefect` (so it appears exactly once). Each is
+   *  scrubbed through the same public-safe boundary as Nits (defense-in-depth) before reaching the comment. */
+  gateBlockers?: AdvisoryFinding[] | undefined;
   recommendation: ReviewRecommendation;
   verdict: Verdict;
   reviewerModel?: string;
 }): DualReviewNote[] {
   const assessment = args.aiReview?.notes?.trim() ?? "";
-  const blockers = args.consensusDefect ? [`${args.consensusDefect.title}${args.consensusDefect.detail ? `: ${args.consensusDefect.detail}` : ""}`.trim()] : [];
+  const consensusBlocker = args.consensusDefect ? [`${args.consensusDefect.title}${args.consensusDefect.detail ? `: ${args.consensusDefect.detail}` : ""}`.trim()] : [];
+  // FIX D1: fold the gate's own hard blockers into the reviewer blockers (so a non-AI gate failure populates
+  // "Why this is blocked"). Exclude `ai_consensus_defect` (already surfaced via consensusDefect → appears once)
+  // and scrub each through the same public-safe boundary as Nits, DROPPING any that still leaks a private term.
+  const gateBlockerLines = (args.gateBlockers ?? [])
+    .filter((finding) => finding.code !== "ai_consensus_defect")
+    .map((finding) => `${finding.title}${finding.action ? ` — ${finding.action}` : ""}`.trim())
+    .filter(Boolean)
+    .map((line) => publicSafeNit(line))
+    .filter((line): line is string => line !== null);
+  const blockers = [...consensusBlocker, ...gateBlockerLines];
   // Nits are the only renderer input not already routed through an existing public-safe filter (the gate's
   // raw warning findings). Scrub each with the private-term boundary and DROP any that still leaks. See
-  // PRIVATE_FORBIDDEN_TERMS above. (Blockers come from the consensus defect, already public-safe via toPublicSafe.)
+  // PRIVATE_FORBIDDEN_TERMS above. (The consensus-defect blocker is already public-safe via toPublicSafe; the
+  // gate blockers above go through the SAME scrub as Nits.)
   const nits = (args.warnings ?? [])
     .map((warning) => `${warning.title}${warning.action ? ` — ${warning.action}` : ""}`.trim())
     .filter(Boolean)
@@ -195,7 +213,54 @@ export type UnifiedCommentBridgeArgs = {
   extraCollapsibles?: UnifiedCollapsible[] | undefined;
   /** Headline brand (default "Gittensory review"). */
   brand?: string | undefined;
+  /** Visual before/after capture routes (visual-capture port). When present + non-empty, a "Visual preview"
+   *  collapsible (a markdown table of <img> tags pointing at the public /gittensory/shot URLs) is appended.
+   *  Public-safe: only URLs + route paths — no private terms. Default OFF (the processor passes this only
+   *  when screenshotsAllowed + the PR touches web-visible files). */
+  beforeAfter?: CaptureRoute[] | undefined;
 };
+
+/**
+ * Build the "Visual preview" collapsible from the before/after capture routes — a clean table whose cells are
+ * CLICKABLE THUMBNAILS: a small `<img>` (GitHub caps it to the column width) wrapped in an `<a href>` to the
+ * SAME full-resolution shot, so a click opens the screenshot full-size. One row per route per viewport
+ * (desktop / mobile), with the route path as the caption and a before (production) vs after (this PR's preview)
+ * column. Emitted as TRUSTED raw HTML (`rawHtml: true`) so the `<a>/<img>` survive — public-safe by
+ * construction: every value is a first-party minted /gittensory/shot URL or a route path (no private rubric /
+ * scoring terms), and a stray `"` in a URL is neutralized so it can't break out of the attribute. Returns null
+ * when nothing is renderable (no route has any shot URL), so the section is omitted rather than shown empty.
+ */
+export function buildBeforeAfterCollapsible(routes: CaptureRoute[]): UnifiedCollapsible | null {
+  const attr = (value: string): string =>
+    value.replace(/[&"<>]/g, (char) => ({ "&": "&amp;", '"': "&quot;", "<": "&lt;", ">": "&gt;" })[char] as string);
+  const markdownCode = (value: string): string =>
+    `\`${value
+      .replace(/\\/g, "\\\\")
+      .replace(/`/g, "\\`")
+      .replace(/\|/g, "\\|")
+      .replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;"))}\``;
+  const cell = (url: string | undefined, label: string): string =>
+    url ? `<a href="${attr(url)}" target="_blank" rel="noopener"><img width="360" alt="${attr(label)}" src="${attr(url)}"></a>` : "—";
+  const rows: string[] = [];
+  for (const route of routes) {
+    const path = markdownCode(route.path);
+    if (route.beforeUrl || route.afterUrl) {
+      rows.push(`| ${path} | desktop | ${cell(route.beforeUrl, `before ${route.path}`)} | ${cell(route.afterUrl, `after ${route.path}`)} |`);
+    }
+    if (route.beforeUrlMobile || route.afterUrlMobile) {
+      rows.push(`| ${path} | mobile | ${cell(route.beforeUrlMobile, `before ${route.path} (mobile)`)} | ${cell(route.afterUrlMobile, `after ${route.path} (mobile)`)} |`);
+    }
+  }
+  if (rows.length === 0) return null;
+  const body = [
+    "| Route | Viewport | Before (production) | After (this PR's preview) |",
+    "| --- | --- | --- | --- |",
+    ...rows,
+    "",
+    "_Click any thumbnail to open the full-size screenshot. Before = production · After = this PR's preview deploy._",
+  ].join("\n");
+  return { title: "Visual preview", body, rawHtml: true };
+}
 
 /**
  * Build the unified PR-review comment body from gittensory's live data. Returns a string that STARTS with
@@ -210,13 +275,24 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
     aiReview: args.aiReview,
     consensusDefect,
     warnings: args.gate.warnings,
+    // FIX D1: hand the gate's own hard blockers to the reviewer note so a non-AI gate failure populates the
+    // "Why this is blocked" list (the consensus defect alone left it empty for those PRs).
+    gateBlockers: args.gate.blockers,
     recommendation: verdictToRecommendation(verdict),
     verdict,
   });
+  // FIX D2: carry the gate's authoritative reason onto the held/blocked/closed verdict headline. The gate
+  // summary is the human-readable "why" (e.g. "A hard blocker was found."); fall back to the title. Public-safe
+  // by construction (gate summary/title are author-facing) and angle-escaped by the renderer's verdictLine.
+  // Only attached for a NON-merge verdict: a passing (merge → ready) PR keeps its positive "safe to merge" /
+  // "all checks passed" wording rather than being overwritten by the gate's "no blocker found" summary.
+  const gateReason = args.gate.summary?.trim() || args.gate.title?.trim() || undefined;
+  const verdictReason = verdict !== "merge" ? gateReason : undefined;
   const input = buildUnifiedReviewInput({
     changedFiles: args.changedFiles,
     reviews,
     decision: verdict,
+    ...(verdictReason !== undefined ? { verdictReason } : {}),
     ...(args.mergeReadiness !== undefined ? { readiness: args.mergeReadiness } : {}),
     ...(args.merged !== undefined ? { merged: args.merged } : {}),
   });
@@ -228,13 +304,19 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
   const visibleRows = args.panelRows.filter((row) => args.reviewFields?.[row.key] !== false);
   const signals = panelRowsToSignalRows(visibleRows);
 
+  // Visual-capture port: when before/after routes are present, append a "Visual preview" collapsible to the
+  // extra sections. Flag-OFF (the processor passes no beforeAfter) ⇒ extraCollapsibles is unchanged.
+  const visualCollapsible = args.beforeAfter && args.beforeAfter.length > 0 ? buildBeforeAfterCollapsible(args.beforeAfter) : null;
+  const extraCollapsibles =
+    visualCollapsible !== null ? [...(args.extraCollapsibles ?? []), visualCollapsible] : args.extraCollapsibles;
+
   const body = renderUnifiedReviewComment(input, {
     brand: args.brand ?? "Gittensory review",
     readinessScore: args.readinessTotal,
     signals,
     footerMarkdown: args.footerMarkdown,
     ...(args.reRunLabel !== undefined ? { reRunLabel: args.reRunLabel } : {}),
-    ...(args.extraCollapsibles !== undefined ? { extraCollapsibles: args.extraCollapsibles } : {}),
+    ...(extraCollapsibles !== undefined ? { extraCollapsibles } : {}),
   });
 
   // Prepend the marker verbatim (matching the legacy body, which leads with the marker then a blank line)

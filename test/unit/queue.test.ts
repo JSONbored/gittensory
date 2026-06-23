@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearInstallationTokenCacheForTest } from "../../src/github/app";
 import {
   listCollisionEdges,
   createAgentRun,
@@ -22,6 +23,7 @@ import {
   recordGateBlockOutcome,
   recordProductUsageEvent,
   upsertAgentCommandAnswer,
+  upsertCheckSummary,
   upsertIssueFromGitHub,
   upsertRepoSyncSegment,
   upsertInstallation,
@@ -33,7 +35,7 @@ import {
   upsertRepositorySettings,
   upsertRepositoryFromGitHub,
 } from "../../src/db/repositories";
-import { processJob } from "../../src/queue/processors";
+import { changedPathsForGuardrail, processJob } from "../../src/queue/processors";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
@@ -43,6 +45,7 @@ describe("queue processors", () => {
   // Freshness-SLO fixtures are dated relative to late May 2026; pin the clock so staleness windows
   // stay deterministic regardless of when CI runs.
   beforeEach(() => {
+    clearInstallationTokenCacheForTest();
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-05-28T00:00:00.000Z"));
   });
@@ -573,6 +576,37 @@ describe("queue processors", () => {
     expect(meta.verdicts).toMatchObject({ "7": "failure", "8": "success" });
     // Advisory only: the sweep enqueues no jobs and posts no check/comment/label.
     expect(sent).toEqual([]);
+  });
+
+  it("agent re-gate sweep re-reviews each stale open PR (installation id) and swallows a failing re-review", async () => {
+    const env = createTestEnv({});
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, linkedIssueGateMode: "block" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Unlinked PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "no linked issue here" });
+    // Advance past the one-hour freshness window so the just-seeded PR reads as stale.
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+    // Make the re-review itself REJECT (its advisory persist throws) so the sweep's per-PR error backstop runs.
+    // Only the advisories insert is poisoned; every other read/write (verdict computation, the closing audit
+    // event) keeps working — the sweep must still complete and record its advisory verdict.
+    const realPrepare = env.DB.prepare.bind(env.DB);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    env.DB.prepare = ((sql: string) => {
+      if (/insert\s+into\s+["'`]?advisories/i.test(sql)) throw new Error("advisory persist failed");
+      return realPrepare(sql);
+    }) as typeof env.DB.prepare;
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+
+    const audit = await realPrepare("select outcome, metadata_json from audit_events where event_type = ?").bind("agent.sweep.regate").first<{
+      outcome: string;
+      metadata_json: string;
+    }>();
+    expect(audit?.outcome).toBe("completed");
+    expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ repoFullName: "owner/agent-repo", examined: 1, flagged: 1 });
+    // The failing re-review was caught and logged via the sweep_rereview_failed backstop, not rethrown.
+    expect(errors.mock.calls.some((call) => String(call[0]).includes("sweep_rereview_failed"))).toBe(true);
+    errors.mockRestore();
   });
 
   it("agent re-gate sweep respects the #776 kill-switch: a paused repo records a skip and recomputes nothing (#777)", async () => {
@@ -1589,15 +1623,16 @@ describe("queue processors", () => {
       },
     });
 
-    // The completion PATCH failed (500), so the catch finalized the SAME check run (id 970) to a neutral,
-    // non-blocking terminal state — never left hanging in_progress.
+    // The completion PATCH failed (500), so the LOCAL check-run catch finalized the SAME check run (id 970) to
+    // a neutral, non-blocking terminal state — never left hanging in_progress — and CONTINUED the review
+    // (no re-throw), so the comment/audit/auto-action still run instead of the whole review dead-lettering.
     expect(patchBodies.length).toBe(2);
     const finalize = patchBodies[1];
     expect(finalize?.status).toBe("completed");
     expect(finalize?.conclusion).toBe("neutral");
     expect(finalize?.output?.title).toBe("Gittensory Gate — could not finish evaluating");
     const audit = await env.DB.prepare("select outcome from audit_events where event_type = ? and target_key = ?")
-      .bind("github_app.gate_finalized_on_error", "JSONbored/gittensory#80")
+      .bind("github_app.gate_check_failed_nonfatal", "JSONbored/gittensory#80")
       .first<{ outcome: string }>();
     expect(audit?.outcome).toBe("error");
   });
@@ -1958,7 +1993,8 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ token: 2, permission: 1, minerList: 1, commentGets: 1, commentPatches: 1 });
+    // token: 1 — the installation token is now cached + reused within the request (was 2: main + permission check).
+    expect(calls).toEqual({ token: 1, permission: 1, minerList: 1, commentGets: 1, commentPatches: 1 });
     expect(patchedBody).toContain("<!-- gittensory-pr-panel:v1 -->");
     expect(patchedBody).toContain("Readiness score:");
     expect(patchedBody).toContain("- [ ] <!-- gittensory-rerun-review:v1 --> Re-run Gittensory review");
@@ -2267,7 +2303,8 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ token: 2, permission: 1, minerList: 1, commentGets: 1, commentPatches: 1 });
+    // token: 1 — the installation token is now cached + reused within the request (was 2: main + permission check).
+    expect(calls).toEqual({ token: 1, permission: 1, minerList: 1, commentGets: 1, commentPatches: 1 });
   });
 
   it("skips PR panel reruns when the editing actor and PR author are unavailable", async () => {
@@ -2860,6 +2897,162 @@ describe("queue processors", () => {
     expect(postedBody).not.toMatch(/wallet|hotkey|reward|trust score/i);
   });
 
+  // FIX B + FIX D3 at the processor call site: a unified comment for a PR whose CI has a FAILED check, with the
+  // PR's files only available from GitHub (stored rows empty) — proves (B) the inline file fetch populates the
+  // real diff/changed-file count on the first review, and (D3) the failing check name + its per-check WHY render
+  // under a "CI checks failing" section (not just a bare "CI failing" chip).
+  it("inline-fetches the PR files and renders failing CI check names + reasons in the unified comment (FIX B + D3)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "detected_contributors_only",
+      publicAudienceMode: "gittensor_only",
+      publicSignalLevel: "standard",
+      publicSurface: "comment_and_label",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      gateCheckMode: "enabled",
+      backfillEnabled: true,
+      privateTrustEnabled: true,
+    });
+    // Seed a FAILED check summary with a per-check WHY (codecov-style) so listCheckSummaries returns it and the
+    // unified site populates failingDetails. (The PR row + headSha must match for the check to associate.)
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 3,
+      title: "Fix webhook duplicate delivery again",
+      state: "open",
+      user: { login: "oktofeesh1" },
+      head: { sha: "unified123" },
+      labels: [{ name: "bug" }],
+      body: "Fixes #1\n\nValidation: npm test",
+    });
+    await upsertCheckSummary(env, {
+      id: "JSONbored/gittensory#unified123#codecov/patch",
+      repoFullName: "JSONbored/gittensory",
+      pullNumber: 3,
+      headSha: "unified123",
+      name: "codecov/patch",
+      status: "completed",
+      conclusion: "failure",
+      detailsUrl: "https://codecov.io/report",
+      payload: { output: { summary: "60% of diff hit (target 97%)" } },
+    });
+    let postedBody = "";
+    let filesFetched = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          {
+            uid: 7,
+            githubUsername: "oktofeesh1",
+            githubId: "123",
+            totalPrs: 4,
+            totalMergedPrs: 3,
+            totalOpenPrs: 1,
+            totalClosedPrs: 0,
+            totalOpenIssues: 0,
+            totalClosedIssues: 0,
+            totalSolvedIssues: 0,
+            totalValidSolvedIssues: 0,
+            isEligible: true,
+            credibility: 1,
+            eligibleRepoCount: 1,
+            hotkey: "must-not-leak",
+          },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({
+          repositories: [
+            {
+              repositoryFullName: "JSONbored/gittensory",
+              totalPrs: "4",
+              totalMergedPrs: "3",
+              totalOpenPrs: "1",
+              totalClosedPrs: "0",
+              totalOpenIssues: "0",
+              totalClosedIssues: "0",
+              isEligible: true,
+              credibility: "1.000000",
+            },
+          ],
+        });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      // FIX B: stored pull_request_files is empty, so the review path inline-fetches from GitHub here.
+      if (url.includes("/pulls/3/files")) {
+        filesFetched += 1;
+        return Response.json([{ filename: "src/cache.ts", additions: 5, deletions: 1, status: "modified", patch: "@@\n+const x = 1;" }]);
+      }
+      // The review path now reads the LIVE CI aggregate (check-runs + commit-statuses). codecov/patch is a
+      // classic COMMIT-STATUS (not a check-run), so it comes from the combined-status endpoint; the check-runs
+      // list stays empty (it must, so the gate's own check-run upsert finds no pre-existing run to PATCH).
+      if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/") && url.includes("/status"))
+        return Response.json({ state: "failure", statuses: [{ context: "codecov/patch", state: "failure", description: "60% of diff hit (target 97%)", target_url: "https://codecov.io/report" }] });
+      if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 902 }, { status: 201 });
+      if (url.includes("/check-runs/902") && method === "PATCH") return Response.json({ id: 902 });
+      if (url.includes("/issues/3/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/3/comments") && method === "POST") {
+        postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        return Response.json({ id: 1, html_url: "https://github.com/comment/1" }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "pr-unified-ci-failing",
+      eventName: "pull_request",
+      payload: {
+        action: "synchronize",
+        installation: {
+          id: 123,
+          account: { login: "JSONbored", id: 1, type: "User" },
+          repository_selection: "selected",
+          permissions: { metadata: "read", pull_requests: "read", issues: "write", checks: "write" },
+          events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+        },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: {
+          number: 3,
+          title: "Fix webhook duplicate delivery again",
+          state: "open",
+          user: { login: "oktofeesh1" },
+          head: { sha: "unified123" },
+          labels: [{ name: "bug" }],
+          body: "Fixes #1\n\nValidation: npm test",
+        },
+      },
+    });
+
+    // FIX B: the files were fetched inline from GitHub (stored rows were empty) and the changed-file count is real.
+    expect(filesFetched).toBeGreaterThan(0);
+    expect(postedBody).toContain("`1 file`");
+    // FIX D3: the failing check name + its WHY render under a "CI checks failing" section, plus the chip.
+    expect(postedBody).toContain("`CI failing`");
+    expect(postedBody).toContain("CI checks failing");
+    expect(postedBody).toContain("codecov/patch");
+    expect(postedBody).toContain("60% of diff hit (target 97%)");
+    // Still public-safe.
+    expect(postedBody).not.toMatch(/wallet|hotkey|reward|trust score/i);
+  });
+
   it("skips bots and maintainer authors, and keeps explicitly enabled checks minimal", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
@@ -3330,7 +3523,8 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ comments: 0, labels: 2, minerList: 1 });
+    // 2 PRs × 3 label POSTs each: the gittensor context label (apply) + the per-PR TYPE label (create + apply).
+    expect(calls).toEqual({ comments: 0, labels: 6, minerList: 1 });
     const cacheAudit = await env.DB.prepare("select event_type, detail from audit_events where actor = ? order by created_at")
       .bind("oktofeesh1")
       .all<{ event_type: string; detail: string | null }>();
@@ -3401,7 +3595,9 @@ describe("queue processors", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(calls).toEqual({ comments: 0, labels: 1 });
+    // gittensor context-label apply (fails 503, recorded) + the best-effort type-label create attempt (also 503,
+    // swallowed). The context-label failure is still recorded below; the type label never drops the recording.
+    expect(calls).toEqual({ comments: 0, labels: 2 });
     const outputFailure = await env.DB.prepare("select event_type, detail from audit_events where event_type = ?")
       .bind("github_app.pr_label_publish_failed")
       .first<{ event_type: string; detail: string }>();
@@ -3694,7 +3890,8 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ minerList: 2, labels: 1 });
+    // 1 labeled PR × 3 label POSTs: the gittensor context label (apply) + the per-PR TYPE label (create + apply).
+    expect(calls).toEqual({ minerList: 2, labels: 3 });
     const cached = await env.DB.prepare("select status, snapshot_json from official_miner_detections where login = ?")
       .bind("oktofeesh1")
       .first<{ status: string; snapshot_json: string }>();
@@ -3884,9 +4081,9 @@ describe("queue processors", () => {
     });
 
     expect(calls.commentsCreated).toBe(8);
-    // Each command now also resolves the commenter's real repo permission (#788), which fetches its own
-    // installation token — so the per-command token count is 2 (permission check + comment).
-    expect(calls.token).toBe(16);
+    // The installation token is cached + reused across all 8 commands (each previously minted 2 — permission
+    // check + comment — for 16 total). Caching collapses them to a single mint, which is the rate-limit fix.
+    expect(calls.token).toBe(1);
     expect(calls.minerList).toBeGreaterThanOrEqual(1);
     const audit = await env.DB.prepare("select event_type, detail from audit_events where target_key = ? order by created_at")
       .bind("JSONbored/gittensory#77")
@@ -3993,7 +4190,7 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ commentsCreated: 1, token: 2 }); // +1 token for the #788 permission check
+    expect(calls).toEqual({ commentsCreated: 1, token: 1 }); // token cached + reused across the #788 permission check
     const audit = await env.DB.prepare("select event_type, detail, metadata_json from audit_events where target_key = ? order by created_at")
       .bind("JSONbored/gittensory#90")
       .all<{ event_type: string; detail: string | null; metadata_json: string }>();
@@ -4126,7 +4323,7 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ commentsCreated: 1, token: 2, minerList: 0 }); // +1 token for the #788 permission check
+    expect(calls).toEqual({ commentsCreated: 1, token: 1, minerList: 0 }); // token cached + reused across the #788 permission check
     const audit = await env.DB.prepare("select event_type, detail from audit_events where target_key = ? order by created_at")
       .bind("JSONbored/gittensory#91")
       .all<{ event_type: string; detail: string | null }>();
@@ -5376,3 +5573,14 @@ async function generatePrivateKeyPem(): Promise<string> {
   const base64 = Buffer.from(exported as ArrayBuffer).toString("base64").replace(/(.{64})/g, "$1\n");
   return `-----BEGIN PRIVATE KEY-----\n${base64}\n-----END PRIVATE KEY-----`;
 }
+
+describe("changedPathsForGuardrail", () => {
+  it("collects current + rename paths and skips empty entries", () => {
+    const files = [
+      { path: "src/a.ts", previousFilename: null },
+      { path: "src/b.ts", previousFilename: "src/old-b.ts" }, // a rename contributes both names
+      { path: "", previousFilename: "" }, // an empty path AND empty rename are both skipped (both guard branches false)
+    ] as unknown as Parameters<typeof changedPathsForGuardrail>[0];
+    expect(changedPathsForGuardrail(files)).toEqual(["src/a.ts", "src/b.ts", "src/old-b.ts"]);
+  });
+});

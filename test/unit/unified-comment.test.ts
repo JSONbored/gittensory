@@ -31,14 +31,24 @@ describe("deriveUnifiedStatus", () => {
     expect(deriveUnifiedStatus({ ...base, recommendations: [] })).toBe("advisory");
   });
 
-  it("held for manual / request_changes / failing CI", () => {
+  it("held for manual / request_changes", () => {
     expect(deriveUnifiedStatus({ ...base, decision: "manual" })).toBe("held");
     expect(deriveUnifiedStatus({ ...base, recommendations: ["request_changes"] })).toBe("held");
-    expect(deriveUnifiedStatus({ ...base, readiness: { ciState: "failed" } })).toBe("held");
+  });
+
+  it("CI that hasn't passed is NEVER safe-to-merge — failed→blocked, pending/unverified→held, even over a merge verdict", () => {
+    // A red CI must never render "safe to merge". It downgrades even an explicit `merge` verdict to blocked.
+    expect(deriveUnifiedStatus({ ...base, readiness: { ciState: "failed" } })).toBe("blocked");
+    expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "failed" } })).toBe("blocked");
+    // CI still running / not yet reported (chip "CI pending") → HELD, never "safe to merge".
+    expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "unverified" } })).toBe("held");
+    // ONLY green CI + a merge verdict renders ready.
+    expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed" } })).toBe("ready");
   });
 
   it("blocked for a close verdict or consensus blockers", () => {
     expect(deriveUnifiedStatus({ ...base, decision: "close" })).toBe("blocked");
+    expect(deriveUnifiedStatus({ ...base, decision: "close", readiness: { ciState: "unverified" } })).toBe("blocked");
     expect(deriveUnifiedStatus({ ...base, recommendations: [], blockers: ["leaks a secret"] })).toBe("blocked");
   });
 
@@ -91,9 +101,17 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).toContain("Checked by Gittensory.");
   });
 
-  it("the entire comment is blockquote-wrapped (the full colored sidebar)", () => {
+  it("wraps the review body in the colored blockquote but renders the re-run checkbox OUTSIDE it (interactive)", () => {
     const md = renderUnifiedReviewComment({ ...base, decision: "merge" }, ctx);
-    expect(md.split("\n").every((l) => l.startsWith(">"))).toBe(true);
+    const lines = md.split("\n");
+    const checkboxLine = lines.find((l) => l.includes("Re-run Gittensory review"));
+    expect(checkboxLine).toBeDefined();
+    // GitHub disables task-list checkboxes inside a blockquote, so the re-run box must be at top level
+    // (otherwise it can never be ticked → no issue_comment.edited → the on-demand re-run never fires).
+    expect(checkboxLine!.startsWith(">")).toBe(false);
+    // The colored sidebar — every non-empty line above the checkbox — IS blockquote-wrapped.
+    const bodyAbove = lines.slice(0, lines.indexOf(checkboxLine!)).filter((l) => l.length > 0);
+    expect(bodyAbove.every((l) => l.startsWith(">"))).toBe(true);
   });
 
   it("blocked state uses the caution alert, red bar, and an expanded blockers section", () => {
@@ -157,6 +175,48 @@ describe("renderUnifiedReviewComment", () => {
     expect(failing).toContain("`behind`");
     const pending = renderUnifiedReviewComment({ ...base, readiness: { ciState: "unverified" } }, {});
     expect(pending).toContain("`CI pending`");
+  });
+
+  it("lists failing check names + per-check details under a 'CI checks failing' section (FIX D3)", () => {
+    const md = renderUnifiedReviewComment(
+      {
+        ...base,
+        readiness: {
+          ciState: "failed",
+          failingChecks: ["codecov/patch", "lint"],
+          failingDetails: [
+            { name: "codecov/patch", summary: "60% of diff hit (target 97%)" },
+            { name: "lint", summary: "2 errors in src/foo.ts" },
+          ],
+        },
+      },
+      {},
+    );
+    expect(md).toContain("CI checks failing");
+    expect(md).toContain("- codecov/patch — 60% of diff hit (target 97%)");
+    expect(md).toContain("- lint — 2 errors in src/foo.ts");
+  });
+
+  it("falls back to bare failing check names when no per-check detail is present (FIX D3)", () => {
+    const md = renderUnifiedReviewComment({ ...base, readiness: { ciState: "failed", failingChecks: ["build", "e2e"] } }, {});
+    expect(md).toContain("CI checks failing");
+    expect(md).toContain("- build");
+    expect(md).toContain("- e2e");
+  });
+
+  it("omits the failing-checks section when CI passed or is unverified (FIX D3)", () => {
+    expect(renderUnifiedReviewComment({ ...base, readiness: { ciState: "passed" } }, {})).not.toContain("CI checks failing");
+    expect(renderUnifiedReviewComment({ ...base, readiness: { ciState: "unverified", failingChecks: ["stale"] } }, {})).not.toContain("CI checks failing");
+  });
+
+  it("angle-escapes a failing check name + detail (FIX D3 public-safety)", () => {
+    const md = renderUnifiedReviewComment(
+      { ...base, readiness: { ciState: "failed", failingDetails: [{ name: "check <x>", summary: "broke </details>" }] } },
+      {},
+    );
+    expect(md).toContain("check &lt;x&gt;");
+    expect(md).toContain("broke &lt;/details&gt;");
+    expect(md).not.toContain("broke </details>");
   });
 
   it("appends an explicit verdict reason across ready (merged + unmerged) and advisory states", () => {

@@ -9,6 +9,17 @@ export type JobMessage =
       payload: GitHubWebhookPayload;
     }
   | {
+      // Delayed self-poll to re-capture a PR's before/after preview once its preview deploy is live — the first
+      // review captures a "loading" placeholder when the deploy isn't ready yet (capture.previewPending). Each
+      // recapture re-reviews the PR; bounded by `attempt` so a never-resolving preview can't loop forever.
+      type: "recapture-preview";
+      deliveryId: string;
+      repoFullName: string;
+      prNumber: number;
+      installationId: number;
+      attempt: number;
+    }
+  | {
       type: "refresh-registry";
       requestedBy: "schedule" | "api" | "test";
     }
@@ -147,6 +158,21 @@ export type JobMessage =
       // ON (index.ts), so flag-OFF this job never exists.
       type: "selftune";
       requestedBy: "schedule" | "api" | "test";
+    }
+  | {
+      // Convergence (RAG / codebase index — Layer C, flag-gated by GITTENSORY_REVIEW_RAG). Populate + maintain the
+      // vector index that retrieval reads.
+      //   - No `repoFullName` (the cron fan-out) → enqueue one per-repo FULL re-index job for every
+      //     registered + cutover-allowlisted repo (mirrors the agent-regate / signal-snapshot fan-out).
+      //   - `repoFullName` + no `paths` → FULL re-index of that repo's code (indexRepo).
+      //   - `repoFullName` + `paths` → INCREMENTAL re-index of only those changed paths (reindexChangedPaths),
+      //     enqueued from a push / merged-PR webhook.
+      // Enqueued + dispatched ONLY when the flag is ON; flag-OFF (default) this job is never created and the
+      // processor no-ops, so the deploy is byte-identical to today.
+      type: "rag-index-repo";
+      requestedBy: "schedule" | "api" | "webhook" | "test";
+      repoFullName?: string;
+      paths?: string[];
     }
   | {
       // Public OAuth draft-submission flow (GITTENSORY_REVIEW_DRAFT): fork the content repo with the
@@ -386,6 +412,12 @@ export type PullRequestRecord = {
    *  the repo opted into slop. `null`/absent = not assessed (slop off, or PR not yet processed). */
   slopRisk?: number | null | undefined;
   slopBand?: string | null | undefined;
+  /** RC3 terminal-fail merges: failed auto-merge attempt count, and the head SHA at which the merge is
+   *  terminally blocked (with a human-readable reason). When mergeBlockedSha === headSha the planner suppresses
+   *  the `merge` disposition (held for a human); a new commit clears the block. */
+  mergeAttemptCount?: number | null | undefined;
+  mergeBlockedSha?: string | null | undefined;
+  mergeBlockedReason?: string | null | undefined;
 };
 
 export type IssueRecord = {
