@@ -2009,28 +2009,48 @@ async function maybePublishPrPublicSurface(
       await recordNativeGateDecision(env, { project: repoFullName, pullNumber: pr.number, headSha: pr.headSha, conclusion: gateEvaluation.conclusion, reasonCode });
     }
     if (gateEnabled) {
-      const gateCheckResult = await createOrUpdateGateCheckRun(
-        env,
-        installationId,
-        repoFullName,
-        advisory,
-        gatePolicy,
-        {
-          checkRunId: pendingGateCheckRunId,
-        },
-      );
-      if (gateCheckResult?.kind === "published") gateFinalized = true;
-      if (gateCheckResult?.kind === "permission_missing") {
-        await auditGateCheckPermissionMissing(env, author, repoFullName, pr.number, webhook.deliveryId, gateCheckResult.warning);
-        // A 403 on the COMPLETION call is classified as permission_missing and does NOT throw, so the catch
-        // below never runs and the pending in_progress check would be orphaned. But the pending check already
-        // posted (pendingGateCheckRunId is set), proving the App had Checks:write — so a 403 here is almost
-        // always a transient secondary-rate-limit, not a real revocation. Finalize the pending check to
-        // neutral (mirrors the catch); if it were a genuine revocation this PATCH also 403s and is swallowed.
+      try {
+        const gateCheckResult = await createOrUpdateGateCheckRun(
+          env,
+          installationId,
+          repoFullName,
+          advisory,
+          gatePolicy,
+          {
+            checkRunId: pendingGateCheckRunId,
+          },
+        );
+        if (gateCheckResult?.kind === "published") gateFinalized = true;
+        if (gateCheckResult?.kind === "permission_missing") {
+          await auditGateCheckPermissionMissing(env, author, repoFullName, pr.number, webhook.deliveryId, gateCheckResult.warning);
+          // A 403 on the COMPLETION call is classified as permission_missing and does NOT throw, so the catch
+          // below never runs and the pending in_progress check would be orphaned. But the pending check already
+          // posted (pendingGateCheckRunId is set), proving the App had Checks:write — so a 403 here is almost
+          // always a transient secondary-rate-limit, not a real revocation. Finalize the pending check to
+          // neutral (mirrors the catch); if it were a genuine revocation this PATCH also 403s and is swallowed.
+          if (pendingGateCheckRunId !== undefined && !gateFinalized) {
+            await createOrUpdateErroredGateCheckRun(env, installationId, repoFullName, advisory, { checkRunId: pendingGateCheckRunId }).catch(() => undefined);
+            gateFinalized = true;
+          }
+        }
+      } catch (checkError) {
+        // CRITICAL: a check-run API failure (e.g. a 422 from an over-long output.title) must NEVER abort the
+        // review. The outer catch re-throws → the comment, the audit row, and the auto-action (merge/close)
+        // would all be skipped and the review dead-lettered. That is exactly why red-CI PRs (whose gate title
+        // grew long with failing-check names) were silently never reviewed or closed. Finalize the pending
+        // check to a neutral terminal state so it doesn't hang, log, and CONTINUE — do not re-throw.
         if (pendingGateCheckRunId !== undefined && !gateFinalized) {
           await createOrUpdateErroredGateCheckRun(env, installationId, repoFullName, advisory, { checkRunId: pendingGateCheckRunId }).catch(() => undefined);
           gateFinalized = true;
         }
+        await recordAuditEvent(env, {
+          eventType: "github_app.gate_check_failed_nonfatal",
+          actor: author,
+          targetKey: `${repoFullName}#${pr.number}`,
+          outcome: "error",
+          detail: errorMessage(checkError),
+          metadata: { deliveryId: webhook.deliveryId, repoFullName },
+        }).catch(() => undefined);
       }
     }
   } catch (error) {

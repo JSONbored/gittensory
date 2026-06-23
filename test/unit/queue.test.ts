@@ -1592,15 +1592,16 @@ describe("queue processors", () => {
       },
     });
 
-    // The completion PATCH failed (500), so the catch finalized the SAME check run (id 970) to a neutral,
-    // non-blocking terminal state — never left hanging in_progress.
+    // The completion PATCH failed (500), so the LOCAL check-run catch finalized the SAME check run (id 970) to
+    // a neutral, non-blocking terminal state — never left hanging in_progress — and CONTINUED the review
+    // (no re-throw), so the comment/audit/auto-action still run instead of the whole review dead-lettering.
     expect(patchBodies.length).toBe(2);
     const finalize = patchBodies[1];
     expect(finalize?.status).toBe("completed");
     expect(finalize?.conclusion).toBe("neutral");
     expect(finalize?.output?.title).toBe("Gittensory Gate — could not finish evaluating");
     const audit = await env.DB.prepare("select outcome from audit_events where event_type = ? and target_key = ?")
-      .bind("github_app.gate_finalized_on_error", "JSONbored/gittensory#80")
+      .bind("github_app.gate_check_failed_nonfatal", "JSONbored/gittensory#80")
       .first<{ outcome: string }>();
     expect(audit?.outcome).toBe("error");
   });

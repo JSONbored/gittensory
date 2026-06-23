@@ -103,13 +103,14 @@ describe("renderUnifiedReviewComment", () => {
   it("wraps the review body in the colored blockquote but renders the re-run checkbox OUTSIDE it (interactive)", () => {
     const md = renderUnifiedReviewComment({ ...base, decision: "merge" }, ctx);
     const lines = md.split("\n");
-    const checkboxIdx = lines.findIndex((l) => l.includes("Re-run Gittensory review"));
-    expect(checkboxIdx).toBeGreaterThan(-1);
+    const checkboxLine = lines.find((l) => l.includes("Re-run Gittensory review"));
+    expect(checkboxLine).toBeDefined();
     // GitHub disables task-list checkboxes inside a blockquote, so the re-run box must be at top level
     // (otherwise it can never be ticked → no issue_comment.edited → the on-demand re-run never fires).
-    expect(lines[checkboxIdx].startsWith(">")).toBe(false);
+    expect(checkboxLine!.startsWith(">")).toBe(false);
     // The colored sidebar — every non-empty line above the checkbox — IS blockquote-wrapped.
-    expect(lines.slice(0, checkboxIdx).filter((l) => l.length > 0).every((l) => l.startsWith(">"))).toBe(true);
+    const bodyAbove = lines.slice(0, lines.indexOf(checkboxLine!)).filter((l) => l.length > 0);
+    expect(bodyAbove.every((l) => l.startsWith(">"))).toBe(true);
   });
 
   it("blocked state uses the caution alert, red bar, and an expanded blockers section", () => {
