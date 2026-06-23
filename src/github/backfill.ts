@@ -58,7 +58,7 @@ import type {
   RepositorySettings,
 } from "../types";
 import { errorMessage, nowIso, repoParts, strippedErrorMessage } from "../utils/json";
-import { createInstallationToken, getAppInstallation } from "./app";
+import { createInstallationToken, getAppInstallation, GITTENSORY_GATE_CHECK_NAME } from "./app";
 
 type GitHubLabelPayload = {
   name: string;
@@ -1985,6 +1985,11 @@ export async function fetchLiveCiAggregate(
     ).catch(() => undefined);
     if (!result) break;
     for (const run of result.data.check_runs ?? []) {
+      // The bot's OWN gate check is NOT "CI" to wait on. It posts the gate as in_progress and then concludes it
+      // AFTER reviewing — so counting it here self-deadlocks: the review waits for all CI to finish, the gate
+      // never finishes (it's pending until the review it is blocking runs), and the PR defers forever. Skip it.
+      // (#gate-self-deadlock — this was deferring green-CI PRs as "CI still running" indefinitely.)
+      if (run.name === GITTENSORY_GATE_CHECK_NAME) continue;
       total += 1;
       const conclusion = (run.conclusion ?? "").toLowerCase();
       const status = (run.status ?? "").toLowerCase();
@@ -2011,9 +2016,10 @@ export async function fetchLiveCiAggregate(
     token,
   ).catch(() => undefined);
   for (const ctx of statusResult?.data.statuses ?? []) {
+    const name = ctx.context ?? "status";
+    if (name === GITTENSORY_GATE_CHECK_NAME) continue; // never wait on the bot's own gate (see #gate-self-deadlock above)
     total += 1;
     const state = (ctx.state ?? "").toLowerCase();
-    const name = ctx.context ?? "status";
     if (state === "failure" || state === "error") {
       const summary = typeof ctx.description === "string" ? ctx.description.trim().slice(0, 200) : "";
       const detail = { name, ...(summary ? { summary } : {}), ...(ctx.target_url ? { detailsUrl: ctx.target_url } : {}) };
