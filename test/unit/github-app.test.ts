@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import {
+  clearInstallationTokenCacheForTest,
   createInstallationToken,
   createOrUpdateCheckRun,
   createOrUpdateGateCheckRun,
@@ -12,6 +13,8 @@ import {
 } from "../../src/github/app";
 import type { Advisory } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
+
+beforeEach(() => clearInstallationTokenCacheForTest());
 
 describe("GitHub check runs", () => {
   afterEach(() => {

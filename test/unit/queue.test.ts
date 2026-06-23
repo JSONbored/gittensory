@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearInstallationTokenCacheForTest } from "../../src/github/app";
 import {
   listCollisionEdges,
   createAgentRun,
@@ -44,6 +45,7 @@ describe("queue processors", () => {
   // Freshness-SLO fixtures are dated relative to late May 2026; pin the clock so staleness windows
   // stay deterministic regardless of when CI runs.
   beforeEach(() => {
+    clearInstallationTokenCacheForTest();
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-05-28T00:00:00.000Z"));
   });
@@ -1959,7 +1961,8 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ token: 2, permission: 1, minerList: 1, commentGets: 1, commentPatches: 1 });
+    // token: 1 — the installation token is now cached + reused within the request (was 2: main + permission check).
+    expect(calls).toEqual({ token: 1, permission: 1, minerList: 1, commentGets: 1, commentPatches: 1 });
     expect(patchedBody).toContain("<!-- gittensory-pr-panel:v1 -->");
     expect(patchedBody).toContain("Readiness score:");
     expect(patchedBody).toContain("- [ ] <!-- gittensory-rerun-review:v1 --> Re-run Gittensory review");
@@ -2268,7 +2271,8 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ token: 2, permission: 1, minerList: 1, commentGets: 1, commentPatches: 1 });
+    // token: 1 — the installation token is now cached + reused within the request (was 2: main + permission check).
+    expect(calls).toEqual({ token: 1, permission: 1, minerList: 1, commentGets: 1, commentPatches: 1 });
   });
 
   it("skips PR panel reruns when the editing actor and PR author are unavailable", async () => {
@@ -4045,9 +4049,9 @@ describe("queue processors", () => {
     });
 
     expect(calls.commentsCreated).toBe(8);
-    // Each command now also resolves the commenter's real repo permission (#788), which fetches its own
-    // installation token — so the per-command token count is 2 (permission check + comment).
-    expect(calls.token).toBe(16);
+    // The installation token is cached + reused across all 8 commands (each previously minted 2 — permission
+    // check + comment — for 16 total). Caching collapses them to a single mint, which is the rate-limit fix.
+    expect(calls.token).toBe(1);
     expect(calls.minerList).toBeGreaterThanOrEqual(1);
     const audit = await env.DB.prepare("select event_type, detail from audit_events where target_key = ? order by created_at")
       .bind("JSONbored/gittensory#77")
@@ -4154,7 +4158,7 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ commentsCreated: 1, token: 2 }); // +1 token for the #788 permission check
+    expect(calls).toEqual({ commentsCreated: 1, token: 1 }); // token cached + reused across the #788 permission check
     const audit = await env.DB.prepare("select event_type, detail, metadata_json from audit_events where target_key = ? order by created_at")
       .bind("JSONbored/gittensory#90")
       .all<{ event_type: string; detail: string | null; metadata_json: string }>();
@@ -4287,7 +4291,7 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ commentsCreated: 1, token: 2, minerList: 0 }); // +1 token for the #788 permission check
+    expect(calls).toEqual({ commentsCreated: 1, token: 1, minerList: 0 }); // token cached + reused across the #788 permission check
     const audit = await env.DB.prepare("select event_type, detail from audit_events where target_key = ? order by created_at")
       .bind("JSONbored/gittensory#91")
       .all<{ event_type: string; detail: string | null }>();
