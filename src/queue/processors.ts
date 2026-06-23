@@ -448,7 +448,7 @@ async function runRagIndexJob(
   const repo = await getRepository(env, repoFullName);
   /* v8 ignore next -- defensive: a fanned-out repo is always present; the null is belt-and-suspenders. */
   if (!repo) return;
-  const project = repoFullName;
+  const [project] = splitRepoForRag(repoFullName);
   if (paths && paths.length > 0) {
     await reindexChangedPaths(env, project, repo, paths);
     return;
@@ -546,12 +546,12 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
     const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null));
     verdicts[String(pr.number)] = gate.conclusion;
     if (gate.conclusion === "failure" || gate.conclusion === "action_required") flaggedPulls.push(pr.number);
-    // FULL fresh review of every open PR (the operator's requirement: gittensory must post its OWN review before
-    // acting — the old comments are reviewbot's, pre-consolidation). reReviewStoredPullRequest re-runs the dual-AI,
-    // re-publishes gittensory's unified comment with the current head/CI/synthesis, then auto-maintains (merge a
-    // clean+approved PR, close a red-CI non-owner PR, hold the owner's). The per-commit decision cache
-    // (cacheReviewDecision / replay in maybePublishPrPublicSurface) makes the repeat passes cheap — the dual-AI
-    // only re-runs when the head SHA changed, so this is affordable on a tight cron without re-AIing every sweep.
+    // Backstop the CI-completion trigger AND refresh the stale public comment: fully RE-REVIEW each stale open
+    // PR (rebuild advisory → re-publish the unified comment with the current head/CI → re-run auto-maintain). The
+    // re-gate above only recomputes the audit verdict; without this re-publish, an idle PR keeps a stale comment
+    // (e.g. "safe to merge" from before a fix) and a stale status label forever. reReviewStoredPullRequest reads
+    // the freshly-synced head + the live CI, so the comment + label + action all reflect reality. Paced at
+    // SWEEP_MAX_PRS per sweep; cheap now that installation tokens are cached.
     if (sweepInstallationId != null) {
       await reReviewStoredPullRequest(env, `regate-sweep:${repoFullName}#${pr.number}`, sweepInstallationId, repoFullName, pr.number).catch((error) => {
         console.error(JSON.stringify({ level: "warn", event: "sweep_rereview_failed", deliveryId: `regate-sweep:${repoFullName}#${pr.number}`, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
@@ -566,6 +566,15 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
     detail: `scheduled re-gate recomputed ${candidates.length} stale open PR verdict(s); ${flaggedPulls.length} flagged`,
     metadata: { repoFullName, mode, openCount: openPullRequests.length, examined: candidates.length, flagged: flaggedPulls.length, flaggedPulls, verdicts },
   });
+}
+
+export function changedPathsForGuardrail(files: Awaited<ReturnType<typeof listPullRequestFiles>>): string[] {
+  const paths = new Set<string>();
+  for (const file of files) {
+    if (file.path.length > 0) paths.add(file.path);
+    if (file.previousFilename && file.previousFilename.length > 0) paths.add(file.previousFilename);
+  }
+  return [...paths];
 }
 
 /**
@@ -624,7 +633,7 @@ async function maybeRunAgentMaintenance(
     fetchLivePullRequestReviewDecision(env, repoFullName, pr.number, ciToken ?? env.GITHUB_PUBLIC_TOKEN),
   ]);
   const ciAggregate = await fetchLiveCiAggregate(env, repoFullName, pr.headSha, ciToken ?? env.GITHUB_PUBLIC_TOKEN, requiredContexts);
-  const changedPaths = changedFiles.map((file) => file.path).filter((path) => path.length > 0);
+  const changedPaths = changedPathsForGuardrail(changedFiles);
   const repoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")) : "";
   const authorLogin = pr.authorLogin ?? "";
   const authorIsOwner = authorLogin.length > 0 && authorLogin.toLowerCase() === repoOwner.toLowerCase();
@@ -1273,7 +1282,7 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
       });
       await persistAdvisory(env, advisory);
       if (installationId && shouldProcessPullRequestPublicSurface(payload.action)) {
-        if (shouldCollectSlopEvidence(settings) || settings.manifestPolicyGateMode !== "off") {
+        if (shouldCollectSlopEvidence(settings) || settings.manifestPolicyGateMode !== "off" || isAgentConfigured(settings.autonomy)) {
           await refreshPullRequestDetails(env, repoFullName, pr.number);
         }
         const gate = await maybePublishPrPublicSurface(env, installationId, repoFullName, pr, repo, settings, advisory, {
@@ -3336,4 +3345,10 @@ function authoritativeContributorRepoStats(
 ) {
   const officialRepoStats = contributorRepoStatsFromGittensor(gittensorSnapshot);
   return officialRepoStats.length > 0 ? officialRepoStats : cachedRepoStats;
+}
+
+/** Split `owner/name` into the project/repo key shape shared by RAG indexing and retrieval. */
+export function splitRepoForRag(repoFullName: string): [string, string] {
+  const slash = repoFullName.indexOf("/");
+  return slash === -1 ? ["", repoFullName] : [repoFullName.slice(0, slash), repoFullName.slice(slash + 1)];
 }
