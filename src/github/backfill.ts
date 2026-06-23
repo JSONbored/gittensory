@@ -1951,27 +1951,25 @@ export async function fetchRequiredStatusContexts(env: Env, repoFullName: string
  * reviewbot `getAllChecksState` parity that the converged auto-maintain path needs: codecov (codecov/patch,
  * codecov/project) and many other tools post a classic COMMIT-STATUS, not a check-run — fetching only
  * `/check-runs` (what the backfill sync does) misses them entirely, which is why a red codecov was reported as
- * "CI green". We aggregate ANY failing check/status → "failed"; else any still-running → "pending"; else any
- * present → "passed"; none at all → "unverified". The disposition layer NEVER approves/merges unless "passed",
- * and closes (non-owner) / holds (owner) on "failed". Best-effort: a fetch error degrades that source to empty.
+ * "CI green". When branch-protection required contexts are known, only those trusted contexts gate review or
+ * automation; non-required failures are reported separately. When required contexts cannot be determined, we
+ * conservatively fold all checks/statuses into the gate so required red checks are not silently ignored.
+ * Best-effort: a fetch error degrades that source to empty.
  */
 export async function fetchLiveCiAggregate(
   env: Env,
   repoFullName: string,
   headSha: string | null | undefined,
   token: string | undefined,
-  // Operator policy (#all-ci-required): ALL CI gates — every check (required or not, incl. codecov/*) must be
-  // GREEN to merge, and ANY red check fails the gate (→ close a contributor PR / hold the owner's); a still-
-  // running check sets `pending` so the review WAITS for it. The legacy `requiredContexts` arg is accepted for
-  // signature compatibility but no longer narrows the gate.
+  // Branch-protection REQUIRED contexts are the trust boundary for CI gate authority. Non-required checks may be
+  // influenced by PR authors or third-party actors, so they are surfaced as advisory details but must not defer
+  // review, fail the merge gate, or drive automated close decisions. If required contexts are unavailable, fall
+  // back to gating on all contexts to avoid silently passing an unknown required failure.
   requiredContexts?: ReadonlySet<string> | null,
 ): Promise<LiveCiAggregate> {
   if (!headSha) return { ciState: "unverified", failingDetails: [], nonRequiredFailingDetails: [] };
-  void requiredContexts;
-  // Every check gates (required or not). isRequired is kept (always true) so the failing/pending bucketing below
-  // is unchanged in shape — nonRequiredFailingDetails simply stays empty now.
-  const enforceRequiredOnly = false;
-  const isRequired = (_name: string): boolean => !enforceRequiredOnly;
+  const enforceRequiredOnly = requiredContexts != null && requiredContexts.size > 0;
+  const isRequired = (name: string): boolean => !enforceRequiredOnly || requiredContexts.has(name);
   const failingDetails: LiveCiAggregate["failingDetails"] = [];
   const nonRequiredFailingDetails: LiveCiAggregate["nonRequiredFailingDetails"] = [];
   let total = 0;

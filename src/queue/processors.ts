@@ -744,8 +744,9 @@ async function prReadyForReview(env: Env, installationId: number, repoFullName: 
     }
     // rebase failed (a real conflict, or transient) → fall through: the gate closes a conflict; CI-wait still applies.
   }
-  // 2) wait for ALL CI to finish (every check gates). Still-running + none-failed (ciState "pending") → defer.
-  const ci = await fetchLiveCiAggregate(env, repoFullName, pr.headSha, token).catch(() => undefined);
+  // 2) wait for trusted required CI to finish. Non-required checks are advisory and must not stall review.
+  const requiredContexts = await fetchRequiredStatusContexts(env, repoFullName, pr.baseRef, token).catch(() => null);
+  const ci = await fetchLiveCiAggregate(env, repoFullName, pr.headSha, token, requiredContexts).catch(() => undefined);
   if (ci?.ciState === "pending") {
     await recordAuditEvent(env, { eventType: "github_app.review_deferred_ci_pending", actor: "gittensory", targetKey: `${repoFullName}#${pr.number}`, outcome: "queued", detail: "CI still running — review deferred until all checks finish", metadata: { deliveryId, repoFullName } }).catch(() => undefined);
     return false;
