@@ -154,7 +154,7 @@ import {
   unionScopedOverlapClusters,
   type ContributorProfile,
 } from "../signals/engine";
-import { buildClosedUnifiedCommentBody, buildUnifiedCommentBody, isUnifiedReviewCommentEnabled } from "../review/unified-comment-bridge";
+import { buildUnifiedCommentBody, isUnifiedReviewCommentEnabled } from "../review/unified-comment-bridge";
 import { screenshotsAllowed } from "../review/visual-wire";
 import { isVisualPath } from "../review/visual/paths";
 import { buildCapture, type CaptureRoute } from "../review/visual/capture";
@@ -1764,23 +1764,6 @@ async function auditGateCheckPermissionMissing(
   });
 }
 
-function buildClosedPrPanelUpdate(repoFullName: string, pullNumber: number): string {
-  return [
-    "<!-- gittensory-pr-panel:v1 -->",
-    "",
-    "> [!NOTE]",
-    "> ## Gittensory Gate skipped",
-    "> PR closed before full evaluation. No late first comment was created.",
-    ">",
-    "> | Signal | Result | Evidence | Action |",
-    "> | --- | --- | --- | --- |",
-    `> | Gate result | ⚠️ Skipped | ${repoFullName}#${pullNumber} is no longer open. | No action. |`,
-    "",
-    "---",
-    gittensoryFooter({ earnUrl: gittensorRepoEarnUrl(repoFullName) }),
-  ].join("\n");
-}
-
 /**
  * Map a PR's realized terminal state + the gate verdict to the {@link SubmissionOutcome} the reputation table
  * records — or `undefined` when there is no terminal signal to record yet. Pure + total; uses ONLY the PR
@@ -1843,18 +1826,15 @@ async function maybePublishPrPublicSurface(
   if (!author && !gateEnabled) return undefined;
 
   if (gateEnabled && (pr.state !== "open" || webhook.action === "closed")) {
+    // The PR is already closed/merged. Mark the gate check skipped, but DO NOT overwrite the unified review
+    // comment. This post-close pass was clobbering the REAL review (the one published while the PR was open, with
+    // the actual diff + verdict) with an empty "advisory only — 0 files — no longer open" skip card — so a
+    // freshly MERGED PR ended up showing a contentless review. The real review must survive the merge/close.
+    // (#preserve-review-on-close) A bot-CLOSED PR still gets its close reasoning from the executor's close comment.
     const gateCheckResult = await createOrUpdateSkippedGateCheckRun(env, installationId, repoFullName, advisory, "PR closed before full evaluation.");
     if (gateCheckResult?.kind === "permission_missing") {
       await auditGateCheckPermissionMissing(env, author, repoFullName, pr.number, webhook.deliveryId, gateCheckResult.warning);
     }
-    // Convergence (Stage D): when the unified-comment flag is ON, render the closed/skipped state through the
-    // unified renderer too. Otherwise an OPEN PR's unified comment would be overwritten by the legacy panel
-    // under the SAME marker when it closes. Flag-OFF (default) keeps the legacy panel byte-identical. The
-    // update is createIfMissing:false either way — we only refresh an existing comment for a closing PR.
-    const closedBody = unifiedCommentAllowed
-      ? buildClosedUnifiedCommentBody({ repoFullName, pullNumber: pr.number, footerMarkdown: gittensoryFooter({ earnUrl: gittensorRepoEarnUrl(repoFullName) }) })
-      : buildClosedPrPanelUpdate(repoFullName, pr.number);
-    await createOrUpdatePrIntelligenceComment(env, installationId, repoFullName, pr.number, closedBody, { createIfMissing: false }).catch(() => undefined);
     return undefined;
   }
   const prelimHasPublicOutput =

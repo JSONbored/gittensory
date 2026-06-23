@@ -171,24 +171,18 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     }
   }
 
-  // 2) review — APPROVE a review-good PR (even on a guarded path: it's correct; the owner just merges it). A
-  // not-good OWNER/automation PR is HELD with request-changes (the maintainer sees what to fix). A not-good
-  // CONTRIBUTOR PR is CLOSED below and the close comment carries the reasoning — no redundant request-changes.
+  // 2) review — APPROVE a review-good PR (even on a guarded path: it's correct; the owner just merges it). The
+  // bot NEVER posts a formal CHANGES_REQUESTED review: a blocking review counts against required approvals and
+  // STRANDS a PR when it later goes green (a stale request-changes keeps it un-mergeable forever). A not-good
+  // CONTRIBUTOR PR is CLOSED below; a not-good OWNER/automation PR is HELD via the needs-human label + the
+  // (non-blocking) unified review comment — never a formal request-changes. (#no-request-changes) Either
+  // merge/approve, or close, with the rare manual hold left open + commented, never blocked.
   if (reviewGood && acting("approve") && input.pr.reviewDecision !== "APPROVED") {
     actions.push({
       actionClass: "approve",
       requiresApproval: approval("approve"),
       reason: wouldMergeButGuarded ? "gate passed, CI green (held for owner — guarded path)" : "gate passed, CI green",
       reviewBody: "Gittensory approves — the gate is satisfied and CI is green.",
-    });
-  } else if (!reviewGood && !willClose && acting("request_changes") && input.pr.reviewDecision !== "CHANGES_REQUESTED") {
-    const lines = [ciReason, ...input.blockerTitles].filter(Boolean);
-    const summary = lines.length ? lines.map((line) => `- ${line}`).join("\n") : "- The Gittensory Gate is not satisfied.";
-    actions.push({
-      actionClass: "request_changes",
-      requiresApproval: approval("request_changes"),
-      reason: ciFailed ? `CI failing${input.blockerTitles.length ? ` + ${input.blockerTitles.length} blocker(s)` : ""}` : `${input.blockerTitles.length || 1} blocker(s)`,
-      reviewBody: `Gittensory requests changes — ${ciFailed ? "CI is not green" : ciUnverified ? "CI could not be verified" : "the gate is not yet satisfied"}:\n\n${summary}`,
     });
   }
 

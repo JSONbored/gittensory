@@ -899,7 +899,7 @@ describe("queue processors", () => {
     expect(calls).toEqual({ minerList: 1, gateChecks: 2 });
   });
 
-  it("auto-maintain (#778): a blocking gate on an agent-configured repo records label + request-changes actions (dry-run)", async () => {
+  it("auto-maintain (#778): a blocking gate on an agent-configured repo records the changes-requested label, never a formal request_changes (dry-run)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
       env,
@@ -955,9 +955,10 @@ describe("queue processors", () => {
     const labelAudit = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("agent.action.label").first<{ outcome: string; metadata_json: string }>();
     expect(labelAudit?.outcome).toBe("completed");
     expect(JSON.parse(labelAudit?.metadata_json ?? "{}")).toMatchObject({ mode: "dry_run", actionClass: "label" });
-    const rcAudit = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("agent.action.request_changes").first<{ outcome: string; metadata_json: string }>();
-    expect(rcAudit?.outcome).toBe("completed");
-    expect(JSON.parse(rcAudit?.metadata_json ?? "{}")).toMatchObject({ mode: "dry_run" });
+    // The bot NEVER posts a formal request_changes (a blocking review strands the PR). With close NOT at an acting
+    // level here, a blocking contributor PR is only labeled; with close acting it would be closed. No request_changes.
+    const rcAudit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("agent.action.request_changes").first<{ outcome: string }>();
+    expect(rcAudit).toBeFalsy();
   });
 
   it("auto-maintain (#778): uses the full gate verdict so manifest-policy blockers cannot be merged", async () => {
@@ -1032,10 +1033,11 @@ describe("queue processors", () => {
     });
 
     const mergeCount = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("agent.action.merge").first<{ n: number }>();
-    expect(mergeCount?.n).toBe(0);
-    const rcAudit = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("agent.action.request_changes").first<{ outcome: string; metadata_json: string }>();
-    expect(rcAudit?.outcome).toBe("completed");
-    expect(JSON.parse(rcAudit?.metadata_json ?? "{}")).toMatchObject({ mode: "dry_run" });
+    expect(mergeCount?.n).toBe(0); // the manifest-policy blocker prevents the auto-merge (the key assertion)
+    // The bot never posts a formal request_changes. With close NOT at an acting level here, the blocked PR is
+    // simply not merged (no blocking review); with close acting it would be closed.
+    const rcAudit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("agent.action.request_changes").first<{ outcome: string }>();
+    expect(rcAudit).toBeFalsy();
   });
 
   it("auto-maintain (#778): a repo with no acting autonomy takes no agent action", async () => {
@@ -1850,10 +1852,13 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ gateWrites: 1, commentGets: 1, commentPosts: 0 });
+    // The real review is PRESERVED on close: the gate check is marked skipped (gateWrites:1), but the unified
+    // comment is NOT touched (commentGets:0, commentPosts:0) — no post-close pass overwrites the open-time review
+    // with an empty skip card. (#preserve-review-on-close)
+    expect(calls).toEqual({ gateWrites: 1, commentGets: 0, commentPosts: 0 });
   });
 
-  it("audits closed PR skipped gate permission failures and swallows late panel errors", async () => {
+  it("audits closed PR skipped gate permission failures (no late panel write — the real review is preserved)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
       env,
@@ -1896,7 +1901,8 @@ describe("queue processors", () => {
       },
     });
 
-    expect(commentGets).toBe(1);
+    // No late panel update on close (the real review is preserved), so the comment endpoint is never hit.
+    expect(commentGets).toBe(0);
     const audit = await env.DB.prepare("select target_key, outcome, detail from audit_events where event_type = ?")
       .bind("github_app.gate_check_permission_missing")
       .first<{ target_key: string; outcome: string; detail: string }>();
