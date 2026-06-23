@@ -1905,6 +1905,159 @@ async function fetchPullRequestChecks(
   return { check_runs: checkRuns };
 }
 
+const CI_FAILING_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
+const CI_PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
+
+export type LiveCiAggregate = {
+  ciState: "passed" | "failed" | "pending" | "unverified";
+  // Checks that FAIL the gate: every failing check when required contexts are unknown, else only the failing
+  // REQUIRED contexts. These drive ciState === "failed" and the disposition (no-merge / close / request-changes).
+  failingDetails: Array<{ name: string; summary?: string; detailsUrl?: string }>;
+  // RC2: checks that are RED but NOT in branch-protection's required set (e.g. codecov/patch, codecov/project).
+  // Surfaced to the contributor but they do NOT fail the gate, block merge/approve, or force request_changes.
+  // Empty when required contexts are unknown (best-effort fetch failed / no protection) — then every red check
+  // stays in failingDetails (byte-identical to pre-RC2).
+  nonRequiredFailingDetails: Array<{ name: string; summary?: string; detailsUrl?: string }>;
+};
+
+/**
+ * RC2 best-effort fetch of the base branch's branch-protection REQUIRED status-check contexts. Returns the set
+ * of required context names (covering both the legacy `contexts` array and the newer `checks[].context` shape),
+ * or `null` when none can be determined — a 404 (no protection / no required checks), a 403 (token lacks
+ * admin:repo, common for installations/forks), or any other error. `null`/empty makes fetchLiveCiAggregate fall
+ * back to folding ALL red checks into the gate, so a fetch failure can never silently pass a required red check.
+ */
+export async function fetchRequiredStatusContexts(env: Env, repoFullName: string, baseRef: string | null | undefined, token: string | undefined): Promise<Set<string> | null> {
+  if (!baseRef) return null;
+  const result = await githubJsonWithHeaders<{ contexts?: Array<string | null> | null; checks?: Array<{ context?: string | null }> | null }>(
+    env,
+    repoFullName,
+    `/branches/${encodeURIComponent(baseRef)}/protection/required_status_checks`,
+    token,
+  ).catch(() => undefined);
+  if (!result) return null; // 404 (no protection) / 403 (no admin) — treat as "unknown".
+  const names = new Set<string>();
+  for (const ctx of result.data.contexts ?? []) {
+    if (typeof ctx === "string" && ctx.trim().length > 0) names.add(ctx);
+  }
+  for (const check of result.data.checks ?? []) {
+    if (typeof check?.context === "string" && check.context.trim().length > 0) names.add(check.context);
+  }
+  return names;
+}
+
+/**
+ * Fetch the head SHA's LIVE CI aggregate over BOTH GitHub Check-runs AND classic commit-statuses. This is the
+ * reviewbot `getAllChecksState` parity that the converged auto-maintain path needs: codecov (codecov/patch,
+ * codecov/project) and many other tools post a classic COMMIT-STATUS, not a check-run — fetching only
+ * `/check-runs` (what the backfill sync does) misses them entirely, which is why a red codecov was reported as
+ * "CI green". We aggregate ANY failing check/status → "failed"; else any still-running → "pending"; else any
+ * present → "passed"; none at all → "unverified". The disposition layer NEVER approves/merges unless "passed",
+ * and closes (non-owner) / holds (owner) on "failed". Best-effort: a fetch error degrades that source to empty.
+ */
+export async function fetchLiveCiAggregate(
+  env: Env,
+  repoFullName: string,
+  headSha: string | null | undefined,
+  token: string | undefined,
+  // RC2: when a NON-EMPTY set, only these branch-protection-required contexts gate the PR — a red check outside
+  // the set is surfaced (nonRequiredFailingDetails) but never fails the gate. null/empty ⇒ fold ALL red checks
+  // (pre-RC2 behavior), the safe fallback when protection can't be read.
+  requiredContexts?: ReadonlySet<string> | null,
+): Promise<LiveCiAggregate> {
+  if (!headSha) return { ciState: "unverified", failingDetails: [], nonRequiredFailingDetails: [] };
+  // Only enforce a required subset when we actually resolved one; otherwise every red check is gate-failing.
+  const enforceRequiredOnly = requiredContexts != null && requiredContexts.size > 0;
+  const isRequired = (name: string): boolean => !enforceRequiredOnly || requiredContexts!.has(name);
+  const failingDetails: LiveCiAggregate["failingDetails"] = [];
+  const nonRequiredFailingDetails: LiveCiAggregate["nonRequiredFailingDetails"] = [];
+  let total = 0;
+  let anyPending = false;
+
+  // 1) Check-runs (GitHub Actions jobs, CodeQL, app checks).
+  for (let page = 1; page <= PR_DETAIL_MAX_PAGES; page += 1) {
+    const result = await githubJsonWithHeaders<{ check_runs?: Array<GitHubCheckRunPayload & { output?: { title?: unknown; summary?: unknown } }> }>(
+      env,
+      repoFullName,
+      `/commits/${headSha}/check-runs?per_page=100&page=${page}`,
+      token,
+    ).catch(() => undefined);
+    if (!result) break;
+    for (const run of result.data.check_runs ?? []) {
+      total += 1;
+      const conclusion = (run.conclusion ?? "").toLowerCase();
+      const status = (run.status ?? "").toLowerCase();
+      if (conclusion ? CI_FAILING_CONCLUSIONS.has(conclusion) : false) {
+        const summary = [run.output?.title, run.output?.summary].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim().slice(0, 200);
+        const detail = { name: run.name, ...(summary ? { summary } : {}), ...(run.details_url ? { detailsUrl: run.details_url } : {}) };
+        (isRequired(run.name) ? failingDetails : nonRequiredFailingDetails).push(detail);
+      } else if (conclusion ? CI_PASSING_CONCLUSIONS.has(conclusion) : status === "completed") {
+        // concluded and not failing → passing
+      } else if (isRequired(run.name)) {
+        anyPending = true; // queued / in_progress / not yet concluded — only a REQUIRED check holds the gate
+      }
+    }
+    if (!hasNextPage(result.link)) break;
+  }
+
+  // 2) Classic commit-statuses (codecov/patch, codecov/project, and any other status-API context). The
+  // combined endpoint returns the LATEST status per context, so a context that flipped red→green is counted
+  // once at its current state.
+  const statusResult = await githubJsonWithHeaders<{ statuses?: Array<{ context?: string | null; state?: string | null; description?: string | null; target_url?: string | null }> }>(
+    env,
+    repoFullName,
+    `/commits/${headSha}/status?per_page=100`,
+    token,
+  ).catch(() => undefined);
+  for (const ctx of statusResult?.data.statuses ?? []) {
+    total += 1;
+    const state = (ctx.state ?? "").toLowerCase();
+    const name = ctx.context ?? "status";
+    if (state === "failure" || state === "error") {
+      const summary = typeof ctx.description === "string" ? ctx.description.trim().slice(0, 200) : "";
+      const detail = { name, ...(summary ? { summary } : {}), ...(ctx.target_url ? { detailsUrl: ctx.target_url } : {}) };
+      (isRequired(name) ? failingDetails : nonRequiredFailingDetails).push(detail);
+    } else if (state === "success") {
+      // passing
+    } else if (isRequired(name)) {
+      anyPending = true; // pending — only a REQUIRED context holds the gate
+    }
+  }
+
+  // ciState reflects ONLY gate-failing (required, or all-when-unknown) checks. A repo whose only red check is a
+  // non-required codecov/* therefore reports "passed" and is eligible to merge/approve, with the codecov
+  // failure riding along in nonRequiredFailingDetails for the contributor to see.
+  const ciState: LiveCiAggregate["ciState"] = failingDetails.length > 0 ? "failed" : anyPending ? "pending" : total > 0 ? "passed" : "unverified";
+  return { ciState, failingDetails, nonRequiredFailingDetails };
+}
+
+/**
+ * Fetch a PR's LIVE `mergeable_state` (clean / dirty / blocked / unstable / behind / has_hooks / unknown). The
+ * STORED value lags GitHub's async recompute — e.g. right after gittensory[bot]'s own APPROVE flips a `blocked`
+ * PR to `clean`, the stored row is still `blocked`, which stops an otherwise-eligible PR from auto-merging
+ * (observed: green+approved PRs stuck OPEN at `mergeState=CLEAN`). The auto-maintain planner uses this so the
+ * merge decision sees the CURRENT state. `unknown` (GitHub still computing) ⇒ caller treats as not-yet-clean and
+ * a later trigger / the sweep retries. Best-effort: a fetch error returns undefined (caller falls back to stored).
+ */
+export async function fetchLivePullRequestMergeState(env: Env, repoFullName: string, prNumber: number, token: string | undefined): Promise<string | undefined> {
+  const result = await githubJsonWithHeaders<{ mergeable_state?: string | null }>(env, repoFullName, `/pulls/${prNumber}`, token).catch(() => undefined);
+  return result?.data.mergeable_state ?? undefined;
+}
+
+/** RC1 (idempotent reviews): the PR's LIVE reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED) via
+ *  GraphQL. The STORED reviewDecision is only written by the open-PR backfill and goes stale, so the action
+ *  planner's approve/request-changes dedup was blind and re-posted a review every cycle — the re-review loop.
+ *  Refreshing it live makes the dedup accurate. Best-effort: returns undefined on any error (caller falls back
+ *  to the stored value). */
+export async function fetchLivePullRequestReviewDecision(env: Env, repoFullName: string, prNumber: number, token: string | undefined): Promise<string | undefined> {
+  if (!token) return undefined;
+  const [owner, name] = repoFullName.split("/");
+  if (!owner || !name) return undefined;
+  const query = `query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { pullRequest(number: ${prNumber}) { reviewDecision } } }`;
+  const result = await githubGraphQl<{ data?: { repository?: { pullRequest?: { reviewDecision?: string | null } | null } | null } }>(env, query, token).catch(() => undefined);
+  return result?.data?.repository?.pullRequest?.reviewDecision ?? undefined;
+}
+
 async function fetchPullRequestDetailsFromGraphQl(
   env: Env,
   repoFullName: string,

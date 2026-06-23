@@ -9,6 +9,17 @@ export type JobMessage =
       payload: GitHubWebhookPayload;
     }
   | {
+      // Delayed self-poll to re-capture a PR's before/after preview once its preview deploy is live — the first
+      // review captures a "loading" placeholder when the deploy isn't ready yet (capture.previewPending). Each
+      // recapture re-reviews the PR; bounded by `attempt` so a never-resolving preview can't loop forever.
+      type: "recapture-preview";
+      deliveryId: string;
+      repoFullName: string;
+      prNumber: number;
+      installationId: number;
+      attempt: number;
+    }
+  | {
       type: "refresh-registry";
       requestedBy: "schedule" | "api" | "test";
     }
@@ -401,6 +412,12 @@ export type PullRequestRecord = {
    *  the repo opted into slop. `null`/absent = not assessed (slop off, or PR not yet processed). */
   slopRisk?: number | null | undefined;
   slopBand?: string | null | undefined;
+  /** RC3 terminal-fail merges: failed auto-merge attempt count, and the head SHA at which the merge is
+   *  terminally blocked (with a human-readable reason). When mergeBlockedSha === headSha the planner suppresses
+   *  the `merge` disposition (held for a human); a new commit clears the block. */
+  mergeAttemptCount?: number | null | undefined;
+  mergeBlockedSha?: string | null | undefined;
+  mergeBlockedReason?: string | null | undefined;
 };
 
 export type IssueRecord = {

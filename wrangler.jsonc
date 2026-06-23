@@ -41,9 +41,13 @@
     "AI_SUMMARIES_ENABLED": "true",
     "AI_PUBLIC_COMMENTS_ENABLED": "true",
     "WORKERS_AI_SUMMARY_MODEL": "@cf/meta/llama-3.1-8b-instruct-fp8-fast",
-    "AI_DAILY_NEURON_BUDGET": "10000",
+    // Enterprise Workers AI plan: the daily neuron budget is a runaway-loop BACKSTOP, not a free-tier cap.
+    // The old "10000" starved EVERY dual-AI review (~573 neurons each) into quota_exceeded. Account headroom is
+    // ~hundreds of k/day; 2,000,000 never blocks normal review volume while still capping an infinite-loop bug.
+    "AI_DAILY_NEURON_BUDGET": "2000000",
     "AI_BYOK_DAILY_REPO_LIMIT": "25",
-    "AI_MAX_OUTPUT_TOKENS": "256",
+    // Enterprise: give the reviewer room for a real assessment + suggestions + risks (256 floored the synthesis).
+    "AI_MAX_OUTPUT_TOKENS": "1024",
     "AI_GATEWAY_ID": "",
     "ADMIN_GITHUB_LOGINS": "JSONbored",
     // Convergence (Stage D): render the public PR comment via the unified-comment bridge. Default OFF —
@@ -56,7 +60,7 @@
     // Convergence (visual capture): capture a before/after screenshot for PRs touching WEB-VISIBLE files
     // (frontend pages / public OG images). Needs the BROWSER + REVIEW_AUDIT bindings; runs only when this is
     // ON AND the repo is in GITTENSORY_REVIEW_REPOS. DEFAULT OFF — flag-OFF captures nothing (byte-identical).
-    "GITTENSORY_REVIEW_SCREENSHOTS": "false",
+    "GITTENSORY_REVIEW_SCREENSHOTS": "true",
     // Convergence (grounding): ground the AI reviewer prompt with the PR's finished CI status + the full
     // post-change content of the changed files, so a non-frontier model verifies claims instead of guessing.
     // Default OFF — flag-OFF keeps the reviewer prompt byte-identical and makes no extra GitHub fetch.
@@ -79,7 +83,7 @@
     // Default OFF — flag-OFF performs no retrieval, uses no adapter, makes no vector query, and keeps the
     // reviewer prompt byte-identical. Even when ON it is inert until a repo's vector index is populated (the
     // index-population job + cron is a deploy-time follow-up; a cold/missing index degrades to no context).
-    "GITTENSORY_REVIEW_RAG": "true",
+    "GITTENSORY_REVIEW_RAG": "false",
     // Convergence (self-improve / auto-tune): run the ported self-improvement loop on the cron tick over
     // gittensory's own review-outcome data — compute tuning recommendations, SHADOW-SOAK any strictly-
     // tightening one, and AUTO-PROMOTE it to live ONLY after the soak window passes the gate; every action is
@@ -105,6 +109,12 @@
     // NO repos converged → the per-PR converged path stays dormant for every repo regardless of the global
     // flags (byte-identical to today). The cron/endpoint flags (ops/selftune/parity/draft) stay global.
     "GITTENSORY_REVIEW_REPOS": "JSONbored/gittensory,JSONbored/awesome-claude,JSONbored/metagraphed",
+    // Proof of Power (#1059): serve the public homepage stats counter at GET /v1/public/stats, computed LIVE
+    // from the review ledger (review_targets + review_audit) behind a 60s cache. ON — the above-the-fold band
+    // shows PRs reviewed / filtered-without-merge % / maintainer time saved / decision accuracy for the
+    // reviewed repos. Flag-OFF the endpoint 404s and the homepage band renders nothing (counts only, no PR
+    // content/authors/scores/rewards). See src/review/public-stats.ts.
+    "GITTENSORY_PUBLIC_STATS": "true",
   },
   "routes": [
     {

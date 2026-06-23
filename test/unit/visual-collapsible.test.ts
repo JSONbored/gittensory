@@ -30,21 +30,24 @@ const routes: CaptureRoute[] = [
 ];
 
 describe("buildBeforeAfterCollapsible", () => {
-  it("renders a 'Visual preview' table of markdown image cells pointing at the public shot URLs", () => {
+  it("renders a 'Visual preview' table of clickable-thumbnail cells pointing at the public shot URLs", () => {
     const c = buildBeforeAfterCollapsible(routes);
     expect(c).not.toBeNull();
     expect(c?.title).toBe("Visual preview");
-    expect(c?.body).toContain("| Route | Before (production) | After (this PR's preview) |");
+    // Trusted raw HTML so the <a>/<img> survive (not angle-escaped).
+    expect(c?.rawHtml).toBe(true);
+    expect(c?.body).toContain("| Route | Viewport | Before (production) | After (this PR's preview) |");
     expect(c?.body).toContain("`/app/analytics`");
-    // Markdown image syntax (not raw <img>) so it survives the renderer's HTML-angle escaping.
-    expect(c?.body).toContain("![preview](https://api.example.dev/gittensory/shot?key=gittensory/shots/abc.png)");
-    expect(c?.body).toContain("![preview](https://api.example.dev/gittensory/shot?key=gittensory/shots/def.png)");
-    expect(c?.body).not.toContain("<img");
+    // Clickable thumbnail: a small <img> wrapped in an <a href> to the SAME full-resolution shot.
+    expect(c?.body).toContain('<a href="https://api.example.dev/gittensory/shot?key=gittensory/shots/abc.png"');
+    expect(c?.body).toContain('<img width="360"');
+    expect(c?.body).toContain("https://api.example.dev/gittensory/shot?key=gittensory/shots/def.png");
+    expect(c?.body).not.toContain("![preview]");
   });
 
   it("renders a dash for a missing slot", () => {
     const c = buildBeforeAfterCollapsible([{ path: "/", afterUrl: "https://api.example.dev/gittensory/shot?key=gittensory/shots/x.png" }]);
-    expect(c?.body).toContain("| `/` | — | ![preview](");
+    expect(c?.body).toContain("| `/` | desktop | — | <a href=");
   });
 
   it("returns null when no route has any shot URL (no empty table)", () => {
@@ -55,6 +58,18 @@ describe("buildBeforeAfterCollapsible", () => {
   it("escapes a pipe in the route path so it can't break the markdown table", () => {
     const c = buildBeforeAfterCollapsible([{ path: "/a|b", afterUrl: "https://api.example.dev/gittensory/shot?key=gittensory/shots/x.png" }]);
     expect(c?.body).toContain("`/a\\|b`");
+  });
+
+  it("escapes route captions before embedding them in the trusted raw HTML table", () => {
+    const c = buildBeforeAfterCollapsible([
+      {
+        path: "/p`<h2>✅ FORGED APPROVAL</h2><a href=x>maintainer click here</a>",
+        afterUrl: "https://api.example.dev/gittensory/shot?key=gittensory/shots/x.png",
+      },
+    ]);
+    expect(c?.body).toContain("`/p\\`&lt;h2&gt;✅ FORGED APPROVAL&lt;/h2&gt;&lt;a href=x&gt;maintainer click here&lt;/a&gt;`");
+    expect(c?.body).not.toContain("<h2>✅ FORGED APPROVAL</h2>");
+    expect(c?.body).not.toContain("<a href=x>maintainer click here</a>");
   });
 });
 

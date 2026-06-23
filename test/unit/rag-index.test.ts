@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { indexRepo, reindexChangedPaths } from "../../src/review/rag-index";
 import { MAX_CHUNKS_PER_REPO, MAX_FILE_BYTES, RAG_DIMENSIONS, ragNamespace } from "../../src/review/rag";
-import { processJob } from "../../src/queue/processors";
+import { processJob, splitRepoForRag } from "../../src/queue/processors";
 import { upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { createTestEnv, TestD1Database } from "../helpers/d1";
 
@@ -51,6 +51,7 @@ function indexEnv(over: { vec?: ReturnType<typeof vectorizeStub>; ai?: ReturnTyp
 
 const REPO = { fullName: "JSONbored/gittensory", installationId: null, defaultBranch: "main" };
 const PROJECT = "JSONbored/gittensory";
+const QUEUE_PROJECT = "JSONbored";
 
 /** Stub global fetch for the git-tree + raw-contents calls the populator makes. */
 function stubGithub(opts: {
@@ -446,7 +447,7 @@ describe("rag-index-repo job dispatch (processors.ts wiring)", () => {
     await registerRepo(env, "JSONbored/gittensory");
     stubGithub({ tree: [{ path: "src/a.ts", size: 30 }], files: { "src/a.ts": "export const a = 1;\n" } });
     await processJob(env, { type: "rag-index-repo", requestedBy: "schedule", repoFullName: "JSONbored/gittensory" });
-    expect(await countChunks(env, PROJECT, "gittensory")).toBe(1);
+    expect(await countChunks(env, QUEUE_PROJECT, "gittensory")).toBe(1);
   });
 
   it("per-repo dispatch SKIPS a non-allowlisted repo (no indexing)", async () => {
@@ -461,7 +462,7 @@ describe("rag-index-repo job dispatch (processors.ts wiring)", () => {
     vi.stubGlobal("fetch", fetchSpy);
     await processJob(env, { type: "rag-index-repo", requestedBy: "schedule", repoFullName: "JSONbored/gittensory" });
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(await countChunks(env, PROJECT, "gittensory")).toBe(0);
+    expect(await countChunks(env, QUEUE_PROJECT, "gittensory")).toBe(0);
   });
 
   it("per-repo INCREMENTAL dispatch (with paths) runs reindexChangedPaths", async () => {
@@ -469,7 +470,7 @@ describe("rag-index-repo job dispatch (processors.ts wiring)", () => {
     await registerRepo(env, "JSONbored/gittensory");
     stubGithub({ files: { "src/a.ts": "export const a = 1;\n" } });
     await processJob(env, { type: "rag-index-repo", requestedBy: "webhook", repoFullName: "JSONbored/gittensory", paths: ["src/a.ts"] });
-    expect(await pathsFor(env, PROJECT, "gittensory")).toEqual(["src/a.ts"]);
+    expect(await pathsFor(env, QUEUE_PROJECT, "gittensory")).toEqual(["src/a.ts"]);
   });
 
   it("FLAG-OFF per-repo dispatch is a no-op", async () => {
@@ -483,7 +484,7 @@ describe("rag-index-repo job dispatch (processors.ts wiring)", () => {
     vi.stubGlobal("fetch", fetchSpy);
     await processJob(env, { type: "rag-index-repo", requestedBy: "schedule", repoFullName: "JSONbored/gittensory" });
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(await countChunks(env, PROJECT, "gittensory")).toBe(0);
+    expect(await countChunks(env, QUEUE_PROJECT, "gittensory")).toBe(0);
   });
 });
 
@@ -547,5 +548,16 @@ describe("merged-PR incremental re-index trigger (webhook)", () => {
 
   it("a non-allowlisted repo enqueues nothing", async () => {
     expect(await runMergedPrWebhook({ repos: "" })).toEqual([]);
+  });
+});
+
+describe("splitRepoForRag", () => {
+  it("splits owner/name into the shared project/repo key shape", () => {
+    expect(splitRepoForRag("JSONbored/gittensory")).toEqual(["JSONbored", "gittensory"]);
+  });
+
+  it("falls back to an empty project for a bare repo name (no slash)", () => {
+    // The slash === -1 arm — indexing and retrieval must agree on this shape for a name without an owner.
+    expect(splitRepoForRag("bareRepoName")).toEqual(["", "bareRepoName"]);
   });
 });
