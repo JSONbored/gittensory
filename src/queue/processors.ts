@@ -543,21 +543,15 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
     const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null));
     verdicts[String(pr.number)] = gate.conclusion;
     if (gate.conclusion === "failure" || gate.conclusion === "action_required") flaggedPulls.push(pr.number);
-    // Backstop the CI-completion trigger: re-run auto-maintain so a clean+green+approved PR is merged and a
-    // red-CI non-owner PR is closed (owner held) even if its check_run/check_suite webhook was missed or
-    // coalesced. maybeRunAgentMaintenance self-guards on autonomy + fetches the live CI aggregate itself.
+    // Backstop the CI-completion trigger AND refresh the stale public comment: fully RE-REVIEW each stale open
+    // PR (rebuild advisory → re-publish the unified comment with the current head/CI → re-run auto-maintain). The
+    // re-gate above only recomputes the audit verdict; without this re-publish, an idle PR keeps a stale comment
+    // (e.g. "safe to merge" from before a fix) and a stale status label forever. reReviewStoredPullRequest reads
+    // the freshly-synced head + the live CI, so the comment + label + action all reflect reality. Paced at
+    // SWEEP_MAX_PRS per sweep; cheap now that installation tokens are cached.
     if (sweepInstallationId != null) {
-      await maybeRunAgentMaintenance(env, {
-        installationId: sweepInstallationId,
-        repoFullName,
-        repo,
-        pr,
-        settings,
-        otherOpenPullRequests: others,
-        deliveryId: `regate-sweep:${repoFullName}#${pr.number}`,
-        gate,
-      }).catch((error) => {
-        console.error(JSON.stringify({ level: "warn", event: "agent_maintenance_failed", deliveryId: `regate-sweep:${repoFullName}#${pr.number}`, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
+      await reReviewStoredPullRequest(env, `regate-sweep:${repoFullName}#${pr.number}`, sweepInstallationId, repoFullName, pr.number).catch((error) => {
+        console.error(JSON.stringify({ level: "warn", event: "sweep_rereview_failed", deliveryId: `regate-sweep:${repoFullName}#${pr.number}`, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
       });
     }
   }
