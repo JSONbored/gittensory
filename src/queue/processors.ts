@@ -66,6 +66,8 @@ import {
   fetchAndStorePullRequestFilesForReview,
   fetchLiveCiAggregate,
   fetchLivePullRequestMergeState,
+  fetchLivePullRequestReviewDecision,
+  fetchRequiredStatusContexts,
   refreshContributorActivity,
   refreshInstallationHealth,
   refreshPullRequestDetails,
@@ -86,6 +88,7 @@ import {
   sanitizePublicComment,
 } from "../github/commands";
 import { ensurePullRequestLabel, removePullRequestLabel } from "../github/labels";
+import { updatePullRequestBranch } from "../github/pr-actions";
 import { ALL_TYPE_LABELS, resolvePrTypeLabel } from "../settings/pr-type-label";
 import { fetchPublicContributorProfile } from "../github/public";
 import { refreshRegistry } from "../registry/sync";
@@ -543,13 +546,12 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
     const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null));
     verdicts[String(pr.number)] = gate.conclusion;
     if (gate.conclusion === "failure" || gate.conclusion === "action_required") flaggedPulls.push(pr.number);
-    // Backstop the CI-completion trigger AND refresh the stale public comment: fully RE-REVIEW each stale open PR
-    // (rebuild dual-AI advisory → re-publish the unified comment with the current head/CI/synthesis → re-run
-    // auto-maintain). The re-gate above only recomputes the deterministic audit verdict; without this re-publish
-    // an idle PR keeps a stale comment ("safe to merge" from before a fix) and a stale label forever, and a
-    // previously dead-lettered review never gets a fresh verdict. This re-runs the dual-AI review every sweep —
-    // affordable on the enterprise Workers AI plan (the daily neuron budget is a runaway backstop, not a free-tier
-    // cap). Paced at SWEEP_MAX_PRS per sweep; installation tokens are cached so the GitHub cost stays bounded.
+    // FULL fresh review of every open PR (the operator's requirement: gittensory must post its OWN review before
+    // acting — the old comments are reviewbot's, pre-consolidation). reReviewStoredPullRequest re-runs the dual-AI,
+    // re-publishes gittensory's unified comment with the current head/CI/synthesis, then auto-maintains (merge a
+    // clean+approved PR, close a red-CI non-owner PR, hold the owner's). The per-commit decision cache
+    // (cacheReviewDecision / replay in maybePublishPrPublicSurface) makes the repeat passes cheap — the dual-AI
+    // only re-runs when the head SHA changed, so this is affordable on a tight cron without re-AIing every sweep.
     if (sweepInstallationId != null) {
       await reReviewStoredPullRequest(env, `regate-sweep:${repoFullName}#${pr.number}`, sweepInstallationId, repoFullName, pr.number).catch((error) => {
         console.error(JSON.stringify({ level: "warn", event: "sweep_rereview_failed", deliveryId: `regate-sweep:${repoFullName}#${pr.number}`, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
@@ -606,14 +608,22 @@ async function maybeRunAgentMaintenance(
   // planner uses this to NEVER approve/merge a PR whose CI isn't green, to CLOSE a red-CI non-owner PR (citing
   // the failing checks) / HOLD the owner's, and to DEFER entirely while CI is still pending.
   const ciToken = await createInstallationToken(env, installationId).catch(() => undefined);
-  const [changedFiles, hardGuardrailGlobs, ciAggregate, liveMergeState] = await Promise.all([
+  const [changedFiles, hardGuardrailGlobs, requiredContexts, liveMergeState, liveReviewDecision] = await Promise.all([
     resolvePullRequestFilesForReview(env, { installationId, repoFullName, pullNumber: pr.number }),
     loadHardGuardrailGlobs(env, repoFullName),
-    fetchLiveCiAggregate(env, repoFullName, pr.headSha, ciToken ?? env.GITHUB_PUBLIC_TOKEN),
+    // RC2: branch-protection REQUIRED status contexts, so only a required red check gates the PR (a red
+    // codecov/* is surfaced but never blocks merge/approve or forces request_changes). null ⇒ fold all red.
+    fetchRequiredStatusContexts(env, repoFullName, pr.baseRef ?? args.repo?.defaultBranch, ciToken ?? env.GITHUB_PUBLIC_TOKEN),
     // Live mergeable_state — the stored one lags GitHub's async recompute after the bot's own approve, which
     // otherwise leaves a green+approved PR stuck OPEN at mergeState=CLEAN (never auto-merged).
     fetchLivePullRequestMergeState(env, repoFullName, pr.number, ciToken ?? env.GITHUB_PUBLIC_TOKEN),
+    // RC1: live reviewDecision so the approve/request-changes dedup is accurate. The STORED reviewDecision is
+    // only written by the open-PR backfill and goes stale → the planner re-posted a review every cycle (the
+    // re-review loop with 14-23 stacked reviews). With the live value, an already-approved/changes-requested PR
+    // is not re-reviewed for the same state.
+    fetchLivePullRequestReviewDecision(env, repoFullName, pr.number, ciToken ?? env.GITHUB_PUBLIC_TOKEN),
   ]);
+  const ciAggregate = await fetchLiveCiAggregate(env, repoFullName, pr.headSha, ciToken ?? env.GITHUB_PUBLIC_TOKEN, requiredContexts);
   const changedPaths = changedFiles.map((file) => file.path).filter((path) => path.length > 0);
   const repoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")) : "";
   const authorLogin = pr.authorLogin ?? "";
@@ -634,10 +644,12 @@ async function maybeRunAgentMaintenance(
     failingCheckNames: ciAggregate.failingDetails.map((detail) => detail.name),
     pr: {
       mergeableState: liveMergeState ?? pr.mergeableState,
-      reviewDecision: pr.reviewDecision,
+      reviewDecision: liveReviewDecision ?? pr.reviewDecision,
       slopRisk: pr.slopRisk,
       labels: pr.labels,
       linkedDuplicateCount: linkedIssueDuplicatePullRequestsForGate(pr, otherOpenPullRequests).length,
+      headSha: pr.headSha,
+      mergeBlockedSha: pr.mergeBlockedSha,
     },
   });
   if (planned.length === 0) return;
@@ -656,6 +668,7 @@ async function maybeRunAgentMaintenance(
       agentPaused: settings.agentPaused,
       agentDryRun: settings.agentDryRun,
       installationPermissions,
+      authorLogin: pr.authorLogin,
     },
     planned,
   );
@@ -671,6 +684,26 @@ async function reReviewStoredPullRequest(env: Env, deliveryId: string, installat
   const [repo, settings] = await Promise.all([getRepository(env, repoFullName), resolveRepositorySettings(env, repoFullName)]);
   const pr = await getPullRequest(env, repoFullName, prNumber);
   if (!pr || pr.state !== "open") return;
+  // Rebase-if-behind BEFORE reviewing (reviewbot parity): if the branch is BEHIND base, issue update-branch so
+  // the fresh review + required CI run against the merged result. The rebase creates a new head → a synchronize
+  // webhook (or the next sweep) re-reviews it; skip the rest of THIS pass so we never review/act on the stale
+  // head. Best-effort: a dirty/conflicting branch (422) is left for the gate to close, not rebased here.
+  if (isAgentConfigured(settings.autonomy) && !pr.isDraft && pr.headSha) {
+    const rebaseToken = await createInstallationToken(env, installationId).catch(() => undefined);
+    const liveMergeState = rebaseToken ? await fetchLivePullRequestMergeState(env, repoFullName, prNumber, rebaseToken) : undefined;
+    if (liveMergeState === "behind") {
+      const rebased = await updatePullRequestBranch(env, installationId, repoFullName, prNumber, pr.headSha)
+        .then(() => true)
+        .catch((error) => {
+          console.log(JSON.stringify({ ev: "rebase_failed", repoFullName, pull: prNumber, message: errorMessage(error).slice(0, 120) }));
+          return false;
+        });
+      if (rebased) {
+        await recordAuditEvent(env, { eventType: "github_app.pr_branch_updated", actor: "gittensory", targetKey: `${repoFullName}#${prNumber}`, outcome: "completed", detail: "behind base; update-branch issued before review", metadata: { deliveryId, repoFullName } }).catch(() => undefined);
+        return; // the rebase fires a synchronize → fresh review runs on the new head
+      }
+    }
+  }
   const otherOpenPullRequests = await listOtherOpenPullRequests(env, repoFullName, prNumber);
   const advisory = buildPullRequestAdvisory(repo, pr, { otherOpenPullRequests, requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings) });
   await persistAdvisory(env, advisory);
@@ -2156,7 +2189,9 @@ async function maybePublishPrPublicSurface(
       // auto-maintain planner uses so the public chip and the disposition can never disagree. "pending" folds to
       // the "unverified" bucket for the 3-state comment chip (renders "CI pending").
       const ciToken = await createInstallationToken(env, installationId).catch(() => undefined);
-      const liveCi = await fetchLiveCiAggregate(env, repoFullName, pr.headSha, ciToken ?? env.GITHUB_PUBLIC_TOKEN);
+      // RC2: only branch-protection-required checks gate the PR; a red codecov/* is surfaced but never blocks.
+      const requiredContexts = await fetchRequiredStatusContexts(env, repoFullName, pr.baseRef ?? repo?.defaultBranch, ciToken ?? env.GITHUB_PUBLIC_TOKEN);
+      const liveCi = await fetchLiveCiAggregate(env, repoFullName, pr.headSha, ciToken ?? env.GITHUB_PUBLIC_TOKEN, requiredContexts);
       const ciState: MergeReadiness["ciState"] = liveCi.ciState === "passed" ? "passed" : liveCi.ciState === "failed" ? "failed" : "unverified";
       // Per-failed-check WHY (codecov %/test/lint reason) from each check-run output or commit-status
       // description — capped + public-safe (name + short reason only). The renderer lists these under the CI chip.

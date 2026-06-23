@@ -31,6 +31,15 @@ describe("getPublicStats — live aggregate over the review ledger", () => {
   // Real prod proportions: merged 1392 + closed 724 + commented 514 + ignored 491 + manual 78 + error 34 = 3233;
   // reviewed = 1392+724+514+78 = 2708; reversed 33 over 2116 auto-actions.
   function ledger(sql: string): Row[] {
+    // RC8: the live audit_events overlay reads return [] here so the existing assertions stay byte-identical to
+    // the frozen base (the overlay adds nothing). Matched FIRST so the weekly-overlay variant — which contains
+    // both `FROM audit_events` and `created_at >= ?` — never falls through to the frozen-weekly branch.
+    if (sql.includes("FROM audit_events")) {
+      return [];
+    }
+    if (sql.includes("MAX(created_at) AS frozenAt")) {
+      return [{ frozenAt: "2026-06-22 17:28:00" }];
+    }
     if (
       sql.includes("FROM review_targets") &&
       sql.includes("GROUP BY project")

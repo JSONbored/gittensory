@@ -79,6 +79,10 @@ export type AgentActionPlanInput = {
     slopRisk?: number | null | undefined;
     labels: string[];
     linkedDuplicateCount?: number | undefined;
+    // RC3 terminal-fail merges: the live head SHA + the SHA at which a prior merge was terminally blocked
+    // (perms/required-check/conflict). When they match, the merge can't complete for this commit → suppress it.
+    headSha?: string | null | undefined;
+    mergeBlockedSha?: string | null | undefined;
   };
 };
 
@@ -174,7 +178,11 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // the failing checks). Owner + maintainer-automation PRs are NEVER closed (a red-CI owner PR is held via the
   // request_changes above, left open for the maintainer). Mutually exclusive with merge.
   const mergeableClean = input.pr.mergeableState === "clean";
-  const canMerge = readyToMerge && acting("merge") && mergeableClean && approvalsSatisfied;
+  // RC3: a prior merge attempt failed terminally for THIS exact head SHA (403/405/409/conflict) → never re-plan
+  // the merge; it can't complete for this commit. A new commit makes the live head differ from mergeBlockedSha,
+  // so this only suppresses the genuinely-stuck merge — the PR falls through to needs-human-review.
+  const mergeTerminallyBlocked = input.pr.mergeBlockedSha != null && input.pr.headSha != null && input.pr.mergeBlockedSha === input.pr.headSha;
+  const canMerge = readyToMerge && acting("merge") && mergeableClean && approvalsSatisfied && !mergeTerminallyBlocked;
   if (canMerge) {
     actions.push({
       actionClass: "merge",
