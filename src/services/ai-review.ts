@@ -37,15 +37,19 @@ export const RELIABLE_FALLBACK_MODELS: readonly [string, string] = [
 export const AI_CONSENSUS_FLOOR = 0.9;
 
 const REVIEW_SYSTEM_PROMPT = [
-  "You are a senior open-source maintainer reviewing a single pull request diff.",
-  "Be concise, concrete, and fair. Judge only the diff and the context provided.",
-  "Report a critical defect ONLY when you are highly confident the change introduces a real bug, a",
-  "security hole, data loss, or a build break — NOT for style, nits, naming, or merely-missing tests.",
-  "Never mention rewards, rankings, payouts, wallets, hotkeys, coldkeys, trust scores, scoreability,",
-  "reviewability, or farming.",
-  'Respond with ONLY a JSON object of this exact shape (no prose, no code fence):',
-  '{"assessment": string, "suggestions": string[], "risks": string[],',
-  ' "criticalDefect": {"present": boolean, "confidence": number, "title": string, "detail": string}}',
+  "You are a senior open-source maintainer giving a FOCUSED, high-signal code review of a single pull request diff.",
+  "Read each meaningful hunk and review like a careful human; judge ONLY the diff and the context provided.",
+  "Respond with ONLY a JSON object of this exact shape (no prose, no code fence):",
+  '{"assessment": string, "blockers": string[], "nits": string[], "suggestions": string[]}',
+  "- assessment: a substantive but CONCISE summary (2-4 sentences) — what the change does, whether it is correct, and the most notable detail. Specific to THIS diff; never a generic one-liner and never hedging ('appears to', 'seems to').",
+  "- blockers: each ONE sentence naming a defect that WILL break the code as written — a missing import/symbol (ReferenceError), a logic error that produces wrong output, a security hole, data loss, a build/test breakage, or an API/contract break. Reference the file (and function/line). Empty [] if there are genuinely none.",
+  "- nits: each ONE sentence — a NON-blocking point: style, naming, a missing doc, or DEFENSIVE hardening ('should handle the empty case', 'consider catching errors', 'add validation'). File-reference where you can.",
+  "- suggestions: a few concrete, file-referenced improvements (may overlap nits).",
+  "BE SELECTIVE — report only the findings that genuinely matter. List at MOST ~3 blockers and ~5 nits, keeping only the most important; prefer signal over volume and do NOT pad the lists.",
+  "DEDUPLICATE — if the same kind of issue recurs across several functions or lines, report it ONCE and note it applies broadly; never repeat a near-identical finding per occurrence.",
+  "SEVERITY DISCIPLINE — defensive or speculative hardening ('should handle X', 'consider validating', 'add error handling') is a NIT, not a blocker, UNLESS a real input WILL actually trigger the failure. CI or check status itself (failing, pending, unverified) is NOT a code defect — never list it (the gate evaluates CI separately).",
+  "Do NOT rubber-stamp: if the diff is genuinely clean, the assessment states specifically why and blockers is [].",
+  "Never mention rewards, rankings, payouts, wallets, hotkeys, coldkeys, trust scores, scoreability, reviewability, or farming.",
 ].join(" ");
 
 /** A maintainer's BYOK provider credential, decrypted at call time. Never logged, never returned. */
@@ -98,9 +102,11 @@ export type GittensoryAiReviewResult =
 
 type ModelReview = {
   assessment: string;
+  // blockers = concrete must-fix defects in the diff (drive the consensus defect / gate); nits = non-blocking
+  // points; suggestions = concrete improvements (rendered alongside nits). reviewbot-parity shape. (#extensive-reviews)
+  blockers: string[];
+  nits: string[];
   suggestions: string[];
-  risks: string[];
-  criticalDefect: { present: boolean; confidence: number; title: string; detail: string };
 };
 
 type AiGatewayOptions = { gateway?: { id: string } };
@@ -184,21 +190,11 @@ export function parseModelReview(text: string): ModelReview | null {
     const toList = (value: unknown): string[] =>
       Array.isArray(value) ? value.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean).slice(0, 6) : [];
     const assessment = typeof obj.assessment === "string" ? obj.assessment.trim() : "";
-    const defectRaw = obj.criticalDefect && typeof obj.criticalDefect === "object" ? (obj.criticalDefect as Record<string, unknown>) : {};
-    const present = defectRaw.present === true;
-    const confidence = typeof defectRaw.confidence === "number" ? Math.max(0, Math.min(1, defectRaw.confidence)) : 0;
-    if (!assessment && !present && !Array.isArray(obj.suggestions)) return null;
-    return {
-      assessment,
-      suggestions: toList(obj.suggestions),
-      risks: toList(obj.risks),
-      criticalDefect: {
-        present,
-        confidence,
-        title: typeof defectRaw.title === "string" ? defectRaw.title.trim().slice(0, 140) : "",
-        detail: typeof defectRaw.detail === "string" ? defectRaw.detail.trim().slice(0, 400) : "",
-      },
-    };
+    const blockers = toList(obj.blockers);
+    const nits = toList(obj.nits);
+    const suggestions = toList(obj.suggestions);
+    if (!assessment && blockers.length === 0 && nits.length === 0 && suggestions.length === 0) return null;
+    return { assessment, blockers, nits, suggestions };
   } catch {
     return null;
   }
@@ -211,7 +207,9 @@ function buildUserPrompt(input: GittensoryAiReviewInput): string {
     input.body ? `Description:\n${input.body.slice(0, 2000)}` : "Description: (none)",
     "",
     "Unified diff (truncated if large):",
-    input.diff.slice(0, 60000),
+    // Widened 60k→120k so a large multi-file PR is actually reviewed in full (the 120B Workers-AI models have a
+    // 128k context window; pairing this with the higher output ceiling gives a thorough review). (#extensive-reviews)
+    input.diff.slice(0, 120000),
   ];
   // Convergence (grounding): append the FINISHED CI status + FULL file content when the caller supplied them
   // (flag GITTENSORY_REVIEW_GROUNDING on). Absent/empty (the default) → the prompt is byte-identical to today.
@@ -337,35 +335,42 @@ async function runProviderReview(providerKey: AiReviewProviderKey, system: strin
 /** Compose a public-safe markdown advisory blurb from one or two model reviews. Null if nothing safe. */
 export function composeAdvisoryNotes(reviews: ModelReview[]): string | null {
   const assessments = reviews.map((r) => r.assessment).filter(Boolean);
-  const suggestions = [...new Set(reviews.flatMap((r) => r.suggestions))].slice(0, 5);
-  const risks = [...new Set(reviews.flatMap((r) => r.risks))].slice(0, 4);
+  // High-signal caps: a focused review shows only the few findings that matter (the prompt also asks the
+  // model to be selective + deduplicate). Keep the core blockers and a handful of nits. (#focused-reviews)
+  const blockers = [...new Set(reviews.flatMap((r) => r.blockers))].slice(0, 3);
+  // nits + suggestions are both non-blocking — merge + dedupe for the write-up.
+  const nits = [...new Set(reviews.flatMap((r) => [...r.nits, ...r.suggestions]))].slice(0, 5);
   const assessment = toPublicSafe(assessments[0] ?? "");
-  const safeSuggestions = suggestions.map((s) => toPublicSafe(s)).filter((s): s is string => Boolean(s));
-  const safeRisks = risks.map((s) => toPublicSafe(s)).filter((s): s is string => Boolean(s));
-  if (!assessment && safeSuggestions.length === 0 && safeRisks.length === 0) return null;
+  const safeBlockers = blockers.map((s) => toPublicSafe(s)).filter((s): s is string => Boolean(s));
+  const safeNits = nits.map((s) => toPublicSafe(s)).filter((s): s is string => Boolean(s));
+  if (!assessment && safeBlockers.length === 0 && safeNits.length === 0) return null;
   const lines: string[] = [];
   if (assessment) lines.push(assessment, "");
-  if (safeSuggestions.length > 0) {
-    lines.push("**Suggestions**");
-    lines.push(...safeSuggestions.map((s) => `- ${s}`));
+  if (safeBlockers.length > 0) {
+    lines.push("**Blockers**");
+    lines.push(...safeBlockers.map((s) => `- ${s}`));
     lines.push("");
   }
-  if (safeRisks.length > 0) {
-    lines.push("**Risks**");
-    lines.push(...safeRisks.map((s) => `- ${s}`));
+  if (safeNits.length > 0) {
+    lines.push("**Nits**");
+    lines.push(...safeNits.map((s) => `- ${s}`));
   }
   // Reaching here means at least one section was pushed (the all-empty case returned null above).
   return lines.join("\n").trim();
 }
 
-/** True iff BOTH reviews independently report a critical defect at/above the floor. */
+/** A CONSENSUS defect = BOTH reviews independently name at least one concrete blocker (the severity-disciplined
+ *  reviewbot model: a lone blocker in a dual review is a split, not a hard block). `floor` retained for the
+ *  caller signature; the consensus here is blocker PRESENCE in both reviews (the prompt's rubric keeps nits out). */
 export function consensusDefectOf(a: ModelReview, b: ModelReview, floor: number): AiConsensusDefect | null {
-  const both = a.criticalDefect.present && b.criticalDefect.present && a.criticalDefect.confidence >= floor && b.criticalDefect.confidence >= floor;
-  if (!both) return null;
-  const title = toPublicSafe(a.criticalDefect.title || b.criticalDefect.title || "AI reviewers agree on a likely critical defect");
-  const detail = toPublicSafe(a.criticalDefect.detail || b.criticalDefect.detail);
+  void floor;
+  if (a.blockers.length === 0 || b.blockers.length === 0) return null;
+  const title = toPublicSafe(a.blockers[0] || b.blockers[0] || "AI reviewers agree on a likely blocking defect");
   if (!title) return null; // unsafe title → drop the block entirely (fail-safe)
-  return { title, detail: detail ?? "Both AI reviewers independently flagged a high-confidence critical defect in this change.", confidence: Math.min(a.criticalDefect.confidence, b.criticalDefect.confidence) };
+  // Cite ONLY the primary blocker (not every finding joined together) so the Gate's "why blocked" reason
+  // stays focused on the single core defect instead of repeating the whole blockers list. (#focused-reviews)
+  const detail = toPublicSafe(a.blockers[0] || b.blockers[0] || "") ?? "Both AI reviewers independently flagged a concrete must-fix defect in this change.";
+  return { title, detail, confidence: 1 };
 }
 
 /**
@@ -378,7 +383,10 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
   if (!isEnabled(env.AI_PUBLIC_COMMENTS_ENABLED)) return { status: "disabled", reason: "Public AI comments are disabled." };
   if (!env.AI) return { status: "unavailable", reason: "Workers AI binding is not configured." };
 
-  const maxTokens = clampNumber(Number(env.AI_MAX_OUTPUT_TOKENS || 256), 256, 1024);
+  // Output ceiling for the review. The old 1024 cap forced a shallow "no blockers" scorecard across large diffs;
+  // a thorough finding-by-finding review needs real room. Default 4096, max 8192 (the free Workers-AI 120B models
+  // support it); an explicit env value still wins, clamped. (#extensive-reviews)
+  const maxTokens = clampNumber(Number(env.AI_MAX_OUTPUT_TOKENS) || 4096, 512, 8192);
   // Safety (convergence, flag-gated): defang the UNTRUSTED, author-controlled title/body/diff so a
   // prompt-injection payload never reaches the model verbatim. Flag-OFF (default) passes `input` through
   // unchanged → the prompt is byte-identical to today. Only the title/body/diff fed to buildUserPrompt are

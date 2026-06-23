@@ -14,6 +14,8 @@ export type ScorePreviewInput = {
   sourceLines?: number | undefined;
   testTokenScore?: number | undefined;
   nonCodeTokenScore?: number | undefined;
+  /** Raw non-code line count before upstream's MAX_LINES_SCORED_FOR_NON_CODE_EXT cap. */
+  nonCodeLines?: number | undefined;
   existingContributorTokenScore?: number | undefined;
   openPrCount?: number | undefined;
   /** Contributor's current open-issue count for the repo, used for the open-issue spam gate (#808). */
@@ -171,7 +173,10 @@ export type ScorePreviewResult = {
     baseTokenGatePassed: boolean;
     openPrThreshold: number;
     openPrCount: number;
+    /** Effective open-PR collateral fraction (OPEN_PR_COLLATERAL_PERCENT × reviewCollateralMultiplier). */
     collateralFraction: number;
+    /** Upstream open-PR review-collateral multiplier from CHANGES_REQUESTED reviews (≥ 1, capped). */
+    reviewCollateralMultiplier: number;
     credibilityFloor: number;
     credibilityObserved: number;
     openIssueThreshold: number;
@@ -298,7 +303,10 @@ function computeScoreCore(
   // TEST_FILE_CONTRIBUTION_WEIGHT (#808): upstream weights test-file tokens at 0.05× relative to source tokens.
   // Applied only when totalTokenScore is not explicitly provided — an explicit caller total is honoured as-is.
   const testFileWeight = constant(constants, "TEST_FILE_CONTRIBUTION_WEIGHT", 0.05);
-  const totalTokenScore = nonNegative(input.totalTokenScore ?? sourceTokenScore + testFileWeight * nonNegative(input.testTokenScore) + nonNegative(input.nonCodeTokenScore));
+  const cappedNonCodeTokenScore = applyNonCodeLineCap(input, constants);
+  const totalTokenScore = nonNegative(
+    input.totalTokenScore ?? sourceTokenScore + testFileWeight * nonNegative(input.testTokenScore) + cappedNonCodeTokenScore,
+  );
   const sourceLines = Math.max(1, nonNegative(input.sourceLines ?? sourceTokenScore));
   const fixedBaseScore = input.fixedBaseScore ?? config?.fixedBaseScore ?? undefined;
   const rawDensity = sourceTokenScore / sourceLines;
@@ -325,7 +333,13 @@ function computeScoreCore(
   const credibilityFloor = constant(constants, "MIN_CREDIBILITY", 0.8);
   const credibilityMultiplier = credibilityObserved >= credibilityFloor ? 1 : credibilityObserved / credibilityFloor;
   const changesRequestedCount = nonNegative(input.changesRequestedCount);
-  const reviewPenaltyMultiplier = clamp(1 - changesRequestedCount * constant(constants, "REVIEW_PENALTY_RATE", 0.15), 0, 1);
+  const reviewPenaltyRate = constant(constants, "REVIEW_PENALTY_RATE", 0.15);
+  const reviewPenaltyMultiplier = clamp(1 - changesRequestedCount * reviewPenaltyRate, 0, 1);
+  const reviewCollateralMultiplier = Math.min(
+    constant(constants, "MAX_OPEN_PR_REVIEW_COLLATERAL_MULTIPLIER", 2.0),
+    1 + changesRequestedCount * reviewPenaltyRate,
+  );
+  const openPrCollateralPercent = constant(constants, "OPEN_PR_COLLATERAL_PERCENT", 0.2);
   const openPrCount = nonNegative(input.openPrCount);
   // The concurrency allowance is earned from the contributor's established merged-history token
   // score; the planned PR's own tokens (totalTokenScore) must not inflate its own open-PR threshold.
@@ -381,7 +395,8 @@ function computeScoreCore(
       baseTokenGatePassed,
       openPrThreshold,
       openPrCount,
-      collateralFraction: constant(constants, "OPEN_PR_COLLATERAL_PERCENT", 0.2),
+      reviewCollateralMultiplier: roundScore(reviewCollateralMultiplier),
+      collateralFraction: roundScore(openPrCollateralPercent * reviewCollateralMultiplier),
       credibilityFloor,
       credibilityObserved,
       openIssueThreshold,
@@ -953,6 +968,14 @@ function inferCredibility(evidence?: ContributorEvidenceRecord | null): number {
   const unlinked = Number(payload?.unlinkedPullRequests ?? 0);
   if (!Number.isFinite(merged)) return 0.8;
   return clamp(0.75 + merged * 0.04 - stale * 0.03 - unlinked * 0.02, 0.25, 1);
+}
+
+function applyNonCodeLineCap(input: Pick<ScorePreviewInput, "nonCodeTokenScore" | "nonCodeLines">, constants: Record<string, number>): number {
+  const score = nonNegative(input.nonCodeTokenScore);
+  const lines = nonNegative(input.nonCodeLines);
+  if (score <= 0 || lines <= 0) return score;
+  const maxLines = constant(constants, "MAX_LINES_SCORED_FOR_NON_CODE_EXT", 300);
+  return lines <= maxLines ? score : score * (maxLines / lines);
 }
 
 function constant(constants: Record<string, number>, key: string, fallback: number): number {

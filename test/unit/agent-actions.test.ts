@@ -38,28 +38,31 @@ describe("planAgentMaintenanceActions (#778)", () => {
     expect(classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto" }, pr: { labels: [AGENT_LABEL_READY] } })))).not.toContain("label");
   });
 
-  it("requests changes on a blocking verdict, with the blocker titles in the body, and never double-requests", () => {
-    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { request_changes: "auto" }, blockerTitles: ["Missing linked issue", "Slop risk"] }));
-    const rc = plan.find((a) => a.actionClass === "request_changes");
-    expect(rc?.reviewBody).toContain("Missing linked issue");
-    expect(rc?.reviewBody).toContain("Slop risk");
-    // already in CHANGES_REQUESTED → not re-requested
-    expect(classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { request_changes: "auto" }, blockerTitles: ["x"], pr: { labels: [], reviewDecision: "CHANGES_REQUESTED" } })))).not.toContain("request_changes");
+  it("NEVER posts a formal request_changes; a blocking contributor PR closes (close acting) and is always labeled", () => {
+    // close acting → CLOSE (no formal request_changes review that would block the PR)
+    const withClose = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto", label: "auto" }, blockerTitles: ["Missing linked issue", "Slop risk"] })));
+    expect(withClose).toContain("close");
+    expect(withClose).not.toContain("request_changes");
+    // close NOT acting → just the changes-requested LABEL, never a formal request_changes (which would strand the PR).
+    const noClose = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { label: "auto" }, blockerTitles: ["x"] })));
+    expect(noClose).toContain("label");
+    expect(noClose).not.toContain("request_changes");
   });
 
-  it("falls back to a generic request-changes body when no blocker titles are supplied", () => {
-    const rc = planAgentMaintenanceActions(input({ conclusion: "action_required", autonomy: { request_changes: "auto" }, blockerTitles: [] })).find((a) => a.actionClass === "request_changes");
-    expect(rc?.reviewBody).toContain("The Gittensory Gate is not satisfied");
-    expect(rc?.reason).toBe("1 blocker(s)");
+  it("never emits request_changes even for an action_required verdict (merge-or-close, never block)", () => {
+    const plan = classes(planAgentMaintenanceActions(input({ conclusion: "action_required", autonomy: { request_changes: "auto", close: "auto", label: "auto" }, blockerTitles: [] })));
+    expect(plan).not.toContain("request_changes");
+    expect(plan).toContain("close"); // contributor + not review-good → close
   });
 
-  it("approves a passing verdict and never re-approves; never approves AND requests changes", () => {
+  it("approves a passing verdict and never re-approves; a failing one closes (never approves, never requests changes)", () => {
     expect(classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto" } })))).toContain("approve");
     expect(classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto" }, pr: { labels: [], reviewDecision: "APPROVED" } })))).not.toContain("approve");
-    // a passing verdict never yields request_changes; a failing one never yields approve
-    const failing = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { approve: "auto", request_changes: "auto" }, blockerTitles: ["x"] })));
-    expect(failing).toContain("request_changes");
+    // a passing verdict never closes; a failing contributor one closes — never approve, never request_changes.
+    const failing = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { approve: "auto", close: "auto" }, blockerTitles: ["x"] })));
+    expect(failing).toContain("close");
     expect(failing).not.toContain("approve");
+    expect(failing).not.toContain("request_changes");
   });
 
   it("merges only a clean, approved, passing PR (reviewDecision drives the approval gate)", () => {
@@ -216,16 +219,21 @@ describe("planAgentMaintenanceActions (#778)", () => {
       expect(close?.reason).toContain("codecov/patch");
     });
 
-    it("NEVER closes the owner's red-CI PR — it is held (request_changes), left open", () => {
-      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", request_changes: "auto" }, ciState: "failed", failingCheckNames: ["codecov/patch"], authorIsOwner: true, pr: { labels: [] } })));
-      expect(plan).not.toContain("close");
-      expect(plan).toContain("request_changes");
+    it("NEVER closes the owner's red-CI PR — held via the changes-requested LABEL only (no blocking request_changes), left open", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", request_changes: "auto", label: "auto" }, ciState: "failed", failingCheckNames: ["codecov/patch"], authorIsOwner: true, pr: { labels: [] } }));
+      const cls = classes(plan);
+      expect(cls).not.toContain("close");
+      expect(cls).not.toContain("request_changes"); // never a formal blocking review
+      expect(plan.find((a) => a.actionClass === "label")?.label).toBe(AGENT_LABEL_CHANGES);
     });
 
-    it("requests changes (never approves) on a red CI and cites the failing check", () => {
-      const rc = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto", request_changes: "auto" }, ciState: "failed", failingCheckNames: ["codecov/patch", "build"], pr: { labels: [] } })).find((a) => a.actionClass === "request_changes");
-      expect(rc?.reviewBody).toContain("codecov/patch");
-      expect(rc?.reviewBody).toContain("CI is not green");
+    it("CLOSES (never approves or requests changes) a contributor's red-CI PR and cites the failing check", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto", close: "auto" }, ciState: "failed", failingCheckNames: ["codecov/patch", "build"], pr: { labels: [] } }));
+      const cls = classes(plan);
+      expect(cls).not.toContain("approve");
+      expect(cls).not.toContain("request_changes");
+      expect(cls).toContain("close");
+      expect(plan.find((a) => a.actionClass === "close")?.reason).toContain("codecov/patch");
     });
 
     it("labels a red-CI PR changes-requested (not ready-to-merge)", () => {
@@ -246,10 +254,10 @@ describe("planAgentMaintenanceActions (#778)", () => {
       expect(plan.find((a) => a.actionClass === "label")?.label).toBe(AGENT_LABEL_CHANGES);
     });
 
-    it("NEVER closes the OWNER's unverified-CI PR — held, left open", () => {
-      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", request_changes: "auto" }, ciState: "unverified", authorIsOwner: true, pr: { labels: [] } })));
+    it("NEVER closes the OWNER's unverified-CI PR — held (no blocking request_changes), left open", () => {
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", request_changes: "auto", label: "auto" }, ciState: "unverified", authorIsOwner: true, pr: { labels: [] } })));
       expect(plan).not.toContain("close");
-      expect(plan).toContain("request_changes");
+      expect(plan).not.toContain("request_changes");
     });
 
     it("merges the same clean+approved PR on green CI but NOT on red CI", () => {

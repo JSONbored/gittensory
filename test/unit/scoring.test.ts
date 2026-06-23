@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLatestScoringModelSnapshot, listUpstreamDriftReports, persistScoringModelSnapshot } from "../../src/db/repositories";
-import { DEFAULT_SCORING_CONSTANTS, detectActiveModel, findUnmodeledUpstreamConstants, getOrCreateScoringModelSnapshot, isTimeDecayEnabled, parsePythonNumberConstants, refreshScoringModelSnapshot, SCORING_SNAPSHOT_STALE_MS, scoringSnapshotStalenessWarning } from "../../src/scoring/model";
+import { DEFAULT_ISSUE_DISCOVERY_SHARE, DEFAULT_SCORING_CONSTANTS, detectActiveModel, findUnmodeledUpstreamConstants, getOrCreateScoringModelSnapshot, isTimeDecayEnabled, parsePythonNumberConstants, refreshScoringModelSnapshot, SCORING_SNAPSHOT_STALE_MS, scoringSnapshotStalenessWarning } from "../../src/scoring/model";
 import { buildScorePreview, calculateTimeDecay, makeScorePreviewRecord, resolveTimeDecay } from "../../src/scoring/preview";
 import { unmodeledScoringConstantsFingerprint } from "../../src/upstream/unmodeled-scoring-drift";
 import type { ScorePreviewInput } from "../../src/scoring/preview";
@@ -168,6 +168,126 @@ MAX_CODE_DENSITY_MULTIPLIER = 1.15
     ).not.toContain("ISSUES_TREASURY_EMISSION_SHARE");
   });
 
+  it("models upstream review-collateral, non-code line cap, and issue-discovery defaults (#809)", () => {
+    expect(DEFAULT_SCORING_CONSTANTS).toMatchObject({
+      MAX_OPEN_PR_REVIEW_COLLATERAL_MULTIPLIER: 2.0,
+      MAX_LINES_SCORED_FOR_NON_CODE_EXT: 300,
+      DEFAULT_ISSUE_DISCOVERY_SHARE,
+    });
+    expect(DEFAULT_ISSUE_DISCOVERY_SHARE).toBe(0.5);
+    expect(
+      findUnmodeledUpstreamConstants(`
+MAX_OPEN_PR_REVIEW_COLLATERAL_MULTIPLIER = 2.0
+MAX_LINES_SCORED_FOR_NON_CODE_EXT = 300
+DEFAULT_ISSUE_DISCOVERY_SHARE = 0.5
+NOVELTY_BONUS_SCALAR = 3
+`),
+    ).toEqual(["NOVELTY_BONUS_SCALAR"]);
+
+    const collateralPreview = buildScorePreview({
+      repo,
+      snapshot: {
+        ...snapshot,
+        constants: {
+          ...snapshot.constants,
+          MAX_OPEN_PR_REVIEW_COLLATERAL_MULTIPLIER: 2.0,
+          OPEN_PR_COLLATERAL_PERCENT: 0.2,
+          REVIEW_PENALTY_RATE: 0.15,
+        },
+      },
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 60,
+        totalTokenScore: 60,
+        sourceLines: 50,
+        changesRequestedCount: 4,
+        openPrCount: 1,
+        credibility: 1,
+      },
+    });
+    expect(collateralPreview.gates.reviewCollateralMultiplier).toBe(1.6);
+    expect(collateralPreview.gates.collateralFraction).toBeCloseTo(0.32, 5);
+    expect(collateralPreview.scoreEstimate.reviewPenaltyMultiplier).toBe(0.4);
+
+    const cappedCollateral = buildScorePreview({
+      repo,
+      snapshot: {
+        ...snapshot,
+        constants: {
+          ...snapshot.constants,
+          MAX_OPEN_PR_REVIEW_COLLATERAL_MULTIPLIER: 2.0,
+          REVIEW_PENALTY_RATE: 0.15,
+        },
+      },
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 60,
+        totalTokenScore: 60,
+        sourceLines: 50,
+        changesRequestedCount: 10,
+        openPrCount: 1,
+        credibility: 1,
+      },
+    });
+    expect(cappedCollateral.gates.reviewCollateralMultiplier).toBe(2);
+    expect(cappedCollateral.gates.collateralFraction).toBeCloseTo(0.4, 5);
+
+    const uncappedNonCode = buildScorePreview({
+      repo,
+      snapshot: {
+        ...snapshot,
+        constants: { ...snapshot.constants, MAX_LINES_SCORED_FOR_NON_CODE_EXT: 300, CONTRIBUTION_SCORE_FOR_FULL_BONUS: 1500, MAX_CONTRIBUTION_BONUS: 25 },
+      },
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 100,
+        testTokenScore: 0,
+        nonCodeTokenScore: 600,
+        sourceLines: 100,
+        openPrCount: 0,
+        credibility: 1,
+      },
+    });
+    const cappedNonCode = buildScorePreview({
+      repo,
+      snapshot: {
+        ...snapshot,
+        constants: { ...snapshot.constants, MAX_LINES_SCORED_FOR_NON_CODE_EXT: 300, CONTRIBUTION_SCORE_FOR_FULL_BONUS: 1500, MAX_CONTRIBUTION_BONUS: 25 },
+      },
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 100,
+        testTokenScore: 0,
+        nonCodeTokenScore: 600,
+        nonCodeLines: 600,
+        sourceLines: 100,
+        openPrCount: 0,
+        credibility: 1,
+      },
+    });
+    expect(uncappedNonCode.scoreEstimate.contributionBonus).toBeGreaterThan(cappedNonCode.scoreEstimate.contributionBonus);
+    expect(cappedNonCode.scoreEstimate.contributionBonus).toBeCloseTo(
+      buildScorePreview({
+        repo,
+        snapshot: {
+          ...snapshot,
+          constants: { ...snapshot.constants, MAX_LINES_SCORED_FOR_NON_CODE_EXT: 300, CONTRIBUTION_SCORE_FOR_FULL_BONUS: 1500, MAX_CONTRIBUTION_BONUS: 25 },
+        },
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 100,
+          testTokenScore: 0,
+          nonCodeTokenScore: 300,
+          nonCodeLines: 300,
+          sourceLines: 100,
+          openPrCount: 0,
+          credibility: 1,
+        },
+      }).scoreEstimate.contributionBonus,
+      5,
+    );
+  });
+
   it("detects the active model from fetched constants before default fallback constants", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "token" });
     const fetchedUrls: string[] = [];
@@ -216,6 +336,54 @@ MAX_CODE_DENSITY_MULTIPLIER = 1.15
     expect(unmodeled).toEqual(["NOVELTY_BONUS_SCALAR"]);
     expect(unmodeled).not.toContain("SRC_TOK_SATURATION_SCALE");
     expect(unmodeled).not.toContain("TIME_DECAY_GRACE_PERIOD_HOURS"); // modeled as of #703
+  });
+
+  it("excludes operational upstream constants from unmodeled scoring drift (#809)", () => {
+    const operationalOnly = findUnmodeledUpstreamConstants(`
+SECONDS_PER_DAY = 86400
+SECONDS_PER_HOUR = 3600
+GITHUB_HTTP_TIMEOUT_SECONDS = 15
+MIRROR_HTTP_TIMEOUT_SECONDS = 30
+MIRROR_MAX_ATTEMPTS = 3
+TREE_SITTER_PARSE_TIMEOUT_MICROS = 5_000_000
+SCORING_SUBPROCESS_BUDGET_S = 120
+MAX_FILE_SIZE_BYTES = 1_000_000
+RECYCLE_UID = 0
+ISSUES_TREASURY_UID = 111
+MAX_ISSUE_ID = 999_999
+`);
+    expect(operationalOnly).toEqual([]);
+
+    const withScoringGap = findUnmodeledUpstreamConstants(`
+SECONDS_PER_DAY = 86400
+GITHUB_HTTP_TIMEOUT_SECONDS = 15
+NOVELTY_BONUS_SCALAR = 3
+`);
+    expect(withScoringGap).toEqual(["NOVELTY_BONUS_SCALAR"]);
+  });
+
+  it("truncates the unmodeled-constants warning when upstream defines more than 12 (#809)", async () => {
+    const env = createTestEnv({
+      GITTENSOR_UPSTREAM_REPO: "custom/upstream",
+      GITTENSOR_UPSTREAM_REF: "staging",
+    });
+    const manyUnmodeled = Array.from({ length: 15 }, (_, index) => `UNMODELED_CONST_${String(index).padStart(2, "0")} = ${index + 1}`).join("\n");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("constants.py")) return new Response(manyUnmodeled);
+      if (url.includes("programming_languages.json")) return Response.json({});
+      return new Response("not found", { status: 404 });
+    });
+
+    const refreshed = await refreshScoringModelSnapshot(env);
+    const warning = refreshed.warnings.find((entry) => /does not yet model/i.test(entry));
+    expect(warning).toMatch(/UNMODELED_CONST_00/);
+    expect(warning).toMatch(/UNMODELED_CONST_11/);
+    expect(warning).not.toMatch(/UNMODELED_CONST_12/);
+    expect(warning).toMatch(/…/);
+    expect(refreshed.payload.constants).toMatchObject({
+      unmodeledUpstreamConstants: expect.arrayContaining(["UNMODELED_CONST_00", "UNMODELED_CONST_14"]),
+    });
   });
 
   it("warns on the snapshot when upstream defines an unmodeled scoring dimension", async () => {

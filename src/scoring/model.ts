@@ -7,6 +7,8 @@ import { syncUnmodeledScoringConstantDrift } from "../upstream/unmodeled-scoring
 import type { JsonValue, ScoringModelSnapshotRecord } from "../types";
 import { errorMessage, nowIso } from "../utils/json";
 
+export const DEFAULT_ISSUE_DISCOVERY_SHARE = 0.5;
+
 export const DEFAULT_SCORING_CONSTANTS: Record<string, number> = {
   OSS_EMISSION_SHARE: 0.9,
   // Upstream name is ISSUES_TREASURY_EMISSION_SHARE (plural). The prior singular spelling never matched
@@ -34,6 +36,9 @@ export const DEFAULT_SCORING_CONSTANTS: Record<string, number> = {
   OPEN_ISSUE_SPAM_TOKEN_SCORE_PER_SLOT: 300,
   MAX_OPEN_ISSUE_THRESHOLD: 30,
   OPEN_PR_COLLATERAL_PERCENT: 0.2,
+  MAX_OPEN_PR_REVIEW_COLLATERAL_MULTIPLIER: 2.0,
+  MAX_LINES_SCORED_FOR_NON_CODE_EXT: 300,
+  DEFAULT_ISSUE_DISCOVERY_SHARE,
   REVIEW_PENALTY_RATE: 0.15,
   STANDARD_ISSUE_MULTIPLIER: 1.33,
   MAINTAINER_ISSUE_MULTIPLIER: 1.66,
@@ -168,6 +173,24 @@ export function parsePythonNumberConstants(source: string, options: { knownOnly?
 }
 
 /**
+ * Upstream operational/infra constants gittensory intentionally does not model in score previews.
+ * They are not scoring dimensions — surfacing them as "unmodeled drift" is noise (#809).
+ */
+const NON_SCORING_UPSTREAM_CONSTANT_NAMES = new Set([
+  "SECONDS_PER_DAY",
+  "SECONDS_PER_HOUR",
+  "GITHUB_HTTP_TIMEOUT_SECONDS",
+  "MIRROR_HTTP_TIMEOUT_SECONDS",
+  "MIRROR_MAX_ATTEMPTS",
+  "TREE_SITTER_PARSE_TIMEOUT_MICROS",
+  "SCORING_SUBPROCESS_BUDGET_S",
+  "MAX_FILE_SIZE_BYTES",
+  "RECYCLE_UID",
+  "ISSUES_TREASURY_UID",
+  "MAX_ISSUE_ID",
+]);
+
+/**
  * Numeric constant names upstream gittensor defines that gittensory's scoring engine does NOT model.
  * The normal parse is `knownOnly` (it keeps only constants we already encode), which silently hides
  * upstream ADDITIONS — e.g. a newly-introduced time-decay constant. Surfacing these makes scoring
@@ -176,7 +199,7 @@ export function parsePythonNumberConstants(source: string, options: { knownOnly?
  */
 export function findUnmodeledConstantKeys(allConstants: Record<string, number>): string[] {
   return Object.keys(allConstants)
-    .filter((name) => !SCORING_CONSTANT_NAMES.has(name))
+    .filter((name) => !SCORING_CONSTANT_NAMES.has(name) && !NON_SCORING_UPSTREAM_CONSTANT_NAMES.has(name))
     .sort();
 }
 
