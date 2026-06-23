@@ -217,11 +217,15 @@ const SIGNAL_ICON: Record<UnifiedSignalRow["state"], string> = { ok: "✅", warn
 /** Derive the single unified status from reviewbot's decision/recs/CI + the host override. */
 export function deriveUnifiedStatus(input: UnifiedReviewInput, ctx: UnifiedCommentContext = {}): UnifiedCommentStatus {
   if (ctx.statusOverride) return ctx.statusOverride;
-  // A failing CI is NEVER "safe to merge": a red CI downgrades any otherwise-ready/merge verdict to blocked (the
-  // disposition layer then closes it for a non-owner author / holds it open for the owner). This runs BEFORE the
-  // explicit-verdict switch so an optimistic gate "merge" can't render a green "safe to merge" headline over a
-  // red CI — the exact bug where a PR with a failing codecov/patch showed "Approved — safe to merge".
-  if (input.readiness?.ciState === "failed") return "blocked";
+  // CI gate — a PR is "safe to merge" ONLY when CI is GREEN. This runs BEFORE the explicit-verdict switch so an
+  // optimistic gate "merge" can never render a "safe to merge" headline over a CI that hasn't passed:
+  //   • failed     → BLOCKED (red CI; the disposition layer closes non-owner / holds owner)
+  //   • unverified / pending (chip "CI pending") → HELD (still running / not yet reported — NOT safe to merge)
+  // Only ciState === "passed" falls through to honor the gate verdict. (Bug this fixes: a PR with a failing
+  // codecov OR with CI still in progress showed "Approved — safe to merge".)
+  if (input.readiness && input.readiness.ciState !== "passed") {
+    return input.readiness.ciState === "failed" ? "blocked" : "held";
+  }
   // An explicit gate verdict is authoritative — it already weighed the reviewers + guardrails.
   switch (input.decision) {
     case "merge":
