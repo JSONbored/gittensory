@@ -543,12 +543,13 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
     const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null));
     verdicts[String(pr.number)] = gate.conclusion;
     if (gate.conclusion === "failure" || gate.conclusion === "action_required") flaggedPulls.push(pr.number);
-    // Backstop the CI-completion trigger AND refresh the stale public comment: fully RE-REVIEW each stale open
-    // PR (rebuild advisory → re-publish the unified comment with the current head/CI → re-run auto-maintain). The
-    // re-gate above only recomputes the audit verdict; without this re-publish, an idle PR keeps a stale comment
-    // (e.g. "safe to merge" from before a fix) and a stale status label forever. reReviewStoredPullRequest reads
-    // the freshly-synced head + the live CI, so the comment + label + action all reflect reality. Paced at
-    // SWEEP_MAX_PRS per sweep; cheap now that installation tokens are cached.
+    // Backstop the CI-completion trigger AND refresh the stale public comment: fully RE-REVIEW each stale open PR
+    // (rebuild dual-AI advisory → re-publish the unified comment with the current head/CI/synthesis → re-run
+    // auto-maintain). The re-gate above only recomputes the deterministic audit verdict; without this re-publish
+    // an idle PR keeps a stale comment ("safe to merge" from before a fix) and a stale label forever, and a
+    // previously dead-lettered review never gets a fresh verdict. This re-runs the dual-AI review every sweep —
+    // affordable on the enterprise Workers AI plan (the daily neuron budget is a runaway backstop, not a free-tier
+    // cap). Paced at SWEEP_MAX_PRS per sweep; installation tokens are cached so the GitHub cost stays bounded.
     if (sweepInstallationId != null) {
       await reReviewStoredPullRequest(env, `regate-sweep:${repoFullName}#${pr.number}`, sweepInstallationId, repoFullName, pr.number).catch((error) => {
         console.error(JSON.stringify({ level: "warn", event: "sweep_rereview_failed", deliveryId: `regate-sweep:${repoFullName}#${pr.number}`, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));

@@ -400,7 +400,7 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
   // Estimate against the EFFECTIVE system prompt (`system`) so grounding's extra context is billed against the
   // budget. Flag-OFF, `system === REVIEW_SYSTEM_PROMPT`, so the estimate is byte-identical to today.
   const estimatedNeurons = freeAiCalls === 0 ? 0 : estimateNeurons(system.length + user.length, maxTokens, freeAiCalls);
-  const budget = clampNumber(Number(env.AI_DAILY_NEURON_BUDGET || 10000), 0, 1_000_000);
+  const budget = clampNumber(Number(env.AI_DAILY_NEURON_BUDGET || 10000), 0, 10_000_000);
   const used = await sumAiEstimatedNeuronsSince(env, utcDayStartIso());
   const remainingBudget = Math.max(0, budget - used);
   if (estimatedNeurons > remainingBudget) {
