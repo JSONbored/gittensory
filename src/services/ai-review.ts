@@ -37,16 +37,18 @@ export const RELIABLE_FALLBACK_MODELS: readonly [string, string] = [
 export const AI_CONSENSUS_FLOOR = 0.9;
 
 const REVIEW_SYSTEM_PROMPT = [
-  "You are a senior open-source maintainer giving a THOROUGH code review of a single pull request diff.",
+  "You are a senior open-source maintainer giving a FOCUSED, high-signal code review of a single pull request diff.",
   "Read each meaningful hunk and review like a careful human; judge ONLY the diff and the context provided.",
   "Respond with ONLY a JSON object of this exact shape (no prose, no code fence):",
   '{"assessment": string, "blockers": string[], "nits": string[], "suggestions": string[]}',
-  "- assessment: a SUBSTANTIVE walkthrough (several sentences) — what the change does, whether it is correct, and the notable details. Specific to THIS diff; NEVER a generic one-liner and never hedging ('appears to', 'seems to').",
-  "- blockers: each ONE sentence naming a CONCRETE must-fix defect IN THIS DIFF — a correctness/logic bug, a security hole, data loss, a build/test breakage, a race condition, or an API/contract/backward-compat break. Reference the file (and function/line). Empty [] if there are genuinely none.",
-  "- nits: each ONE sentence — a NON-blocking point: style, naming, a 'consider…', a missing doc/comment, an unhandled edge case worth noting, or a minor improvement. File-reference where you can.",
-  "- suggestions: concrete, file-referenced improvements (may overlap nits).",
-  "Do NOT rubber-stamp. If the diff is genuinely clean, the assessment must state SPECIFICALLY why it is safe (what you checked) and blockers must be []. Otherwise give real, specific findings — aim for depth, list every concern you actually see.",
-  "SEVERITY DISCIPLINE: a BLOCKER is a real defect you can point to in the diff; a NIT is style / preference / hypothetical / optional / docs. CI or check status ITSELF (failing, pending, unverified) is NOT a code defect — NEVER list it as a blocker or nit (the gate evaluates CI separately). Nits and hypotheticals are never blockers.",
+  "- assessment: a substantive but CONCISE summary (2-4 sentences) — what the change does, whether it is correct, and the most notable detail. Specific to THIS diff; never a generic one-liner and never hedging ('appears to', 'seems to').",
+  "- blockers: each ONE sentence naming a defect that WILL break the code as written — a missing import/symbol (ReferenceError), a logic error that produces wrong output, a security hole, data loss, a build/test breakage, or an API/contract break. Reference the file (and function/line). Empty [] if there are genuinely none.",
+  "- nits: each ONE sentence — a NON-blocking point: style, naming, a missing doc, or DEFENSIVE hardening ('should handle the empty case', 'consider catching errors', 'add validation'). File-reference where you can.",
+  "- suggestions: a few concrete, file-referenced improvements (may overlap nits).",
+  "BE SELECTIVE — report only the findings that genuinely matter. List at MOST ~3 blockers and ~5 nits, keeping only the most important; prefer signal over volume and do NOT pad the lists.",
+  "DEDUPLICATE — if the same kind of issue recurs across several functions or lines, report it ONCE and note it applies broadly; never repeat a near-identical finding per occurrence.",
+  "SEVERITY DISCIPLINE — defensive or speculative hardening ('should handle X', 'consider validating', 'add error handling') is a NIT, not a blocker, UNLESS a real input WILL actually trigger the failure. CI or check status itself (failing, pending, unverified) is NOT a code defect — never list it (the gate evaluates CI separately).",
+  "Do NOT rubber-stamp: if the diff is genuinely clean, the assessment states specifically why and blockers is [].",
   "Never mention rewards, rankings, payouts, wallets, hotkeys, coldkeys, trust scores, scoreability, reviewability, or farming.",
 ].join(" ");
 
@@ -186,7 +188,7 @@ export function parseModelReview(text: string): ModelReview | null {
   try {
     const obj = JSON.parse(match[0]) as Record<string, unknown>;
     const toList = (value: unknown): string[] =>
-      Array.isArray(value) ? value.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean).slice(0, 12) : [];
+      Array.isArray(value) ? value.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean).slice(0, 6) : [];
     const assessment = typeof obj.assessment === "string" ? obj.assessment.trim() : "";
     const blockers = toList(obj.blockers);
     const nits = toList(obj.nits);
@@ -333,9 +335,11 @@ async function runProviderReview(providerKey: AiReviewProviderKey, system: strin
 /** Compose a public-safe markdown advisory blurb from one or two model reviews. Null if nothing safe. */
 export function composeAdvisoryNotes(reviews: ModelReview[]): string | null {
   const assessments = reviews.map((r) => r.assessment).filter(Boolean);
-  const blockers = [...new Set(reviews.flatMap((r) => r.blockers))].slice(0, 8);
+  // High-signal caps: a focused review shows only the few findings that matter (the prompt also asks the
+  // model to be selective + deduplicate). Keep the core blockers and a handful of nits. (#focused-reviews)
+  const blockers = [...new Set(reviews.flatMap((r) => r.blockers))].slice(0, 3);
   // nits + suggestions are both non-blocking — merge + dedupe for the write-up.
-  const nits = [...new Set(reviews.flatMap((r) => [...r.nits, ...r.suggestions]))].slice(0, 12);
+  const nits = [...new Set(reviews.flatMap((r) => [...r.nits, ...r.suggestions]))].slice(0, 5);
   const assessment = toPublicSafe(assessments[0] ?? "");
   const safeBlockers = blockers.map((s) => toPublicSafe(s)).filter((s): s is string => Boolean(s));
   const safeNits = nits.map((s) => toPublicSafe(s)).filter((s): s is string => Boolean(s));
@@ -362,9 +366,11 @@ export function consensusDefectOf(a: ModelReview, b: ModelReview, floor: number)
   void floor;
   if (a.blockers.length === 0 || b.blockers.length === 0) return null;
   const title = toPublicSafe(a.blockers[0] || b.blockers[0] || "AI reviewers agree on a likely blocking defect");
-  const detail = toPublicSafe([...new Set([...a.blockers, ...b.blockers])].slice(0, 4).join("; "));
   if (!title) return null; // unsafe title → drop the block entirely (fail-safe)
-  return { title, detail: detail ?? "Both AI reviewers independently flagged a concrete must-fix defect in this change.", confidence: 1 };
+  // Cite ONLY the primary blocker (not every finding joined together) so the Gate's "why blocked" reason
+  // stays focused on the single core defect instead of repeating the whole blockers list. (#focused-reviews)
+  const detail = toPublicSafe(a.blockers[0] || b.blockers[0] || "") ?? "Both AI reviewers independently flagged a concrete must-fix defect in this change.";
+  return { title, detail, confidence: 1 };
 }
 
 /**
