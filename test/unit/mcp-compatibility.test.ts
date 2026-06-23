@@ -8,7 +8,12 @@ describe("MCP compatibility telemetry", () => {
     expect(classifyMcpClientVersion("0.2.1")).toBe("incompatible");
     expect(classifyMcpClientVersion("0.3.0")).toBe("incompatible");
     expect(classifyMcpClientVersion("0.4.0")).toBe("incompatible");
-    expect(classifyMcpClientVersion("0.5.0")).toBe("current");
+    // Supported (>= 0.5.0 minimum) but behind the 0.6.0 recommended version → stale.
+    expect(classifyMcpClientVersion("0.5.0")).toBe("stale");
+    expect(classifyMcpClientVersion("0.5.9")).toBe("stale");
+    // At or above the recommended version → current.
+    expect(classifyMcpClientVersion("0.6.0")).toBe("current");
+    expect(classifyMcpClientVersion("0.7.1")).toBe("current");
     expect(classifyMcpClientVersion("not-a-version")).toBe("unknown");
     expect(classifyMcpClientVersion(undefined)).toBe("unknown");
   });
@@ -50,7 +55,8 @@ describe("MCP compatibility telemetry", () => {
       clientVersion: "0.5.0",
       metadata: {
         packageName: "@example/custom-mcp",
-        compatibilityStatus: "current",
+        // 0.5.0 is the supported minimum but behind 0.6.0 recommended → stale.
+        compatibilityStatus: "stale",
       },
     });
   });

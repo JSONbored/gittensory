@@ -59,6 +59,9 @@ export function classifyMcpClientVersion(version: string | null | undefined): Mc
   const minimumComparison = compareMcpSemver(version, MINIMUM_SUPPORTED_MCP_VERSION);
   if (minimumComparison === null) return "unknown";
   if (minimumComparison < 0) return "incompatible";
+  // Supported but behind the latest recommended version → stale (an upgrade nudge, not a break).
+  const recommendedComparison = compareMcpSemver(version, LATEST_RECOMMENDED_MCP_VERSION);
+  if (recommendedComparison !== null && recommendedComparison < 0) return "stale";
   return "current";
 }
 
