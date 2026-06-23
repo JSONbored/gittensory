@@ -188,6 +188,19 @@ describe("evaluateNotificationEvent", () => {
     expect(created.map((delivery) => delivery.channel)).toEqual(["badge"]);
   });
 
+  it("does not create email deliveries from explicit email subscriptions when email delivery is not runtime-configured", async () => {
+    const env = createTestEnv();
+    delete env.EMAIL;
+    await upsertNotificationSubscription(env, {
+      login: "miner",
+      channel: "email",
+      destination: "miner@example.com",
+      status: "active",
+    });
+    const created = await evaluateNotificationEvent(env, event());
+    expect(created.map((delivery) => delivery.channel)).toEqual(["badge"]);
+  });
+
   it("suppresses deliveries beyond the per-recipient rate-limit window", async () => {
     const env = createTestEnv();
     for (let index = 0; index < NOTIFICATION_RATE_LIMIT.maxPerWindow; index += 1) {
@@ -250,6 +263,8 @@ describe("deliverNotification", () => {
     expect(sent[0]?.text).toContain("owner/repo#8");
     expect((await getNotificationDeliveryById(env, firstEmail!.id))?.status).toBe("delivered");
     expect((await getNotificationDeliveryById(env, secondEmail!.id))?.status).toBe("delivered");
+    expect((await getNotificationDeliveryById(env, firstBadge!.id))?.status).toBe("pending");
+    expect((await getNotificationDeliveryById(env, secondBadge!.id))?.status).toBe("pending");
 
     await deliverNotification(env, secondEmail!.id);
     expect(sent).toHaveLength(1);
@@ -261,6 +276,41 @@ describe("deliverNotification", () => {
     delete unconfigured.EMAIL;
     delete unconfigured.NOTIFICATION_FROM_EMAIL;
     expect(notificationEmailDeliveryEnabled(unconfigured)).toBe(false);
+  });
+
+  it("fails closed with notification_email_unconfigured when a malformed email binding slips through", async () => {
+    const env = createTestEnv({ EMAIL: {} as SendEmail });
+    await upsertNotificationSubscription(env, {
+      login: "miner",
+      channel: "email",
+      destination: "miner@example.com",
+      status: "active",
+    });
+    const [, emailDelivery] = await evaluateNotificationEvent(env, event({ dedupKey: "explicit-email" }));
+    expect(emailDelivery).toBeUndefined();
+
+    const writableEnv = createTestEnv({ EMAIL: {} as SendEmail });
+    await upsertNotificationSubscription(writableEnv, {
+      login: "miner",
+      channel: "email",
+      destination: "miner@example.com",
+      status: "active",
+    });
+    const pendingEmail = await insertNotificationDeliveryIfAbsent(writableEnv, {
+      dedupKey: "manual-email",
+      channel: "email",
+      recipientLogin: "miner",
+      eventType: "pull_request_changes_requested",
+      repoFullName: "owner/repo",
+      pullNumber: 7,
+      title: "t",
+      body: "b",
+      deeplink: "https://x",
+      actorLogin: "reviewer",
+      status: "pending",
+    });
+    await expect(deliverNotification(writableEnv, pendingEmail.delivery.id)).rejects.toThrow("notification_email_unconfigured");
+    expect((await getNotificationDeliveryById(writableEnv, pendingEmail.delivery.id))?.status).toBe("pending");
   });
 });
 

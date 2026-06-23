@@ -164,8 +164,10 @@ export async function evaluateNotificationEvent(env: Env, event: DetectedNotific
     listNotificationSubscriptionsForLogin(env, event.recipientLogin),
     listDigestSubscriptionsForLogin(env, event.recipientLogin),
   ]);
-  const emailCapableDigestSubscriptions = notificationEmailDeliveryEnabled(env) ? digestSubscriptions : [];
-  const channels = resolveNotificationChannels(subscriptions, emailCapableDigestSubscriptions);
+  const emailDeliveryEnabled = notificationEmailDeliveryEnabled(env);
+  const emailCapableSubscriptions = emailDeliveryEnabled ? subscriptions : subscriptions.filter((subscription) => subscription.channel !== "email");
+  const emailCapableDigestSubscriptions = emailDeliveryEnabled ? digestSubscriptions : [];
+  const channels = resolveNotificationChannels(emailCapableSubscriptions, emailCapableDigestSubscriptions);
   if (channels.length === 0) return [];
 
   const { title, body } = buildNotificationContent(event);
@@ -284,7 +286,8 @@ export function buildNotificationEmailMessage(deliveries: NotificationDeliveryRe
 }
 
 async function deliverEmailNotification(env: Env, anchorDelivery: NotificationDeliveryRecord): Promise<void> {
-  if (!notificationEmailDeliveryEnabled(env)) {
+  const emailSend = env.EMAIL?.send;
+  if (!notificationEmailDeliveryEnabled(env) || typeof emailSend !== "function") {
     throw new Error("notification_email_unconfigured");
   }
   const [subscriptions, digestSubscriptions] = await Promise.all([
@@ -313,7 +316,7 @@ async function deliverEmailNotification(env: Env, anchorDelivery: NotificationDe
   try {
     await Promise.all(
       destinations.map((to) =>
-        env.EMAIL!.send({
+        emailSend({
           to,
           from: notificationFromAddress(env),
           subject,
