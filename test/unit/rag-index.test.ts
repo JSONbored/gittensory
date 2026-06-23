@@ -221,6 +221,86 @@ describe("reindexChangedPaths: delete + re-upsert only the changed paths", () =>
     expect(vec.upserted.length).toBe(0);
   });
 
+  it("rejects a changed file whose Content-Length header already exceeds the cap (no body read)", async () => {
+    const { env, vec } = indexEnv();
+    const ns = ragNamespace(PROJECT, "gittensory");
+    await env.DB.prepare("INSERT INTO repo_chunks (id, project, repo, path, chunk_index, kind, text) VALUES (?,?,?,?,?,?,?)")
+      .bind(`${ns}|src/declared-big.ts::0`, PROJECT, "gittensory", "src/declared-big.ts", 0, "code", "old")
+      .run();
+    // Header declares an oversized length → readTextCapped bails before streaming the (small) body.
+    vi.stubGlobal("fetch", async () =>
+      new Response("export const a = 1;\n", { status: 200, headers: { "content-length": String(MAX_FILE_BYTES + 1) } }),
+    );
+
+    const result = await reindexChangedPaths(env, PROJECT, REPO, ["src/declared-big.ts"]);
+
+    expect(result).toEqual({ indexed: 0, files: 0, capped: false });
+    expect(vec.upserted.length).toBe(0);
+    expect(await countChunks(env, PROJECT, "gittensory")).toBe(0);
+  });
+
+  it("reads a changed file delivered without a readable body via arrayBuffer (within the cap)", async () => {
+    const { env, vec } = indexEnv();
+    const ns = ragNamespace(PROJECT, "gittensory");
+    // A Response built from a Blob exposes arrayBuffer() but no streamable .body in this runtime path:
+    // force the no-reader branch with an explicit body-less object.
+    const bytes = new TextEncoder().encode("export const a = 1;\n");
+    vi.stubGlobal("fetch", async () => ({
+      ok: true,
+      headers: new Headers(),
+      body: null,
+      arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    }));
+
+    const result = await reindexChangedPaths(env, PROJECT, REPO, ["src/a.ts"]);
+
+    expect(result.files).toBe(1);
+    expect(result.indexed).toBe(1);
+    expect(vec.upserted).toContain(`${ns}|src/a.ts::0`);
+  });
+
+  it("rejects a body-less changed file whose arrayBuffer exceeds the cap", async () => {
+    const { env, vec } = indexEnv();
+    const oversized = new Uint8Array(MAX_FILE_BYTES + 1);
+    vi.stubGlobal("fetch", async () => ({
+      ok: true,
+      headers: new Headers(),
+      body: null,
+      arrayBuffer: async () => oversized.buffer,
+    }));
+
+    const result = await reindexChangedPaths(env, PROJECT, REPO, ["src/a.ts"]);
+
+    expect(result).toEqual({ indexed: 0, files: 0, capped: false });
+    expect(vec.upserted.length).toBe(0);
+  });
+
+  it("tolerates empty stream chunks and cancels a stream that overflows the cap (cancel rejection swallowed)", async () => {
+    const { env, vec } = indexEnv();
+    const reads = [
+      { done: false, value: undefined }, // empty chunk → `if (!value) continue`
+      { done: false, value: new Uint8Array(MAX_FILE_BYTES + 1) }, // overflow → cancel path
+    ];
+    let i = 0;
+    vi.stubGlobal("fetch", async () => ({
+      ok: true,
+      headers: new Headers(),
+      body: {
+        getReader: () => ({
+          read: async () => reads[i++] ?? { done: true, value: undefined },
+          cancel: async () => {
+            throw new Error("cancel failed"); // exercises `.catch(() => undefined)`
+          },
+        }),
+      },
+    }));
+
+    const result = await reindexChangedPaths(env, PROJECT, REPO, ["src/a.ts"]);
+
+    expect(result).toEqual({ indexed: 0, files: 0, capped: false });
+    expect(vec.upserted.length).toBe(0);
+  });
+
   it("caps incremental reindex upserts at MAX_CHUNKS_PER_REPO", async () => {
     const { env, vec } = indexEnv();
     const overCap = MAX_CHUNKS_PER_REPO + 25;
