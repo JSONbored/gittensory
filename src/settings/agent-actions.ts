@@ -145,13 +145,12 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // the merge; it can't complete for this commit. A new commit makes the live head differ from mergeBlockedSha.
   const mergeTerminallyBlocked = input.pr.mergeBlockedSha != null && input.pr.headSha != null && input.pr.mergeBlockedSha === input.pr.headSha;
   const canMerge = reviewGood && !guardrailHit && acting("merge") && mergeableClean && approvalsSatisfied && !mergeTerminallyBlocked;
-  // A GOOD PR on a guarded path → held for the owner's manual safety review (NOT auto-approved or auto-merged).
-  // But a CONTRIBUTOR PR that is NOT review-good (gate blockers / red / unverified CI) OR conflicts is CLOSED
-  // one-shot REGARDLESS of the guardrail. Spec: "guarded + would-merge → hold; otherwise → closure." The
-  // guardrail exists to stop auto-MERGING/APPROVING crucial-path changes without owner review (see canMerge /
-  // approve) — it must NOT keep a rejected PR open: closing rejects bad changes and merges nothing, so it is
-  // always safe. Owner/automation PRs are still never closed (isContributor gates that). (#close-bad-guarded)
-  const willClose = isContributor && acting("close") && (!reviewGood || isConflict);
+  // A guarded/CRUCIAL path (CI, the review engine, visual) → ALWAYS held for the owner, never auto-actioned —
+  // not auto-approved, not auto-merged, AND not auto-closed. Operator decision (#hold-crucial-on-reject): a
+  // hallucinated reject on a crucial PR must NOT auto-close a good change (the #1528 near-miss); the owner
+  // verifies and closes/merges. The BULK (non-guarded) contributor PRs still auto-close one-shot on a bad
+  // verdict / conflict — only the small crucial set is held. Owner/automation PRs are never closed regardless.
+  const willClose = !guardrailHit && isContributor && acting("close") && (!reviewGood || isConflict);
   const ciReason = ciFailed
     ? `CI is failing${failingCheckNames.length ? ` (${failingCheckNames.join(", ")})` : ""}`
     : ciUnverified

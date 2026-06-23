@@ -130,11 +130,12 @@ describe("planAgentMaintenanceActions (#778)", () => {
       expect(plan).not.toContain("merge");
     });
 
-    it("DOES auto-close a failing contributor PR on a guarded path (the guard blocks auto-merge, NOT rejection)", () => {
-      // Spec: guarded + would-merge → hold; otherwise → closure. Closing a bad PR merges nothing, so the
-      // hard-guardrail (which exists to stop auto-MERGING crucial paths) must not keep a rejected PR open.
+    it("does NOT auto-close a failing contributor PR on a guarded path — holds it for the owner (#hold-crucial-on-reject)", () => {
+      // Operator decision: a crucial/guarded PR is NEVER auto-closed, even on a reject — a hallucinated reject
+      // must not auto-close a good crucial PR (the #1528 near-miss). The owner verifies + closes/merges. The
+      // BULK (non-guarded) still auto-closes on reject; only the small crucial set is held.
       const plan = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, blockerTitles: ["x"], ...guarded, pr: { labels: [], slopRisk: 95 } })));
-      expect(plan).toContain("close");
+      expect(plan).not.toContain("close");
     });
 
     it("does NOT approve or auto-merge a passing PR on a guarded path", () => {
