@@ -85,7 +85,8 @@ import {
   parseGittensoryMentionCommand,
   sanitizePublicComment,
 } from "../github/commands";
-import { ensurePullRequestLabel } from "../github/labels";
+import { ensurePullRequestLabel, removePullRequestLabel } from "../github/labels";
+import { ALL_TYPE_LABELS, resolvePrTypeLabel } from "../settings/pr-type-label";
 import { fetchPublicContributorProfile } from "../github/public";
 import { refreshRegistry } from "../registry/sync";
 import { buildIssueAdvisory, buildPullRequestAdvisory, evaluateGateCheck, isTestPath } from "../rules/advisory";
@@ -348,6 +349,10 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       // so flag-OFF does zero work here too. indexRepo / reindexChangedPaths are fully fail-safe (never throw).
       if (isRagEnabled(env)) await runRagIndexJob(env, message.requestedBy, message.repoFullName, message.paths);
       return;
+    case "recapture-preview":
+      // Delayed visual self-poll: re-review the PR to re-capture the AFTER preview shot once its deploy is live.
+      await reReviewStoredPullRequest(env, message.deliveryId, message.installationId, message.repoFullName, message.prNumber, message.attempt);
+      break;
     case "github-webhook":
       await processGitHubWebhook(env, message.deliveryId, message.eventName, message.payload);
       return;
@@ -667,7 +672,7 @@ async function maybeRunAgentMaintenance(
  * "the CI event WAKES the existing row and re-runs the full review". The PR's persisted head SHA is used as-is
  * (never overwritten from the CI payload — reviewbot scope parity). Best-effort throughout.
  */
-async function reReviewStoredPullRequest(env: Env, deliveryId: string, installationId: number, repoFullName: string, prNumber: number): Promise<void> {
+async function reReviewStoredPullRequest(env: Env, deliveryId: string, installationId: number, repoFullName: string, prNumber: number, previewPollAttempt?: number): Promise<void> {
   const [repo, settings] = await Promise.all([getRepository(env, repoFullName), resolveRepositorySettings(env, repoFullName)]);
   const pr = await getPullRequest(env, repoFullName, prNumber);
   if (!pr || pr.state !== "open") return;
@@ -677,7 +682,7 @@ async function reReviewStoredPullRequest(env: Env, deliveryId: string, installat
   if (shouldCollectSlopEvidence(settings) || settings.manifestPolicyGateMode !== "off") {
     await refreshPullRequestDetails(env, repoFullName, prNumber).catch(() => undefined);
   }
-  const gate = await maybePublishPrPublicSurface(env, installationId, repoFullName, pr, repo, settings, advisory, { deliveryId }).catch((error) => {
+  const gate = await maybePublishPrPublicSurface(env, installationId, repoFullName, pr, repo, settings, advisory, { deliveryId, ...(previewPollAttempt !== undefined ? { previewPollAttempt } : {}) }).catch((error) => {
     console.error(JSON.stringify({ level: "warn", event: "pr_public_surface_failed", deliveryId, repository: repoFullName, pullNumber: prNumber, error: errorMessage(error) }));
     return undefined;
   });
@@ -692,6 +697,12 @@ async function reReviewStoredPullRequest(env: Env, deliveryId: string, installat
 // only bounds FREQUENCY, never correctness — a later out-of-window completion + the hourly sweep + the merge-time
 // re-check still catch the settled state.
 const CI_COALESCE_WINDOW_SECONDS = 60;
+
+// Visual preview self-poll (reviewbot PREVIEW_POLL_SECONDS parity): when a PR's preview deploy isn't live at
+// review time, re-review after this delay to re-capture the AFTER shot, up to MAX_PREVIEW_POLLS times (so a
+// never-resolving preview can't poll forever ~ 5×90s = 7.5min).
+const PREVIEW_POLL_SECONDS = 90;
+const MAX_PREVIEW_POLLS = 5;
 
 /**
  * Coalesce CI-completion re-reviews: claims a per-PR window and returns true if this PR was already re-reviewed
@@ -1730,7 +1741,7 @@ async function maybePublishPrPublicSurface(
   repo: Awaited<ReturnType<typeof getRepository>>,
   settings: Awaited<ReturnType<typeof getRepositorySettings>>,
   advisory: Awaited<ReturnType<typeof buildPullRequestAdvisory>>,
-  webhook: { deliveryId: string; authorType?: string | undefined; action?: string | undefined },
+  webhook: { deliveryId: string; authorType?: string | undefined; action?: string | undefined; previewPollAttempt?: number | undefined },
 ): Promise<ReturnType<typeof evaluateGateCheck> | undefined> {
   const author = pr.authorLogin ?? null;
   // Per-repo cutover gate (GITTENSORY_REVIEW_REPOS): the unified converged comment renders for THIS repo
@@ -2164,6 +2175,17 @@ async function maybePublishPrPublicSurface(
             previewFromChecks: true,
           }, visualFiles);
           beforeAfter = capture.routes;
+          // Visual self-poll: the FIRST capture returns a "loading" placeholder for the AFTER shot when the
+          // preview deploy isn't live yet (capture.previewPending). Schedule a delayed re-review to re-capture
+          // the now-ready shot — bounded by `attempt` so a never-resolving preview can't loop (the deployment_status
+          // webhook also refills it; this is the backstop when that event is missed/late).
+          const previewPollAttempt = webhook.previewPollAttempt ?? 0;
+          if (capture.previewPending && previewPollAttempt < MAX_PREVIEW_POLLS) {
+            await env.JOBS.send(
+              { type: "recapture-preview", deliveryId: webhook.deliveryId, repoFullName, prNumber: pr.number, installationId, attempt: previewPollAttempt + 1 },
+              { delaySeconds: PREVIEW_POLL_SECONDS },
+            ).catch((error) => console.log(JSON.stringify({ ev: "recapture_enqueue_failed", repoFullName, pull: pr.number, message: errorMessage(error).slice(0, 120) })));
+          }
         } catch (error) {
           console.log(JSON.stringify({ ev: "visual_capture_error", repoFullName, pull: pr.number, message: errorMessage(error).slice(0, 200) }));
         }
@@ -2219,6 +2241,23 @@ async function maybePublishPrPublicSurface(
       const message = errorMessage(error);
       failedOutputs.push({ output: "label", error: message });
       await recordPublicSurfaceOutputFailure(env, "label", author, repoFullName, pr.number, webhook.deliveryId, message);
+    }
+    // Per-PR TYPE label (reviewbot auto-label parity): exactly ONE of gittensor:bug/feature/priority by the PR
+    // title + changed paths. Review-time + neutral, BEST-EFFORT + independent of the context label above so a
+    // type-label hiccup never drops the "label" output. Files are only fetched when content globs are configured
+    // (otherwise the label is title-derived). The status labels (ready-to-merge etc.) remain the autonomy layer's.
+    if (settings.autoLabelEnabled) {
+      try {
+        const contentGlobs = (settings as { contentGlobs?: string[] }).contentGlobs ?? [];
+        const typeFiles = contentGlobs.length > 0 ? await getReviewFiles().catch(() => [] as Awaited<ReturnType<typeof getReviewFiles>>) : [];
+        const chosenType = resolvePrTypeLabel({ title: pr.title, changedPaths: typeFiles.map((file) => file.path), contentGlobs });
+        await ensurePullRequestLabel(env, installationId, repoFullName, pr.number, chosenType, { createMissingLabel: true });
+        for (const other of ALL_TYPE_LABELS.filter((label) => label !== chosenType)) {
+          await removePullRequestLabel(env, installationId, repoFullName, pr.number, other);
+        }
+      } catch (error) {
+        console.log(JSON.stringify({ ev: "type_label_error", repoFullName, pull: pr.number, message: errorMessage(error).slice(0, 150) }));
+      }
     }
   }
   if (publishedOutputs.length === 0) {

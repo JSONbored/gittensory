@@ -3487,7 +3487,8 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ comments: 0, labels: 2, minerList: 1 });
+    // 2 PRs × 3 label POSTs each: the gittensor context label (apply) + the per-PR TYPE label (create + apply).
+    expect(calls).toEqual({ comments: 0, labels: 6, minerList: 1 });
     const cacheAudit = await env.DB.prepare("select event_type, detail from audit_events where actor = ? order by created_at")
       .bind("oktofeesh1")
       .all<{ event_type: string; detail: string | null }>();
@@ -3558,7 +3559,9 @@ describe("queue processors", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(calls).toEqual({ comments: 0, labels: 1 });
+    // gittensor context-label apply (fails 503, recorded) + the best-effort type-label create attempt (also 503,
+    // swallowed). The context-label failure is still recorded below; the type label never drops the recording.
+    expect(calls).toEqual({ comments: 0, labels: 2 });
     const outputFailure = await env.DB.prepare("select event_type, detail from audit_events where event_type = ?")
       .bind("github_app.pr_label_publish_failed")
       .first<{ event_type: string; detail: string }>();
@@ -3851,7 +3854,8 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ minerList: 2, labels: 1 });
+    // 1 labeled PR × 3 label POSTs: the gittensor context label (apply) + the per-PR TYPE label (create + apply).
+    expect(calls).toEqual({ minerList: 2, labels: 3 });
     const cached = await env.DB.prepare("select status, snapshot_json from official_miner_detections where login = ?")
       .bind("oktofeesh1")
       .first<{ status: string; snapshot_json: string }>();
