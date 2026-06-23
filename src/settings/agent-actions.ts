@@ -145,12 +145,13 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // the merge; it can't complete for this commit. A new commit makes the live head differ from mergeBlockedSha.
   const mergeTerminallyBlocked = input.pr.mergeBlockedSha != null && input.pr.headSha != null && input.pr.mergeBlockedSha === input.pr.headSha;
   const canMerge = reviewGood && !guardrailHit && acting("merge") && mergeableClean && approvalsSatisfied && !mergeTerminallyBlocked;
-  // A good PR on a guarded path → held for the owner's manual safety review (NOT auto-approved, auto-merged, or auto-closed).
-  // A CONTRIBUTOR PR is CLOSED one-shot when it isn't review-good OR it conflicts, unless a hard guardrail
-  // requires manual review. request-changes is then redundant (the close comment carries the reasoning); it only
-  // fires as a FALLBACK when we are NOT closing — a guarded PR, an owner/automation PR (never closed), or a repo
-  // where `close` isn't at an acting autonomy level.
-  const willClose = !guardrailHit && isContributor && acting("close") && (!reviewGood || isConflict);
+  // A GOOD PR on a guarded path → held for the owner's manual safety review (NOT auto-approved or auto-merged).
+  // But a CONTRIBUTOR PR that is NOT review-good (gate blockers / red / unverified CI) OR conflicts is CLOSED
+  // one-shot REGARDLESS of the guardrail. Spec: "guarded + would-merge → hold; otherwise → closure." The
+  // guardrail exists to stop auto-MERGING/APPROVING crucial-path changes without owner review (see canMerge /
+  // approve) — it must NOT keep a rejected PR open: closing rejects bad changes and merges nothing, so it is
+  // always safe. Owner/automation PRs are still never closed (isContributor gates that). (#close-bad-guarded)
+  const willClose = isContributor && acting("close") && (!reviewGood || isConflict);
   const ciReason = ciFailed
     ? `CI is failing${failingCheckNames.length ? ` (${failingCheckNames.join(", ")})` : ""}`
     : ciUnverified
