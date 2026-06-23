@@ -49,10 +49,10 @@ function advisory(over: Partial<Advisory> = {}): Advisory {
 const pr = { number: 3, title: "Add helper", body: "Adds a helper." };
 
 function defectJson() {
-  return JSON.stringify({ assessment: "Likely crash.", suggestions: ["Guard null."], risks: ["Null deref."], criticalDefect: { present: true, confidence: 0.97, title: "Null deref", detail: "Dereferences null." } });
+  return JSON.stringify({ assessment: "Likely crash.", blockers: ["Null dereference of a possibly-null value in src/a.ts."], nits: ["Guard null."], suggestions: ["Guard null."] });
 }
 function notesOnlyJson() {
-  return JSON.stringify({ assessment: "Looks fine.", suggestions: ["Add a test."], risks: [], criticalDefect: { present: false, confidence: 0, title: "", detail: "" } });
+  return JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: ["Add a test."], suggestions: ["Add a test."] });
 }
 
 function aiEnv(run: () => Promise<unknown>, flags = true) {
