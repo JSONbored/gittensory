@@ -153,6 +153,7 @@ import {
   unionScopedOverlapClusters,
   type ContributorProfile,
 } from "../signals/engine";
+import { buildUnifiedReviewDiff } from "../review/review-diff";
 import { buildUnifiedCommentBody, isUnifiedReviewCommentEnabled } from "../review/unified-comment-bridge";
 import { screenshotsAllowed } from "../review/visual-wire";
 import { isVisualPath } from "../review/visual/paths";
@@ -1547,21 +1548,19 @@ async function resolvePullRequestFilesForReview(
  *  huge PR cannot blow the model context or the neuron budget; each file's patch is taken from the raw
  *  GitHub file payload when present. */
 export function buildAiReviewDiff(files: Awaited<ReturnType<typeof listPullRequestFiles>>): string {
-  const MAX_DIFF_CHARS = 60000;
-  const parts: string[] = [];
-  let total = 0;
-  for (const file of files) {
-    const patch = typeof file.payload?.patch === "string" ? file.payload.patch : "";
-    const header = `### ${file.path}${file.status ? ` (${file.status})` : ""} +${file.additions}/-${file.deletions}`;
-    const block = patch ? `${header}\n${patch}` : header;
-    if (total + block.length > MAX_DIFF_CHARS) {
-      parts.push(`… diff truncated (${files.length} files total).`);
-      break;
-    }
-    parts.push(block);
-    total += block.length;
-  }
-  return parts.join("\n\n");
+  // Source-first + hunk-aware + always-list-dropped-files (ported from reviewbot). The old blind 60k
+  // head-slice `break`-dropped whole files in stored order, so the file DEFINING a symbol could vanish
+  // while another referenced it → the model hallucinated "missing import / undefined symbol" (the #1528
+  // class, which survived even with grounding on). (#accuracy-gap-1)
+  return buildUnifiedReviewDiff(
+    files.map((file) => ({
+      path: file.path,
+      patch: typeof file.payload?.patch === "string" ? file.payload.patch : undefined,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+    })),
+  );
 }
 
 /**

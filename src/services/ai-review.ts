@@ -182,12 +182,45 @@ export function coerceAiText(result: unknown): string {
   return "";
 }
 
+/**
+ * Extract the LAST complete top-level JSON object from text — brace-depth-aware + string-safe.
+ * The gpt-oss/nemotron reasoning models emit a `<think>` scratchpad object BEFORE the real verdict; a
+ * greedy `/\{[\s\S]*\}/` spans first-`{` to last-`}` and swallows BOTH, corrupting the parse (silently
+ * dropping/garbling reviews). Ported from reviewbot (the source-of-truth engine). Returns null when there
+ * is no complete top-level object. (#accuracy-gap-3)
+ */
+export function extractLastJsonObject(text: string): string | null {
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let esc = false;
+  let last: string | null = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) last = text.slice(start, i + 1);
+    }
+  }
+  return last;
+}
+
 /** Parse a model's JSON review into a normalized {@link ModelReview}, or null when unparseable. */
 export function parseModelReview(text: string): ModelReview | null {
-  const match = text.replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").match(/\{[\s\S]*\}/);
-  if (!match) return null;
+  const jsonText = extractLastJsonObject(text);
+  if (!jsonText) return null;
   try {
-    const obj = JSON.parse(match[0]) as Record<string, unknown>;
+    const obj = JSON.parse(jsonText) as Record<string, unknown>;
     const toList = (value: unknown): string[] =>
       Array.isArray(value) ? value.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean).slice(0, 6) : [];
     const assessment = typeof obj.assessment === "string" ? obj.assessment.trim() : "";

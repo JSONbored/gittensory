@@ -13,18 +13,20 @@ function fileRecord(over: Partial<PullRequestFileRecord> & { path: string }): Pu
 }
 
 describe("buildAiReviewDiff", () => {
-  it("includes patches and headers, omits the patch when absent, and truncates oversized diffs", () => {
+  it("includes patches and headers, lists a patch-less file, and truncates oversized diffs (source-first)", () => {
     const diff = buildAiReviewDiff([
       fileRecord({ path: "src/a.ts", status: "modified", payload: { patch: "@@\n+const x = 1;" } }),
       fileRecord({ path: "src/b.ts", status: undefined, payload: {} }),
     ]);
     expect(diff).toContain("### src/a.ts (modified) +1/-0");
     expect(diff).toContain("+const x = 1;");
-    expect(diff).toContain("### src/b.ts +1/-0"); // no status, no patch
+    expect(diff).toContain("### src/b.ts (modified) +1/-0"); // status defaults to "modified"
+    expect(diff).toContain("no inline patch"); // patch-less file still listed, never invisible
     expect(buildAiReviewDiff([])).toBe("");
 
-    const huge = buildAiReviewDiff([fileRecord({ path: "src/big.ts", payload: { patch: "x".repeat(70000) } }), fileRecord({ path: "src/next.ts" })]);
-    expect(huge).toContain("diff truncated");
+    // Oversized patch beyond the 80k budget is truncated (per-file hunk-aware or top-level), never silently dropped.
+    const huge = buildAiReviewDiff([fileRecord({ path: "src/big.ts", payload: { patch: "x".repeat(90000) } }), fileRecord({ path: "src/next.ts" })]);
+    expect(huge).toContain("truncated");
   });
 });
 

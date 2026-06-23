@@ -1,0 +1,53 @@
+import { describe, expect, it } from "vitest";
+import { addedLineCount, buildUnifiedReviewDiff, diffFilePriority, keepHighSignalHunks } from "../../src/review/review-diff";
+
+describe("diffFilePriority — source survives, noise drops first", () => {
+  it("ranks source(0) < tests(1) < docs(2) < lockfiles/generated(4)", () => {
+    expect(diffFilePriority("src/a.ts")).toBe(0);
+    expect(diffFilePriority("src/a.test.ts")).toBe(1);
+    expect(diffFilePriority("README.md")).toBe(2);
+    expect(diffFilePriority("package-lock.json")).toBe(4);
+    expect(diffFilePriority("dist/bundle.js")).toBe(4);
+    expect(diffFilePriority("app.min.css")).toBe(4);
+  });
+});
+
+describe("addedLineCount — counts +lines, ignores +++ header", () => {
+  it("counts only substantive added lines", () => {
+    expect(addedLineCount("@@\n+a\n+b\n-c\n d")).toBe(2);
+    expect(addedLineCount("+++ b/file.ts\n+real")).toBe(1);
+    expect(addedLineCount(undefined)).toBe(0);
+  });
+});
+
+describe("buildUnifiedReviewDiff — the #1528 fix: never silently drop the file defining a symbol", () => {
+  it("orders SOURCE before a lockfile, so under a tight budget source survives and the lockfile drops", () => {
+    const bigLock = `@@\n${"+x\n".repeat(400)}`; // large, low-priority
+    const source = "@@\n+export function loadArtifactData() { return 1; }";
+    const diff = buildUnifiedReviewDiff(
+      [
+        { path: "package-lock.json", patch: bigLock, status: "modified", additions: 400, deletions: 0 },
+        { path: "src/mcp-server.mjs", patch: source, status: "modified", additions: 1, deletions: 0 },
+      ],
+      300, // tight budget — only one file fits
+    );
+    expect(diff).toContain("src/mcp-server.mjs"); // source kept
+    expect(diff).toContain("loadArtifactData"); // the symbol-defining hunk survives
+    expect(diff).toContain("…diff truncated"); // the lockfile was dropped, and that is announced
+  });
+
+  it("lists a patch-less (binary/too-large) file with its counts instead of making it invisible", () => {
+    const diff = buildUnifiedReviewDiff([{ path: "logo.png", patch: undefined, status: "added", additions: 0, deletions: 0 }]);
+    expect(diff).toContain("logo.png (added)");
+    expect(diff).toContain("no inline patch");
+  });
+
+  it("reduces an oversized single file hunk-aware (keeps the highest-signal hunk) rather than head-slicing", () => {
+    const lowSignal = `@@ -1,2 +1,2 @@\n context\n context`;
+    const highSignal = `@@ -10,1 +10,5 @@\n+critical1\n+critical2\n+critical3\n+critical4`;
+    const reduced = keepHighSignalHunks(`${lowSignal}\n${highSignal}`, 70); // room for the high-signal hunk only
+    expect(reduced).toContain("critical1"); // the high-signal hunk is kept
+    expect(reduced).not.toContain("context"); // the low-signal hunk is dropped
+    expect(reduced).toContain("dropped"); // and the drop is announced
+  });
+});

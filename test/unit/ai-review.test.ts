@@ -285,6 +285,23 @@ describe("pure helpers", () => {
     expect(parsed?.nits).toEqual([]);
   });
 
+  it("parseModelReview takes the LAST top-level object — a reasoning <think> scratchpad object no longer corrupts the verdict (#accuracy-gap-3)", () => {
+    // gpt-oss/nemotron emit a scratchpad object BEFORE the verdict. The old greedy /\{[\s\S]*\}/ spanned
+    // first-{ to last-} and swallowed both → JSON.parse failed / garbled. The brace-aware extractor takes
+    // only the LAST complete top-level object (the real verdict).
+    const withScratchpad = `<think>{"thought":"file a.ts looks fine, but b.ts has a leak","draft":{"x":1}}</think>\n{"assessment":"leak in b.ts","blockers":["Unclosed handle in src/b.ts"],"nits":[],"suggestions":[]}`;
+    const parsed = parseModelReview(withScratchpad);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.assessment).toBe("leak in b.ts");
+    expect(parsed?.blockers).toEqual(["Unclosed handle in src/b.ts"]);
+  });
+
+  it("parseModelReview parses a verdict wrapped in ```json fences without a regex strip (#accuracy-gap-3)", () => {
+    const fenced = '```json\n{"assessment":"ok","blockers":["X in src/a.ts"],"nits":[],"suggestions":[]}\n```';
+    const parsed = parseModelReview(fenced);
+    expect(parsed?.blockers).toEqual(["X in src/a.ts"]);
+  });
+
   it("consensusDefectOf requires a concrete blocker in BOTH reviews and drops unsafe titles", () => {
     const r = (blockers: string[]) => ({ assessment: "", suggestions: [], nits: [], blockers });
     expect(consensusDefectOf(r(["Null deref in src/a.ts"]), r(["Null deref in src/a.ts"]), AI_CONSENSUS_FLOOR)).not.toBeNull();
