@@ -578,6 +578,37 @@ describe("queue processors", () => {
     expect(sent).toEqual([]);
   });
 
+  it("agent re-gate sweep re-reviews each stale open PR (installation id) and swallows a failing re-review", async () => {
+    const env = createTestEnv({});
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, linkedIssueGateMode: "block" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Unlinked PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "no linked issue here" });
+    // Advance past the one-hour freshness window so the just-seeded PR reads as stale.
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+    // Make the re-review itself REJECT (its advisory persist throws) so the sweep's per-PR error backstop runs.
+    // Only the advisories insert is poisoned; every other read/write (verdict computation, the closing audit
+    // event) keeps working — the sweep must still complete and record its advisory verdict.
+    const realPrepare = env.DB.prepare.bind(env.DB);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    env.DB.prepare = ((sql: string) => {
+      if (/insert\s+into\s+["'`]?advisories/i.test(sql)) throw new Error("advisory persist failed");
+      return realPrepare(sql);
+    }) as typeof env.DB.prepare;
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+
+    const audit = await realPrepare("select outcome, metadata_json from audit_events where event_type = ?").bind("agent.sweep.regate").first<{
+      outcome: string;
+      metadata_json: string;
+    }>();
+    expect(audit?.outcome).toBe("completed");
+    expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ repoFullName: "owner/agent-repo", examined: 1, flagged: 1 });
+    // The failing re-review was caught and logged via the sweep_rereview_failed backstop, not rethrown.
+    expect(errors.mock.calls.some((call) => String(call[0]).includes("sweep_rereview_failed"))).toBe(true);
+    errors.mockRestore();
+  });
+
   it("agent re-gate sweep respects the #776 kill-switch: a paused repo records a skip and recomputes nothing (#777)", async () => {
     const env = createTestEnv({});
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } });

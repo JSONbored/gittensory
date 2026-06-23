@@ -85,6 +85,50 @@ describe("GitHub check runs", () => {
     await expect(createInstallationToken(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123)).resolves.toBe("installation-token");
   });
 
+  it("caches an installation token and reuses it within the validity window", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    let mints = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) {
+        mints += 1;
+        return Response.json({ token: `installation-token-${mints}`, expires_at: new Date(Date.now() + 60 * 60_000).toISOString() });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey });
+    const first = await createInstallationToken(env, 555);
+    const second = await createInstallationToken(env, 555);
+
+    expect(first).toBe("installation-token-1");
+    expect(second).toBe("installation-token-1");
+    expect(mints).toBe(1);
+  });
+
+  it("re-mints an installation token once the cached one is within the expiry safety margin", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    let mints = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) {
+        mints += 1;
+        // First mint expires almost immediately (inside the 2-minute safety margin) → must not be reused.
+        const expiresInMs = mints === 1 ? 30_000 : 60 * 60_000;
+        return Response.json({ token: `installation-token-${mints}`, expires_at: new Date(Date.now() + expiresInMs).toISOString() });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey });
+    const first = await createInstallationToken(env, 777);
+    const second = await createInstallationToken(env, 777);
+
+    expect(first).toBe("installation-token-1");
+    expect(second).toBe("installation-token-2");
+    expect(mints).toBe(2);
+  });
+
   it("fetches repository collaborator permissions with installation credentials", async () => {
     const privateKey = await generatePrivateKeyPem();
     const calls: string[] = [];
