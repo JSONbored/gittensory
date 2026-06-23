@@ -164,7 +164,8 @@ export async function evaluateNotificationEvent(env: Env, event: DetectedNotific
     listNotificationSubscriptionsForLogin(env, event.recipientLogin),
     listDigestSubscriptionsForLogin(env, event.recipientLogin),
   ]);
-  const channels = resolveNotificationChannels(subscriptions, digestSubscriptions);
+  const emailCapableDigestSubscriptions = notificationEmailDeliveryEnabled(env) ? digestSubscriptions : [];
+  const channels = resolveNotificationChannels(subscriptions, emailCapableDigestSubscriptions);
   if (channels.length === 0) return [];
 
   const { title, body } = buildNotificationContent(event);

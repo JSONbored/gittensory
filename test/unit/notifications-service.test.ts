@@ -180,6 +180,14 @@ describe("evaluateNotificationEvent", () => {
     expect(created.map((delivery) => delivery.channel)).toEqual(["badge", "email"]);
   });
 
+  it("keeps digest subscriptions store-only when email delivery is not runtime-configured", async () => {
+    const env = createTestEnv();
+    delete env.EMAIL;
+    await upsertDigestSubscription(env, { login: "Miner", email: "miner@example.com" });
+    const created = await evaluateNotificationEvent(env, event());
+    expect(created.map((delivery) => delivery.channel)).toEqual(["badge"]);
+  });
+
   it("suppresses deliveries beyond the per-recipient rate-limit window", async () => {
     const env = createTestEnv();
     for (let index = 0; index < NOTIFICATION_RATE_LIMIT.maxPerWindow; index += 1) {
