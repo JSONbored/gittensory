@@ -5348,9 +5348,22 @@ function loginMatches(column: unknown, login: string) {
   return sql`lower(${column}) = ${login.toLowerCase()}`;
 }
 
-export function extractLinkedIssueNumbers(text: string): number[] {
-  const matches = [...text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)];
-  return [...new Set(matches.map((match) => Number(match[1])).filter((value) => Number.isInteger(value) && value > 0))];
+export const MAX_LINKED_ISSUE_NUMBERS = 50;
+
+export function extractLinkedIssueNumbers(text: string, limit = MAX_LINKED_ISSUE_NUMBERS): number[] {
+  const normalizedLimit = Math.max(0, Math.floor(limit));
+  if (normalizedLimit === 0) return [];
+
+  const linkedIssues: number[] = [];
+  const seen = new Set<number>();
+  for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)) {
+    const value = Number(match[1]);
+    if (!Number.isInteger(value) || value <= 0 || seen.has(value)) continue;
+    seen.add(value);
+    linkedIssues.push(value);
+    if (linkedIssues.length >= normalizedLimit) break;
+  }
+  return linkedIssues;
 }
 
 function extractLinkedPrNumbers(text: string): number[] {
