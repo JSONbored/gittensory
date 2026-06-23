@@ -353,11 +353,10 @@ export function composeAdvisoryNotes(reviews: ModelReview[]): string | null {
     lines.push("");
   }
   if (safeNits.length > 0) {
-    // Nits go inside a collapsed <details> toggle so the body stays focused on the assessment + blockers;
-    // the blank line after </summary> lets GitHub render the markdown list inside the dropdown. (#focused-reviews)
-    lines.push("<details>", `<summary>Nits (${safeNits.length})</summary>`, "");
+    // Keep advisory notes markdown-only: downstream public comment renderers escape angle brackets
+    // in this blob, so raw HTML would render as literal tags instead of GitHub UI. (#focused-reviews)
+    lines.push(`**Nits (${safeNits.length})**`);
     lines.push(...safeNits.map((s) => `- ${s}`));
-    lines.push("</details>");
   }
   // Reaching here means at least one section was pushed (the all-empty case returned null above).
   return lines.join("\n").trim();
