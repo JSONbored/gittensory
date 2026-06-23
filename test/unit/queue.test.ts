@@ -55,6 +55,17 @@ describe("queue processors", () => {
     vi.unstubAllGlobals();
   });
 
+  async function seedLiveCutover(repoFullName: string, env: Env): Promise<void> {
+    await (env.DB as unknown as { prepare: (sql: string) => { bind: (...values: unknown[]) => { run: () => Promise<unknown> } } })
+      .prepare(
+        `INSERT INTO review_cutover_controls (repo_full_name, stage, freeze_verified_at, rollback_dry_run_at, last_live_at, updated_at)
+         VALUES (?, 'live', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT(repo_full_name) DO UPDATE SET stage = 'live', updated_at = CURRENT_TIMESTAMP`,
+      )
+      .bind(repoFullName)
+      .run();
+  }
+
   it("processes registry, backfill, installation health, and signal snapshot jobs", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -2775,6 +2786,7 @@ describe("queue processors", () => {
   // and enables the gate so `maybePublishPrPublicSurface` takes the flag-ON branch.
   it("renders the unified PR-review comment when the flag is on and the gate evaluates", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
+    await seedLiveCutover("JSONbored/gittensory", env);
     await persistRegistrySnapshot(
       env,
       normalizeRegistryPayload(
@@ -2909,6 +2921,7 @@ describe("queue processors", () => {
   // under a "CI checks failing" section (not just a bare "CI failing" chip).
   it("inline-fetches the PR files and renders failing CI check names + reasons in the unified comment (FIX B + D3)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
+    await seedLiveCutover("JSONbored/gittensory", env);
     await persistRegistrySnapshot(
       env,
       normalizeRegistryPayload(
