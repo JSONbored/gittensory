@@ -57,6 +57,11 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
         return undefined;
       },
     } as unknown as Queue,
+    EMAIL: {
+      async send() {
+        return { messageId: "test-message-id" };
+      },
+    } as unknown as SendEmail,
     GITHUB_APP_ID: "3824093",
     GITHUB_APP_SLUG: "gittensory",
     GITTENSOR_UPSTREAM_REPO: "entrius/gittensor",
@@ -66,6 +71,7 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
     GITTENSORY_DRIFT_ISSUE_REPO: "JSONbored/gittensory",
     PUBLIC_API_ORIGIN: "https://gittensory-api.aethereal.dev",
     PUBLIC_SITE_ORIGIN: "https://gittensory.aethereal.dev",
+    NOTIFICATION_FROM_EMAIL: "notifications@gittensory.aethereal.dev",
     INTERNAL_JOB_TOKEN: "dev-internal-token",
     GITTENSORY_API_TOKEN: "test-api-token",
     GITTENSORY_MCP_TOKEN: "test-mcp-token",

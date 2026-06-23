@@ -1260,7 +1260,7 @@ export async function upsertDigestSubscription(
   const now = nowIso();
   const record: DigestSubscriptionRecord = {
     id: crypto.randomUUID(),
-    login: input.login,
+    login: input.login.toLowerCase(),
     email: input.email.toLowerCase(),
     status: input.status ?? "active",
     source: input.source ?? "app",
@@ -1296,7 +1296,12 @@ export async function upsertDigestSubscription(
 
 export async function listDigestSubscriptionsForLogin(env: Env, login: string): Promise<DigestSubscriptionRecord[]> {
   const db = getDb(env.DB);
-  const rows = await db.select().from(digestSubscriptions).where(eq(digestSubscriptions.login, login)).orderBy(desc(digestSubscriptions.updatedAt)).limit(20);
+  const rows = await db
+    .select()
+    .from(digestSubscriptions)
+    .where(eq(digestSubscriptions.login, login.toLowerCase()))
+    .orderBy(desc(digestSubscriptions.updatedAt))
+    .limit(20);
   return rows.map(toDigestSubscriptionRecord);
 }
 
@@ -1486,6 +1491,66 @@ export async function markNotificationDeliveryDelivered(env: Env, id: string): P
     .update(notificationDeliveries)
     .set({ status: "delivered", deliveredAt: nowIso() })
     .where(and(eq(notificationDeliveries.id, id), eq(notificationDeliveries.status, "pending")));
+}
+
+export async function listNotificationDeliveriesByIds(env: Env, ids: string[]): Promise<NotificationDeliveryRecord[]> {
+  if (ids.length === 0) return [];
+  const db = getDb(env.DB);
+  const rows = await db.select().from(notificationDeliveries).where(inArray(notificationDeliveries.id, ids));
+  const records = rows.map(toNotificationDeliveryRecord);
+  const order = new Map(ids.map((id, index) => [id, index]));
+  return records.sort((left, right) => (order.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(right.id) ?? Number.MAX_SAFE_INTEGER));
+}
+
+export async function listPendingNotificationDeliveriesForRecipient(
+  env: Env,
+  recipientLogin: string,
+  channel: NotificationChannel,
+  limit: number,
+): Promise<NotificationDeliveryRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select()
+    .from(notificationDeliveries)
+    .where(
+      and(
+        eq(notificationDeliveries.recipientLogin, recipientLogin.toLowerCase()),
+        eq(notificationDeliveries.channel, channel),
+        eq(notificationDeliveries.status, "pending"),
+      ),
+    )
+    .orderBy(notificationDeliveries.createdAt)
+    .limit(Math.max(1, Math.min(50, limit)));
+  return rows.map(toNotificationDeliveryRecord);
+}
+
+export async function claimPendingNotificationDeliveries(env: Env, ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const db = getDb(env.DB);
+  const claimed = await db
+    .update(notificationDeliveries)
+    .set({ status: "sending" })
+    .where(and(inArray(notificationDeliveries.id, ids), eq(notificationDeliveries.status, "pending")))
+    .returning({ id: notificationDeliveries.id });
+  return claimed.map((row) => row.id);
+}
+
+export async function markNotificationDeliveriesPending(env: Env, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const db = getDb(env.DB);
+  await db
+    .update(notificationDeliveries)
+    .set({ status: "pending" })
+    .where(and(inArray(notificationDeliveries.id, ids), eq(notificationDeliveries.status, "sending")));
+}
+
+export async function markNotificationDeliveriesDelivered(env: Env, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const db = getDb(env.DB);
+  await db
+    .update(notificationDeliveries)
+    .set({ status: "delivered", deliveredAt: nowIso() })
+    .where(and(inArray(notificationDeliveries.id, ids), eq(notificationDeliveries.status, "sending")));
 }
 
 export async function listNotificationDeliveriesForRecipient(
@@ -4355,7 +4420,7 @@ function toNotificationSubscriptionRecord(row: typeof notificationSubscriptions.
 }
 
 function toNotificationDeliveryStatus(value: string): NotificationDeliveryStatus {
-  return value === "delivered" || value === "read" || value === "suppressed" ? value : "pending";
+  return value === "sending" || value === "delivered" || value === "read" || value === "suppressed" ? value : "pending";
 }
 
 function toNotificationDeliveryRecord(row: typeof notificationDeliveries.$inferSelect): NotificationDeliveryRecord {

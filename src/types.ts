@@ -1274,7 +1274,7 @@ export type DigestSubscriptionRecord = {
 // (#570) is a later opt-in channel. Subscriptions store per-channel opt-out (badge is on by default
 // unless a row is `paused`).
 export type NotificationChannel = "badge" | "email";
-export type NotificationDeliveryStatus = "pending" | "delivered" | "read" | "suppressed";
+export type NotificationDeliveryStatus = "pending" | "sending" | "delivered" | "read" | "suppressed";
 export type NotificationEventType = "pull_request_changes_requested" | "pull_request_merged" | "issue_watch_match";
 
 /** #699 path B: a miner's standing watch on a repo for new grabbable issues. `labels` ([]=any) filters

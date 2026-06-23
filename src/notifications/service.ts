@@ -1,28 +1,72 @@
 import { sanitizePublicComment } from "../github/commands";
 import {
+  claimPendingNotificationDeliveries,
   countRecentNotificationDeliveries,
   getNotificationDeliveryById,
   getRepository,
   insertNotificationDeliveryIfAbsent,
   listIssueWatchersForRepo,
+  listDigestSubscriptionsForLogin,
+  listNotificationDeliveriesByIds,
+  listPendingNotificationDeliveriesForRecipient,
   listNotificationSubscriptionsForLogin,
+  markNotificationDeliveriesDelivered,
+  markNotificationDeliveriesPending,
   markNotificationDeliveryDelivered,
 } from "../db/repositories";
 import { isGrabbableHighMultiplierIssue } from "../signals/engine";
 import { canLoginAccessRepo } from "../services/control-panel-roles";
-import type { DetectedNotificationEvent, IssueRecord, NotificationChannel, NotificationDeliveryRecord, NotificationSubscriptionRecord } from "../types";
+import type {
+  DetectedNotificationEvent,
+  DigestSubscriptionRecord,
+  IssueRecord,
+  NotificationChannel,
+  NotificationDeliveryRecord,
+  NotificationSubscriptionRecord,
+} from "../types";
 import { nowIso } from "../utils/json";
 
 // Per-recipient, per-channel safety cap. The killer event (changes_requested) delivers immediately, but a
 // burst of reviews must not flood a miner's badge — beyond the cap inside the window, deliveries are still
 // recorded (idempotent) but marked `suppressed` so they neither notify nor count toward the next window.
 export const NOTIFICATION_RATE_LIMIT = { windowMinutes: 60, maxPerWindow: 10 } as const;
+export const EMAIL_NOTIFICATION_MAX_ITEMS = 10;
+const DEFAULT_NOTIFICATION_FROM_EMAIL = "notifications@gittensory.aethereal.dev";
+const EMAIL_SUBJECT_PREFIX = "[Gittensory]";
 
 // `badge` is the channel shipped first (pull-based extension + harness feed). It is on by default; a miner
-// opts OUT by pausing the badge subscription. `email` (#570) is a later opt-in channel — not resolved yet.
-export function resolveNotificationChannels(subscriptions: NotificationSubscriptionRecord[]): NotificationChannel[] {
+// opts OUT by pausing the badge subscription. `email` is opt-in and reuses active digest subscriptions as the
+// destination list; a paused email notification subscription mutes outbound sends without deleting the stored
+// digest opt-in rows.
+export function resolveNotificationChannels(
+  subscriptions: NotificationSubscriptionRecord[],
+  digestSubscriptions: DigestSubscriptionRecord[] = [],
+): NotificationChannel[] {
   const badgePaused = subscriptions.some((subscription) => subscription.channel === "badge" && subscription.status === "paused");
-  return badgePaused ? [] : ["badge"];
+  const channels: NotificationChannel[] = badgePaused ? [] : ["badge"];
+  if (resolveNotificationEmailDestinations(subscriptions, digestSubscriptions).length > 0) channels.push("email");
+  return channels;
+}
+
+export function resolveNotificationEmailDestinations(
+  subscriptions: NotificationSubscriptionRecord[],
+  digestSubscriptions: DigestSubscriptionRecord[],
+): string[] {
+  const emailPaused = subscriptions.some((subscription) => subscription.channel === "email" && subscription.status === "paused");
+  if (emailPaused) return [];
+  const explicitDestinations = subscriptions
+    .filter((subscription) => subscription.channel === "email" && subscription.status === "active")
+    .map((subscription) => subscription.destination?.trim().toLowerCase() ?? "")
+    .filter(Boolean);
+  if (explicitDestinations.length > 0) return [...new Set(explicitDestinations)];
+  return [
+    ...new Set(
+      digestSubscriptions
+        .filter((subscription) => subscription.status === "active")
+        .map((subscription) => subscription.email.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 export function buildChangesRequestedNotification(event: DetectedNotificationEvent): { title: string; body: string } {
@@ -116,8 +160,11 @@ function rateLimitWindowStart(now: string): string {
 // rows that were freshly created with status `pending` (the caller enqueues a deliver job for each). Rows
 // that already existed (duplicate webhook/retry) or were rate-limited/suppressed are NOT returned.
 export async function evaluateNotificationEvent(env: Env, event: DetectedNotificationEvent): Promise<NotificationDeliveryRecord[]> {
-  const subscriptions = await listNotificationSubscriptionsForLogin(env, event.recipientLogin);
-  const channels = resolveNotificationChannels(subscriptions);
+  const [subscriptions, digestSubscriptions] = await Promise.all([
+    listNotificationSubscriptionsForLogin(env, event.recipientLogin),
+    listDigestSubscriptionsForLogin(env, event.recipientLogin),
+  ]);
+  const channels = resolveNotificationChannels(subscriptions, digestSubscriptions);
   if (channels.length === 0) return [];
 
   const { title, body } = buildNotificationContent(event);
@@ -187,13 +234,96 @@ export function buildNotificationFeed(login: string, deliveries: NotificationDel
   return { login: login.toLowerCase(), unreadCount, notifications };
 }
 
-// Badge delivery is pull-based: "delivering" just makes the row visible to the recipient's feed (status
-// pending -> delivered). Email/web-push (#570) would perform an outbound send here for their channel.
 export async function deliverNotification(env: Env, deliveryId: string): Promise<void> {
   const delivery = await getNotificationDeliveryById(env, deliveryId);
   /* v8 ignore next -- deliver is only enqueued for a row that was just created; the guard protects retries after deletion. */
   if (!delivery || delivery.status !== "pending") return;
-  // Only the badge channel is resolved today (resolveNotificationChannels), so every delivery is a badge
-  // delivery — making the row visible to the recipient's feed. Email/web-push (#570) will branch by channel here.
-  await markNotificationDeliveryDelivered(env, deliveryId);
+  if (delivery.channel === "badge") {
+    await markNotificationDeliveryDelivered(env, deliveryId);
+    return;
+  }
+  await deliverEmailNotification(env, delivery);
+}
+
+function notificationFromAddress(env: Env): string {
+  return env.NOTIFICATION_FROM_EMAIL?.trim() || DEFAULT_NOTIFICATION_FROM_EMAIL;
+}
+
+export function notificationEmailDeliveryEnabled(env: Env): boolean {
+  return typeof env.EMAIL?.send === "function" && Boolean(notificationFromAddress(env));
+}
+
+function pluralize(count: number, singular: string, plural: string): string {
+  return count === 1 ? singular : plural;
+}
+
+export function buildNotificationEmailMessage(deliveries: NotificationDeliveryRecord[]): { subject: string; text: string } {
+  const items = deliveries.slice(0, EMAIL_NOTIFICATION_MAX_ITEMS);
+  const repoCount = new Set(items.map((delivery) => delivery.repoFullName.toLowerCase())).size;
+  const subject =
+    items.length === 1
+      ? `${EMAIL_SUBJECT_PREFIX} ${items[0]!.title}`
+      : `${EMAIL_SUBJECT_PREFIX} ${items.length} updates across ${repoCount} ${pluralize(repoCount, "repo", "repos")}`;
+  const intro =
+    items.length === 1
+      ? "You have a new Gittensory update."
+      : `You have ${items.length} new Gittensory updates. Recent review activity was coalesced into this one email.`;
+  const lines = [
+    intro,
+    "",
+    ...items.flatMap((delivery, index) => [
+      `${index + 1}. ${delivery.title}`,
+      delivery.body,
+      `Link: ${delivery.deeplink}`,
+      "",
+    ]),
+    "You received this because you opted into Gittensory email notifications via the digest panel.",
+  ];
+  return { subject, text: lines.join("\n").trim() };
+}
+
+async function deliverEmailNotification(env: Env, anchorDelivery: NotificationDeliveryRecord): Promise<void> {
+  if (!notificationEmailDeliveryEnabled(env)) {
+    throw new Error("notification_email_unconfigured");
+  }
+  const [subscriptions, digestSubscriptions] = await Promise.all([
+    listNotificationSubscriptionsForLogin(env, anchorDelivery.recipientLogin),
+    listDigestSubscriptionsForLogin(env, anchorDelivery.recipientLogin),
+  ]);
+  const destinations = resolveNotificationEmailDestinations(subscriptions, digestSubscriptions);
+  if (destinations.length === 0) {
+    await markNotificationDeliveryDelivered(env, anchorDelivery.id);
+    return;
+  }
+
+  const pending = await listPendingNotificationDeliveriesForRecipient(env, anchorDelivery.recipientLogin, "email", EMAIL_NOTIFICATION_MAX_ITEMS);
+  const candidateIds = pending.map((delivery) => delivery.id);
+  const claimedIds = await claimPendingNotificationDeliveries(env, candidateIds);
+  if (!claimedIds.includes(anchorDelivery.id)) return;
+
+  const claimed = await listNotificationDeliveriesByIds(env, claimedIds);
+  const bundle = claimed
+    .filter((delivery) => delivery.channel === "email")
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .slice(0, EMAIL_NOTIFICATION_MAX_ITEMS);
+  if (bundle.length === 0) return;
+
+  const { subject, text } = buildNotificationEmailMessage(bundle);
+  try {
+    await Promise.all(
+      destinations.map((to) =>
+        env.EMAIL!.send({
+          to,
+          from: notificationFromAddress(env),
+          subject,
+          text,
+          headers: { "X-Gittensory-Recipient": anchorDelivery.recipientLogin },
+        }),
+      ),
+    );
+    await markNotificationDeliveriesDelivered(env, bundle.map((delivery) => delivery.id));
+  } catch (error) {
+    await markNotificationDeliveriesPending(env, bundle.map((delivery) => delivery.id));
+    throw error;
+  }
 }

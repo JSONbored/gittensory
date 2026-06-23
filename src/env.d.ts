@@ -2,6 +2,7 @@ declare global {
   interface Env {
     DB: D1Database;
     JOBS: Queue;
+    EMAIL?: SendEmail;
     RATE_LIMITER?: DurableObjectNamespace;
     AI?: Ai;
     /** Convergence (infra): Vectorize index for codebase RAG retrieval (Layer C). Optional — the review is
@@ -25,6 +26,8 @@ declare global {
      *  Deliberately NOT declared in this chunk; the review path keeps its current concurrency behavior. */
     PUBLIC_API_ORIGIN?: string;
     PUBLIC_SITE_ORIGIN?: string;
+    /** Sender address for outbound notification emails. Must be valid for the worker's send_email binding. */
+    NOTIFICATION_FROM_EMAIL?: string;
     AI_SUMMARIES_ENABLED?: string;
     AI_PUBLIC_COMMENTS_ENABLED?: string;
     WORKERS_AI_SUMMARY_MODEL?: string;

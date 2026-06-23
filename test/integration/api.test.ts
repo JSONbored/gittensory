@@ -3139,7 +3139,7 @@ describe("api routes", () => {
     const digest = await app.request("/v1/app/digest", { headers: cookieHeaders }, env);
     expect(digest.status).toBe(200);
     await expect(digest.json()).resolves.toMatchObject({
-      delivery: { mode: "store_only", emailDeliveryEnabled: false },
+      delivery: { mode: "email_opt_in", emailDeliveryEnabled: true },
       items: expect.arrayContaining([expect.objectContaining({ kind: "summary" })]),
       subscriptions: [],
     });
@@ -3171,7 +3171,7 @@ describe("api routes", () => {
     await expect(storedDigestSubscription.json()).resolves.toMatchObject({
       status: "stored",
       subscription: { login: "oktofeesh1", email: "operator@example.com" },
-      delivery: { mode: "store_only", emailDeliveryEnabled: false },
+      delivery: { mode: "email_opt_in", emailDeliveryEnabled: true },
     });
 
     const digestWithSubscription = await app.request("/v1/app/digest", { headers: cookieHeaders }, env);

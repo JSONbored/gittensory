@@ -38,6 +38,7 @@
     "GITTENSORY_DRIFT_ISSUE_REPO": "JSONbored/gittensory",
     "PUBLIC_API_ORIGIN": "https://gittensory-api.aethereal.dev",
     "PUBLIC_SITE_ORIGIN": "https://gittensory.aethereal.dev",
+    "NOTIFICATION_FROM_EMAIL": "notifications@gittensory.aethereal.dev",
     "AI_SUMMARIES_ENABLED": "true",
     "AI_PUBLIC_COMMENTS_ENABLED": "true",
     "WORKERS_AI_SUMMARY_MODEL": "@cf/meta/llama-3.1-8b-instruct-fp8-fast",
@@ -125,6 +126,11 @@
   "ai": {
     "binding": "AI",
   },
+  "send_email": [
+    {
+      "name": "EMAIL"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

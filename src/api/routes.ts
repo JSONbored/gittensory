@@ -222,6 +222,7 @@ import { buildSlopAssessment, buildIssueSlopAssessment, SLOP_RUBRIC_MARKDOWN, IS
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
 import { buildMaintainerActivationPreview, recommendedAdvisoryActivationSettings } from "../services/maintainer-activation";
 import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
+import { notificationEmailDeliveryEnabled } from "../notifications/service";
 import { loadGatePrecisionReport } from "../services/gate-precision";
 import { computeOpsStats, isOpsEnabled } from "../review/ops-wire";
 import { computeParityReadiness, isParityAuditEnabled } from "../review/parity-wire";
@@ -1495,13 +1496,14 @@ export function createApp() {
       login ? listDigestSubscriptionsForLogin(c.env, login) : Promise.resolve([]),
     ]);
     const items = buildDigestItems({ repositories, health, upstreamDrift, rateLimits });
+    const emailDeliveryEnabled = notificationEmailDeliveryEnabled(c.env);
     return c.json({
       generatedAt: nowIso(),
       date: nowIso().slice(0, 10),
       signal: items.some((item) => item.kind === "drift" || item.kind === "install") ? "warn" : "ready",
       items,
       subscriptions,
-      delivery: { mode: "store_only", emailDeliveryEnabled: false },
+      delivery: { mode: emailDeliveryEnabled ? "email_opt_in" : "store_only", emailDeliveryEnabled },
     });
   });
 
@@ -1514,14 +1516,15 @@ export function createApp() {
     const parsed = digestSubscriptionSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_digest_subscription_request", issues: parsed.error.issues }, 400);
     const subscription = await upsertDigestSubscription(c.env, { login: identity.actor, email: parsed.data.email, source: "app" });
+    const emailDeliveryEnabled = notificationEmailDeliveryEnabled(c.env);
     await recordRouteProductUsage(c, {
       surface: "control_panel",
       eventName: "digest_subscription_stored",
       identity,
       outcome: "success",
-      metadata: { source: "app", deliveryMode: "store_only" },
+      metadata: { source: "app", deliveryMode: emailDeliveryEnabled ? "email_opt_in" : "store_only" },
     });
-    return c.json({ status: "stored", subscription, delivery: { mode: "store_only", emailDeliveryEnabled: false } }, 201);
+    return c.json({ status: "stored", subscription, delivery: { mode: emailDeliveryEnabled ? "email_opt_in" : "store_only", emailDeliveryEnabled } }, 201);
   });
 
   app.get("/v1/extension/pull-context", async (c) => {

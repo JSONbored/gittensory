@@ -30,7 +30,7 @@ type DigestResponse = {
   signal: "ready" | "warn";
   items: DigestItem[];
   subscriptions: Array<{ email: string; status: string }>;
-  delivery: { mode: "store_only"; emailDeliveryEnabled: boolean };
+  delivery: { mode: "store_only" | "email_opt_in"; emailDeliveryEnabled: boolean };
 };
 
 const ICONS: Record<DigestItem["kind"], React.ReactNode> = {
@@ -64,7 +64,9 @@ export function DigestPanel() {
               <DigestStream items={data.items.slice(0, 4)} compact date={data.date} />
             </PhoneFrame>
             <p className="mt-3 text-center text-token-2xs text-muted-foreground">
-              Live in-app digest preview. Email delivery is not enabled.
+              {data.delivery.emailDeliveryEnabled
+                ? "Live in-app digest preview. Opt-in emails deliver from this subscription list."
+                : "Live in-app digest preview. Email delivery is not enabled in this environment."}
             </p>
           </div>
 
@@ -104,7 +106,11 @@ export function DigestPanel() {
               ))}
             </ul>
 
-            <SubscribeForm subscribed={data.subscriptions.length > 0} onStored={digest.reload} />
+            <SubscribeForm
+              subscribed={data.subscriptions.length > 0}
+              emailDeliveryEnabled={data.delivery.emailDeliveryEnabled}
+              onStored={digest.reload}
+            />
           </div>
         </div>
       ) : null}
@@ -168,7 +174,15 @@ function DigestStream({
   );
 }
 
-function SubscribeForm({ subscribed, onStored }: { subscribed: boolean; onStored: () => void }) {
+function SubscribeForm({
+  subscribed,
+  emailDeliveryEnabled,
+  onStored,
+}: {
+  subscribed: boolean;
+  emailDeliveryEnabled: boolean;
+  onStored: () => void;
+}) {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   return (
@@ -190,7 +204,9 @@ function SubscribeForm({ subscribed, onStored }: { subscribed: boolean; onStored
           return;
         }
         toast.success("Digest subscription stored", {
-          description: "Stored in Gittensory. Email delivery is not enabled yet.",
+          description: emailDeliveryEnabled
+            ? "Stored in Gittensory. Matching notification events now deliver to this inbox."
+            : "Stored in Gittensory, but email delivery is not enabled in this environment.",
         });
         onStored();
       }}
@@ -198,10 +214,12 @@ function SubscribeForm({ subscribed, onStored }: { subscribed: boolean; onStored
     >
       <div className="flex-1">
         <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-          Store-only digest
+          {emailDeliveryEnabled ? "Email notification opt-in" : "Store-only digest"}
         </div>
         <div className="mt-0.5 text-token-sm">
-          Persist a subscription record without claiming email delivery.
+          {emailDeliveryEnabled
+            ? "Receive coalesced Gittensory notification emails at this address."
+            : "Persist a subscription record without claiming email delivery."}
         </div>
       </div>
       <Input
