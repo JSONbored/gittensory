@@ -1719,6 +1719,7 @@ export async function runAiReviewForAdvisory(
     const ragContext = isRagEnabled(env) && convergedRepoAllowed
       ? await buildReviewRagContext(env, {
           repoFullName: args.repoFullName,
+          title: args.pr.title,
           files: files.map((file) => ({ path: file.path, patch: typeof file.payload?.patch === "string" ? file.payload.patch : undefined })),
         })
       : undefined;

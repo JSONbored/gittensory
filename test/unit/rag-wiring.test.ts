@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runGittensoryAiReview } from "../../src/services/ai-review";
 import { runAiReviewForAdvisory } from "../../src/queue/processors";
+import * as ragModule from "../../src/review/rag";
 import { RAG_DIMENSIONS } from "../../src/review/rag";
 import { buildRagQuery, buildReviewRagContext, isRagEnabled, populateRepoIndexStub } from "../../src/review/rag-wire";
 import { createTestEnv } from "../helpers/d1";
@@ -92,8 +93,23 @@ describe("buildRagQuery composes the retrieval query from the changed files", ()
     expect(excludePaths).toEqual(["src/a.ts"]);
   });
 
+  it("PREPENDS the PR title to the query text (recall parity with reviewbot)", () => {
+    const { queryText } = buildRagQuery(changedFiles, "Refactor the auth middleware");
+    expect(queryText).toContain("Refactor the auth middleware");
+    // The title leads the query (before the "Changed files:" block).
+    expect(queryText.indexOf("Refactor the auth middleware")).toBeLessThan(queryText.indexOf("Changed files:"));
+    // The diff sample is still present (title is ADDITIVE, not a replacement).
+    expect(queryText).toContain("helper()");
+  });
+
+  it("omits a blank/whitespace title cleanly (query still starts with the Changed files block)", () => {
+    expect(buildRagQuery(changedFiles, "   ").queryText.startsWith("Changed files:")).toBe(true);
+    expect(buildRagQuery(changedFiles, undefined).queryText.startsWith("Changed files:")).toBe(true);
+  });
+
   it("returns an empty query (nothing to retrieve on) when there are no files", () => {
     expect(buildRagQuery([])).toEqual({ queryText: "", excludePaths: [] });
+    expect(buildRagQuery([], "Some title")).toEqual({ queryText: "", excludePaths: [] });
   });
 
   it("dedupes excluded paths", () => {
@@ -152,6 +168,32 @@ describe("buildReviewRagContext: retrieval wiring + fail-safe", () => {
     const out = await buildReviewRagContext(env, { repoFullName: "acme/rag-empty", files: [] });
     expect(out).toBe("");
     expect(vec.query).not.toHaveBeenCalled();
+  });
+});
+
+// ── Quality knobs (#GAP-2): minScore + reranker + title flow into retrieveContext ──────────────────
+
+describe("buildReviewRagContext passes the quality knobs into retrieveContext (#GAP-2)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("invokes the retrieve call with minScore 0.4 + reranker 'bm25' and the title-led query (reviewbot parity)", async () => {
+    const spy = vi.spyOn(ragModule, "retrieveContext").mockResolvedValue("=== RELEVANT EXISTING CODE / DOCS ===");
+    const env = createTestEnv({ DB: ragDbStub(), VECTORIZE: vectorizeStub() as unknown as Vectorize, AI: aiStub() as unknown as Ai });
+    const out = await buildReviewRagContext(env, { repoFullName: "acme/widgets", title: "Add a feature", files: changedFiles });
+    expect(out).toContain("RELEVANT EXISTING CODE / DOCS");
+    expect(spy).toHaveBeenCalledTimes(1);
+    const opts = spy.mock.calls[0]?.[1];
+    expect(opts).toMatchObject({ minScore: 0.4, reranker: "bm25", project: "acme", repo: "widgets" });
+    // The title leads the embedded query (recall parity with reviewbot).
+    expect(opts?.queryText).toContain("Add a feature");
+    expect(opts?.queryText.indexOf("Add a feature")).toBeLessThan(opts?.queryText.indexOf("Changed files:") ?? -1);
+  });
+
+  it("a caller-supplied reranker still wins over the default (e.g. forcing it off), minScore unchanged", async () => {
+    const spy = vi.spyOn(ragModule, "retrieveContext").mockResolvedValue("");
+    const env = createTestEnv({ DB: ragDbStub(), VECTORIZE: vectorizeStub() as unknown as Vectorize, AI: aiStub() as unknown as Ai });
+    await buildReviewRagContext(env, { repoFullName: "acme/widgets", files: changedFiles, reranker: "off" });
+    expect(spy.mock.calls[0]?.[1]).toMatchObject({ minScore: 0.4, reranker: "off" });
   });
 });
 
