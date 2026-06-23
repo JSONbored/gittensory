@@ -38,23 +38,16 @@ export const AI_CONSENSUS_FLOOR = 0.9;
 
 const REVIEW_SYSTEM_PROMPT = [
   "You are a senior open-source maintainer giving a THOROUGH code review of a single pull request diff.",
-  "Review like a careful human: read each meaningful hunk and give SPECIFIC, concrete feedback — correctness",
-  "bugs, logic errors, risky patterns, missing/incorrect error handling, unhandled edge cases, security issues,",
-  "performance problems, race conditions, and API/contract or backward-compat breaks. Reference the file (and the",
-  "function/line where you can) for every point. Do NOT rubber-stamp: if the diff is genuinely clean, state",
-  "specifically WHY it is safe (what you checked); otherwise give real, actionable findings.",
-  "Judge only the diff and the context provided. `assessment` must be a substantive walkthrough of the change",
-  "(several sentences — what it does, whether it is correct, and the notable details), NOT one generic line.",
-  "`suggestions` = concrete improvements (file-referenced); `risks` = things that could break or need a human's",
-  "attention. Aim for real depth over brevity.",
-  "Report a criticalDefect ONLY when you are highly confident the change introduces a real bug, a security",
-  "hole, data loss, or a build break — NOT for style, nits, naming, or merely-missing tests (those belong in",
-  "suggestions/risks and must NOT block).",
-  "Never mention rewards, rankings, payouts, wallets, hotkeys, coldkeys, trust scores, scoreability,",
-  "reviewability, or farming.",
-  'Respond with ONLY a JSON object of this exact shape (no prose, no code fence):',
-  '{"assessment": string, "suggestions": string[], "risks": string[],',
-  ' "criticalDefect": {"present": boolean, "confidence": number, "title": string, "detail": string}}',
+  "Read each meaningful hunk and review like a careful human; judge ONLY the diff and the context provided.",
+  "Respond with ONLY a JSON object of this exact shape (no prose, no code fence):",
+  '{"assessment": string, "blockers": string[], "nits": string[], "suggestions": string[]}',
+  "- assessment: a SUBSTANTIVE walkthrough (several sentences) — what the change does, whether it is correct, and the notable details. Specific to THIS diff; NEVER a generic one-liner and never hedging ('appears to', 'seems to').",
+  "- blockers: each ONE sentence naming a CONCRETE must-fix defect IN THIS DIFF — a correctness/logic bug, a security hole, data loss, a build/test breakage, a race condition, or an API/contract/backward-compat break. Reference the file (and function/line). Empty [] if there are genuinely none.",
+  "- nits: each ONE sentence — a NON-blocking point: style, naming, a 'consider…', a missing doc/comment, an unhandled edge case worth noting, or a minor improvement. File-reference where you can.",
+  "- suggestions: concrete, file-referenced improvements (may overlap nits).",
+  "Do NOT rubber-stamp. If the diff is genuinely clean, the assessment must state SPECIFICALLY why it is safe (what you checked) and blockers must be []. Otherwise give real, specific findings — aim for depth, list every concern you actually see.",
+  "SEVERITY DISCIPLINE: a BLOCKER is a real defect you can point to in the diff; a NIT is style / preference / hypothetical / optional / docs. CI or check status ITSELF (failing, pending, unverified) is NOT a code defect — NEVER list it as a blocker or nit (the gate evaluates CI separately). Nits and hypotheticals are never blockers.",
+  "Never mention rewards, rankings, payouts, wallets, hotkeys, coldkeys, trust scores, scoreability, reviewability, or farming.",
 ].join(" ");
 
 /** A maintainer's BYOK provider credential, decrypted at call time. Never logged, never returned. */
@@ -107,9 +100,11 @@ export type GittensoryAiReviewResult =
 
 type ModelReview = {
   assessment: string;
+  // blockers = concrete must-fix defects in the diff (drive the consensus defect / gate); nits = non-blocking
+  // points; suggestions = concrete improvements (rendered alongside nits). reviewbot-parity shape. (#extensive-reviews)
+  blockers: string[];
+  nits: string[];
   suggestions: string[];
-  risks: string[];
-  criticalDefect: { present: boolean; confidence: number; title: string; detail: string };
 };
 
 type AiGatewayOptions = { gateway?: { id: string } };
@@ -191,23 +186,13 @@ export function parseModelReview(text: string): ModelReview | null {
   try {
     const obj = JSON.parse(match[0]) as Record<string, unknown>;
     const toList = (value: unknown): string[] =>
-      Array.isArray(value) ? value.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean).slice(0, 6) : [];
+      Array.isArray(value) ? value.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean).slice(0, 12) : [];
     const assessment = typeof obj.assessment === "string" ? obj.assessment.trim() : "";
-    const defectRaw = obj.criticalDefect && typeof obj.criticalDefect === "object" ? (obj.criticalDefect as Record<string, unknown>) : {};
-    const present = defectRaw.present === true;
-    const confidence = typeof defectRaw.confidence === "number" ? Math.max(0, Math.min(1, defectRaw.confidence)) : 0;
-    if (!assessment && !present && !Array.isArray(obj.suggestions)) return null;
-    return {
-      assessment,
-      suggestions: toList(obj.suggestions),
-      risks: toList(obj.risks),
-      criticalDefect: {
-        present,
-        confidence,
-        title: typeof defectRaw.title === "string" ? defectRaw.title.trim().slice(0, 140) : "",
-        detail: typeof defectRaw.detail === "string" ? defectRaw.detail.trim().slice(0, 400) : "",
-      },
-    };
+    const blockers = toList(obj.blockers);
+    const nits = toList(obj.nits);
+    const suggestions = toList(obj.suggestions);
+    if (!assessment && blockers.length === 0 && nits.length === 0 && suggestions.length === 0) return null;
+    return { assessment, blockers, nits, suggestions };
   } catch {
     return null;
   }
@@ -348,35 +333,38 @@ async function runProviderReview(providerKey: AiReviewProviderKey, system: strin
 /** Compose a public-safe markdown advisory blurb from one or two model reviews. Null if nothing safe. */
 export function composeAdvisoryNotes(reviews: ModelReview[]): string | null {
   const assessments = reviews.map((r) => r.assessment).filter(Boolean);
-  const suggestions = [...new Set(reviews.flatMap((r) => r.suggestions))].slice(0, 5);
-  const risks = [...new Set(reviews.flatMap((r) => r.risks))].slice(0, 4);
+  const blockers = [...new Set(reviews.flatMap((r) => r.blockers))].slice(0, 8);
+  // nits + suggestions are both non-blocking — merge + dedupe for the write-up.
+  const nits = [...new Set(reviews.flatMap((r) => [...r.nits, ...r.suggestions]))].slice(0, 12);
   const assessment = toPublicSafe(assessments[0] ?? "");
-  const safeSuggestions = suggestions.map((s) => toPublicSafe(s)).filter((s): s is string => Boolean(s));
-  const safeRisks = risks.map((s) => toPublicSafe(s)).filter((s): s is string => Boolean(s));
-  if (!assessment && safeSuggestions.length === 0 && safeRisks.length === 0) return null;
+  const safeBlockers = blockers.map((s) => toPublicSafe(s)).filter((s): s is string => Boolean(s));
+  const safeNits = nits.map((s) => toPublicSafe(s)).filter((s): s is string => Boolean(s));
+  if (!assessment && safeBlockers.length === 0 && safeNits.length === 0) return null;
   const lines: string[] = [];
   if (assessment) lines.push(assessment, "");
-  if (safeSuggestions.length > 0) {
-    lines.push("**Suggestions**");
-    lines.push(...safeSuggestions.map((s) => `- ${s}`));
+  if (safeBlockers.length > 0) {
+    lines.push("**Blockers**");
+    lines.push(...safeBlockers.map((s) => `- ${s}`));
     lines.push("");
   }
-  if (safeRisks.length > 0) {
-    lines.push("**Risks**");
-    lines.push(...safeRisks.map((s) => `- ${s}`));
+  if (safeNits.length > 0) {
+    lines.push("**Nits**");
+    lines.push(...safeNits.map((s) => `- ${s}`));
   }
   // Reaching here means at least one section was pushed (the all-empty case returned null above).
   return lines.join("\n").trim();
 }
 
-/** True iff BOTH reviews independently report a critical defect at/above the floor. */
+/** A CONSENSUS defect = BOTH reviews independently name at least one concrete blocker (the severity-disciplined
+ *  reviewbot model: a lone blocker in a dual review is a split, not a hard block). `floor` retained for the
+ *  caller signature; the consensus here is blocker PRESENCE in both reviews (the prompt's rubric keeps nits out). */
 export function consensusDefectOf(a: ModelReview, b: ModelReview, floor: number): AiConsensusDefect | null {
-  const both = a.criticalDefect.present && b.criticalDefect.present && a.criticalDefect.confidence >= floor && b.criticalDefect.confidence >= floor;
-  if (!both) return null;
-  const title = toPublicSafe(a.criticalDefect.title || b.criticalDefect.title || "AI reviewers agree on a likely critical defect");
-  const detail = toPublicSafe(a.criticalDefect.detail || b.criticalDefect.detail);
+  void floor;
+  if (a.blockers.length === 0 || b.blockers.length === 0) return null;
+  const title = toPublicSafe(a.blockers[0] || b.blockers[0] || "AI reviewers agree on a likely blocking defect");
+  const detail = toPublicSafe([...new Set([...a.blockers, ...b.blockers])].slice(0, 4).join("; "));
   if (!title) return null; // unsafe title → drop the block entirely (fail-safe)
-  return { title, detail: detail ?? "Both AI reviewers independently flagged a high-confidence critical defect in this change.", confidence: Math.min(a.criticalDefect.confidence, b.criticalDefect.confidence) };
+  return { title, detail: detail ?? "Both AI reviewers independently flagged a concrete must-fix defect in this change.", confidence: 1 };
 }
 
 /**

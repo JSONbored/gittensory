@@ -1497,9 +1497,9 @@ describe("queue processors", () => {
   it("hard-blocks a confirmed contributor on a dual-model AI consensus defect when aiReview: block is opted in", async () => {
     const defectJson = JSON.stringify({
       assessment: "Introduces a likely crash.",
+      blockers: ["Unhandled null dereference on empty input in src/a.ts — the new branch dereferences a possibly-null value."],
+      nits: ["Guard the null case."],
       suggestions: ["Guard the null case."],
-      risks: ["Unhandled null on empty input."],
-      criticalDefect: { present: true, confidence: 0.96, title: "Unhandled null dereference", detail: "The new branch dereferences a possibly-null value." },
     });
     const env = createTestEnv({
       GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
