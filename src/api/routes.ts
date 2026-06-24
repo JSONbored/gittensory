@@ -175,6 +175,7 @@ import {
   loadWeeklyValueReport,
 } from "../services/weekly-value-report";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
+import { buildContributorOpenPrPressureResponse } from "../services/open-pr-pressure-response";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
@@ -214,6 +215,7 @@ import {
   buildExtensionIssueBadges,
   buildExtensionPrStatus,
 } from "../signals/extension-contributor-context";
+import { buildExtensionOpenPrPressure } from "../signals/extension-open-pr-pressure";
 import { attachDataQuality, buildCoreSignalFidelity, buildFreshnessSloReport, buildRepoDataQuality, buildSignalFidelity } from "../signals/data-quality";
 import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
@@ -2571,6 +2573,26 @@ export function createApp() {
     const queueHealth = buildQueueHealth(repo, issues, pullRequests, collisions);
     const readiness = buildPublicReadinessScore({ pr, preflight, queueHealth });
     return c.json(buildExtensionPrStatus({ repoFullName, pullNumber, readiness }));
+  });
+
+  // #348 open-PR pressure strategy: self-only contributor simulation of whether to open more work,
+  // wait, or clean up first. Public-safe bands only — no payout/reward/scoreability language.
+  app.get("/v1/extension/contributors/:login/open-pr-pressure", async (c) => {
+    const login = c.req.param("login");
+    const unauthorized = await requireContributorAccess(c, login);
+    if (unauthorized) return unauthorized;
+    const owner = c.req.query("owner") ?? "";
+    const repoName = c.req.query("repo") ?? "";
+    if (!owner || !repoName) return c.json({ error: "valid_owner_repo_required" }, 400);
+    const repoFullName = `${owner}/${repoName}`;
+    const repo = await getRepository(c.env, repoFullName);
+    if (!repo) return c.json({ error: "repo_not_found" }, 404);
+    const repoForbidden = await requireContributorRepoAccess(c, repoFullName, repo);
+    if (repoForbidden) return repoForbidden;
+    const context = await loadContributorFastContext(c.env, login);
+    const response = await buildContributorOpenPrPressureResponse(c.env, login, repoFullName, context.profile);
+    if (!response) return c.json({ error: "repo_not_found" }, 404);
+    return c.json(buildExtensionOpenPrPressure(response));
   });
 
   app.post("/v1/local/branch-analysis", async (c) => {
