@@ -62,10 +62,13 @@ export async function handleGitHubWebhook(c: Context<{ Bindings: Env }>): Promis
     payload,
   };
   try {
-    await c.env.JOBS.send(message);
+    // Send to the dedicated WEBHOOKS lane (not the shared JOBS queue) so a maintenance burst on JOBS can never
+    // starve real GitHub events into the DLQ. (#audit-webhook-queue)
+    await c.env.WEBHOOKS.send(message);
   } catch {
     // Enqueue failed: flip the event to "error" so the dedup guard above lets GitHub redeliver,
-    // and return 500 so GitHub retries instead of treating the webhook as handled (#786).
+    // and return 500 so GitHub retries instead of treating the webhook as handled (#786). This also covers the
+    // deploy-ordering case where the WEBHOOKS queue is not yet provisioned — no event is lost.
     await recordWebhookEvent(c.env, {
       deliveryId,
       eventName,

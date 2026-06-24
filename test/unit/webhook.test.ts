@@ -41,11 +41,11 @@ describe("github webhook body reader edge cases", () => {
 describe("github webhook enqueue failure (#786)", () => {
   it("flags the event 'error' and returns 500 when the queue send fails", async () => {
     const env = createTestEnv();
-    env.JOBS = {
+    env.WEBHOOKS = {
       send: async () => {
         throw new Error("queue unavailable");
       },
-    } as unknown as typeof env.JOBS;
+    } as unknown as typeof env.WEBHOOKS;
     const rawBody = JSON.stringify({ action: "opened", repository: { full_name: "JSONbored/gittensory" }, installation: { id: 1 } });
     const signature = await signWebhook(rawBody, env.GITHUB_WEBHOOK_SECRET);
     const request = new Request("https://example.com/webhook", { method: "POST", body: rawBody });
@@ -80,11 +80,11 @@ describe("github webhook dedup (#789)", () => {
   it("suppresses redelivery of an already-processed event instead of re-running side effects", async () => {
     const env = createTestEnv();
     let sendCount = 0;
-    env.JOBS = {
+    env.WEBHOOKS = {
       send: async () => {
         sendCount += 1;
       },
-    } as unknown as typeof env.JOBS;
+    } as unknown as typeof env.WEBHOOKS;
     // Seed a fully-processed event: on success the queue overwrites payloadHash with the "processed"
     // sentinel, so a redelivery carries the real hash and a hash-only dedup would miss it.
     await recordWebhookEvent(env, { deliveryId: "redelivery-1", eventName: "pull_request", payloadHash: "processed", status: "processed" });
@@ -113,6 +113,42 @@ describe("github webhook dedup (#789)", () => {
     expect(response.status).toBe(202);
     await expect(response.json()).resolves.toMatchObject({ status: "duplicate" });
     expect(sendCount).toBe(0); // not re-enqueued
+  });
+});
+
+describe("github webhook queue isolation (#audit-webhook-queue)", () => {
+  it("INVARIANT: a valid webhook is enqueued onto the dedicated WEBHOOKS lane, never the shared JOBS queue", async () => {
+    const env = createTestEnv();
+    let jobsSends = 0;
+    let webhookSends = 0;
+    env.JOBS = { send: async () => void (jobsSends += 1) } as unknown as typeof env.JOBS;
+    env.WEBHOOKS = { send: async () => void (webhookSends += 1) } as unknown as typeof env.WEBHOOKS;
+    const rawBody = JSON.stringify({ action: "opened", repository: { full_name: "JSONbored/gittensory" }, installation: { id: 1 } });
+    const signature = await signWebhook(rawBody, env.GITHUB_WEBHOOK_SECRET);
+    const request = new Request("https://example.com/webhook", { method: "POST", body: rawBody });
+    const headers: Record<string, string> = {
+      "x-github-delivery": "isolation-1",
+      "x-github-event": "pull_request",
+      "x-hub-signature-256": signature,
+    };
+    const context = {
+      req: {
+        raw: request,
+        header(name: string) {
+          return headers[name.toLowerCase()] ?? null;
+        },
+      },
+      env,
+      json(payload: unknown, status?: number) {
+        return Response.json(payload, status === undefined ? undefined : { status });
+      },
+    } as unknown as Context<{ Bindings: Env }>;
+
+    const response = await handleGitHubWebhook(context);
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ status: "queued" });
+    expect(webhookSends).toBe(1); // routed to the dedicated webhook lane
+    expect(jobsSends).toBe(0); // never the shared maintenance queue
   });
 });
 

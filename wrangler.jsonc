@@ -199,8 +199,24 @@
         "binding": "JOBS",
         "queue": "gittensory-jobs",
       },
+      {
+        // Dedicated lane for incoming github-webhook jobs so a burst of heavy maintenance work (the re-gate
+        // sweep, backfills, rag-index, snapshots) on the shared `gittensory-jobs` queue can never starve real
+        // GitHub events into the DLQ. Webhooks get their own consumer concurrency + retry budget. (#audit-webhook-queue)
+        "binding": "WEBHOOKS",
+        "queue": "gittensory-webhooks",
+      },
     ],
     "consumers": [
+      {
+        // Webhook lane: small/fast batches so a real PR event is dispatched promptly, isolated from the
+        // maintenance lane's throughput. Its own DLQ keeps a failing webhook observable + replayable (PR2).
+        "queue": "gittensory-webhooks",
+        "max_batch_size": 5,
+        "max_batch_timeout": 1,
+        "max_retries": 3,
+        "dead_letter_queue": "gittensory-webhooks-dlq",
+      },
       {
         "queue": "gittensory-jobs",
         "max_batch_size": 10,
