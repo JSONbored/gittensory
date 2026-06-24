@@ -35,6 +35,28 @@ describe("worker entrypoint", () => {
     expect(retried).toEqual([]);
   });
 
+  it("routes the webhook lane's gittensory-webhooks-dlq batches to the DLQ consumer too (#1276)", async () => {
+    const env = createTestEnv();
+    const acked: string[] = [];
+    const retried: string[] = [];
+    const batch = {
+      queue: "gittensory-webhooks-dlq",
+      messages: [
+        {
+          id: "wh-dlq-1",
+          body: { type: "github-webhook", deliveryId: "d-wh-dlq", eventName: "pull_request", payload: {}, redriven: true },
+          ack: () => acked.push("wh-dlq-1"),
+          retry: () => retried.push("wh-dlq-1"),
+        },
+      ],
+    } as unknown as MessageBatch<import("../../src/types").JobMessage>;
+
+    await worker.queue(batch, env);
+
+    expect(acked).toEqual(["wh-dlq-1"]); // handled by processDlqBatch (endsWith "-dlq"), not the processJob loop
+    expect(retried).toEqual([]);
+  });
+
   it("acks successful queue messages and retries failed messages", async () => {
     const env = createTestEnv();
     vi.stubGlobal("fetch", async () => new Response("missing", { status: 404 }));

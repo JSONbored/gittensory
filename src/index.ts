@@ -14,7 +14,9 @@ export { RateLimiter };
 export default {
   fetch: app.fetch,
   async queue(batch: MessageBatch<JobMessage>, env: Env): Promise<void> {
-    if (batch.queue === "gittensory-jobs-dlq") {
+    // Both dead-letter queues (the maintenance lane's gittensory-jobs-dlq and the webhook lane's
+    // gittensory-webhooks-dlq, #1276) drain through the same observability + self-heal consumer.
+    if (batch.queue?.endsWith("-dlq")) {
       await processDlqBatch(batch, env);
       return;
     }

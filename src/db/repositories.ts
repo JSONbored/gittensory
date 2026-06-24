@@ -1982,6 +1982,20 @@ export async function hasRecentAuditEvent(env: Env, actor: string, eventType: st
   return rows.length > 0;
 }
 
+/** Observability for the queue dead-letter rate (#1276): how many jobs (across BOTH the maintenance and webhook
+ *  lanes) were dead-lettered since `sinceIso`. Reads the `github_app.dlq_dead_lettered` audit events written by
+ *  processDlqBatch — NOT gated behind any review-ops flag, so the infra drop rate is always visible. */
+export async function countRecentDeadLetters(env: Env, sinceIso: string): Promise<number> {
+  const db = getDb(env.DB);
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(auditEvents)
+    .where(and(eq(auditEvents.eventType, "github_app.dlq_dead_lettered"), gte(auditEvents.createdAt, sinceIso)));
+  /* v8 ignore next -- count(*) always returns exactly one row; the empty-array guard only satisfies the destructure type. */
+  if (!row) return 0;
+  return row.count;
+}
+
 export type PrVisibilitySkipAuditEvent = {
   repoFullName: string;
   pullNumber: number;

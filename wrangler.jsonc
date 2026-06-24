@@ -247,6 +247,15 @@
         "max_batch_timeout": 30,
         "max_retries": 0,
       },
+      {
+        // Webhook-lane DLQ consumer (#1276): a dead-lettered github-webhook carries a real GitHub event that
+        // GitHub will not redeliver, so processDlqBatch audits it AND re-drives it once onto the webhook lane
+        // (bounded by the `redriven` marker). max_retries: 0 — a DLQ message must never re-loop the DLQ.
+        "queue": "gittensory-webhooks-dlq",
+        "max_batch_size": 10,
+        "max_batch_timeout": 30,
+        "max_retries": 0,
+      },
     ],
   },
   "triggers": {

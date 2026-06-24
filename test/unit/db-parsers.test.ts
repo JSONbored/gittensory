@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  countRecentDeadLetters,
   getLatestScorePreview,
   getRepoAuthorPullRequestHistory,
   getLatestScoringModelSnapshot,
@@ -9,6 +10,7 @@ import {
   listRepoSyncSegments,
   listRepoSyncStates,
   markPullRequestRegated,
+  recordAuditEvent,
   upsertOfficialMinerDetection,
   upsertPullRequestFromGitHub,
   extractLinkedIssueNumbers,
@@ -106,6 +108,18 @@ describe("database row parser hardening", () => {
     const resynced = (await listPullRequests(env, "owner/repo")).find((p) => p.number === 6);
     expect(resynced?.title).toBe("Synced again"); // the sync ran
     expect(resynced?.lastRegatedAt).toBe(stamped); // but the marker survived
+  });
+
+  it("countRecentDeadLetters counts github_app.dlq_dead_lettered audits since a cutoff, independent of any ops flag (#1276)", async () => {
+    const env = createTestEnv();
+    await recordAuditEvent(env, { eventType: "github_app.dlq_dead_lettered", actor: "gittensory", targetKey: "dlq:github-webhook:a", outcome: "error", createdAt: "2026-06-24T10:00:00.000Z" });
+    await recordAuditEvent(env, { eventType: "github_app.dlq_dead_lettered", actor: "gittensory", targetKey: "dlq:backfill-repo-segment:b", outcome: "error", createdAt: "2026-06-24T12:00:00.000Z" });
+    // An unrelated audit event must NOT be counted (the event-type filter).
+    await recordAuditEvent(env, { eventType: "agent.sweep.regate", actor: "gittensory", targetKey: "owner/repo", outcome: "completed", createdAt: "2026-06-24T12:00:00.000Z" });
+
+    expect(await countRecentDeadLetters(env, "2026-06-24T09:00:00.000Z")).toBe(2); // both dead-letters in window
+    expect(await countRecentDeadLetters(env, "2026-06-24T11:00:00.000Z")).toBe(1); // only the 12:00 one
+    expect(await countRecentDeadLetters(env, "2026-06-24T13:00:00.000Z")).toBe(0); // none after the cutoff → count(*) returns 0
   });
 
   it("computes complete case-insensitive repo author PR history for gate grace", async () => {
