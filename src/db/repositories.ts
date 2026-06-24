@@ -5363,9 +5363,13 @@ function loginMatches(column: unknown, login: string) {
 
 export const MAX_LINKED_ISSUE_NUMBERS = 50;
 
-export function extractLinkedIssueNumbers(text: string, limit = MAX_LINKED_ISSUE_NUMBERS): number[] {
+export type LinkedIssueExtractionResult = {
+  numbers: number[];
+  overflow: boolean;
+};
+
+export function extractLinkedIssueNumbersWithOverflow(text: string, limit = MAX_LINKED_ISSUE_NUMBERS): LinkedIssueExtractionResult {
   const normalizedLimit = Math.max(0, Math.floor(limit));
-  if (normalizedLimit === 0) return [];
 
   const linkedIssues: number[] = [];
   const seen = new Set<number>();
@@ -5373,10 +5377,14 @@ export function extractLinkedIssueNumbers(text: string, limit = MAX_LINKED_ISSUE
     const value = Number(match[1]);
     if (!Number.isInteger(value) || value <= 0 || seen.has(value)) continue;
     seen.add(value);
+    if (linkedIssues.length >= normalizedLimit) return { numbers: linkedIssues, overflow: true };
     linkedIssues.push(value);
-    if (linkedIssues.length >= normalizedLimit) break;
   }
-  return linkedIssues;
+  return { numbers: linkedIssues, overflow: false };
+}
+
+export function extractLinkedIssueNumbers(text: string, limit = MAX_LINKED_ISSUE_NUMBERS): number[] {
+  return extractLinkedIssueNumbersWithOverflow(text, limit).numbers;
 }
 
 function extractLinkedPrNumbers(text: string): number[] {

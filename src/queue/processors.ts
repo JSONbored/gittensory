@@ -56,6 +56,7 @@ import {
   upsertIssueFromGitHub,
   upsertPullRequestFromGitHub,
   upsertRepositoryFromGitHub,
+  extractLinkedIssueNumbersWithOverflow,
 } from "../db/repositories";
 import { pruneExpiredRecords } from "../db/retention";
 import {
@@ -663,14 +664,22 @@ async function maybeRunAgentMaintenance(
     linkedIssueRulesConfig.ownerAssignedClose === "block" ||
     linkedIssueRulesConfig.missingPointLabelClose === "block" ||
     linkedIssueRulesConfig.maintainerOnlyLabelClose === "block";
-  if (anyLinkedIssueRuleOn && pr.linkedIssues.length > 0) {
-    // pr.linkedIssues is already capped at MAX_LINKED_ISSUE_NUMBERS at extraction (extractLinkedIssueNumbers),
-    // so the per-issue fetch fanout is bounded at the source — no extra cap needed here.
-    const issueFacts = (
-      await Promise.all(pr.linkedIssues.map((issueNumber) => fetchLinkedIssueFacts(env, repoFullName, issueNumber, ciToken ?? env.GITHUB_PUBLIC_TOKEN)))
-    ).flatMap((facts) => (facts ? [facts] : []));
-    if (issueFacts.length > 0) {
-      linkedIssueHardRule = evaluateLinkedIssueHardRules({ issues: issueFacts, config: linkedIssueRulesConfig, repoOwner });
+  if (anyLinkedIssueRuleOn) {
+    const linkedIssueExtraction = extractLinkedIssueNumbersWithOverflow(pr.body ?? "");
+    if (linkedIssueExtraction.overflow) {
+      linkedIssueHardRule = {
+        violated: true,
+        reason: "PR body links more issues than Gittensory can safely verify automatically; please reduce linked closing references or request maintainer review.",
+      };
+    } else if (pr.linkedIssues.length > 0) {
+      // pr.linkedIssues is already capped at MAX_LINKED_ISSUE_NUMBERS at extraction (extractLinkedIssueNumbers),
+      // so the per-issue fetch fanout is bounded at the source — no extra cap needed here.
+      const issueFacts = (
+        await Promise.all(pr.linkedIssues.map((issueNumber) => fetchLinkedIssueFacts(env, repoFullName, issueNumber, ciToken ?? env.GITHUB_PUBLIC_TOKEN)))
+      ).flatMap((facts) => (facts ? [facts] : []));
+      if (issueFacts.length > 0) {
+        linkedIssueHardRule = evaluateLinkedIssueHardRules({ issues: issueFacts, config: linkedIssueRulesConfig, repoOwner });
+      }
     }
   }
 
