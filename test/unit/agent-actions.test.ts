@@ -175,6 +175,15 @@ describe("planAgentMaintenanceActions (#778)", () => {
       expect(plan).not.toContain("close");
     });
 
+    it("DOES auto-close a guarded contributor PR with red REQUIRED CI — a broken change can't merge regardless (#ci-fail-closes-guarded)", () => {
+      // The guardrail holds a crucial PR against the AI/gate VERDICT (the test above), but a red required CI is an
+      // OBJECTIVE failure: the change cannot merge no matter what, so it closes even on a guarded path. The
+      // contributor fixes CI and resubmits; a GREEN guarded resubmission is then held for review. conclusion is
+      // 'neutral' here to prove it is the CI — not a verdict — driving the close.
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "neutral", autonomy: { close: "auto" }, ...guarded, ciState: "failed", pr: { labels: [] } })));
+      expect(plan).toContain("close");
+    });
+
     it("does NOT approve or auto-merge a passing PR on a guarded path", () => {
       const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto", merge: "auto" }, ...guarded, pr: { labels: [], mergeableState: "clean" } })));
       expect(plan).not.toContain("approve");

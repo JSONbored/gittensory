@@ -222,8 +222,12 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // CLOSE a contributor PR ONLY on a REAL adverse signal — a confirmed gate FAILURE, a red required CI, or a base
   // CONFLICT. NEVER close merely because CI is UNVERIFIED (a fork whose Actions await approval, or unreadable
   // checks) or otherwise not-yet-mergeable — those are HELD for review, not killed (#harm-stop fork-false-close).
-  // Owner/automation PRs are never closed (isContributor); guarded paths are held (guardrailHit).
-  const willClose = !guardrailHit && isContributor && acting("close") && (input.conclusion === "failure" || ciFailed || isConflict);
+  // Owner/automation PRs are never closed (isContributor). A guarded path is HELD for the AI/gate VERDICT and for
+  // a base conflict (don't kill a crucial change on an AI call or a rebaseable conflict). But a red REQUIRED CI is
+  // an OBJECTIVE failure — a broken change that cannot merge regardless — so it CLOSES a contributor PR even on a
+  // guarded path; the contributor fixes CI and resubmits, and a GREEN guarded resubmission is then held for review.
+  // (Rebase-if-behind already ran above, so a red CI here is on the latest base — not a stale-base artifact.) (#ci-fail-closes-guarded)
+  const willClose = isContributor && acting("close") && (ciFailed || (!guardrailHit && (input.conclusion === "failure" || isConflict)));
   // Linked-issue HARD-RULE close (#linked-issue-hard-rules). A DETERMINISTIC verdict about the LINKED ISSUE
   // (owner-assigned / missing point-label / maintainer-only) — NOT an AI verdict, so there is no hallucination
   // to guard against: this close fires REGARDLESS of `guardrailHit`. It still only ever closes a CONTRIBUTOR
