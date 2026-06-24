@@ -626,7 +626,9 @@ function isConfiguredGateBlocker(code: string, policy: GateCheckPolicy): boolean
   // A dual-model AI consensus defect blocks ONLY when the maintainer opted into aiReview: block. It is the
   // most conservative AI signal (two independent models, high confidence) but still confirmed-contributor
   // gated by evaluateGateCheck, and advisory by default.
-  if (code === "ai_consensus_defect") return gateMode(policy.aiReviewGateMode ?? "advisory") === "block";
+  // A consensus defect (both reviewers) OR a SPLIT (one reviewer flagged a blocker the other did not) both block
+  // when aiReviewGateMode is `block` — reviewbot's quorum: ANY reviewer rejection closes the PR. (#ai-review-split)
+  if (code === "ai_consensus_defect" || code === "ai_review_split") return gateMode(policy.aiReviewGateMode ?? "advisory") === "block";
   // A leaked-secret finding (`secret_leak`) ALWAYS hard-blocks: a committed credential must be removed and
   // rotated before merge, with no opt-in. This finding is produced ONLY by the flag-gated safety scan
   // (GITTENSORY_REVIEW_SAFETY); when the flag is off the finding never exists, so this branch is unreachable and the

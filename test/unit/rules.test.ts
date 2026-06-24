@@ -221,6 +221,18 @@ describe("advisory rules", () => {
     expect(evaluateGateCheck(duplicateAdvisory, { duplicatePrGateMode: "block" }).conclusion).toBe("failure");
   });
 
+  it("a reviewer SPLIT (ai_review_split) blocks → close, gated like a consensus defect by aiReviewGateMode (#ai-review-split)", () => {
+    const splitAdvisory = {
+      ...buildPullRequestAdvisory(repo, null),
+      findings: [{ code: "ai_review_split", title: "An AI reviewer flagged a likely blocking defect", severity: "critical" as const, detail: "One reviewer flagged a blocker the other did not." }],
+    };
+    // reviewbot quorum: a single rejection (split) blocks → gate failure → close, but ONLY when aiReviewGateMode
+    // is `block` (advisory/off keep it non-blocking, exactly like ai_consensus_defect).
+    expect(evaluateGateCheck(splitAdvisory, { aiReviewGateMode: "block" }).conclusion).toBe("failure");
+    expect(evaluateGateCheck(splitAdvisory, { aiReviewGateMode: "advisory" }).conclusion).toBe("success");
+    expect(evaluateGateCheck(splitAdvisory).conclusion).toBe("success");
+  });
+
   it("only enforces readiness score when quality gate mode is block", () => {
     const advisory = buildPullRequestAdvisory(repo, {
       repoFullName: repo.fullName,

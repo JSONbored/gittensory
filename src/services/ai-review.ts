@@ -99,7 +99,7 @@ export type GittensoryAiReviewResult =
   | { status: "disabled"; reason: string }
   | { status: "unavailable"; reason: string }
   | { status: "quota_exceeded"; estimatedNeurons: number; remainingBudget: number }
-  | { status: "ok"; advisoryNotes: string | null; consensusDefect: AiConsensusDefect | null; estimatedNeurons: number; reviewerCount: number };
+  | { status: "ok"; advisoryNotes: string | null; consensusDefect: AiConsensusDefect | null; split: boolean; estimatedNeurons: number; reviewerCount: number };
 
 type ModelReview = {
   assessment: string;
@@ -480,6 +480,7 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
 
   let consensusDefect: AiConsensusDefect | null = null;
   let secondReview: ModelReview | null = null;
+  let aiReviewSplit = false;
   if (input.mode === "block") {
     // Consensus blocker ALWAYS uses the free Workers-AI pair (provider-independent, never BYOK).
     const [a, b] = await Promise.all([
@@ -487,7 +488,13 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
       runWorkersOpinion(env, BEST_REVIEW_MODELS[1], RELIABLE_FALLBACK_MODELS[1], system, user, maxTokens),
     ]);
     secondReview = b;
-    if (a && b) consensusDefect = consensusDefectOf(a, b, AI_CONSENSUS_FLOOR);
+    if (a && b) {
+      consensusDefect = consensusDefectOf(a, b, AI_CONSENSUS_FLOOR);
+      // SPLIT = the two reviewers DISAGREE (exactly one named a blocker). Lower confidence than a clean consensus,
+      // so the gate HOLDS it for review instead of auto-merging (only when there is no real consensus defect —
+      // a consensus is the stronger signal and blocks on its own). (#ai-review-split)
+      aiReviewSplit = !consensusDefect && (a.blockers.length > 0) !== (b.blockers.length > 0);
+    }
   }
 
   const reviewsForNotes = [advisoryReview, secondReview].filter((r): r is ModelReview => Boolean(r));
@@ -499,7 +506,7 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
     consensus: Boolean(consensusDefect),
     ...(byokFailure ? { byokFailure } : {}),
   });
-  return { status: "ok", advisoryNotes, consensusDefect, estimatedNeurons, reviewerCount: reviewsForNotes.length };
+  return { status: "ok", advisoryNotes, consensusDefect, split: aiReviewSplit, estimatedNeurons, reviewerCount: reviewsForNotes.length };
 }
 
 async function record(

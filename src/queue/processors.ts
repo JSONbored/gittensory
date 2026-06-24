@@ -1887,6 +1887,17 @@ export async function runAiReviewForAdvisory(
         action: "Resolve the flagged defect, or override if the AI reviewers are mistaken, then re-run the gate.",
       };
       args.advisory.findings.push(defect);
+    } else if (result.split) {
+      // The reviewers DISAGREED — exactly one flagged a blocking defect. reviewbot's quorum: ANY reviewer
+      // rejection closes the PR, so a split is a HARD BLOCKER (advisory.ts gates `ai_review_split` like a
+      // consensus defect → gate failure → close); the contributor resubmits a fresh PR. (#ai-review-split)
+      args.advisory.findings.push({
+        code: "ai_review_split",
+        severity: "critical",
+        title: "An AI reviewer flagged a likely blocking defect",
+        detail: "One AI reviewer independently flagged a concrete must-fix defect in this change (the other did not). Under the quorum rule, a single rejection closes the PR; see the review notes for specifics.",
+        action: "Resolve the flagged defect and open a new pull request, or override if the reviewers are mistaken.",
+      });
     }
     return result.advisoryNotes ? { notes: result.advisoryNotes, reviewerCount: result.reviewerCount } : undefined;
   } catch (error) {
