@@ -25,6 +25,11 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/migrations ./migrations
 COPY --from=build /app/scripts/register-selfhost.mjs ./scripts/register-selfhost.mjs
+# Optional: bake the Claude Code / Codex CLIs so the `claude-code` / `codex` subscription providers (#979)
+# work in-image. Build with `--build-arg INSTALL_AI_CLIS=true`. No credentials are baked — operators mint
+# CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`) / codex auth at run time and pass it via the env.
+ARG INSTALL_AI_CLIS=false
+RUN if [ "$INSTALL_AI_CLIS" = "true" ]; then npm install -g @anthropic-ai/claude-code @openai/codex; fi
 # Data dir (the SQLite file) — owned by the unprivileged node user; mount a volume here to persist.
 RUN mkdir -p /data && chown -R node:node /data /app
 USER node

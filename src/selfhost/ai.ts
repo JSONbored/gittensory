@@ -52,6 +52,37 @@ export function createOpenAiCompatibleAi(opts: { baseUrl: string; apiKey?: strin
   };
 }
 
+/** Native Anthropic Messages API (BYOK — bills your Anthropic API key; distinct from the claude-code
+ *  subscription path). The system message becomes the top-level `system` param; the rest map to user/assistant. */
+export function createAnthropicAi(opts: { apiKey: string; model?: string | undefined; baseUrl?: string | undefined }): SelfHostAi {
+  const base = (opts.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
+  return {
+    async run(model, options) {
+      const msgs = toMessages(options);
+      const system =
+        msgs
+          .filter((m) => m.role === "system")
+          .map((m) => m.content)
+          .join("\n\n") || undefined;
+      const messages = msgs.filter((m) => m.role !== "system").map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
+      const res = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": opts.apiKey, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({ model: resolveModel(opts.model, model, "claude-sonnet-4-6"), max_tokens: options.max_tokens ?? 1024, ...(system ? { system } : {}), messages }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (!res.ok) throw new Error(`anthropic_http_${res.status}`);
+      const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
+      return {
+        response: (data.content ?? [])
+          .filter((c) => c.type === "text")
+          .map((c) => c.text ?? "")
+          .join(""),
+      };
+    },
+  };
+}
+
 // ── Subscription CLI providers (#979) — locally-authenticated `claude` / `codex` as a subprocess ──────────
 // SECURITY: the child env DELETES the billable API keys so a misconfigured CLI cannot silently bill the
 // metered API instead of using the subscription OAuth token. The CLI runs read-only / no extra tools. Any
@@ -169,14 +200,63 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
   };
 }
 
-/** Pick the self-host AI provider from env (AI_PROVIDER). Returns undefined when unconfigured. */
-export function createSelfHostAi(env: Record<string, string | undefined>): SelfHostAi | undefined {
-  const provider = (env.AI_PROVIDER ?? "").trim().toLowerCase();
-  if (!provider) return undefined;
-  if (provider === "ollama" || provider === "openai-compatible" || provider === "openai") {
-    return createOpenAiCompatibleAi({ baseUrl: env.AI_BASE_URL ?? "http://localhost:11434/v1", apiKey: env.AI_API_KEY, model: configuredModel(env) });
+/** Try each provider in order until one returns; if all throw, rethrow the last error so the caller degrades
+ *  (AI summary → "unavailable"; the review still runs deterministically). The fallback chain is what makes a
+ *  BYOK setup robust — e.g. AI_PROVIDER="anthropic,ollama" uses the API first and a local model if it's down. */
+export function createChainAi(providers: Array<{ name: string; ai: SelfHostAi }>): SelfHostAi {
+  return {
+    async run(model, options) {
+      let lastError: unknown = new Error("no_ai_providers");
+      for (const p of providers) {
+        try {
+          return await p.ai.run(model, options);
+        } catch (error) {
+          lastError = error;
+          console.error(JSON.stringify({ level: "warn", event: "selfhost_ai_provider_failed", provider: p.name, error: error instanceof Error ? error.message : "unknown" }));
+        }
+      }
+      throw lastError instanceof Error ? lastError : new Error("all_ai_providers_failed");
+    },
+  };
+}
+
+/** Build one provider adapter by name (BYO credentials read from provider-specific env, then the generic
+ *  AI_API_KEY). Returns undefined when its required credential is missing. */
+export function buildProvider(name: string, env: Record<string, string | undefined>): SelfHostAi | undefined {
+  switch (name) {
+    case "ollama":
+    case "openai-compatible":
+    case "openai":
+      return createOpenAiCompatibleAi({
+        baseUrl: env.AI_BASE_URL ?? (name === "openai" ? "https://api.openai.com/v1" : "http://localhost:11434/v1"),
+        apiKey: env.AI_API_KEY ?? env.OPENAI_API_KEY,
+        model: configuredModel(env),
+      });
+    case "anthropic": {
+      const apiKey = env.ANTHROPIC_API_KEY ?? env.AI_API_KEY;
+      return apiKey ? createAnthropicAi({ apiKey, model: configuredModel(env), baseUrl: env.AI_BASE_URL }) : undefined;
+    }
+    case "claude-code":
+      return createClaudeCodeAi(env);
+    case "codex":
+      return createCodexAi(env);
+    default:
+      return undefined;
   }
-  if (provider === "claude-code") return createClaudeCodeAi(env);
-  if (provider === "codex") return createCodexAi(env);
-  return undefined;
+}
+
+/** Select the self-host AI provider(s) from AI_PROVIDER. A comma-separated list builds a fallback chain
+ *  (first to succeed wins). Returns undefined when unconfigured or no provider has its credential. */
+export function createSelfHostAi(env: Record<string, string | undefined>): SelfHostAi | undefined {
+  const raw = (env.AI_PROVIDER ?? "").trim().toLowerCase();
+  if (!raw) return undefined;
+  const providers = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((name) => ({ name, ai: buildProvider(name, env) }))
+    .filter((p): p is { name: string; ai: SelfHostAi } => Boolean(p.ai));
+  if (providers.length === 0) return undefined;
+  if (providers.length === 1) return providers[0]?.ai;
+  return createChainAi(providers);
 }

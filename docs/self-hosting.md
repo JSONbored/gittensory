@@ -76,9 +76,18 @@ and only the AI **summary** degrades to "unavailable". To enable AI, set `AI_PRO
 
 | `AI_PROVIDER` | Backend | Extra config |
 | --- | --- | --- |
-| `ollama` / `openai-compatible` / `openai` | any OpenAI-compatible `/chat/completions` endpoint | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` |
+| `ollama` / `openai-compatible` / `openai` | any OpenAI-compatible `/chat/completions` endpoint (Ollama, OpenAI, Groq, Together, OpenRouter, vLLM, Gemini's OpenAI-compat endpoint, …) | `AI_BASE_URL`, `AI_API_KEY` (or `OPENAI_API_KEY`), `AI_MODEL` |
+| `anthropic` | **native Anthropic Messages API** (BYOK — bills your API key) | `ANTHROPIC_API_KEY`, `AI_MODEL` (e.g. `claude-sonnet-4-6`) |
 | `claude-code` | your **Claude** subscription via the `claude` CLI (read-only, headless) | `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), `AI_MODEL` (e.g. `sonnet`) |
 | `codex` | your **Codex** subscription via the `codex` CLI | local `codex` auth, `AI_MODEL` (e.g. `gpt-5`) |
+
+**Fallback chain.** `AI_PROVIDER` accepts a comma-separated list and tries each in order until one succeeds —
+e.g. `AI_PROVIDER=anthropic,ollama` uses the Anthropic API first and falls back to a local Ollama model if it
+errors. If every provider fails, the AI summary degrades to "unavailable" and the review still runs.
+
+**Subscription CLIs in the image.** The `claude-code` / `codex` providers need their CLI present. Build the
+image with `--build-arg INSTALL_AI_CLIS=true` (or `docker compose build --build-arg INSTALL_AI_CLIS=true`) to
+bake them in, then provide `CLAUDE_CODE_OAUTH_TOKEN` / codex auth at run time. No credentials are baked in.
 
 > **Set `AI_MODEL`.** The core would otherwise hand the adapter a Cloudflare Workers-AI model id
 > (`@cf/meta/...`) that Ollama / `claude` / `codex` can't use. The adapter ignores that id in favour of

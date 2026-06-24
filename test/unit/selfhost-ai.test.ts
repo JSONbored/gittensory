@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { claudeErrorStatus, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveModel } from "../../src/selfhost/ai";
+import { claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveModel } from "../../src/selfhost/ai";
 
 describe("resolveModel (#979 — never leak the Workers-AI default to a self-host backend)", () => {
   const WORKERS_DEFAULT = "@cf/meta/llama-3.1-8b-instruct-fp8-fast";
@@ -52,6 +52,49 @@ describe("createSelfHostAi — provider selection", () => {
     expect(typeof createSelfHostAi({ AI_PROVIDER: "claude-code" })?.run).toBe("function");
     expect(typeof createSelfHostAi({ AI_PROVIDER: "codex" })?.run).toBe("function");
     expect(createSelfHostAi({ AI_PROVIDER: "nonsense" })).toBeUndefined();
+  });
+  it("anthropic requires a key; a comma-list builds a fallback chain", () => {
+    expect(createSelfHostAi({ AI_PROVIDER: "anthropic" })).toBeUndefined(); // no key → dropped
+    expect(typeof createSelfHostAi({ AI_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-ant" })?.run).toBe("function");
+    // "anthropic,ollama" with a key → both build → a chain (a runnable adapter)
+    expect(typeof createSelfHostAi({ AI_PROVIDER: "anthropic,ollama", ANTHROPIC_API_KEY: "sk-ant" })?.run).toBe("function");
+  });
+});
+
+describe("createAnthropicAi (#979 native BYOK)", () => {
+  it("splits the system message and returns the joined text content", async () => {
+    let sent: { url: string; headers: Record<string, string>; body: Record<string, unknown> } | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: { headers: Record<string, string>; body: string }) => {
+      sent = { url, headers: init.headers, body: JSON.parse(init.body) as Record<string, unknown> };
+      return new Response(JSON.stringify({ content: [{ type: "text", text: "hi" }, { type: "thinking", text: "ignored" }] }), { status: 200 });
+    }));
+    const out = await createAnthropicAi({ apiKey: "sk-ant", model: "claude-sonnet-4-6" }).run("@cf/ignored", {
+      messages: [
+        { role: "system", content: "be terse" },
+        { role: "user", content: "go" },
+      ],
+      max_tokens: 256,
+    });
+    expect(out.response).toBe("hi"); // only text blocks
+    expect(sent?.url).toBe("https://api.anthropic.com/v1/messages");
+    expect(sent?.headers["x-api-key"]).toBe("sk-ant");
+    expect(sent?.headers["anthropic-version"]).toBe("2023-06-01");
+    expect(sent?.body.system).toBe("be terse");
+    expect(sent?.body.model).toBe("claude-sonnet-4-6"); // configured wins over the @cf id
+    expect(sent?.body.messages).toEqual([{ role: "user", content: "go" }]);
+  });
+});
+
+describe("createChainAi (fallback)", () => {
+  it("falls through to the next provider on failure, returns the first success", async () => {
+    const failing = { name: "a", ai: { run: async () => { throw new Error("down"); } } };
+    const working = { name: "b", ai: { run: async () => ({ response: "from b" }) } };
+    expect((await createChainAi([failing, working]).run("m", { prompt: "x" })).response).toBe("from b");
+  });
+  it("throws the last error when every provider fails", async () => {
+    const a = { name: "a", ai: { run: async () => { throw new Error("err-a"); } } };
+    const b = { name: "b", ai: { run: async () => { throw new Error("err-b"); } } };
+    await expect(createChainAi([a, b]).run("m", { prompt: "x" })).rejects.toThrow(/err-b/);
   });
 });
 
