@@ -1,5 +1,21 @@
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { claudeErrorStatus, createClaudeCodeAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText } from "../../src/selfhost/ai";
+import { claudeErrorStatus, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveModel } from "../../src/selfhost/ai";
+
+describe("resolveModel (#979 — never leak the Workers-AI default to a self-host backend)", () => {
+  const WORKERS_DEFAULT = "@cf/meta/llama-3.1-8b-instruct-fp8-fast";
+  it("operator-configured model wins over the core's Workers-AI id", () => {
+    expect(resolveModel("llama3.1", WORKERS_DEFAULT, "x")).toBe("llama3.1");
+  });
+  it("strips the Workers-AI id and falls back to the provider default", () => {
+    expect(resolveModel(undefined, WORKERS_DEFAULT, "sonnet")).toBe("sonnet");
+  });
+  it("passes through a real model the core supplied", () => {
+    expect(resolveModel(undefined, "gpt-4o", "sonnet")).toBe("gpt-4o");
+  });
+});
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -62,5 +78,28 @@ describe("subscription CLI helpers + fail-safe", () => {
     expect(out.response).toBe("review text");
     expect(capturedEnv.ANTHROPIC_API_KEY).toBeUndefined(); // scrubbed
     expect(capturedEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe("t");
+  });
+
+  it("Codex returns text on success and throws on a non-zero exit", async () => {
+    const ok: StubSpawn = async () => ({ stdout: JSON.stringify({ type: "result", result: "codex review" }), code: 0 });
+    expect((await createCodexAi({}, ok).run("gpt-5", { prompt: "x" })).response).toBe("codex review");
+    const bad: StubSpawn = async () => ({ stdout: "", code: 1 });
+    await expect(createCodexAi({}, bad).run("gpt-5", { prompt: "x" })).rejects.toThrow(/codex_exit_1/);
+  });
+
+  it("drives the REAL subprocess (defaultSpawn) against a fake `claude` on PATH", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fakecli-"));
+    const fake = join(dir, "claude");
+    // a minimal stand-in: read the prompt on stdin, emit a Claude-Code-shaped JSON result
+    writeFileSync(fake, "#!/usr/bin/env node\nlet i='';process.stdin.on('data',d=>i+=d);process.stdin.on('end',()=>process.stdout.write(JSON.stringify({type:'result',result:'OK:'+i.trim()})));\n");
+    chmodSync(fake, 0o755);
+    const origPath = process.env.PATH;
+    process.env.PATH = `${dir}:${origPath ?? ""}`;
+    try {
+      const out = await createClaudeCodeAi({ ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "t" }).run("sonnet", { prompt: "hello" });
+      expect(out.response).toBe("OK:hello");
+    } finally {
+      process.env.PATH = origPath;
+    }
   });
 });

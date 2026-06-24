@@ -1,0 +1,65 @@
+# Self-host stack CI (#980/#982). Builds the Node bundle + the Docker image, boots the container, and
+# smoke-tests the operational endpoints — the integration coverage the unit tests can't give. Runs on
+# Node 24 because node:sqlite (the SQLite backing store) is only stable there.
+name: self-host
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/selfhost/**"
+      - "src/server.ts"
+      - "scripts/build-selfhost.mjs"
+      - "scripts/register-selfhost.mjs"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "migrations/**"
+      - "test/unit/selfhost-*"
+      - ".github/workflows/selfhost.yml"
+  pull_request:
+    paths:
+      - "src/selfhost/**"
+      - "src/server.ts"
+      - "scripts/build-selfhost.mjs"
+      - "scripts/register-selfhost.mjs"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "migrations/**"
+      - "test/unit/selfhost-*"
+      - ".github/workflows/selfhost.yml"
+
+jobs:
+  build-boot:
+    name: build + boot smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install deps
+        run: npm ci --ignore-scripts
+      - name: Self-host unit tests
+        run: npx vitest run test/unit/selfhost-*.test.ts
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Build the self-host bundle
+        run: node scripts/build-selfhost.mjs
+      - name: Build the Docker image
+        run: docker build -t gittensory:selfhost-ci .
+      - name: Boot the container + smoke-test /health, /ready, /metrics, migrations
+        run: |
+          docker run -d --name gt -p 8787:8787 gittensory:selfhost-ci
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8787/health >/dev/null; then ok=1; break; fi
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then echo "::error::container did not become healthy"; docker logs gt; exit 1; fi
+          curl -sf http://127.0.0.1:8787/health  | grep -q '"status":"ok"'
+          curl -sf http://127.0.0.1:8787/ready   | grep -q '"ok":true'
+          curl -sf http://127.0.0.1:8787/metrics | grep -q 'gittensory_uptime_seconds'
+          docker logs gt 2>&1 | grep -q 'selfhost_migrations_applied'
+          echo "self-host smoke test passed"
+          docker rm -f gt

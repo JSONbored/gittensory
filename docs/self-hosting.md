@@ -76,9 +76,15 @@ and only the AI **summary** degrades to "unavailable". To enable AI, set `AI_PRO
 
 | `AI_PROVIDER` | Backend | Extra config |
 | --- | --- | --- |
-| `ollama` / `openai-compatible` / `openai` | any OpenAI-compatible `/chat/completions` endpoint | `AI_BASE_URL`, `AI_API_KEY`, `WORKERS_AI_SUMMARY_MODEL` |
-| `claude-code` | your **Claude** subscription via the `claude` CLI (read-only, headless) | `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) |
-| `codex` | your **Codex** subscription via the `codex` CLI | local `codex` auth |
+| `ollama` / `openai-compatible` / `openai` | any OpenAI-compatible `/chat/completions` endpoint | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` |
+| `claude-code` | your **Claude** subscription via the `claude` CLI (read-only, headless) | `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), `AI_MODEL` (e.g. `sonnet`) |
+| `codex` | your **Codex** subscription via the `codex` CLI | local `codex` auth, `AI_MODEL` (e.g. `gpt-5`) |
+
+> **Set `AI_MODEL`.** The core would otherwise hand the adapter a Cloudflare Workers-AI model id
+> (`@cf/meta/...`) that Ollama / `claude` / `codex` can't use. The adapter ignores that id in favour of
+> `AI_MODEL` (falling back to a provider default), so always set `AI_MODEL` to a real model for your provider.
+> The `claude`/`codex` CLIs must be installed and authenticated in the runtime (a CLI-bearing image variant
+> is a follow-up); without `AI_MODEL` + a working CLI, the call throws and the review degrades.
 
 The local-AI default is Ollama: uncomment the `ollama` service in `docker-compose.yml`, set
 `AI_PROVIDER=ollama` + `AI_BASE_URL=http://ollama:11434/v1`, then `docker compose exec ollama ollama pull
@@ -112,13 +118,22 @@ repository settings. The authoritative reference for all of these is
 
 ## 6. Operations
 
-- **Health.** `GET /health` is binding-free (liveness); the container's `HEALTHCHECK` uses it.
+- **Endpoints.**
+  - `GET /health` — binding-free liveness (the container `HEALTHCHECK` uses it).
+  - `GET /ready` — readiness: returns `503` until the DB answers **and** migrations are applied
+    (`{"ok":true,"checks":{"db":true,"migrations":true}}`). Use it as your orchestrator's readiness probe.
+  - `GET /metrics` — Prometheus text: `gittensory_queue_pending` / `_dead`, `gittensory_jobs_*_total`
+    (enqueued/processed/failed/dead), `gittensory_uptime_seconds`, `gittensory_http_requests_total`.
+- **Durable queue.** Jobs are persisted in SQLite (`_selfhost_jobs`), not held in memory — a restart or crash
+  **re-claims** in-flight work instead of losing it. Failures retry with exponential backoff and dead-letter
+  after `maxRetries` (visible via `gittensory_queue_dead`).
+- **Graceful shutdown.** On `SIGTERM`/`SIGINT` the server stops accepting requests, lets the queue finish its
+  in-flight job, checkpoints the WAL, and closes the DB before exiting.
 - **Logs** are structured JSON (`selfhost_listening`, `selfhost_migrations_applied`, `selfhost_ai_provider`,
-  `selfhost_cron_error`, …). Pipe them to your log stack.
+  `selfhost_queue_recovered`, `selfhost_job_dead`, `selfhost_cron_error`, `selfhost_shutdown`, …).
 - **Data + backup.** Everything is the single SQLite file on the `gittensory-data` volume (WAL mode). Back up
-  by snapshotting the volume or copying the `.sqlite` file. Migrations are idempotent and re-checked at every
-  boot.
-- **Metrics.** Enable `GITTENSORY_REVIEW_OPS=true` for the read-only gate-block anomaly scan and the
+  by snapshotting the volume or copying the `.sqlite` file. Migrations are idempotent and re-checked at boot.
+- **App-level metrics.** Enable `GITTENSORY_REVIEW_OPS=true` for the read-only gate-block anomaly scan and the
   bearer-gated `GET /v1/internal/ops/stats` aggregate.
 
 ---

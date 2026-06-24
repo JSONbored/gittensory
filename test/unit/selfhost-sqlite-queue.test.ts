@@ -1,0 +1,73 @@
+import { DatabaseSync } from "node:sqlite";
+import { describe, expect, it } from "vitest";
+import { nodeSqliteDriver } from "../../src/selfhost/d1-adapter";
+import { createSqliteQueue } from "../../src/selfhost/sqlite-queue";
+import type { JobMessage } from "../../src/types";
+
+function makeDriver(): ReturnType<typeof nodeSqliteDriver> {
+  return nodeSqliteDriver(new DatabaseSync(":memory:") as never);
+}
+const msg = (t: string): JobMessage => ({ type: t }) as unknown as JobMessage;
+const typeOf = (m: JobMessage): string => (m as unknown as { type: string }).type;
+
+describe("createSqliteQueue (durable #980)", () => {
+  it("persists + drains FIFO through the consumer", async () => {
+    const driver = makeDriver();
+    const seen: string[] = [];
+    const q = createSqliteQueue(driver, async (m) => void seen.push(typeOf(m)));
+    await q.binding.send(msg("a"));
+    await q.binding.send(msg("b"));
+    await q.drain();
+    expect(seen).toEqual(["a", "b"]);
+    expect(q.size()).toBe(0);
+  });
+
+  it("retries then dead-letters after maxRetries", async () => {
+    const driver = makeDriver();
+    let calls = 0;
+    const q = createSqliteQueue(
+      driver,
+      async () => {
+        calls += 1;
+        throw new Error("boom");
+      },
+      { maxRetries: 3, backoffMs: () => 0 },
+    );
+    await q.binding.send(msg("x"));
+    await q.drain(); // backoff 0 → all 3 attempts run within one drain, then dead-lettered
+    expect(calls).toBe(3);
+    expect(q.deadCount()).toBe(1);
+    expect(q.size()).toBe(0);
+  });
+
+  it("SURVIVES A RESTART: a fresh queue over the same DB processes a persisted pending job", async () => {
+    const driver = makeDriver();
+    const seen: string[] = [];
+    const fresh = createSqliteQueue(driver, async (m) => void seen.push(typeOf(m))); // creates the table
+    // a job left pending on disk by a prior run (insert directly so this instance doesn't auto-process it first)
+    driver.query("INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'pending', 0, 0, 0)", [JSON.stringify(msg("persisted"))]);
+    await fresh.drain(); // the "new process" picks it up
+    expect(seen).toEqual(["persisted"]);
+  });
+
+  it("start() runs the poll loop and processes a job, stop() halts it", async () => {
+    const driver = makeDriver();
+    const seen: string[] = [];
+    const q = createSqliteQueue(driver, async (m) => void seen.push(typeOf(m)), { pollIntervalMs: 10 });
+    q.start();
+    await q.binding.send(msg("ticked"));
+    for (let i = 0; i < 50 && seen.length === 0; i += 1) await new Promise((r) => setTimeout(r, 10));
+    await q.stop();
+    expect(seen).toEqual(["ticked"]);
+  });
+
+  it("recovers a job left 'processing' by a crash", async () => {
+    const driver = makeDriver();
+    createSqliteQueue(driver, async () => undefined); // creates the table
+    driver.query("INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'processing', 0, 0, 0)", [JSON.stringify(msg("stuck"))]);
+    const seen: string[] = [];
+    const fresh = createSqliteQueue(driver, async (m) => void seen.push(typeOf(m)));
+    await fresh.drain();
+    expect(seen).toEqual(["stuck"]);
+  });
+});

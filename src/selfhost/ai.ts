@@ -21,15 +21,28 @@ function toMessages(options: AiRunOptions): Array<{ role: string; content: strin
   return [{ role: "user", content: String(options.prompt ?? "") }];
 }
 
+/** The core passes a Workers-AI model id (e.g. "@cf/meta/llama-3.1-8b-instruct-fp8-fast") that is meaningless
+ *  off-Workers — handing it to Ollama or `claude --model` fails. Prefer the operator-configured model
+ *  (AI_MODEL / WORKERS_AI_SUMMARY_MODEL), then any non-Workers model the core passed, then a provider default. */
+export function resolveModel(configured: string | undefined, passed: string, providerDefault: string): string {
+  if (configured && configured.trim()) return configured.trim();
+  if (passed && !passed.startsWith("@cf/")) return passed;
+  return providerDefault;
+}
+
+function configuredModel(env: Record<string, string | undefined>): string | undefined {
+  return env.AI_MODEL ?? env.WORKERS_AI_SUMMARY_MODEL;
+}
+
 /** OpenAI-compatible chat endpoint (Ollama's /v1, OpenAI, vLLM, LM Studio, …). */
-export function createOpenAiCompatibleAi(opts: { baseUrl: string; apiKey?: string | undefined; defaultModel?: string | undefined }): SelfHostAi {
+export function createOpenAiCompatibleAi(opts: { baseUrl: string; apiKey?: string | undefined; model?: string | undefined }): SelfHostAi {
   const base = opts.baseUrl.replace(/\/+$/, "");
   return {
     async run(model, options) {
       const res = await fetch(`${base}/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json", ...(opts.apiKey ? { authorization: `Bearer ${opts.apiKey}` } : {}) },
-        body: JSON.stringify({ model: model || opts.defaultModel || "llama3.1", messages: toMessages(options), max_tokens: options.max_tokens, temperature: options.temperature }),
+        body: JSON.stringify({ model: resolveModel(opts.model, model, "llama3.1"), messages: toMessages(options), max_tokens: options.max_tokens, temperature: options.temperature }),
         signal: AbortSignal.timeout(120_000),
       });
       if (!res.ok) throw new Error(`ai_http_${res.status}`);
@@ -127,7 +140,8 @@ export function createClaudeCodeAi(parentEnv: Record<string, string | undefined>
       env.CLAUDE_CODE_OAUTH_TOKEN = token;
       const prompt = toMessages(options).map((m) => m.content).join("\n\n");
       const spawn = spawnImpl ?? (await defaultSpawn());
-      const { stdout, code } = await spawn("claude", ["--print", "--output-format", "json", "--model", model || "sonnet", "--permission-mode", "plan", "--disallowedTools", "Bash,Edit,Write,WebFetch,WebSearch"], { env, input: prompt, timeoutMs: 120_000 });
+      const claudeModel = resolveModel(configuredModel(parentEnv), model, "sonnet");
+      const { stdout, code } = await spawn("claude", ["--print", "--output-format", "json", "--model", claudeModel, "--permission-mode", "plan", "--disallowedTools", "Bash,Edit,Write,WebFetch,WebSearch"], { env, input: prompt, timeoutMs: 120_000 });
       if (code !== 0) throw new Error(`claude_code_exit_${code ?? "null"}`);
       const errStatus = claudeErrorStatus(stdout);
       if (errStatus) throw new Error(`claude_code_error_${errStatus}`);
@@ -145,7 +159,8 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
       const env = scrubBillableKeys(parentEnv);
       const prompt = toMessages(options).map((m) => m.content).join("\n\n");
       const spawn = spawnImpl ?? (await defaultSpawn());
-      const { stdout, code } = await spawn("codex", ["exec", "--json", "--sandbox", "read-only", "--ask-for-approval", "never", "--model", model || "gpt-5", prompt], { env, timeoutMs: 120_000 });
+      const codexModel = resolveModel(configuredModel(parentEnv), model, "gpt-5");
+      const { stdout, code } = await spawn("codex", ["exec", "--json", "--sandbox", "read-only", "--ask-for-approval", "never", "--model", codexModel, prompt], { env, timeoutMs: 120_000 });
       if (code !== 0) throw new Error(`codex_exit_${code ?? "null"}`);
       const text = extractCliText(stdout);
       if (!text) throw new Error("codex_empty_output");
@@ -159,7 +174,7 @@ export function createSelfHostAi(env: Record<string, string | undefined>): SelfH
   const provider = (env.AI_PROVIDER ?? "").trim().toLowerCase();
   if (!provider) return undefined;
   if (provider === "ollama" || provider === "openai-compatible" || provider === "openai") {
-    return createOpenAiCompatibleAi({ baseUrl: env.AI_BASE_URL ?? "http://localhost:11434/v1", apiKey: env.AI_API_KEY, defaultModel: env.WORKERS_AI_SUMMARY_MODEL });
+    return createOpenAiCompatibleAi({ baseUrl: env.AI_BASE_URL ?? "http://localhost:11434/v1", apiKey: env.AI_API_KEY, model: configuredModel(env) });
   }
   if (provider === "claude-code") return createClaudeCodeAi(env);
   if (provider === "codex") return createCodexAi(env);

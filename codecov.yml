@@ -33,3 +33,8 @@ ignore:
   - "apps/**"
   - "test/**"
   - "scripts/**"
+  # Self-host process entry + build-time stubs: exercised by the Docker build+boot smoke test
+  # (.github/workflows/selfhost.yml), not unit-coverable without booting a server/subprocess.
+  - "src/server.ts"
+  - "src/selfhost/cf-workers-shim.ts"
+  - "src/selfhost/stubs/**"
