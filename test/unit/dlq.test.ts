@@ -84,4 +84,14 @@ describe("DLQ consumer (processDlqBatch)", () => {
     await expect(processDlqBatch(batch as unknown as MessageBatch<never>, env)).resolves.toBeUndefined();
     expect(batch.acked).toEqual(["msg-6"]);
   });
+
+  it("is fail-safe when recordAuditEvent throws — the catch body runs and ack is not blocked", async () => {
+    const env = createTestEnv();
+    // Break DB to force recordAuditEvent to throw → exercises the .catch(() => undefined) body
+    const brokenEnv = { ...env, DB: null } as unknown as typeof env;
+    const batch = makeBatch([{ id: "msg-7", body: { type: "github-webhook", deliveryId: "d99", eventName: "push", payload: {} } }]);
+
+    await expect(processDlqBatch(batch as unknown as MessageBatch<never>, brokenEnv)).resolves.toBeUndefined();
+    expect(batch.acked).toEqual(["msg-7"]);
+  });
 });
