@@ -25,13 +25,24 @@ On first boot the container creates the SQLite database on the `gittensory-data`
 migrations automatically (`{"event":"selfhost_migrations_applied","count":56}` in the logs). Point your
 GitHub App's webhook at `https://<your-host>/v1/github/webhook` (expose port 8787 behind your own TLS).
 
+**Or use the published image** (multi-arch, ~254 MB) instead of building:
+
+```bash
+docker run -p 8787:8787 --env-file .env -v gittensory-data:/data \
+  ghcr.io/<owner>/gittensory-selfhost:latest      # or pin a version, e.g. :0.1.0
+```
+
 To run without Docker:
 
 ```bash
 npm ci
-node scripts/build-selfhost.mjs
+node scripts/build-selfhost.mjs           # external mode (fast local rebuilds)
 node --import ./scripts/register-selfhost.mjs dist/server.mjs
 ```
+
+Releases are cut by pushing a `selfhost-v<semver>` tag (e.g. `selfhost-v0.1.0`): CI builds the multi-arch
+image, pushes it to GHCR with `:<version>`, `:latest`, and `:sha-…` tags (with provenance + SBOM), and opens a
+GitHub Release.
 
 ---
 
