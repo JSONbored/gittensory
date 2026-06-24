@@ -581,6 +581,24 @@ describe("queue processors", () => {
     expect(sent).toEqual([]);
   });
 
+  it("agent re-gate sweep applies the self-authored-linked-issue block (#self-authored-parity)", async () => {
+    const env = createTestEnv({ JOBS: { async send() {} } as unknown as Queue });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, selfAuthoredLinkedIssueGateMode: "block" });
+    // Issue #5 is authored by miner1; PR #9 by miner1 links it → self-authored. Without threading the linked-issue
+    // author into the sweep's advisory, this PR would re-gate as "success" and escape the block. (#self-authored-parity)
+    await upsertIssueFromGitHub(env, "owner/agent-repo", { number: 5, title: "Self-reported bug", body: "", state: "open", user: { login: "miner1" }, labels: [], html_url: "https://github.com/owner/agent-repo/issues/5", created_at: "2026-05-27T00:00:00Z", updated_at: "2026-05-27T00:00:00Z" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 9, title: "Fix self-reported bug", state: "open", user: { login: "miner1" }, head: { sha: "a9" }, labels: [], body: "Closes #5" });
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+
+    const audit = await env.DB.prepare("select metadata_json from audit_events where event_type = ?").bind("agent.sweep.regate").first<{ metadata_json: string }>();
+    const meta = JSON.parse(audit?.metadata_json ?? "{}");
+    expect(meta.verdicts).toMatchObject({ "9": "failure" });
+    expect(meta.flaggedPulls).toContain(9);
+  });
+
   it("agent re-gate sweep skips advisory AI review while refreshing the PR surface on a stale AI-enabled PR", async () => {
     let aiCalls = 0;
     const env = createTestEnv({

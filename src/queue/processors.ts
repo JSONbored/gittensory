@@ -561,7 +561,10 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
   const duplicateWinnerEnabled = env.GITTENSORY_DUPLICATE_WINNER === "true";
   for (const pr of candidates) {
     const others = openPullRequests.filter((other) => other.number !== pr.number);
-    const advisory = buildPullRequestAdvisory(repo, pr, { otherOpenPullRequests: others, requireLinkedIssue, duplicateWinnerEnabled });
+    // Thread linked-issue authors so the re-gate sweep applies the self-authored-linked-issue block too — without
+    // this a self-authored PR re-gated by the sweep escapes a block the main webhook path applies. (#self-authored-parity)
+    const linkedIssueAuthorLogins = await resolveLinkedIssueAuthorLogins(env, sweepInstallationId, repoFullName, pr.linkedIssues, settings.selfAuthoredLinkedIssueGateMode === "block");
+    const advisory = buildPullRequestAdvisory(repo, pr, { otherOpenPullRequests: others, requireLinkedIssue, duplicateWinnerEnabled, linkedIssueAuthorLogins });
     const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null));
     verdicts[String(pr.number)] = gate.conclusion;
     if (gate.conclusion === "failure" || gate.conclusion === "action_required") flaggedPulls.push(pr.number);
@@ -3125,17 +3128,21 @@ async function authorizePrActionActor(args: {
 
 // #824 the common "load the PR's repo context + build its advisory" step every authorized action command runs
 // before its mutation. Identical across gate-override and the PR-panel retrigger.
-async function buildAuthorizedPrActionAdvisory(
+export async function buildAuthorizedPrActionAdvisory(
   env: Env,
   repoFullName: string,
   pr: PullRequestRecord,
   settings: RepositorySettings,
 ): Promise<{ repo: Awaited<ReturnType<typeof getRepository>>; advisory: ReturnType<typeof buildPullRequestAdvisory> }> {
   const [repo, otherOpenPullRequests] = await Promise.all([getRepository(env, repoFullName), listOtherOpenPullRequests(env, repoFullName, pr.number)]);
+  // Mirror the main webhook path: thread linked-issue authors so an authorized PR action (gate-override / panel
+  // retrigger) honors the self-authored-linked-issue block too. installationId comes from the repo record. (#self-authored-parity)
+  const linkedIssueAuthorLogins = await resolveLinkedIssueAuthorLogins(env, repo?.installationId ?? null, repoFullName, pr.linkedIssues, settings.selfAuthoredLinkedIssueGateMode === "block");
   const advisory = buildPullRequestAdvisory(repo, pr, {
     otherOpenPullRequests,
     requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings),
     duplicateWinnerEnabled: env.GITTENSORY_DUPLICATE_WINNER === "true",
+    linkedIssueAuthorLogins,
   });
   return { repo, advisory };
 }

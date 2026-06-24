@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { clearInstallationTokenCacheForTest } from "../../src/github/app";
-import { gateCheckPolicy, resolveLinkedIssueAuthorLogins, shouldCollectLinkedIssueEvidence, shouldCollectSlopEvidence, shouldRunSlopAiAdvisory } from "../../src/queue/processors";
+import { buildAuthorizedPrActionAdvisory, gateCheckPolicy, resolveLinkedIssueAuthorLogins, shouldCollectLinkedIssueEvidence, shouldCollectSlopEvidence, shouldRunSlopAiAdvisory } from "../../src/queue/processors";
 import { createTestEnv } from "../helpers/d1";
 import { upsertIssueFromGitHub, upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { evaluateGateCheck } from "../../src/rules/advisory";
 import { parseFocusManifest, resolveEffectiveSettings } from "../../src/signals/focus-manifest";
-import type { Advisory, RepositorySettings } from "../../src/types";
+import type { Advisory, PullRequestRecord, RepositorySettings } from "../../src/types";
 
 function settings(over: Partial<RepositorySettings> = {}): RepositorySettings {
   return {
@@ -480,5 +480,41 @@ describe("resolveLinkedIssueAuthorLogins", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("buildAuthorizedPrActionAdvisory self-authored parity (#self-authored-parity)", () => {
+  it("threads linked-issue authors so an authorized PR action blocks a self-authored linked issue", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 1);
+    await upsertIssueFromGitHub(env, "owner/repo", { number: 12, title: "Self-authored bug", body: "", state: "open", user: { login: "miner1" }, labels: [], html_url: "https://github.com/owner/repo/issues/12", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    // PR author "Miner1" matches issue author "miner1" case-insensitively → self-authored.
+    const pr: PullRequestRecord = { repoFullName: "owner/repo", number: 99, title: "Fix self-authored bug", state: "open", authorLogin: "Miner1", body: "Closes #12", labels: [], linkedIssues: [12] };
+
+    const policy = settings({ selfAuthoredLinkedIssueGateMode: "block" });
+    const { advisory } = await buildAuthorizedPrActionAdvisory(env, "owner/repo", pr, policy);
+    const gate = evaluateGateCheck(advisory, gateCheckPolicy(policy, null));
+
+    expect(advisory.findings.some((finding) => finding.code === "self_authored_linked_issue")).toBe(true);
+    expect(gate.conclusion).toBe("failure");
+    expect(gate.blockers.some((finding) => finding.code === "self_authored_linked_issue")).toBe(true);
+  });
+
+  it("does not flag a linked issue authored by someone else", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 1);
+    await upsertIssueFromGitHub(env, "owner/repo", { number: 13, title: "Reported by another", body: "", state: "open", user: { login: "reporter" }, labels: [], html_url: "https://github.com/owner/repo/issues/13", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    const pr: PullRequestRecord = { repoFullName: "owner/repo", number: 100, title: "Fix reported bug", state: "open", authorLogin: "fixer", body: "Closes #13", labels: [], linkedIssues: [13] };
+
+    const { advisory } = await buildAuthorizedPrActionAdvisory(env, "owner/repo", pr, settings({ selfAuthoredLinkedIssueGateMode: "block" }));
+    expect(advisory.findings.some((finding) => finding.code === "self_authored_linked_issue")).toBe(false);
+  });
+
+  it("tolerates a repo absent from the DB and a non-blocking mode (no installation id, no live fetch)", async () => {
+    const env = createTestEnv();
+    // No repository row → getRepository returns null → repo?.installationId ?? null = null; mode !== "block" → no live fetch.
+    const pr: PullRequestRecord = { repoFullName: "owner/missing", number: 101, title: "Fix something", state: "open", authorLogin: "someone", body: "Closes #14", labels: [], linkedIssues: [14] };
+    const { advisory } = await buildAuthorizedPrActionAdvisory(env, "owner/missing", pr, settings({ selfAuthoredLinkedIssueGateMode: "advisory" }));
+    expect(advisory.findings.some((finding) => finding.code === "self_authored_linked_issue")).toBe(false);
   });
 });

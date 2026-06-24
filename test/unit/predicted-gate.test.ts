@@ -9,8 +9,8 @@ function openPr(number: number, title: string, linkedIssues: number[] = [], auth
   return { repoFullName: "acme/widgets", number, title, state: "open", authorLogin, linkedIssues, labels: [] };
 }
 
-function openIssue(number: number, title: string): IssueRecord {
-  return { repoFullName: "acme/widgets", number, title, state: "open", labels: [], linkedPrs: [], authorAssociation: null } as IssueRecord;
+function openIssue(number: number, title: string, authorLogin: string | null = null): IssueRecord {
+  return { repoFullName: "acme/widgets", number, title, state: "open", labels: [], linkedPrs: [], authorAssociation: null, authorLogin } as IssueRecord;
 }
 
 const BASE_INPUT: PredictedGateInput = {
@@ -64,6 +64,21 @@ describe("buildPredictedGateVerdict", () => {
     // Default (advisory) → not a hard blocker.
     const advisory = verdict({ gate: { linkedIssue: "advisory" }, input: { body: "no issue here", linkedIssues: [] }, issues: [] });
     expect(advisory.blockers.some((b) => b.code === "missing_linked_issue")).toBe(false);
+  });
+
+  it("predicts a BLOCK for a self-authored linked issue when gate.selfAuthoredLinkedIssue:block (#self-authored-parity)", () => {
+    // miner1 links issue #7 which miner1 also authored → self_authored_linked_issue (resolved from the snapshot).
+    const blocked = verdict({ gate: { selfAuthoredLinkedIssue: "block" }, issues: [openIssue(7, "Uploads should retry on 5xx", "miner1")] });
+    expect(blocked.conclusion).toBe("failure");
+    expect(blocked.blockers.some((b) => b.code === "self_authored_linked_issue")).toBe(true);
+
+    // Authored by someone else → no self-authored finding.
+    const otherAuthor = verdict({ gate: { selfAuthoredLinkedIssue: "block" }, issues: [openIssue(7, "Uploads should retry on 5xx", "reporter")] });
+    expect(otherAuthor.blockers.some((b) => b.code === "self_authored_linked_issue")).toBe(false);
+
+    // A linked issue absent from the snapshot resolves to a null author → no self-authored finding (fail-open).
+    const notInSnapshot = verdict({ gate: { selfAuthoredLinkedIssue: "block" }, input: { body: "Closes #99", linkedIssues: [99] }, issues: [] });
+    expect(notInSnapshot.blockers.some((b) => b.code === "self_authored_linked_issue")).toBe(false);
   });
 
   it("uses linked issues inferred from the body for gate advisory parity", () => {
