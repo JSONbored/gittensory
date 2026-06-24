@@ -198,6 +198,22 @@ describe("indexRepo: full repo index (tree → chunk → embed → upsert)", () 
     expect(result.files).toBe(1);
     expect(await pathsFor(env, PROJECT, "gittensory")).toContain("src/current.ts");
   });
+
+  it("listStoredChunkPaths drops blank paths and tolerates an absent result set (defensive branches)", async () => {
+    const { env } = indexEnv();
+    const realPrepare = env.DB.prepare.bind(env.DB);
+    let allReturn: { results?: Array<{ path: string }> } = { results: [{ path: "" }, { path: "src/stale.ts" }] };
+    env.DB.prepare = ((query: string) =>
+      query.includes("SELECT DISTINCT path FROM repo_chunks")
+        ? ({ bind: () => ({ all: async () => allReturn }) } as unknown as ReturnType<typeof realPrepare>)
+        : realPrepare(query)) as typeof env.DB.prepare;
+    // Empty tree → every stored path is stale; the blank "" is filtered out, "src/stale.ts" is pruned.
+    stubGithub({ tree: [], files: {} });
+    await expect(indexRepo(env, PROJECT, REPO)).resolves.toEqual({ indexed: 0, files: 0, capped: false });
+    // No `results` key at all → exercises the `?? []` defensive arm.
+    allReturn = {};
+    await expect(indexRepo(env, PROJECT, REPO)).resolves.toEqual({ indexed: 0, files: 0, capped: false });
+  });
 });
 
 describe("indexRepo: MAX_CHUNKS_PER_REPO cap holds", () => {
