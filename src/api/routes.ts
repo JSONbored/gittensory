@@ -991,7 +991,7 @@ export function createApp() {
     const githubToken = typeof body?.githubToken === "string" ? body.githubToken : "";
     if (!githubToken) return c.json({ error: "github_token_required" }, 400);
     try {
-      const session = await createSessionFromGitHubToken(c.env, githubToken, { source: "github_token_exchange" });
+      const session = await createSessionFromGitHubToken(c.env, githubToken, { source: "github_token_exchange" }, { verifyAppAudience: true });
       await recordRouteProductUsage(c, {
         surface: "api",
         eventName: "auth_session_created",
