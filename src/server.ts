@@ -215,7 +215,7 @@ async function main(): Promise<void> {
         if ((path === "/setup" || path === "/setup/callback") && !process.env.GITHUB_APP_ID) {
           // PUBLIC_API_ORIGIN is required: falling back to request.url.origin would let an attacker spoof
           // the Host header and redirect the App-creation callback to an attacker-controlled domain, where
-          // they could exchange the code for the App private key and webhook secret.
+          // they could exchange the one-time code for the App private key and webhook secret.
           const origin = process.env.PUBLIC_API_ORIGIN;
           if (!origin) {
             return new Response(
@@ -256,7 +256,14 @@ async function main(): Promise<void> {
         }
         // Gittensory Orb setup wizard — only while no Orb App is configured.
         if ((path === "/orb/setup" || path === "/orb/setup/callback") && !process.env.ORB_APP_ID) {
-          const origin = process.env.PUBLIC_API_ORIGIN ?? new URL(request.url).origin;
+          // Same guard as the main setup wizard: PUBLIC_API_ORIGIN required to prevent Host-header spoofing.
+          const origin = process.env.PUBLIC_API_ORIGIN;
+          if (!origin) {
+            return new Response(
+              "PUBLIC_API_ORIGIN must be set before using the Orb setup wizard — add it to your .env file",
+              { status: 400 },
+            );
+          }
           if (path === "/orb/setup") {
             const state = randomUUID();
             return new Response(renderOrbSetupPage(origin, state), {
