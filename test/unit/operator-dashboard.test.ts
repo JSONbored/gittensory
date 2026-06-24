@@ -47,6 +47,9 @@ describe("operator dashboard payload", () => {
     await seed("good1", 5, "merged"); // precision 1.0
     await seed("good2", 5, "merged"); // precision 1.0
     await seed("bad", 5, "closed"); // precision 0.0 → outlier vs the median (1.0)
+    for (const id of ["good1", "good2", "bad"]) {
+      await env.DB.prepare(`INSERT INTO orb_instances (instance_id, registered) VALUES (?, 1)`).bind(id).run(); // only registered instances count
+    }
     const payload = await buildOperatorDashboardPayload(env);
     expect(payload.fleetMetrics.instanceCount).toBe(3);
     expect(payload.fleetMetrics.outliers.map((o) => o.instanceId)).toContain("bad");

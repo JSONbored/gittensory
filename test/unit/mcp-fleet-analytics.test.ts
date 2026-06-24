@@ -22,6 +22,8 @@ async function seedMergeSignals(env: Env, instance: string, n: number): Promise<
       .bind(instance, `repo${seq}`, `pr${seq++}`)
       .run();
   }
+  // Register the instance so it counts toward the fleet (only registered instances are aggregated).
+  await env.DB.prepare(`INSERT INTO orb_instances (instance_id, registered) VALUES (?, 1) ON CONFLICT(instance_id) DO UPDATE SET registered=1`).bind(instance).run();
 }
 
 describe("gittensory_get_fleet_analytics MCP tool", () => {

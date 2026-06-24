@@ -122,7 +122,7 @@ import {
   type GittensoryMentionCommandName,
 } from "../github/commands";
 import { handleGitHubWebhook } from "../github/webhook";
-import { handleOrbIngest } from "../orb/ingest";
+import { handleOrbIngest, readOrbIngestBody } from "../orb/ingest";
 import { computeFleetAnalytics } from "../orb/analytics";
 import { handleMcpRequest } from "../mcp/server";
 import { buildOpenApiSpec } from "../openapi/spec";
@@ -2868,7 +2868,10 @@ export function createApp() {
   // outcome batches from self-hosted instances. No auth required: all data is HMAC-anonymized by the sender;
   // dedup is enforced via UNIQUE(instance_id, repo_hash, pr_hash) in orb_signals. Rate-limited (strict, #1254).
   app.post("/v1/orb/ingest", async (c) => {
-    const body = await c.req.text().catch(() => null);
+    // Open ingress (no shared secret — the fleet topology has no per-instance key the collector could
+    // verify), bounded by a hard body ceiling so it can't be used to make us buffer unbounded input.
+    const body = await readOrbIngestBody(c.req.raw, c.req.header("content-length"));
+    if (body === null) return c.json({ error: "payload_too_large" }, 413);
     if (!body) return c.json({ error: "invalid_request" }, 400);
     const result = await handleOrbIngest(body, c.env.DB);
     if ("error" in result) return c.json(result, 400);
@@ -2881,6 +2884,40 @@ export function createApp() {
   app.get("/v1/internal/fleet/analytics", async (c) => {
     const days = parsePositiveInt(c.req.query("days")) ?? 90;
     return c.json(await computeFleetAnalytics(c.env, { windowDays: days }));
+  });
+
+  // Orb instance registry — the fleet trust gate. Every self-host instance that ingests is recorded here,
+  // but only REGISTERED ones count toward fleet calibration (computeFleetAnalytics). Bearer-gated by the
+  // `/v1/internal/*` middleware (INTERNAL_JOB_TOKEN). List shows pending + registered instances with their
+  // stored-signal counts so an operator knows what they're opting in before they register it.
+  app.get("/v1/internal/orb/instances", async (c) => {
+    const rows = await c.env.DB
+      .prepare(
+        `SELECT i.instance_id AS instanceId, i.registered AS registered, i.first_seen_at AS firstSeenAt,
+                i.last_seen_at AS lastSeenAt, i.registered_at AS registeredAt,
+                (SELECT COUNT(*) FROM orb_signals s WHERE s.instance_id = i.instance_id) AS signalCount
+         FROM orb_instances i ORDER BY i.last_seen_at DESC`,
+      )
+      .all<{ instanceId: string; registered: number; firstSeenAt: string; lastSeenAt: string; registeredAt: string | null; signalCount: number }>();
+    return c.json({ instances: (rows.results ?? []).map((r) => ({ ...r, registered: r.registered === 1 })) });
+  });
+
+  // Opt an instance into (or out of) fleet calibration. Body: { instanceId, registered? } (registered
+  // defaults true). Upserts so an operator can register an instance that has ingested but isn't recorded yet.
+  app.post("/v1/internal/orb/instances/register", async (c) => {
+    const payload = (await c.req.json().catch(() => null)) as { instanceId?: unknown; registered?: unknown } | null;
+    const instanceId = typeof payload?.instanceId === "string" ? payload.instanceId : "";
+    if (!instanceId) return c.json({ error: "instanceId required" }, 400);
+    const registered = payload?.registered === false ? 0 : 1;
+    await c.env.DB
+      .prepare(
+        `INSERT INTO orb_instances (instance_id, registered, registered_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(instance_id) DO UPDATE SET registered = excluded.registered,
+           registered_at = CASE WHEN excluded.registered = 1 THEN CURRENT_TIMESTAMP ELSE NULL END`,
+      )
+      .bind(instanceId, registered)
+      .run();
+    return c.json({ instanceId, registered: registered === 1 });
   });
 
   // Convergence (ops / observability, flag GITTENSORY_REVIEW_OPS). Cross-repo review-OUTCOME aggregate (gate-block
