@@ -56,7 +56,6 @@ import {
   upsertIssueFromGitHub,
   upsertPullRequestFromGitHub,
   upsertRepositoryFromGitHub,
-  extractLinkedIssueNumbersWithOverflow,
 } from "../db/repositories";
 import { pruneExpiredRecords } from "../db/retention";
 import {
@@ -65,7 +64,6 @@ import {
   backfillRepositorySegment,
   enqueueRepositoryOpenDataBackfill,
   fetchAndStorePullRequestFilesForReview,
-  fetchLinkedIssueFacts,
   fetchLiveCiAggregate,
   fetchLivePullRequestMergeState,
   fetchLivePullRequestReviewDecision,
@@ -178,7 +176,7 @@ import { isReputationEnabled, recordReputationOutcome, shouldSkipAiForReputation
 import { isConvergenceRepoAllowed } from "../review/cutover-gate";
 import { deploymentStatusToPreview, type DeploymentStatusPayload } from "../review/visual/preview-url";
 import { loadHardGuardrailGlobs } from "../review/guardrail-config";
-import { evaluateLinkedIssueHardRules, loadLinkedIssueHardRules } from "../review/linked-issue-hard-rules";
+import { loadLinkedIssueHardRules, resolveLinkedIssueHardRule } from "../review/linked-issue-hard-rules";
 import { isOpsEnabled, runOpsAlerts } from "../review/ops-wire";
 import { isSelfTuneEnabled, runSelfTune } from "../review/selftune-wire";
 import { isHoldOnly, recordPrOutcome, recordReversalSignals, runSelfTuneBreaker } from "../review/outcomes-wire";
@@ -653,35 +651,21 @@ async function maybeRunAgentMaintenance(
   const authorIsOwner = authorLogin.length > 0 && authorLogin.toLowerCase() === repoOwner.toLowerCase();
   const authorIsAutomationBot = isProtectedAutomationAuthor(pr.authorLogin);
 
-  // Linked-issue HARD-RULE close (#linked-issue-hard-rules). DETERMINISTIC: if the repo enabled any rule AND
-  // this PR links at least one issue, fetch each linked issue's facts (labels/assignees/state) and evaluate.
-  // Skip the fetch entirely when no rule is on OR there are no linked issues (no extra GitHub calls on the
-  // common path). Fetches are FAIL-OPEN per issue (a fetch error skips that issue, never blocks the review);
-  // the config load is FAIL-SAFE (a KV fault yields all-off, never a surprise close).
-  let linkedIssueHardRule: { violated: boolean; reason: string | null } | undefined;
+  // Linked-issue HARD-RULE close (#linked-issue-hard-rules): when the repo enabled any rule, a body that links
+  // MORE closing references than we can safely verify (overflow) is itself a violation; otherwise evaluate the
+  // linked issues' facts (fail-open per issue). The decision is extracted into resolveLinkedIssueHardRule (pure,
+  // dependency-injected) so it is unit-tested directly rather than only through this orchestrator. Config load is
+  // FAIL-SAFE (a KV fault yields all-off, never a surprise close).
   const linkedIssueRulesConfig = await loadLinkedIssueHardRules(env, repoFullName);
-  const anyLinkedIssueRuleOn =
-    linkedIssueRulesConfig.ownerAssignedClose === "block" ||
-    linkedIssueRulesConfig.missingPointLabelClose === "block" ||
-    linkedIssueRulesConfig.maintainerOnlyLabelClose === "block";
-  if (anyLinkedIssueRuleOn) {
-    const linkedIssueExtraction = extractLinkedIssueNumbersWithOverflow(pr.body ?? "");
-    if (linkedIssueExtraction.overflow) {
-      linkedIssueHardRule = {
-        violated: true,
-        reason: "PR body links more issues than Gittensory can safely verify automatically; please reduce linked closing references or request maintainer review.",
-      };
-    } else if (pr.linkedIssues.length > 0) {
-      // pr.linkedIssues is already capped at MAX_LINKED_ISSUE_NUMBERS at extraction (extractLinkedIssueNumbers),
-      // so the per-issue fetch fanout is bounded at the source — no extra cap needed here.
-      const issueFacts = (
-        await Promise.all(pr.linkedIssues.map((issueNumber) => fetchLinkedIssueFacts(env, repoFullName, issueNumber, ciToken ?? env.GITHUB_PUBLIC_TOKEN)))
-      ).flatMap((facts) => (facts ? [facts] : []));
-      if (issueFacts.length > 0) {
-        linkedIssueHardRule = evaluateLinkedIssueHardRules({ issues: issueFacts, config: linkedIssueRulesConfig, repoOwner });
-      }
-    }
-  }
+  const linkedIssueHardRule = await resolveLinkedIssueHardRule({
+    env,
+    repoFullName,
+    repoOwner,
+    config: linkedIssueRulesConfig,
+    body: pr.body,
+    linkedIssues: pr.linkedIssues,
+    ciToken,
+  });
 
   const planned = planAgentMaintenanceActions({
     conclusion: gate.conclusion,
