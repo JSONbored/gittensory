@@ -91,7 +91,7 @@ services:
   # Transaction-mode pooler — allows hundreds of app clients with a small PG connection cap.
   # Set DATABASE_URL in gittensory to: postgres://gittensory:<pw>@pgbouncer:5432/gittensory
   pgbouncer:
-    image: edoburu/pgbouncer:latest
+    image: edoburu/pgbouncer:v1.25.2-p0
     restart: unless-stopped
     profiles: ["pgbouncer"]
     depends_on:
@@ -138,7 +138,7 @@ services:
   # QDRANT_URL=http://qdrant:6333 is set. Scales to millions of vectors with ANN search.
   # REST API: http://localhost:6333  gRPC: localhost:6334  Dashboard: http://localhost:6333/dashboard
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.18.2
     restart: unless-stopped
     profiles: ["qdrant"]
     # Ports are bound to LOOPBACK (127.0.0.1), not 0.0.0.0: the app reaches Qdrant over the internal
@@ -172,7 +172,7 @@ services:
   #   docker compose exec ollama ollama pull llama3.2
   # Then set AI_PROVIDER=ollama and AI_BASE_URL=http://ollama:11434/v1 in .env.
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.30.10
     restart: unless-stopped
     profiles: ["ollama"]
     volumes:
@@ -182,7 +182,7 @@ services:
   # Continuous WAL backup of the SQLite DB to S3/B2/R2. Copy litestream.yml.example
   # → litestream.yml and fill in your bucket. Set LITESTREAM_* secrets in .env.
   litestream:
-    image: litestream/litestream:latest
+    image: litestream/litestream:0.5.12
     restart: unless-stopped
     profiles: ["litestream"]
     command: replicate
@@ -223,7 +223,7 @@ services:
   # Prometheus scrapes /metrics; Alertmanager routes alerts; Loki+Promtail collect logs;
   # Grafana visualises metrics AND logs. Grafana UI: http://localhost:3000 (admin / $GRAFANA_ADMIN_PASSWORD).
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.12.0
     restart: unless-stopped
     profiles: ["observability"]
     volumes:
@@ -238,7 +238,7 @@ services:
   # Routes Prometheus alerts to your notification channel. Ships SILENT: alerts go to a
   # null receiver until you fill in a receiver in alertmanager/alertmanager.yml.
   alertmanager:
-    image: prom/alertmanager:latest
+    image: prom/alertmanager:v0.33.0
     restart: unless-stopped
     profiles: ["observability"]
     depends_on: [prometheus]
@@ -252,7 +252,7 @@ services:
       - "--storage.path=/alertmanager"
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.1.0
     restart: unless-stopped
     profiles: ["observability"]
     depends_on: [prometheus, loki]
@@ -271,7 +271,7 @@ services:
   # docker-proxy (NOT a raw socket) and ships their logs to Loki. Browse in Grafana → Explore →
   # Loki, e.g. {service="gittensory"} | json | level="error".
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.7.3
     restart: unless-stopped
     profiles: ["observability"]
     command: ["-config.file=/etc/loki/loki-config.yml"]
@@ -306,7 +306,7 @@ services:
     networks: [docker-proxy]   # isolated — only Promtail joins this network
 
   promtail:
-    image: grafana/promtail:latest
+    image: grafana/promtail:3.6.11
     restart: unless-stopped
     profiles: ["observability"]
     command: ["-config.file=/etc/promtail/promtail-config.yml"]
@@ -325,6 +325,10 @@ services:
   # public ports exposed. Generate an auth key at tailscale.com/settings/keys and
   # set TS_AUTHKEY= in .env. The gittensory service is reachable at the tailnet IP on port 8787.
   tailscale:
+    # Kept on the `stable` release channel rather than a version tag: tailscale's ghcr tags use a
+    # non-obvious scheme and the client is happiest tracking the current stable. For a fully immutable
+    # pin, resolve a digest once: docker pull ghcr.io/tailscale/tailscale:stable && docker inspect \
+    #   --format='{{index .RepoDigests 0}}' ghcr.io/tailscale/tailscale:stable
     image: ghcr.io/tailscale/tailscale:stable
     restart: unless-stopped
     profiles: ["tailscale"]
