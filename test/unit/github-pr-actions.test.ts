@@ -110,6 +110,23 @@ describe("GitHub PR action primitives (#778)", () => {
     expect(calls.some((url) => url.includes("per_page=100") && url.includes("page=1"))).toBe(true);
     expect(calls.some((url) => url.includes("per_page=100") && url.includes("page=2"))).toBe(true);
   });
+
+  it("returns null when the events API throws (catch path)", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (input.toString().includes("/access_tokens")) return Response.json({ token: "t" });
+      throw new Error("network failure");
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 18)).resolves.toBeNull();
+  });
+
+  it("records null lastCloser when the closed event has a null actor", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (input.toString().includes("/access_tokens")) return Response.json({ token: "t" });
+      if (input.toString().includes("/issues/19/events")) return Response.json([{ event: "closed", actor: null }]);
+      return new Response("not found", { status: 404 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 19)).resolves.toBeNull();
+  });
 });
 
 function generateRsaPrivateKeyPem(): string {
