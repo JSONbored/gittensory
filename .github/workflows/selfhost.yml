@@ -28,6 +28,10 @@ on:
       - "test/unit/selfhost-*"
       - ".github/workflows/selfhost.yml"
 
+# Least privilege — the smoke test only reads the repo; no writes, no packages.
+permissions:
+  contents: read
+
 jobs:
   build-boot:
     name: build + boot smoke test
@@ -44,8 +48,10 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "24"
       - name: Install deps

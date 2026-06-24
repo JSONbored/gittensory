@@ -24,14 +24,20 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    # Environment gate — requires reviewer approval before a release runs (configure under repo Settings > Environments).
+    environment: release
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Resolve version
         id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "v=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "v=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
           else
             echo "v=${GITHUB_REF_NAME#selfhost-v}" >> "$GITHUB_OUTPUT"
           fi
@@ -70,8 +76,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
           sbom: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: GitHub Release
         if: github.event_name == 'push'

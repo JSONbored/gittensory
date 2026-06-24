@@ -212,7 +212,7 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
       const prompt = toMessages(options).map((m) => m.content).join("\n\n");
       const spawn = spawnImpl ?? (await defaultSpawn());
       const codexModel = resolveModel(configuredModel(parentEnv), model, "gpt-5");
-      const { stdout, code } = await spawn("codex", ["exec", "--json", "--sandbox", "read-only", "--ask-for-approval", "never", "--model", codexModel, prompt], { env, timeoutMs: 120_000 });
+      const { stdout, code } = await spawn("codex", ["exec", "--json", "--sandbox", "read-only", "--ask-for-approval", "never", "--model", codexModel, "--", prompt], { env, timeoutMs: 120_000 });
       if (code !== 0) throw new Error(`codex_exit_${code ?? "null"}`);
       const text = extractCliText(stdout);
       if (!text) throw new Error("codex_empty_output");

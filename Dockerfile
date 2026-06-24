@@ -29,7 +29,7 @@ COPY --from=build /app/migrations ./migrations
 # work in-image. Build with `--build-arg INSTALL_AI_CLIS=true`. No credentials are baked — operators mint
 # CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`) / codex auth at run time and pass it via the env.
 ARG INSTALL_AI_CLIS=false
-RUN if [ "$INSTALL_AI_CLIS" = "true" ]; then npm install -g @anthropic-ai/claude-code @openai/codex; fi
+RUN if [ "$INSTALL_AI_CLIS" = "true" ]; then npm install -g @anthropic-ai/claude-code@2.1.187 @openai/codex@0.142.0 --ignore-scripts; fi
 # Optional: enable visual review via an external Chrome sidecar (e.g. `browserless/chrome:latest`).
 # Build with `--build-arg INSTALL_VISUAL_REVIEW=true` then set BROWSER_WS_ENDPOINT=<ws-url> at runtime.
 ARG INSTALL_VISUAL_REVIEW=false
