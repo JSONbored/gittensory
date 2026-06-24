@@ -68,7 +68,7 @@ import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import { buildMcpClientTelemetry } from "../services/client-telemetry";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
-import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
+import { buildRepoOutcomeCalibration, outcomeCalibrationSummary } from "../services/outcome-calibration";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import {
   applyMcpPlanningChoices,
@@ -1915,21 +1915,9 @@ export class GittensoryMcp {
   private async getOutcomeCalibration(input: { owner: string; repo: string; windowDays?: number | undefined }): Promise<ToolPayload> {
     const fullName = `${input.owner}/${input.repo}`;
     await this.requireRepoAccess(fullName);
-    const report = await buildRepoOutcomeCalibration(
-      this.env,
-      fullName,
-      input.windowDays !== undefined ? input.windowDays : undefined,
-    );
-    const slop = report.slop;
-    const totalResolved = slop?.totalResolved ?? 0;
-    const summary =
-      slop?.discriminates === true
-        ? `Outcome calibration for ${fullName}: slop bands are predictive across ${totalResolved} resolved PRs.`
-        : slop?.discriminates === false
-          ? `Outcome calibration for ${fullName}: slop bands are NOT discriminating on current data (${totalResolved} resolved PRs).`
-          : `Outcome calibration for ${fullName}: not enough resolved PR data to judge slop calibration yet.`;
+    const report = await buildRepoOutcomeCalibration(this.env, fullName, input.windowDays);
     return {
-      summary,
+      summary: outcomeCalibrationSummary(fullName, report.slop),
       data: report as unknown as Record<string, unknown>,
     };
   }
