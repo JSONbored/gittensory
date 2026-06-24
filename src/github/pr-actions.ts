@@ -133,6 +133,27 @@ export async function getLastCloserLogin(env: Env, installationId: number, repoF
     const firstResponse = await requestPage(1);
     const firstEvents = firstResponse.data as Array<{ event?: string; actor?: { login?: string | null } | null }>;
     const lastPage = issueEventsLastPage(firstResponse.headers.link);
+    if (lastPage === null) {
+      // No rel="last" in the Link header. A genuine single page has no rel="next" either — return page 1 directly.
+      // But GitHub can paginate WITHOUT emitting rel="last" (only rel="next"); then trusting page 1 alone would let
+      // a later maintainer/bot close hide behind the un-enumerated tail and the reopen guard would fail OPEN. So
+      // follow rel="next" forward, tracking the latest close across pages (events are oldest-first → a later page's
+      // close supersedes), bounded by the same page budget. coveredAllPages holds ONLY if we reached the tail within
+      // budget; otherwise report not-covered so the caller fails closed. (#audit-rel-last)
+      if (!issueEventsHasNextPage(firstResponse.headers.link)) {
+        return { login: latestCloserInPage(firstEvents) ?? null, coveredAllPages: true };
+      }
+      let latestCloser = latestCloserInPage(firstEvents);
+      let hasNext = true;
+      for (let page = 2; hasNext && page <= ISSUE_EVENTS_RECENT_PAGE_LIMIT + 1; page += 1) {
+        const response = await requestPage(page);
+        const closer = latestCloserInPage(response.data as Array<{ event?: string; actor?: { login?: string | null } | null }>);
+        if (closer !== undefined) latestCloser = closer;
+        hasNext = issueEventsHasNextPage(response.headers.link);
+      }
+      const coveredAllPages = !hasNext;
+      return { login: coveredAllPages ? (latestCloser ?? null) : null, coveredAllPages };
+    }
     if (lastPage <= 1) return { login: latestCloserInPage(firstEvents) ?? null, coveredAllPages: true };
 
     // GitHub returns issue-events oldest-first. Use the Link header to inspect the newest bounded window instead
@@ -160,9 +181,17 @@ function latestCloserInPage(events: Array<{ event?: string; actor?: { login?: st
   return undefined;
 }
 
-function issueEventsLastPage(linkHeader: string | undefined): number {
-  if (!linkHeader) return 1;
+// The last page number from the Link header's rel="last", or null when GitHub did not emit rel="last" (no
+// header, a single page, or a paginated response where rel="last" was omitted — the caller follows rel="next"
+// forward in that case rather than assuming a single page). (#audit-rel-last)
+function issueEventsLastPage(linkHeader: string | undefined): number | null {
+  if (!linkHeader) return null;
   const lastLink = linkHeader.split(",").find((link) => /rel="last"/.test(link));
   const page = lastLink?.match(/[?&]page=(\d+)/)?.[1];
-  return page ? Number(page) : 1;
+  return page ? Number(page) : null;
+}
+
+// Whether the Link header advertises a rel="next" page (more events exist beyond the one just fetched).
+function issueEventsHasNextPage(linkHeader: string | undefined): boolean {
+  return linkHeader !== undefined && linkHeader.split(",").some((link) => /rel="next"/.test(link));
 }
