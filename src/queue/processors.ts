@@ -564,10 +564,11 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
     // re-gate above only recomputes the audit verdict; without this re-publish, an idle PR keeps a stale comment
     // (e.g. "safe to merge" from before a fix) and a stale status label forever. reReviewStoredPullRequest reads
     // the freshly-synced head + the live CI, so the comment + label + action all reflect reality. Paced at
-    // SWEEP_MAX_PRS per sweep; scheduled sweeps deliberately skip AI so the 2-minute cadence cannot amplify
-    // model/API spend for unchanged PR heads.
+    // SWEEP_MAX_PRS per sweep. Scheduled sweeps may skip advisory-only AI so the 2-minute cadence cannot
+    // amplify model/API spend for unchanged PR heads, but aiReview:block is part of the authoritative gate
+    // decision and must run before auto-maintenance can act on the recomputed verdict.
     if (sweepInstallationId != null) {
-      await reReviewStoredPullRequest(env, `regate-sweep:${repoFullName}#${pr.number}`, sweepInstallationId, repoFullName, pr.number, undefined, { skipAiReview: true }).catch((error) => {
+      await reReviewStoredPullRequest(env, `regate-sweep:${repoFullName}#${pr.number}`, sweepInstallationId, repoFullName, pr.number, undefined, { skipAiReview: settings.aiReviewMode !== "block" }).catch((error) => {
         console.error(JSON.stringify({ level: "warn", event: "sweep_rereview_failed", deliveryId: `regate-sweep:${repoFullName}#${pr.number}`, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
       });
     }
@@ -2248,8 +2249,8 @@ async function maybePublishPrPublicSurface(
     // BEFORE the gate evaluates, and returns advisory notes for the panel. Inside the try so any AI
     // failure is caught and the gate is still finalized (never left in_progress). Pass the shared resolved
     // files so the review (+ grounding + RAG) sees the REAL diff even on a pre-detail-sync first review (FIX B);
-    // resolve only when the review will actually run (aiReviewMode !== off + a head SHA + not a scheduled
-    // sweep backstop) to keep gate-only and sweep-only repos free of an extra file resolve.
+    // resolve only when the review will actually run (aiReviewMode !== off + a head SHA + not explicitly skipped)
+    // to keep gate-only and advisory-sweep repos free of an extra file resolve.
     const aiReviewWillRun = !webhook.skipAiReview && settings.aiReviewMode !== "off" && Boolean(advisory.headSha);
     if (aiReviewWillRun) {
       aiReview = await runAiReviewForAdvisory(env, {
