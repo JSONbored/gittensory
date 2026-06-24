@@ -1,10 +1,13 @@
 export function isTestPath(file: string): boolean {
   return (
-    /(^|\/)(test|tests|spec|__tests__)\//i.test(file) ||
+    /(^|\/)(test|tests|spec|__tests__|e2e|integration|playwright|cypress)\//i.test(file) ||
     /(^|\/)src\/test\//i.test(file) ||
     /(^|\/)[^/]+_test\.(go|py|rb)$/i.test(file) ||
     /(^|\/)[^/]+_spec\.rb$/i.test(file) ||
-    /\.(test|spec)\.(ts|tsx|js|jsx|py|rb|rs)$/i.test(file)
+    /\.(test|spec)\.(ts|tsx|js|jsx|py|rb|rs)$/i.test(file) ||
+    /(^|\/)[^/]+\.(cy|e2e)\.(ts|tsx|js|jsx)$/i.test(file) ||
+    /(^|\/)__snapshots__\//i.test(file) ||
+    /(^|\/)[^/]+\.snap$/i.test(file)
   );
 }
 
