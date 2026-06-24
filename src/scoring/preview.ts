@@ -404,7 +404,9 @@ function computeScoreCore(
   const issueCredibilityFloor = constant(constants, "MIN_ISSUE_CREDIBILITY");
   const validSolvedIssuesObserved = input.validSolvedIssues !== undefined ? nonNegative(input.validSolvedIssues) : undefined;
   const issueCredibilityObserved = input.issueCredibility !== undefined ? clamp(input.issueCredibility, 0, 1) : undefined;
-  const issueDiscoveryRelevant = issueDiscoveryShare > 0 || (input.linkedIssueMode ?? "none") !== "none";
+  // Issue-discovery validity mirrors upstream's separate issue lane — only gate previews that
+  // actually claim linked-issue / issue-discovery scoring, not every repo with a non-zero share.
+  const issueDiscoveryRelevant = (input.linkedIssueMode ?? "none") !== "none";
   const issueDiscoveryHistoryKnown = validSolvedIssuesObserved !== undefined && issueCredibilityObserved !== undefined;
   const issueDiscoveryHistoryMultiplier =
     !issueDiscoveryRelevant || !issueDiscoveryHistoryKnown
