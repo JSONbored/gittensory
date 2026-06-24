@@ -16,4 +16,20 @@ describe("readiness (#982)", () => {
     driver.query("INSERT INTO _selfhost_migrations (name, applied_at) VALUES (?, ?)", ["0001", 0]);
     expect(await readiness(db)).toEqual({ ok: true, checks: { db: true, migrations: true } });
   });
+
+  it("reports db=false and migrations=false when the SELECT 1 probe throws (db down)", async () => {
+    const throwingDb = {
+      prepare: () => ({
+        bind: function() { return this; },
+        first: () => Promise.reject(new Error("sqlite_io_error")),
+        all: () => Promise.reject(new Error("sqlite_io_error")),
+        run: () => Promise.reject(new Error("sqlite_io_error")),
+        raw: () => Promise.reject(new Error("sqlite_io_error")),
+      }),
+      exec: () => Promise.resolve({ results: [], success: true, meta: {} }),
+      batch: () => Promise.resolve([]),
+      dump: () => Promise.resolve(new ArrayBuffer(0)),
+    } as unknown as D1Database;
+    expect(await readiness(throwingDb)).toEqual({ ok: false, checks: { db: false, migrations: false } });
+  });
 });

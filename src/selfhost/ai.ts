@@ -46,6 +46,7 @@ export function createOpenAiCompatibleAi(opts: { baseUrl: string; apiKey?: strin
     async run(model, options) {
       // Embedding request — the core's embedTexts passes { text: string[] }; route to /embeddings (for RAG).
       if (Array.isArray(options.text)) {
+        if (options.text.length === 0) return { data: [] };
         const res = await fetch(`${base}/embeddings`, {
           method: "POST",
           headers: headers(),

@@ -8,6 +8,7 @@ services:
   gittensory:
     build:
       context: .
+    restart: unless-stopped
     ports:
       - "8787:8787"
     env_file:
@@ -57,9 +58,10 @@ services:
   #     LITESTREAM_REGION: ${LITESTREAM_REGION}
 
   # Optional: Postgres backend (shared DB → multi-instance). Uncomment, set DATABASE_URL above, and add
-  # `depends_on: [postgres]` to the gittensory service.
+  # `depends_on: [postgres]` to the gittensory service. Uses pgvector/pgvector:pg16 (drop-in for
+  # postgres:16-alpine) — also set PGVECTOR_ENABLED=true in the gittensory environment to enable RAG on Postgres.
   # postgres:
-  #   image: postgres:16-alpine
+  #   image: pgvector/pgvector:pg16
   #   restart: unless-stopped
   #   environment:
   #     POSTGRES_USER: gittensory

@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveModel } from "../../src/selfhost/ai";
+import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveModel } from "../../src/selfhost/ai";
 
 describe("resolveModel (#979 — never leak the Workers-AI default to a self-host backend)", () => {
   const WORKERS_DEFAULT = "@cf/meta/llama-3.1-8b-instruct-fp8-fast";
@@ -56,6 +56,24 @@ describe("createOpenAiCompatibleAi (#979)", () => {
   it("throws on a non-OK embeddings response", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("e", { status: 502 })));
     await expect(createOpenAiCompatibleAi({ baseUrl: "http://x/v1" }).run("m", { text: ["a"] })).rejects.toThrow(/ai_embed_http_502/);
+  });
+
+  it("empty text array returns { data: [] } without a fetch", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await createOpenAiCompatibleAi({ baseUrl: "http://o/v1" }).run("m", { text: [] });
+    expect(result).toEqual({ data: [] });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("undefined prompt falls back to empty string (toMessages ?? guard)", async () => {
+    let body: { messages: Array<{ role: string; content: string }> } | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init: { body: string }) => {
+      body = JSON.parse(init.body) as { messages: Array<{ role: string; content: string }> };
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+    }));
+    await createOpenAiCompatibleAi({ baseUrl: "http://o/v1" }).run("m", {});
+    expect(body?.messages).toEqual([{ role: "user", content: "" }]);
   });
 });
 
@@ -159,6 +177,27 @@ describe("branch coverage — defaults + edge inputs", () => {
   it("anthropic with no content field → empty response", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })));
     expect((await createAnthropicAi({ apiKey: "k" }).run("m", { prompt: "x" })).response).toBe("");
+  });
+  it("anthropic maps assistant-role messages to the 'assistant' role", async () => {
+    let sentMessages: Array<{ role: string; content: string }> | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init: { body: string }) => {
+      sentMessages = (JSON.parse(init.body) as { messages: Array<{ role: string; content: string }> }).messages;
+      return new Response(JSON.stringify({ content: [{ type: "text", text: "hi" }] }), { status: 200 });
+    }));
+    await createAnthropicAi({ apiKey: "k" }).run("m", {
+      messages: [
+        { role: "assistant", content: "prior reply" },
+        { role: "user", content: "follow-up" },
+      ],
+    });
+    expect(sentMessages).toEqual([
+      { role: "assistant", content: "prior reply" },
+      { role: "user", content: "follow-up" },
+    ]);
+  });
+  it("buildProvider uses provider-specific default base URLs when AI_BASE_URL is unset", () => {
+    expect(typeof buildProvider("openai", {})?.run).toBe("function"); // defaults to https://api.openai.com/v1
+    expect(typeof buildProvider("ollama", {})?.run).toBe("function"); // defaults to http://localhost:11434/v1
   });
   it("extractCliText reads content + response fields", () => {
     expect(extractCliText(JSON.stringify({ content: "c" }))).toBe("c");

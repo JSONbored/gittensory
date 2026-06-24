@@ -110,6 +110,12 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(q2.size()).toBe(1);
   });
 
+  it("stop() is a no-op when start() was never called (timer is null)", async () => {
+    const q = createSqliteQueue(makeDriver(), async () => undefined);
+    await q.stop(); // timer=null → the false branch of `if (timer) clearTimeout(timer)` is taken
+    expect(q.size()).toBe(0); // still usable after a spurious stop()
+  });
+
   it("start() is idempotent and stop() waits for an in-flight pump", async () => {
     let done = false;
     const q = createSqliteQueue(makeDriver(), async () => {

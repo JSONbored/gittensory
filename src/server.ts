@@ -19,6 +19,7 @@ import { gauge, incr, renderMetrics } from "./selfhost/metrics";
 import { runSelfHostMigrations } from "./selfhost/migrate";
 import { createPgAdapter } from "./selfhost/pg-adapter";
 import { createPgQueue } from "./selfhost/pg-queue";
+import { createPgVectorize, initPgVectorize } from "./selfhost/pg-vectorize";
 import { createSqliteQueue } from "./selfhost/sqlite-queue";
 import { createSqliteVectorize } from "./selfhost/vectorize";
 import type { JobMessage } from "./types";
@@ -52,10 +53,15 @@ async function buildPostgresBackend(url: string, consume: (m: JobMessage) => Pro
   const db = createPgAdapter(pool);
   const queue = createPgQueue(pool, consume);
   await queue.init();
+  let vectorize: Vectorize | undefined;
+  if (process.env.PGVECTOR_ENABLED === "true") {
+    await initPgVectorize(pool);
+    vectorize = createPgVectorize(pool);
+  }
   return {
     db,
     queue,
-    // RAG vector store is SQLite-only today → omit on Postgres (RAG degrades to no-context).
+    ...(vectorize ? { vectorize } : {}),
     async shutdown() {
       await queue.stop();
       await pool.end();
@@ -125,6 +131,9 @@ async function main(): Promise<void> {
     AI: ai,
     ...(backend.vectorize ? { VECTORIZE: backend.vectorize } : {}),
     ...(rateLimiter ? { RATE_LIMITER: rateLimiter } : {}),
+    // Visual review: when BROWSER_WS_ENDPOINT is set, expose a truthy BROWSER binding so shot.ts's
+    // `if (!env.BROWSER) return` guard is bypassed; the puppeteer stub then connects via WS.
+    ...(process.env.BROWSER_WS_ENDPOINT ? { BROWSER: {} } : {}),
   } as unknown as Env;
 
   gauge("gittensory_queue_pending", () => backend.queue.size());

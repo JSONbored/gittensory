@@ -30,6 +30,11 @@ COPY --from=build /app/migrations ./migrations
 # CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`) / codex auth at run time and pass it via the env.
 ARG INSTALL_AI_CLIS=false
 RUN if [ "$INSTALL_AI_CLIS" = "true" ]; then npm install -g @anthropic-ai/claude-code @openai/codex; fi
+# Optional: enable visual review via an external Chrome sidecar (e.g. `browserless/chrome:latest`).
+# Build with `--build-arg INSTALL_VISUAL_REVIEW=true` then set BROWSER_WS_ENDPOINT=<ws-url> at runtime.
+ARG INSTALL_VISUAL_REVIEW=false
+COPY --from=build /app/package*.json ./
+RUN if [ "$INSTALL_VISUAL_REVIEW" = "true" ]; then npm install puppeteer-core --ignore-scripts; fi
 # Data dir (the SQLite file) — owned by the unprivileged node user; mount a volume here to persist.
 RUN mkdir -p /data && chown -R node:node /data /app
 USER node

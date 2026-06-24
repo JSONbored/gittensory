@@ -63,4 +63,23 @@ describe("createSqliteVectorize (#979 local RAG)", () => {
     res = await v.query([0, 1], { topK: 10, namespace: "n" });
     expect(res.matches).toHaveLength(0);
   });
+
+  it("upsert without a namespace defaults to the empty-string namespace", async () => {
+    const v = makeVectorize();
+    await v.upsert([{ id: "ns-less", values: [1, 0] }]);
+    // After upserting without namespace, querying with no namespace finds it
+    const { matches } = await v.query([1, 0], { topK: 1 });
+    expect(matches[0]?.id).toBe("ns-less");
+  });
+
+  it("query without a namespace scans the full table", async () => {
+    const v = makeVectorize();
+    await v.upsert([
+      { id: "n1", values: [1, 0], namespace: "a" },
+      { id: "n2", values: [0, 1], namespace: "b" },
+    ]);
+    const res = await v.query([1, 0], { topK: 10 }); // no namespace → scans all
+    expect(res.matches.map((m) => m.id)).toContain("n1");
+    expect(res.matches.map((m) => m.id)).toContain("n2");
+  });
 });

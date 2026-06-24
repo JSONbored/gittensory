@@ -63,4 +63,11 @@ describe("createD1Adapter (#980 self-host D1-over-SQLite)", () => {
     expect(await d1.prepare("SELECT x FROM t").first("x")).toBe("val");
     expect(await d1.prepare("SELECT x FROM t WHERE id=99").first("x")).toBeNull(); // no row → null
   });
+
+  it("first(colName) returns null when the row exists but the column value is NULL", async () => {
+    const d1 = makeD1();
+    await d1.exec("CREATE TABLE t (id INTEGER, x TEXT)");
+    await d1.prepare("INSERT INTO t (id, x) VALUES (1, NULL)").run();
+    expect(await d1.prepare("SELECT x FROM t WHERE id=1").first("x")).toBeNull(); // row present, value is SQL NULL → null
+  });
 });

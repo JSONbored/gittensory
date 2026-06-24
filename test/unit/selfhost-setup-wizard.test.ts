@@ -37,4 +37,11 @@ describe("setup-wizard (#981 GitHub App Manifest)", () => {
     const fakeFetch = vi.fn(async () => new Response("e", { status: 422 })) as unknown as typeof fetch;
     await expect(exchangeManifestCode("x", fakeFetch)).rejects.toThrow(/manifest_exchange_http_422/);
   });
+
+  it("credentialsToEnv omits optional OAuth lines when client_id / client_secret are absent", () => {
+    const env = credentialsToEnv({ id: 1, slug: "s", webhook_secret: "w", pem: "k" });
+    expect(env).toContain("GITHUB_APP_ID=1");
+    expect(env).not.toContain("GITHUB_OAUTH_CLIENT_ID");
+    expect(env).not.toContain("GITHUB_OAUTH_CLIENT_SECRET");
+  });
 });
