@@ -92,6 +92,7 @@ type GitHubCheckRunPayload = {
   completed_at?: string | null;
   details_url?: string | null;
   html_url?: string | null;
+  app?: { id?: number | null; slug?: string | null } | null;
 };
 
 type BackfillLimits = {
@@ -1914,6 +1915,12 @@ const CI_PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 // check is posted the same way and re-created the deadlock, so exclude ALL bot-owned checks.)
 const BOT_OWNED_CHECK_NAMES = new Set<string>([GITTENSORY_GATE_CHECK_NAME, GITTENSORY_CONTEXT_CHECK_NAME]);
 
+function isOwnGitHubAppCheckRun(env: Env, run: GitHubCheckRunPayload): boolean {
+  const appSlug = typeof run.app?.slug === "string" ? run.app.slug.trim().toLowerCase() : "";
+  const ownSlug = env.GITHUB_APP_SLUG.trim().toLowerCase();
+  return ownSlug.length > 0 && appSlug === ownSlug && BOT_OWNED_CHECK_NAMES.has(run.name);
+}
+
 export type LiveCiAggregate = {
   ciState: "passed" | "failed" | "pending" | "unverified";
   // Checks that FAIL the gate: every failing check when required contexts are unknown, else only the failing
@@ -1991,7 +1998,7 @@ export async function fetchLiveCiAggregate(
     ).catch(() => undefined);
     if (!result) break;
     for (const run of result.data.check_runs ?? []) {
-      if (BOT_OWNED_CHECK_NAMES.has(run.name)) continue; // never wait on the bot's own Gate/Context checks (see above)
+      if (isOwnGitHubAppCheckRun(env, run)) continue; // never wait on the bot's own Gate/Context check-runs (see above)
       total += 1;
       const conclusion = (run.conclusion ?? "").toLowerCase();
       const status = (run.status ?? "").toLowerCase();
@@ -2019,7 +2026,6 @@ export async function fetchLiveCiAggregate(
   ).catch(() => undefined);
   for (const ctx of statusResult?.data.statuses ?? []) {
     const name = ctx.context ?? "status";
-    if (BOT_OWNED_CHECK_NAMES.has(name)) continue; // never wait on the bot's own Gate/Context checks (see #gate-self-deadlock above)
     total += 1;
     const state = (ctx.state ?? "").toLowerCase();
     if (state === "failure" || state === "error") {

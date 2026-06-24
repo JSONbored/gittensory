@@ -2695,8 +2695,8 @@ describe("GitHub backfill", () => {
               { name: "test", status: "completed", conclusion: "success" },
               // BOTH bot-posted checks, still in_progress (posted but not yet concluded). Counting EITHER would
               // defer the very review that concludes it — the self-deadlock that froze green-CI PRs as "CI pending".
-              { name: "Gittensory Gate", status: "in_progress", conclusion: null },
-              { name: "Gittensory Context", status: "in_progress", conclusion: null },
+              { name: "Gittensory Gate", status: "in_progress", conclusion: null, app: { slug: "gittensory" } },
+              { name: "Gittensory Context", status: "in_progress", conclusion: null, app: { slug: "gittensory" } },
             ],
           });
         }
@@ -2710,6 +2710,44 @@ describe("GitHub backfill", () => {
       expect(aggregate.ciState).toBe("passed"); // would be "pending" if either in_progress bot check were counted
       expect(aggregate.failingDetails).toEqual([]);
     });
+
+    it("does not ignore same-named Gate check-runs from a different GitHub App", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) {
+          return Response.json({
+            check_runs: [
+              { name: "test", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+              { name: "Gittensory Gate", status: "completed", conclusion: "failure", output: { title: "External gate failed" }, app: { slug: "external-ci" } },
+            ],
+          });
+        }
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        return new Response("not found", { status: 404 });
+      });
+
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["test", "Gittensory Gate"]));
+
+      expect(aggregate.ciState).toBe("failed");
+      expect(aggregate.failingDetails).toEqual([expect.objectContaining({ name: "Gittensory Gate", summary: "External gate failed" })]);
+    });
+
+    it("does not ignore classic statuses named like the Gate", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "test", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+        if (url.includes("/status?")) return Response.json({ statuses: [{ context: "Gittensory Gate", state: "failure", description: "External status failed" }] });
+        return new Response("not found", { status: 404 });
+      });
+
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+
+      expect(aggregate.ciState).toBe("failed");
+      expect(aggregate.failingDetails).toEqual([expect.objectContaining({ name: "Gittensory Gate", summary: "External status failed" })]);
+    });
+
   });
 
 });
