@@ -13,7 +13,14 @@ import { serve } from "@hono/node-server";
 import worker from "./index";
 import { processJob } from "./queue/processors";
 import { createSelfHostAi } from "./selfhost/ai";
-import { credentialsToEnv, exchangeManifestCode, renderSetupPage } from "./selfhost/setup-wizard";
+import {
+  cookieValue,
+  credentialsToEnv,
+  exchangeManifestCode,
+  isValidSetupAuthCookie,
+  renderSetupPage,
+  setupAuthCookieValue,
+} from "./selfhost/setup-wizard";
 import { orbEnabled, exportOrbBatch } from "./selfhost/orb-collector";
 import { createD1Adapter, nodeSqliteDriver } from "./selfhost/d1-adapter";
 import { readiness } from "./selfhost/health";
@@ -237,6 +244,10 @@ async function main(): Promise<void> {
         if (path === "/metrics") return new Response(await renderMetrics(), { headers: { "content-type": "text/plain; version=0.0.4" } });
         // First-run GitHub App setup wizard — only while no App is configured (can't rebind a live install).
         if ((path === "/setup" || path === "/setup/callback") && !process.env.GITHUB_APP_ID) {
+          const setupToken = process.env.SELFHOST_SETUP_TOKEN;
+          if (!setupToken) {
+            return new Response("SELFHOST_SETUP_TOKEN must be set before using the setup wizard", { status: 400 });
+          }
           // PUBLIC_API_ORIGIN is required: falling back to request.url.origin would let an attacker spoof
           // the Host header and redirect the App-creation callback to an attacker-controlled domain, where
           // they could exchange the one-time code for the App private key and webhook secret.
@@ -248,13 +259,20 @@ async function main(): Promise<void> {
             );
           }
           if (path === "/setup") {
+            const suppliedToken =
+              new URL(request.url).searchParams.get("token") ??
+              request.headers.get("x-setup-token") ??
+              request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+            if (suppliedToken !== setupToken) return new Response("invalid setup token", { status: 403 });
             // Generate a per-visit CSRF nonce, embed it in the manifest's redirect_url, and bind it to
-            // this browser session via an HttpOnly cookie so the callback can validate it.
+            // this browser session via an HttpOnly signed cookie so the callback can validate it came
+            // from an operator-authorized setup visit, not just any unauthenticated browser.
             const state = randomUUID();
             return new Response(renderSetupPage(origin, state), {
               headers: {
                 "content-type": "text/html; charset=utf-8",
-                "Set-Cookie": `setup_state=${state}; Path=/setup; HttpOnly; SameSite=Lax; Max-Age=3600`,
+                "Referrer-Policy": "no-referrer",
+                "Set-Cookie": `setup_auth=${setupAuthCookieValue(setupToken, state)}; Path=/setup; HttpOnly; SameSite=Lax; Max-Age=3600`,
               },
             });
           }
@@ -264,8 +282,8 @@ async function main(): Promise<void> {
           // Validate the CSRF state: must match the cookie set when /setup was served.
           const stateParam = params.get("state");
           const cookieHeader = request.headers.get("cookie") ?? "";
-          const cookieState = cookieHeader.split(";").map((c) => c.trim()).find((c) => c.startsWith("setup_state="))?.slice("setup_state=".length);
-          if (!stateParam || !cookieState || stateParam !== cookieState) {
+          const setupAuth = cookieValue(cookieHeader, "setup_auth");
+          if (!stateParam || !isValidSetupAuthCookie(setupToken, stateParam, setupAuth)) {
             return new Response("invalid state parameter", { status: 403 });
           }
           try {

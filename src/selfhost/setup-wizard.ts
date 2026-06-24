@@ -3,6 +3,7 @@
 // right permissions/events + webhook URL and redirects back to /setup/callback?code=…, which exchanges the
 // code for the App's credentials and writes them to a file the operator loads (then restarts). The routes are
 // disabled once an App is configured (server.ts gates on GITHUB_APP_ID), so this can't rebind a live install.
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 export interface AppCredentials {
   id: number;
@@ -48,6 +49,26 @@ which are written to a file for you to load — then restart the container.</p>
   <button type="submit" style="padding:.6rem 1.2rem;font-size:1rem;cursor:pointer">Create GitHub App →</button>
 </form>
 </body></html>`;
+}
+
+/** Signed cookie value proving the setup flow was started by someone who knows the operator token. */
+export function setupAuthCookieValue(secret: string, state: string): string {
+  const mac = createHmac("sha256", secret).update(state).digest("base64url");
+  return `${state}.${mac}`;
+}
+
+/** Extract a named cookie value from the Cookie header. */
+export function cookieValue(cookieHeader: string, name: string): string | undefined {
+  return cookieHeader.split(";").map((c) => c.trim()).find((c) => c.startsWith(`${name}=`))?.slice(name.length + 1);
+}
+
+/** Validate the signed setup cookie without trusting a client-supplied state alone. */
+export function isValidSetupAuthCookie(secret: string, state: string, cookie: string | undefined): boolean {
+  if (!cookie) return false;
+  const expected = setupAuthCookieValue(secret, state);
+  const actualBytes = Buffer.from(cookie);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }
 
 /** Exchange the temporary manifest code for the App's credentials (id, slug, webhook secret, private key). */

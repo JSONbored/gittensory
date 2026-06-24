@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildManifest, credentialsToEnv, exchangeManifestCode, renderSetupPage } from "../../src/selfhost/setup-wizard";
+import {
+  buildManifest,
+  cookieValue,
+  credentialsToEnv,
+  exchangeManifestCode,
+  isValidSetupAuthCookie,
+  renderSetupPage,
+  setupAuthCookieValue,
+} from "../../src/selfhost/setup-wizard";
 
 describe("setup-wizard (#981 GitHub App Manifest)", () => {
   it("builds a manifest with the webhook + redirect URLs (including CSRF state), permissions, events", () => {
@@ -22,6 +30,21 @@ describe("setup-wizard (#981 GitHub App Manifest)", () => {
     expect(html).toContain('name="manifest"');
     expect(html).toContain("Gittensory Self-Host");
     expect(html).toContain("nonce-abc"); // state is baked into the manifest value
+  });
+
+  it("signs the setup cookie so only token-authorized setup visits can finish the callback", () => {
+    const cookie = setupAuthCookieValue("operator-token", "nonce-abc");
+    expect(isValidSetupAuthCookie("operator-token", "nonce-abc", cookie)).toBe(true);
+    expect(isValidSetupAuthCookie("operator-token", "other-nonce", cookie)).toBe(false);
+    expect(isValidSetupAuthCookie("wrong-token", "nonce-abc", cookie)).toBe(false);
+    expect(isValidSetupAuthCookie("operator-token", "nonce-abc", "bad-cookie")).toBe(false);
+    expect(isValidSetupAuthCookie("operator-token", "nonce-abc", undefined)).toBe(false);
+  });
+
+  it("extracts setup cookies from a multi-cookie header", () => {
+    const cookie = setupAuthCookieValue("operator-token", "nonce-abc");
+    expect(cookieValue(`theme=dark; setup_auth=${cookie}; session=xyz`, "setup_auth")).toBe(cookie);
+    expect(cookieValue("theme=dark", "setup_auth")).toBeUndefined();
   });
 
   it("exchanges the code and serializes credentials to .env lines", async () => {
