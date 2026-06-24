@@ -116,6 +116,11 @@ describe("OpenAPI contract", () => {
     expect(JSON.stringify(spec.components?.schemas?.Health)).toContain("latestRecommendedMcpVersion");
     expect(JSON.stringify(spec.components?.schemas?.McpCompatibility)).toContain("minimumSupportedVersion");
     expect(JSON.stringify(spec.components?.schemas?.McpCompatibility)).toContain("compatibilityWarnings");
+    const repositorySettings = spec.components?.schemas?.RepositorySettings as
+      | { required?: string[]; properties?: Record<string, { default?: unknown; description?: string }> }
+      | undefined;
+    expect(repositorySettings?.required ?? []).not.toContain("reviewerRoutingMode");
+    expect(repositorySettings?.properties?.reviewerRoutingMode).toMatchObject({ default: "off" });
     expect(spec.components?.securitySchemes?.GittensoryBearer).toBeDefined();
     expect(spec.components?.securitySchemes?.GittensorySessionCookie).toBeDefined();
     expect(spec.paths["/health"]?.get?.security).toBeUndefined();

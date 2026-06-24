@@ -9,7 +9,9 @@ import {
   createOrUpdateSkippedGateCheckRun,
   getAppInstallation,
   getInstallationId,
+  getPullRequestRequestedReviewers,
   getRepositoryCollaboratorPermission,
+  requestPullRequestReviewers,
 } from "../../src/github/app";
 import type { Advisory } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
@@ -162,6 +164,132 @@ describe("GitHub check runs", () => {
     await expect(getRepositoryCollaboratorPermission(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "JSONbored/gittensory", "missing")).resolves.toBeNull();
     await expect(getRepositoryCollaboratorPermission(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "JSONbored/gittensory", "no-permission")).resolves.toBeNull();
     await expect(getRepositoryCollaboratorPermission(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "JSONbored/gittensory", "error")).rejects.toThrow(/Failed to fetch GitHub collaborator permission/);
+  });
+
+  it("fetches requested reviewers with installation credentials", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/repos/JSONbored/gittensory/pulls/7/requested_reviewers")) {
+        return Response.json({
+          users: [{ login: "alice" }, { login: "bob" }],
+          teams: [{ slug: "platform", organization: { login: "org" } }],
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(getPullRequestRequestedReviewers(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "JSONbored/gittensory", 7)).resolves.toEqual({
+      users: ["alice", "bob"],
+      teams: ["org/platform"],
+    });
+  });
+
+  it("returns empty requested-reviewer data for invalid pull targets and filters incomplete payload entries", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    let fetches = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      fetches += 1;
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/repos/JSONbored/gittensory/pulls/8/requested_reviewers")) {
+        return Response.json({
+          users: [{ login: " alice " }, { login: " " }, {}],
+          teams: [{ slug: "platform", organization: { login: " org " } }, { slug: "platform" }, { organization: { login: "org" } }],
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(getPullRequestRequestedReviewers(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "invalid", 7)).resolves.toEqual({
+      users: [],
+      teams: [],
+    });
+    await expect(getPullRequestRequestedReviewers(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "JSONbored/gittensory", 0)).resolves.toEqual({
+      users: [],
+      teams: [],
+    });
+    await expect(getPullRequestRequestedReviewers(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "JSONbored/gittensory", 8)).resolves.toEqual({
+      users: ["alice"],
+      teams: ["org/platform"],
+    });
+    expect(fetches).toBe(2);
+  });
+
+  it("returns empty reviewer arrays when GitHub omits users and teams", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/repos/JSONbored/gittensory/pulls/9/requested_reviewers")) return Response.json({});
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(getPullRequestRequestedReviewers(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "JSONbored/gittensory", 9)).resolves.toEqual({
+      users: [],
+      teams: [],
+    });
+  });
+
+  it("surfaces requested-reviewer fetch failures", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/repos/JSONbored/gittensory/pulls/7/requested_reviewers")) return new Response("nope", { status: 500 });
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(getPullRequestRequestedReviewers(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "JSONbored/gittensory", 7)).rejects.toThrow(
+      /Failed to fetch GitHub requested reviewers/,
+    );
+  });
+
+  it("requests reviewers with a deduped payload", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    let capturedBody: { reviewers?: string[] } | undefined;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/repos/JSONbored/gittensory/pulls/7/requested_reviewers")) {
+        capturedBody = JSON.parse(String(init?.body)) as { reviewers?: string[] };
+        return Response.json({}, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await requestPullRequestReviewers(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "JSONbored/gittensory", 7, ["alice", "alice", " bob "]);
+    expect(capturedBody).toEqual({ reviewers: ["alice", "bob"] });
+  });
+
+  it("skips reviewer requests when the repo, pull number, or reviewer list is invalid", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    let fetches = 0;
+    vi.stubGlobal("fetch", async () => {
+      fetches += 1;
+      return Response.json({ token: "installation-token" });
+    });
+
+    await expect(requestPullRequestReviewers(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "invalid", 7, ["alice"])).resolves.toBeUndefined();
+    await expect(requestPullRequestReviewers(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "JSONbored/gittensory", 0, ["alice"])).resolves.toBeUndefined();
+    await expect(requestPullRequestReviewers(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "JSONbored/gittensory", 7, [" ", ""])).resolves.toBeUndefined();
+
+    expect(fetches).toBe(0);
+  });
+
+  it("surfaces reviewer-request failures", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/repos/JSONbored/gittensory/pulls/7/requested_reviewers")) return new Response("blocked", { status: 500 });
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(requestPullRequestReviewers(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "JSONbored/gittensory", 7, ["alice"])).rejects.toThrow(
+      /Failed to request GitHub reviewers/,
+    );
   });
 
   it("updates an existing Gittensory check run for the same head SHA", async () => {

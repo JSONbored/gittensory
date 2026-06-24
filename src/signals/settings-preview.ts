@@ -189,6 +189,7 @@ export type RepoSettingsPreview = {
     qualityGateMinScore?: number | null | undefined;
     slopGateMode: RepositorySettings["slopGateMode"];
     mergeReadinessGateMode: RepositorySettings["mergeReadinessGateMode"];
+    reviewerRoutingMode: RepositorySettings["reviewerRoutingMode"];
     manifestPolicyGateMode: RepositorySettings["manifestPolicyGateMode"];
     selfAuthoredLinkedIssueGateMode: RepositorySettings["selfAuthoredLinkedIssueGateMode"];
     firstTimeContributorGrace: boolean;
@@ -312,6 +313,7 @@ export function buildRepoSettingsPreview(args: {
       qualityGateMinScore: settings.qualityGateMinScore ?? null,
       slopGateMode: settings.slopGateMode,
       mergeReadinessGateMode: settings.mergeReadinessGateMode,
+      reviewerRoutingMode: settings.reviewerRoutingMode,
       manifestPolicyGateMode: settings.manifestPolicyGateMode,
       selfAuthoredLinkedIssueGateMode: settings.selfAuthoredLinkedIssueGateMode,
       firstTimeContributorGrace: settings.firstTimeContributorGrace,
@@ -360,6 +362,11 @@ function buildWarnings(settings: RepositorySettings, decision: PublicSurfaceDeci
   }
   if (settings.gateCheckMode === "enabled" && missing.has("checks")) {
     warnings.push("Gate checks are enabled but GitHub App permission Checks: write is missing. Set repository permission checks to write, then approve the change.");
+  }
+  if (settings.reviewerRoutingMode === "auto_request" && missing.has("pull_requests")) {
+    warnings.push(
+      "Reviewer auto-request is enabled but GitHub App permission Pull requests: write is missing. Set repository permission pull_requests to write, then approve the change.",
+    );
   }
   for (const event of installation.missingEvents) {
     warnings.push(`The GitHub App is not subscribed to the ${event} webhook event; subscribe to it so Gittensory receives the relevant deliveries.`);
@@ -508,14 +515,15 @@ function writesPrPublicSurface(settings: RepositorySettings, decision: PublicSur
 function requiredInstallPermissions(settings: RepositorySettings, decision: PublicSurfaceDecision): string[] {
   // Read-only base permissions are derived from the canonical constant so this surface stays in sync.
   // Write permissions are gated on whether the current settings actually produce that output.
-  const permissions = new Set(
+  const permissions = new Map(
     Object.entries(REQUIRED_INSTALLATION_PERMISSIONS)
       .filter(([, value]) => value === "read")
-      .map(([key, value]) => `${key}: ${value}`),
+      .map(([key, value]) => [key, value] as const),
   );
-  if (writesPrPublicSurface(settings, decision)) permissions.add("issues: write");
-  if (decision.willCheckRun || settings.checkRunMode === "enabled" || settings.gateCheckMode === "enabled") permissions.add("checks: write");
-  return [...permissions];
+  if (settings.reviewerRoutingMode === "auto_request") permissions.set("pull_requests", "write");
+  if (writesPrPublicSurface(settings, decision)) permissions.set("issues", "write");
+  if (decision.willCheckRun || settings.checkRunMode === "enabled" || settings.gateCheckMode === "enabled") permissions.set("checks", "write");
+  return [...permissions.entries()].map(([key, value]) => `${key}: ${value}`);
 }
 
 function activeMissingPermissions(settings: RepositorySettings, decision: PublicSurfaceDecision, installation: InstallationHealthSummary | null): string[] {

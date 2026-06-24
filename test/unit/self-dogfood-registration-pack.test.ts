@@ -63,6 +63,7 @@ function settingsFor(repoFullName: string, overrides: Partial<RepositorySettings
     mergeReadinessGateMode: "off",
     manifestPolicyGateMode: "off",
     selfAuthoredLinkedIssueGateMode: "advisory",
+    reviewerRoutingMode: "off",
     firstTimeContributorGrace: false,
     slopAiAdvisory: false,
     qualityGateMinScore: null,

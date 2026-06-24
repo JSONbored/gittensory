@@ -88,6 +88,11 @@ export async function getAppInstallation(env: Env, installationId: number): Prom
 
 export type GitHubRepositoryCollaboratorPermission = "admin" | "maintain" | "write" | "triage" | "read" | "none" | string;
 
+export type PullRequestRequestedReviewers = {
+  users: string[];
+  teams: string[];
+};
+
 export async function getRepositoryCollaboratorPermission(
   env: Env,
   installationId: number,
@@ -108,6 +113,64 @@ export async function getRepositoryCollaboratorPermission(
   }
   const payload = (await response.json()) as { permission?: GitHubRepositoryCollaboratorPermission };
   return payload.permission ?? null;
+}
+
+export async function getPullRequestRequestedReviewers(
+  env: Env,
+  installationId: number,
+  repoFullName: string,
+  pullNumber: number,
+): Promise<PullRequestRequestedReviewers> {
+  const [owner, name] = repoFullName.split("/");
+  if (!owner || !name || !Number.isInteger(pullNumber) || pullNumber <= 0) return { users: [], teams: [] };
+  const token = await createInstallationToken(env, installationId);
+  const response = await timeoutFetch(
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${pullNumber}/requested_reviewers`,
+    { headers: githubHeaders(`Bearer ${token}`) },
+  );
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Failed to fetch GitHub requested reviewers (${response.status}): ${body.slice(0, 200)}`);
+  }
+  const payload = (await response.json()) as {
+    users?: Array<{ login?: string | null }>;
+    teams?: Array<{ slug?: string | null; organization?: { login?: string | null } | null }>;
+  };
+  return {
+    users: (payload.users ?? []).map((user) => user.login?.trim()).filter((login): login is string => Boolean(login)),
+    teams: (payload.teams ?? [])
+      .map((team) => {
+        const org = team.organization?.login?.trim();
+        const slug = team.slug?.trim();
+        return org && slug ? `${org}/${slug}` : null;
+      })
+      .filter((team): team is string => Boolean(team)),
+  };
+}
+
+export async function requestPullRequestReviewers(
+  env: Env,
+  installationId: number,
+  repoFullName: string,
+  pullNumber: number,
+  reviewers: string[],
+): Promise<void> {
+  const [owner, name] = repoFullName.split("/");
+  const dedupedReviewers = Array.from(new Set(reviewers.map((reviewer) => reviewer.trim()).filter(Boolean)));
+  if (!owner || !name || !Number.isInteger(pullNumber) || pullNumber <= 0 || dedupedReviewers.length === 0) return;
+  const token = await createInstallationToken(env, installationId);
+  const response = await timeoutFetch(
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${pullNumber}/requested_reviewers`,
+    {
+      method: "POST",
+      headers: githubHeaders(`Bearer ${token}`),
+      body: JSON.stringify({ reviewers: dedupedReviewers }),
+    },
+  );
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Failed to request GitHub reviewers (${response.status}): ${body.slice(0, 200)}`);
+  }
 }
 
 async function createAppJwt(env: Env): Promise<string> {

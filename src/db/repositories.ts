@@ -414,6 +414,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       qualityGateMinScore: null,
       slopGateMode: "off",
       mergeReadinessGateMode: "off",
+      reviewerRoutingMode: "off",
       manifestPolicyGateMode: "off",
       selfAuthoredLinkedIssueGateMode: "advisory",
       firstTimeContributorGrace: false,
@@ -454,6 +455,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     qualityGateMinScore: normalizeQualityGateMinScore(row.qualityGateMinScore),
     slopGateMode: parseGateRuleMode(row.slopGateMode),
     mergeReadinessGateMode: parseGateRuleMode(row.mergeReadinessGateMode),
+    reviewerRoutingMode: parseReviewerRoutingMode(row.reviewerRoutingMode),
     manifestPolicyGateMode: parseGateRuleMode(row.manifestPolicyGateMode),
     selfAuthoredLinkedIssueGateMode: parseGateRuleMode(row.selfAuthoredLinkedIssueGateMode),
     firstTimeContributorGrace: row.firstTimeContributorGrace,
@@ -498,6 +500,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     qualityGateMinScore: normalizeQualityGateMinScore(settings.qualityGateMinScore),
     slopGateMode: settings.slopGateMode ?? "off",
     mergeReadinessGateMode: settings.mergeReadinessGateMode ?? "off",
+    reviewerRoutingMode: settings.reviewerRoutingMode ?? "off",
     manifestPolicyGateMode: settings.manifestPolicyGateMode ?? "off",
     selfAuthoredLinkedIssueGateMode: settings.selfAuthoredLinkedIssueGateMode ?? "advisory",
     firstTimeContributorGrace: settings.firstTimeContributorGrace ?? false,
@@ -540,6 +543,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       qualityGateMinScore: resolved.qualityGateMinScore,
       slopGateMode: resolved.slopGateMode,
       mergeReadinessGateMode: resolved.mergeReadinessGateMode,
+      reviewerRoutingMode: resolved.reviewerRoutingMode,
       manifestPolicyGateMode: resolved.manifestPolicyGateMode,
       selfAuthoredLinkedIssueGateMode: resolved.selfAuthoredLinkedIssueGateMode,
       firstTimeContributorGrace: resolved.firstTimeContributorGrace,
@@ -583,6 +587,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         // persist on update of an existing row. Restored here alongside the new slopAiAdvisory field.
         slopGateMode: resolved.slopGateMode,
         mergeReadinessGateMode: resolved.mergeReadinessGateMode,
+        reviewerRoutingMode: resolved.reviewerRoutingMode,
         manifestPolicyGateMode: resolved.manifestPolicyGateMode,
         selfAuthoredLinkedIssueGateMode: resolved.selfAuthoredLinkedIssueGateMode,
         firstTimeContributorGrace: resolved.firstTimeContributorGrace,
@@ -5275,6 +5280,11 @@ function parseGatePack(value: string | null | undefined): RepositorySettings["ga
 function parseGateRuleMode(value: string): RepositorySettings["linkedIssueGateMode"] {
   if (value === "off" || value === "block") return value;
   return "advisory";
+}
+
+function parseReviewerRoutingMode(value: string): RepositorySettings["reviewerRoutingMode"] {
+  if (value === "advisory" || value === "auto_request") return value;
+  return "off";
 }
 
 function normalizeAiReviewProvider(value: string | null | undefined): "anthropic" | "openai" | null {

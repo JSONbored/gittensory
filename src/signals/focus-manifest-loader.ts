@@ -115,7 +115,7 @@ export async function loadRepoFocusManifests(
   return new Map(entries);
 }
 
-async function readBoundedResponseText(response: Response): Promise<string | null> {
+export async function readBoundedResponseText(response: Response): Promise<string | null> {
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null) {
     const parsedLength = Number.parseInt(contentLength, 10);

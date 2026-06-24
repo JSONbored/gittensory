@@ -596,6 +596,13 @@ export const RepositorySettingsSchema = z
     qualityGateMinScore: z.number().nullable().optional(),
     slopGateMode: z.enum(["off", "advisory", "block"]),
     mergeReadinessGateMode: z.enum(["off", "advisory", "block"]),
+    reviewerRoutingMode: z
+      .enum(["off", "advisory", "auto_request"])
+      .optional()
+      .openapi({
+        description: "CODEOWNERS reviewer routing mode. Defaults to off for existing repositories and omitted client payloads.",
+        default: "off",
+      }),
     manifestPolicyGateMode: z.enum(["off", "advisory", "block"]),
     selfAuthoredLinkedIssueGateMode: z.enum(["off", "advisory", "block"]),
     firstTimeContributorGrace: z.boolean(),
@@ -643,6 +650,13 @@ export const RepoSettingsPreviewSchema = z
       qualityGateMinScore: z.number().nullable().optional(),
       slopGateMode: z.enum(["off", "advisory", "block"]),
       mergeReadinessGateMode: z.enum(["off", "advisory", "block"]),
+      reviewerRoutingMode: z
+        .enum(["off", "advisory", "auto_request"])
+        .optional()
+        .openapi({
+          description: "CODEOWNERS reviewer routing mode. Defaults to off for existing repositories and omitted client payloads.",
+          default: "off",
+        }),
       manifestPolicyGateMode: z.enum(["off", "advisory", "block"]),
       selfAuthoredLinkedIssueGateMode: z.enum(["off", "advisory", "block"]),
       firstTimeContributorGrace: z.boolean(),

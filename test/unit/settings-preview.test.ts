@@ -47,6 +47,7 @@ function settings(overrides: Partial<RepositorySettings> = {}): RepositorySettin
     mergeReadinessGateMode: "off",
     manifestPolicyGateMode: "off",
     selfAuthoredLinkedIssueGateMode: "advisory",
+    reviewerRoutingMode: "off",
     firstTimeContributorGrace: false,
     slopAiAdvisory: false,
     qualityGateMinScore: null,
@@ -195,6 +196,19 @@ describe("buildRepoSettingsPreview", () => {
       status: "needs_attention",
       summary: expect.stringContaining("pull_requests"),
     });
+  });
+
+  it("requires pull_requests:write when reviewer auto-request is enabled", () => {
+    const preview = buildRepoSettingsPreview({
+      ...base,
+      settings: settings({ reviewerRoutingMode: "auto_request", commentMode: "off", publicSurface: "off", autoLabelEnabled: false }),
+      installation: { ...healthyInstall, status: "needs_attention", missingPermissions: ["pull_requests"] },
+      sample: { authorLogin: "miner", minerStatus: "confirmed" },
+    });
+
+    expect(preview.installPreview.permissions.required).toContain("pull_requests: write");
+    expect(preview.installPreview.permissions.required).not.toContain("pull_requests: read");
+    expect(preview.warnings.some((warning) => /Reviewer auto-request is enabled.*Pull requests: write/.test(warning))).toBe(true);
   });
 
   it("explains a missing optional Checks: write permission only when check runs are enabled", () => {

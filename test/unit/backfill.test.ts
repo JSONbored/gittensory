@@ -481,6 +481,77 @@ describe("GitHub backfill", () => {
     );
   });
 
+  it("requires Pull requests write only for repos with reviewer auto-request enabled", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await seedRegisteredRepo(env);
+    await upsertInstallation(env, {
+      installation: {
+        id: 123,
+        account: { login: "JSONbored", id: 1, type: "User" },
+        repository_selection: "selected",
+        permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+        events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+      },
+    });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      reviewerRoutingMode: "auto_request",
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.endsWith("/app/installations/123")) {
+        return Response.json({
+          id: 123,
+          account: { login: "JSONbored", id: 1, type: "User" },
+          repository_selection: "selected",
+          permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+          events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const refreshed = await refreshInstallationHealth(env);
+
+    expect(refreshed.installations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          installationId: 123,
+          status: "needs_attention",
+          missingPermissions: ["pull_requests"],
+          requiredPermissions: expect.objectContaining({ pull_requests: "write" }),
+        }),
+      ]),
+    );
+
+    const repair = await buildInstallationRepairDiagnostics(env, {
+      installationId: 123,
+      accountLogin: "JSONbored",
+      repositorySelection: "selected",
+      installedReposCount: 1,
+      registeredInstalledCount: 1,
+      status: "needs_attention",
+      missingPermissions: ["pull_requests"],
+      missingEvents: [],
+      permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+      events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+      checkedAt: "2026-05-28T00:00:00.000Z",
+    });
+
+    expect(repair.requiredPermissions).toMatchObject({ pull_requests: "write" });
+    expect(repair.modeImpacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          mode: "reviewer_request",
+          enabled: true,
+          affectedRepoCount: 1,
+          requiredPermissions: [expect.objectContaining({ permission: "pull_requests", requiredAccess: "write", missing: true })],
+        }),
+      ]),
+    );
+  });
+
   it("marks comment, label, and check repair impacts disabled by repo settings", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);

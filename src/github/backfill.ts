@@ -695,7 +695,7 @@ export const REQUIRED_INSTALLATION_EVENTS = ["issues", "issue_comment", "pull_re
 export const OPTIONAL_VISIBLE_INSTALLATION_EVENTS = ["installation_target", "installation_repositories"] as const;
 
 type InstallationModeImpact = {
-  mode: "comment" | "label" | "check_run" | "gate_check";
+  mode: "comment" | "label" | "check_run" | "gate_check" | "reviewer_request";
   enabled: boolean;
   affectedRepoCount: number;
   requiredPermissions: Array<{ permission: string; requiredAccess: string; missing: boolean; optional: boolean }>;
@@ -722,6 +722,7 @@ export function enrichInstallationHealth(health: InstallationHealthRecord) {
       : health.status;
   const requiredPermissions = {
     ...REQUIRED_INSTALLATION_PERMISSIONS,
+    ...(missingPermissions.has("pull_requests") && health.permissions.pull_requests === "read" ? { pull_requests: "write" } : {}),
     ...(missingPermissions.has("checks") ? OPTIONAL_CHECK_RUN_PERMISSION : {}),
   };
   return {
@@ -763,13 +764,11 @@ export async function buildInstallationRepairDiagnostics(env: Env, health: Insta
   const labelRepoCount = installedSettings.filter(usesLabelMode).length;
   const checkRunRepoCount = installedSettings.filter((settings) => settings.checkRunMode === "enabled").length;
   const gateCheckRepoCount = installedSettings.filter((settings) => settings.gateCheckMode === "enabled").length;
+  const reviewerRequestRepoCount = installedSettings.filter((settings) => settings.reviewerRoutingMode === "auto_request").length;
   const missingPermissions = new Set(health.missingPermissions);
   const requiredEventSet = new Set<string>(REQUIRED_INSTALLATION_EVENTS);
   const missingEvents = new Set(health.missingEvents.filter((event) => requiredEventSet.has(event)));
-  const requiredPermissions = {
-    ...REQUIRED_INSTALLATION_PERMISSIONS,
-    ...(checkRunRepoCount > 0 || gateCheckRepoCount > 0 ? OPTIONAL_CHECK_RUN_PERMISSION : {}),
-  };
+  const requiredPermissions = installationPermissionRequirements(installedSettings);
   const optionalPermissions = checkRunRepoCount > 0 || gateCheckRepoCount > 0 ? {} : OPTIONAL_CHECK_RUN_PERMISSION;
   const modeImpacts: InstallationModeImpact[] = [
     buildPermissionModeImpact({
@@ -815,6 +814,19 @@ export async function buildInstallationRepairDiagnostics(env: Env, health: Insta
         gateCheckRepoCount > 0
           ? "Gate check mode is enabled for at least one installed repo, so Checks: write is required."
           : "Checks: write is optional unless gate check mode is enabled for an installed repo.",
+    }),
+    buildPermissionModeImpact({
+      mode: "reviewer_request",
+      enabled: reviewerRequestRepoCount > 0,
+      affectedRepoCount: reviewerRequestRepoCount,
+      permission: "pull_requests",
+      requiredAccess: "write",
+      missing: reviewerRequestRepoCount > 0 && missingPermissions.has("pull_requests"),
+      optional: reviewerRequestRepoCount === 0,
+      summary:
+        reviewerRequestRepoCount > 0
+          ? "Reviewer auto-request is enabled for at least one installed repo, so Pull requests: write is required."
+          : "Pull requests: write is optional unless reviewer auto-request is enabled for an installed repo.",
     }),
   ];
   const eventDiagnostics: InstallationEventDiagnostic[] = [
@@ -888,6 +900,14 @@ function buildPermissionModeImpact(args: {
   };
 }
 
+function installationPermissionRequirements(settings: RepositorySettings[]): Record<string, string> {
+  return {
+    ...REQUIRED_INSTALLATION_PERMISSIONS,
+    ...(settings.some((entry) => entry.checkRunMode === "enabled" || entry.gateCheckMode === "enabled") ? OPTIONAL_CHECK_RUN_PERMISSION : {}),
+    ...(settings.some((entry) => entry.reviewerRoutingMode === "auto_request") ? { pull_requests: "write" } : {}),
+  };
+}
+
 function usesCommentMode(settings: RepositorySettings): boolean {
   if (settings.commentMode === "off") return false;
   return settings.publicSurface === "comment_and_label" || settings.publicSurface === "comment_only";
@@ -927,11 +947,7 @@ async function refreshInstallationHealthRecords(env: Env, installations: Install
     const installedRepos = repositories.filter((repo) => repo.installationId === currentInstallation.id && repo.isInstalled);
     const registeredInstalled = installedRepos.filter((repo) => repo.isRegistered);
     const installedSettings = await Promise.all(installedRepos.map((repo) => getRepositorySettings(env, repo.fullName)));
-    const requiresChecks = installedSettings.some((settings) => settings.checkRunMode === "enabled");
-    const requiredPermissions = {
-      ...REQUIRED_INSTALLATION_PERMISSIONS,
-      ...(requiresChecks ? OPTIONAL_CHECK_RUN_PERMISSION : {}),
-    };
+    const requiredPermissions = installationPermissionRequirements(installedSettings);
     const missingPermissions = Object.entries(requiredPermissions)
       .filter(([permission, expected]) => !permissionSatisfies(currentInstallation.permissions[permission], expected))
       .map(([permission]) => permission);

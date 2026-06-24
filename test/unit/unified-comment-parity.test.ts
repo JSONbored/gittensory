@@ -56,11 +56,12 @@ const settings: RepositorySettings = {
   linkedIssueGateMode: "advisory",
   duplicatePrGateMode: "advisory",
   qualityGateMode: "advisory",
-  slopGateMode: "off",
-  mergeReadinessGateMode: "off",
-  manifestPolicyGateMode: "off",
-  selfAuthoredLinkedIssueGateMode: "advisory",
-  firstTimeContributorGrace: false,
+    slopGateMode: "off",
+    mergeReadinessGateMode: "off",
+    manifestPolicyGateMode: "off",
+    selfAuthoredLinkedIssueGateMode: "advisory",
+    reviewerRoutingMode: "off",
+    firstTimeContributorGrace: false,
   slopAiAdvisory: false,
   qualityGateMinScore: null,
   autoLabelEnabled: true,
@@ -157,6 +158,63 @@ describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
     // The "Contributor next steps" body is single-sourced with the legacy panel's deduped next-steps list.
     const nextSteps = collapsibles.find((section) => section.title === "Contributor next steps")!;
     expect(nextSteps.body.length).toBeGreaterThan(0);
+  });
+
+  it("renders CODEOWNERS reviewer suggestions in both the legacy and unified public surfaces", () => {
+    const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
+    const reviewerRouting = {
+      suggestions: [{ login: "alice", matchedFileCount: 2, loadBand: "light" as const, reason: "Owns 2 changed files." }],
+      teams: ["org/platform-team"],
+      repoLoadLevel: null,
+      summary: "Suggested 1 reviewer from CODEOWNERS for the changed files.",
+    };
+    const legacy = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings, reviewerRouting });
+    const collapsibles = buildPublicSafeCollapsibles({ repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth, reviewerRouting });
+
+    expect(legacy).toContain("Suggested reviewers");
+    expect(legacy).toContain("alice");
+    expect(legacy).toContain("org/platform-team");
+    expect(collapsibles.map((section) => section.title)).toContain("Suggested reviewers");
+    expect(collapsibles.find((section) => section.title === "Suggested reviewers")?.body).toContain("auto-request");
+  });
+
+  it("renders suggestions-only reviewer routing without a teams line", () => {
+    const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
+    const reviewerRouting = {
+      suggestions: [{ login: "alice", matchedFileCount: 2, loadBand: "light" as const, reason: "Owns 2 changed files." }],
+      teams: [],
+      repoLoadLevel: null,
+      summary: "Suggested 1 reviewer from CODEOWNERS for the changed files.",
+    };
+
+    const legacy = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings, reviewerRouting });
+    const section = buildPublicSafeCollapsibles({ repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth, reviewerRouting }).find(
+      (entry) => entry.title === "Suggested reviewers",
+    );
+
+    expect(legacy).toContain("alice");
+    expect(legacy).not.toContain("Teams:");
+    expect(section?.body).toContain("alice");
+    expect(section?.body).not.toContain("Teams:");
+  });
+
+  it("renders team-only reviewer routing without individual suggestions", () => {
+    const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
+    const reviewerRouting = {
+      suggestions: [],
+      teams: ["org/platform-team"],
+      repoLoadLevel: null,
+      summary: "Matched 1 CODEOWNERS team for the changed files.",
+    };
+
+    const legacy = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings, reviewerRouting });
+    const collapsibles = buildPublicSafeCollapsibles({ repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth, reviewerRouting });
+    const section = collapsibles.find((entry) => entry.title === "Suggested reviewers");
+
+    expect(legacy).toContain("Teams: `org/platform-team`.");
+    expect(legacy).not.toContain("`alice`");
+    expect(section?.body).toContain("Teams: `org/platform-team`.");
+    expect(section?.body).not.toContain("changed file(s), load:");
   });
 
   it("the legacy panel still renders 'Maintainer notes' inline (private section is unchanged, just not shared)", () => {

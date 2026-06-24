@@ -30,6 +30,7 @@ import { hasLocalTestEvidence } from "./test-evidence";
 import { isDuplicateClusterWinner } from "./duplicate-winner";
 import { PREFLIGHT_LIMITS } from "./preflight-limits";
 import type { UnifiedCollapsible } from "../review/unified-comment";
+import type { ReviewerRouting } from "./reviewer-routing";
 
 export type ParticipationLane = "direct_pr" | "issue_discovery" | "split" | "inactive" | "unknown";
 export type SignalFinding = AdvisoryFinding;
@@ -4044,6 +4045,7 @@ type PublicSafeCollapsibleArgs = {
   queueHealth: QueueHealth;
   review?: FocusManifestReviewConfig | undefined;
   aiReview?: { notes: string } | undefined;
+  reviewerRouting?: ReviewerRouting | undefined;
 };
 
 /** "Signal definitions" body — a static legend for the readiness signals. No inputs. */
@@ -4100,6 +4102,22 @@ function reviewDetailsBody(aiReview: { notes: string } | undefined): string[] {
   ];
 }
 
+function reviewerRoutingBody(reviewerRouting: ReviewerRouting | undefined): string[] {
+  if (!reviewerRouting || (reviewerRouting.suggestions.length === 0 && reviewerRouting.teams.length === 0)) return [];
+  return [
+    `_${sanitizePanelText(reviewerRouting.summary)} From CODEOWNERS. When auto-request is enabled, gittensory may request top-ranked individual reviewers automatically._`,
+    ...(reviewerRouting.suggestions.length > 0
+      ? [
+          "",
+          ...reviewerRouting.suggestions.map(
+            (suggestion) => `- \`${sanitizePanelText(suggestion.login)}\` — owns ${suggestion.matchedFileCount} changed file(s), load: ${suggestion.loadBand}.`,
+          ),
+        ]
+      : []),
+    ...(reviewerRouting.teams.length > 0 ? ["", `Teams: ${reviewerRouting.teams.map((team) => `\`${sanitizePanelText(team)}\``).join(", ")}.`] : []),
+  ];
+}
+
 /**
  * The public-safe collapsibles for the CONVERGED comment, as `UnifiedCollapsible[]`. Built from the SAME
  * bodies the legacy panel renders (above) so the two never diverge. Order mirrors the legacy panel's
@@ -4114,6 +4132,8 @@ export function buildPublicSafeCollapsibles(args: PublicSafeCollapsibleArgs): Un
   ];
   const reviewDetails = reviewDetailsBody(args.aiReview);
   if (reviewDetails.length > 0) collapsibles.push({ title: "Review details", body: reviewDetails.join("\n") });
+  const reviewerRouting = reviewerRoutingBody(args.reviewerRouting);
+  if (reviewerRouting.length > 0) collapsibles.push({ title: "Suggested reviewers", body: reviewerRouting.join("\n") });
   return collapsibles;
 }
 
@@ -4158,7 +4178,7 @@ function publicSafePreflightFindings(preflight: PreflightResult, settings: Repos
     .slice(0, settings.publicSignalLevel === "minimal" ? 2 : 5);
 }
 
-export function buildPublicPrIntelligenceComment(args: {
+export type PublicPrIntelligenceCommentArgs = {
   repo: RepositoryRecord | null;
   pr: PullRequestRecord;
   profile: ContributorProfile;
@@ -4175,7 +4195,10 @@ export function buildPublicPrIntelligenceComment(args: {
    *  sibling number among `linkedDuplicatePrs`), the hard-duplicate panel block is suppressed so the winner's
    *  panel does not show a blocking duplicate. Default/false ⇒ byte-identical to today. */
   duplicateWinnerEnabled?: boolean | undefined;
-}): string {
+  reviewerRouting?: ReviewerRouting | undefined;
+};
+
+export function buildPublicPrIntelligenceComment(args: PublicPrIntelligenceCommentArgs): string {
   const publicFindings = publicSafePreflightFindings(args.preflight, args.settings);
   const prCollisionClusters = pullRequestSpecificCollisionClusters(args.collisions, args.pr);
   const linkedDuplicatePrs = linkedIssueDuplicatePullRequests(args.pr, prCollisionClusters);
@@ -4281,6 +4304,7 @@ export function buildPublicPrIntelligenceComment(args: {
   // The earn CTA stays a permanent marketing surface; `.gittensory.yml review.footer.text` can replace
   // the lead copy (already public-safe-validated) but the Gittensor register link + attribution remain.
   const footer = gittensoryFooter({ earnUrl: footerEarnUrl(args.repo, args.pr.repoFullName), customText: args.review?.footerText ?? undefined });
+  const reviewerRoutingLines = reviewerRoutingBody(args.reviewerRouting);
   return [
     "<!-- gittensory-pr-panel:v1 -->",
     "",
@@ -4348,6 +4372,17 @@ export function buildPublicPrIntelligenceComment(args: {
           // angle brackets as a final guard so a stray tag (e.g. </details> or an HTML comment marker) cannot
           // break the panel structure while preserving the section/bullet layout we add ourselves.
           args.aiReview.notes.replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;")).slice(0, 4000),
+          "",
+          "</details>",
+        ]
+      : []),
+    ...(reviewerRoutingLines.length > 0
+      ? [
+          "",
+          "<details>",
+          "<summary>Suggested reviewers</summary>",
+          "",
+          ...reviewerRoutingLines,
           "",
           "</details>",
         ]

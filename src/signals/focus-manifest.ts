@@ -52,6 +52,7 @@ export type FocusManifestSettings = Partial<
     | "checkRunMode"
     | "checkRunDetailLevel"
     | "gateCheckMode"
+    | "reviewerRoutingMode"
     | "linkedIssueGateMode"
     | "duplicatePrGateMode"
     | "selfAuthoredLinkedIssueGateMode"
@@ -414,6 +415,8 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   if (checkRunDetailLevel !== null) out.checkRunDetailLevel = checkRunDetailLevel;
   const gateCheckMode = normalizeOptionalEnum(r.gateCheckMode, "settings.gateCheckMode", ["off", "enabled"] as const, warnings);
   if (gateCheckMode !== null) out.gateCheckMode = gateCheckMode;
+  const reviewerRoutingMode = normalizeOptionalEnum(r.reviewerRoutingMode, "settings.reviewerRoutingMode", ["off", "advisory", "auto_request"] as const, warnings);
+  if (reviewerRoutingMode !== null) out.reviewerRoutingMode = reviewerRoutingMode;
   const linkedIssueGateMode = normalizeOptionalGateMode(r.linkedIssueGateMode, "settings.linkedIssueGateMode", warnings);
   if (linkedIssueGateMode !== null) out.linkedIssueGateMode = linkedIssueGateMode;
   const duplicatePrGateMode = normalizeOptionalGateMode(r.duplicatePrGateMode, "settings.duplicatePrGateMode", warnings);
