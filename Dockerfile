@@ -11,7 +11,9 @@ COPY package*.json ./
 # pure JS; esbuild ships its binary as an optional dependency, not a script).
 RUN npm ci --ignore-scripts
 COPY . .
-RUN node scripts/build-selfhost.mjs
+# --all: bundle every dependency into one self-contained dist/server.mjs, so the runtime image needs no
+# node_modules (≈10× smaller). The bundle has zero `cloudflare:*` imports (stubbed at build), so no loader.
+RUN node scripts/build-selfhost.mjs --all
 
 # --- runtime: slim, non-root ----------------------------------------------------------------------------
 FROM node:24-slim AS runtime
@@ -21,10 +23,8 @@ ENV NODE_ENV=production \
     PORT=8787 \
     DATABASE_PATH=/data/gittensory.sqlite \
     MIGRATIONS_DIR=/app/migrations
-COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/migrations ./migrations
-COPY --from=build /app/scripts/register-selfhost.mjs ./scripts/register-selfhost.mjs
 # Optional: bake the Claude Code / Codex CLIs so the `claude-code` / `codex` subscription providers (#979)
 # work in-image. Build with `--build-arg INSTALL_AI_CLIS=true`. No credentials are baked — operators mint
 # CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`) / codex auth at run time and pass it via the env.
@@ -36,5 +36,4 @@ USER node
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8787)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-# The register hook stubs cloudflare:* imports so the Worker graph loads on Node.
-CMD ["node", "--import", "./scripts/register-selfhost.mjs", "dist/server.mjs"]
+CMD ["node", "dist/server.mjs"]
