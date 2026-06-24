@@ -1188,6 +1188,31 @@ describe("queue processors", () => {
     expect(updateBranchCalls).toBe(0); // no installation perms → the executor denies the write; the block falls through
   });
 
+  it("recapture-preview (#1158): a clean PR re-review threads previewPollAttempt into the public-surface publish", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9101, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "preview-repo", full_name: "owner/preview-repo", private: false, owner: { login: "owner" } }, 9101);
+    await upsertRepositorySettings(env, { repoFullName: "owner/preview-repo", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/preview-repo", { number: 9, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "c9" }, labels: [], body: "x" });
+    await upsertPullRequestFile(env, { repoFullName: "owner/preview-repo", pullNumber: 9, path: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, payload: { patch: "@@\n+export const ok = true;" } });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/9/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (/\/pulls\/9(?:\?|$)/.test(url)) return Response.json({ number: 9, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "c9" }, labels: [], body: "x" });
+      if (url.includes("/commits/c9/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/c9/status")) return Response.json({ state: "success", statuses: [] });
+      return new Response("not found", { status: 404 });
+    });
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    // attempt:2 → previewPollAttempt is defined, so the conditional spread at the publish call takes the
+    // `{ previewPollAttempt }` arm (the recapture-preview poll path; the sweep/webhook callers omit it).
+    await expect(
+      processJob(env, { type: "recapture-preview", deliveryId: "rp-9", installationId: 9101, repoFullName: "owner/preview-repo", prNumber: 9, attempt: 2 }),
+    ).resolves.toBeUndefined();
+  });
+
   it("auto-maintain (#778): a repo with no acting autonomy takes no agent action", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
