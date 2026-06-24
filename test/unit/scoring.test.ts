@@ -1398,6 +1398,201 @@ NOVELTY_BONUS_SCALAR = 3
       expect(issueDelta?.projected).toContain("multiplier 1");
     });
 
+    it("merged-PR history floor blocks scoring when mergedPullRequests is below MIN_VALID_MERGED_PRS (#808)", () => {
+      const baseInput = {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 60,
+        totalTokenScore: 90,
+        sourceLines: 50,
+        openPrCount: 0,
+        credibility: 1,
+      };
+
+      const atFloor = buildScorePreview({ repo, snapshot, input: { ...baseInput, mergedPullRequests: 3 } });
+      expect(atFloor.gates.mergedPrFloor).toBe(3);
+      expect(atFloor.gates.mergedPullRequests).toBe(3);
+      expect(atFloor.scoreEstimate.mergedHistoryMultiplier).toBe(1);
+      expect(atFloor.effectiveEstimatedScore).toBeGreaterThan(0);
+
+      const belowFloor = buildScorePreview({ repo, snapshot, input: { ...baseInput, mergedPullRequests: 2 } });
+      expect(belowFloor.scoreEstimate.mergedHistoryMultiplier).toBe(0);
+      expect(belowFloor.effectiveEstimatedScore).toBe(0);
+      expect(belowFloor.blockedBy.some((b) => b.code === "merged_pr_history_floor")).toBe(true);
+      expect(belowFloor.recommendation.actions.some((action) => /merged PR history/i.test(action))).toBe(true);
+    });
+
+    it("merged-PR history floor does not block when mergedPullRequests is unknown (not supplied and no evidence)", () => {
+      const preview = buildScorePreview({
+        repo,
+        snapshot,
+        input: { repoFullName: repo.fullName, sourceTokenScore: 60, totalTokenScore: 90, sourceLines: 50, openPrCount: 0, credibility: 1 },
+      });
+      expect(preview.gates.mergedPullRequests).toBeUndefined();
+      expect(preview.scoreEstimate.mergedHistoryMultiplier).toBe(1);
+      expect(preview.blockedBy.some((b) => b.code === "merged_pr_history_floor")).toBe(false);
+    });
+
+    it("infers mergedPullRequests from contributor evidence when input omits it (#808)", () => {
+      const eligible = buildScorePreview({
+        repo,
+        snapshot,
+        input: { repoFullName: repo.fullName, sourceTokenScore: 60, totalTokenScore: 90, sourceLines: 50, openPrCount: 0, credibility: 1 },
+        contributorEvidence: {
+          login: "dev",
+          generatedAt: "2026-05-23T00:00:00.000Z",
+          payload: { mergedPullRequests: 4, stalePullRequests: 0, unlinkedPullRequests: 0 },
+        },
+      });
+      expect(eligible.gates.mergedPullRequests).toBe(4);
+      expect(eligible.scoreEstimate.mergedHistoryMultiplier).toBe(1);
+
+      const ineligible = buildScorePreview({
+        repo,
+        snapshot,
+        input: { repoFullName: repo.fullName, sourceTokenScore: 60, totalTokenScore: 90, sourceLines: 50, openPrCount: 0, credibility: 1 },
+        contributorEvidence: {
+          login: "newbie",
+          generatedAt: "2026-05-23T00:00:00.000Z",
+          payload: { mergedPullRequests: 1, stalePullRequests: 0, unlinkedPullRequests: 0 },
+        },
+      });
+      expect(ineligible.scoreEstimate.mergedHistoryMultiplier).toBe(0);
+      expect(ineligible.blockedBy.some((b) => b.code === "merged_pr_history_floor")).toBe(true);
+    });
+
+    it("issue-discovery validity floor blocks when valid solved issues or issue credibility are below upstream floors (#808)", () => {
+      const issueDiscoveryRepo: RepositoryRecord = {
+        ...repo,
+        registryConfig: { ...repo.registryConfig!, issueDiscoveryShare: 0.25 },
+      };
+      const baseInput = {
+        repoFullName: issueDiscoveryRepo.fullName,
+        sourceTokenScore: 60,
+        totalTokenScore: 90,
+        sourceLines: 50,
+        openPrCount: 0,
+        credibility: 1,
+        mergedPullRequests: 5,
+        linkedIssueMode: "standard" as const,
+      };
+
+      const eligible = buildScorePreview({
+        repo: issueDiscoveryRepo,
+        snapshot,
+        input: { ...baseInput, validSolvedIssues: 3, issueCredibility: 0.85 },
+      });
+      expect(eligible.scoreEstimate.issueDiscoveryHistoryMultiplier).toBe(1);
+      expect(eligible.effectiveEstimatedScore).toBeGreaterThan(0);
+
+      const lowValidSolved = buildScorePreview({
+        repo: issueDiscoveryRepo,
+        snapshot,
+        input: { ...baseInput, validSolvedIssues: 2, issueCredibility: 0.9 },
+      });
+      expect(lowValidSolved.scoreEstimate.issueDiscoveryHistoryMultiplier).toBe(0);
+      expect(lowValidSolved.blockedBy.some((b) => b.code === "issue_discovery_validity_floor")).toBe(true);
+
+      const lowIssueCredibility = buildScorePreview({
+        repo: issueDiscoveryRepo,
+        snapshot,
+        input: { ...baseInput, validSolvedIssues: 4, issueCredibility: 0.7 },
+      });
+      expect(lowIssueCredibility.scoreEstimate.issueDiscoveryHistoryMultiplier).toBe(0);
+    });
+
+    it("issue-discovery validity floor is skipped when issue-discovery is not relevant or history is unknown", () => {
+      const issueDiscoveryRepo: RepositoryRecord = {
+        ...repo,
+        registryConfig: { ...repo.registryConfig!, issueDiscoveryShare: 0.25 },
+      };
+      const noHistory = buildScorePreview({
+        repo: issueDiscoveryRepo,
+        snapshot,
+        input: {
+          repoFullName: issueDiscoveryRepo.fullName,
+          sourceTokenScore: 60,
+          totalTokenScore: 90,
+          sourceLines: 50,
+          openPrCount: 0,
+          credibility: 1,
+          mergedPullRequests: 5,
+          linkedIssueMode: "standard",
+        },
+      });
+      expect(noHistory.scoreEstimate.issueDiscoveryHistoryMultiplier).toBe(1);
+
+      const directPrOnly = buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 60,
+          totalTokenScore: 90,
+          sourceLines: 50,
+          openPrCount: 0,
+          credibility: 1,
+          mergedPullRequests: 5,
+          validSolvedIssues: 0,
+          issueCredibility: 0.1,
+          linkedIssueMode: "none",
+        },
+      });
+      expect(directPrOnly.scoreEstimate.issueDiscoveryHistoryMultiplier).toBe(1);
+    });
+
+    it("bestReasonableCase clears contributor-history gates and surfaces gate deltas (#808)", () => {
+      const issueDiscoveryRepo: RepositoryRecord = {
+        ...repo,
+        registryConfig: { ...repo.registryConfig!, issueDiscoveryShare: 0.2 },
+      };
+      const preview = buildScorePreview({
+        repo: issueDiscoveryRepo,
+        snapshot,
+        input: {
+          repoFullName: issueDiscoveryRepo.fullName,
+          sourceTokenScore: 60,
+          totalTokenScore: 90,
+          sourceLines: 50,
+          openPrCount: 0,
+          credibility: 1,
+          mergedPullRequests: 1,
+          validSolvedIssues: 1,
+          issueCredibility: 0.5,
+          linkedIssueMode: "standard",
+        },
+      });
+      const bestReasonable = preview.scenarioPreviews.find((scenario) => scenario.name === "bestReasonableCase");
+      expect(bestReasonable?.scoreEstimate.mergedHistoryMultiplier).toBe(1);
+      expect(bestReasonable?.scoreEstimate.issueDiscoveryHistoryMultiplier).toBe(1);
+      expect(bestReasonable?.effectiveEstimatedScore).toBeGreaterThan(0);
+      expect(preview.gateDeltas).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ gate: "merged_pr_history_floor" }),
+          expect.objectContaining({ gate: "issue_discovery_validity_floor" }),
+        ]),
+      );
+    });
+
+    it("afterPendingMerges projects mergedPullRequests upward when pending merges are supplied (#808)", () => {
+      const preview = buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 60,
+          totalTokenScore: 90,
+          sourceLines: 50,
+          openPrCount: 0,
+          credibility: 1,
+          mergedPullRequests: 2,
+          pendingMergedPrCount: 1,
+        },
+      });
+      const afterPending = preview.scenarioPreviews.find((scenario) => scenario.name === "afterPendingMerges");
+      expect(afterPending?.gates.mergedPullRequests).toBe(3);
+      expect(afterPending?.scoreEstimate.mergedHistoryMultiplier).toBe(1);
+    });
+
     it("all nine issue-discovery constants are modeled and do not surface as upstream drift warnings (#808)", () => {
       const upstreamSource = [
         "TEST_FILE_CONTRIBUTION_WEIGHT = 0.05",

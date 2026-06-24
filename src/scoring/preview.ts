@@ -21,6 +21,12 @@ export type ScorePreviewInput = {
   openPrCount?: number | undefined;
   /** Contributor's current open-issue count for the repo, used for the open-issue spam gate (#808). */
   openIssueCount?: number | undefined;
+  /** Repo-level merged PR count for upstream contributor-history eligibility (#808). */
+  mergedPullRequests?: number | undefined;
+  /** Count of valid solved issues for upstream issue-discovery eligibility (#808). */
+  validSolvedIssues?: number | undefined;
+  /** Issue-discovery credibility for upstream issue-discovery eligibility (#808). */
+  issueCredibility?: number | undefined;
   credibility?: number | undefined;
   changesRequestedCount?: number | undefined;
   fixedBaseScore?: number | undefined;
@@ -107,6 +113,8 @@ export type ScoreGateBlocker = {
     | "base_token_gate"
     | "open_pr_threshold"
     | "open_issue_threshold"
+    | "merged_pr_history_floor"
+    | "issue_discovery_validity_floor"
     | "credibility_floor"
     | "review_penalty"
     | "metadata_only"
@@ -121,7 +129,13 @@ export type ScoreGateBlocker = {
 };
 
 export type ScoreGateDelta = {
-  gate: "open_pr_threshold" | "open_issue_threshold" | "credibility_floor" | "linked_issue_multiplier";
+  gate:
+    | "open_pr_threshold"
+    | "open_issue_threshold"
+    | "merged_pr_history_floor"
+    | "issue_discovery_validity_floor"
+    | "credibility_floor"
+    | "linked_issue_multiplier";
   current: string;
   projected: string;
   explanation: string;
@@ -164,6 +178,10 @@ export type ScorePreviewResult = {
     reviewPenaltyMultiplier: number;
     openPrMultiplier: number;
     openIssueMultiplier: number;
+    /** Upstream merged-PR history floor (#808). 0 when below MIN_VALID_MERGED_PRS; 1 when unknown or eligible. */
+    mergedHistoryMultiplier: number;
+    /** Upstream issue-discovery validity floor (#808). 0 when below MIN_VALID_SOLVED_ISSUES or MIN_ISSUE_CREDIBILITY. */
+    issueDiscoveryHistoryMultiplier: number;
     /** Upstream sigmoid time-decay multiplier (#703). 1 = no decay (fresh PR, or feature off). */
     timeDecayMultiplier: number;
     estimatedMergedScore: number;
@@ -182,6 +200,15 @@ export type ScorePreviewResult = {
     credibilityObserved: number;
     openIssueThreshold: number;
     openIssueCount: number;
+    mergedPrFloor: number;
+    /** Observed merged PR count when supplied or inferred from contributor evidence; absent when unknown. */
+    mergedPullRequests?: number | undefined;
+    validSolvedIssuesFloor: number;
+    /** Observed valid solved-issue count when supplied; absent when unknown. */
+    validSolvedIssues?: number | undefined;
+    issueCredibilityFloor: number;
+    /** Observed issue-discovery credibility when supplied; absent when unknown. */
+    issueCredibility?: number | undefined;
   };
   branchEligibility: BranchEligibilityResult;
   effectiveEstimatedScore: number;
@@ -217,6 +244,10 @@ export function buildScorePreview(args: {
     ...(!current.gates.baseTokenGatePassed ? ["Increase meaningful source change size or scope clarity before relying on this preview."] : []),
     ...(current.scoreEstimate.openPrMultiplier === 0 ? ["Land or close existing open PRs before opening more concurrent work."] : []),
     ...(current.scoreEstimate.openIssueMultiplier === 0 ? ["Close excess open issues to stay within the open-issue spam threshold."] : []),
+    ...(current.scoreEstimate.mergedHistoryMultiplier === 0 ? ["Build merged PR history on this repo before relying on this preview; upstream requires a minimum merged count."] : []),
+    ...(current.scoreEstimate.issueDiscoveryHistoryMultiplier === 0
+      ? ["Build valid solved-issue history and issue credibility before relying on issue-discovery scoring on this repo."]
+      : []),
     ...(current.scoreEstimate.credibilityMultiplier < 1 ? ["Build or wait for contributor credibility evidence before relying on this preview."] : []),
     ...(current.scoreEstimate.reviewPenaltyMultiplier < 1 ? ["Reduce review churn with tighter tests and clearer evidence."] : []),
     ...(current.scoreEstimate.labelMultiplier <= 1 && Object.keys(args.repo?.registryConfig?.labelMultipliers ?? {}).length > 0
@@ -365,13 +396,38 @@ function computeScoreCore(
       Math.floor(nonNegative(input.existingContributorTokenScore) / constant(constants, "OPEN_ISSUE_SPAM_TOKEN_SCORE_PER_SLOT")),
   );
   const openIssueMultiplier = openIssueCount <= openIssueThreshold ? 1 : 0;
+  const mergedPrFloor = constant(constants, "MIN_VALID_MERGED_PRS");
+  const mergedPullRequestsObserved = resolveMergedPullRequests(input, contributorEvidence);
+  const mergedHistoryMultiplier =
+    mergedPullRequestsObserved === undefined ? 1 : mergedPullRequestsObserved >= mergedPrFloor ? 1 : 0;
+  const validSolvedIssuesFloor = constant(constants, "MIN_VALID_SOLVED_ISSUES");
+  const issueCredibilityFloor = constant(constants, "MIN_ISSUE_CREDIBILITY");
+  const validSolvedIssuesObserved = input.validSolvedIssues !== undefined ? nonNegative(input.validSolvedIssues) : undefined;
+  const issueCredibilityObserved = input.issueCredibility !== undefined ? clamp(input.issueCredibility, 0, 1) : undefined;
+  const issueDiscoveryRelevant = issueDiscoveryShare > 0 || (input.linkedIssueMode ?? "none") !== "none";
+  const issueDiscoveryHistoryKnown = validSolvedIssuesObserved !== undefined && issueCredibilityObserved !== undefined;
+  const issueDiscoveryHistoryMultiplier =
+    !issueDiscoveryRelevant || !issueDiscoveryHistoryKnown
+      ? 1
+      : validSolvedIssuesObserved >= validSolvedIssuesFloor && issueCredibilityObserved >= issueCredibilityFloor
+        ? 1
+        : 0;
   // Upstream time-decay (#703): mirrors upstream's `scored.time_decay_multiplier` applied to a PR's score.
   // Opt-in + env-gated (default off). A fresh PR (prAgeHours below the grace period) yields 1.0, so a normal
   // new-PR preview is unchanged even when enabled — only an aged-PR projection decays.
   // Per-repo curve (#703): the repo's registry `scoring.time_decay` overrides overlay the snapshot defaults.
   const timeDecayMultiplier = input.applyTimeDecay ? calculateTimeDecay(nonNegative(input.prAgeHours), constants, config?.timeDecay) : 1;
   const estimatedMergedScore = roundScore(
-    baseScore * labelMultiplier * issueMultiplier * credibilityMultiplier * reviewPenaltyMultiplier * openPrMultiplier * openIssueMultiplier * timeDecayMultiplier,
+    baseScore *
+      labelMultiplier *
+      issueMultiplier *
+      credibilityMultiplier *
+      reviewPenaltyMultiplier *
+      openPrMultiplier *
+      openIssueMultiplier *
+      mergedHistoryMultiplier *
+      issueDiscoveryHistoryMultiplier *
+      timeDecayMultiplier,
   );
   const pendingSaturationScore = roundScore(saturationBaseScore);
   return {
@@ -393,6 +449,8 @@ function computeScoreCore(
       reviewPenaltyMultiplier: roundScore(reviewPenaltyMultiplier),
       openPrMultiplier,
       openIssueMultiplier,
+      mergedHistoryMultiplier,
+      issueDiscoveryHistoryMultiplier,
       timeDecayMultiplier: roundScore(timeDecayMultiplier),
       estimatedMergedScore,
       pendingSaturationScore,
@@ -408,6 +466,12 @@ function computeScoreCore(
       credibilityObserved,
       openIssueThreshold,
       openIssueCount,
+      mergedPrFloor,
+      ...(mergedPullRequestsObserved !== undefined ? { mergedPullRequests: mergedPullRequestsObserved } : {}),
+      validSolvedIssuesFloor,
+      ...(validSolvedIssuesObserved !== undefined ? { validSolvedIssues: validSolvedIssuesObserved } : {}),
+      issueCredibilityFloor,
+      ...(issueCredibilityObserved !== undefined ? { issueCredibility: issueCredibilityObserved } : {}),
     },
   };
 }
@@ -454,12 +518,25 @@ function buildScenarioPreviews(
   const cleanGatesInput = {
     ...input,
     openPrCount: Math.min(current.gates.openPrCount, current.gates.openPrThreshold),
+    openIssueCount: Math.min(current.gates.openIssueCount, current.gates.openIssueThreshold),
     credibility: Math.max(current.gates.credibilityObserved, current.gates.credibilityFloor),
+    ...(current.gates.mergedPullRequests !== undefined
+      ? { mergedPullRequests: Math.max(current.gates.mergedPullRequests, current.gates.mergedPrFloor) }
+      : {}),
+    ...(current.gates.validSolvedIssues !== undefined
+      ? { validSolvedIssues: Math.max(current.gates.validSolvedIssues, current.gates.validSolvedIssuesFloor) }
+      : {}),
+    ...(current.gates.issueCredibility !== undefined
+      ? { issueCredibility: Math.max(current.gates.issueCredibility, current.gates.issueCredibilityFloor) }
+      : {}),
   };
   const afterPendingInput = {
     ...input,
     openPrCount: expectedOpenPrCountAfterMerge,
     credibility: projectedCredibility,
+    ...(current.gates.mergedPullRequests !== undefined
+      ? { mergedPullRequests: nonNegative(current.gates.mergedPullRequests) + mergeReadyPending }
+      : {}),
   };
   const linkedIssueInput = withValidatedLinkedIssueScenario(input);
   const bestReasonableInput = {
@@ -472,11 +549,25 @@ function buildScenarioPreviews(
     // "best reasonable case" can clear the open-issue gate just like it clears open-PR pressure.
     openIssueCount: Math.min(current.gates.openIssueCount, current.gates.openIssueThreshold),
     credibility: Math.max(projectedCredibility, observedApprovalCredibility, current.gates.credibilityFloor),
+    ...(current.gates.mergedPullRequests !== undefined
+      ? {
+          mergedPullRequests: Math.max(
+            nonNegative(current.gates.mergedPullRequests) + mergeReadyPending,
+            current.gates.mergedPrFloor,
+          ),
+        }
+      : {}),
+    ...(current.gates.validSolvedIssues !== undefined
+      ? { validSolvedIssues: Math.max(current.gates.validSolvedIssues, current.gates.validSolvedIssuesFloor) }
+      : {}),
+    ...(current.gates.issueCredibility !== undefined
+      ? { issueCredibility: Math.max(current.gates.issueCredibility, current.gates.issueCredibilityFloor) }
+      : {}),
   };
   return [
     scenario("current", "current_data", input, current, ["Current cached/account state and supplied local diff metadata."], repo),
     scenario("cleanGates", "gittensory_projection", cleanGatesInput, computeScoreCore(cleanGatesInput, repo, snapshot, contributorEvidence), [
-      "Open PR and credibility gates are projected as cleared; branch metadata is otherwise unchanged.",
+      "Open PR, open-issue, credibility, and contributor-history gates are projected as cleared; branch metadata is otherwise unchanged.",
     ], repo),
     scenario(
       "afterPendingMerges",
@@ -535,7 +626,7 @@ function buildScenarioPreviews(
         : "Linked issue mode was already supplied; this scenario projects solved-by-PR validation where needed.",
     ], repo),
     scenario("bestReasonableCase", "gittensory_projection", bestReasonableInput, computeScoreCore(bestReasonableInput, repo, snapshot, contributorEvidence), [
-      "Combines plausible near-term gate cleanup: open PR pressure at threshold or below, open-issue spam pressure at threshold or below, credibility at floor or above, and linked-issue context where applicable.",
+      "Combines plausible near-term gate cleanup: open PR pressure at threshold or below, open-issue spam pressure at threshold or below, credibility at floor or above, contributor merged-history and issue-discovery validity at floor or above, and linked-issue context where applicable.",
       ...(input.scenarioNotes ?? []),
       ...observedScenarioNotes(input),
     ], repo),
@@ -627,6 +718,24 @@ function blockedByFor(input: ScorePreviewInput, repo: RepositoryRecord | null, c
           },
         ]
       : []),
+    ...(core.scoreEstimate.mergedHistoryMultiplier === 0
+      ? [
+          {
+            code: "merged_pr_history_floor" as const,
+            severity: "blocker" as const,
+            detail: `Merged PR count ${core.gates.mergedPullRequests ?? 0} is below upstream floor ${core.gates.mergedPrFloor}.`,
+          },
+        ]
+      : []),
+    ...(core.scoreEstimate.issueDiscoveryHistoryMultiplier === 0
+      ? [
+          {
+            code: "issue_discovery_validity_floor" as const,
+            severity: "blocker" as const,
+            detail: `Issue-discovery history (${core.gates.validSolvedIssues ?? 0} valid solved, credibility ${roundScore(core.gates.issueCredibility ?? 0)}) is below upstream floors (${core.gates.validSolvedIssuesFloor} valid solved, ${core.gates.issueCredibilityFloor} credibility).`,
+          },
+        ]
+      : []),
     ...(core.gates.credibilityObserved < core.gates.credibilityFloor
       ? [
           {
@@ -706,6 +815,29 @@ function buildGateDeltas(current: ScoreCore, scenarios: ScoreScenarioPreview[]):
             current: `${current.gates.openIssueCount}/${current.gates.openIssueThreshold} open issues, multiplier ${current.scoreEstimate.openIssueMultiplier}`,
             projected: `${best.gates.openIssueCount}/${best.gates.openIssueThreshold} open issues, multiplier ${best.scoreEstimate.openIssueMultiplier}`,
             explanation: `Open issue spam pressure changes estimated score ${current.scoreEstimate.estimatedMergedScore} -> ${best.scoreEstimate.estimatedMergedScore}.`,
+          },
+        ]
+      : []),
+    ...(current.scoreEstimate.mergedHistoryMultiplier !== best.scoreEstimate.mergedHistoryMultiplier ||
+    current.gates.mergedPullRequests !== best.gates.mergedPullRequests
+      ? [
+          {
+            gate: "merged_pr_history_floor" as const,
+            current: `${current.gates.mergedPullRequests ?? "unknown"}/${current.gates.mergedPrFloor} merged PRs, multiplier ${current.scoreEstimate.mergedHistoryMultiplier}`,
+            projected: `${best.gates.mergedPullRequests ?? "unknown"}/${best.gates.mergedPrFloor} merged PRs, multiplier ${best.scoreEstimate.mergedHistoryMultiplier}`,
+            explanation: `Merged PR history changes estimated score ${current.scoreEstimate.estimatedMergedScore} -> ${best.scoreEstimate.estimatedMergedScore}.`,
+          },
+        ]
+      : []),
+    ...(current.scoreEstimate.issueDiscoveryHistoryMultiplier !== best.scoreEstimate.issueDiscoveryHistoryMultiplier ||
+    current.gates.validSolvedIssues !== best.gates.validSolvedIssues ||
+    current.gates.issueCredibility !== best.gates.issueCredibility
+      ? [
+          {
+            gate: "issue_discovery_validity_floor" as const,
+            current: `${current.gates.validSolvedIssues ?? "unknown"} valid solved / ${roundScore(current.gates.issueCredibility ?? 0)} credibility, multiplier ${current.scoreEstimate.issueDiscoveryHistoryMultiplier}`,
+            projected: `${best.gates.validSolvedIssues ?? "unknown"} valid solved / ${roundScore(best.gates.issueCredibility ?? 0)} credibility, multiplier ${best.scoreEstimate.issueDiscoveryHistoryMultiplier}`,
+            explanation: `Issue-discovery validity changes estimated score ${current.scoreEstimate.estimatedMergedScore} -> ${best.scoreEstimate.estimatedMergedScore}.`,
           },
         ]
       : []),
@@ -966,6 +1098,15 @@ function normalizeBranchEligibility(input: ScorePreviewInput): BranchEligibility
     stale,
     warnings,
   };
+}
+
+function resolveMergedPullRequests(
+  input: Pick<ScorePreviewInput, "mergedPullRequests">,
+  contributorEvidence?: ContributorEvidenceRecord | null,
+): number | undefined {
+  if (input.mergedPullRequests !== undefined) return nonNegative(input.mergedPullRequests);
+  const fromEvidence = Number(contributorEvidence?.payload?.mergedPullRequests);
+  return Number.isFinite(fromEvidence) ? nonNegative(fromEvidence) : undefined;
 }
 
 function inferCredibility(evidence?: ContributorEvidenceRecord | null): number {

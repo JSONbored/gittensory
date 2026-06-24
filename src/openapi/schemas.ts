@@ -1254,6 +1254,9 @@ const ScoreEstimateSchema = z.object({
   credibilityMultiplier: z.number(),
   reviewPenaltyMultiplier: z.number(),
   openPrMultiplier: z.number(),
+  openIssueMultiplier: z.number(),
+  mergedHistoryMultiplier: z.number(),
+  issueDiscoveryHistoryMultiplier: z.number(),
   timeDecayMultiplier: z.number(),
   estimatedMergedScore: z.number(),
   pendingSaturationScore: z.number(),
@@ -1267,6 +1270,14 @@ const ScoreGatesSchema = z.object({
   reviewCollateralMultiplier: z.number(),
   credibilityFloor: z.number(),
   credibilityObserved: z.number(),
+  openIssueThreshold: z.number(),
+  openIssueCount: z.number(),
+  mergedPrFloor: z.number(),
+  mergedPullRequests: z.number().optional(),
+  validSolvedIssuesFloor: z.number(),
+  validSolvedIssues: z.number().optional(),
+  issueCredibilityFloor: z.number(),
+  issueCredibility: z.number().optional(),
 });
 
 const BranchEligibilitySchema = z.object({
@@ -1286,6 +1297,9 @@ const ScoreGateBlockerSchema = z.object({
     "inactive_allocation",
     "base_token_gate",
     "open_pr_threshold",
+    "open_issue_threshold",
+    "merged_pr_history_floor",
+    "issue_discovery_validity_floor",
     "credibility_floor",
     "review_penalty",
     "metadata_only",
@@ -1293,13 +1307,22 @@ const ScoreGateBlockerSchema = z.object({
     "linked_issue_unvalidated",
     "branch_ineligible",
     "branch_eligibility_missing",
+    "duplicate_risk",
+    "stale_work",
   ]),
   severity: z.enum(["blocker", "reducer", "context"]),
   detail: z.string(),
 });
 
 const ScoreGateDeltaSchema = z.object({
-  gate: z.enum(["open_pr_threshold", "credibility_floor", "linked_issue_multiplier"]),
+  gate: z.enum([
+    "open_pr_threshold",
+    "open_issue_threshold",
+    "merged_pr_history_floor",
+    "issue_discovery_validity_floor",
+    "credibility_floor",
+    "linked_issue_multiplier",
+  ]),
   current: z.string(),
   projected: z.string(),
   explanation: z.string(),
