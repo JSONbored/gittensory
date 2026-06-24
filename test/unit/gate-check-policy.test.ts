@@ -110,6 +110,20 @@ describe("AI fail-closed hold (#ai-fail-closed)", () => {
     expect(result.conclusion).toBe("neutral");
     expect(result.blockers).toEqual([]);
   });
+
+  it("a deterministic hard blocker (secret_leak) still FAILS even when the AI review is inconclusive (#audit-3.5)", () => {
+    const adv: Advisory = {
+      ...missingIssueAdvisory(),
+      findings: [
+        { code: "secret_leak", title: "Possible leaked secret", severity: "critical", detail: "a committed token", action: "remove and rotate it" },
+        { code: "ai_review_inconclusive", title: "AI review could not be completed", severity: "warning", detail: "no usable verdict", action: "held for human" },
+      ],
+    };
+    const result = evaluateGateCheck(adv, gateCheckPolicy(settings(), null, true));
+    // An inconclusive AI can no longer bury a real violation in a "held" state — the secret_leak still hard-blocks.
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((blocker) => blocker.code)).toContain("secret_leak");
+  });
 });
 
 describe("policy pack (#692)", () => {

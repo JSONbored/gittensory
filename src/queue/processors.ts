@@ -172,7 +172,7 @@ import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import { runGittensoryAiReview } from "../services/ai-review";
-import { isSafetyEnabled, secretLeakFinding } from "../review/safety";
+import { secretLeakFinding } from "../review/safety";
 import { buildReviewGroundingText, checkSummaryText as checkFailureSummaryText, isGroundingEnabled } from "../review/grounding-wire";
 import { buildReviewRagContext, isRagEnabled } from "../review/rag-wire";
 import { indexRepo, reindexChangedPaths } from "../review/rag-index";
@@ -2030,10 +2030,10 @@ export async function maybeAddSecretLeakFinding(
     files: Awaited<ReturnType<typeof listPullRequestFiles>> | null;
   },
 ): Promise<void> {
-  // Per-repo cutover gate (GITTENSORY_REVIEW_REPOS): the secret-leak scan activates for THIS repo only when
-  // it is allowlisted AND the global safety flag is ON. Empty/unset allowlist → no-op for every repo (the
-  // advisory is byte-identical to today) regardless of GITTENSORY_REVIEW_SAFETY.
-  if (!isSafetyEnabled(env) || !isConvergenceRepoAllowed(env, args.repoFullName)) return;
+  // UNCONDITIONAL (#audit-3.4): a CONCRETE, real-format committed credential (github_token, aws_access_key, …)
+  // is unambiguously a leak regardless of which repo it lands in, so the secret-leak hard block runs for every
+  // repo — NOT only the safety-flag-on / allowlisted ones. secretLeakFinding already filters to HARD_SECRET_KINDS
+  // (the weak heuristics that false-positive on config/workflow content are dropped), so this never mis-fires.
   try {
     const files = args.files ?? (await listPullRequestFiles(env, args.repoFullName, args.pullNumber));
     const finding = secretLeakFinding(buildSecretScanDiff(files));
@@ -2408,17 +2408,14 @@ async function maybePublishPrPublicSurface(
       });
     }
 
-    // Safety secrets-scan (convergence, flag-gated by GITTENSORY_REVIEW_SAFETY). Scans the diff and, on a hit,
-    // appends a critical `secret_leak` blocker BEFORE the gate evaluates. When the scan will actually run
-    // (safety flag ON + repo allowlisted), pass the shared resolved files so it scans the REAL diff (FIX B);
-    // otherwise pass the already-loaded files (or null) and let the scan early-return. Flag-OFF (default) is an
-    // immediate no-op → the advisory/gate is byte-identical.
-    const safetyWillRun = isSafetyEnabled(env) && isConvergenceRepoAllowed(env, repoFullName);
+    // Secrets-scan (#audit-3.4): always scans the REAL resolved diff and, on a CONCRETE credential hit, appends a
+    // critical `secret_leak` hard blocker BEFORE the gate evaluates — unconditionally, since a committed token is
+    // a leak on any repo. getReviewFiles() is memoized, so this reuses the already-loaded diff when present.
     await maybeAddSecretLeakFinding(env, {
       advisory,
       repoFullName,
       pullNumber: pr.number,
-      files: safetyWillRun ? await getReviewFiles() : reviewFiles,
+      files: await getReviewFiles(),
     });
 
     // First-time-contributor grace (#552): compute the author's complete per-repo PR history
