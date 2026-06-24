@@ -3414,6 +3414,23 @@ export async function markGateOutcomeOverridden(env: Env, repoFullName: string, 
     .where(and(eq(gateOutcomes.repoFullName, boundedString(repoFullName, 200)), eq(gateOutcomes.pullNumber, pullNumber)));
 }
 
+// Retrieve the latest gate-block outcome for a PR. Returns undefined when no block exists.
+// Used to detect draft-dodge attempts: a contributor converting an already-gate-rejected PR to draft
+// is trying to keep the PR open past the verdict — this lets the caller enforce the verdict immediately.
+export async function getGateBlockOutcome(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number,
+): Promise<{ headSha: string | null; blockerCodes: string[]; overridden: boolean } | undefined> {
+  const row = await getDb(env.DB)
+    .select()
+    .from(gateOutcomes)
+    .where(and(eq(gateOutcomes.repoFullName, boundedString(repoFullName, 200)), eq(gateOutcomes.pullNumber, pullNumber)))
+    .get();
+  if (!row) return undefined;
+  return { headSha: row.headSha, blockerCodes: parseJson<string[]>(row.blockerCodesJson, []), overridden: row.overridden };
+}
+
 export async function listGateOutcomes(
   env: Env,
   options: { repoFullName?: string; windowDays?: number; now?: string; limit?: number } = {},
