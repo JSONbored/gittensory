@@ -14,8 +14,9 @@ vi.mock("../../src/github/labels", () => ({
 
 import { closePullRequest, createIssueComment, createPullRequestReview, mergePullRequest, updatePullRequestBranch } from "../../src/github/pr-actions";
 import { ensurePullRequestLabel, removePullRequestLabel } from "../../src/github/labels";
-import { actionParams, executeAgentMaintenanceActions, type AgentActionExecutionContext } from "../../src/services/agent-action-executor";
+import { actionParams, executeAgentMaintenanceActions, pendingClosureLabelApplied, type AgentActionExecutionContext, type AgentActionOutcome } from "../../src/services/agent-action-executor";
 import type { PlannedAgentAction } from "../../src/settings/agent-actions";
+import { AGENT_LABEL_PENDING_CLOSURE } from "../../src/review/linked-issue-hard-rules";
 import { createTestEnv } from "../helpers/d1";
 
 function ctx(over: Partial<AgentActionExecutionContext> = {}): AgentActionExecutionContext {
@@ -177,5 +178,34 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect(outcomes[0]?.outcome).toBe("error");
     expect(outcomes[0]?.detail).toMatch(/not mergeable/i);
     expect((await auditFor(env, "merge"))?.outcome).toBe("error");
+  });
+});
+
+describe("pendingClosureLabelApplied (#1136 Pass-2 trigger)", () => {
+  const labelAdd: PlannedAgentAction = { actionClass: "label", requiresApproval: false, reason: "flag", label: AGENT_LABEL_PENDING_CLOSURE, labelOp: "add" };
+  const approve2: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "ok" };
+  const out = (outcome: AgentActionOutcome["outcome"], actionClass: AgentActionOutcome["actionClass"] = "label"): AgentActionOutcome => ({ actionClass, outcome, detail: "" });
+
+  it("true when the pending-closure label-add COMPLETED", () => {
+    expect(pendingClosureLabelApplied([labelAdd], [out("completed")])).toBe(true);
+  });
+  it("false when the label action did not complete (queued/error/dry_run/denied → state not established)", () => {
+    for (const o of ["queued", "error", "dry_run", "denied"] as const) expect(pendingClosureLabelApplied([labelAdd], [out(o)])).toBe(false);
+  });
+  it("false when no pending-closure label-add is planned", () => {
+    expect(pendingClosureLabelApplied([approve2], [out("completed", "approve")])).toBe(false);
+  });
+  it("false for a label REMOVE — only an ADD establishes the pending-closure flag", () => {
+    expect(pendingClosureLabelApplied([{ ...labelAdd, labelOp: "remove" }], [out("completed")])).toBe(false);
+  });
+  it("false for a completed add of a DIFFERENT label", () => {
+    expect(pendingClosureLabelApplied([{ ...labelAdd, label: "some-other-label" }], [out("completed")])).toBe(false);
+  });
+  it("matches the label's outcome by its OWN plan index (not assuming index 0)", () => {
+    expect(pendingClosureLabelApplied([approve2, labelAdd], [out("completed", "approve"), out("completed")])).toBe(true);
+    expect(pendingClosureLabelApplied([approve2, labelAdd], [out("completed", "approve"), out("error")])).toBe(false);
+  });
+  it("false when there is no outcome at the label's index (outcomes shorter than the plan)", () => {
+    expect(pendingClosureLabelApplied([approve2, labelAdd], [out("completed", "approve")])).toBe(false);
   });
 });

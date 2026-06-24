@@ -8,6 +8,7 @@ import { buildAgentActionAudit, isGlobalAgentPause, resolveAgentActionMode, reso
 import type { PlannedAgentAction } from "../settings/agent-actions";
 import type { AgentActionClass, AgentPendingActionParams, AutonomyLevel, AutonomyPolicy } from "../types";
 import { errorMessage } from "../utils/json";
+import { AGENT_LABEL_PENDING_CLOSURE } from "../review/linked-issue-hard-rules";
 
 // The agent actor name on every audit record — the App acts on the maintainer's behalf per their configured
 // autonomy (the config IS the authorization; there is no human commenter to authorize, unlike #824).
@@ -35,6 +36,14 @@ export type AgentActionOutcome = {
   outcome: "completed" | "queued" | "denied" | "error" | "dry_run";
   detail: string;
 };
+
+// Pass-2 trigger predicate (flag-then-close double-check): true iff the executed plan included a pending-closure
+// label-ADD whose mutation actually COMPLETED. A queued (approval-gated) / failed / dry-run / denied label does NOT
+// establish the label-backed state the verification pass reads, so re-enqueuing the delayed re-review off the plan
+// alone would create a verification loop. `outcomes[i]` is the outcome of `planned[i]` (1:1, same order).
+export function pendingClosureLabelApplied(plan: PlannedAgentAction[], outcomes: AgentActionOutcome[]): boolean {
+  return plan.some((action, index) => action.actionClass === "label" && action.label === AGENT_LABEL_PENDING_CLOSURE && action.labelOp === "add" && outcomes[index]?.outcome === "completed");
+}
 
 /**
  * Execute (or dry-run, or stage for approval) a planned auto-maintain action set on one PR. Each action runs
