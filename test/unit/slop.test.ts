@@ -429,8 +429,17 @@ describe("buildIssueSlopAssessment (#533 issue-side triage)", () => {
   it("handles repeated unterminated HTML comment openers without excessive scanning", () => {
     const maliciousBody = "<!--".repeat(30_000);
 
-    expect(buildUnfilledIssueTemplateFinding({ body: maliciousBody })).toBeNull();
+    // Pure scaffolding with no real word survives → flagged as unfilled. The 1s budget guards against
+    // catastrophic scanning (the word-run check is a linear scan, no backtracking).
+    expect(buildUnfilledIssueTemplateFinding({ body: maliciousBody })).toMatchObject({ code: "unfilled_issue_template" });
   }, 1_000);
+
+  it("a single padding character does NOT defeat the unfilled-template check (#audit-§4)", () => {
+    // Template scaffolding + one stray char that survives the punctuation strip — must still be flagged.
+    expect(buildUnfilledIssueTemplateFinding({ body: "### Description\n<!-- describe -->\n.\n" })).toMatchObject({ code: "unfilled_issue_template" });
+    // A genuine (even terse) description survives — a real 3+ letter word is present.
+    expect(buildUnfilledIssueTemplateFinding({ body: "### Description\nThe build fails on save.\n" })).toBeNull();
+  });
 });
 
 describe("buildNonSubstantivePaddingFinding (#561 path-matcher signal)", () => {

@@ -100,6 +100,19 @@ describe("buildPredictedGateVerdict", () => {
     expect(returning.blockers.some((b) => b.code === "duplicate_pr_risk")).toBe(true);
   });
 
+  it("matches author history case-insensitively, like the live gate (#audit-§4)", () => {
+    // The merged PR's author is "MINER1" (different case from the contributor "miner1"). The predictor must
+    // count it as history — otherwise it would falsely predict newcomer grace (neutral) while the live gate fails.
+    const mixedCase = verdict({
+      gate: { duplicates: "block", firstTimeContributorGrace: true },
+      pullRequests: [
+        openPr(42, "Retry uploads on 5xx responses", [7], "someone-else"),
+        { ...openPr(9, "Earlier fix", [], "MINER1"), state: "merged", mergedAt: "2026-06-01T00:00:00.000Z" },
+      ],
+    });
+    expect(mixedCase.conclusion).toBe("failure");
+  });
+
   it("denies first-contribution grace to a repeat offender via the closed-unmerged author-count path", () => {
     // The author has 3 prior CLOSED-unmerged PRs (state === "closed" && !mergedAt) in this repo, so
     // authorClosedUnmergedPrCount === 3 → isRepeatOffender → grace does NOT apply and the gate blocks.
