@@ -62,13 +62,32 @@ export function cookieValue(cookieHeader: string, name: string): string | undefi
   return cookieHeader.split(";").map((c) => c.trim()).find((c) => c.startsWith(`${name}=`))?.slice(name.length + 1);
 }
 
+/** Constant-time string equality (avoids timing side-channels when comparing secrets/tokens). */
+export function timingSafeStrEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
 /** Validate the signed setup cookie without trusting a client-supplied state alone. */
 export function isValidSetupAuthCookie(secret: string, state: string, cookie: string | undefined): boolean {
   if (!cookie) return false;
-  const expected = setupAuthCookieValue(secret, state);
-  const actualBytes = Buffer.from(cookie);
-  const expectedBytes = Buffer.from(expected);
-  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+  return timingSafeStrEqual(cookie, setupAuthCookieValue(secret, state));
+}
+
+/** First step of the browser setup flow: a form that POSTs the operator's setup token in the request BODY.
+ *  The token is never put in the URL — a query-string secret leaks to access logs, proxies, and history. */
+export function renderTokenEntryPage(invalid = false): string {
+  const error = invalid ? `<p style="color:#b00">Invalid setup token.</p>\n` : "";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gittensory self-host setup</title></head>
+<body style="font-family:system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem">
+<h1>Gittensory self-host setup</h1>
+<p>Enter your <code>SELFHOST_SETUP_TOKEN</code> to continue.</p>
+${error}<form action="/setup" method="post">
+  <input type="password" name="token" autocomplete="off" autofocus aria-label="Setup token" style="padding:.5rem;font-size:1rem;width:20rem">
+  <button type="submit" style="padding:.6rem 1.2rem;font-size:1rem;cursor:pointer">Continue →</button>
+</form>
+</body></html>`;
 }
 
 /** Exchange the temporary manifest code for the App's credentials (id, slug, webhook secret, private key). */

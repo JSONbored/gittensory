@@ -6,7 +6,9 @@ import {
   exchangeManifestCode,
   isValidSetupAuthCookie,
   renderSetupPage,
+  renderTokenEntryPage,
   setupAuthCookieValue,
+  timingSafeStrEqual,
 } from "../../src/selfhost/setup-wizard";
 
 describe("setup-wizard (#981 GitHub App Manifest)", () => {
@@ -72,5 +74,21 @@ describe("setup-wizard (#981 GitHub App Manifest)", () => {
     expect(env).toContain("GITHUB_APP_ID=1");
     expect(env).not.toContain("GITHUB_OAUTH_CLIENT_ID");
     expect(env).not.toContain("GITHUB_OAUTH_CLIENT_SECRET");
+  });
+
+  it("timingSafeStrEqual compares constant-time: equal vs differing-value vs differing-length", () => {
+    expect(timingSafeStrEqual("s3cret-token", "s3cret-token")).toBe(true);
+    expect(timingSafeStrEqual("s3cret-token", "s3cret-toker")).toBe(false); // same length, different bytes
+    expect(timingSafeStrEqual("short", "longer-token")).toBe(false); // length mismatch must not throw
+    expect(timingSafeStrEqual("", "")).toBe(true);
+  });
+
+  it("renderTokenEntryPage renders a POST form (token in the body, not the URL) + an error variant", () => {
+    const page = renderTokenEntryPage();
+    expect(page).toContain(`<form action="/setup" method="post">`);
+    expect(page).toContain(`name="token"`);
+    expect(page).toContain(`type="password"`); // never echoed/visible
+    expect(page).not.toContain("Invalid setup token");
+    expect(renderTokenEntryPage(true)).toContain("Invalid setup token"); // shown after a wrong submission
   });
 });

@@ -19,7 +19,9 @@ import {
   exchangeManifestCode,
   isValidSetupAuthCookie,
   renderSetupPage,
+  renderTokenEntryPage,
   setupAuthCookieValue,
+  timingSafeStrEqual,
 } from "./selfhost/setup-wizard";
 import { exportOrbBatch } from "./selfhost/orb-collector";
 import { createD1Adapter, nodeSqliteDriver } from "./selfhost/d1-adapter";
@@ -259,11 +261,25 @@ async function main(): Promise<void> {
             );
           }
           if (path === "/setup") {
-            const suppliedToken =
-              new URL(request.url).searchParams.get("token") ??
+            // Token via header (programmatic) or the POST form body (browser) — NEVER the URL query string,
+            // which would leak the secret to access logs, proxies, and browser history.
+            let suppliedToken =
               request.headers.get("x-setup-token") ??
-              request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-            if (suppliedToken !== setupToken) return new Response("invalid setup token", { status: 403 });
+              request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
+              "";
+            if (!suppliedToken && request.method === "POST") {
+              const form = await request.formData().catch(() => null);
+              const field = form?.get("token");
+              suppliedToken = typeof field === "string" ? field : "";
+            }
+            if (!timingSafeStrEqual(suppliedToken, setupToken)) {
+              // Not authenticated → show the token-entry form (token submitted via POST body, not the URL).
+              // First visit (no token) is 200; a wrong submission is 403.
+              return new Response(renderTokenEntryPage(suppliedToken.length > 0), {
+                status: suppliedToken.length > 0 ? 403 : 200,
+                headers: { "content-type": "text/html; charset=utf-8", "Referrer-Policy": "no-referrer" },
+              });
+            }
             // Generate a per-visit CSRF nonce, embed it in the manifest's redirect_url, and bind it to
             // this browser session via an HttpOnly signed cookie so the callback can validate it came
             // from an operator-authorized setup visit, not just any unauthenticated browser.
