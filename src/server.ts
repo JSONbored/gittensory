@@ -207,7 +207,16 @@ async function main(): Promise<void> {
         if (path === "/metrics") return new Response(await renderMetrics(), { headers: { "content-type": "text/plain; version=0.0.4" } });
         // First-run GitHub App setup wizard — only while no App is configured (can't rebind a live install).
         if ((path === "/setup" || path === "/setup/callback") && !process.env.GITHUB_APP_ID) {
-          const origin = process.env.PUBLIC_API_ORIGIN ?? new URL(request.url).origin;
+          // PUBLIC_API_ORIGIN is required: falling back to request.url.origin would let an attacker spoof
+          // the Host header and redirect the App-creation callback to an attacker-controlled domain, where
+          // they could exchange the code for the App private key and webhook secret.
+          const origin = process.env.PUBLIC_API_ORIGIN;
+          if (!origin) {
+            return new Response(
+              "PUBLIC_API_ORIGIN must be set before using the setup wizard — add it to your .env file",
+              { status: 400 },
+            );
+          }
           if (path === "/setup") {
             // Generate a per-visit CSRF nonce, embed it in the manifest's redirect_url, and bind it to
             // this browser session via an HttpOnly cookie so the callback can validate it.
