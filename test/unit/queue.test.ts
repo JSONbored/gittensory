@@ -5460,6 +5460,8 @@ describe("queue processors", () => {
       linkedIssueGateMode: "off",
       duplicatePrGateMode: "block",
       slopGateMode: "advisory",
+      qualityGateMode: "block",
+      qualityGateMinScore: 95,
     });
     // The shared issue + the HIGHER-numbered open sibling (#92) → forms the same-issue duplicate cluster.
     await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 1, title: "Cache the registry sync", state: "open", user: { login: "maintainer" }, author_association: "OWNER", body: "We should cache the registry fetch." });
@@ -5489,12 +5491,13 @@ describe("queue processors", () => {
         action: "opened",
         installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
         repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
-        pull_request: { number: 91, title: "Fix the cache", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: "win91" }, labels: [], body: "Fixes #1" },
+        pull_request: { number: 91, title: "Fix the cache", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: "win91" }, labels: [], body: "Fixes #1\n\nValidation: npm test" },
       },
     });
 
-    // Winner survives: the Gate did not fail on a duplicate block.
+    // Winner survives: a later duplicate sibling must not lower readiness below a blocking threshold.
     expect(gatePatchBody.conclusion).not.toBe("failure");
+    expect(gatePatchBody.output?.text ?? "").not.toContain("readiness_score_below_threshold");
     // The persisted advisory for the winner OMITS the duplicate finding (suppressed) — that is what suppresses
     // the gate failure and the auto-close duplicate cause.
     const winnerAdvisory = await env.DB.prepare("select findings_json from advisories where target_type = 'pull_request' and repo_full_name = ? and pull_number = ?").bind("JSONbored/gittensory", 91).first<{ findings_json: string }>();
