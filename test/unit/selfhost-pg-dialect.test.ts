@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripConflictTargetQualifiers, toNumberedPlaceholders, translateDdl, translateFunctions, translateInsertOr, translateSql } from "../../src/selfhost/pg-dialect";
+import { stripConflictTargetQualifiers, toNumberedPlaceholders, translateDdl, translateFunctions, translateInsertOr, translateMigrationInserts, translateSql } from "../../src/selfhost/pg-dialect";
 
 describe("pg-dialect (#977 SQLite → Postgres)", () => {
   it("numbers placeholders, skipping `?` inside string literals", () => {
@@ -28,6 +28,26 @@ describe("pg-dialect (#977 SQLite → Postgres)", () => {
   it("translateSql composes all passes; translateDdl handles the ISO-now default", () => {
     expect(translateSql("SELECT * FROM t WHERE updated_at > datetime('now', ?)")).toMatch(/\$1/);
     expect(translateDdl("created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")).toContain("to_char(now() AT TIME ZONE 'UTC'");
+  });
+
+  it("translates an INSERT OR IGNORE seed embedded in a (multi-statement) migration file", () => {
+    // The 0059_global_agent_controls seed — runSelfHostMigrations exec()s the whole file, so the
+    // statement-anchored translateInsertOr can't reach this; translateMigrationInserts handles it.
+    expect(translateMigrationInserts("INSERT OR IGNORE INTO global_agent_controls (id, frozen) VALUES ('singleton', 0);"))
+      .toBe("INSERT INTO global_agent_controls (id, frozen) VALUES ('singleton', 0) ON CONFLICT DO NOTHING;");
+    // Works mid-file alongside DDL, and leaves non-INSERT-OR statements untouched.
+    const file = "CREATE TABLE t (a INTEGER);\nINSERT OR IGNORE INTO t (a) VALUES (1);\n";
+    const out = translateMigrationInserts(file);
+    expect(out).toContain("CREATE TABLE t (a INTEGER);");
+    expect(out).toContain("INSERT INTO t (a) VALUES (1) ON CONFLICT DO NOTHING;");
+    expect(translateMigrationInserts("CREATE TABLE t (a INTEGER);")).toBe("CREATE TABLE t (a INTEGER);"); // no-op
+  });
+
+  it("translateDdl applies INSERT OR IGNORE + function translation together", () => {
+    const out = translateDdl("INSERT OR IGNORE INTO t (a, at) VALUES (1, CURRENT_TIMESTAMP);");
+    expect(out).toContain("ON CONFLICT DO NOTHING");
+    expect(out).toContain("to_char(now(),"); // CURRENT_TIMESTAMP still translated
+    expect(out).not.toMatch(/INSERT\s+OR\s+IGNORE/i);
   });
 
   it("strips table qualifiers from an ON CONFLICT target (drizzle emits `\"t\".\"c\"`, which Postgres rejects)", () => {
