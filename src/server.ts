@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { serve } from "@hono/node-server";
 import worker from "./index";
 import { processJob } from "./queue/processors";
+import { createSelfHostAi } from "./selfhost/ai";
 import { createD1Adapter, nodeSqliteDriver } from "./selfhost/d1-adapter";
 import { runSelfHostMigrations } from "./selfhost/migrate";
 import { createInProcessQueue } from "./selfhost/queue";
@@ -42,7 +43,11 @@ async function main(): Promise<void> {
   const queue = createInProcessQueue(async (message: JobMessage) => {
     await processJob(env, message);
   });
-  env = { ...process.env, DB: db, JOBS: queue.binding, AI: undefined } as unknown as Env;
+  // AI: the OpenAI-compatible / subscription adapter selected by AI_PROVIDER (undefined when unconfigured →
+  // gittensory's AI summary degrades to "unavailable" and the review proceeds deterministically).
+  const ai = createSelfHostAi(process.env);
+  if (ai) console.log(JSON.stringify({ event: "selfhost_ai_provider", provider: process.env.AI_PROVIDER }));
+  env = { ...process.env, DB: db, JOBS: queue.binding, AI: ai } as unknown as Env;
 
   const ctx = {
     waitUntil: (p: Promise<unknown>) => void Promise.resolve(p).catch(() => undefined),
