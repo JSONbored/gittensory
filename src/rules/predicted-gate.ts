@@ -55,7 +55,8 @@ export type PredictedGateVerdict = {
 const PREDICTED_GATE_NOTE =
   "Predicted from the repo's public .gittensory.yml gate config + safe defaults. The maintainer may have " +
   "private dashboard overrides not reflected here, and the dual-model AI-consensus blocker is only " +
-  "evaluated on a real PR. Only confirmed Gittensor contributors are ever hard-blocked.";
+  "evaluated on a real PR. Every author is gated the same: a configured hard blocker fails the gate " +
+  "regardless of confirmed-contributor status (which affects only on-chain scoring).";
 
 export type PredictedGateInput = {
   repoFullName: string;
@@ -84,8 +85,9 @@ export function buildPredictedGateVerdict(args: {
   pullRequests: PullRequestRecord[];
   bounties?: BountyRecord[] | undefined;
   issueQuality?: IssueQualityReport | null | undefined;
-  /** The contributor's OWN confirmed-Gittensor status (self-data). `false` → the real gate would stay
-   *  neutral for them; `undefined` → not gated on contributor status. */
+  /** The contributor's OWN confirmed-Gittensor status (self-data). Carried through for transparency only —
+   *  it no longer changes the predicted verdict (the real gate fails any author on a configured blocker;
+   *  confirmed-status affects only on-chain scoring). `undefined` → not resolved. */
   confirmedContributor?: boolean | undefined;
 }): PredictedGateVerdict {
   const { input, manifest, repo, issues, pullRequests } = args;
@@ -134,6 +136,11 @@ export function buildPredictedGateVerdict(args: {
   // Linked-issue finding is surfaced when the repo's public policy treats it as anything but `off`, so the
   // gate can evaluate it; evaluateGateCheck decides whether it actually blocks (block) or stays advisory.
   const requireLinkedIssue = gate.linkedIssue !== null && gate.linkedIssue !== "off";
+  // `duplicateWinnerEnabled` is INTENTIONALLY omitted (#dup-winner): the prospective PR is synthetic #0, but a
+  // real new PR opened into an existing duplicate cluster gets the HIGHEST number ⇒ it is always a duplicate
+  // LOSER, never the winner. So the predictor must keep showing the duplicate finding (the honest pre-submit
+  // answer). Threading the flag here would let isDuplicateClusterWinner(0, …) treat #0 as the winner and
+  // falsely suppress the block — a false-optimism regression. Do NOT add it without modeling #0 as the loser.
   const advisory = buildPullRequestAdvisory(repo, syntheticPr, { otherOpenPullRequests: pullRequests, requireLinkedIssue });
 
   // Pack-aware (#693): under `oss-anti-slop` the gate blocks ANY author, so drop the confirmed-contributor

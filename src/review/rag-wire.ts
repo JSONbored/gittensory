@@ -39,17 +39,28 @@ const MAX_QUERY_PATHS = 40;
 const MAX_QUERY_DIFF_CHARS = 4000;
 /** Default neighbours retrieved per review (rag.ts hard-caps at RAG_MAX_TOPK regardless). */
 const RAG_TOP_K = 12;
+/** Relevance floor for the cosine matches — drops low-relevance "neighbours" that are noise, not real context
+ *  (bge-m3 scores relevant code ~0.5-0.7 and clear noise <0.35; 0.4 is a conservative floor). Matches reviewbot's
+ *  core config (`rag: { minScore: 0.4 }`); gittensory previously used 0 (off), which kept that noise as
+ *  "relevant code" and itself drove false positives. (#GAP-2) */
+const RAG_MIN_SCORE = 0.4;
+/** Rerank the cosine top-K by exact-term overlap before injecting, to demote vector-accident matches (high
+ *  cosine, no real term overlap). Matches reviewbot's core config (`rag: { reranker: "bm25" }`); gittensory
+ *  previously left this off. (#283 / #GAP-2) */
+const RAG_RERANKER = "bm25" as const;
 
 /** The subset of a PR file record the query builder reads (filename + the patch text when present). */
 export type RagQueryFile = { path: string; patch?: string | undefined };
 
 /**
- * Compose the retrieval QUERY TEXT from the PR's changed files. We embed the changed PATHS plus a bounded slice
- * of the diff so the vector query finds code semantically near WHAT CHANGED (callers/related modules), not just
- * the PR title. The changed paths are ALSO returned as `excludePaths` so retrieval never echoes a file that is
- * itself part of the diff (that's already in the prompt). Returns "" when there's nothing to query on.
+ * Compose the retrieval QUERY TEXT from the PR's TITLE + changed files. We PREPEND the PR title (intent in natural
+ * language — recall parity with reviewbot, whose query is `${title}\n${diff}`), then embed the changed PATHS plus a
+ * bounded slice of the diff so the vector query finds code semantically near both WHY the PR exists and WHAT
+ * CHANGED (callers/related modules). The changed paths are ALSO returned as `excludePaths` so retrieval never
+ * echoes a file that is itself part of the diff (that's already in the prompt). Returns "" when there's nothing to
+ * query on (no files).
  */
-export function buildRagQuery(files: RagQueryFile[]): { queryText: string; excludePaths: string[] } {
+export function buildRagQuery(files: RagQueryFile[], title?: string): { queryText: string; excludePaths: string[] } {
   const paths = files.map((f) => f.path).filter(Boolean);
   const excludePaths = [...new Set(paths)];
   if (excludePaths.length === 0) return { queryText: "", excludePaths };
@@ -62,7 +73,9 @@ export function buildRagQuery(files: RagQueryFile[]): { queryText: string; exclu
     const patch = typeof file.patch === "string" ? file.patch : "";
     if (patch) diffSample += `${patch}\n`;
   }
-  const queryText = `Changed files:\n${pathList}\n\n${diffSample}`.slice(0, MAX_QUERY_DIFF_CHARS + 2000).trim();
+  // Prepend the PR title so the embedder sees the change's intent in plain language (recall parity with reviewbot).
+  const titleLine = typeof title === "string" && title.trim() ? `${title.trim()}\n\n` : "";
+  const queryText = `${titleLine}Changed files:\n${pathList}\n\n${diffSample}`.slice(0, MAX_QUERY_DIFF_CHARS + 2000).trim();
   return { queryText, excludePaths };
 }
 
@@ -78,22 +91,26 @@ export function buildRagQuery(files: RagQueryFile[]): { queryText: string; exclu
  */
 export async function buildReviewRagContext(
   env: Env,
-  args: { repoFullName: string; files: RagQueryFile[]; reranker?: "off" | "bm25" },
+  args: { repoFullName: string; files: RagQueryFile[]; title?: string; reranker?: "off" | "bm25" },
 ): Promise<string> {
   try {
-    const { queryText, excludePaths } = buildRagQuery(args.files);
+    const { queryText, excludePaths } = buildRagQuery(args.files, args.title);
     if (!queryText) return "";
     const infra = createReviewAdapters(env);
     // No vector index or no AI binding → the adapters omit the member and retrieveContext returns "" (no RAG).
     if (!infra.vector || !infra.inference) return "";
     const [project, repo] = splitRepo(args.repoFullName);
+    // Quality knobs match reviewbot's core config: drop low-relevance cosine matches (minScore) and BM25-rerank the
+    // survivors (reranker) so only genuinely-related code reaches the prompt — low-relevance "neighbours" are noise
+    // that themselves cause false positives. A caller-supplied reranker still wins (e.g. to force "off"). (#GAP-2)
     return await retrieveContext(infra, {
       project,
       repo,
       queryText,
       topK: RAG_TOP_K,
       excludePaths,
-      ...(args.reranker ? { reranker: args.reranker } : {}),
+      minScore: RAG_MIN_SCORE,
+      reranker: args.reranker ?? RAG_RERANKER,
     });
   } catch {
     return ""; // any error → review proceeds on the diff alone (fail-safe)

@@ -56,10 +56,6 @@ export const DEFAULT_SCORING_CONSTANTS: Record<string, number> = {
 
 export const DEFAULT_GITTENSOR_UPSTREAM_REPO = "entrius/gittensor";
 export const DEFAULT_GITTENSOR_UPSTREAM_REF = "test";
-export const SCORING_CONSTANTS_URL =
-  "https://raw.githubusercontent.com/entrius/gittensor/test/gittensor/constants.py";
-export const PROGRAMMING_LANGUAGES_URL =
-  "https://raw.githubusercontent.com/entrius/gittensor/test/gittensor/validator/weights/programming_languages.json";
 
 function scoringUpstreamConfig(env: Env): { repo: string; ref: string } {
   return {
@@ -72,19 +68,50 @@ function upstreamRawUrl(config: { repo: string; ref: string }, path: string): st
   return `https://raw.githubusercontent.com/${config.repo}/${encodeURIComponent(config.ref)}/${path}`;
 }
 
+// Fetch the HEAD commit SHA of the upstream ref for audit trail. Fail-open: a network hiccup or a
+// missing administration token must never block the constants refresh itself.
+async function fetchUpstreamRefSha(upstream: { repo: string; ref: string }, token: string | undefined): Promise<string | null> {
+  try {
+    const response = await fetch(`https://api.github.com/repos/${upstream.repo}/commits/${encodeURIComponent(upstream.ref)}`, { headers: githubHeaders(token, "application/vnd.github+json") });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { sha?: string };
+    return typeof data.sha === "string" && data.sha.length > 0 ? data.sha : null;
+  } catch {
+    return null;
+  }
+}
+
 const SCORING_CONSTANT_NAMES = new Set([...Object.keys(DEFAULT_SCORING_CONSTANTS), "MIN_TOKEN_SCORE_FOR_BASE_SCORE", "MAX_CODE_DENSITY_MULTIPLIER"]);
 
 export async function refreshScoringModelSnapshot(env: Env): Promise<ScoringModelSnapshotRecord> {
   const warnings: string[] = [];
   const fetchedAt = nowIso();
   const upstream = scoringUpstreamConfig(env);
-  const constantsUrl = upstreamRawUrl(upstream, "gittensor/constants.py");
-  const programmingLanguagesUrl = upstreamRawUrl(upstream, "gittensor/validator/weights/programming_languages.json");
+  // Pin the fetch to the upstream ref's immutable HEAD commit SHA so a force-push / branch-rename can't silently
+  // change what every repo scores against: resolve ref → SHA first, then fetch the constants AT that SHA (an
+  // atomic SHA↔constants binding, recorded in the payload). Best-effort — if the SHA can't be resolved (a
+  // transient API error) fall back to the mutable ref so a refresh is never blocked purely on the SHA lookup.
+  const upstreamSourceSha = await fetchUpstreamRefSha(upstream, env.GITHUB_PUBLIC_TOKEN);
+  const fetchRef = upstreamSourceSha ?? upstream.ref;
+  const constantsUrl = upstreamRawUrl({ repo: upstream.repo, ref: fetchRef }, "gittensor/constants.py");
+  const programmingLanguagesUrl = upstreamRawUrl({ repo: upstream.repo, ref: fetchRef }, "gittensor/validator/weights/programming_languages.json");
   const [registrySnapshot, constantsResult, languagesResult] = await Promise.all([
     getLatestRegistrySnapshot(env),
     fetchText(constantsUrl, env.GITHUB_PUBLIC_TOKEN),
     fetchJson(programmingLanguagesUrl, env.GITHUB_PUBLIC_TOKEN),
   ]);
+
+  // FAIL-CLOSED (#scoring-fail-closed): a failed constants fetch must NEVER silently overwrite the last verified
+  // upstream constants with hardcoded DEFAULT_SCORING_CONSTANTS — that would move live scoring with no one
+  // noticing. Freeze the last-good snapshot instead (its age is surfaced by scoringSnapshotStalenessWarning), and
+  // only bootstrap to defaults when there is no verified last-good to fall back to.
+  if (!constantsResult.ok) {
+    const lastGood = await getLatestScoringModelSnapshot(env);
+    if (lastGood && lastGood.sourceKind !== "fallback") {
+      const frozenNote = `Upstream scoring constants refresh failed (${constantsResult.error}); froze the last-good snapshot rather than reverting to default constants.`;
+      return { ...lastGood, warnings: [...lastGood.warnings, frozenNote] };
+    }
+  }
 
   let sourceKind: ScoringModelSnapshotRecord["sourceKind"] = "raw-github";
   let constants = { ...DEFAULT_SCORING_CONSTANTS };
@@ -126,13 +153,14 @@ export async function refreshScoringModelSnapshot(env: Env): Promise<ScoringMode
       constants: constantsPayload,
       programmingLanguagesSourceUrl: programmingLanguagesUrl,
       registryRepoCount: registrySnapshot?.repoCount ?? 0,
+      ...(upstreamSourceSha ? { upstreamSourceSha } : {}),
     },
   };
   await persistScoringModelSnapshot(env, snapshot);
   if (constantsResult.ok) {
     await syncUnmodeledScoringConstantDrift(env, {
       unmodeledConstants: findUnmodeledUpstreamConstants(constantsResult.value),
-      source: { repo: upstream.repo, ref: upstream.ref, commitSha: null },
+      source: { repo: upstream.repo, ref: upstream.ref, commitSha: upstreamSourceSha },
     });
   }
   return snapshot;

@@ -120,6 +120,82 @@ describe("advisory rules", () => {
     expect(advisory.findings.map((finding) => finding.code)).toContain("duplicate_pr_risk");
   });
 
+  it("#dup-winner: flag ON + winner (lowest open PR) ⇒ NO duplicate finding (gate success)", () => {
+    const winner: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 12,
+      title: "Add registry sync",
+      state: "open",
+      authorLogin: "oktofeesh1",
+      authorAssociation: "NONE",
+      headSha: "abc123",
+      labels: [],
+      linkedIssues: [4],
+    };
+    const higherSibling: PullRequestRecord = { ...winner, number: 13, title: "Alternative registry sync" };
+
+    const advisory = buildPullRequestAdvisory(repo, winner, { otherOpenPullRequests: [higherSibling], duplicateWinnerEnabled: true });
+
+    expect(advisory.findings.map((finding) => finding.code)).not.toContain("duplicate_pr_risk");
+  });
+
+  it("#dup-winner: flag ON + loser (a lower open sibling exists) ⇒ duplicate finding present", () => {
+    const loser: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 13,
+      title: "Alternative registry sync",
+      state: "open",
+      authorLogin: "oktofeesh1",
+      authorAssociation: "NONE",
+      headSha: "abc123",
+      labels: [],
+      linkedIssues: [4],
+    };
+    const lowerSibling: PullRequestRecord = { ...loser, number: 12, title: "Add registry sync" };
+
+    const advisory = buildPullRequestAdvisory(repo, loser, { otherOpenPullRequests: [lowerSibling], duplicateWinnerEnabled: true });
+
+    expect(advisory.findings.map((finding) => finding.code)).toContain("duplicate_pr_risk");
+  });
+
+  it("#dup-winner: flag OFF + would-be-winner ⇒ duplicate finding STILL present (byte-identical)", () => {
+    const wouldBeWinner: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 12,
+      title: "Add registry sync",
+      state: "open",
+      authorLogin: "oktofeesh1",
+      authorAssociation: "NONE",
+      headSha: "abc123",
+      labels: [],
+      linkedIssues: [4],
+    };
+    const higherSibling: PullRequestRecord = { ...wouldBeWinner, number: 13, title: "Alternative registry sync" };
+
+    const advisory = buildPullRequestAdvisory(repo, wouldBeWinner, { otherOpenPullRequests: [higherSibling], duplicateWinnerEnabled: false });
+
+    expect(advisory.findings.map((finding) => finding.code)).toContain("duplicate_pr_risk");
+  });
+
+  it("#dup-winner: flag ON + no overlap ⇒ no duplicate finding (alone in cluster)", () => {
+    const lonePr: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 12,
+      title: "Add registry sync",
+      state: "open",
+      authorLogin: "oktofeesh1",
+      authorAssociation: "NONE",
+      headSha: "abc123",
+      labels: [],
+      linkedIssues: [4],
+    };
+    const unrelated: PullRequestRecord = { ...lonePr, number: 13, title: "Unrelated change", linkedIssues: [99] };
+
+    const advisory = buildPullRequestAdvisory(repo, lonePr, { otherOpenPullRequests: [unrelated], duplicateWinnerEnabled: true });
+
+    expect(advisory.findings.map((finding) => finding.code)).not.toContain("duplicate_pr_risk");
+  });
+
   it("keeps weak queue warnings advisory-only for the opt-in gate", () => {
     const pr: PullRequestRecord = {
       repoFullName: repo.fullName,
@@ -221,6 +297,18 @@ describe("advisory rules", () => {
     expect(evaluateGateCheck(duplicateAdvisory, { duplicatePrGateMode: "block" }).conclusion).toBe("failure");
   });
 
+  it("a reviewer SPLIT (ai_review_split) blocks → close, gated like a consensus defect by aiReviewGateMode (#ai-review-split)", () => {
+    const splitAdvisory = {
+      ...buildPullRequestAdvisory(repo, null),
+      findings: [{ code: "ai_review_split", title: "An AI reviewer flagged a likely blocking defect", severity: "critical" as const, detail: "One reviewer flagged a blocker the other did not." }],
+    };
+    // reviewbot quorum: a single rejection (split) blocks → gate failure → close, but ONLY when aiReviewGateMode
+    // is `block` (advisory/off keep it non-blocking, exactly like ai_consensus_defect).
+    expect(evaluateGateCheck(splitAdvisory, { aiReviewGateMode: "block" }).conclusion).toBe("failure");
+    expect(evaluateGateCheck(splitAdvisory, { aiReviewGateMode: "advisory" }).conclusion).toBe("success");
+    expect(evaluateGateCheck(splitAdvisory).conclusion).toBe("success");
+  });
+
   it("only enforces readiness score when quality gate mode is block", () => {
     const advisory = buildPullRequestAdvisory(repo, {
       repoFullName: repo.fullName,
@@ -276,27 +364,25 @@ describe("advisory rules", () => {
     expect(gate.warnings.map((finding) => finding.code)).toEqual(["busy_pr_queue"]);
   });
 
-  it("only hard-blocks confirmed Gittensor contributors — non-confirmed authors stay neutral regardless of blockers", () => {
+  it("gates NON-confirmed contributors normally — a real blocker closes them like a confirmed author (#gate-nonconfirmed)", () => {
     const blockingAdvisory = {
       ...buildPullRequestAdvisory(repo, null),
       findings: [{ code: "duplicate_pr_risk", title: "Linked issue overlaps another open PR", severity: "warning" as const, detail: "Duplicate." }],
     };
 
-    // Non-confirmed author: the gate is forced neutral (non-blocking) even though a real blocker fired.
+    // Non-confirmed author: gated NORMALLY now — a real blocker → failure (one-shot close), no longer forced to a
+    // neutral/held state. Confirmed-status affects only on-chain scoring, never the gate verdict. (#gate-nonconfirmed)
     const nonConfirmed = evaluateGateCheck(blockingAdvisory, { duplicatePrGateMode: "block", confirmedContributor: false });
-    expect(nonConfirmed.conclusion).toBe("neutral");
-    expect(nonConfirmed.title).toBe("Gittensory Gate — advisory only");
-    expect(nonConfirmed.summary).toContain("not a confirmed Gittensor contributor");
-    expect(nonConfirmed.blockers).toEqual([]);
+    expect(nonConfirmed.conclusion).toBe("failure");
+    expect(nonConfirmed.title).toBe("Gittensory Gate: Linked issue overlaps another open PR");
+    expect(nonConfirmed.blockers.map((finding) => finding.code)).toEqual(["duplicate_pr_risk"]);
 
-    // Confirmed author with the same blocker: the gate blocks and names the blocker in the title.
+    // Confirmed author with the same blocker: identical verdict.
     const confirmed = evaluateGateCheck(blockingAdvisory, { duplicatePrGateMode: "block", confirmedContributor: true });
     expect(confirmed.conclusion).toBe("failure");
-    expect(confirmed.title).toBe("Gittensory Gate: Linked issue overlaps another open PR");
     expect(confirmed.blockers.map((finding) => finding.code)).toEqual(["duplicate_pr_risk"]);
 
-    // A clean PR from a non-confirmed author stays a normal success (the neutral override only kicks in
-    // when there is actually a blocker to suppress).
+    // A clean PR from a non-confirmed author is a normal success → auto-merges.
     const cleanNonConfirmed = evaluateGateCheck({ ...buildPullRequestAdvisory(repo, null), findings: [] }, { confirmedContributor: false });
     expect(cleanNonConfirmed.conclusion).toBe("success");
   });

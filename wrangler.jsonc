@@ -85,7 +85,7 @@
     // Default OFF — flag-OFF performs no retrieval, uses no adapter, makes no vector query, and keeps the
     // reviewer prompt byte-identical. Even when ON it is inert until a repo's vector index is populated (the
     // index-population job + cron is a deploy-time follow-up; a cold/missing index degrades to no context).
-    "GITTENSORY_REVIEW_RAG": "false",
+    "GITTENSORY_REVIEW_RAG": "true",
     // Convergence (self-improve / auto-tune): run the ported self-improvement loop on the cron tick over
     // gittensory's own review-outcome data — compute tuning recommendations, SHADOW-SOAK any strictly-
     // tightening one, and AUTO-PROMOTE it to live ONLY after the soak window passes the gate; every action is
@@ -117,6 +117,12 @@
     // reviewed repos. Flag-OFF the endpoint 404s and the homepage band renders nothing (counts only, no PR
     // content/authors/scores/rewards). See src/review/public-stats.ts.
     "GITTENSORY_PUBLIC_STATS": "true",
+    // Duplicate-winner adjudication (#dup-winner): when a same-issue cluster of OPEN PRs forms, spare exactly
+    // ONE winner — the lowest-numbered (earliest opened) open PR — instead of blocking/closing every sibling.
+    // Only the LOSERS get the duplicate blocker + close reason + slop penalty + panel block; the winner is
+    // judged on its own merits. DEFAULT OFF — flag-OFF every duplicate sibling dies (today's behavior,
+    // byte-identical). See src/signals/duplicate-winner.ts.
+    "GITTENSORY_DUPLICATE_WINNER": "false",
   },
   "routes": [
     {
@@ -208,6 +214,11 @@
     ],
   },
   "triggers": {
-    "crons": ["*/30 * * * *"],
+    // Tick every 2 minutes. The light auto-maintain/recovery sweep (agent-regate-sweep) runs on EVERY tick so an
+    // approved+clean PR merges and a red-CI / stuck PR is handled within ~2 min (see src/index.ts). Heavy sync/
+    // health jobs stay on their own cadence inside the handler via `minute % 30` (30-min) and `isHourly` (hourly),
+    // so they are unaffected by the faster tick. (Was "*/30": the sweep the code intends to run every ~2 min was
+    // actually firing only every 30 min, starving the recovery rail.)
+    "crons": ["*/2 * * * *"],
   },
 }
