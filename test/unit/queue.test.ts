@@ -4143,6 +4143,62 @@ describe("queue processors", () => {
     expect(cached?.snapshot_json).not.toMatch(/hotkey|wallet|coldkey|must-not-cache/i);
   });
 
+  it("suppresses labels and comments when agentPaused is true", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      publicSurface: "comment_and_label",
+      autoLabelEnabled: true,
+      createMissingLabel: false,
+      checkRunMode: "off",
+      agentPaused: true,
+    });
+    const calls = { labels: 0, comments: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([{ githubUsername: "paused-miner", githubId: "999", totalPrs: 1, totalMergedPrs: 1, isEligible: true, credibility: 1 }]);
+      if (url === "https://api.gittensor.io/miners/999") return Response.json({ repositories: [] });
+      if (url === "https://api.gittensor.io/miners/999/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/999/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/paused-miner")) return Response.json({ login: "paused-miner" });
+      if (url.includes("/users/paused-miner/repos")) return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/labels") && method === "POST") {
+        calls.labels += 1;
+        return Response.json([{ name: "gittensor" }]);
+      }
+      if (url.includes("/comments") && method === "POST") {
+        calls.comments += 1;
+        return Response.json({ id: 1 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "paused-surface",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } },
+        pull_request: { number: 88, title: "Paused repo PR", state: "open", user: { login: "paused-miner" }, labels: [], body: "Fixes #1" },
+      },
+    });
+
+    // agentPaused suppresses ALL public surface mutations — no label, no comment.
+    expect(calls).toEqual({ labels: 0, comments: 0 });
+  });
+
   it("responds to authorized @gittensory mention commands with one public-safe comment", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
@@ -5461,6 +5517,8 @@ describe("queue processors", () => {
       linkedIssueGateMode: "off",
       duplicatePrGateMode: "block",
       slopGateMode: "advisory",
+      qualityGateMode: "block",
+      qualityGateMinScore: 95,
     });
     // The shared issue + the HIGHER-numbered open sibling (#92) → forms the same-issue duplicate cluster.
     await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 1, title: "Cache the registry sync", state: "open", user: { login: "maintainer" }, author_association: "OWNER", body: "We should cache the registry fetch." });
@@ -5490,12 +5548,13 @@ describe("queue processors", () => {
         action: "opened",
         installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
         repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
-        pull_request: { number: 91, title: "Fix the cache", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: "win91" }, labels: [], body: "Fixes #1" },
+        pull_request: { number: 91, title: "Fix the cache", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: "win91" }, labels: [], body: "Fixes #1\n\nValidation: npm test" },
       },
     });
 
-    // Winner survives: the Gate did not fail on a duplicate block.
+    // Winner survives: a later duplicate sibling must not lower readiness below a blocking threshold.
     expect(gatePatchBody.conclusion).not.toBe("failure");
+    expect(gatePatchBody.output?.text ?? "").not.toContain("readiness_score_below_threshold");
     // The persisted advisory for the winner OMITS the duplicate finding (suppressed) — that is what suppresses
     // the gate failure and the auto-close duplicate cause.
     const winnerAdvisory = await env.DB.prepare("select findings_json from advisories where target_type = 'pull_request' and repo_full_name = ? and pull_number = ?").bind("JSONbored/gittensory", 91).first<{ findings_json: string }>();

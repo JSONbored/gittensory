@@ -2184,6 +2184,11 @@ async function maybePublishPrPublicSurface(
     if (!gateEnabled && decision.actions.length === 1 && decision.actions[0] === "none") return undefined;
   }
 
+  // Respect the per-repo agent pause: suppress all public surface mutations (label, comment, context
+  // check run) so a paused repo sees no gittensory-authored GitHub content. The Gittensory Gate check
+  // run still posts so the required-check status is not broken (#agent-pause).
+  if (settings.agentPaused) decision = { ...decision, willLabel: false, willComment: false, willCheckRun: false };
+
   let pendingGateCheckRunId: number | undefined;
   if (gateEnabled) {
     const pendingGateResult = await createOrUpdatePendingGateCheckRun(env, installationId, repoFullName, advisory);
@@ -2239,20 +2244,21 @@ async function maybePublishPrPublicSurface(
       repoPullRequests,
       repoBounties,
     );
+    // Duplicate-winner adjudication (#dup-winner): compute the winner ONCE for this review run from the SAME
+    // open-only sibling source the gate uses, and thread the flag/result consistently into readiness, the slop
+    // penalty (below), and the public panel builders (further down) so they agree by construction. Flag-OFF
+    // (default) ⇒ duplicateWinnerEnabled is false and isDupWinner is false ⇒ every guard short-circuits
+    // (byte-identical).
+    const linkedDuplicatePrsForGate = linkedIssueDuplicatePullRequestsForGate(pr, repoPullRequests);
+    const duplicateWinnerEnabled = env.GITTENSORY_DUPLICATE_WINNER === "true";
+    const isDupWinner = duplicateWinnerEnabled && isDuplicateClusterWinner(pr.number, linkedDuplicatePrsForGate);
     const readiness = buildPublicReadinessScore({
       pr,
       preflight,
       queueHealth,
-      linkedDuplicatePrs: linkedIssueDuplicatePullRequestsForGate(pr, repoPullRequests),
+      linkedDuplicatePrs: isDupWinner ? [] : linkedDuplicatePrsForGate,
       scopedOverlapCount: unionScopedOverlapClusters(collisions, pr, preflight.collisions).length,
     });
-
-    // Duplicate-winner adjudication (#dup-winner): compute the winner ONCE for this review run from the SAME
-    // open-only sibling source the gate uses, and thread the flag/result consistently into the slop penalty
-    // (below) and the public panel builders (further down) so they agree by construction. Flag-OFF (default)
-    // ⇒ duplicateWinnerEnabled is false and isDupWinner is false ⇒ every guard short-circuits (byte-identical).
-    const duplicateWinnerEnabled = env.GITTENSORY_DUPLICATE_WINNER === "true";
-    const isDupWinner = duplicateWinnerEnabled && isDuplicateClusterWinner(pr.number, linkedIssueDuplicatePullRequestsForGate(pr, repoPullRequests));
 
     if (gateEnabled && author && !publicSurfaceSkipped && !official) {
       official = await getCachedOfficialMinerDetection(env, author, {
