@@ -5,8 +5,8 @@
 //
 // Export is ALWAYS ON once the GitHub App is configured (the fleet-telemetry contract of self-hosting) —
 // there is no opt-out flag. It self-gates on a configured App private key (no App → no review data to
-// export anyway), from which it derives a DEDICATED, domain-separated anonymization key (so it never
-// reuses the webhook-verification secret and survives webhook-secret rotation).
+// export anyway) and anonymizes with a DEDICATED, per-instance secret generated once and persisted in
+// system_flags (never the App private key or the webhook-verification secret — key separation).
 //   ORB_COLLECTOR_URL=<url>   — endpoint (default: gittensory's hosted collector)
 //   ORB_AIR_GAP=true          — air-gapped/offline deployments only: compute locally, never send
 //   ORB_ANONYMIZE=true        — HMAC-hash repo/PR before export (default: true)
@@ -14,8 +14,11 @@
 // No diffs, no code, no comments, no logins, no commit SHAs — only verdict + outcome + reversal + a bucketed
 // reason category + cycle time, with repo/PR identifiers HMAC'd by a key the collector never holds (so it
 // can never de-anonymize).
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { incr } from "./metrics";
+
+/** Key under which the per-instance anonymization secret is persisted in system_flags. */
+const ANON_SECRET_FLAG = "orb:anon_secret";
 
 /** One de-noised, resolved-PR row read from review_audit (the join below). */
 interface FleetRow {
@@ -56,6 +59,33 @@ function instanceId(): string {
 /** HMAC a string with the instance's own secret for anonymized export. */
 function hmacField(value: string, secret: string): string {
   return createHmac("sha256", secret).update(value).digest("hex").slice(0, 24);
+}
+
+/**
+ * The instance's DEDICATED anonymization secret: a 256-bit random key generated once and persisted in
+ * system_flags, then reused on every export. Stable across restarts so a repo/PR always hashes the same
+ * way (the collector can dedup), per-instance, and SINGLE-PURPOSE — never the App private key or the
+ * webhook-verification secret (key separation). The collector never holds it, so it cannot de-anonymize.
+ */
+export async function getOrCreateAnonSecret(db: D1Database): Promise<string> {
+  const read = async (): Promise<string | undefined> => {
+    const row = await db
+      .prepare(`SELECT value FROM system_flags WHERE key = ?`)
+      .bind(ANON_SECRET_FLAG)
+      .first<{ value: string }>();
+    return row?.value;
+  };
+  const existing = await read();
+  if (existing) return existing;
+  const generated = randomBytes(32).toString("hex"); // 256-bit, 64 hex chars
+  // Race-safe across instances sharing a Postgres DB: OR IGNORE keeps the first writer's key; the re-read
+  // returns whichever value won, so every instance converges on the same secret.
+  await db
+    .prepare(`INSERT OR IGNORE INTO system_flags (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`)
+    .bind(ANON_SECRET_FLAG, generated)
+    .run();
+  /* v8 ignore next -- a row always exists after INSERT OR IGNORE, so the ?? fallback is unreachable */
+  return (await read()) ?? generated;
 }
 
 /** Map the gate's free-text reasonCode to a fixed, low-cardinality category — done at the source so the raw
@@ -126,16 +156,15 @@ export async function exportOrbBatch(db: D1Database, batchSize = 200, fetchFn: t
   // Always on (no opt-out). Air-gapped/offline deployments may suppress the outbound call.
   if ((process.env.ORB_AIR_GAP ?? "").toLowerCase() === "true") return 0;
 
-  // No App configured → no review data to export anyway. The App's PRIVATE KEY (high-entropy RSA material)
-  // gates export and seeds anonymization; the webhook-verification secret is never reused here.
-  const appKey = process.env.GITHUB_APP_PRIVATE_KEY ?? "";
-  if (!appKey) return 0;
+  // No App configured → no review data to export anyway. Gate export on the App being set up.
+  if (!(process.env.GITHUB_APP_PRIVATE_KEY ?? "")) return 0;
 
-  // gittensory's hosted collector. No shared secret is sent: repo/PR identifiers are HMAC'd with a DEDICATED,
-  // domain-separated key derived from THIS instance's App private key — so it's high-entropy (not brute-forceable),
-  // single-purpose (independent of webhook-secret rotation), and the collector can never de-anonymize them.
+  // gittensory's hosted collector. No shared secret is sent: repo/PR identifiers are HMAC'd with this
+  // instance's DEDICATED anonymization secret (a 256-bit random key generated once and persisted in
+  // system_flags — see getOrCreateAnonSecret), single-purpose and never the App key, so the collector
+  // (which never holds it) can never de-anonymize them.
   const collectorUrl = process.env.ORB_COLLECTOR_URL ?? "https://gittensory-api.aethereal.dev/v1/orb/ingest";
-  const secret = createHmac("sha256", appKey).update("gittensory-orb-anon-v1").digest("hex");
+  const secret = await getOrCreateAnonSecret(db);
   const anonymize = (process.env.ORB_ANONYMIZE ?? "true").toLowerCase() !== "false";
   const instance = instanceId();
 

@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { createD1Adapter, nodeSqliteDriver } from "../../src/selfhost/d1-adapter";
-import { bucketReasonCode, exportOrbBatch } from "../../src/selfhost/orb-collector";
+import { bucketReasonCode, exportOrbBatch, getOrCreateAnonSecret } from "../../src/selfhost/orb-collector";
 import { resetMetrics, renderMetrics } from "../../src/selfhost/metrics";
 
 /** In-memory DB with the review_audit + orb_export_cursor tables the exporter reads. */
@@ -16,6 +16,10 @@ function makeDb(): D1Database {
     );
     CREATE TABLE orb_export_cursor (
       instance_hash TEXT PRIMARY KEY, last_exported_at TEXT NOT NULL DEFAULT '2000-01-01T00:00:00Z',
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE TABLE system_flags (
+      key TEXT PRIMARY KEY, value TEXT,
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     );
   `);
@@ -44,10 +48,28 @@ describe("bucketReasonCode()", () => {
   });
 });
 
+describe("getOrCreateAnonSecret()", () => {
+  it("generates a 256-bit (64 hex char) dedicated secret on first use and persists it", async () => {
+    const db = makeDb();
+    const secret = await getOrCreateAnonSecret(db);
+    expect(secret).toMatch(/^[0-9a-f]{64}$/);
+    const row = await db.prepare(`SELECT value FROM system_flags WHERE key = 'orb:anon_secret'`).first<{ value: string }>();
+    expect(row?.value).toBe(secret); // persisted, so it survives restarts
+  });
+
+  it("reuses the persisted secret on subsequent calls (stable → collector dedup holds)", async () => {
+    const db = makeDb();
+    const first = await getOrCreateAnonSecret(db);
+    const second = await getOrCreateAnonSecret(db);
+    expect(second).toBe(first);
+    expect(first).not.toBe(process.env.GITHUB_APP_PRIVATE_KEY); // never the App private key
+  });
+});
+
 describe("exportOrbBatch() — always-on; reads review_audit, ships anonymized reversal-aware signal", () => {
   beforeEach(() => {
     resetMetrics();
-    (process.env as NodeJS.Dict<string>).GITHUB_APP_PRIVATE_KEY = "test-private-key"; // seeds the derived anonymization key
+    (process.env as NodeJS.Dict<string>).GITHUB_APP_PRIVATE_KEY = "test-private-key"; // gates export (App configured); not the anon key
     process.env.ORB_APP_ID = "555";
     process.env.ORB_ANONYMIZE = "true";
     delete process.env.ORB_AIR_GAP;
