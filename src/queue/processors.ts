@@ -813,16 +813,23 @@ const MAX_PREVIEW_POLLS = 5;
  * within CI_COALESCE_WINDOW_SECONDS (caller skips). KV-backed (REVIEW_CONFIG); a missing KV or a KV hiccup
  * degrades to NO coalescing (returns false — never blocks a re-review, never throws).
  */
-async function ciReReviewCoalesced(env: Env, repoFullName: string, prNumber: number): Promise<boolean> {
+async function ciCompletionCoalesced(env: Env, key: string): Promise<boolean> {
   if (!env.REVIEW_CONFIG) return false;
-  const key = `ci-coalesce:${repoFullName.toLowerCase()}#${prNumber}`;
   try {
-    if (await env.REVIEW_CONFIG.get(key)) return true; // re-reviewed within the window → skip this event
+    if (await env.REVIEW_CONFIG.get(key)) return true; // already handled within the window → skip this event
     await env.REVIEW_CONFIG.put(key, "1", { expirationTtl: CI_COALESCE_WINDOW_SECONDS }); // claim the window
     return false;
   } catch {
     return false;
   }
+}
+
+async function ciReReviewCoalesced(env: Env, repoFullName: string, prNumber: number): Promise<boolean> {
+  return ciCompletionCoalesced(env, `ci-coalesce:${repoFullName.toLowerCase()}#${prNumber}`);
+}
+
+async function ciHeadShaResolutionCoalesced(env: Env, repoFullName: string, headSha: string): Promise<boolean> {
+  return ciCompletionCoalesced(env, `ci-head-sha-resolve:${repoFullName.toLowerCase()}@${headSha.toLowerCase()}`);
 }
 
 /** Read the CI head SHA off a `check_suite`/`check_run` `completed` payload (the event node carries `head_sha`;
@@ -886,8 +893,15 @@ async function maybeReReviewOnCiCompletion(env: Env, deliveryId: string, eventNa
   if (!repoFullName || !installationId) return false;
   const node = (payload as Record<string, unknown>)[eventName] as { pull_requests?: Array<{ number?: number | null }> } | undefined;
   const populatedPrNumbers = [...new Set((node?.pull_requests ?? []).map((entry) => entry?.number).filter((value): value is number => typeof value === "number"))];
+  const headSha = ciCompletionHeadSha(eventName, payload);
   if (isConvergenceRepoAllowed(env, repoFullName)) {
-    const { numbers: prNumbers, viaHeadShaFallback } = await resolveCiCompletionPrNumbers(env, installationId, repoFullName, populatedPrNumbers, ciCompletionHeadSha(eventName, payload)).catch(() => ({
+    // GitHub can emit many empty-pull_requests CI completions for the same fork head SHA. Claim a head-SHA
+    // window before the fallback resolver so duplicate events do not repeat DB scans or commits/{sha}/pulls calls.
+    if (populatedPrNumbers.length === 0 && headSha && (await ciHeadShaResolutionCoalesced(env, repoFullName, headSha))) {
+      await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId, repositoryFullName: repoFullName, payloadHash: "processed", status: "processed" });
+      return true;
+    }
+    const { numbers: prNumbers, viaHeadShaFallback } = await resolveCiCompletionPrNumbers(env, installationId, repoFullName, populatedPrNumbers, headSha).catch(() => ({
       numbers: populatedPrNumbers,
       viaHeadShaFallback: false,
     }));

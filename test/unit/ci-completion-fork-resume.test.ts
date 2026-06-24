@@ -10,6 +10,22 @@ import type { GitHubWebhookPayload, JobMessage } from "../../src/types";
 
 const FORK_SHA = "deadbeefcafe1234deadbeefcafe1234deadbeef";
 
+class MemoryKv {
+  readonly values = new Map<string, string>();
+  getCalls = 0;
+  putCalls = 0;
+
+  async get(key: string): Promise<string | null> {
+    this.getCalls += 1;
+    return this.values.get(key) ?? null;
+  }
+
+  async put(key: string, value: string): Promise<void> {
+    this.putCalls += 1;
+    this.values.set(key, value);
+  }
+}
+
 function checkSuitePayload(opts: { repo: string; installationId: number; headSha?: string; prNumbers?: number[] }): GitHubWebhookPayload {
   const [owner, name] = opts.repo.split("/");
   return {
@@ -135,6 +151,36 @@ describe("CI-completion fork PR resume (head-SHA fallback)", () => {
     // The CI-completion handler always records the webhook event as processed.
     const webhook = await env.DB.prepare("select status from webhook_events where delivery_id = ?").bind("fork-delivery-1").first<{ status: string }>();
     expect(webhook?.status).toBe("processed");
+  });
+
+  it("dispatch: duplicate empty-pull_requests fork completions coalesce before head-SHA resolution", async () => {
+    const kv = new MemoryKv();
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token", REVIEW_CONFIG: kv as unknown as KVNamespace });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 5001);
+
+    let commitPullsCalls = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (input.toString().includes(`/commits/${FORK_SHA}/pulls`)) commitPullsCalls += 1;
+      return Response.json([{ number: 99, state: "open" }]);
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: `fork-storm-${i}`,
+        eventName: "check_suite",
+        payload: checkSuitePayload({ repo: "JSONbored/gittensory", installationId: 5001, headSha: FORK_SHA, prNumbers: [] }),
+      });
+    }
+
+    expect(commitPullsCalls).toBe(1);
+    expect(kv.values.has(`ci-head-sha-resolve:jsonbored/gittensory@${FORK_SHA}`)).toBe(true);
+    expect(kv.putCalls).toBe(2); // one head-SHA resolution claim + one per-PR re-review claim
+
+    const audits = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?")
+      .bind("github_app.ci_completion_fork_resume")
+      .first<{ n: number }>();
+    expect(audits?.n).toBe(1);
   });
 
   it("dispatch: a SAME-REPO check_suite (populated pull_requests[]) re-reviews WITHOUT the fork-resume audit", async () => {
