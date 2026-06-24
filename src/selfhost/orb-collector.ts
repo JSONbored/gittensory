@@ -3,10 +3,11 @@
 // engine's outcomes-wire. This ships an anonymized, reversal-aware signal UP to gittensory's central
 // collector so the gate can be calibrated across the whole self-host fleet.
 //
-// Export is ALWAYS ON once the GitHub App is configured (the fleet-telemetry contract of self-hosting) —
-// there is no opt-out flag. It self-gates on a configured App private key (no App → no review data to
-// export anyway) and anonymizes with a DEDICATED, per-instance secret generated once and persisted in
-// system_flags (never the App private key or the webhook-verification secret — key separation).
+// Export is opt-in: set ORB_ENABLED=true after reviewing the telemetry contract. It also self-gates
+// on a configured App private key (no App → no review data to export anyway) and anonymizes with a
+// DEDICATED, per-instance secret generated once and persisted in system_flags (never the App private
+// key or the webhook-verification secret — key separation).
+//   ORB_ENABLED=true          — opt in to fleet-calibration export (default: false)
 //   ORB_COLLECTOR_URL=<url>   — endpoint (default: gittensory's hosted collector)
 //   ORB_AIR_GAP=true          — air-gapped/offline deployments only: compute locally, never send
 //   ORB_ANONYMIZE=true        — HMAC-hash repo/PR before export (default: true)
@@ -149,11 +150,13 @@ function cycleTimeMs(decidedAt: string, outcomeAt: string): number | null {
 
 /**
  * Export newly-resolved PR outcomes (since this instance's watermark) to the central collector. Reads from
- * review_audit (de-noised, reversal-aware), anonymizes, signs, POSTs, then advances the cursor. Always on.
- * Returns the number of events exported (0 if air-gapped, the App isn't configured, or nothing new).
+ * review_audit (de-noised, reversal-aware), anonymizes, signs, POSTs, then advances the cursor.
+ * Returns the number of events exported (0 if disabled, air-gapped, the App isn't configured, or nothing new).
  */
 export async function exportOrbBatch(db: D1Database, batchSize = 200, fetchFn: typeof fetch = fetch): Promise<number> {
-  // Always on (no opt-out). Air-gapped/offline deployments may suppress the outbound call.
+  if (!/^(1|true|yes|on)$/i.test(process.env.ORB_ENABLED ?? "")) return 0;
+
+  // Air-gapped/offline deployments may suppress the outbound call even after opting in.
   if ((process.env.ORB_AIR_GAP ?? "").toLowerCase() === "true") return 0;
 
   // No App configured → no review data to export anyway. Gate export on the App being set up.

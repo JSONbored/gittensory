@@ -355,8 +355,8 @@ async function main(): Promise<void> {
     );
   }, intervalMs);
 
-  // Orb fleet-telemetry export — ALWAYS ON (the fleet-calibration contract of self-hosting). Self-gates
-  // inside exportOrbBatch: a no-op until the GitHub App is configured, or when ORB_AIR_GAP=true.
+  // Orb fleet-telemetry export — opt-in inside exportOrbBatch; also a no-op until the GitHub App
+  // is configured, or when ORB_AIR_GAP=true.
   const runOrbExport = () =>
     exportOrbBatch(backend.db)
       .then((n) => { if (n > 0) console.log(JSON.stringify({ event: "selfhost_orb_export", exported: n })); })

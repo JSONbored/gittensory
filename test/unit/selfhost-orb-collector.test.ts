@@ -66,17 +66,31 @@ describe("getOrCreateAnonSecret()", () => {
   });
 });
 
-describe("exportOrbBatch() — always-on; reads review_audit, ships anonymized reversal-aware signal", () => {
+describe("exportOrbBatch() — opt-in; reads review_audit, ships anonymized reversal-aware signal", () => {
   beforeEach(() => {
     resetMetrics();
     (process.env as NodeJS.Dict<string>).GITHUB_APP_PRIVATE_KEY = "test-private-key"; // gates export (App configured); not the anon key
+    process.env.ORB_ENABLED = "true";
     process.env.ORB_APP_ID = "555";
     process.env.ORB_ANONYMIZE = "true";
     delete process.env.ORB_AIR_GAP;
     delete process.env.ORB_COLLECTOR_URL;
   });
   afterEach(() => {
-    for (const k of ["GITHUB_APP_PRIVATE_KEY", "ORB_APP_ID", "ORB_ANONYMIZE", "ORB_AIR_GAP", "ORB_COLLECTOR_URL", "GITHUB_APP_ID"]) delete (process.env as NodeJS.Dict<string>)[k];
+    for (const k of ["GITHUB_APP_PRIVATE_KEY", "ORB_ENABLED", "ORB_APP_ID", "ORB_ANONYMIZE", "ORB_AIR_GAP", "ORB_COLLECTOR_URL", "GITHUB_APP_ID"]) delete (process.env as NodeJS.Dict<string>)[k];
+  });
+
+  it("returns 0 unless Orb export is explicitly enabled", async () => {
+    delete process.env.ORB_ENABLED;
+    const db = makeDb();
+    await audit(db, "o/r", 1, "gate_decision", "merge", "2026-01-01T00:00:00Z");
+    await audit(db, "o/r", 1, "pr_outcome", "merged", "2026-01-01T01:00:00Z");
+    expect(await exportOrbBatch(db, 200, async () => new Response(null, { status: 200 }))).toBe(0);
+
+    for (const off of ["", "false", "no", "0", "off"]) {
+      process.env.ORB_ENABLED = off;
+      expect(await exportOrbBatch(db, 200, async () => new Response(null, { status: 200 }))).toBe(0);
+    }
   });
 
   it("returns 0 when the App private key is not configured (App not set up → nothing to export)", async () => {
@@ -179,7 +193,7 @@ describe("exportOrbBatch() — always-on; reads review_audit, ships anonymized r
     expect(sig).toMatch(/^sha256=[a-f0-9]{64}$/);
   });
 
-  it("falls back to GITHUB_APP_ID for the instance id and applies the anonymize default when ORB_* are unset", async () => {
+  it("falls back to GITHUB_APP_ID for the instance id and applies the anonymize default when optional ORB_* are unset", async () => {
     delete process.env.ORB_APP_ID; // → falls through to GITHUB_APP_ID
     delete process.env.ORB_ANONYMIZE; // → defaults to "true"
     (process.env as NodeJS.Dict<string>).GITHUB_APP_ID = "999";
