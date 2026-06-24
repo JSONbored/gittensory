@@ -49,6 +49,13 @@ export type PlannedAgentAction = {
   reviewBody?: string;
   mergeMethod?: AutoMergeMethod;
   closeComment?: string;
+  // For a `close` action: WHICH kind of close this is, so the close-precision circuit-breaker can scope itself.
+  // "linked-issue-hard-rule" = the DETERMINISTIC flag-then-close state machine (zero hallucination risk — and on
+  // the verify path it posts a comment PROMISING closure); "heuristic" = a verdict-driven close (gate-verdict /
+  // duplicate / slop / CI). The breaker downgrades ONLY "heuristic" closes; the deterministic close is EXEMPT
+  // (silently holding a close whose comment already promised closure would be incoherent). Absent on non-close
+  // actions; treated as a heuristic close only when explicitly tagged "heuristic".
+  closeKind?: "linked-issue-hard-rule" | "heuristic";
   expectedHeadSha?: string;
 };
 
@@ -86,6 +93,10 @@ export type AgentActionPlanInput = {
   // The names of the failing checks, surfaced in the close/request-changes reason so the contributor knows
   // WHY (e.g. "codecov/patch"). Empty unless ciState === "failed".
   failingCheckNames?: string[] | undefined;
+  // True only when the caller proved the failing CI names are required branch-protection contexts. When required
+  // contexts are unavailable, ciState conservatively folds in all red checks; that fallback must not bypass hard
+  // guardrails because an optional or third-party check may be the only red signal.
+  ciRequiredContextsVerified?: boolean | undefined;
   // Linked-issue HARD-RULE result (#linked-issue-hard-rules). A DETERMINISTIC verdict about the issue(s) this PR
   // links (owner-assigned / missing point-label / maintainer-only), pre-computed by the trigger. When
   // `violated`, a CONTRIBUTOR PR is one-shot CLOSED citing `reason` — and because it is deterministic (no
@@ -151,6 +162,48 @@ export function downgradeMergeToHold(planned: PlannedAgentAction[], holdOnly: bo
   }
   // Drop any ready-to-merge label add (the auto-merge it promised is now suppressed).
   return next.filter((action) => !(action.actionClass === "label" && action.label === AGENT_LABEL_READY && action.labelOp !== "remove"));
+}
+
+/**
+ * CLOSE-precision circuit-breaker (the symmetric mirror of {@link downgradeMergeToHold}): when auto-CLOSE is
+ * DISABLED for a repo (the auto-tuner engaged the `closehold` flag after CLOSE precision dropped, or a human set
+ * it), DOWNGRADE a would-CLOSE into a human HOLD — drop the `close` action(s) and surface the needs-human-review
+ * label so the PR is held for a person instead of auto-closed.
+ *
+ * TIGHTENING-ONLY in the close direction: it can ONLY remove a `close` action + ADD a label. It NEVER adds or
+ * enables a close, merge, or approve, and it never touches an existing merge/approve action.
+ *
+ * OWNER-REQUIRED SCOPING: it downgrades ONLY HEURISTIC (verdict-driven) closes — those tagged
+ * `closeKind: "heuristic"` (gate-verdict / duplicate / slop / CI). It EXEMPTS the DETERMINISTIC linked-issue
+ * hard-rule close (`closeKind: "linked-issue-hard-rule"`): that close is zero-hallucination, and on the verify
+ * path it posts a comment PROMISING closure — silently downgrading it to a hold while a comment promises closure
+ * would be incoherent. So a plan whose only close is the deterministic one is returned UNCHANGED. A plan with a
+ * heuristic close gets it dropped; a deterministic close present alongside is KEPT.
+ *
+ * The existing changes-requested label is KEPT (it correctly says the PR is not mergeable). PURE + idempotent:
+ * with `closeHoldOnly` false this returns the plan UNCHANGED (the common path); with no HEURISTIC close planned
+ * it is also a no-op. Only ever makes the system MORE cautious.
+ */
+export function downgradeCloseToHold(planned: PlannedAgentAction[], closeHoldOnly: boolean): PlannedAgentAction[] {
+  const isHeuristicClose = (action: PlannedAgentAction): boolean => action.actionClass === "close" && action.closeKind === "heuristic";
+  if (!closeHoldOnly || !planned.some(isHeuristicClose)) return planned;
+  // Drop ONLY the heuristic close(s); a deterministic linked-issue-hard-rule close (if any) is left intact.
+  const next = planned.filter((action) => !isHeuristicClose(action));
+  // The dropped close means the PR is held for a person — surface needs-human-review. Idempotent: only add when
+  // absent (e.g. a guarded-but-passing plan may already carry it). NEVER adds a merge/approve.
+  const alreadyNeedsReview = next.some((action) => action.actionClass === "label" && action.label === AGENT_LABEL_NEEDS_REVIEW && action.labelOp !== "remove");
+  const droppedClose = planned.find(isHeuristicClose);
+  if (!alreadyNeedsReview) {
+    next.push({
+      actionClass: "label",
+      requiresApproval: droppedClose?.requiresApproval ?? false,
+      reason: "close-precision circuit-breaker engaged — would-close held for human review",
+      label: AGENT_LABEL_NEEDS_REVIEW,
+      labelOp: "add",
+    });
+  }
+  // KEEP the changes-requested label (it correctly states the PR is not mergeable) and every other action.
+  return next;
 }
 
 function closeMessage(reasons: string[]): string {
@@ -232,11 +285,12 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // CONFLICT. NEVER close merely because CI is UNVERIFIED (a fork whose Actions await approval, or unreadable
   // checks) or otherwise not-yet-mergeable — those are HELD for review, not killed (#harm-stop fork-false-close).
   // Owner/automation PRs are never closed (isContributor). A guarded path is HELD for the AI/gate VERDICT and for
-  // a base conflict (don't kill a crucial change on an AI call or a rebaseable conflict). But a red REQUIRED CI is
-  // an OBJECTIVE failure — a broken change that cannot merge regardless — so it CLOSES a contributor PR even on a
-  // guarded path; the contributor fixes CI and resubmits, and a GREEN guarded resubmission is then held for review.
+  // a base conflict (don't kill a crucial change on an AI call or a rebaseable conflict). A red CI may close a
+  // guarded path only after the caller proves required-context data was available; otherwise the live aggregate may
+  // have folded in optional / third-party checks and must keep the hard-guardrail manual hold.
   // (Rebase-if-behind already ran above, so a red CI here is on the latest base — not a stale-base artifact.) (#ci-fail-closes-guarded)
-  const willClose = isContributor && acting("close") && (ciFailed || (!guardrailHit && (input.conclusion === "failure" || isConflict)));
+  const redVerifiedRequiredCi = ciFailed && input.ciRequiredContextsVerified === true;
+  const willClose = isContributor && acting("close") && (redVerifiedRequiredCi || (!guardrailHit && (ciFailed || input.conclusion === "failure" || isConflict)));
   // Linked-issue HARD-RULE close (#linked-issue-hard-rules). A DETERMINISTIC verdict about the LINKED ISSUE
   // (owner-assigned / missing point-label / maintainer-only) — NOT an AI verdict, so there is no hallucination
   // to guard against: this close fires REGARDLESS of `guardrailHit`. It still only ever closes a CONTRIBUTOR
@@ -351,7 +405,9 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     // exactly why. This is the FIRST disposition branch: it wins over an otherwise-mergeable verdict (a PR for
     // an ineligible issue must never auto-merge) and fires REGARDLESS of `guardrailHit` (deterministic, not AI).
     const reason = linkedIssueHardRule?.reason ?? "the linked issue is not eligible for a community PR";
-    actions.push({ actionClass: "close", requiresApproval: approval("close"), reason, closeComment: closeMessage([reason]) });
+    // Tagged "linked-issue-hard-rule": the close-precision breaker EXEMPTS this deterministic close (it is not
+    // verdict-driven, and the verify path may already have promised closure in a comment).
+    actions.push({ actionClass: "close", requiresApproval: approval("close"), reason, closeComment: closeMessage([reason]), closeKind: "linked-issue-hard-rule" });
   } else if (canMerge) {
     actions.push({
       actionClass: "merge",
@@ -369,7 +425,9 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     if (input.pr.slopRisk != null && input.pr.slopRisk >= slopGateMinScore) closeReasons.push(`slop score ${input.pr.slopRisk} ≥ ${slopGateMinScore}`);
     if ((input.pr.linkedDuplicateCount ?? 0) > 0) closeReasons.push("duplicate of another open PR");
     if (closeReasons.length === 0) closeReasons.push("the review gate is not satisfied");
-    actions.push({ actionClass: "close", requiresApproval: approval("close"), reason: closeReasons.join("; "), closeComment: closeMessage(closeReasons) });
+    // Tagged "heuristic": a verdict-driven close (gate-verdict / duplicate / slop / CI). This is the ONLY close
+    // the close-precision breaker downgrades to a hold when close precision has dropped.
+    actions.push({ actionClass: "close", requiresApproval: approval("close"), reason: closeReasons.join("; "), closeComment: closeMessage(closeReasons), closeKind: "heuristic" });
   }
   // else: guarded → manual (needs-human/changes label above); not-good OWNER/automation → held
   // (request-changes above); review-good-but-not-yet-mergeable → held briefly (rebase/approve resolves it next pass).

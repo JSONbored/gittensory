@@ -2163,7 +2163,7 @@ export function createApp() {
       getRepositorySettings(c.env, fullName),
       listPullRequests(c.env, fullName),
     ]);
-    return c.json(buildMaintainerActivationPreview({ repoFullName: fullName, repo, settings, pullRequests, generatedAt: nowIso() }));
+    return c.json(buildMaintainerActivationPreview({ repoFullName: fullName, repo, settings, pullRequests, generatedAt: nowIso(), duplicateWinnerEnabled: c.env.GITTENSORY_DUPLICATE_WINNER === "true" }));
   });
 
   // #543 outcome-learning loop: is the slop score predictive, and are recommendations panning out? Read-only
