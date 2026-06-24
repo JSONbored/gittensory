@@ -218,12 +218,23 @@
         "dead_letter_queue": "gittensory-webhooks-dlq",
       },
       {
+        // Maintenance lane: the re-gate sweep, backfills, rag-index, snapshots. Webhooks have their own lane
+        // (above), so this lane is bounded to keep a heavy/retrying batch from re-saturating the consumer and
+        // amplifying GitHub-rate pressure (the metagraphed-dry-run overload). (#audit-bound-lane)
+        //  - max_batch_size 5 (was 10): one batch can't bundle as many heavy sweep/backfill jobs at once.
+        //  - max_concurrency 3: bounded fan-out — enough to drain metagraphed's worst sweep within the 2-min
+        //    cron interval, but not so wide it floods the shared GitHub installation rate bucket. (A follow-up
+        //    may tighten this to 2 once the sweep fans into tiny per-PR jobs.)
+        //  - retry_delay 30: a failed job backs off 30s instead of re-delivering immediately and re-hammering
+        //    the already-overloaded path.
         "queue": "gittensory-jobs",
-        "max_batch_size": 10,
+        "max_batch_size": 5,
         "max_batch_timeout": 5,
-        // After max_retries failed attempts a job is dead-lettered so a persistently-failing webhook
-        // is observable rather than vanishing silently. The DLQ consumer below picks them up.
+        "max_concurrency": 3,
+        // After max_retries failed attempts a job is dead-lettered so a persistently-failing job is observable
+        // rather than vanishing silently. The DLQ consumer below picks them up.
         "max_retries": 3,
+        "retry_delay": 30,
         "dead_letter_queue": "gittensory-jobs-dlq",
       },
       {
