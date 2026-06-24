@@ -563,9 +563,10 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
     // re-gate above only recomputes the audit verdict; without this re-publish, an idle PR keeps a stale comment
     // (e.g. "safe to merge" from before a fix) and a stale status label forever. reReviewStoredPullRequest reads
     // the freshly-synced head + the live CI, so the comment + label + action all reflect reality. Paced at
-    // SWEEP_MAX_PRS per sweep; cheap now that installation tokens are cached.
+    // SWEEP_MAX_PRS per sweep; scheduled sweeps deliberately skip AI so the 2-minute cadence cannot amplify
+    // model/API spend for unchanged PR heads.
     if (sweepInstallationId != null) {
-      await reReviewStoredPullRequest(env, `regate-sweep:${repoFullName}#${pr.number}`, sweepInstallationId, repoFullName, pr.number).catch((error) => {
+      await reReviewStoredPullRequest(env, `regate-sweep:${repoFullName}#${pr.number}`, sweepInstallationId, repoFullName, pr.number, undefined, { skipAiReview: true }).catch((error) => {
         console.error(JSON.stringify({ level: "warn", event: "sweep_rereview_failed", deliveryId: `regate-sweep:${repoFullName}#${pr.number}`, repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
       });
     }
@@ -745,7 +746,15 @@ async function maybeRunAgentMaintenance(
  * "the CI event WAKES the existing row and re-runs the full review". The PR's persisted head SHA is used as-is
  * (never overwritten from the CI payload — reviewbot scope parity). Best-effort throughout.
  */
-async function reReviewStoredPullRequest(env: Env, deliveryId: string, installationId: number, repoFullName: string, prNumber: number, previewPollAttempt?: number): Promise<void> {
+async function reReviewStoredPullRequest(
+  env: Env,
+  deliveryId: string,
+  installationId: number,
+  repoFullName: string,
+  prNumber: number,
+  previewPollAttempt?: number,
+  options: { skipAiReview?: boolean } = {},
+): Promise<void> {
   const [repo, settings] = await Promise.all([getRepository(env, repoFullName), resolveRepositorySettings(env, repoFullName)]);
   const pr = await getPullRequest(env, repoFullName, prNumber);
   if (!pr || pr.state !== "open") return;
@@ -759,7 +768,11 @@ async function reReviewStoredPullRequest(env: Env, deliveryId: string, installat
   if (shouldCollectSlopEvidence(settings) || settings.manifestPolicyGateMode !== "off") {
     await refreshPullRequestDetails(env, repoFullName, prNumber).catch(() => undefined);
   }
-  const gate = await maybePublishPrPublicSurface(env, installationId, repoFullName, pr, repo, settings, advisory, { deliveryId, ...(previewPollAttempt !== undefined ? { previewPollAttempt } : {}) }).catch((error) => {
+  const gate = await maybePublishPrPublicSurface(env, installationId, repoFullName, pr, repo, settings, advisory, {
+    deliveryId,
+    ...(previewPollAttempt !== undefined ? { previewPollAttempt } : {}),
+    ...(options.skipAiReview ? { skipAiReview: true } : {}),
+  }).catch((error) => {
     console.error(JSON.stringify({ level: "warn", event: "pr_public_surface_failed", deliveryId, repository: repoFullName, pullNumber: prNumber, error: errorMessage(error) }));
     return undefined;
   });
@@ -2006,7 +2019,7 @@ async function maybePublishPrPublicSurface(
   repo: Awaited<ReturnType<typeof getRepository>>,
   settings: Awaited<ReturnType<typeof getRepositorySettings>>,
   advisory: Awaited<ReturnType<typeof buildPullRequestAdvisory>>,
-  webhook: { deliveryId: string; authorType?: string | undefined; action?: string | undefined; previewPollAttempt?: number | undefined },
+  webhook: { deliveryId: string; authorType?: string | undefined; action?: string | undefined; previewPollAttempt?: number | undefined; skipAiReview?: boolean | undefined },
 ): Promise<ReturnType<typeof evaluateGateCheck> | undefined> {
   const author = pr.authorLogin ?? null;
   // Per-repo cutover gate (GITTENSORY_REVIEW_REPOS): the unified converged comment renders for THIS repo
@@ -2218,18 +2231,20 @@ async function maybePublishPrPublicSurface(
     // BEFORE the gate evaluates, and returns advisory notes for the panel. Inside the try so any AI
     // failure is caught and the gate is still finalized (never left in_progress). Pass the shared resolved
     // files so the review (+ grounding + RAG) sees the REAL diff even on a pre-detail-sync first review (FIX B);
-    // resolve only when the review will actually run (aiReviewMode !== off + a head SHA) to keep gate-only
-    // repos free of an extra file resolve.
-    const aiReviewWillRun = settings.aiReviewMode !== "off" && Boolean(advisory.headSha);
-    aiReview = await runAiReviewForAdvisory(env, {
-      settings,
-      advisory,
-      repoFullName,
-      pr,
-      author,
-      confirmedContributor,
-      ...(aiReviewWillRun ? { files: await getReviewFiles() } : {}),
-    });
+    // resolve only when the review will actually run (aiReviewMode !== off + a head SHA + not a scheduled
+    // sweep backstop) to keep gate-only and sweep-only repos free of an extra file resolve.
+    const aiReviewWillRun = !webhook.skipAiReview && settings.aiReviewMode !== "off" && Boolean(advisory.headSha);
+    if (aiReviewWillRun) {
+      aiReview = await runAiReviewForAdvisory(env, {
+        settings,
+        advisory,
+        repoFullName,
+        pr,
+        author,
+        confirmedContributor,
+        files: await getReviewFiles(),
+      });
+    }
 
     // Safety secrets-scan (convergence, flag-gated by GITTENSORY_REVIEW_SAFETY). Scans the diff and, on a hit,
     // appends a critical `secret_leak` blocker BEFORE the gate evaluates. When the scan will actually run

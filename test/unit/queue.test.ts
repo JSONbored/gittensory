@@ -578,6 +578,54 @@ describe("queue processors", () => {
     expect(sent).toEqual([]);
   });
 
+  it("agent re-gate sweep skips AI review while refreshing the PR surface on a stale AI-enabled PR", async () => {
+    let aiCalls = 0;
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      AI: {
+        run: async () => {
+          aiCalls += 1;
+          return { response: JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: [], suggestions: [] }) };
+        },
+      } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, {
+      repoFullName: "owner/agent-repo",
+      autonomy: { merge: "auto" },
+      aiReviewMode: "block",
+      gatePack: "oss-anti-slop",
+      gateCheckMode: "enabled",
+      checkRunMode: "off",
+      commentMode: "off",
+      publicSurface: "off",
+    });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Stale PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "no linked issue here" });
+    await upsertPullRequestFile(env, { repoFullName: "owner/agent-repo", pullNumber: 7, path: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, payload: { patch: "@@\n+export const ok = true;" } });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.endsWith("/pulls/7")) return Response.json({ number: 7, title: "Stale PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "no linked issue here" });
+      if (url.includes("/commits/a7/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      return new Response("not found", { status: 404 });
+    });
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+
+    expect(aiCalls).toBe(0);
+    const aiUsage = await env.DB.prepare("select count(*) as n from ai_usage_events where feature = ?").bind("ai_review_pr").first<{ n: number }>();
+    expect(aiUsage?.n).toBe(0);
+    const audit = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("agent.sweep.regate").first<{ outcome: string; metadata_json: string }>();
+    expect(audit?.outcome).toBe("completed");
+    expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ repoFullName: "owner/agent-repo", examined: 1 });
+  });
+
   it("agent re-gate sweep re-reviews each stale open PR (installation id) and swallows a failing re-review", async () => {
     const env = createTestEnv({});
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
