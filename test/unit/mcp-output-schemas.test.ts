@@ -17,6 +17,7 @@ const TOOLS_WITH_OUTPUT_SCHEMA = [
   "gittensory_get_contributor_profile",
   "gittensory_get_decision_pack",
   "gittensory_monitor_open_prs",
+  "gittensory_simulate_open_pr_pressure",
   "gittensory_explain_repo_decision",
   "gittensory_get_issue_quality",
   "gittensory_validate_linked_issue",
@@ -405,6 +406,30 @@ describe("MCP tool calls return schema-valid structured content", () => {
     expect(data.slop).toBeTruthy();
     expect(data.recommendations).toBeTruthy();
     expect(Array.isArray(data.signals)).toBe(true);
+  });
+
+  it("gittensory_simulate_open_pr_pressure returns strategy options for a contributor repo", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "demo", full_name: "octo/demo", private: false, owner: { login: "octo" }, default_branch: "main" });
+    await upsertPullRequestFromGitHub(env, "octo/demo", {
+      number: 1,
+      title: "Open work",
+      state: "open",
+      user: { login: "alice" },
+      head: { sha: "abc", ref: "feat" },
+      base: { ref: "main" },
+    });
+    const { client } = await connectTestClient(env);
+    const result = await client.callTool({
+      name: "gittensory_simulate_open_pr_pressure",
+      arguments: { login: "alice", owner: "octo", repo: "demo" },
+    });
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.repoFullName).toBe("octo/demo");
+    expect(data.contributorOpenPrCount).toBe(1);
+    expect(data.recommendedOption).toMatch(/^(open_new_work|wait|cleanup_first)$/);
+    expect(Array.isArray(data.scenarios)).toBe(true);
   });
 });
 

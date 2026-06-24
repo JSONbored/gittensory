@@ -69,6 +69,8 @@ import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast
 import { buildMcpClientTelemetry } from "../services/client-telemetry";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
 import { buildRepoOutcomeCalibration, outcomeCalibrationSummary } from "../services/outcome-calibration";
+import { buildContributorOpenPrPressureResponse } from "../services/open-pr-pressure-response";
+import { buildExtensionOpenPrPressure, extensionOpenPrPressureHeadline } from "../signals/extension-open-pr-pressure";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import {
   applyMcpPlanningChoices,
@@ -636,6 +638,17 @@ const openPrMonitorOutputSchema = {
   pullRequests: z.unknown().optional(),
 };
 
+const openPrPressureOutputSchema = {
+  login: z.string().optional(),
+  repoFullName: z.string().optional(),
+  generatedAt: z.string().optional(),
+  contributorOpenPrCount: z.number().optional(),
+  queuePressure: z.string().optional(),
+  recommendedOption: z.string().optional(),
+  summary: z.string().optional(),
+  scenarios: z.unknown().optional(),
+};
+
 const notificationsOutputSchema = {
   login: z.string().optional(),
   unreadCount: z.number().optional(),
@@ -1083,6 +1096,17 @@ export class GittensoryMcp {
         outputSchema: openPrMonitorOutputSchema,
       },
       async (input) => this.toolResult(await this.monitorOpenPullRequests(input.login)),
+    );
+
+    server.registerTool(
+      "gittensory_simulate_open_pr_pressure",
+      {
+        description:
+          "Simulate open-PR pressure strategy options for a contributor on a repo: open new work, wait, or clean up first. Self-scoped, public-safe, advisory only.",
+        inputSchema: loginRepoShape,
+        outputSchema: openPrPressureOutputSchema,
+      },
+      async (input) => this.toolResult(await this.simulateOpenPrPressure(input)),
     );
 
     server.registerTool(
@@ -1645,6 +1669,26 @@ export class GittensoryMcp {
     );
 
     server.registerPrompt(
+      "gittensory_plan_open_pr_strategy",
+      {
+        title: "Plan open-PR strategy",
+        description: "Compare open-new-work, wait, and cleanup-first options for a contributor on a repo using queue pressure signals. Advisory only.",
+        argsSchema: { ...ownerRepoShape, login: z.string().min(1) },
+      },
+      ({ owner, repo, login }) => ({
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: `Use gittensory_simulate_open_pr_pressure for ${login} on ${owner}/${repo} to compare strategy options before opening another PR. Summarize the recommended option, queue pressure band, and the top facts/blockers for each scenario. Do not open a PR or take any GitHub action — present guidance for the contributor to decide manually.`,
+            },
+          },
+        ],
+      }),
+    );
+
+    server.registerPrompt(
       "gittensory_plan_cleanup_first",
       {
         title: "Plan cleanup-first work",
@@ -1971,6 +2015,25 @@ export class GittensoryMcp {
     return {
       summary: monitor.summary,
       data: monitor as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async simulateOpenPrPressure(input: { login: string; owner: string; repo: string }): Promise<ToolPayload> {
+    this.requireContributorAccess(input.login);
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireWatchableRepo(input.login, fullName);
+    const response = await buildContributorOpenPrPressureResponse(this.env, input.login, fullName);
+    if (!response) {
+      return {
+        summary: `Gittensory has no cached metadata for ${fullName}.`,
+        data: { status: "not_found", repoFullName: fullName },
+      };
+    }
+    const simulation = response.simulation;
+    const extension = buildExtensionOpenPrPressure(response);
+    return {
+      summary: extensionOpenPrPressureHeadline(extension),
+      data: extension as unknown as Record<string, unknown>,
     };
   }
 

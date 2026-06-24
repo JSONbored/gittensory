@@ -3863,6 +3863,20 @@ describe("api routes", () => {
     expect(JSON.stringify(prStatusBody)).not.toMatch(/"(?:score|total|max)":/);
     expect(JSON.stringify(prStatusBody)).not.toMatch(FORBIDDEN_PUBLIC_REPORT_TERMS);
 
+    const pressure = await app.request("/v1/extension/contributors/contributor-dev/open-pr-pressure?owner=octo&repo=demo", { headers: bearer }, env);
+    expect(pressure.status).toBe(200);
+    const pressureBody = (await pressure.json()) as {
+      contributorOpenPrCount: number;
+      queuePressure: string;
+      recommendedOption: string;
+      scenarios: Array<{ option: string; recommended: boolean }>;
+    };
+    expect(pressureBody.contributorOpenPrCount).toBeGreaterThanOrEqual(2);
+    expect(["low", "medium", "high", "critical", "unknown"]).toContain(pressureBody.queuePressure);
+    expect(["open_new_work", "wait", "cleanup_first"]).toContain(pressureBody.recommendedOption);
+    expect(pressureBody.scenarios.some((entry) => entry.recommended)).toBe(true);
+    expect(JSON.stringify(pressureBody)).not.toMatch(FORBIDDEN_PUBLIC_REPORT_TERMS);
+
     // The contributor's OWN bodyless PR still resolves to a public-safe readiness band (body defaults cleanly).
     const bodylessPrStatus = await app.request("/v1/extension/contributors/contributor-dev/pr-status?owner=octo&repo=demo&pullNumber=14", { headers: bearer }, env);
     expect(bodylessPrStatus.status).toBe(200);
@@ -3889,6 +3903,9 @@ describe("api routes", () => {
     expect((await app.request("/v1/extension/contributors/contributor-dev/pr-status?repo=demo&pullNumber=12", { headers: bearer }, env)).status).toBe(400);
     expect((await app.request("/v1/extension/contributors/contributor-dev/pr-status?owner=octo&pullNumber=12", { headers: bearer }, env)).status).toBe(400);
     expect((await app.request("/v1/extension/contributors/contributor-dev/pr-status?owner=octo&repo=demo&pullNumber=abc", { headers: bearer }, env)).status).toBe(400);
+    expect((await app.request("/v1/extension/contributors/contributor-dev/open-pr-pressure?owner=octo", { headers: bearer }, env)).status).toBe(400);
+    expect((await app.request("/v1/extension/contributors/contributor-dev/open-pr-pressure?repo=demo", { headers: bearer }, env)).status).toBe(400);
+    expect((await app.request("/v1/extension/contributors/contributor-dev/open-pr-pressure?owner=victim-org&repo=secret", { headers: bearer }, env)).status).toBe(403);
     // Repo not found → 404.
     expect((await app.request("/v1/extension/contributors/contributor-dev/issue-fit?owner=no&repo=such&issueNumber=1", { headers: bearer }, env)).status).toBe(404);
     expect((await app.request("/v1/extension/contributors/contributor-dev/issue-badges?owner=no&repo=such", { headers: bearer }, env)).status).toBe(404);
