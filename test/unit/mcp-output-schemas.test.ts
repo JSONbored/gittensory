@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
-import { persistSignalSnapshot, upsertBounty, upsertIssueFromGitHub, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub, updatePullRequestSlopAssessment } from "../../src/db/repositories";
+import { createAgentRun, persistSignalSnapshot, replaceAgentActions, upsertAgentRecommendationOutcome, upsertBounty, upsertIssueFromGitHub, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub, updatePullRequestSlopAssessment } from "../../src/db/repositories";
 import { GittensoryMcp } from "../../src/mcp/server";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
@@ -14,6 +14,7 @@ const TOOLS_WITH_OUTPUT_SCHEMA = [
   "gittensory_get_burden_forecast",
   "gittensory_get_repo_outcome_patterns",
   "gittensory_get_outcome_calibration",
+  "gittensory_get_recommendation_quality",
   "gittensory_get_contributor_profile",
   "gittensory_get_decision_pack",
   "gittensory_monitor_open_prs",
@@ -406,6 +407,72 @@ describe("MCP tool calls return schema-valid structured content", () => {
     expect(data.slop).toBeTruthy();
     expect(data.recommendations).toBeTruthy();
     expect(Array.isArray(data.signals)).toBe(true);
+  });
+
+  it("gittensory_get_recommendation_quality returns repo-scoped recommendation outcome quality", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "demo", full_name: "octo/demo", private: false, owner: { login: "octo" }, default_branch: "main" });
+    await createAgentRun(env, {
+      id: "quality-run",
+      objective: "Track recommendation quality",
+      actorLogin: "alice",
+      surface: "mcp",
+      mode: "copilot",
+      status: "completed",
+      dataQualityStatus: "complete",
+      payload: {},
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-02T00:00:00.000Z",
+    } as any);
+    await replaceAgentActions(env, "quality-run", [
+      {
+        id: "quality-action",
+        runId: "quality-run",
+        actionType: "prepare_pr_packet",
+        targetRepoFullName: "octo/demo",
+        targetPullNumber: null,
+        targetIssueNumber: null,
+        status: "recommended",
+        recommendation: "pursue",
+        why: ["fixture"],
+        blockedBy: [],
+        publicSafeSummary: "fixture",
+        approvalRequired: false,
+        safetyClass: "private",
+        payload: {},
+        createdAt: "2026-06-01T00:00:00.000Z",
+      },
+    ] as any);
+    await upsertAgentRecommendationOutcome(env, {
+      runId: "quality-run",
+      actionId: "quality-action",
+      actorLogin: "alice",
+      actionType: "prepare_pr_packet",
+      surface: "mcp",
+      source: "inferred",
+      outcomeState: "merged",
+      confidence: "high",
+      outcomeTargetType: "pull_request",
+      outcomeRepoFullName: "octo/demo",
+      targetRepoFullName: "octo/demo",
+      maintainerLane: false,
+      reason: "test",
+      metadata: {},
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-02T00:00:00.000Z",
+    } as any);
+    const { client } = await connectTestClient(env);
+    const result = await client.callTool({
+      name: "gittensory_get_recommendation_quality",
+      arguments: { owner: "octo", repo: "demo", windowDays: 30 },
+    });
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.repoFullName).toBe("octo/demo");
+    expect(data.windowDays).toBe(30);
+    expect(data.totals).toBeTruthy();
+    expect(Array.isArray(data.failureCategories)).toBe(true);
+    expect(Array.isArray(data.trends)).toBe(true);
   });
 
   it("gittensory_simulate_open_pr_pressure returns strategy options for a contributor repo", async () => {

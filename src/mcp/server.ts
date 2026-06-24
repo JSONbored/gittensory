@@ -69,6 +69,7 @@ import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast
 import { buildMcpClientTelemetry } from "../services/client-telemetry";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
 import { buildRepoOutcomeCalibration, outcomeCalibrationSummary } from "../services/outcome-calibration";
+import { buildRepoRecommendationQuality, recommendationQualitySummary } from "../services/recommendation-quality";
 import { buildContributorOpenPrPressureResponse } from "../services/open-pr-pressure-response";
 import { buildExtensionOpenPrPressure, extensionOpenPrPressureHeadline } from "../signals/extension-open-pr-pressure";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
@@ -1068,6 +1069,17 @@ export class GittensoryMcp {
     );
 
     server.registerTool(
+      "gittensory_get_recommendation_quality",
+      {
+        description:
+          "Return recommendation quality calibration for a repo from the agent recommendation-outcome ledger: positive vs negative outcomes, failure category mix, and trends. Maintainer-authenticated; measurement only.",
+        inputSchema: ownerRepoWindowShape,
+        outputSchema: maintainerMeasurementReportOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getRecommendationQuality(input)),
+    );
+
+    server.registerTool(
       "gittensory_get_contributor_profile",
       {
         description: "Return an evidence-backed Gittensory contributor profile for a GitHub login.",
@@ -1962,6 +1974,16 @@ export class GittensoryMcp {
     const report = await buildRepoOutcomeCalibration(this.env, fullName, input.windowDays);
     return {
       summary: outcomeCalibrationSummary(fullName, report.slop),
+      data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getRecommendationQuality(input: { owner: string; repo: string; windowDays?: number | undefined }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoAccess(fullName);
+    const report = await buildRepoRecommendationQuality(this.env, fullName, input.windowDays);
+    return {
+      summary: recommendationQualitySummary(report),
       data: report as unknown as Record<string, unknown>,
     };
   }

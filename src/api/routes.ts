@@ -224,6 +224,7 @@ import { buildSlopAssessment, buildIssueSlopAssessment, SLOP_RUBRIC_MARKDOWN, IS
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
 import { buildMaintainerActivationPreview, recommendedAdvisoryActivationSettings } from "../services/maintainer-activation";
 import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
+import { buildRepoRecommendationQuality } from "../services/recommendation-quality";
 import { loadGatePrecisionReport } from "../services/gate-precision";
 import { computeOpsStats, isOpsEnabled } from "../review/ops-wire";
 import { computeParityReadiness, isParityAuditEnabled } from "../review/parity-wire";
@@ -2180,6 +2181,17 @@ export function createApp() {
     const windowDaysRaw = Number(c.req.query("windowDays"));
     const windowDays = windowDaysRaw > 0 ? windowDaysRaw : undefined;
     return c.json(await buildRepoOutcomeCalibration(c.env, fullName, windowDays));
+  });
+
+  // #577 recommendation quality: are agent recommendations for this repo leading to positive outcomes?
+  // Read-only measurement over agent_recommendation_outcomes. Optional ?windowDays bounds the window; defaults to 90.
+  app.get("/v1/repos/:owner/:repo/recommendation-quality", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoMaintainer(c, fullName);
+    if (gate instanceof Response) return gate;
+    const windowDaysRaw = Number(c.req.query("windowDays"));
+    const windowDays = windowDaysRaw > 0 ? windowDaysRaw : undefined;
+    return c.json(await buildRepoRecommendationQuality(c.env, fullName, windowDays));
   });
 
   // #554 gate false-positive telemetry: is the gate PRECISE? Read-only measurement of blocked-then-merged
