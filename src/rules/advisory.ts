@@ -10,6 +10,7 @@ import type {
   RepositoryRecord,
 } from "../types";
 import type { CollisionCluster, CollisionReport } from "../signals/engine";
+import { isDuplicateClusterWinner } from "../signals/duplicate-winner";
 import { nowIso } from "../utils/json";
 
 export type GateCheckConclusion = "success" | "failure" | "action_required" | "neutral" | "skipped";
@@ -45,9 +46,10 @@ export type GateCheckPolicy = {
   authorMergedPrCount?: number | undefined;
   /** The PR author's closed-unmerged PR count in THIS repo (repeat offender = >= 3). Used only by grace. */
   authorClosedUnmergedPrCount?: number | undefined;
-  /** ONLY confirmed gittensor contributors can be hard-blocked. When explicitly `false`, the gate is
-   *  forced to a neutral (non-blocking) conclusion regardless of blockers — gittensory must never block
-   *  a non-confirmed contributor. `undefined` = the caller did not gate on contributor status. */
+  /** The PR author's confirmed-Gittensor status. Carried for context/telemetry only — it no longer
+   *  changes the gate verdict (every author is gated identically; a configured blocker fails the gate
+   *  regardless of confirmed status, which now affects only on-chain scoring). `undefined` = unresolved.
+   *  (#gate-nonconfirmed) */
   confirmedContributor?: boolean | undefined;
 };
 
@@ -79,7 +81,15 @@ export function buildRepositoryAdvisory(repo: RepositoryRecord | null, fullName:
 export function buildPullRequestAdvisory(
   repo: RepositoryRecord | null,
   pr: PullRequestRecord | null,
-  context: { otherOpenPullRequests?: PullRequestRecord[]; requireLinkedIssue?: boolean } = {},
+  context: {
+    otherOpenPullRequests?: PullRequestRecord[];
+    requireLinkedIssue?: boolean;
+    /** Duplicate-winner adjudication (#dup-winner). When true AND this PR is the cluster winner (the lowest
+     *  open sibling number), the `duplicate_pr_risk` finding is suppressed so the winner is not gate-blocked /
+     *  closed as a duplicate. Default/false ⇒ every duplicate sibling keeps the finding (byte-identical). The
+     *  caller sets this to `env.GITTENSORY_DUPLICATE_WINNER === "true"`. */
+    duplicateWinnerEnabled?: boolean;
+  } = {},
 ): Advisory {
   const repoFullName = pr?.repoFullName ?? repo?.fullName ?? "unknown/unknown";
   const targetKey = pr ? `${repoFullName}#${pr.number}` : `${repoFullName}#unknown`;
@@ -104,7 +114,7 @@ export function buildPullRequestAdvisory(
       action: "Re-deliver the webhook or wait for the next sync.",
     });
   } else {
-    addPullRequestFindings(repo, pr, findings, context.otherOpenPullRequests ?? [], Boolean(context.requireLinkedIssue));
+    addPullRequestFindings(repo, pr, findings, context.otherOpenPullRequests ?? [], Boolean(context.requireLinkedIssue), Boolean(context.duplicateWinnerEnabled));
   }
   return advisory("pull_request", targetKey, repoFullName, findings, "Pull request advisory generated.", pr?.number, undefined, pr?.headSha ?? undefined);
 }
@@ -341,6 +351,19 @@ export function evaluateGateCheck(advisoryResult: Advisory, policy: GateCheckPol
       warnings,
     };
   }
+  // Fail-CLOSED AI hold (#ai-fail-closed): the block-mode AI review could not return a usable verdict, so the
+  // gate is HELD (neutral) for a human rather than passed automatically. NEVER a failure → a contributor PR is
+  // never auto-CLOSED because an AI model hiccupped; it re-evaluates on the next update.
+  if (advisoryResult.findings.some((finding) => finding.code === "ai_review_inconclusive")) {
+    return {
+      enabled: true,
+      conclusion: "neutral",
+      title: "Gittensory Gate — held for human review",
+      summary: "The AI review could not be completed for this change, so the gate is held for a human reviewer rather than passed automatically. It re-evaluates on the next update.",
+      blockers: [],
+      warnings,
+    };
+  }
   // Merge-readiness composite (#551): when set, escalate every sub-gate to its mode so they roll into one
   // pass/fail. When off, this is a no-op and each sub-gate keeps its own mode.
   const effective = applyMergeReadinessGate(policy);
@@ -348,19 +371,12 @@ export function evaluateGateCheck(advisoryResult: Advisory, policy: GateCheckPol
   const qualityBlocker = buildQualityGateBlocker(effective);
   const slopBlocker = buildSlopGateBlocker(effective);
   const blockers = [...configuredBlockers, ...(qualityBlocker ? [qualityBlocker] : []), ...(slopBlocker ? [slopBlocker] : [])];
-  // Contributor-gated: ONLY confirmed Gittensor contributors can be hard-blocked. For everyone else the
-  // gate is neutral (non-blocking) + the minimal advisory comment — gittensory must never block a
-  // non-confirmed contributor, regardless of what blockers fired.
-  if (effective.confirmedContributor === false && blockers.length > 0) {
-    return {
-      enabled: true,
-      conclusion: "neutral",
-      title: "Gittensory Gate — advisory only",
-      summary: "The PR author is not a confirmed Gittensor contributor, so gittensory does not block this PR. Findings stay advisory.",
-      blockers: [],
-      warnings,
-    };
-  }
+  // Non-confirmed contributors are gated NORMALLY (real blockers → failure → one-shot close; clean → success →
+  // merge), the SAME as confirmed contributors: the review + CI + guardrail vet every PR, and confirmed-status
+  // affects only on-chain SCORING, never the merge/close decision. (#gate-nonconfirmed) The old blanket
+  // "never block a non-confirmed contributor" forced every non-confirmed PR with a blocker to a neutral → HELD
+  // state, burying the maintainer in manual review. Genuine newcomers stay protected by the opt-in first-time-
+  // contributor grace immediately below; everyone else is auto-merged/closed so the queue stays automated.
   // First-time-contributor grace (#552): when the maintainer opted in, a genuine newcomer (0 merged PRs in
   // this repo) who is NOT a repeat offender (< 3 closed-unmerged PRs) gets a neutral, non-blocking gate even
   // when blockers fired — they keep the advisory findings without the hard block. Repeat offenders, authors
@@ -487,6 +503,7 @@ function addPullRequestFindings(
   findings: AdvisoryFinding[],
   otherOpenPullRequests: PullRequestRecord[],
   requireLinkedIssue: boolean,
+  duplicateWinnerEnabled: boolean,
 ): void {
   if (pr.state !== "open") {
     findings.push({
@@ -508,7 +525,12 @@ function addPullRequestFindings(
     const overlappingPrs = otherOpenPullRequests.filter((otherPr) =>
       otherPr.linkedIssues.some((issueNumber) => pr.linkedIssues.includes(issueNumber)),
     );
-    if (overlappingPrs.length > 0) {
+    // Duplicate-winner adjudication (#dup-winner): when the flag is ON and this PR is the cluster winner (the
+    // lowest open sibling number), SKIP the duplicate finding — suppressing it suppresses the gate failure, so
+    // the winner survives while the losers (which still see overlap > 0 and a lower sibling) keep the finding.
+    // `overlappingPrs` is derived from the OPEN-only `otherOpenPullRequests`, so the numbers are open siblings.
+    // Flag-OFF (default) short-circuits ⇒ the finding is pushed exactly as before (byte-identical).
+    if (overlappingPrs.length > 0 && !(duplicateWinnerEnabled && isDuplicateClusterWinner(pr.number, overlappingPrs.map((otherPr) => otherPr.number)))) {
       findings.push({
         code: "duplicate_pr_risk",
         severity: "warning",
@@ -632,7 +654,9 @@ function isConfiguredGateBlocker(code: string, policy: GateCheckPolicy): boolean
   // A dual-model AI consensus defect blocks ONLY when the maintainer opted into aiReview: block. It is the
   // most conservative AI signal (two independent models, high confidence) but still confirmed-contributor
   // gated by evaluateGateCheck, and advisory by default.
-  if (code === "ai_consensus_defect") return gateMode(policy.aiReviewGateMode ?? "advisory") === "block";
+  // A consensus defect (both reviewers) OR a SPLIT (one reviewer flagged a blocker the other did not) both block
+  // when aiReviewGateMode is `block` — reviewbot's quorum: ANY reviewer rejection closes the PR. (#ai-review-split)
+  if (code === "ai_consensus_defect" || code === "ai_review_split") return gateMode(policy.aiReviewGateMode ?? "advisory") === "block";
   // A leaked-secret finding (`secret_leak`) ALWAYS hard-blocks: a committed credential must be removed and
   // rotated before merge, with no opt-in. This finding is produced ONLY by the flag-gated safety scan
   // (GITTENSORY_REVIEW_SAFETY); when the flag is off the finding never exists, so this branch is unreachable and the

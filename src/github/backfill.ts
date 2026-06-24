@@ -37,6 +37,7 @@ import {
   upsertRepoSyncState,
   upsertRepositoryFromGitHub,
   persistRepoSnapshot,
+  extractLinkedIssueNumbers,
 } from "../db/repositories";
 import type {
   ContributorRepoStatRecord,
@@ -92,6 +93,7 @@ type GitHubCheckRunPayload = {
   completed_at?: string | null;
   details_url?: string | null;
   html_url?: string | null;
+  app?: { id?: number | null; slug?: string | null } | null;
 };
 
 type BackfillLimits = {
@@ -1905,7 +1907,12 @@ async function fetchPullRequestChecks(
   return { check_runs: checkRuns };
 }
 
-const CI_FAILING_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
+// NOTE: "action_required" is deliberately NOT here. A fork PR awaiting maintainer "Approve and run" surfaces its
+// required checks with conclusion="action_required" — that is NOT a failure, it is awaiting-approval. Treating it
+// as failing made ciState="failed" → the agent one-shot CLOSED the fork ("CI is failing") even though no check
+// ever ran. Excluded here, an action_required check falls through to anyPending → ciState="pending" → the PR is
+// DEFERRED/held (never closed) until its runs are approved (manually, or auto-approved by fork CI auto-approval). (#fork-action-required)
+const CI_FAILING_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "startup_failure"]);
 const CI_PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 // The bot's OWN check-runs — it posts these (in_progress, then concluded) as PART OF reviewing. They are NOT
 // "CI to wait on": counting them self-deadlocks (the review waits for all CI to finish; these only finish when
@@ -1913,6 +1920,12 @@ const CI_PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 // (#gate-self-deadlock — froze green-CI PRs as "CI still running". The Gate alone wasn't enough: the Context
 // check is posted the same way and re-created the deadlock, so exclude ALL bot-owned checks.)
 const BOT_OWNED_CHECK_NAMES = new Set<string>([GITTENSORY_GATE_CHECK_NAME, GITTENSORY_CONTEXT_CHECK_NAME]);
+
+function isOwnGitHubAppCheckRun(env: Env, run: GitHubCheckRunPayload): boolean {
+  const appSlug = typeof run.app?.slug === "string" ? run.app.slug.trim().toLowerCase() : "";
+  const ownSlug = env.GITHUB_APP_SLUG.trim().toLowerCase();
+  return ownSlug.length > 0 && appSlug === ownSlug && BOT_OWNED_CHECK_NAMES.has(run.name);
+}
 
 export type LiveCiAggregate = {
   ciState: "passed" | "failed" | "pending" | "unverified";
@@ -1929,9 +1942,10 @@ export type LiveCiAggregate = {
 /**
  * RC2 best-effort fetch of the base branch's branch-protection REQUIRED status-check contexts. Returns the set
  * of required context names (covering both the legacy `contexts` array and the newer `checks[].context` shape),
- * or `null` when none can be determined — a 404 (no protection / no required checks), a 403 (token lacks
- * admin:repo, common for installations/forks), or any other error. `null`/empty makes fetchLiveCiAggregate fall
- * back to folding ALL red checks into the gate, so a fetch failure can never silently pass a required red check.
+ * or `null` when none can be determined: a 404 (no protection / no required checks), a 403 (token lacks
+ * `administration:read`, common for installations/forks), or any other error. `null`/empty makes
+ * fetchLiveCiAggregate fall back to folding ALL red checks into the gate, so a fetch failure can never silently
+ * pass a required red check.
  */
 export async function fetchRequiredStatusContexts(env: Env, repoFullName: string, baseRef: string | null | undefined, token: string | undefined): Promise<Set<string> | null> {
   if (!baseRef) return null;
@@ -1941,7 +1955,7 @@ export async function fetchRequiredStatusContexts(env: Env, repoFullName: string
     `/branches/${encodeURIComponent(baseRef)}/protection/required_status_checks`,
     token,
   ).catch(() => undefined);
-  if (!result) return null; // 404 (no protection) / 403 (no admin) — treat as "unknown".
+  if (!result) return null; // 404 / 403 (no admin:read) / error → conservative fold-all.
   const names = new Set<string>();
   for (const ctx of result.data.contexts ?? []) {
     if (typeof ctx === "string" && ctx.trim().length > 0) names.add(ctx);
@@ -1980,6 +1994,10 @@ export async function fetchLiveCiAggregate(
   const nonRequiredFailingDetails: LiveCiAggregate["nonRequiredFailingDetails"] = [];
   let total = 0;
   let anyPending = false;
+  // Track which required context names actually appear in any API result. An absent required context
+  // (never queued, in-progress, or complete) has no entry to push anyPending — without this guard it
+  // would be silently ignored and ciState could become "passed" while it never ran.
+  const seenContextNames = enforceRequiredOnly ? new Set<string>() : null;
 
   // 1) Check-runs (GitHub Actions jobs, CodeQL, app checks).
   for (let page = 1; page <= PR_DETAIL_MAX_PAGES; page += 1) {
@@ -1991,7 +2009,8 @@ export async function fetchLiveCiAggregate(
     ).catch(() => undefined);
     if (!result) break;
     for (const run of result.data.check_runs ?? []) {
-      if (BOT_OWNED_CHECK_NAMES.has(run.name)) continue; // never wait on the bot's own Gate/Context checks (see above)
+      seenContextNames?.add(run.name); // mark BEFORE bot-check skip: a bot-owned required context is "seen"
+      if (isOwnGitHubAppCheckRun(env, run)) continue; // never wait on the bot's own Gate/Context check-runs (see above)
       total += 1;
       const conclusion = (run.conclusion ?? "").toLowerCase();
       const status = (run.status ?? "").toLowerCase();
@@ -2019,8 +2038,8 @@ export async function fetchLiveCiAggregate(
   ).catch(() => undefined);
   for (const ctx of statusResult?.data.statuses ?? []) {
     const name = ctx.context ?? "status";
-    if (BOT_OWNED_CHECK_NAMES.has(name)) continue; // never wait on the bot's own Gate/Context checks (see #gate-self-deadlock above)
     total += 1;
+    seenContextNames?.add(name);
     const state = (ctx.state ?? "").toLowerCase();
     if (state === "failure" || state === "error") {
       const summary = typeof ctx.description === "string" ? ctx.description.trim().slice(0, 200) : "";
@@ -2030,6 +2049,15 @@ export async function fetchLiveCiAggregate(
       // passing
     } else if (isRequired(name)) {
       anyPending = true; // pending — only a REQUIRED context holds the gate
+    }
+  }
+
+  // A required context that never appeared in any result is not safe to treat as passed — count it as pending
+  // so the gate waits rather than approving a PR whose required CI never ran (e.g. a workflow that doesn't
+  // trigger on forks, or a check that was skipped).
+  if (seenContextNames) {
+    for (const ctx of requiredContexts!) {
+      if (!seenContextNames.has(ctx)) anyPending = true;
     }
   }
 
@@ -2053,6 +2081,29 @@ export async function fetchLivePullRequestMergeState(env: Env, repoFullName: str
   return result?.data.mergeable_state ?? undefined;
 }
 
+/** Resolve the OPEN PRs associated with a commit SHA via the REST `GET /repos/{owner}/{repo}/commits/{sha}/pulls`
+ *  endpoint. This is the only PR↔commit resolution that works for FORK (cross-repo) PRs, whose CI-completion
+ *  webhooks (`check_suite`/`check_run`) carry an EMPTY `pull_requests[]`. Returns the de-duplicated open PR numbers.
+ *  Best-effort: an empty/whitespace SHA or any API error yields `[]` (the caller must never stall a PR on a hiccup). */
+export async function fetchOpenPullRequestNumbersForCommit(env: Env, repoFullName: string, commitSha: string, token: string | undefined): Promise<number[]> {
+  const sha = commitSha.trim();
+  if (!sha) return [];
+  // GET /commits/{sha}/pulls returns the PRs (incl. cross-repo forks) whose head is this commit, on the default
+  // `application/vnd.github+json` accept that githubRestHeaders already sends.
+  const result = await githubJsonWithHeaders<Array<{ number?: number | null; state?: string | null }>>(
+    env,
+    repoFullName,
+    `/commits/${encodeURIComponent(sha)}/pulls?per_page=100`,
+    token,
+  ).catch(() => undefined);
+  if (!result) return [];
+  const numbers = result.data
+    .filter((pr) => pr?.state === "open")
+    .map((pr) => pr?.number)
+    .filter((value): value is number => typeof value === "number");
+  return [...new Set(numbers)];
+}
+
 /** RC1 (idempotent reviews): the PR's LIVE reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED) via
  *  GraphQL. The STORED reviewDecision is only written by the open-PR backfill and goes stale, so the action
  *  planner's approve/request-changes dedup was blind and re-posted a review every cycle — the re-review loop.
@@ -2065,6 +2116,38 @@ export async function fetchLivePullRequestReviewDecision(env: Env, repoFullName:
   const query = `query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { pullRequest(number: ${prNumber}) { reviewDecision } } }`;
   const result = await githubGraphQl<{ data?: { repository?: { pullRequest?: { reviewDecision?: string | null } | null } | null } }>(env, query, token).catch(() => undefined);
   return result?.data?.repository?.pullRequest?.reviewDecision ?? undefined;
+}
+
+/** The deterministic linked-issue facts the hard-rule evaluator needs (labels / assignees / open-state). */
+export type LinkedIssueFactsResult = { number: number; labels: string[]; assignees: string[]; state: string };
+
+/**
+ * FETCH the facts for one linked issue via the REST issues endpoint. FAIL-OPEN: any fetch/parse error returns
+ * undefined so the caller skips that issue — a deterministic auto-close must NEVER fire (or be blocked) on a
+ * transient fetch failure. Uses the same authenticated REST client + public-token 404-fallback as the other
+ * live fetches. (Note: GitHub's issues endpoint also returns pull requests, which carry a `pull_request` field;
+ * a PR number passed here would simply fail the rules — we only treat real issues' labels/assignees.)
+ */
+export async function fetchLinkedIssueFacts(env: Env, repoFullName: string, issueNumber: number, token: string | undefined): Promise<LinkedIssueFactsResult | undefined> {
+  const result = await githubJsonWithHeaders<{
+    number?: number;
+    state?: string | null;
+    labels?: Array<{ name?: string | null } | string | null> | null;
+    assignees?: Array<{ login?: string | null } | null> | null;
+  }>(env, repoFullName, `/issues/${issueNumber}`, token).catch(() => undefined);
+  if (!result) return undefined;
+  const data = result.data;
+  const labels = (data.labels ?? []).flatMap((label) => {
+    if (typeof label === "string") return label.length > 0 ? [label] : [];
+    return label?.name ? [label.name] : [];
+  });
+  const assignees = (data.assignees ?? []).flatMap((assignee) => (assignee?.login ? [assignee.login] : []));
+  return {
+    number: data.number ?? issueNumber,
+    labels,
+    assignees,
+    state: String(data.state ?? "open").toLowerCase(),
+  };
 }
 
 async function fetchPullRequestDetailsFromGraphQl(
@@ -2621,10 +2704,6 @@ function countObservedLabels(records: Array<{ labels?: Array<{ name?: string }> 
   /* v8 ignore stop */
 }
 
-function extractLinkedIssueNumbers(text: string): number[] {
-  const matches = [...text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)];
-  return [...new Set(matches.map((match) => Number(match[1])).filter((value) => Number.isInteger(value) && value > 0))];
-}
 
 function topItems(values: string[], limit: number): string[] {
   const counts = new Map<string, number>();

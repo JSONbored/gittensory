@@ -2525,6 +2525,18 @@ export async function markPullRequestMergeBlocked(env: Env, fullName: string, nu
     .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.number, number), eq(pullRequests.headSha, headSha)));
 }
 
+/** Re-approval idempotency: record the head SHA the bot just auto-approved. The planner skips the `approve`
+ *  disposition while approved_head_sha == headSha (this commit is already approved by the bot). Scoped to
+ *  headSha so a later commit (the live head no longer matches) lets the bot re-approve the new code without
+ *  any manual reset. Mirrors markPullRequestMergeBlocked. */
+export async function markPullRequestApproved(env: Env, fullName: string, number: number, headSha: string): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .update(pullRequests)
+    .set({ approvedHeadSha: headSha, updatedAt: nowIso() })
+    .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.number, number), eq(pullRequests.headSha, headSha)));
+}
+
 export async function getIssue(env: Env, fullName: string, number: number): Promise<IssueRecord | null> {
   const db = getDb(env.DB);
   const [row] = await db.select().from(issues).where(and(eq(issues.repoFullName, fullName), eq(issues.number, number))).limit(1);
@@ -2611,6 +2623,19 @@ export async function listOpenPullRequests(env: Env, fullName: string): Promise<
 export async function countOpenPullRequests(env: Env, fullName: string): Promise<number> {
   const db = getDb(env.DB);
   const [row] = await db.select({ count: sql<number>`count(*)` }).from(pullRequests).where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.state, "open")));
+  /* v8 ignore next -- SQL aggregate count always returns one row; fallback protects D1 driver anomalies. */
+  return Number(row?.count ?? 0);
+}
+
+// Anti-farming (#anti-gaming-flood): how many PRs this author has SUBMITTED to this repo since `sinceIso` (ANY
+// state — open/merged/closed), so a flood that merges fast is still caught. createdAt is the row-insert time
+// (≈ when gittensory first saw the PR), a good proxy for submission time on live webhook-driven PRs.
+export async function countRecentSubmissionsByAuthor(env: Env, fullName: string, authorLogin: string, sinceIso: string): Promise<number> {
+  const db = getDb(env.DB);
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(pullRequests)
+    .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.authorLogin, authorLogin), gte(pullRequests.createdAt, sinceIso)));
   /* v8 ignore next -- SQL aggregate count always returns one row; fallback protects D1 driver anomalies. */
   return Number(row?.count ?? 0);
 }
@@ -3930,6 +3955,7 @@ function toPullRequestRecordFromRow(row: typeof pullRequests.$inferSelect): Pull
     mergeAttemptCount: row.mergeAttemptCount,
     mergeBlockedSha: row.mergeBlockedSha,
     mergeBlockedReason: row.mergeBlockedReason,
+    approvedHeadSha: row.approvedHeadSha,
   };
 }
 
@@ -5348,9 +5374,30 @@ function loginMatches(column: unknown, login: string) {
   return sql`lower(${column}) = ${login.toLowerCase()}`;
 }
 
-export function extractLinkedIssueNumbers(text: string): number[] {
-  const matches = [...text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)];
-  return [...new Set(matches.map((match) => Number(match[1])).filter((value) => Number.isInteger(value) && value > 0))];
+export const MAX_LINKED_ISSUE_NUMBERS = 50;
+
+export type LinkedIssueExtractionResult = {
+  numbers: number[];
+  overflow: boolean;
+};
+
+export function extractLinkedIssueNumbersWithOverflow(text: string, limit = MAX_LINKED_ISSUE_NUMBERS): LinkedIssueExtractionResult {
+  const normalizedLimit = Math.max(0, Math.floor(limit));
+
+  const linkedIssues: number[] = [];
+  const seen = new Set<number>();
+  for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)) {
+    const value = Number(match[1]);
+    if (!Number.isInteger(value) || value <= 0 || seen.has(value)) continue;
+    seen.add(value);
+    if (linkedIssues.length >= normalizedLimit) return { numbers: linkedIssues, overflow: true };
+    linkedIssues.push(value);
+  }
+  return { numbers: linkedIssues, overflow: false };
+}
+
+export function extractLinkedIssueNumbers(text: string, limit = MAX_LINKED_ISSUE_NUMBERS): number[] {
+  return extractLinkedIssueNumbersWithOverflow(text, limit).numbers;
 }
 
 function extractLinkedPrNumbers(text: string): number[] {

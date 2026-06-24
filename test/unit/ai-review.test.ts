@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __aiReviewInternals,
-  AI_CONSENSUS_FLOOR,
   BEST_REVIEW_MODELS,
   runGittensoryAiReview,
   type GittensoryAiReviewInput,
@@ -164,7 +163,15 @@ describe("runGittensoryAiReview block mode (consensus)", () => {
     expect(result.status).toBe("ok");
     if (result.status !== "ok") return;
     expect(result.consensusDefect).toBeNull();
+    expect(result.inconclusive).toBe(true); // FAIL-CLOSED: a missing second opinion holds the PR, never passes it
     expect(result.advisoryNotes).not.toBeNull(); // notes still come from the one parseable opinion
+  });
+
+  it("a clean dual review is NOT inconclusive (both models parsed, neither blocks → passes)", async () => {
+    const env = envWith(async () => ({ response: reviewJson({ present: false }) }));
+    const result = await runGittensoryAiReview(env, { ...baseInput, mode: "block" });
+    expect(result.status === "ok" && result.consensusDefect).toBeNull();
+    expect(result.status === "ok" && result.inconclusive).toBe(false);
   });
 
   it("block mode with BYOK: provider writes the advisory, the free Workers-AI pair drives consensus", async () => {
@@ -304,21 +311,21 @@ describe("pure helpers", () => {
 
   it("consensusDefectOf requires a concrete blocker in BOTH reviews and drops unsafe titles", () => {
     const r = (blockers: string[]) => ({ assessment: "", suggestions: [], nits: [], blockers });
-    expect(consensusDefectOf(r(["Null deref in src/a.ts"]), r(["Null deref in src/a.ts"]), AI_CONSENSUS_FLOOR)).not.toBeNull();
-    expect(consensusDefectOf(r([]), r(["Null deref"]), AI_CONSENSUS_FLOOR)).toBeNull(); // one has no blocker → split, not consensus
-    expect(consensusDefectOf(r(["Null deref"]), r([]), AI_CONSENSUS_FLOOR)).toBeNull();
-    expect(consensusDefectOf(r(["Boost your reward payout"]), r(["Boost your reward payout"]), AI_CONSENSUS_FLOOR)).toBeNull(); // unsafe → dropped
+    expect(consensusDefectOf(r(["Null deref in src/a.ts"]), r(["Null deref in src/a.ts"]))).not.toBeNull();
+    expect(consensusDefectOf(r([]), r(["Null deref"]))).toBeNull(); // one has no blocker → split, not consensus
+    expect(consensusDefectOf(r(["Null deref"]), r([]))).toBeNull();
+    expect(consensusDefectOf(r(["Boost your reward payout"]), r(["Boost your reward payout"]))).toBeNull(); // unsafe → dropped
   });
 
   it("consensusDefectOf falls back to b's blocker when a's is blank", () => {
     const a = { assessment: "", suggestions: [], nits: [], blockers: [""] };
     const b = { assessment: "", suggestions: [], nits: [], blockers: ["Race condition in src/x.ts"] };
-    expect(consensusDefectOf(a, b, AI_CONSENSUS_FLOOR)?.title).toBe("Race condition in src/x.ts");
+    expect(consensusDefectOf(a, b)?.title).toBe("Race condition in src/x.ts");
   });
 
   it("consensusDefectOf uses the default title + detail when BOTH reviewers' blockers are blank", () => {
     const blank = { assessment: "", suggestions: [], nits: [], blockers: [""] };
-    const out = consensusDefectOf(blank, { ...blank, blockers: [""] }, AI_CONSENSUS_FLOOR);
+    const out = consensusDefectOf(blank, { ...blank, blockers: [""] });
     expect(out?.title).toContain("AI reviewers agree"); // both blockers[0] falsy → default title
     expect(out?.detail).toContain("independently flagged"); // joined detail empty → default detail
   });
@@ -349,11 +356,12 @@ describe("pure helpers", () => {
     const assessmentOnly = composeAdvisoryNotes([review({ assessment: "Looks good." })]);
     expect(assessmentOnly).toBe("Looks good.");
     const nitsOnly = composeAdvisoryNotes([review({ nits: ["Add a test."] })]);
-    expect(nitsOnly).toContain("<summary>Nits");
+    expect(nitsOnly).toContain("**Nits (1)**");
+    expect(nitsOnly).not.toContain("<details>");
     expect(nitsOnly).not.toContain("**Blockers**");
     const blockersOnly = composeAdvisoryNotes([review({ blockers: ["Null deref in src/a.ts."] })]);
     expect(blockersOnly).toContain("**Blockers**");
-    expect(blockersOnly).not.toContain("<summary>Nits");
+    expect(blockersOnly).not.toContain("**Nits");
   });
 
   it("composeAdvisoryNotes merges + dedupes blockers/nits across two reviewers and renders both sections", () => {
@@ -363,7 +371,8 @@ describe("pure helpers", () => {
     expect(out).toContain("Solid change."); // first reviewer's assessment wins
     expect(out).toContain("**Blockers**");
     expect(out).toContain("Off-by-one in the loop bound.");
-    expect(out).toContain("<summary>Nits");
+    expect(out).toContain("**Nits (3)**");
+    expect(out).not.toContain("<details>");
     expect(out).toContain("Tighten the type."); // nits + suggestions merged
     // the shared blocker + the shared nit/suggestion each appear exactly once (dedupe across reviewers)
     expect(out.match(/Null deref in src\/a\.ts\./g)?.length).toBe(1);
