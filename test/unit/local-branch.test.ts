@@ -122,6 +122,72 @@ describe("local branch analysis", () => {
     expect(analysis.scorePreview.blockedBy).toEqual(expect.arrayContaining([expect.objectContaining({ code: "open_issue_threshold" })]));
   });
 
+  it("threads contributor-history validity gates from outcome history (#808)", () => {
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        body: "Fixes #7",
+        changedFiles: [{ path: "src/cache.ts", additions: 42, deletions: 4, status: "modified" }],
+        localScorer: { mode: "external_command", sourceTokenScore: 48, totalTokenScore: 80, sourceLines: 46 },
+      },
+      repo,
+      issues: [{ repoFullName: repo.fullName, number: 7, title: "Cache refresh fails", state: "open", labels: ["bug"], linkedPrs: [] }],
+      pullRequests: [],
+      profile,
+      outcomeHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+    expect(analysis.scorePreview.gates.mergedPullRequests).toBe(5);
+    expect(analysis.scorePreview.gates.validSolvedIssues).toBe(3);
+    expect(analysis.scorePreview.gates.issueCredibility).toBe(1);
+    expect(analysis.scorePreview.scoreEstimate.mergedHistoryMultiplier).toBe(1);
+    expect(analysis.scorePreview.scoreEstimate.issueDiscoveryHistoryMultiplier).toBe(1);
+  });
+
+  it("prefers repo-scoped outcome counts over global totals when both are present (#808)", () => {
+    const repoScopedHistory: ContributorOutcomeHistory = {
+      ...outcomeHistory,
+      totals: {
+        ...outcomeHistory.totals,
+        mergedPullRequests: 5,
+        validSolvedIssues: 3,
+        issueCredibility: 1,
+      },
+      repoOutcomes: [
+        {
+          ...outcomeHistory.repoOutcomes[0]!,
+          mergedPullRequests: 1,
+          validSolvedIssues: 0,
+          issueCredibility: 0.4,
+        },
+      ],
+    };
+    const analysis = buildLocalBranchAnalysis({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        body: "Fixes #7",
+        changedFiles: [{ path: "src/cache.ts", additions: 42, deletions: 4, status: "modified" }],
+        localScorer: { mode: "external_command", sourceTokenScore: 48, totalTokenScore: 80, sourceLines: 46 },
+      },
+      repo,
+      issues: [{ repoFullName: repo.fullName, number: 7, title: "Cache refresh fails", state: "open", labels: ["bug"], linkedPrs: [] }],
+      pullRequests: [],
+      profile,
+      outcomeHistory: repoScopedHistory,
+      scoringSnapshot,
+      scoringProfile,
+    });
+    expect(analysis.scorePreview.gates.mergedPullRequests).toBe(1);
+    expect(analysis.scorePreview.gates.validSolvedIssues).toBe(0);
+    expect(analysis.scorePreview.gates.issueCredibility).toBe(0.4);
+    expect(analysis.scorePreview.scoreEstimate.mergedHistoryMultiplier).toBe(0);
+    expect(analysis.scorePreview.scoreEstimate.issueDiscoveryHistoryMultiplier).toBe(0);
+    expect(analysis.accountStateBlockers.join(" ")).toMatch(/Merged PR count|Issue-discovery history/i);
+  });
+
   it("bounds local scorer warnings before adding local findings", () => {
     const analysis = buildLocalBranchAnalysis({
       input: {

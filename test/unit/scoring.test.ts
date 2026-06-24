@@ -1498,6 +1498,10 @@ NOVELTY_BONUS_SCALAR = 3
         input: { ...baseInput, validSolvedIssues: 4, issueCredibility: 0.7 },
       });
       expect(lowIssueCredibility.scoreEstimate.issueDiscoveryHistoryMultiplier).toBe(0);
+      expect(lowIssueCredibility.blockedBy.some((b) => b.code === "issue_discovery_validity_floor")).toBe(true);
+      expect(
+        lowIssueCredibility.recommendation.actions.some((action) => /valid solved-issue history and issue credibility/i.test(action)),
+      ).toBe(true);
     });
 
     it("issue-discovery validity floor is skipped when issue-discovery is not relevant or history is unknown", () => {

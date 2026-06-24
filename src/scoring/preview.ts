@@ -725,7 +725,7 @@ function blockedByFor(input: ScorePreviewInput, repo: RepositoryRecord | null, c
           {
             code: "merged_pr_history_floor" as const,
             severity: "blocker" as const,
-            detail: `Merged PR count ${core.gates.mergedPullRequests ?? 0} is below upstream floor ${core.gates.mergedPrFloor}.`,
+            detail: `Merged PR count ${core.gates.mergedPullRequests} is below upstream floor ${core.gates.mergedPrFloor}.`,
           },
         ]
       : []),
@@ -734,7 +734,7 @@ function blockedByFor(input: ScorePreviewInput, repo: RepositoryRecord | null, c
           {
             code: "issue_discovery_validity_floor" as const,
             severity: "blocker" as const,
-            detail: `Issue-discovery history (${core.gates.validSolvedIssues ?? 0} valid solved, credibility ${roundScore(core.gates.issueCredibility ?? 0)}) is below upstream floors (${core.gates.validSolvedIssuesFloor} valid solved, ${core.gates.issueCredibilityFloor} credibility).`,
+            detail: `Issue-discovery history (${core.gates.validSolvedIssues} valid solved, credibility ${roundScore(core.gates.issueCredibility!)}) is below upstream floors (${core.gates.validSolvedIssuesFloor} valid solved, ${core.gates.issueCredibilityFloor} credibility).`,
           },
         ]
       : []),
@@ -820,25 +820,22 @@ function buildGateDeltas(current: ScoreCore, scenarios: ScoreScenarioPreview[]):
           },
         ]
       : []),
-    ...(current.scoreEstimate.mergedHistoryMultiplier !== best.scoreEstimate.mergedHistoryMultiplier ||
-    current.gates.mergedPullRequests !== best.gates.mergedPullRequests
+    ...(current.scoreEstimate.mergedHistoryMultiplier !== best.scoreEstimate.mergedHistoryMultiplier
       ? [
           {
             gate: "merged_pr_history_floor" as const,
-            current: `${current.gates.mergedPullRequests ?? "unknown"}/${current.gates.mergedPrFloor} merged PRs, multiplier ${current.scoreEstimate.mergedHistoryMultiplier}`,
-            projected: `${best.gates.mergedPullRequests ?? "unknown"}/${best.gates.mergedPrFloor} merged PRs, multiplier ${best.scoreEstimate.mergedHistoryMultiplier}`,
+            current: `${current.gates.mergedPullRequests}/${current.gates.mergedPrFloor} merged PRs, multiplier ${current.scoreEstimate.mergedHistoryMultiplier}`,
+            projected: `${best.gates.mergedPullRequests}/${best.gates.mergedPrFloor} merged PRs, multiplier ${best.scoreEstimate.mergedHistoryMultiplier}`,
             explanation: `Merged PR history changes estimated score ${current.scoreEstimate.estimatedMergedScore} -> ${best.scoreEstimate.estimatedMergedScore}.`,
           },
         ]
       : []),
-    ...(current.scoreEstimate.issueDiscoveryHistoryMultiplier !== best.scoreEstimate.issueDiscoveryHistoryMultiplier ||
-    current.gates.validSolvedIssues !== best.gates.validSolvedIssues ||
-    current.gates.issueCredibility !== best.gates.issueCredibility
+    ...(current.scoreEstimate.issueDiscoveryHistoryMultiplier !== best.scoreEstimate.issueDiscoveryHistoryMultiplier
       ? [
           {
             gate: "issue_discovery_validity_floor" as const,
-            current: `${current.gates.validSolvedIssues ?? "unknown"} valid solved / ${roundScore(current.gates.issueCredibility ?? 0)} credibility, multiplier ${current.scoreEstimate.issueDiscoveryHistoryMultiplier}`,
-            projected: `${best.gates.validSolvedIssues ?? "unknown"} valid solved / ${roundScore(best.gates.issueCredibility ?? 0)} credibility, multiplier ${best.scoreEstimate.issueDiscoveryHistoryMultiplier}`,
+            current: `${current.gates.validSolvedIssues} valid solved / ${roundScore(current.gates.issueCredibility!)} credibility, multiplier ${current.scoreEstimate.issueDiscoveryHistoryMultiplier}`,
+            projected: `${best.gates.validSolvedIssues} valid solved / ${roundScore(best.gates.issueCredibility!)} credibility, multiplier ${best.scoreEstimate.issueDiscoveryHistoryMultiplier}`,
             explanation: `Issue-discovery validity changes estimated score ${current.scoreEstimate.estimatedMergedScore} -> ${best.scoreEstimate.estimatedMergedScore}.`,
           },
         ]
