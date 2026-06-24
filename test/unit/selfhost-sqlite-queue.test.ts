@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nodeSqliteDriver } from "../../src/selfhost/d1-adapter";
 import { createSqliteQueue } from "../../src/selfhost/sqlite-queue";
 import type { JobMessage } from "../../src/types";
@@ -11,6 +11,10 @@ const msg = (t: string): JobMessage => ({ type: t }) as unknown as JobMessage;
 const typeOf = (m: JobMessage): string => (m as unknown as { type: string }).type;
 
 describe("createSqliteQueue (durable #980)", () => {
+  // Suppress audit log stdout noise.
+  beforeEach(() => { vi.spyOn(process.stdout, "write").mockImplementation(() => true); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
   it("persists + drains FIFO through the consumer", async () => {
     const driver = makeDriver();
     const seen: string[] = [];
@@ -114,6 +118,39 @@ describe("createSqliteQueue (durable #980)", () => {
     const q = createSqliteQueue(makeDriver(), async () => undefined);
     await q.stop(); // timer=null → the false branch of `if (timer) clearTimeout(timer)` is taken
     expect(q.size()).toBe(0); // still usable after a spurious stop()
+  });
+
+  it("concurrency=1 saturates after one active pump (active >= concurrency → early return)", async () => {
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    const q = createSqliteQueue(makeDriver(), async () => {
+      concurrent++;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await new Promise((r) => setTimeout(r, 15));
+      concurrent--;
+    }, { concurrency: 1, pollIntervalMs: 100_000 });
+    // sendBatch fires two void pump() calls synchronously; the second sees active=1 >= 1 and returns.
+    await q.binding.sendBatch([{ body: msg("a") }, { body: msg("b") }]);
+    await new Promise((r) => setTimeout(r, 60));
+    await q.stop();
+    expect(maxConcurrent).toBe(1);
+    expect(q.size()).toBe(0);
+  });
+
+  it("concurrency=2 allows two jobs to run simultaneously", async () => {
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    const q = createSqliteQueue(makeDriver(), async () => {
+      concurrent++;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await new Promise((r) => setTimeout(r, 15));
+      concurrent--;
+    }, { concurrency: 2, pollIntervalMs: 100_000 });
+    await q.binding.sendBatch([{ body: msg("a") }, { body: msg("b") }]);
+    await new Promise((r) => setTimeout(r, 60));
+    await q.stop();
+    expect(maxConcurrent).toBe(2);
+    expect(q.size()).toBe(0);
   });
 
   it("start() is idempotent and stop() waits for an in-flight pump", async () => {

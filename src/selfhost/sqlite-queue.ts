@@ -4,6 +4,7 @@
 // backing store differs. Single-process model: node:sqlite is synchronous + serial, so claim (SELECT→UPDATE)
 // is atomic with no row-lock dance.
 import type { SqliteDriver } from "./d1-adapter";
+import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import type { JobMessage } from "../types";
 
@@ -39,12 +40,15 @@ export interface SqliteQueueOptions {
   maxRetries?: number;
   pollIntervalMs?: number;
   backoffMs?: (attempt: number) => number;
+  /** Max concurrent `processOne()` loops. Defaults to QUEUE_CONCURRENCY env var or 1. */
+  concurrency?: number;
 }
 
 export function createSqliteQueue(driver: SqliteDriver, consume: (message: JobMessage) => Promise<void>, opts: SqliteQueueOptions = {}): DurableQueue {
   const maxRetries = opts.maxRetries ?? 5;
   const pollIntervalMs = opts.pollIntervalMs ?? 1000;
   const backoff = opts.backoffMs ?? ((attempt: number) => Math.min(60_000, 1000 * 2 ** attempt));
+  const concurrency = opts.concurrency ?? Math.max(1, Number(process.env.QUEUE_CONCURRENCY ?? "1"));
 
   driver.exec(DDL);
   // Recover jobs a crashed previous run left mid-flight → make them claimable again.
@@ -52,7 +56,7 @@ export function createSqliteQueue(driver: SqliteDriver, consume: (message: JobMe
   if (recovered) console.log(JSON.stringify({ event: "selfhost_queue_recovered", count: recovered }));
 
   let running = false;
-  let pumping = false;
+  let active = 0;  // number of concurrent pump() loops currently draining jobs
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   function enqueue(message: JobMessage, delaySeconds: number): void {
@@ -74,18 +78,21 @@ export function createSqliteQueue(driver: SqliteDriver, consume: (message: JobMe
   async function processOne(): Promise<boolean> {
     const job = claimNext();
     if (!job) return false;
+    const claimedAt = Date.now();
     let message: JobMessage;
     try {
       message = JSON.parse(job.payload) as JobMessage;
     } catch {
       driver.query(`UPDATE ${TABLE} SET status='dead', last_error='unparseable payload' WHERE id=?`, [job.id]);
       incr("gittensory_jobs_dead_total");
+      logAudit({ event: "job_dead", ts: Date.now(), job_id: job.id, latency_ms: Date.now() - claimedAt, attempts: job.attempts + 1, error: "unparseable payload" });
       return true;
     }
     try {
       await consume(message);
       driver.query(`DELETE FROM ${TABLE} WHERE id=?`, [job.id]);
       incr("gittensory_jobs_processed_total");
+      logAudit({ event: "job_complete", ts: Date.now(), job_id: job.id, payload_type: extractPayloadType(job.payload), latency_ms: Date.now() - claimedAt, attempts: job.attempts + 1 });
     } catch (error) {
       const attempts = job.attempts + 1;
       const errMsg = error instanceof Error ? error.message : "unknown error";
@@ -94,24 +101,27 @@ export function createSqliteQueue(driver: SqliteDriver, consume: (message: JobMe
         driver.query(`UPDATE ${TABLE} SET status='dead', attempts=?, last_error=? WHERE id=?`, [attempts, errMsg, job.id]);
         incr("gittensory_jobs_dead_total");
         console.error(JSON.stringify({ level: "error", event: "selfhost_job_dead", id: job.id, attempts, error: errMsg }));
+        logAudit({ event: "job_dead", ts: Date.now(), job_id: job.id, payload_type: extractPayloadType(job.payload), latency_ms: Date.now() - claimedAt, attempts, error: errMsg });
       } else {
         driver.query(`UPDATE ${TABLE} SET status='pending', attempts=?, run_after=?, last_error=? WHERE id=?`, [attempts, Date.now() + backoff(attempts), errMsg, job.id]);
+        logAudit({ event: "job_error", ts: Date.now(), job_id: job.id, payload_type: extractPayloadType(job.payload), latency_ms: Date.now() - claimedAt, attempts, error: errMsg });
       }
     }
     return true;
   }
 
   // Drains every job that is currently DUE. A retry is rescheduled into the future (run_after > now) so it is
-  // not re-claimed here — the next poll tick picks it up — which also bounds this loop.
+  // not re-claimed here — the next poll tick picks it up — which also bounds this loop. Up to `concurrency`
+  // pump loops may run simultaneously (each claims its own job row, atomic under node:sqlite's serial writes).
   async function pump(): Promise<void> {
-    if (pumping) return;
-    pumping = true;
+    if (active >= concurrency) return;
+    active++;
     try {
       while (await processOne()) {
         /* keep draining due jobs */
       }
     } finally {
-      pumping = false;
+      active--;
     }
   }
 
@@ -141,11 +151,11 @@ export function createSqliteQueue(driver: SqliteDriver, consume: (message: JobMe
     async stop() {
       running = false;
       if (timer) clearTimeout(timer);
-      while (pumping) await new Promise((r) => setTimeout(r, 10)); // let an in-flight pump finish
+      while (active > 0) await new Promise((r) => setTimeout(r, 10)); // let in-flight pumps finish
     },
     async drain() {
-      // send() fire-and-forgets a pump; wait for any in-flight pump to settle, then drain to completion.
-      while (pumping) await new Promise((r) => setTimeout(r, 5));
+      // send() fire-and-forgets a pump; wait for any in-flight pumps to settle, then drain to completion.
+      while (active > 0) await new Promise((r) => setTimeout(r, 5));
       await pump();
     },
     size() {

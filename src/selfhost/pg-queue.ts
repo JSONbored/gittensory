@@ -3,6 +3,7 @@
 // app instances sharing one Postgres can claim jobs concurrently without double-processing. size()/deadCount()
 // are async (the metrics gauges accept async samplers).
 import type { Pool } from "pg";
+import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import type { JobMessage } from "../types";
 
@@ -39,15 +40,18 @@ export interface PgQueueOptions {
   maxRetries?: number;
   pollIntervalMs?: number;
   backoffMs?: (attempt: number) => number;
+  /** Max concurrent `processOne()` loops. Defaults to QUEUE_CONCURRENCY env var or 1. */
+  concurrency?: number;
 }
 
 export function createPgQueue(pool: Pool, consume: (message: JobMessage) => Promise<void>, opts: PgQueueOptions = {}): PgDurableQueue {
   const maxRetries = opts.maxRetries ?? 5;
   const pollIntervalMs = opts.pollIntervalMs ?? 1000;
   const backoff = opts.backoffMs ?? ((attempt: number) => Math.min(60_000, 1000 * 2 ** attempt));
+  const concurrency = opts.concurrency ?? Math.max(1, Number(process.env.QUEUE_CONCURRENCY ?? "1"));
 
   let running = false;
-  let pumping = false;
+  let active = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   async function init(): Promise<void> {
@@ -77,18 +81,21 @@ export function createPgQueue(pool: Pool, consume: (message: JobMessage) => Prom
   async function processOne(): Promise<boolean> {
     const job = await claimNext();
     if (!job) return false;
+    const claimedAt = Date.now();
     let message: JobMessage;
     try {
       message = JSON.parse(job.payload) as JobMessage;
     } catch {
       await pool.query(`UPDATE ${TABLE} SET status='dead', last_error='unparseable payload' WHERE id=$1`, [job.id]);
       incr("gittensory_jobs_dead_total");
+      logAudit({ event: "job_dead", ts: Date.now(), job_id: job.id, latency_ms: Date.now() - claimedAt, attempts: Number(job.attempts) + 1, error: "unparseable payload" });
       return true;
     }
     try {
       await consume(message);
       await pool.query(`DELETE FROM ${TABLE} WHERE id=$1`, [job.id]);
       incr("gittensory_jobs_processed_total");
+      logAudit({ event: "job_complete", ts: Date.now(), job_id: job.id, payload_type: extractPayloadType(job.payload), latency_ms: Date.now() - claimedAt, attempts: Number(job.attempts) + 1 });
     } catch (error) {
       const attempts = Number(job.attempts) + 1;
       const errMsg = error instanceof Error ? error.message : "unknown error";
@@ -97,22 +104,24 @@ export function createPgQueue(pool: Pool, consume: (message: JobMessage) => Prom
         await pool.query(`UPDATE ${TABLE} SET status='dead', attempts=$1, last_error=$2 WHERE id=$3`, [attempts, errMsg, job.id]);
         incr("gittensory_jobs_dead_total");
         console.error(JSON.stringify({ level: "error", event: "selfhost_job_dead", id: job.id, attempts, error: errMsg }));
+        logAudit({ event: "job_dead", ts: Date.now(), job_id: job.id, payload_type: extractPayloadType(job.payload), latency_ms: Date.now() - claimedAt, attempts, error: errMsg });
       } else {
         await pool.query(`UPDATE ${TABLE} SET status='pending', attempts=$1, run_after=$2, last_error=$3 WHERE id=$4`, [attempts, Date.now() + backoff(attempts), errMsg, job.id]);
+        logAudit({ event: "job_error", ts: Date.now(), job_id: job.id, payload_type: extractPayloadType(job.payload), latency_ms: Date.now() - claimedAt, attempts, error: errMsg });
       }
     }
     return true;
   }
 
   async function pump(): Promise<void> {
-    if (pumping) return;
-    pumping = true;
+    if (active >= concurrency) return;
+    active++;
     try {
       while (await processOne()) {
         /* drain due jobs */
       }
     } finally {
-      pumping = false;
+      active--;
     }
   }
 
@@ -132,6 +141,7 @@ export function createPgQueue(pool: Pool, consume: (message: JobMessage) => Prom
       if (running) return;
       running = true;
       const tick = (): void => {
+        /* v8 ignore next */ // stop() clears the timer before the next tick can fire with running=false
         if (!running) return;
         void pump().finally(() => {
           if (running) timer = setTimeout(tick, pollIntervalMs);
@@ -142,10 +152,10 @@ export function createPgQueue(pool: Pool, consume: (message: JobMessage) => Prom
     async stop() {
       running = false;
       if (timer) clearTimeout(timer);
-      while (pumping) await new Promise((r) => setTimeout(r, 10));
+      while (active > 0) await new Promise((r) => setTimeout(r, 10));
     },
     async drain() {
-      while (pumping) await new Promise((r) => setTimeout(r, 5));
+      while (active > 0) await new Promise((r) => setTimeout(r, 5));
       await pump();
     },
     async size() {
