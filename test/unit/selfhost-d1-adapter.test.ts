@@ -51,4 +51,8 @@ describe("createD1Adapter (#980 self-host D1-over-SQLite)", () => {
     ).rejects.toThrow();
     expect((await d1.prepare("SELECT count(*) AS n FROM t").first<{ n: number }>())?.n).toBe(1); // "ok" rolled back
   });
+
+  it("dump() returns an ArrayBuffer (D1 surface completeness)", async () => {
+    expect(await makeD1().dump()).toBeInstanceOf(ArrayBuffer);
+  });
 });

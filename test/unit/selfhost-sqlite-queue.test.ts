@@ -70,4 +70,44 @@ describe("createSqliteQueue (durable #980)", () => {
     await fresh.drain();
     expect(seen).toEqual(["stuck"]);
   });
+
+  it("dead-letters an unparseable payload", async () => {
+    const driver = makeDriver();
+    const q = createSqliteQueue(driver, async () => undefined);
+    driver.query("INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES ('not-json','pending',0,0,0)", []);
+    await q.drain();
+    expect(q.deadCount()).toBe(1);
+  });
+
+  it("sendBatch enqueues all; default backoff reschedules a failure into the future", async () => {
+    const seen: string[] = [];
+    const q = createSqliteQueue(makeDriver(), async (m) => void seen.push(typeOf(m)));
+    await q.binding.sendBatch([{ body: msg("a") }, { body: msg("b") }]);
+    await q.drain();
+    expect(seen.sort()).toEqual(["a", "b"]);
+
+    let calls = 0;
+    const q2 = createSqliteQueue(makeDriver(), async () => {
+      calls += 1;
+      throw new Error("x");
+    }, { maxRetries: 5 }); // default backoff (~2s) → not re-claimed this drain
+    await q2.binding.send(msg("f"));
+    await q2.drain();
+    expect(calls).toBe(1);
+    expect(q2.size()).toBe(1);
+  });
+
+  it("start() is idempotent and stop() waits for an in-flight pump", async () => {
+    let done = false;
+    const q = createSqliteQueue(makeDriver(), async () => {
+      await new Promise((r) => setTimeout(r, 40));
+      done = true;
+    }, { pollIntervalMs: 5 });
+    q.start();
+    q.start(); // idempotent
+    await q.binding.send(msg("slow"));
+    await new Promise((r) => setTimeout(r, 12)); // let the tick claim it + enter the slow consume
+    await q.stop(); // waits for the in-flight consume to finish
+    expect(done).toBe(true);
+  });
 });

@@ -52,6 +52,11 @@ describe("createOpenAiCompatibleAi (#979)", () => {
     expect(url).toBe("http://o/v1/embeddings");
     expect(out).toEqual({ data: [[0.1, 0.2], [0.3, 0.4]] });
   });
+
+  it("throws on a non-OK embeddings response", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("e", { status: 502 })));
+    await expect(createOpenAiCompatibleAi({ baseUrl: "http://x/v1" }).run("m", { text: ["a"] })).rejects.toThrow(/ai_embed_http_502/);
+  });
 });
 
 describe("createSelfHostAi — provider selection", () => {
@@ -93,6 +98,11 @@ describe("createAnthropicAi (#979 native BYOK)", () => {
     expect(sent?.body.system).toBe("be terse");
     expect(sent?.body.model).toBe("claude-sonnet-4-6"); // configured wins over the @cf id
     expect(sent?.body.messages).toEqual([{ role: "user", content: "go" }]);
+  });
+
+  it("throws on a non-OK response", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("e", { status: 429 })));
+    await expect(createAnthropicAi({ apiKey: "k" }).run("m", { prompt: "x" })).rejects.toThrow(/anthropic_http_429/);
   });
 });
 
@@ -155,5 +165,33 @@ describe("subscription CLI helpers + fail-safe", () => {
     } finally {
       process.env.PATH = origPath;
     }
+  });
+
+  it("Claude Code throws on no-token / non-zero exit / empty output", async () => {
+    await expect(createClaudeCodeAi({}).run("m", { prompt: "x" })).rejects.toThrow(/claude_code_no_oauth_token/);
+    const exit1: StubSpawn = async () => ({ stdout: "", code: 1 });
+    await expect(createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t" }, exit1).run("m", { prompt: "x" })).rejects.toThrow(/claude_code_exit_1/);
+    const empty: StubSpawn = async () => ({ stdout: "", code: 0 });
+    await expect(createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t" }, empty).run("m", { prompt: "x" })).rejects.toThrow(/claude_code_empty_output/);
+  });
+
+  it("Codex throws on empty output", async () => {
+    const empty: StubSpawn = async () => ({ stdout: "", code: 0 });
+    await expect(createCodexAi({}, empty).run("gpt-5", { prompt: "x" })).rejects.toThrow(/codex_empty_output/);
+  });
+
+  it("defaultSpawn rejects when the CLI binary is missing (error handler)", async () => {
+    const origPath = process.env.PATH;
+    process.env.PATH = "/nonexistent-gittensory-empty";
+    try {
+      await expect(createCodexAi({ ...process.env }).run("gpt-5", { prompt: "x" })).rejects.toThrow();
+    } finally {
+      process.env.PATH = origPath;
+    }
+  });
+
+  it("extractCliText falls back to the last JSON line (JSONL) and is empty when none parse", () => {
+    expect(extractCliText('not json\n{"result":"x"}')).toBe("x");
+    expect(extractCliText("not json\nstill not json")).toBe("");
   });
 });

@@ -159,6 +159,7 @@ async function defaultSpawn(): Promise<SpawnFn> {
       const child = cp.spawn(cmd, args, { env: o.env as NodeJS.ProcessEnv, stdio });
       let stdout = "";
       const timer = setTimeout(() => {
+        /* v8 ignore next 2 */ // a 120s subprocess timeout is not unit-testable without a 2-minute wait
         child.kill("SIGKILL");
         reject(new Error("subscription_cli_timeout"));
       }, o.timeoutMs);

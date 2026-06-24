@@ -28,7 +28,7 @@ describe("createSqliteVectorize (#979 local RAG)", () => {
     expect(res.matches[0]?.metadata?.path).toBe("a.ts");
   });
 
-  it("scopes results by namespace", async () => {
+  it("scopes results by namespace and defaults topK when omitted", async () => {
     const v = makeVectorize();
     await v.upsert([
       { id: "x", values: [1, 0], namespace: "n1" },
@@ -36,6 +36,9 @@ describe("createSqliteVectorize (#979 local RAG)", () => {
     ]);
     const res = await v.query([1, 0], { topK: 10, namespace: "n1" });
     expect(res.matches.map((m) => m.id)).toEqual(["x"]);
+    // topK omitted → default applies (no throw, returns the namespace's match)
+    const res2 = await v.query([1, 0], { namespace: "n1" });
+    expect(res2.matches.map((m) => m.id)).toEqual(["x"]);
   });
 
   it("upsert overwrites by id; deleteByIds removes", async () => {

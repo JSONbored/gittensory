@@ -15,6 +15,11 @@ describe("metrics registry (#982)", () => {
     expect(renderMetrics()).toContain('h_total{status="ok"} 1');
   });
 
+  it("sorts multiple labels deterministically", () => {
+    incr("m_total", { b: "2", a: "1" });
+    expect(renderMetrics()).toContain('m_total{a="1",b="2"} 1');
+  });
+
   it("gauges sample at scrape time", () => {
     let v = 5;
     gauge("g", () => v);
