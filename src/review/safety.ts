@@ -16,15 +16,29 @@ import { scanForSecrets } from "./secrets-scan";
 // (RC6: #1505/#1495/#1485). A real-format token IS a leak regardless of the file it lives in, so we keep the
 // concrete formats as hard blockers and ignore only the ambiguous heuristics. This mirrors the same gate the
 // content lane already uses (src/review/content-lane/security-scan.ts).
-const HARD_SECRET_KINDS = new Set(["github_token", "github_pat", "private_key_block", "aws_access_key", "slack_token"]);
+const HARD_SECRET_KINDS = new Set([
+  "github_token",
+  "github_pat",
+  "private_key_block",
+  "aws_access_key",
+  "slack_token",
+]);
 
 /** True when the safety scan is enabled. Flag-OFF (default) → every helper below is a no-op pass-through. */
-export function isSafetyEnabled(env: { GITTENSORY_REVIEW_SAFETY?: string | undefined }): boolean {
+export function isSafetyEnabled(env: {
+  GITTENSORY_REVIEW_SAFETY?: string | undefined;
+}): boolean {
   return /^(1|true|yes|on)$/i.test(env.GITTENSORY_REVIEW_SAFETY ?? "");
 }
 
 /** The untrusted, author-controlled fields fed to the AI reviewer. */
-export type SafetyReviewInput = { repoFullName: string; prNumber: number; title: string; body?: string | null | undefined; diff: string };
+export type SafetyReviewInput = {
+  repoFullName: string;
+  prNumber: number;
+  title: string;
+  body?: string | null | undefined;
+  diff: string;
+};
 
 /**
  * Defang prompt-injection in the UNTRUSTED title/body/diff before any of it reaches the AI reviewer. Returns
@@ -33,9 +47,20 @@ export type SafetyReviewInput = { repoFullName: string; prNumber: number; title:
  * the verdict. Callers MUST gate this on {@link isSafetyEnabled} — when OFF, pass the raw input through
  * unchanged so the prompt is byte-identical.
  */
-export function defangReviewInput(input: SafetyReviewInput): { title: string; body: string | null | undefined; diff: string } {
-  const title = safeReviewTitle({ title: input.title, repo: input.repoFullName, number: input.prNumber });
-  const body = input.body == null ? input.body : neutralizePromptInjection(input.body).text;
+export function defangReviewInput(input: SafetyReviewInput): {
+  title: string;
+  body: string | null | undefined;
+  diff: string;
+} {
+  const title = safeReviewTitle({
+    title: input.title,
+    repo: input.repoFullName,
+    number: input.prNumber,
+  });
+  const body =
+    input.body == null
+      ? input.body
+      : neutralizePromptInjection(input.body).text;
   const diff = neutralizePromptInjection(input.diff).text;
   return { title, body, diff };
 }
@@ -50,17 +75,28 @@ export function defangReviewInput(input: SafetyReviewInput): { title: string; bo
  * {@link isSafetyEnabled} — when OFF, no finding is produced so the advisory/gate is unchanged.
  */
 export function secretLeakFinding(diff: string): AdvisoryFinding | null {
+  // Scan ONLY added lines — the secrets THIS change introduces. A token on a removed/context line is not being
+  // committed by the PR, so flagging it would wrongly block a change that merely REMOVES or refactors a
+  // secret-shaped string (e.g. deleting/defanging a test fixture, or rotating a credential out). The input is the
+  // buildAiReviewDiff/buildSecretScanDiff patch corpus, so keep `+` additions and drop the `+++`/`### …` headers.
+  const added = diff
+    .split("\n")
+    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+    .join("\n");
   // Only CONCRETE credential formats hard-block. The raw scanner also returns the weak `seed_or_mnemonic` /
   // `bittensor_key` heuristics, which false-positive on `coldkey:` / `hotkey =` / "mnemonic" lines in
   // legitimate config/workflow files (RC6); those are filtered out here so they never produce a `secret_leak`
   // blocker. A real token (github_token, aws_access_key, …) still blocks regardless of which file it is in.
-  const kinds = scanForSecrets(diff).kinds.filter((kind) => HARD_SECRET_KINDS.has(kind));
+  const kinds = scanForSecrets(added).kinds.filter((kind) =>
+    HARD_SECRET_KINDS.has(kind),
+  );
   if (kinds.length === 0) return null;
   return {
     code: "secret_leak",
     severity: "critical",
     title: `Possible leaked secret in the diff (${kinds.join(", ")})`,
     detail: `The PR diff matches secret pattern(s): ${kinds.join(", ")}. A committed credential must be rotated and removed from the change before merge.`,
-    action: "Remove the secret from the diff, rotate the exposed credential, then re-run the gate.",
+    action:
+      "Remove the secret from the diff, rotate the exposed credential, then re-run the gate.",
   };
 }
