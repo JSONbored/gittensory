@@ -107,7 +107,7 @@ import {
   evidenceGraphTouchedRepoFullNames,
 } from "../services/contributor-evidence-graph";
 import { executeAgentRun, explainBlockersWithAgent, planNextWork, preflightBranchWithAgent, preparePrPacketWithAgent } from "../services/agent-orchestrator";
-import { isAuthorizedGitHubSessionLogin } from "../auth/security";
+import { isAuthorizedGitHubSessionLogin, parseGitHubLoginList } from "../auth/security";
 import { commandAuthorizationAllowedRoles, commandAuthorizationNeedsMinerDetection } from "../settings/command-authorization";
 import { autonomyRequiresApproval, isAgentConfigured, resolveAutonomy } from "../settings/autonomy";
 import { isGlobalAgentPause, resolveAgentActionMode } from "../settings/agent-execution";
@@ -3177,9 +3177,9 @@ async function maybeRecloseDisallowedReopen(
   const botLogin = `${env.GITHUB_APP_SLUG}[bot]`.toLowerCase();
   if (reopener === botLogin) return false; // the bot's own nightly re-review reopen is allowed
   const repoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")).toLowerCase() : "";
-  const admins = (env.ADMIN_GITHUB_LOGINS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const admins = parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS); // unified parse: whitespace OR comma (#audit-3.13)
   const hasMaintainerPermission = async (login: string): Promise<boolean> => {
-    if (login === repoOwner || admins.includes(login)) return true;
+    if (login === repoOwner || admins.has(login)) return true;
     const permission = await getRepositoryCollaboratorPermission(env, installationId, repoFullName, login).catch(() => null);
     return permission === "admin" || permission === "maintain" || permission === "write";
   };

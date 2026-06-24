@@ -148,7 +148,10 @@ export function buildPredictedGateVerdict(args: {
   const pack: GatePolicyPack = gate.pack ?? "gittensor";
   const effectiveConfirmedContributor = pack === "oss-anti-slop" ? undefined : args.confirmedContributor;
 
-  const authorHistory = pullRequests.filter((pr) => pr.repoFullName === input.repoFullName && pr.authorLogin === input.contributorLogin);
+  // Case-insensitive author match so the PREDICTOR agrees with the live gate (which matches case-insensitively);
+  // otherwise a contributor could see false first-time-grace optimism before a one-shot loss. (#audit-§4)
+  const contributorLoginLc = input.contributorLogin?.toLowerCase();
+  const authorHistory = pullRequests.filter((pr) => pr.repoFullName === input.repoFullName && pr.authorLogin?.toLowerCase() === contributorLoginLc);
 
   const evaluation = evaluateGateCheck(advisory, {
     linkedIssueGateMode: gate.linkedIssue ?? undefined,

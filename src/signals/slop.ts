@@ -409,7 +409,9 @@ export function buildUnfilledIssueTemplateFinding(input: IssueSlopAssessmentInpu
     .replace(/^\s*[-*]\s*(\[[ xX]\])?\s*$/gm, "") // empty bullets / checkboxes
     .replace(/[\s>#*_`+-]/g, "") // residual markdown punctuation + whitespace
     .trim();
-  if (substantive.length > 0) return null;
+  // Require a real WORD (a run of 3+ letters/digits, any script) to survive — not merely "any surviving char",
+  // which a single padding character would satisfy to dodge the finding. (#audit-§4)
+  if (/[\p{L}\p{N}]{3,}/u.test(substantive)) return null;
   // Static, public-safe text (no interpolation) — no sanitizer guard needed.
   const detail = "The issue body contains only an unfilled template (headings or comment placeholders, no details).";
   return {
