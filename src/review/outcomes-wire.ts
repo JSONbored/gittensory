@@ -133,11 +133,17 @@ export async function recordPrOutcome(env: Env, eventName: string, payload: GitH
   if (!pr?.number || !repoFullName) return;
 
   const merged = Boolean(pr.merged_at);
+  const senderLogin = (payload.sender?.login ?? "").toLowerCase();
+  const authorLogin = (pr.user?.login ?? "").toLowerCase();
+  const botWasActor = payload.sender?.type === "Bot";
+  // A PR author can close their own unmerged PR without maintainer approval. Those self-closes are not
+  // authoritative ground truth for the repository's merge/close decision and must not feed the precision
+  // circuit-breaker; otherwise contributors can poison merge precision by closing their own mergeable PRs.
+  // Merges remain trusted because GitHub requires merge permission, and maintainer/bot closes are not self-closes.
+  if (!merged && !botWasActor && senderLogin && authorLogin && senderLogin === authorLogin) return;
+
   const decision = merged ? "merged" : "closed";
   const targetId = reviewAuditTargetId(repoFullName, pr.number);
-  // Whether GITTENSORY itself was the actor that resolved this PR — for the metadata only (the bot's own
-  // close/merge action was already recorded as an agent.action.* audit row; this just annotates the outcome).
-  const botWasActor = payload.sender?.type === "Bot";
 
   await appendReviewAudit(env, { project: repoFullName.slice(0, 200), targetId, eventType: "pr_outcome", decision });
   await recordAuditEvent(env, {

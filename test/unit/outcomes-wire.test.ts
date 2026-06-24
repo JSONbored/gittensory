@@ -58,16 +58,28 @@ describe("recordPrOutcome — realized merge/close ground truth", () => {
     expect(ledger[0]).toMatchObject({ target_key: "owner/repo#42", detail: "merged" });
   });
 
-  it("writes a pr_outcome=closed row when a PR is closed WITHOUT merging", async () => {
+  it("writes a pr_outcome=closed row when a maintainer closes a PR WITHOUT merging", async () => {
     const env = createTestEnv();
     await recordPrOutcome(env, "pull_request", {
       action: "closed",
       repository: { name: "repo", full_name: "owner/repo", owner: { login: "owner" } },
-      pull_request: pullRequestPayload({ number: 43, merged_at: null }),
-      sender: { login: "contributor", type: "User" },
+      pull_request: pullRequestPayload({ number: 43, merged_at: null, user: { login: "contributor", type: "User" } }),
+      sender: { login: "owner", type: "User" },
     });
     expect((await reviewAuditRows(env, "pr_outcome"))[0]).toMatchObject({ target_id: "owner/repo#43", decision: "closed" });
     expect((await auditEventRows(env, "pr_outcome"))[0]).toMatchObject({ detail: "closed" });
+  });
+
+  it("records NOTHING for an unmerged contributor PR self-close", async () => {
+    const env = createTestEnv();
+    await recordPrOutcome(env, "pull_request", {
+      action: "closed",
+      repository: { name: "repo", full_name: "owner/repo", owner: { login: "owner" } },
+      pull_request: pullRequestPayload({ number: 43, merged_at: null, user: { login: "contributor", type: "User" } }),
+      sender: { login: "contributor", type: "User" },
+    });
+    expect(await reviewAuditRows(env, "pr_outcome")).toHaveLength(0);
+    expect(await auditEventRows(env, "pr_outcome")).toHaveLength(0);
   });
 
   it("records NOTHING for a non-closed action or a payload with no PR number", async () => {
