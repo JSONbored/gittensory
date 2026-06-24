@@ -2014,6 +2014,10 @@ export async function fetchLiveCiAggregate(
   const nonRequiredFailingDetails: LiveCiAggregate["nonRequiredFailingDetails"] = [];
   let total = 0;
   let anyPending = false;
+  // Track which required context names actually appear in any API result. An absent required context
+  // (never queued, in-progress, or complete) has no entry to push anyPending — without this guard it
+  // would be silently ignored and ciState could become "passed" while it never ran.
+  const seenContextNames = enforceRequiredOnly ? new Set<string>() : null;
 
   // 1) Check-runs (GitHub Actions jobs, CodeQL, app checks).
   for (let page = 1; page <= PR_DETAIL_MAX_PAGES; page += 1) {
@@ -2025,6 +2029,7 @@ export async function fetchLiveCiAggregate(
     ).catch(() => undefined);
     if (!result) break;
     for (const run of result.data.check_runs ?? []) {
+      seenContextNames?.add(run.name); // mark BEFORE bot-check skip: a bot-owned required context is "seen"
       if (isOwnGitHubAppCheckRun(env, run)) continue; // never wait on the bot's own Gate/Context check-runs (see above)
       total += 1;
       const conclusion = (run.conclusion ?? "").toLowerCase();
@@ -2054,6 +2059,7 @@ export async function fetchLiveCiAggregate(
   for (const ctx of statusResult?.data.statuses ?? []) {
     const name = ctx.context ?? "status";
     total += 1;
+    seenContextNames?.add(name);
     const state = (ctx.state ?? "").toLowerCase();
     if (state === "failure" || state === "error") {
       const summary = typeof ctx.description === "string" ? ctx.description.trim().slice(0, 200) : "";
@@ -2063,6 +2069,15 @@ export async function fetchLiveCiAggregate(
       // passing
     } else if (isRequired(name)) {
       anyPending = true; // pending — only a REQUIRED context holds the gate
+    }
+  }
+
+  // A required context that never appeared in any result is not safe to treat as passed — count it as pending
+  // so the gate waits rather than approving a PR whose required CI never ran (e.g. a workflow that doesn't
+  // trigger on forks, or a check that was skipped).
+  if (seenContextNames) {
+    for (const ctx of requiredContexts!) {
+      if (!seenContextNames.has(ctx)) anyPending = true;
     }
   }
 

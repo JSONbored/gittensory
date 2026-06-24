@@ -2750,6 +2750,57 @@ describe("GitHub backfill", () => {
       expect(aggregate.failingDetails).toEqual([expect.objectContaining({ name: "Gittensory Gate", summary: "External status failed" })]);
     });
 
+    it("treats a required context that never ran (absent from results) as pending, not passed", async () => {
+      // Bypass: requiredContexts = {"validate"}, but CI only returns non-required checks (e.g. CodeQL). The
+      // "validate" job never triggered (fork workflow skipped, matrix split, etc.). Without the absent-check
+      // guard, total > 0 (CodeQL passed) → ciState = "passed" even though the required check never ran.
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) {
+          return Response.json({
+            check_runs: [
+              // Only non-required checks ran — "validate" is absent.
+              { name: "CodeQL", status: "completed", conclusion: "success", app: { slug: "github-advanced-security" } },
+              { name: "Superagent Security Scan", status: "completed", conclusion: "success", app: { slug: "superagent" } },
+            ],
+          });
+        }
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        return new Response("not found", { status: 404 });
+      });
+
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["validate"]));
+
+      expect(aggregate.ciState).toBe("pending"); // required "validate" never ran — must not be "passed"
+      expect(aggregate.failingDetails).toEqual([]);
+    });
+
+    it("keeps bot-owned required contexts as seen (not absent) even though they are excluded from gate logic", async () => {
+      // The existing deadlock-avoidance test: bot-owned required contexts (Gate, Context) in in_progress are
+      // skipped from gate logic, but seenContextNames must still mark them to avoid the absent-check guard
+      // treating them as missing and re-introducing a false anyPending.
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) {
+          return Response.json({
+            check_runs: [
+              { name: "validate", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+              { name: "Gittensory Gate", status: "in_progress", conclusion: null, app: { slug: "gittensory" } },
+            ],
+          });
+        }
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        return new Response("not found", { status: 404 });
+      });
+
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "sha", "tok", new Set(["validate", "Gittensory Gate"]));
+
+      // "Gittensory Gate" is a bot check: present in results (so not absent), excluded from gate logic → passed
+      expect(aggregate.ciState).toBe("passed");
+    });
+
   });
 
   describe("configuredRequiredCiContexts", () => {
