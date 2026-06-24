@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, not, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, not, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./client";
 import {
   advisories,
@@ -2675,6 +2675,10 @@ export async function listOtherOpenPullRequests(env: Env, fullName: string, numb
     .select()
     .from(pullRequests)
     .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.state, "open"), not(eq(pullRequests.number, number))))
+    // Order by ascending PR number so the 100-row cap always retains the LOWEST-numbered open siblings. The
+    // duplicate-winner adjudication elects the minimum open number as the winner, so an unordered LIMIT could
+    // drop the true winner on a repo with >100 open PRs and mis-elect a higher-numbered sibling. (#audit-3.9)
+    .orderBy(asc(pullRequests.number))
     .limit(100);
   return rows.map(toPullRequestRecordFromRow);
 }
