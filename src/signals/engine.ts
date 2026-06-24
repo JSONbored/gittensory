@@ -3502,9 +3502,12 @@ export function buildContributorStrategy(args: {
   scoringSnapshot: ScoringModelSnapshotRecord;
   outcomeHistory?: ContributorOutcomeHistory | null | undefined;
 }): ContributorStrategy {
-  const outcomeByRepo = new Map((args.outcomeHistory?.repoOutcomes ?? []).map((outcome) => [outcome.repoFullName, outcome]));
+  // Key/lookup case-insensitively: outcome repo names can come from the Gittensor API (unnormalized casing)
+  // while opportunity repo names use registry casing — match the sibling sites (buildRepoFitRecommendation /
+  // buildPullRequestReviewIntelligence) that already compare `repoFullName.toLowerCase()`.
+  const outcomeByRepo = new Map((args.outcomeHistory?.repoOutcomes ?? []).map((outcome) => [outcome.repoFullName.toLowerCase(), outcome]));
   const bestFitRepos = args.fit.opportunities.slice(0, 10).map((opportunity) => {
-    const outcome = outcomeByRepo.get(opportunity.repoFullName);
+    const outcome = outcomeByRepo.get(opportunity.repoFullName.toLowerCase());
     const privateScoringReadiness: ContributorStrategy["bestFitRepos"][number]["privateScoringReadiness"] =
       /* v8 ignore next -- Maintainer-lane strategy readiness is already represented in repo-fit and reward-risk outputs. */
       outcome?.maintainerLane
