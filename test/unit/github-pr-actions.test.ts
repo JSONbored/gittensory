@@ -99,7 +99,7 @@ describe("GitHub PR action primitives (#778)", () => {
           return Response.json([
             ...Array.from({ length: 99 }, (_, index) => ({ event: "labeled", actor: { login: `labeler-${index}` } })),
             { event: "closed", actor: { login: "contributor" } },
-          ]);
+          ], { headers: { link: '<https://api.github.test/issues/17/events?per_page=100&page=2>; rel="last"' } });
         }
         if (page === "2") return Response.json([{ event: "closed", actor: { login: "maintainer" } }]);
       }
@@ -128,7 +128,7 @@ describe("GitHub PR action primitives (#778)", () => {
     await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 19)).resolves.toBeNull();
   });
 
-  it("returns the best-known closer when the 10-page event cap is reached (page-cap exit path)", async () => {
+  it("reads the newest bounded event pages instead of the oldest prefix", async () => {
     const fetchedPages: number[] = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
@@ -136,18 +136,38 @@ describe("GitHub PR action primitives (#778)", () => {
       if (url.includes("/issues/20/events")) {
         const page = Number(new URL(url).searchParams.get("page") ?? "1");
         fetchedPages.push(page);
-        // Page 5 contains the close event; all pages return exactly 100 entries so the loop never exits early.
+        if (page === 1) {
+          return Response.json([{ event: "closed", actor: { login: "stale-contributor" } }], {
+            headers: { link: '<https://api.github.test/issues/20/events?per_page=100&page=12>; rel="last"' },
+          });
+        }
         const events = Array.from({ length: 100 }, (_, i) =>
-          page === 5 && i === 50 ? { event: "closed", actor: { login: "capped-closer" } } : { event: "labeled" },
+          page === 11 && i === 40 ? { event: "closed", actor: { login: "maintainer" } } : { event: "labeled" },
         );
         return Response.json(events);
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 20)).resolves.toBe("capped-closer");
-    // Loop ran pages 1–10 and then exited via the cap, never requesting page 11.
-    expect(fetchedPages).toHaveLength(10);
-    expect(fetchedPages).not.toContain(11);
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 20)).resolves.toBe("maintainer");
+    expect(fetchedPages).toEqual([1, 12, 11]);
+    expect(fetchedPages).not.toContain(2);
+  });
+
+  it("returns null when the newest bounded event pages contain no close event", async () => {
+    const fetchedPages: number[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/21/events")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        fetchedPages.push(page);
+        return Response.json(page === 1 ? [{ event: "closed", actor: { login: "stale-contributor" } }] : [{ event: "labeled" }],
+          page === 1 ? { headers: { link: '<https://api.github.test/issues/21/events?per_page=100&page=12>; rel="last"' } } : undefined);
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 21)).resolves.toBeNull();
+    expect(fetchedPages).toEqual([1, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
   });
 });
 
