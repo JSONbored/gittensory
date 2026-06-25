@@ -57,6 +57,9 @@ declare global {
     GITTENSORY_AUTO_FILE_DRIFT_ISSUES?: string;
     GITTENSORY_DRIFT_ISSUE_REPO?: string;
     GITTENSORY_DRIFT_ISSUE_TOKEN?: string;
+    /** Self-host default Discord webhook URL — per-action notifications (merged/closed/manual) for any repo
+     *  not in the built-in per-repo map. Lets a self-host operator wire one channel without a source edit. */
+    DISCORD_WEBHOOK_URL?: string;
     GITTENSORY_CONTRIBUTOR_ISSUE_TOKEN?: string;
     PRODUCT_USAGE_HASH_SALT?: string;
     GITTENSORY_API_TOKEN: string;
