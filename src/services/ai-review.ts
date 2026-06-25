@@ -60,6 +60,18 @@ export type AiReviewProviderKey = {
   model?: string | null | undefined;
 };
 
+/**
+ * How the independent reviewer opinions are combined into ONE gate decision (#dual-ai-combiner):
+ *   • `single`     — one reviewer; its verdict IS the decision (a named blocker blocks).
+ *   • `consensus`  — two reviewers; block ONLY when BOTH name a blocker; lone blocker → split (hold). The
+ *                    historical cloud behavior — the default, so an unset `combine` is byte-identical.
+ *   • `synthesis`  — two reviewers run separately, then merge into ONE decision (no split/hold-on-disagree):
+ *                    `onMerge: either` blocks if EITHER flags a blocker; `both` only if all do.
+ */
+export type CombineStrategy = "single" | "consensus" | "synthesis";
+/** Synthesis merge rule — block if `either` reviewer flags a blocker, or only when `both` agree. */
+export type OnMerge = "either" | "both";
+
 export type GittensoryAiReviewInput = {
   repoFullName: string;
   prNumber: number;
@@ -70,6 +82,13 @@ export type GittensoryAiReviewInput = {
   actor?: string | null | undefined;
   /** Effective `aiReviewMode`. `block` additionally runs the consensus-defect pass. */
   mode: "advisory" | "block";
+  /**
+   * How to combine the two reviewer opinions in `block` mode (#dual-ai-combiner). Absent ⇒ `consensus` — the
+   * historical behavior, so the gate decision is byte-identical until a repo/self-host opts into another
+   * strategy. `onMerge` only applies to `synthesis` (default `either`).
+   */
+  combine?: CombineStrategy | null | undefined;
+  onMerge?: OnMerge | null | undefined;
   /** Present only when the repo has BYOK on AND a key configured; drives the advisory write-up. */
   providerKey?: AiReviewProviderKey | null | undefined;
   /**
@@ -114,7 +133,7 @@ export type GittensoryAiReviewResult =
   | { status: "quota_exceeded"; estimatedNeurons: number; remainingBudget: number }
   | { status: "ok"; advisoryNotes: string | null; consensusDefect: AiConsensusDefect | null; split: boolean; inconclusive: boolean; estimatedNeurons: number; reviewerCount: number };
 
-type ModelReview = {
+export type ModelReview = {
   assessment: string;
   // blockers = concrete must-fix defects in the diff (drive the consensus defect / gate); nits = non-blocking
   // points; suggestions = concrete improvements (rendered alongside nits). reviewbot-parity shape. (#extensive-reviews)
@@ -436,6 +455,63 @@ export function consensusDefectOf(a: ModelReview, b: ModelReview): AiConsensusDe
   return { title, detail, confidence: 1 };
 }
 
+/** Deterministic SYNTHESIS of one public-safe defect from the reviews that named a blocker — same public-safe
+ *  discipline as `consensusDefectOf` (cite the primary blocker; an unsafe title drops the whole block, fail-safe).
+ *  Used by the `synthesis` and `single` combine strategies. */
+function synthesizeDefect(reviews: ReadonlyArray<ModelReview>): AiConsensusDefect | null {
+  const primary = reviews.flatMap((r) => r.blockers).map((b) => b.trim()).find((b) => b.length > 0);
+  if (!primary) return null;
+  const title = toPublicSafe(primary);
+  if (!title) return null; // unsafe title → drop the block entirely (fail-safe)
+  return { title, detail: title, confidence: 1 }; // cite the primary blocker as both title + detail
+}
+
+/** Combine the independent reviewer opinions into ONE gate decision per the configured strategy (#dual-ai-combiner).
+ *  `reviews` carries one slot per reviewer; a slot is `null` when that reviewer errored or returned unparseable
+ *  output. Returns the gate-relevant trio: a `defect` (→ blocker), `split` (reviewers disagree → HOLD), and
+ *  `inconclusive` (cannot certify → HOLD). FAIL-CLOSED: in every strategy, a missing opinion we needed to clear
+ *  the change yields `inconclusive` rather than a silent pass. The `consensus` branch is byte-identical to the
+ *  historical block-mode logic, so an unset strategy never changes the gate. */
+export function combineReviews(
+  reviews: ReadonlyArray<ModelReview | null>,
+  opts: { strategy: CombineStrategy; onMerge?: OnMerge | null | undefined },
+): { defect: AiConsensusDefect | null; split: boolean; inconclusive: boolean } {
+  const present = reviews.filter((r): r is ModelReview => Boolean(r));
+  const missing = reviews.length - present.length;
+
+  if (opts.strategy === "single") {
+    // One reviewer: its verdict IS the decision (no second opinion to require). A named blocker blocks; a
+    // missing review can't certify the change → hold.
+    const r = present[0];
+    if (!r) return { defect: null, split: false, inconclusive: true };
+    return { defect: r.blockers.length > 0 ? synthesizeDefect([r]) : null, split: false, inconclusive: false };
+  }
+
+  if (opts.strategy === "synthesis") {
+    // Both run separately, then merge into ONE decision — never a split/hold-on-disagreement.
+    const flagged = present.filter((r) => r.blockers.length > 0);
+    if ((opts.onMerge ?? "either") === "both") {
+      // Block only when EVERY expected reviewer is present AND each named a blocker.
+      if (missing > 0) return { defect: null, split: false, inconclusive: true };
+      const all = present.length > 0 && flagged.length === present.length;
+      return { defect: all ? synthesizeDefect(present) : null, split: false, inconclusive: false };
+    }
+    // `either`: any present reviewer's blocker blocks. With no present blocker but a missing opinion we cannot
+    // certify the change is clean → hold (fail-closed).
+    if (flagged.length > 0) return { defect: synthesizeDefect(flagged), split: false, inconclusive: false };
+    return { defect: null, split: false, inconclusive: missing > 0 };
+  }
+
+  // `consensus` (default) — BYTE-IDENTICAL to the historical block-mode pair logic.
+  const [a, b] = reviews;
+  if (a && b) {
+    const defect = consensusDefectOf(a, b);
+    const split = !defect && (a.blockers.length > 0) !== (b.blockers.length > 0);
+    return { defect, split, inconclusive: false };
+  }
+  return { defect: null, split: false, inconclusive: true };
+}
+
 /**
  * Run the AI maintainer review. Returns advisory notes (always, when AI is on) and — in `block` mode —
  * a consensus defect when the free Workers-AI pair agrees with high confidence. Fail-safe on every error
@@ -516,19 +592,13 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
       runWorkersOpinion(env, BEST_REVIEW_MODELS[1], RELIABLE_FALLBACK_MODELS[1], system, user, maxTokens),
     ]);
     secondReview = b;
-    // Fail-CLOSED: block mode requires BOTH independent reviews. If a model errored or returned unparseable
-    // output (a/b null), we cannot certify the change — signal `inconclusive` so the gate HOLDS the PR for a
-    // human instead of silently passing it through to auto-merge. A clean dual review (both present, no
-    // blocker) is NOT inconclusive and still passes normally.
-    if (a && b) {
-      consensusDefect = consensusDefectOf(a, b);
-      // SPLIT = the two reviewers DISAGREE (exactly one named a blocker). Lower confidence than a clean consensus,
-      // so the gate HOLDS it for review instead of auto-merging (only when there is no real consensus defect —
-      // a consensus is the stronger signal and blocks on its own). (#ai-review-split)
-      aiReviewSplit = !consensusDefect && (a.blockers.length > 0) !== (b.blockers.length > 0);
-    } else {
-      inconclusive = true;
-    }
+    // Combine the two opinions per the configured strategy (#dual-ai-combiner). Default `consensus` is
+    // byte-identical to the historical logic: block only on agreement, lone blocker → split, a missing
+    // opinion → inconclusive (fail-closed, HELD for a human rather than silently auto-merged).
+    const combined = combineReviews([a, b], { strategy: input.combine ?? "consensus", onMerge: input.onMerge });
+    consensusDefect = combined.defect;
+    aiReviewSplit = combined.split;
+    inconclusive = combined.inconclusive;
   }
 
   const reviewsForNotes = [advisoryReview, secondReview].filter((r): r is ModelReview => Boolean(r));
@@ -571,6 +641,8 @@ export const __aiReviewInternals = {
   coerceAiText,
   composeAdvisoryNotes,
   consensusDefectOf,
+  combineReviews,
+  synthesizeDefect,
   toPublicSafe,
   estimateNeurons,
   runWorkersOpinion,

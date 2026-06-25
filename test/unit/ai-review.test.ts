@@ -7,7 +7,7 @@ import {
 } from "../../src/services/ai-review";
 import { createTestEnv } from "../helpers/d1";
 
-const { parseModelReview, coerceAiText, composeAdvisoryNotes, consensusDefectOf, toPublicSafe, runWorkersOpinion } = __aiReviewInternals;
+const { parseModelReview, coerceAiText, composeAdvisoryNotes, consensusDefectOf, combineReviews, toPublicSafe, runWorkersOpinion } = __aiReviewInternals;
 
 function reviewJson(over: Partial<{ assessment: string; suggestions: string[]; nits: string[]; blockers: string[]; present: boolean; confidence: number; title: string; detail: string }> = {}): string {
   return JSON.stringify({
@@ -351,6 +351,46 @@ describe("pure helpers", () => {
     const fenced = '```json\n{"assessment":"ok","blockers":["X in src/a.ts"],"nits":[],"suggestions":[]}\n```';
     const parsed = parseModelReview(fenced);
     expect(parsed?.blockers).toEqual(["X in src/a.ts"]);
+  });
+
+  describe("combineReviews (#dual-ai-combiner)", () => {
+    const r = (blockers: string[]) => ({ assessment: "", suggestions: [], nits: [], blockers });
+    const clean = r([]);
+    const blocked = r(["Null deref in src/a.ts"]);
+
+    it("single: the lone reviewer's blocker IS the decision; a clean review passes; a missing review holds", () => {
+      expect(combineReviews([blocked], { strategy: "single" }).defect?.title).toContain("Null deref");
+      expect(combineReviews([clean], { strategy: "single" })).toEqual({ defect: null, split: false, inconclusive: false });
+      expect(combineReviews([null], { strategy: "single" })).toEqual({ defect: null, split: false, inconclusive: true });
+    });
+
+    it("consensus (default): blocks only when BOTH name a blocker; lone blocker → split; a missing opinion → inconclusive (byte-identical to the historical logic)", () => {
+      expect(combineReviews([blocked, blocked], { strategy: "consensus" }).defect).not.toBeNull();
+      expect(combineReviews([blocked, clean], { strategy: "consensus" })).toMatchObject({ defect: null, split: true, inconclusive: false });
+      expect(combineReviews([clean, clean], { strategy: "consensus" })).toEqual({ defect: null, split: false, inconclusive: false });
+      expect(combineReviews([blocked, null], { strategy: "consensus" })).toEqual({ defect: null, split: false, inconclusive: true });
+    });
+
+    it("synthesis/either: ANY reviewer's blocker blocks (one decision, never a split); a missing opinion holds only when nothing present blocked", () => {
+      expect(combineReviews([clean, blocked], { strategy: "synthesis", onMerge: "either" })).toMatchObject({ split: false, inconclusive: false });
+      expect(combineReviews([clean, blocked], { strategy: "synthesis", onMerge: "either" }).defect).not.toBeNull();
+      expect(combineReviews([clean, clean], { strategy: "synthesis", onMerge: "either" })).toEqual({ defect: null, split: false, inconclusive: false });
+      expect(combineReviews([blocked, null], { strategy: "synthesis", onMerge: "either" }).defect).not.toBeNull(); // a present blocker decides despite the missing one
+      expect(combineReviews([clean, null], { strategy: "synthesis", onMerge: "either" })).toEqual({ defect: null, split: false, inconclusive: true }); // can't certify clean
+      expect(combineReviews([clean, blocked], { strategy: "synthesis" }).defect).not.toBeNull(); // onMerge defaults to either
+    });
+
+    it("synthesis/both: blocks only when EVERY present reviewer flags; disagreement passes (never a hold); a missing opinion holds; empty set passes", () => {
+      expect(combineReviews([blocked, blocked], { strategy: "synthesis", onMerge: "both" }).defect).not.toBeNull();
+      expect(combineReviews([blocked, clean], { strategy: "synthesis", onMerge: "both" })).toEqual({ defect: null, split: false, inconclusive: false });
+      expect(combineReviews([blocked, null], { strategy: "synthesis", onMerge: "both" })).toEqual({ defect: null, split: false, inconclusive: true });
+      expect(combineReviews([], { strategy: "synthesis", onMerge: "both" })).toEqual({ defect: null, split: false, inconclusive: false });
+    });
+
+    it("synthesized defect drops a blocker whose only finding is blank or unsafe (fail-safe, same discipline as consensus)", () => {
+      expect(combineReviews([r(["   "])], { strategy: "single" })).toEqual({ defect: null, split: false, inconclusive: false }); // whitespace-only → no primary
+      expect(combineReviews([r(["Boost your reward payout"]), clean], { strategy: "synthesis", onMerge: "either" })).toEqual({ defect: null, split: false, inconclusive: false }); // unsafe title dropped
+    });
   });
 
   it("consensusDefectOf requires a concrete blocker in BOTH reviews and drops unsafe titles", () => {
