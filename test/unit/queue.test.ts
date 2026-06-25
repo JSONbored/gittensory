@@ -760,7 +760,33 @@ describe("queue processors", () => {
     await sweepAndDrainPerPr(env, "owner/agent-repo");
 
     const after = await env.DB.prepare("select last_regated_at from pull_requests where repo_full_name = ? and number = 7").bind("owner/agent-repo").first<{ last_regated_at: string | null }>();
-    expect(typeof after?.last_regated_at).toBe("string"); // stamped via a D1 write in the per-PR job — convergence does not need a GitHub write
+    expect(typeof after?.last_regated_at).toBe("string"); // stamped via a D1 write at dispatch — convergence does not need a GitHub write
+  });
+
+  it("REGRESSION (#audit-sweep-dispatch-stamp): ONE sweep stamps ALL candidates AT DISPATCH, so the next fan-out skips the repo as draining — no overlapping sweeps", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
+    await upsertInstallation(env, { action: "created", installation: { id: 9300, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9300);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" } });
+    for (const number of [7, 8, 9]) {
+      await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number, title: `PR${number}`, state: "open", user: { login: "c" }, head: { sha: `a${number}` }, labels: [], body: "" });
+    }
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    // Run ONE sweep — but do NOT drain the per-PR jobs (simulate the staggered/deferred re-reviews not having run yet).
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+
+    // The marker is stamped for EVERY candidate immediately at dispatch — NOT waiting on the per-PR jobs.
+    const stamped = await env.DB.prepare("select count(*) as n from pull_requests where repo_full_name = ? and last_regated_at is not null").bind("owner/agent-repo").first<{ n: number }>();
+    expect(stamped?.n).toBe(3);
+
+    // So the very next cron fan-out sees the fresh stamp and SKIPS this repo as draining — the overlap that caused the runaway is gone.
+    sent.length = 0;
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "schedule" });
+    expect(sent.some((m) => m.type === "agent-regate-sweep" && m.repoFullName === "owner/agent-repo")).toBe(false);
+    const fanout = await env.DB.prepare("select metadata_json from audit_events where event_type = ? order by created_at desc limit 1").bind("agent.sweep.fanout").first<{ metadata_json: string }>();
+    expect(JSON.parse(fanout?.metadata_json ?? "{}").skippedDraining).toBeGreaterThanOrEqual(1);
   });
 
   it("agent re-gate sweep swallows a failing last_regated_at stamp and still completes (#audit-sweep-converge)", async () => {
@@ -771,12 +797,12 @@ describe("queue processors", () => {
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Stale PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "" });
     vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
     const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const stamp = vi.spyOn(repositoriesModule, "markPullRequestRegated").mockRejectedValueOnce(new Error("D1 write error"));
+    const stamp = vi.spyOn(repositoriesModule, "markPullRequestsRegated").mockRejectedValueOnce(new Error("D1 write error"));
 
     await sweepAndDrainPerPr(env, "owner/agent-repo");
 
     const audit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("agent.sweep.regate").first<{ outcome: string }>();
-    expect(audit?.outcome).toBe("completed"); // the sweep still records its verdict; the per-PR stamp failure is swallowed
+    expect(audit?.outcome).toBe("completed"); // the sweep still records its verdict; the dispatch-time stamp failure is swallowed
     expect(errors.mock.calls.some((call) => String(call[0]).includes("sweep_mark_regated_failed"))).toBe(true);
     stamp.mockRestore();
     errors.mockRestore();
@@ -881,19 +907,19 @@ describe("queue processors", () => {
     expect(typeof after?.last_regated_at).toBe("string"); // stamped inline so the sweep still advances
   });
 
-  it("the sweep swallows a failing INLINE stamp on a no-installation repo and still completes (#audit-sweep-fanout)", async () => {
+  it("the sweep swallows a failing dispatch-time stamp on a no-installation repo and still completes (#audit-sweep-fanout)", async () => {
     const env = createTestEnv({ JOBS: { async send() {} } as unknown as Queue });
     await upsertRepositoryFromGitHub(env, { name: "no-install", full_name: "owner/no-install", private: false, owner: { login: "owner" } });
     await upsertRepositorySettings(env, { repoFullName: "owner/no-install", autonomy: { merge: "auto" } });
     await upsertPullRequestFromGitHub(env, "owner/no-install", { number: 7, title: "PR7", state: "open", user: { login: "c" }, head: { sha: "a7" }, labels: [], body: "" });
     vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
     const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const stamp = vi.spyOn(repositoriesModule, "markPullRequestRegated").mockRejectedValueOnce(new Error("D1 write error"));
+    const stamp = vi.spyOn(repositoriesModule, "markPullRequestsRegated").mockRejectedValueOnce(new Error("D1 write error"));
 
     await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/no-install" });
 
     const audit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("agent.sweep.regate").first<{ outcome: string }>();
-    expect(audit?.outcome).toBe("completed"); // the inline stamp failure is swallowed; the sweep still records its verdict
+    expect(audit?.outcome).toBe("completed"); // the dispatch-time stamp failure is swallowed; the sweep still records its verdict
     expect(errors.mock.calls.some((call) => String(call[0]).includes("sweep_mark_regated_failed"))).toBe(true);
     stamp.mockRestore();
     errors.mockRestore();
@@ -924,12 +950,12 @@ describe("queue processors", () => {
     const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
     vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
     await repositoriesModule.recordGitHubRateLimitObservation(env, { repoFullName: "owner/agent-repo", resource: "rest", path: "/x", statusCode: 200, limitValue: 5000, remaining: 10, resetAt: "2026-05-28T02:30:00.000Z", observedAt: "2026-05-28T02:00:00.000Z" });
-    const stamp = vi.spyOn(repositoriesModule, "markPullRequestRegated");
+    const stamp = vi.spyOn(repositoriesModule, "markPullRequestsRegated");
 
     await processJob(env, { type: "agent-regate-pr", deliveryId: "regate-sweep:owner/agent-repo#7", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9200 });
 
     expect(sent.filter((m) => m.type === "agent-regate-pr")).toHaveLength(1); // re-queued for after the reset
-    expect(stamp).not.toHaveBeenCalled(); // deferred before any re-review or stamp
+    expect(stamp).not.toHaveBeenCalled(); // the per-PR job NEVER stamps the convergence marker — the sweep already did, at dispatch
     stamp.mockRestore();
   });
 

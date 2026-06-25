@@ -39,7 +39,7 @@ import {
   markInstallationDeleted,
   markRepositoriesRemovedFromInstallation,
   persistAdvisory,
-  markPullRequestRegated,
+  markPullRequestsRegated,
   getLatestRegatedAt,
   recordAgentCommandFeedback,
   recordAuditEvent,
@@ -589,6 +589,15 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
     });
     return;
   }
+  // Stamp the convergence marker for EVERY candidate NOW, at dispatch — not in the downstream per-PR job
+  // (#audit-sweep-dispatch-stamp). This makes getLatestRegatedAt() reflect this sweep immediately, so the in-flight
+  // guard (fanOutAgentRegateSweepJobs) skips re-arming this repo on the next cron tick BEFORE the staggered/
+  // rate-deferred per-PR re-reviews finish. Stamping in the per-PR job lagged minutes behind under load, so the
+  // guard never engaged and overlapping sweeps stacked up (the metagraphed dry-run runaway). It also advances
+  // selectRegateCandidates so the NEXT sweep picks the next-stalest 25. A plain D1 write → dry-run stays inert.
+  await markPullRequestsRegated(env, repoFullName, candidates.map((pr) => pr.number)).catch((error) => {
+    console.error(JSON.stringify({ level: "warn", event: "sweep_mark_regated_failed", repository: repoFullName, error: errorMessage(error) }));
+  });
   const requireLinkedIssue = settings.requireLinkedIssue || settings.linkedIssueGateMode !== "off";
   const verdicts: Record<string, string> = {};
   const flaggedPulls: number[] = [];
@@ -604,19 +613,15 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
     verdicts[String(pr.number)] = gate.conclusion;
     if (gate.conclusion === "failure" || gate.conclusion === "action_required") flaggedPulls.push(pr.number);
     // Fan the HEAVY re-review (rebuild advisory → re-publish the unified comment with the current head/CI →
-    // re-run auto-maintain → stamp the marker) into its own bounded, individually-retryable per-PR job, staggered
-    // like the repo fan-out, so it interleaves with other work instead of monopolizing the consumer for all
-    // SWEEP_MAX_PRS candidates at once (#audit-sweep-fanout). The cheap verdict summary above is computed inline
-    // and recorded below, preserving the advisory audit. With no installation to act with, stamp the marker
-    // inline so the sweep still converges (audit-only — no re-review is possible without an installation).
+    // re-run auto-maintain) into its own bounded, individually-retryable per-PR job, staggered like the repo
+    // fan-out, so it interleaves with other work instead of monopolizing the consumer for all SWEEP_MAX_PRS
+    // candidates at once (#audit-sweep-fanout). The cheap verdict summary above is computed inline and recorded
+    // below, preserving the advisory audit. The convergence marker was already stamped for every candidate at
+    // dispatch (above); with no installation to act with there is simply no re-review to fan out (audit-only).
     if (sweepInstallationId != null) {
       const job: JobMessage = { type: "agent-regate-pr", deliveryId: `regate-sweep:${repoFullName}#${pr.number}`, repoFullName, prNumber: pr.number, installationId: sweepInstallationId };
       const delaySeconds = Math.min(index * 10, 600);
       await (delaySeconds > 0 ? env.JOBS.send(job, { delaySeconds }) : env.JOBS.send(job));
-    } else {
-      await markPullRequestRegated(env, repoFullName, pr.number).catch((error) => {
-        console.error(JSON.stringify({ level: "warn", event: "sweep_mark_regated_failed", repository: repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
-      });
     }
   }
   await recordAuditEvent(env, {
@@ -629,16 +634,17 @@ async function sweepRepoRegate(env: Env, repoFullName: string | undefined): Prom
   });
 }
 
-// #audit-sweep-fanout: one per-PR re-gate unit fanned out by sweepRepoRegate. Re-reviews + stamps a single PR as
-// its own bounded, retryable queue message. Routes through the #1258 chokepoint so a repo that paused or switched
-// to dry-run between fan-out and processing stays inert. Self-contained: resolves the repo settings to mirror the
-// sweep's skipAiReview policy. Both steps degrade quietly on failure (logged, never rethrown) so one bad PR never
-// blocks the others; a stamp failure just re-selects the PR next sweep.
+// #audit-sweep-fanout: one per-PR re-gate unit fanned out by sweepRepoRegate. Re-reviews a single PR as its own
+// bounded, retryable queue message. Routes through the #1258 chokepoint so a repo that paused or switched to
+// dry-run between fan-out and processing stays inert. Self-contained: resolves the repo settings to mirror the
+// sweep's skipAiReview policy. The convergence marker is NOT stamped here — the sweep already stamped every
+// candidate at dispatch (#audit-sweep-dispatch-stamp), so the in-flight guard does not wait on this job and a
+// deferred/failed re-review never stalls convergence (the next sweep after the window re-claims the PR).
 async function regatePullRequest(env: Env, repoFullName: string, prNumber: number, installationId: number, deliveryId: string): Promise<void> {
   // Reserve installation rate-limit headroom for real webhooks (#audit-rate-headroom): all repos share ONE GitHub
   // App installation = ONE REST bucket, so when the shared budget is at/below the maintenance floor, DEFER this
   // re-review until the reset instead of burning budget a webhook's re-review needs. Re-enqueue with the reset
-  // delay so the PR is still eventually re-gated.
+  // delay so the PR is still eventually re-reviewed.
   const rateResetAt = await shouldWaitForGitHubRateLimit(env, MAINTENANCE_RESERVED_HEADROOM);
   if (rateResetAt) {
     await env.JOBS.send({ type: "agent-regate-pr", deliveryId, repoFullName, prNumber, installationId }, { delaySeconds: delayUntil(rateResetAt) });
@@ -647,9 +653,6 @@ async function regatePullRequest(env: Env, repoFullName: string, prNumber: numbe
   const settings = await resolveRepositorySettings(env, repoFullName);
   await reReviewStoredPullRequest(env, deliveryId, installationId, repoFullName, prNumber, undefined, { skipAiReview: settings.aiReviewMode !== "block" }).catch((error) => {
     console.error(JSON.stringify({ level: "warn", event: "sweep_rereview_failed", deliveryId, repository: repoFullName, pullNumber: prNumber, error: errorMessage(error) }));
-  });
-  await markPullRequestRegated(env, repoFullName, prNumber).catch((error) => {
-    console.error(JSON.stringify({ level: "warn", event: "sweep_mark_regated_failed", repository: repoFullName, pullNumber: prNumber, error: errorMessage(error) }));
   });
 }
 

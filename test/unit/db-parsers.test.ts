@@ -10,6 +10,7 @@ import {
   listRepoSyncSegments,
   listRepoSyncStates,
   markPullRequestRegated,
+  markPullRequestsRegated,
   recordAuditEvent,
   upsertOfficialMinerDetection,
   upsertPullRequestFromGitHub,
@@ -94,6 +95,22 @@ describe("database row parser hardening", () => {
     const after = (await listPullRequests(env, "owner/repo")).find((p) => p.number === 5);
     expect(typeof after?.lastRegatedAt).toBe("string"); // marker stamped with an ISO timestamp
     expect(after?.title).toBe("Stale PR"); // INVARIANT: a plain D1 UPDATE — it touches only the marker, not PR content
+  });
+
+  it("markPullRequestsRegated batch-stamps every candidate at dispatch and no-ops on an empty list (#audit-sweep-dispatch-stamp)", async () => {
+    const env = createTestEnv();
+    for (const number of [5, 6, 7]) {
+      await upsertPullRequestFromGitHub(env, "owner/repo", { number, title: `PR${number}`, state: "open", user: { login: "alice" }, labels: [] });
+    }
+
+    await markPullRequestsRegated(env, "owner/repo", []); // empty → no-op (early return)
+    expect((await listPullRequests(env, "owner/repo")).every((p) => (p.lastRegatedAt ?? null) === null)).toBe(true);
+
+    await markPullRequestsRegated(env, "owner/repo", [5, 7]); // batch stamps only 5 and 7
+    const rows = await listPullRequests(env, "owner/repo");
+    expect(typeof rows.find((p) => p.number === 5)?.lastRegatedAt).toBe("string");
+    expect(typeof rows.find((p) => p.number === 7)?.lastRegatedAt).toBe("string");
+    expect(rows.find((p) => p.number === 6)?.lastRegatedAt ?? null).toBeNull(); // #6 not in the batch → untouched
   });
 
   it("REGRESSION: a later GitHub sync does NOT clobber last_regated_at (omitted from the upsert SET clause)", async () => {

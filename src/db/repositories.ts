@@ -2591,6 +2591,21 @@ export async function markPullRequestRegated(env: Env, fullName: string, number:
     .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.number, number)));
 }
 
+/** Batch variant: stamp the re-gate marker for every dispatched candidate in ONE write, at sweep DISPATCH time.
+ *  Stamping here — not in the downstream per-PR job — makes getLatestRegatedAt reflect the sweep immediately, so
+ *  the in-flight guard engages on the next cron tick before the staggered/deferred per-PR re-reviews complete.
+ *  This closes the overlapping-sweep runaway where the per-PR stamp lagged minutes behind under load. A plain D1
+ *  write — never the #1258 GitHub chokepoint — so dry-run stays inert. (#audit-sweep-dispatch-stamp) */
+export async function markPullRequestsRegated(env: Env, fullName: string, numbers: number[]): Promise<void> {
+  if (numbers.length === 0) return;
+  const db = getDb(env.DB);
+  const now = nowIso();
+  await db
+    .update(pullRequests)
+    .set({ lastRegatedAt: now, updatedAt: now })
+    .where(and(eq(pullRequests.repoFullName, fullName), inArray(pullRequests.number, numbers)));
+}
+
 /** In-flight guard input for the re-gate sweep fan-out (#audit-sweep-fanout): the MOST RECENT last_regated_at
  *  across a repo's OPEN PRs (the freshest sweep stamp), or null if none has been swept. fanOutAgentRegateSweepJobs
  *  passes this to isRegateSweepDraining to skip re-arming a repo whose prior sweep is still draining. */
