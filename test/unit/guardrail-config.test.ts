@@ -1,31 +1,63 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_CRUCIAL_GUARDRAIL_GLOBS, FAIL_CLOSED_GUARDRAIL_GLOBS, loadHardGuardrailGlobs } from "../../src/review/guardrail-config";
+import { matchesAny } from "../../src/signals/change-guardrail";
+import { CONFIG_AS_CODE_GUARDRAIL_GLOBS, DEFAULT_CRUCIAL_GUARDRAIL_GLOBS, ENGINE_DECISION_GUARDRAIL_GLOBS, FAIL_CLOSED_GUARDRAIL_GLOBS, loadHardGuardrailGlobs } from "../../src/review/guardrail-config";
 
 function envWith(get: (key: string, type: string) => Promise<unknown>): Env {
   return { REVIEW_CONFIG: { get } } as unknown as Env;
 }
 
 describe("loadHardGuardrailGlobs", () => {
-  it("returns the conservative default when REVIEW_CONFIG is unbound", async () => {
-    expect(await loadHardGuardrailGlobs({} as Env, "JSONbored/gittensory")).toEqual(DEFAULT_CRUCIAL_GUARDRAIL_GLOBS);
+  it("returns the conservative default plus the config-as-code + engine guards when REVIEW_CONFIG is unbound", async () => {
+    expect(await loadHardGuardrailGlobs({} as Env, "JSONbored/gittensory")).toEqual([...DEFAULT_CRUCIAL_GUARDRAIL_GLOBS, ...CONFIG_AS_CODE_GUARDRAIL_GLOBS, ...ENGINE_DECISION_GUARDRAIL_GLOBS]);
   });
 
-  it("reads globs from KV keyed by the repo slug (owner stripped)", async () => {
+  it("reads globs from KV keyed by the repo slug (owner stripped) and always appends the config-as-code + engine guards", async () => {
     const get = vi.fn().mockResolvedValue({ hardGuardrailGlobs: ["src/scoring/**", "scripts/**"] });
     const globs = await loadHardGuardrailGlobs(envWith(get), "JSONbored/gittensory");
-    expect(globs).toEqual(["src/scoring/**", "scripts/**"]);
+    expect(globs).toEqual(["src/scoring/**", "scripts/**", ...CONFIG_AS_CODE_GUARDRAIL_GLOBS, ...ENGINE_DECISION_GUARDRAIL_GLOBS]);
     expect(get).toHaveBeenCalledWith("gittensory", "json");
   });
 
-  it("falls back to the default when the field is absent, null, or empty", async () => {
-    expect(await loadHardGuardrailGlobs(envWith(async () => ({})), "o/r")).toEqual(DEFAULT_CRUCIAL_GUARDRAIL_GLOBS);
-    expect(await loadHardGuardrailGlobs(envWith(async () => null), "o/r")).toEqual(DEFAULT_CRUCIAL_GUARDRAIL_GLOBS);
-    expect(await loadHardGuardrailGlobs(envWith(async () => ({ hardGuardrailGlobs: [] })), "o/r")).toEqual(DEFAULT_CRUCIAL_GUARDRAIL_GLOBS);
+  it("falls back to the default (plus config-as-code + engine guards) when the field is absent, null, or empty", async () => {
+    const expected = [...DEFAULT_CRUCIAL_GUARDRAIL_GLOBS, ...CONFIG_AS_CODE_GUARDRAIL_GLOBS, ...ENGINE_DECISION_GUARDRAIL_GLOBS];
+    expect(await loadHardGuardrailGlobs(envWith(async () => ({})), "o/r")).toEqual(expected);
+    expect(await loadHardGuardrailGlobs(envWith(async () => null), "o/r")).toEqual(expected);
+    expect(await loadHardGuardrailGlobs(envWith(async () => ({ hardGuardrailGlobs: [] })), "o/r")).toEqual(expected);
   });
 
-  it("drops non-string entries and keeps the valid globs", async () => {
+  it("drops non-string entries and keeps the valid globs (plus config-as-code + engine guards)", async () => {
     const globs = await loadHardGuardrailGlobs(envWith(async () => ({ hardGuardrailGlobs: [123, "scripts/**", ""] })), "o/r");
-    expect(globs).toEqual(["scripts/**"]);
+    expect(globs).toEqual(["scripts/**", ...CONFIG_AS_CODE_GUARDRAIL_GLOBS, ...ENGINE_DECISION_GUARDRAIL_GLOBS]);
+  });
+
+  it("guards the engine's own crown-jewel decision paths for every repo, even under a narrow KV glob list", async () => {
+    // A repo whose KV tuning is deliberately minimal must NOT thereby un-guard the review engine's own code.
+    const globs = await loadHardGuardrailGlobs(envWith(async () => ({ hardGuardrailGlobs: ["docs/**"] })), "o/r");
+    for (const enginePath of [
+      "src/rules/advisory.ts",
+      "src/services/agent-action-executor.ts",
+      "src/settings/agent-execution.ts",
+      "src/queue/processors.ts", // the orchestration + the direct-close paths — the gap this constant closes
+      "src/queue/dlq.ts",
+      "src/github/pr-actions.ts",
+      "src/scoring/model.ts",
+      "src/auth/session.ts",
+      "src/review/guardrail-config.ts",
+    ]) {
+      expect(matchesAny(enginePath, globs)).toBe(true);
+    }
+    expect(matchesAny("docs/readme.md", globs)).toBe(true); // the repo's own narrow KV glob still applies
+    expect(matchesAny("src/utils/json.ts", globs)).toBe(false); // a non-decision src file remains auto-mergeable
+    expect(matchesAny("src/db/repositories.ts", globs)).toBe(false); // the data layer stays non-crucial (env kill-switch backstops the freeze there)
+  });
+
+  it("guards the gate's own policy files for every repo (the config-as-code self-weakening hole)", async () => {
+    const globs = await loadHardGuardrailGlobs(envWith(async () => ({ hardGuardrailGlobs: ["src/**"] })), "o/r");
+    for (const policyFile of [".gittensory.yml", ".github/gittensory.json", "codecov.yml", ".github/codecov.yml"]) {
+      expect(matchesAny(policyFile, globs)).toBe(true);
+    }
+    expect(matchesAny("src/utils/json.ts", globs)).toBe(true); // the repo's own KV glob still applies
+    expect(matchesAny("README.md", globs)).toBe(false); // an unrelated file is still auto-mergeable
   });
 
   it("fails CLOSED (guard everything) when the KV read throws — an outage must never open the gate", async () => {

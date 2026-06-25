@@ -1,5 +1,8 @@
-import { Octokit } from "@octokit/core";
 import type { Advisory, GitHubWebhookPayload } from "../types";
+import { fetchBrokeredInstallationToken, isOrbBrokerMode } from "../orb/broker-client";
+import { makeInstallationOctokit } from "./client";
+import { maintainerControlPanelUrl } from "./footer";
+import type { AgentActionMode } from "../settings/agent-execution";
 import { signRs256Jwt } from "../utils/crypto";
 import { evaluateGateCheck, formatCheckRunOutput, formatGateCheckOutput, type CheckRunAnnotationContext, type CheckRunOutput, type GateCheckConclusion, type GateCheckPolicy } from "../rules/advisory";
 
@@ -49,6 +52,15 @@ const TOKEN_SAFETY_MARGIN_MS = 120_000;
 export async function createInstallationToken(env: Env, installationId: number): Promise<string> {
   const cached = installationTokenCache.get(installationId);
   if (cached && cached.expiresAtMs - TOKEN_SAFETY_MARGIN_MS > Date.now()) return cached.token;
+  // Self-host broker mode: a brokered self-host holds no App private key, so source the installation token from
+  // the central Orb (enrollment secret → short-lived token) instead of minting locally. Cloud sets no enrollment
+  // secret, so this branch is inert there → byte-identical. The token caches the same way (the install id is the
+  // self-host's single bound install). See src/orb/broker-client.
+  if (isOrbBrokerMode(env)) {
+    const brokered = await fetchBrokeredInstallationToken(env);
+    installationTokenCache.set(installationId, { token: brokered.token, expiresAtMs: brokered.expiresAtMs });
+    return brokered.token;
+  }
   const jwt = await createAppJwt(env);
   const response = await timeoutFetch(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
     method: "POST",
@@ -131,11 +143,13 @@ export async function createOrUpdateCheckRun(
   advisory: Advisory,
   detailLevel: "minimal" | "standard" | "deep" = "minimal",
   annotationContext?: CheckRunAnnotationContext,
+  mode: AgentActionMode = "live",
 ): Promise<CheckRunOutcome | null> {
   return createOrUpdateNamedCheckRun(env, installationId, repoFullName, advisory, {
     name: GITTENSORY_CONTEXT_CHECK_NAME,
     conclusion: advisory.conclusion,
     output: formatCheckRunOutput(advisory, detailLevel, annotationContext),
+    mode,
   });
 }
 
@@ -146,6 +160,7 @@ export async function createOrUpdateGateCheckRun(
   advisory: Advisory,
   policy: GateCheckPolicy = {},
   options: { checkRunId?: number | undefined } = {},
+  mode: AgentActionMode = "live",
 ): Promise<CheckRunOutcome | null> {
   const gate = evaluateGateCheck(advisory, policy);
   return createOrUpdateNamedCheckRun(env, installationId, repoFullName, advisory, {
@@ -154,6 +169,7 @@ export async function createOrUpdateGateCheckRun(
     conclusion: gate.conclusion,
     output: formatGateCheckOutput(gate),
     checkRunId: options.checkRunId,
+    mode,
   });
 }
 
@@ -162,6 +178,7 @@ export async function createOrUpdatePendingGateCheckRun(
   installationId: number,
   repoFullName: string,
   advisory: Advisory,
+  mode: AgentActionMode = "live",
 ): Promise<CheckRunOutcome | null> {
   return createOrUpdateNamedCheckRun(env, installationId, repoFullName, advisory, {
     name: GITTENSORY_GATE_CHECK_NAME,
@@ -171,6 +188,7 @@ export async function createOrUpdatePendingGateCheckRun(
       summary: "Gittensory is running deterministic public PR hygiene checks.",
       text: "The Gate blocks every author on the repo's configured hard blockers (duplicate PRs by default); on everything else, and while state is still syncing, it stays advisory.",
     },
+    mode,
   });
 }
 
@@ -180,6 +198,7 @@ export async function createOrUpdateSkippedGateCheckRun(
   repoFullName: string,
   advisory: Advisory,
   reason = "PR closed before full evaluation.",
+  mode: AgentActionMode = "live",
 ): Promise<CheckRunOutcome | null> {
   return createOrUpdateNamedCheckRun(env, installationId, repoFullName, advisory, {
     name: GITTENSORY_GATE_CHECK_NAME,
@@ -190,6 +209,7 @@ export async function createOrUpdateSkippedGateCheckRun(
       summary: reason,
       text: "Gittensory does not post late first comments on closed or merged pull requests.",
     },
+    mode,
   });
 }
 
@@ -206,6 +226,7 @@ export async function createOrUpdateErroredGateCheckRun(
   repoFullName: string,
   advisory: Advisory,
   options: { checkRunId?: number | undefined } = {},
+  mode: AgentActionMode = "live",
 ): Promise<CheckRunOutcome | null> {
   return createOrUpdateNamedCheckRun(env, installationId, repoFullName, advisory, {
     name: GITTENSORY_GATE_CHECK_NAME,
@@ -217,6 +238,7 @@ export async function createOrUpdateErroredGateCheckRun(
       text: "Gittensory finalizes the Gate to a neutral, non-blocking state when evaluation is interrupted, so the check never hangs in_progress. Push a new commit or use the 'Re-run Gittensory review' checkbox to re-evaluate.",
     },
     checkRunId: options.checkRunId,
+    mode,
   });
 }
 
@@ -232,6 +254,7 @@ export async function createOrUpdateOverriddenGateCheckRun(
   repoFullName: string,
   advisory: Advisory,
   options: { actor: string; reason: string; checkRunId?: number | undefined },
+  mode: AgentActionMode = "live",
 ): Promise<CheckRunOutcome | null> {
   return createOrUpdateNamedCheckRun(env, installationId, repoFullName, advisory, {
     name: GITTENSORY_GATE_CHECK_NAME,
@@ -243,6 +266,7 @@ export async function createOrUpdateOverriddenGateCheckRun(
       text: `Overridden by @${options.actor}: ${options.reason}`,
     },
     checkRunId: options.checkRunId,
+    mode,
   });
 }
 
@@ -257,6 +281,7 @@ async function createOrUpdateNamedCheckRun(
     conclusion?: GitHubCheckConclusion | undefined;
     output: CheckRunOutput;
     checkRunId?: number | undefined;
+    mode?: AgentActionMode | undefined;
   },
 ): Promise<CheckRunOutcome | null> {
   if (!advisory.headSha) return null;
@@ -264,9 +289,13 @@ async function createOrUpdateNamedCheckRun(
   if (!owner || !repo) throw new Error(`Invalid repository full name: ${repoFullName}`);
 
   const token = await createInstallationToken(env, installationId);
-  // Inject a per-request timeout so a stalled GitHub API call (e.g. the Gate's completing PATCH) can never
-  // hang the Worker and orphan the in_progress check.
-  const octokit = new Octokit({ auth: token, request: { fetch: timeoutFetch } });
+  // makeInstallationOctokit injects the shared per-request timeout (a stalled PATCH can never orphan the
+  // in_progress check) AND suppresses the check-run writes under a non-live mode (dry-run / pause / freeze).
+  const octokit = makeInstallationOctokit(env, token, check.mode);
+  // Point the merge-box "Details" link at the repo's Gittensory maintainer panel instead of GitHub's generic
+  // check page. Spread conditionally so a URL-construction failure (null) just omits it. (#audit-details-url)
+  const detailsUrl = maintainerControlPanelUrl(env, repoFullName);
+  const detailsUrlBody = detailsUrl ? { details_url: detailsUrl } : {};
 
   try {
     if (check.checkRunId) {
@@ -279,6 +308,7 @@ async function createOrUpdateNamedCheckRun(
         status: check.status ?? "completed",
         ...(check.conclusion ? { conclusion: check.conclusion } : {}),
         output: outputForCheckRunUpdate(check.output),
+        ...detailsUrlBody,
       });
       const data = response.data as CheckRunResponse;
       return publishedOutcome(data);
@@ -302,6 +332,7 @@ async function createOrUpdateNamedCheckRun(
         status: check.status ?? "completed",
         ...(check.conclusion ? { conclusion: check.conclusion } : {}),
         output: outputForCheckRunUpdate(check.output),
+        ...detailsUrlBody,
       });
       const data = response.data as CheckRunResponse;
       return publishedOutcome(data);
@@ -315,6 +346,7 @@ async function createOrUpdateNamedCheckRun(
       status: check.status ?? "completed",
       ...(check.conclusion ? { conclusion: check.conclusion } : {}),
       output: check.output,
+      ...detailsUrlBody,
     });
     const data = response.data as CheckRunResponse;
     return publishedOutcome(data);

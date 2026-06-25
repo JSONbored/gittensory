@@ -27,6 +27,7 @@ import { nowIso } from "../utils/json";
 import { sanitizePublicComment } from "../queue-intelligence";
 import { projectLinkedIssueMultiplierForPlannedSolve, type LinkedIssueMultiplierStatus } from "../scoring/preview";
 import { hasLocalTestEvidence } from "./test-evidence";
+import { isDuplicateClusterWinner } from "./duplicate-winner";
 import { PREFLIGHT_LIMITS } from "./preflight-limits";
 import type { UnifiedCollapsible } from "../review/unified-comment";
 
@@ -84,6 +85,7 @@ export type QueueHealth = {
     openPullRequests: number;
     unlinkedPullRequests: number;
     stalePullRequests: number;
+    draftPullRequests: number;
     maintainerAuthoredPullRequests: number;
     collisionClusters: number;
     ageBuckets: {
@@ -912,6 +914,7 @@ export function buildQueueHealth(
     countOverrides.likelyReviewablePullRequests !== undefined ? "authoritative" : openPullRequestCount > openPullRequests.length ? "sampled_cache" : "cache";
   const unlinkedPullRequests = openPullRequests.filter((pr) => pr.linkedIssues.length === 0);
   const stalePullRequests = openPullRequests.filter((pr) => daysSince(pr.updatedAt ?? pr.createdAt) >= 14);
+  const draftPullRequests = openPullRequests.filter((pr) => pr.isDraft);
   const maintainerAuthoredPullRequests = openPullRequests.filter((pr) => isMaintainerAssociation(pr.authorAssociation));
   const cachedLikelyReviewablePullRequests = openPullRequests.filter((pr) => pr.linkedIssues.length > 0 && daysSince(pr.updatedAt ?? pr.createdAt) < 30).length;
   const likelyReviewablePullRequests = Math.min(openPullRequestCount, Math.max(cachedLikelyReviewablePullRequests, countOverrides.likelyReviewablePullRequests ?? 0));
@@ -962,6 +965,16 @@ export function buildQueueHealth(
       detail: `${stalePullRequests.length} open pull request(s) have not updated in at least 14 days.`,
     });
   }
+  const inactiveDraftPullRequests = draftPullRequests.filter((pr) => daysSince(pr.updatedAt ?? pr.createdAt) >= 14);
+  if (inactiveDraftPullRequests.length > 0) {
+    findings.push({
+      code: "inactive_draft_prs",
+      severity: "info",
+      title: "Draft PRs have been open without recent activity",
+      detail: `${inactiveDraftPullRequests.length} draft pull request(s) have not updated in at least 14 days — they may be abandoned or blocked.`,
+      action: "Mark as ready for review when work resumes, or close if the approach has been abandoned.",
+    });
+  }
   return {
     repoFullName,
     generatedAt: nowIso(),
@@ -973,6 +986,7 @@ export function buildQueueHealth(
       openPullRequests: openPullRequestCount,
       unlinkedPullRequests: unlinkedPullRequests.length,
       stalePullRequests: stalePullRequests.length,
+      draftPullRequests: draftPullRequests.length,
       maintainerAuthoredPullRequests: maintainerAuthoredPullRequests.length,
       collisionClusters: collisions.summary.clusterCount,
       ageBuckets,
@@ -1066,7 +1080,10 @@ export function buildLabelAudit(repo: RepositoryRecord | null, repoLabels: RepoL
       existsOnGitHub: liveLabels.includes(name),
     }));
   const missingConfiguredLabels = configuredLabels.filter((label) => !liveLabels.includes(label));
-  const suspiciousConfiguredLabels = configuredLabels.filter((label) => /^(status|state|source|bot|codex|gittensory|reward|score|miner|verified|risk)[:/-]?/i.test(label));
+  // Require a real separator (`:`/`/`/`-`) OR end-of-string after the keyword so this flags prefix-style labels
+  // (`status:ready`, `reward/x`) and bare keywords (`bot`) — but NOT mid-word matches like `bottleneck` (`bot`),
+  // `scoreboard` (`score`), or `riskier` (`risk`). The old optional+unanchored `[:/-]?` over-matched those.
+  const suspiciousConfiguredLabels = configuredLabels.filter((label) => /^(status|state|source|bot|codex|gittensory|reward|score|miner|verified|risk)([:/-]|$)/i.test(label));
   const findings: SignalFinding[] = [];
   if (repo?.registryConfig?.trustedLabelPipeline && missingConfiguredLabels.length > 0) {
     findings.push({
@@ -3502,9 +3519,12 @@ export function buildContributorStrategy(args: {
   scoringSnapshot: ScoringModelSnapshotRecord;
   outcomeHistory?: ContributorOutcomeHistory | null | undefined;
 }): ContributorStrategy {
-  const outcomeByRepo = new Map((args.outcomeHistory?.repoOutcomes ?? []).map((outcome) => [outcome.repoFullName, outcome]));
+  // Key/lookup case-insensitively: outcome repo names can come from the Gittensor API (unnormalized casing)
+  // while opportunity repo names use registry casing — match the sibling sites (buildRepoFitRecommendation /
+  // buildPullRequestReviewIntelligence) that already compare `repoFullName.toLowerCase()`.
+  const outcomeByRepo = new Map((args.outcomeHistory?.repoOutcomes ?? []).map((outcome) => [outcome.repoFullName.toLowerCase(), outcome]));
   const bestFitRepos = args.fit.opportunities.slice(0, 10).map((opportunity) => {
-    const outcome = outcomeByRepo.get(opportunity.repoFullName);
+    const outcome = outcomeByRepo.get(opportunity.repoFullName.toLowerCase());
     const privateScoringReadiness: ContributorStrategy["bestFitRepos"][number]["privateScoringReadiness"] =
       /* v8 ignore next -- Maintainer-lane strategy readiness is already represented in repo-fit and reward-risk outputs. */
       outcome?.maintainerLane
@@ -4151,6 +4171,10 @@ export function buildPublicPrIntelligenceComment(args: {
   review?: FocusManifestReviewConfig | undefined;
   /** Optional AI maintainer-review notes (already public-safe). Rendered as an advisory section. */
   aiReview?: { notes: string } | undefined;
+  /** Duplicate-winner adjudication (#dup-winner). When true AND this PR is the cluster winner (the lowest open
+   *  sibling number among `linkedDuplicatePrs`), the hard-duplicate panel block is suppressed so the winner's
+   *  panel does not show a blocking duplicate. Default/false ⇒ byte-identical to today. */
+  duplicateWinnerEnabled?: boolean | undefined;
 }): string {
   const publicFindings = publicSafePreflightFindings(args.preflight, args.settings);
   const prCollisionClusters = pullRequestSpecificCollisionClusters(args.collisions, args.pr);
@@ -4178,7 +4202,13 @@ export function buildPublicPrIntelligenceComment(args: {
   const gateEnabled = args.settings.gateCheckMode === "enabled";
   const hardLinkedIssueBlock =
     args.settings.linkedIssueGateMode === "block" && args.pr.linkedIssues.length === 0 && !hasClearNoIssueRationale(args.pr);
-  const hardDuplicateBlock = args.settings.duplicatePrGateMode === "block" && linkedDuplicatePrs.length > 0;
+  // Duplicate-winner adjudication (#dup-winner): when the flag is ON and this PR is the cluster winner (the
+  // lowest open sibling number), do NOT hard-block it as a duplicate — only the losers block. `linkedDuplicatePrs`
+  // is open-only (collision clusters exclude closed PRs). Flag-OFF (default) short-circuits ⇒ byte-identical.
+  const hardDuplicateBlock =
+    args.settings.duplicatePrGateMode === "block" &&
+    linkedDuplicatePrs.length > 0 &&
+    !(args.duplicateWinnerEnabled && isDuplicateClusterWinner(args.pr.number, linkedDuplicatePrs));
   const fallbackGateConclusion = !gateEnabled
     ? "success"
     : !args.repo
@@ -4376,6 +4406,10 @@ export function buildPublicPrPanelSignalRows(args: {
   preflight: PreflightResult;
   settings: RepositorySettings;
   gate?: PublicPrPanelGateEvaluation | undefined;
+  /** Duplicate-winner adjudication (#dup-winner). When true AND this PR is the cluster winner (the lowest open
+   *  sibling number among `linkedDuplicatePrs`), the hard-duplicate block is suppressed. Default/false ⇒
+   *  byte-identical to today. Matches `buildPublicPrIntelligenceComment` so both panels agree. */
+  duplicateWinnerEnabled?: boolean | undefined;
 }): { rows: PublicPrPanelSignalRow[]; readinessTotal: number } {
   const prCollisionClusters = pullRequestSpecificCollisionClusters(args.collisions, args.pr);
   const linkedDuplicatePrs = linkedIssueDuplicatePullRequests(args.pr, prCollisionClusters);
@@ -4386,7 +4420,12 @@ export function buildPublicPrPanelSignalRows(args: {
   const relatedWorkResult = relatedWorkPanelResult(linkedDuplicatePrs, scopedOverlapCount);
   const gateEnabled = args.settings.gateCheckMode === "enabled";
   const hardLinkedIssueBlock = args.settings.linkedIssueGateMode === "block" && args.pr.linkedIssues.length === 0 && !hasClearNoIssueRationale(args.pr);
-  const hardDuplicateBlock = args.settings.duplicatePrGateMode === "block" && linkedDuplicatePrs.length > 0;
+  // Duplicate-winner adjudication (#dup-winner): suppress the winner's hard-duplicate block (see the comment
+  // builder). `linkedDuplicatePrs` is open-only; flag-OFF (default) short-circuits ⇒ byte-identical to today.
+  const hardDuplicateBlock =
+    args.settings.duplicatePrGateMode === "block" &&
+    linkedDuplicatePrs.length > 0 &&
+    !(args.duplicateWinnerEnabled && isDuplicateClusterWinner(args.pr.number, linkedDuplicatePrs));
   const fallbackGateConclusion = !gateEnabled ? "success" : !args.repo ? "neutral" : hardLinkedIssueBlock || hardDuplicateBlock ? "failure" : "success";
   const gateConclusion = args.gate?.conclusion ?? fallbackGateConclusion;
   const confirmedMiner = isOfficialContributorDetection(args.detection);
@@ -4529,8 +4568,13 @@ function validationComponent(pr: PullRequestRecord, preflight: PreflightResult):
   if (preflight.status === "hold") {
     return { score: 5, evidence: "Cached preflight status is hold.", action: "Fix blocker." };
   }
-  if (missingTests && !explicitValidation) {
-    return { score: 10, evidence: "No cached test files or validation note found.", action: "Add validation note." };
+  if (missingTests) {
+    // A body validation note is an UNBACKED claim when no test files accompany the change. Cap it just above the
+    // no-signal floor so a one-line "tested" cannot lift readiness over a configured gate threshold on a
+    // zero-test PR — full credit is reserved for actual test evidence in the branch below. (#audit-2.3)
+    return explicitValidation
+      ? { score: 12, evidence: "PR body claims validation but no test files accompany the change.", action: "Add tests covering the change." }
+      : { score: 10, evidence: "No cached test files or validation note found.", action: "Add validation note." };
   }
   if (explicitValidation) {
     return { score: 25, evidence: "PR body includes validation/test evidence.", action: "No action." };
@@ -4589,7 +4633,7 @@ export type PrTextLintInput = {
 };
 
 export type PrTextLintComponent = {
-  key: "traceability" | "commit_message" | "pr_body";
+  key: "traceability" | "commit_message" | "pr_body" | "validation_evidence";
   label: string;
   status: "ok" | "weak";
   evidence: string;
@@ -4603,7 +4647,7 @@ export type PrTextLintReport = {
    * 0-100 PR-text quality score from the deterministic rubric (sum of per-component weights; weak
    * components score 25% of their weight). Advisory sub-signal only — `verdict` is authoritative.
    * Because traceability is a hard gate for the verdict but only one weighted component of the score,
-   * the two can rank-disagree (e.g. a strong commit + body with no linked issue scores ~78 yet the
+   * the two can rank-disagree (e.g. a strong commit + body with no linked issue scores ~81 yet the
    * verdict is "weak"). Rank by `verdict`, not `score`. Not a Gittensor reward/trust score.
    */
   score: number;
@@ -4619,7 +4663,7 @@ export const GENERIC_COMMIT_PATTERN = /^(?:(?:wip|fix(?:es|ed|ing)?|updat(?:e|es
 // then `: ` and a non-empty summary (e.g. `feat(api): add cursor pagination`). Single source of truth
 // with CONTRIBUTING.md "Commit And PR Titles".
 const CONVENTIONAL_COMMIT_PATTERN = /^(?:feat|fix|test|docs|refactor|build|ci|chore|revert)(?:\([^()\r\n]+\))?!?:\s+\S/i;
-const PR_TEXT_LINT_WEIGHTS = { traceability: 30, commit_message: 35, pr_body: 35 } as const;
+const PR_TEXT_LINT_WEIGHTS = { traceability: 25, commit_message: 30, pr_body: 30, validation_evidence: 15 } as const;
 
 function stripPrBodyScaffolding(body: string): string {
   return body
@@ -4633,10 +4677,11 @@ function stripPrBodyScaffolding(body: string): string {
 
 /**
  * Deterministic commit-message + PR-body rubric linter. Catches generic/empty AI-slop text before
- * submit and returns a quality verdict plus specific, public-safe fixes. Reuses the gittensor
- * traceability/no-issue-rationale rubric ({@link hasClearNoIssueRationale}, {@link tokenize},
- * {@link STOPWORDS}) shared with the public readiness score. All output is routed through
- * {@link sanitizePublicComment}; no private scoring is exposed.
+ * submit and returns a quality verdict plus specific, public-safe fixes. Grades four dimensions:
+ * traceability (25 pts), commit message (30 pts), PR body (30 pts), validation evidence (15 pts).
+ * Reuses the gittensor traceability/no-issue-rationale rubric ({@link hasClearNoIssueRationale},
+ * {@link tokenize}, {@link STOPWORDS}) shared with the public readiness score. All output is routed
+ * through {@link sanitizePublicComment}; no private scoring is exposed.
  */
 export function buildPrTextLint(input: PrTextLintInput): PrTextLintReport {
   const commitMessages = (input.commitMessages ?? []).map((message) => message.trim()).filter((message) => message.length > 0);
@@ -4708,7 +4753,18 @@ export function buildPrTextLint(input: PrTextLintInput): PrTextLintReport {
         fix: "Describe what changed, why, and how it was validated; fill in or remove unused template sections.",
       };
 
-  const components = [traceability, commitMessage, prBodyComponent];
+  const validationOk = hasValidationNote(prBody);
+  const validationEvidence: PrTextLintComponent = validationOk
+    ? { key: "validation_evidence", label: "Validation evidence", status: "ok", evidence: "PR body describes how the change was tested or validated." }
+    : {
+        key: "validation_evidence",
+        label: "Validation evidence",
+        status: "weak",
+        evidence: "PR body does not describe how the change was tested or validated.",
+        fix: "Add a short note describing how you validated this change — for example, 'Tested with npm run test:ci' or 'Manually verified the login flow in staging'.",
+      };
+
+  const components = [traceability, commitMessage, prBodyComponent, validationEvidence];
   const score = components.reduce((sum, component) => sum + (component.status === "ok" ? PR_TEXT_LINT_WEIGHTS[component.key] : Math.round(PR_TEXT_LINT_WEIGHTS[component.key] * 0.25)), 0);
   const weakCount = components.filter((component) => component.status === "weak").length;
   const verdict: PrTextLintReport["verdict"] = weakCount === 0 ? "strong" : traceabilityOk && weakCount === 1 ? "adequate" : "weak";

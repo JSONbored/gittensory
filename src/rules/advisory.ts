@@ -10,6 +10,7 @@ import type {
   RepositoryRecord,
 } from "../types";
 import type { CollisionCluster, CollisionReport } from "../signals/engine";
+import { isDuplicateClusterWinner } from "../signals/duplicate-winner";
 import { nowIso } from "../utils/json";
 
 export type GateCheckConclusion = "success" | "failure" | "action_required" | "neutral" | "skipped";
@@ -37,6 +38,10 @@ export type GateCheckPolicy = {
    *  blockers. An INDEPENDENT dimension, deliberately NOT folded into the merge-readiness composite so #555
    *  stays focused. `off`/`advisory` = the findings stay advisory (never block). Default off. */
   manifestPolicyGateMode?: GateRuleMode | undefined;
+  /** Self-authored linked-issue gate. When `block`, a `self_authored_linked_issue` finding — raised when
+   *  the PR author also filed the linked issue — becomes a hard blocker. Defaults to `advisory` — the
+   *  finding is surfaced but never blocks unless the maintainer opts in. */
+  selfAuthoredLinkedIssueGateMode?: GateRuleMode | undefined;
   /** First-time-contributor grace (#552). When true AND the author is a genuine newcomer (0 merged PRs in
    *  this repo) who is NOT a repeat offender (< 3 closed-unmerged PRs), a would-be BLOCK is softened to a
    *  neutral/advisory gate. `undefined`/false = the grace rule does not apply and blockers gate normally. */
@@ -61,6 +66,40 @@ export type GateCheckEvaluation = {
   warnings: AdvisoryFinding[];
 };
 
+// AI-JUDGMENT blocker codes (#ai-ci-refutation): a gate failure driven SOLELY by these is the dual-model AI
+// reviewer's OPINION, not a deterministic fact. Shared by the disposition refutation (agent-actions) and the
+// public-comment reconciliation so the merge/close ACTION and the rendered comment always agree.
+// `ai_review_inconclusive` is deliberately EXCLUDED — that is a "could not review" HOLD, not a false defect.
+export const AI_JUDGMENT_BLOCKER_CODES = new Set<string>(["ai_consensus_defect", "ai_review_split"]);
+
+/** True when the gate FAILED *solely* because of AI-judgment blockers (every blocker is an AI-judgment code).
+ *  An empty blocker list is NOT an AI-judgment-only failure (there is nothing to refute). PURE. */
+export function isAiJudgmentOnlyFailure(evaluation: GateCheckEvaluation): boolean {
+  return evaluation.conclusion === "failure" && evaluation.blockers.length > 0 && evaluation.blockers.every((blocker) => AI_JUDGMENT_BLOCKER_CODES.has(blocker.code));
+}
+
+/**
+ * Reconcile a gate evaluation with the deterministic CI for the PUBLIC review comment (#ai-ci-refutation).
+ * When the gate FAILED solely on an AI-judgment blocker (ai_consensus_defect / ai_review_split) but the real CI
+ * is GREEN, the AI claim is refuted by the validator — so the comment must render SUCCESS (advisory), matching
+ * the disposition (planAgentMaintenanceActions merges such a PR) instead of a contradictory red "blocked/closed"
+ * headline + Gate row. The AI concern stays VISIBLE without double-listing: the specific consensus defect still
+ * surfaces from the advisory findings as a raised concern under the green verdict, so we only clear the gate's
+ * hard blockers here. `enabled` is the caller's grounding+convergence gate (passed in so this stays a PURE,
+ * unit-testable function and the processor carries no branch); `enabled` false, `ciState !== "passed"`, or a
+ * non-AI-only failure ⇒ the evaluation is returned UNCHANGED.
+ */
+export function reconcileGateEvaluationForGreenCi(evaluation: GateCheckEvaluation, ciState: "passed" | "failed" | "unverified", enabled: boolean): GateCheckEvaluation {
+  if (!enabled || ciState !== "passed" || !isAiJudgmentOnlyFailure(evaluation)) return evaluation;
+  return {
+    ...evaluation,
+    conclusion: "success",
+    title: "Gittensory Gate passed",
+    summary: "The AI review raised a concern, but the deterministic checks (CI) are green — the concern is advisory, not blocking.",
+    blockers: [],
+  };
+}
+
 export function buildRepositoryAdvisory(repo: RepositoryRecord | null, fullName: string): Advisory {
   const findings: AdvisoryFinding[] = [];
   if (!repo) {
@@ -80,7 +119,19 @@ export function buildRepositoryAdvisory(repo: RepositoryRecord | null, fullName:
 export function buildPullRequestAdvisory(
   repo: RepositoryRecord | null,
   pr: PullRequestRecord | null,
-  context: { otherOpenPullRequests?: PullRequestRecord[]; requireLinkedIssue?: boolean } = {},
+  context: {
+    otherOpenPullRequests?: PullRequestRecord[];
+    requireLinkedIssue?: boolean;
+    /** Duplicate-winner adjudication (#dup-winner). When true AND this PR is the cluster winner (the lowest
+     *  open sibling number), the `duplicate_pr_risk` finding is suppressed so the winner is not gate-blocked /
+     *  closed as a duplicate. Default/false ⇒ every duplicate sibling keeps the finding (byte-identical). The
+     *  caller sets this to `env.GITTENSORY_DUPLICATE_WINNER === "true"`. */
+    duplicateWinnerEnabled?: boolean;
+    /** Author logins of the linked issues (one entry per resolved issue, may be null when unknown). Used to
+     *  surface a `self_authored_linked_issue` finding when the PR author also opened the linked issue. Absent
+     *  or empty ⇒ the finding is never raised (fail-open: unknown issue authorship stays advisory-only). */
+    linkedIssueAuthorLogins?: (string | null | undefined)[];
+  } = {},
 ): Advisory {
   const repoFullName = pr?.repoFullName ?? repo?.fullName ?? "unknown/unknown";
   const targetKey = pr ? `${repoFullName}#${pr.number}` : `${repoFullName}#unknown`;
@@ -105,7 +156,7 @@ export function buildPullRequestAdvisory(
       action: "Re-deliver the webhook or wait for the next sync.",
     });
   } else {
-    addPullRequestFindings(repo, pr, findings, context.otherOpenPullRequests ?? [], Boolean(context.requireLinkedIssue));
+    addPullRequestFindings(repo, pr, findings, context.otherOpenPullRequests ?? [], Boolean(context.requireLinkedIssue), Boolean(context.duplicateWinnerEnabled), context.linkedIssueAuthorLogins ?? []);
   }
   return advisory("pull_request", targetKey, repoFullName, findings, "Pull request advisory generated.", pr?.number, undefined, pr?.headSha ?? undefined);
 }
@@ -374,6 +425,21 @@ export function evaluateGateCheck(advisoryResult: Advisory, policy: GateCheckPol
     };
   }
   if (blockers.length === 0) {
+    // Fail-CLOSED AI hold (#ai-fail-closed, #audit-3.5): with NO deterministic blocker, a block-mode AI review
+    // that could not return a usable verdict HOLDS the gate (neutral) for a human rather than passing
+    // automatically — NEVER a failure, so a contributor PR is never auto-CLOSED because a model hiccupped. This
+    // is evaluated AFTER the deterministic blockers above, so a real violation (secret_leak, duplicate,
+    // missing-issue, slop, quality) still blocks: an inconclusive AI can no longer bury a blocked PR in a hold.
+    if (advisoryResult.findings.some((finding) => finding.code === "ai_review_inconclusive")) {
+      return {
+        enabled: true,
+        conclusion: "neutral",
+        title: "Gittensory Gate — held for human review",
+        summary: "The AI review could not be completed for this change, so the gate is held for a human reviewer rather than passed automatically. It re-evaluates on the next update.",
+        blockers: [],
+        warnings,
+      };
+    }
     return {
       enabled: true,
       conclusion: "success",
@@ -481,6 +547,8 @@ function addPullRequestFindings(
   findings: AdvisoryFinding[],
   otherOpenPullRequests: PullRequestRecord[],
   requireLinkedIssue: boolean,
+  duplicateWinnerEnabled: boolean,
+  linkedIssueAuthorLogins: (string | null | undefined)[],
 ): void {
   if (pr.state !== "open") {
     findings.push({
@@ -502,13 +570,35 @@ function addPullRequestFindings(
     const overlappingPrs = otherOpenPullRequests.filter((otherPr) =>
       otherPr.linkedIssues.some((issueNumber) => pr.linkedIssues.includes(issueNumber)),
     );
-    if (overlappingPrs.length > 0) {
+    // Duplicate-winner adjudication (#dup-winner): when the flag is ON and this PR is the cluster winner (the
+    // lowest open sibling number), SKIP the duplicate finding — suppressing it suppresses the gate failure, so
+    // the winner survives while the losers (which still see overlap > 0 and a lower sibling) keep the finding.
+    // `overlappingPrs` is derived from the OPEN-only `otherOpenPullRequests`, so the numbers are open siblings.
+    // Flag-OFF (default) short-circuits ⇒ the finding is pushed exactly as before (byte-identical).
+    if (overlappingPrs.length > 0 && !(duplicateWinnerEnabled && isDuplicateClusterWinner(pr.number, overlappingPrs.map((otherPr) => otherPr.number)))) {
       findings.push({
         code: "duplicate_pr_risk",
         severity: "warning",
         title: "Linked issue overlaps another open PR",
         detail: `Other open pull requests reference the same linked issue set: ${overlappingPrs.map((otherPr) => `#${otherPr.number}`).join(", ")}.`,
         action: "Review the related PRs before spending reviewer time on duplicate work.",
+      });
+    }
+  }
+  // Self-authored linked-issue detection: the PR author also filed the linked issue. Raised when at least
+  // one linked issue's author login is a case-insensitive match for the PR author. Gated by
+  // selfAuthoredLinkedIssueGateMode — advisory by default so this never blocks without maintainer opt-in.
+  // Absent/null issue author logins are treated as unknown and never trigger the finding (fail-open).
+  if (pr.linkedIssues.length > 0 && pr.authorLogin) {
+    const prAuthor = pr.authorLogin.toLowerCase();
+    const selfAuthored = linkedIssueAuthorLogins.some((login) => login != null && login.toLowerCase() === prAuthor);
+    if (selfAuthored) {
+      findings.push({
+        code: "self_authored_linked_issue",
+        severity: "warning",
+        title: "PR author also opened the linked issue",
+        detail: "The contributor who opened this PR also filed the linked issue. This pattern can indicate artificial issue-discovery work rather than solving an independently discovered problem.",
+        action: "Link an issue that was opened by a different contributor, or provide a rationale for why this self-authored issue represents genuine discovery work.",
       });
     }
   }
@@ -615,7 +705,10 @@ function conclusionForSeverity(severity: AdvisorySeverity, findings: AdvisoryFin
 }
 
 function isEvaluationBlocker(code: string): boolean {
-  return code === "repo_not_registered" || code === "repo_not_seen" || code === "pr_not_cached";
+  // pre_merge_check_unresolved: an enforced path-gated pre-merge check whose changed-file set could not be
+  // resolved — gittensory cannot evaluate it yet, so the gate is NEUTRAL (held) and re-evaluates on the next
+  // sync, rather than auto-merging past the unverified requirement or hard-closing on a transient miss. (#review-audit)
+  return code === "repo_not_registered" || code === "repo_not_seen" || code === "pr_not_cached" || code === "pre_merge_check_unresolved";
 }
 
 function isConfiguredGateBlocker(code: string, policy: GateCheckPolicy): boolean {
@@ -626,17 +719,28 @@ function isConfiguredGateBlocker(code: string, policy: GateCheckPolicy): boolean
   // A dual-model AI consensus defect blocks ONLY when the maintainer opted into aiReview: block. It is the
   // most conservative AI signal (two independent models, high confidence) but still confirmed-contributor
   // gated by evaluateGateCheck, and advisory by default.
-  if (code === "ai_consensus_defect") return gateMode(policy.aiReviewGateMode ?? "advisory") === "block";
+  // A consensus defect (both reviewers) OR a SPLIT (one reviewer flagged a blocker the other did not) both block
+  // when aiReviewGateMode is `block` — reviewbot's quorum: ANY reviewer rejection closes the PR. (#ai-review-split)
+  if (code === "ai_consensus_defect" || code === "ai_review_split") return gateMode(policy.aiReviewGateMode ?? "advisory") === "block";
   // A leaked-secret finding (`secret_leak`) ALWAYS hard-blocks: a committed credential must be removed and
   // rotated before merge, with no opt-in. This finding is produced ONLY by the flag-gated safety scan
   // (GITTENSORY_REVIEW_SAFETY); when the flag is off the finding never exists, so this branch is unreachable and the
   // gate verdict is byte-identical to today.
   if (code === "secret_leak") return true;
+  // A maintainer pre-merge check (#review-pre-merge-checks) marked `enforce: true` produces this DETERMINISTIC
+  // finding when it fails (a required title/description phrase or label is missing). It always blocks: the
+  // per-check `enforce` flag in `.gittensory.yml` IS the opt-in (mirroring secret_leak — the finding only exists
+  // when the maintainer configured an enforced check). The advisory variant (`pre_merge_check_failed`) is a plain
+  // warning and is never blocked here. No AI judgment is involved, so this can never cause an AI false-close.
+  if (code === "pre_merge_check_required") return true;
   // Focus-manifest policy (#555): the three enforceable manifest findings block ONLY when the maintainer
   // opts into manifestPolicy: block. Default off/advisory keeps them advisory-only.
   if (code === "manifest_blocked_path" || code === "manifest_linked_issue_required" || code === "manifest_missing_tests") {
     return gateMode(policy.manifestPolicyGateMode ?? "off") === "block";
   }
+  // Self-authored linked-issue gate: blocks only when the maintainer opts in with `block`. Defaults to
+  // advisory — the finding surfaces in the panel without ever closing the PR unless explicitly configured.
+  if (code === "self_authored_linked_issue") return gateMode(policy.selfAuthoredLinkedIssueGateMode ?? "advisory") === "block";
   return false;
 }
 

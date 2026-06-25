@@ -39,11 +39,14 @@ export type SlopAssessment = {
 
 // Deterministic, high-precision signals only — this score is the ONLY thing allowed to gate (block), so it
 // must be false-positive-averse. Heuristic/AI "this reads low-effort" judgments stay ADVISORY elsewhere and
-// never feed this score. Each "strong" signal is weighted 30 so the `high` band (>=60) is reachable from any
-// two of them; `clamp(.,0,100)` keeps the stacked score bounded.
+// never feed this score. The "strong" signals (trivialWhitespaceChurn, nonSubstantivePadding) are weighted 30
+// so the `high` band (>=60) is reachable from any two of them. missingTestEvidence is a weak/corroborating 15:
+// missing-test alone never blocks, and even paired with one strong-30 signal it only reaches 45 (elevated, not
+// blockable at the default block threshold) — it takes two strong signals (or one strong + two weak) to block,
+// so "no tests" corroborates a high but is no longer decisive. `clamp(.,0,100)` keeps the stacked score bounded.
 export const SLOP_WEIGHTS = {
   trivialWhitespaceChurn: 30,
-  missingTestEvidence: 30,
+  missingTestEvidence: 15,
   nonSubstantivePadding: 30,
   emptyDescription: 15,
   lowQualityCommitMessage: 15,
@@ -71,6 +74,10 @@ export const SLOP_RUBRIC_MARKDOWN = [
 
 const MIN_CHURN_LINES = 40;
 const MAX_SOURCE_LINE_SHARE = 0.15;
+// Minimum added lines for a changed test file to count as real test evidence. A genuine test needs at least a
+// describe/it/assert; an empty or stub file (0–2 added lines) does not — this stops an empty `*.test.ts` from
+// faking coverage to clear the missing-test finding. (#audit-3.1)
+const MIN_SUBSTANTIVE_TEST_ADDITIONS = 3;
 // A padded diff is one whose churn is dominated by non-substantive output. Set at half the diff so a PR
 // with any meaningful share of real, hand-authored files cannot trip it.
 const PADDING_DOMINANCE_SHARE = 0.5;
@@ -250,9 +257,15 @@ export function buildMissingTestEvidenceFinding(input: SlopAssessmentInput): Sig
   const codePaths = changedPaths.filter(isCodeFile);
   if (codePaths.length === 0) return null;
 
-  const hasChangedTestPaths =
-    changedPaths.some((path) => isTestFile(path) || isTestPath(path)) ||
-    hasLocalTestEvidence({ tests: input.tests, testFiles: input.testFiles });
+  // A changed test FILE only counts as real test evidence when it carries substantive content. An empty or
+  // no-op test (e.g. a committed `tests/noop.test.ts`) would otherwise clear this finding by path alone. When
+  // per-file line counts are unavailable we trust the path (can't prove emptiness); when known, require a few
+  // added lines so a stub can't fake coverage. (#audit-3.1)
+  const hasSubstantiveTestFile = changedFiles.some((file) => {
+    if (!(isTestFile(file.path) || isTestPath(file.path))) return false;
+    return file.additions === undefined || nonNegative(file.additions) >= MIN_SUBSTANTIVE_TEST_ADDITIONS;
+  });
+  const hasChangedTestPaths = hasSubstantiveTestFile || hasLocalTestEvidence({ tests: input.tests, testFiles: input.testFiles });
   if (hasChangedTestPaths) return null;
 
   const detail = ensurePublicSafeText(
@@ -397,7 +410,9 @@ export function buildUnfilledIssueTemplateFinding(input: IssueSlopAssessmentInpu
     .replace(/^\s*[-*]\s*(\[[ xX]\])?\s*$/gm, "") // empty bullets / checkboxes
     .replace(/[\s>#*_`+-]/g, "") // residual markdown punctuation + whitespace
     .trim();
-  if (substantive.length > 0) return null;
+  // Require a real WORD (a run of 3+ letters/digits, any script) to survive — not merely "any surviving char",
+  // which a single padding character would satisfy to dodge the finding. (#audit-§4)
+  if (/[\p{L}\p{N}]{3,}/u.test(substantive)) return null;
   // Static, public-safe text (no interpolation) — no sanitizer guard needed.
   const detail = "The issue body contains only an unfilled template (headings or comment placeholders, no details).";
   return {
@@ -443,8 +458,9 @@ function ensurePublicSafeText(text: string, fallback: string): string {
 }
 
 // Documented thresholds (#565): the deterministic slopRisk (0-100) maps to fixed bands — clean = 0,
-// low = 1-24, elevated = 25-59, high = 60-100. Strong signals weigh 30 (any two reach `high`); weak/
-// traceability signals weigh 15. Identical metadata always yields an identical band (see golden fixtures).
+// low = 1-24, elevated = 25-59, high = 60-100. Strong signals (trivial churn, non-substantive padding)
+// weigh 30 (any two reach `high`); weak/corroborating/traceability signals — including missing-test-evidence
+// — weigh 15. Identical metadata always yields an identical band (see golden fixtures).
 function slopBandFor(slopRisk: number): SlopBand {
   if (slopRisk <= 0) return "clean";
   if (slopRisk < 25) return "low";

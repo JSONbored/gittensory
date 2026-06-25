@@ -9,6 +9,8 @@ import {
   firstAddedLineFromPatch,
   formatCheckRunOutput,
   formatGateCheckOutput,
+  isAiJudgmentOnlyFailure,
+  reconcileGateEvaluationForGreenCi,
 } from "../../src/rules/advisory";
 import type { CollisionReport } from "../../src/signals/engine";
 import type { IssueRecord, PullRequestRecord, PullRequestFileRecord, RepositoryRecord } from "../../src/types";
@@ -120,6 +122,82 @@ describe("advisory rules", () => {
     expect(advisory.findings.map((finding) => finding.code)).toContain("duplicate_pr_risk");
   });
 
+  it("#dup-winner: flag ON + winner (lowest open PR) ⇒ NO duplicate finding (gate success)", () => {
+    const winner: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 12,
+      title: "Add registry sync",
+      state: "open",
+      authorLogin: "oktofeesh1",
+      authorAssociation: "NONE",
+      headSha: "abc123",
+      labels: [],
+      linkedIssues: [4],
+    };
+    const higherSibling: PullRequestRecord = { ...winner, number: 13, title: "Alternative registry sync" };
+
+    const advisory = buildPullRequestAdvisory(repo, winner, { otherOpenPullRequests: [higherSibling], duplicateWinnerEnabled: true });
+
+    expect(advisory.findings.map((finding) => finding.code)).not.toContain("duplicate_pr_risk");
+  });
+
+  it("#dup-winner: flag ON + loser (a lower open sibling exists) ⇒ duplicate finding present", () => {
+    const loser: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 13,
+      title: "Alternative registry sync",
+      state: "open",
+      authorLogin: "oktofeesh1",
+      authorAssociation: "NONE",
+      headSha: "abc123",
+      labels: [],
+      linkedIssues: [4],
+    };
+    const lowerSibling: PullRequestRecord = { ...loser, number: 12, title: "Add registry sync" };
+
+    const advisory = buildPullRequestAdvisory(repo, loser, { otherOpenPullRequests: [lowerSibling], duplicateWinnerEnabled: true });
+
+    expect(advisory.findings.map((finding) => finding.code)).toContain("duplicate_pr_risk");
+  });
+
+  it("#dup-winner: flag OFF + would-be-winner ⇒ duplicate finding STILL present (byte-identical)", () => {
+    const wouldBeWinner: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 12,
+      title: "Add registry sync",
+      state: "open",
+      authorLogin: "oktofeesh1",
+      authorAssociation: "NONE",
+      headSha: "abc123",
+      labels: [],
+      linkedIssues: [4],
+    };
+    const higherSibling: PullRequestRecord = { ...wouldBeWinner, number: 13, title: "Alternative registry sync" };
+
+    const advisory = buildPullRequestAdvisory(repo, wouldBeWinner, { otherOpenPullRequests: [higherSibling], duplicateWinnerEnabled: false });
+
+    expect(advisory.findings.map((finding) => finding.code)).toContain("duplicate_pr_risk");
+  });
+
+  it("#dup-winner: flag ON + no overlap ⇒ no duplicate finding (alone in cluster)", () => {
+    const lonePr: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 12,
+      title: "Add registry sync",
+      state: "open",
+      authorLogin: "oktofeesh1",
+      authorAssociation: "NONE",
+      headSha: "abc123",
+      labels: [],
+      linkedIssues: [4],
+    };
+    const unrelated: PullRequestRecord = { ...lonePr, number: 13, title: "Unrelated change", linkedIssues: [99] };
+
+    const advisory = buildPullRequestAdvisory(repo, lonePr, { otherOpenPullRequests: [unrelated], duplicateWinnerEnabled: true });
+
+    expect(advisory.findings.map((finding) => finding.code)).not.toContain("duplicate_pr_risk");
+  });
+
   it("keeps weak queue warnings advisory-only for the opt-in gate", () => {
     const pr: PullRequestRecord = {
       repoFullName: repo.fullName,
@@ -219,6 +297,18 @@ describe("advisory rules", () => {
     expect(evaluateGateCheck(duplicateAdvisory, { duplicatePrGateMode: "advisory" }).conclusion).toBe("success");
     expect(evaluateGateCheck(duplicateAdvisory, { duplicatePrGateMode: "off" }).conclusion).toBe("success");
     expect(evaluateGateCheck(duplicateAdvisory, { duplicatePrGateMode: "block" }).conclusion).toBe("failure");
+  });
+
+  it("a reviewer SPLIT (ai_review_split) blocks → close, gated like a consensus defect by aiReviewGateMode (#ai-review-split)", () => {
+    const splitAdvisory = {
+      ...buildPullRequestAdvisory(repo, null),
+      findings: [{ code: "ai_review_split", title: "An AI reviewer flagged a likely blocking defect", severity: "critical" as const, detail: "One reviewer flagged a blocker the other did not." }],
+    };
+    // reviewbot quorum: a single rejection (split) blocks → gate failure → close, but ONLY when aiReviewGateMode
+    // is `block` (advisory/off keep it non-blocking, exactly like ai_consensus_defect).
+    expect(evaluateGateCheck(splitAdvisory, { aiReviewGateMode: "block" }).conclusion).toBe("failure");
+    expect(evaluateGateCheck(splitAdvisory, { aiReviewGateMode: "advisory" }).conclusion).toBe("success");
+    expect(evaluateGateCheck(splitAdvisory).conclusion).toBe("success");
   });
 
   it("only enforces readiness score when quality gate mode is block", () => {
@@ -893,6 +983,166 @@ describe("firstAddedLineFromPatch", () => {
   it("clamps a zero-based hunk start up to line 1", () => {
     const patch = "@@ -0,0 +0,1 @@\n+first line of a new file";
     expect(firstAddedLineFromPatch(patch)).toBe(1);
+  });
+});
+
+  describe("self_authored_linked_issue finding", () => {
+    const prBase: PullRequestRecord = {
+      repoFullName: repo.fullName,
+      number: 55,
+      title: "Fix login bug",
+      state: "open",
+      authorLogin: "contributor1",
+      authorAssociation: "NONE",
+      headSha: "sha55",
+      labels: [],
+      linkedIssues: [10],
+    };
+
+    it("raises self_authored_linked_issue when the PR author also opened the linked issue", () => {
+      const advisory = buildPullRequestAdvisory(repo, prBase, { linkedIssueAuthorLogins: ["contributor1"] });
+      expect(advisory.findings.map((f) => f.code)).toContain("self_authored_linked_issue");
+    });
+
+    it("is case-insensitive when comparing author logins", () => {
+      const advisory = buildPullRequestAdvisory(repo, prBase, { linkedIssueAuthorLogins: ["Contributor1"] });
+      expect(advisory.findings.map((f) => f.code)).toContain("self_authored_linked_issue");
+    });
+
+    it("does not raise the finding when the PR author differs from the issue author", () => {
+      const advisory = buildPullRequestAdvisory(repo, prBase, { linkedIssueAuthorLogins: ["someone_else"] });
+      expect(advisory.findings.map((f) => f.code)).not.toContain("self_authored_linked_issue");
+    });
+
+    it("does not raise the finding when linkedIssueAuthorLogins is absent (fail-open: unknown authorship stays advisory-only)", () => {
+      const advisory = buildPullRequestAdvisory(repo, prBase);
+      expect(advisory.findings.map((f) => f.code)).not.toContain("self_authored_linked_issue");
+    });
+
+    it("does not raise the finding when linkedIssueAuthorLogins contains only null values (author unknown)", () => {
+      const advisory = buildPullRequestAdvisory(repo, prBase, { linkedIssueAuthorLogins: [null, undefined] });
+      expect(advisory.findings.map((f) => f.code)).not.toContain("self_authored_linked_issue");
+    });
+
+    it("does not raise the finding when the PR has no linked issues", () => {
+      const noIssuePr = { ...prBase, linkedIssues: [] };
+      const advisory = buildPullRequestAdvisory(repo, noIssuePr, { linkedIssueAuthorLogins: ["contributor1"] });
+      expect(advisory.findings.map((f) => f.code)).not.toContain("self_authored_linked_issue");
+    });
+
+    it("does not raise the finding when the PR author is unknown (null authorLogin)", () => {
+      const noAuthorPr = { ...prBase, authorLogin: null };
+      const advisory = buildPullRequestAdvisory(repo, noAuthorPr, { linkedIssueAuthorLogins: ["contributor1"] });
+      expect(advisory.findings.map((f) => f.code)).not.toContain("self_authored_linked_issue");
+    });
+
+    it("raises the finding when at least one linked issue author matches the PR author (mixed authors)", () => {
+      const advisory = buildPullRequestAdvisory(repo, prBase, { linkedIssueAuthorLogins: ["other_user", "contributor1"] });
+      expect(advisory.findings.map((f) => f.code)).toContain("self_authored_linked_issue");
+    });
+
+    it("is advisory by default: self_authored_linked_issue is NOT a gate blocker without policy override", () => {
+      const advisory = buildPullRequestAdvisory(repo, prBase, { linkedIssueAuthorLogins: ["contributor1"] });
+      const gate = evaluateGateCheck(advisory);
+      expect(gate.conclusion).toBe("success");
+      expect(gate.blockers.map((f) => f.code)).not.toContain("self_authored_linked_issue");
+      expect(gate.warnings.map((f) => f.code)).toContain("self_authored_linked_issue");
+    });
+
+    it("is advisory when selfAuthoredLinkedIssueGateMode is advisory", () => {
+      const advisory = buildPullRequestAdvisory(repo, prBase, { linkedIssueAuthorLogins: ["contributor1"] });
+      const gate = evaluateGateCheck(advisory, { selfAuthoredLinkedIssueGateMode: "advisory" });
+      expect(gate.conclusion).toBe("success");
+      expect(gate.blockers.map((f) => f.code)).not.toContain("self_authored_linked_issue");
+    });
+
+    it("is advisory when selfAuthoredLinkedIssueGateMode is off", () => {
+      const advisory = buildPullRequestAdvisory(repo, prBase, { linkedIssueAuthorLogins: ["contributor1"] });
+      const gate = evaluateGateCheck(advisory, { selfAuthoredLinkedIssueGateMode: "off" });
+      expect(gate.conclusion).toBe("success");
+      expect(gate.blockers.map((f) => f.code)).not.toContain("self_authored_linked_issue");
+    });
+
+    it("blocks when selfAuthoredLinkedIssueGateMode is block", () => {
+      const advisory = buildPullRequestAdvisory(repo, prBase, { linkedIssueAuthorLogins: ["contributor1"] });
+      const gate = evaluateGateCheck(advisory, { selfAuthoredLinkedIssueGateMode: "block" });
+      expect(gate.conclusion).toBe("failure");
+      expect(gate.blockers.map((f) => f.code)).toContain("self_authored_linked_issue");
+    });
+
+    it("does not block when selfAuthoredLinkedIssueGateMode is block but no self-authored issue finding exists", () => {
+      const advisory = buildPullRequestAdvisory(repo, prBase, { linkedIssueAuthorLogins: ["someone_else"] });
+      const gate = evaluateGateCheck(advisory, { selfAuthoredLinkedIssueGateMode: "block" });
+      expect(gate.conclusion).toBe("success");
+      expect(gate.blockers.map((f) => f.code)).not.toContain("self_authored_linked_issue");
+    });
+  });
+
+describe("CI-refutation of the public comment gate (#ai-ci-refutation)", () => {
+  const finding = (code: string): import("../../src/types").AdvisoryFinding => ({ code, severity: "critical", title: `t:${code}`, detail: `d:${code}` });
+  const failure = (codes: string[]): import("../../src/rules/advisory").GateCheckEvaluation => ({
+    enabled: true,
+    conclusion: "failure",
+    title: "Gittensory Gate: blocked",
+    summary: "A hard blocker was found.",
+    blockers: codes.map(finding),
+    warnings: [],
+  });
+
+  it("isAiJudgmentOnlyFailure: true only when EVERY blocker is an AI-judgment code", () => {
+    expect(isAiJudgmentOnlyFailure(failure(["ai_consensus_defect"]))).toBe(true);
+    expect(isAiJudgmentOnlyFailure(failure(["ai_review_split"]))).toBe(true);
+    expect(isAiJudgmentOnlyFailure(failure(["ai_consensus_defect", "ai_review_split"]))).toBe(true);
+    expect(isAiJudgmentOnlyFailure(failure(["ai_consensus_defect", "duplicate_open_pr"]))).toBe(false);
+    expect(isAiJudgmentOnlyFailure(failure(["slop_high"]))).toBe(false);
+    expect(isAiJudgmentOnlyFailure(failure(["ai_review_inconclusive"]))).toBe(false);
+    // An empty blocker list is not a refutable AI-only failure.
+    expect(isAiJudgmentOnlyFailure({ ...failure([]), conclusion: "failure" })).toBe(false);
+    // A non-failure conclusion is never AI-only-failure.
+    expect(isAiJudgmentOnlyFailure({ ...failure(["ai_consensus_defect"]), conclusion: "success" })).toBe(false);
+  });
+
+  it("enabled + green CI + AI-judgment-only failure → SUCCESS with cleared blockers (matches the merge disposition)", () => {
+    const out = reconcileGateEvaluationForGreenCi(failure(["ai_consensus_defect"]), "passed", true);
+    expect(out.conclusion).toBe("success");
+    expect(out.blockers).toEqual([]);
+    expect(out.title).toBe("Gittensory Gate passed");
+    expect(out.summary).toContain("advisory, not blocking");
+  });
+
+  it("enabled + green CI + split-only failure → SUCCESS too", () => {
+    expect(reconcileGateEvaluationForGreenCi(failure(["ai_review_split"]), "passed", true).conclusion).toBe("success");
+  });
+
+  it("is GATED by `enabled` — enabled=false returns the failure UNCHANGED even on green CI", () => {
+    const fail = failure(["ai_consensus_defect"]);
+    expect(reconcileGateEvaluationForGreenCi(fail, "passed", false)).toBe(fail);
+  });
+
+  it("does NOT reconcile when CI is red — the real failing check stands", () => {
+    const fail = failure(["ai_consensus_defect"]);
+    expect(reconcileGateEvaluationForGreenCi(fail, "failed", true)).toBe(fail);
+  });
+
+  it("does NOT reconcile when CI is unverified", () => {
+    const fail = failure(["ai_consensus_defect"]);
+    expect(reconcileGateEvaluationForGreenCi(fail, "unverified", true)).toBe(fail);
+  });
+
+  it("does NOT reconcile a mixed failure (any deterministic blocker present) even on green CI", () => {
+    const fail = failure(["ai_consensus_defect", "duplicate_open_pr"]);
+    expect(reconcileGateEvaluationForGreenCi(fail, "passed", true)).toBe(fail);
+    expect(reconcileGateEvaluationForGreenCi(fail, "passed", true).conclusion).toBe("failure");
+  });
+
+  it("does NOT reconcile a deterministic-only failure on green CI (e.g. slop)", () => {
+    const fail = failure(["slop_high"]);
+    expect(reconcileGateEvaluationForGreenCi(fail, "passed", true)).toBe(fail);
+  });
+
+  it("does NOT reconcile a success gate (no-op pass-through)", () => {
+    const ok = { ...failure([]), conclusion: "success" as const, blockers: [] };
+    expect(reconcileGateEvaluationForGreenCi(ok, "passed", true)).toBe(ok);
   });
 });
 

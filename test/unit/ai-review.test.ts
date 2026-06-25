@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __aiReviewInternals,
-  AI_CONSENSUS_FLOOR,
   BEST_REVIEW_MODELS,
   runGittensoryAiReview,
   type GittensoryAiReviewInput,
 } from "../../src/services/ai-review";
 import { createTestEnv } from "../helpers/d1";
 
-const { parseModelReview, coerceAiText, composeAdvisoryNotes, consensusDefectOf, toPublicSafe, runWorkersOpinion } = __aiReviewInternals;
+const { parseModelReview, coerceAiText, composeAdvisoryNotes, consensusDefectOf, combineReviews, toPublicSafe, runWorkersOpinion } = __aiReviewInternals;
 
 function reviewJson(over: Partial<{ assessment: string; suggestions: string[]; nits: string[]; blockers: string[]; present: boolean; confidence: number; title: string; detail: string }> = {}): string {
   return JSON.stringify({
@@ -124,6 +123,50 @@ describe("runGittensoryAiReview advisory mode", () => {
   });
 });
 
+describe("review.profile shapes the reviewer system prompt (#review-profile)", () => {
+  const systemPromptOf = (run: ReturnType<typeof vi.fn>): string => ((run.mock.calls[0]?.[1] as { messages?: Array<{ content?: string }> })?.messages?.[0]?.content ?? "");
+  const runProfile = async (profile: GittensoryAiReviewInput["profile"]) => {
+    const run = vi.fn(async () => ({ response: reviewJson() }));
+    const env = createTestEnv({ AI: { run } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI_DAILY_NEURON_BUDGET: "100000" });
+    await runGittensoryAiReview(env, { ...baseInput, profile });
+    return systemPromptOf(run);
+  };
+
+  it("chill appends the CHILL tone instruction (suppress nits)", async () => {
+    const system = await runProfile("chill");
+    expect(system).toContain("CHILL");
+    expect(system).not.toContain("ASSERTIVE");
+  });
+
+  it("assertive appends the ASSERTIVE tone instruction (also raise nits)", async () => {
+    const system = await runProfile("assertive");
+    expect(system).toContain("ASSERTIVE");
+    expect(system).not.toContain("CHILL");
+  });
+
+  it("absent / null profile leaves the prompt byte-identical (no profile suffix)", async () => {
+    const withNull = await runProfile(null);
+    const without = await runProfile(undefined);
+    expect(withNull).not.toMatch(/CHILL|ASSERTIVE/);
+    expect(without).not.toMatch(/CHILL|ASSERTIVE/);
+    expect(withNull).toBe(without);
+  });
+
+  it("pathGuidance is appended to the system prompt; empty/absent leaves it byte-identical (#review-path-instructions)", async () => {
+    const systemPromptOf = (run: ReturnType<typeof vi.fn>): string => ((run.mock.calls[0]?.[1] as { messages?: Array<{ content?: string }> })?.messages?.[0]?.content ?? "");
+    const runGuidance = async (pathGuidance: string | undefined) => {
+      const run = vi.fn(async () => ({ response: reviewJson() }));
+      const env = createTestEnv({ AI: { run } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI_DAILY_NEURON_BUDGET: "100000" });
+      await runGittensoryAiReview(env, { ...baseInput, pathGuidance });
+      return systemPromptOf(run);
+    };
+    expect(await runGuidance("\n\nPath-specific review instructions:\n- `src/**`: Enforce null checks.")).toContain("Enforce null checks.");
+    // Absent or whitespace-only → no append.
+    expect(await runGuidance(undefined)).not.toContain("Path-specific review instructions");
+    expect(await runGuidance("   ")).not.toContain("Path-specific review instructions");
+  });
+});
+
 describe("runGittensoryAiReview block mode (consensus)", () => {
   function envWith(run: (model: string) => Promise<unknown>) {
     return createTestEnv({ AI: { run: vi.fn(run) } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI_DAILY_NEURON_BUDGET: "100000" });
@@ -164,7 +207,15 @@ describe("runGittensoryAiReview block mode (consensus)", () => {
     expect(result.status).toBe("ok");
     if (result.status !== "ok") return;
     expect(result.consensusDefect).toBeNull();
+    expect(result.inconclusive).toBe(true); // FAIL-CLOSED: a missing second opinion holds the PR, never passes it
     expect(result.advisoryNotes).not.toBeNull(); // notes still come from the one parseable opinion
+  });
+
+  it("a clean dual review is NOT inconclusive (both models parsed, neither blocks → passes)", async () => {
+    const env = envWith(async () => ({ response: reviewJson({ present: false }) }));
+    const result = await runGittensoryAiReview(env, { ...baseInput, mode: "block" });
+    expect(result.status === "ok" && result.consensusDefect).toBeNull();
+    expect(result.status === "ok" && result.inconclusive).toBe(false);
   });
 
   it("block mode with BYOK: provider writes the advisory, the free Workers-AI pair drives consensus", async () => {
@@ -243,6 +294,58 @@ describe("Workers AI fallback + degraded output", () => {
   });
 });
 
+describe("runGittensoryAiReview self-host dual-AI plan (#dual-ai-combiner)", () => {
+  const planEnv = (plan: { reviewers: Array<{ model: string }>; combine: string; onMerge?: string }, run: (model: string) => Promise<unknown>) =>
+    createTestEnv({ AI: { run: vi.fn(run) } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI_DAILY_NEURON_BUDGET: "100000", AI_REVIEW_PLAN: plan as never });
+
+  it("single provider: runs ONE named reviewer and its blocker IS the decision", async () => {
+    const seen: string[] = [];
+    const env = planEnv({ reviewers: [{ model: "claude-code" }], combine: "single" }, async (model) => {
+      seen.push(model);
+      return { response: reviewJson({ present: true, title: "Null deref in src/a.ts" }) };
+    });
+    const result = await runGittensoryAiReview(env, { ...baseInput, mode: "block" });
+    expect(result.status === "ok" && result.consensusDefect?.title).toContain("Null deref");
+    expect(seen).toEqual(["claude-code"]); // exactly one reviewer, addressed by name
+  });
+
+  it("dual synthesis (either): runs claude-code AND codex; EITHER blocker decides, never a split", async () => {
+    const seen: string[] = [];
+    const env = planEnv({ reviewers: [{ model: "claude-code" }, { model: "codex" }], combine: "synthesis", onMerge: "either" }, async (model) => {
+      seen.push(model);
+      return model === "codex" ? { response: reviewJson({ present: true, title: "Race condition in src/x.ts" }) } : { response: reviewJson({ present: false }) };
+    });
+    const result = await runGittensoryAiReview(env, { ...baseInput, mode: "block" });
+    if (result.status !== "ok") throw new Error("expected ok");
+    expect(result.consensusDefect?.title).toContain("Race condition"); // codex's lone blocker decides under synthesis/either
+    expect(result.split).toBe(false); // synthesis never splits
+    expect([...seen].sort()).toEqual(["claude-code", "codex"]);
+  });
+
+  it("single + BYOK: the provider writes the advisory; the one decision reviewer runs via the router", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ content: [{ type: "text", text: reviewJson({ assessment: "Frontier advisory." }) }] }), { status: 200 })));
+    const seen: string[] = [];
+    const env = planEnv({ reviewers: [{ model: "claude-code" }], combine: "single" }, async (model) => {
+      seen.push(model);
+      return { response: reviewJson({ present: true, title: "Bug in src/a.ts" }) };
+    });
+    const result = await runGittensoryAiReview(env, { ...baseInput, mode: "block", providerKey: { provider: "anthropic", key: "sk-ant" } });
+    if (result.status !== "ok") throw new Error("expected ok");
+    expect(result.consensusDefect?.title).toContain("Bug"); // the single Workers-AI/router reviewer's blocker decides
+    expect(seen).toEqual(["claude-code"]); // the decision reviewer ran once; the advisory came from BYOK (fetch)
+  });
+
+  it("explicit input.reviewers/combine/onMerge override the env plan", async () => {
+    const seen: string[] = [];
+    const env = planEnv({ reviewers: [{ model: "claude-code" }, { model: "codex" }], combine: "synthesis" }, async (model) => {
+      seen.push(model);
+      return { response: reviewJson({ present: false }) };
+    });
+    await runGittensoryAiReview(env, { ...baseInput, mode: "block", reviewers: [{ model: "ollama" }, { model: "groq" }], combine: "synthesis", onMerge: "both" });
+    expect([...seen].sort()).toEqual(["groq", "ollama"]); // input reviewers win over the env plan
+  });
+});
+
 describe("pure helpers", () => {
   it("toPublicSafe drops forbidden public text and neutralizes markdown, mentions, links, and control characters", () => {
     expect(toPublicSafe("This change is solid.")).toBe("This change is solid.");
@@ -302,23 +405,63 @@ describe("pure helpers", () => {
     expect(parsed?.blockers).toEqual(["X in src/a.ts"]);
   });
 
+  describe("combineReviews (#dual-ai-combiner)", () => {
+    const r = (blockers: string[]) => ({ assessment: "", suggestions: [], nits: [], blockers });
+    const clean = r([]);
+    const blocked = r(["Null deref in src/a.ts"]);
+
+    it("single: the lone reviewer's blocker IS the decision; a clean review passes; a missing review holds", () => {
+      expect(combineReviews([blocked], { strategy: "single" }).defect?.title).toContain("Null deref");
+      expect(combineReviews([clean], { strategy: "single" })).toEqual({ defect: null, split: false, inconclusive: false });
+      expect(combineReviews([null], { strategy: "single" })).toEqual({ defect: null, split: false, inconclusive: true });
+    });
+
+    it("consensus (default): blocks only when BOTH name a blocker; lone blocker → split; a missing opinion → inconclusive (byte-identical to the historical logic)", () => {
+      expect(combineReviews([blocked, blocked], { strategy: "consensus" }).defect).not.toBeNull();
+      expect(combineReviews([blocked, clean], { strategy: "consensus" })).toMatchObject({ defect: null, split: true, inconclusive: false });
+      expect(combineReviews([clean, clean], { strategy: "consensus" })).toEqual({ defect: null, split: false, inconclusive: false });
+      expect(combineReviews([blocked, null], { strategy: "consensus" })).toEqual({ defect: null, split: false, inconclusive: true });
+    });
+
+    it("synthesis/either: ANY reviewer's blocker blocks (one decision, never a split); a missing opinion holds only when nothing present blocked", () => {
+      expect(combineReviews([clean, blocked], { strategy: "synthesis", onMerge: "either" })).toMatchObject({ split: false, inconclusive: false });
+      expect(combineReviews([clean, blocked], { strategy: "synthesis", onMerge: "either" }).defect).not.toBeNull();
+      expect(combineReviews([clean, clean], { strategy: "synthesis", onMerge: "either" })).toEqual({ defect: null, split: false, inconclusive: false });
+      expect(combineReviews([blocked, null], { strategy: "synthesis", onMerge: "either" }).defect).not.toBeNull(); // a present blocker decides despite the missing one
+      expect(combineReviews([clean, null], { strategy: "synthesis", onMerge: "either" })).toEqual({ defect: null, split: false, inconclusive: true }); // can't certify clean
+      expect(combineReviews([clean, blocked], { strategy: "synthesis" }).defect).not.toBeNull(); // onMerge defaults to either
+    });
+
+    it("synthesis/both: blocks only when EVERY present reviewer flags; disagreement passes (never a hold); a missing opinion holds; empty set passes", () => {
+      expect(combineReviews([blocked, blocked], { strategy: "synthesis", onMerge: "both" }).defect).not.toBeNull();
+      expect(combineReviews([blocked, clean], { strategy: "synthesis", onMerge: "both" })).toEqual({ defect: null, split: false, inconclusive: false });
+      expect(combineReviews([blocked, null], { strategy: "synthesis", onMerge: "both" })).toEqual({ defect: null, split: false, inconclusive: true });
+      expect(combineReviews([], { strategy: "synthesis", onMerge: "both" })).toEqual({ defect: null, split: false, inconclusive: false });
+    });
+
+    it("synthesized defect drops a blocker whose only finding is blank or unsafe (fail-safe, same discipline as consensus)", () => {
+      expect(combineReviews([r(["   "])], { strategy: "single" })).toEqual({ defect: null, split: false, inconclusive: false }); // whitespace-only → no primary
+      expect(combineReviews([r(["Boost your reward payout"]), clean], { strategy: "synthesis", onMerge: "either" })).toEqual({ defect: null, split: false, inconclusive: false }); // unsafe title dropped
+    });
+  });
+
   it("consensusDefectOf requires a concrete blocker in BOTH reviews and drops unsafe titles", () => {
     const r = (blockers: string[]) => ({ assessment: "", suggestions: [], nits: [], blockers });
-    expect(consensusDefectOf(r(["Null deref in src/a.ts"]), r(["Null deref in src/a.ts"]), AI_CONSENSUS_FLOOR)).not.toBeNull();
-    expect(consensusDefectOf(r([]), r(["Null deref"]), AI_CONSENSUS_FLOOR)).toBeNull(); // one has no blocker → split, not consensus
-    expect(consensusDefectOf(r(["Null deref"]), r([]), AI_CONSENSUS_FLOOR)).toBeNull();
-    expect(consensusDefectOf(r(["Boost your reward payout"]), r(["Boost your reward payout"]), AI_CONSENSUS_FLOOR)).toBeNull(); // unsafe → dropped
+    expect(consensusDefectOf(r(["Null deref in src/a.ts"]), r(["Null deref in src/a.ts"]))).not.toBeNull();
+    expect(consensusDefectOf(r([]), r(["Null deref"]))).toBeNull(); // one has no blocker → split, not consensus
+    expect(consensusDefectOf(r(["Null deref"]), r([]))).toBeNull();
+    expect(consensusDefectOf(r(["Boost your reward payout"]), r(["Boost your reward payout"]))).toBeNull(); // unsafe → dropped
   });
 
   it("consensusDefectOf falls back to b's blocker when a's is blank", () => {
     const a = { assessment: "", suggestions: [], nits: [], blockers: [""] };
     const b = { assessment: "", suggestions: [], nits: [], blockers: ["Race condition in src/x.ts"] };
-    expect(consensusDefectOf(a, b, AI_CONSENSUS_FLOOR)?.title).toBe("Race condition in src/x.ts");
+    expect(consensusDefectOf(a, b)?.title).toBe("Race condition in src/x.ts");
   });
 
   it("consensusDefectOf uses the default title + detail when BOTH reviewers' blockers are blank", () => {
     const blank = { assessment: "", suggestions: [], nits: [], blockers: [""] };
-    const out = consensusDefectOf(blank, { ...blank, blockers: [""] }, AI_CONSENSUS_FLOOR);
+    const out = consensusDefectOf(blank, { ...blank, blockers: [""] });
     expect(out?.title).toContain("AI reviewers agree"); // both blockers[0] falsy → default title
     expect(out?.detail).toContain("independently flagged"); // joined detail empty → default detail
   });

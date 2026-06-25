@@ -71,17 +71,23 @@ export function defangReviewInput(input: SafetyReviewInput): {
  * (see rules/advisory.ts) so a leaked secret holds the PR. Only CONCRETE credential formats
  * ({@link HARD_SECRET_KINDS}) qualify — the weak `seed_or_mnemonic` / `bittensor_key` heuristics are ignored
  * here because they false-positive on legitimate config/workflow content (e.g. `coldkey:` / `hotkey =` lines
- * in *.toml, .github/workflows/**, or wrangler/workers config). Callers MUST gate this on
- * {@link isSafetyEnabled} — when OFF, no finding is produced so the advisory/gate is unchanged.
+ * in *.toml, .github/workflows/**, or wrangler/workers config). This is UNCONDITIONAL (#audit-3.4): a concrete,
+ * real-format committed credential is a leak on any repo, so the caller runs it regardless of the safety flag /
+ * review allowlist (unlike the prompt-injection defang, which stays flag-gated).
  */
 export function secretLeakFinding(diff: string): AdvisoryFinding | null {
-  // Scan ONLY added lines — the secrets THIS change introduces. A token on a removed/context line is not being
+  // Scan ONLY additions — the secrets THIS change introduces. A token on a removed/context line is not being
   // committed by the PR, so flagging it would wrongly block a change that merely REMOVES or refactors a
-  // secret-shaped string (e.g. deleting/defanging a test fixture, or rotating a credential out). The input is the
-  // buildAiReviewDiff/buildSecretScanDiff patch corpus, so keep `+` additions and drop the `+++`/`### …` headers.
+  // secret-shaped string (e.g. deleting/defanging a test fixture, or rotating a credential out). Added/renamed
+  // file paths are also committed PR state, but buildSecretScanDiff carries them only in `### path (status)`
+  // headers, so keep those metadata lines while still dropping modified/removed headers and `+++` patch headers.
   const added = diff
     .split("\n")
-    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+    .filter(
+      (line) =>
+        (line.startsWith("+") && !line.startsWith("+++")) ||
+        /^### .+ \((?:added|renamed)\) /.test(line),
+    )
     .join("\n");
   // Only CONCRETE credential formats hard-block. The raw scanner also returns the weak `seed_or_mnemonic` /
   // `bittensor_key` heuristics, which false-positive on `coldkey:` / `hotkey =` / "mnemonic" lines in

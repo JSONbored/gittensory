@@ -7,6 +7,9 @@ export type JobMessage =
       deliveryId: string;
       eventName: string;
       payload: GitHubWebhookPayload;
+      // Set when the DLQ consumer re-drives a dead-lettered webhook back onto the lane (#1276). Bounds the
+      // self-heal to a single re-drive so a genuinely-poison payload cannot loop the webhook DLQ forever.
+      redriven?: boolean;
     }
   | {
       // Delayed self-poll to re-capture a PR's before/after preview once its preview deploy is live — the first
@@ -18,6 +21,16 @@ export type JobMessage =
       prNumber: number;
       installationId: number;
       attempt: number;
+    }
+  | {
+      // One bounded re-gate unit fanned out by the scheduled sweep (#audit-sweep-fanout): re-review + stamp a
+      // single PR. Each candidate becomes its own individually-retryable, rate-limited queue message so the heavy
+      // re-review work interleaves with other jobs instead of monopolizing the consumer for all 25 at once.
+      type: "agent-regate-pr";
+      deliveryId: string;
+      repoFullName: string;
+      prNumber: number;
+      installationId: number;
     }
   | {
       type: "refresh-registry";
@@ -180,6 +193,12 @@ export type JobMessage =
       type: "submit-draft";
       requestedBy: "api" | "test";
       draftId: string;
+    }
+  | {
+      // Orb relay retry (#relay-retry): re-attempt previously-failed forwardOrbEvent calls (container was down).
+      // Enqueued by the cron every sweep cycle (≈2 min) ONLY when ORB_BROKER_ENABLED is set.
+      type: "retry-orb-relay";
+      requestedBy: "schedule" | "test";
     };
 
 export type GitHubWebhookPayload = {
@@ -422,6 +441,11 @@ export type PullRequestRecord = {
    *  disposition while approvedHeadSha === headSha (this commit is already approved by the bot); a new commit
    *  clears the match so the bot may re-approve the new code. Mirrors mergeBlockedSha. */
   approvedHeadSha?: string | null | undefined;
+  /** Sweep convergence: the timestamp the scheduled re-gate sweep last recomputed this PR. selectRegateCandidates
+   *  orders by this marker (not GitHub's updatedAt) so the sweep advances through all open PRs even when the
+   *  review write that would bump updatedAt is suppressed (dry-run / paused). Sweep-written; read straight from
+   *  the row (never the GitHub payload). */
+  lastRegatedAt?: string | null | undefined;
 };
 
 export type IssueRecord = {
@@ -486,6 +510,10 @@ export type RepositorySettings = {
    *  required-linked-issue, test expectations) becomes an enforceable `Gittensory Gate` blocker. An
    *  INDEPENDENT dimension, deliberately not folded into the merge-readiness composite. Default `off` — opt-in. */
   manifestPolicyGateMode: GateRuleMode;
+  /** Self-authored linked-issue gate. When `block`, the gate closes a PR where the contributor also
+   *  opened the linked issue (`pr.authorLogin === issue.authorLogin`). Defaults to `advisory` — the finding
+   *  is surfaced in the review panel but never blocks unless the maintainer opts in. */
+  selfAuthoredLinkedIssueGateMode: GateRuleMode;
   /** First-time-contributor grace (#552). When true, a would-be BLOCK is softened to a neutral/advisory gate
    *  for a genuine newcomer (0 merged PRs in this repo) who is NOT a repeat offender (< 3 closed-unmerged PRs).
    *  Repeat offenders and authors with merge history are gated normally. Default false — opt-in. */

@@ -15,6 +15,7 @@ import {
   registryHyperparameterDriftWarningsForRepo,
   refreshUpstreamDrift,
   refreshUpstreamSourceSnapshots,
+  resolveDriftAssignees,
 } from "../../src/upstream/ruleset";
 import type { UpstreamDriftReportRecord, UpstreamRulesetSnapshotRecord, UpstreamSourceSnapshotRecord } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
@@ -809,6 +810,25 @@ describe("upstream ruleset drift tracking", () => {
     await expect(fileUpstreamDriftIssues(env)).resolves.toMatchObject({ status: "disabled", created: 0, updated: 0, skipped: 0 });
   });
 
+  it("REGRESSION (#audit-rawfetch-pause): the global agent brake / freeze halts drift-issue filing (raw PAT writes outside the chokepoint)", async () => {
+    // DB freeze arm: enabled + token + a real report, but a global freeze must skip ALL GitHub writes.
+    const frozenEnv = createTestEnv({ GITTENSORY_AUTO_FILE_DRIFT_ISSUES: "true", GITTENSORY_DRIFT_ISSUE_TOKEN: "token" });
+    await upsertUpstreamDriftReport(frozenEnv, driftReport("frozen-fingerprint"));
+    await repositories.setGlobalAgentFrozen(frozenEnv, true);
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(`${(init?.method ?? "GET").toUpperCase()} ${String(input)}`);
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await expect(fileUpstreamDriftIssues(frozenEnv)).resolves.toMatchObject({ status: "paused", created: 0, updated: 0, skipped: 0 });
+    expect(calls.some((c) => c.startsWith("POST") || c.startsWith("PATCH"))).toBe(false); // no GitHub issue write reached the network
+
+    // env brake arm: AGENT_ACTIONS_PAUSED short-circuits before the DB freeze read.
+    const pausedEnv = createTestEnv({ GITTENSORY_AUTO_FILE_DRIFT_ISSUES: "true", GITTENSORY_DRIFT_ISSUE_TOKEN: "token", AGENT_ACTIONS_PAUSED: "true" });
+    await upsertUpstreamDriftReport(pausedEnv, driftReport("paused-fingerprint"));
+    await expect(fileUpstreamDriftIssues(pausedEnv)).resolves.toMatchObject({ status: "paused", created: 0, updated: 0, skipped: 0 });
+  });
+
   it("files or reuses upstream drift issues only when explicitly enabled", async () => {
     const missingTokenEnv = createTestEnv({ GITTENSORY_AUTO_FILE_DRIFT_ISSUES: "true" });
     await expect(fileUpstreamDriftIssues(missingTokenEnv)).resolves.toMatchObject({ status: "skipped", reason: "missing_issue_token" });
@@ -856,6 +876,15 @@ describe("upstream ruleset drift tracking", () => {
     await upsertUpstreamDriftReport(failingEnv, driftReport("failing-fingerprint"));
     vi.stubGlobal("fetch", githubIssueFetch({ createStatus: 500, listStatus: 500 }));
     await expect(fileUpstreamDriftIssues(failingEnv)).resolves.toMatchObject({ status: "completed", created: 0, updated: 0, skipped: 1 });
+  });
+
+  it("assigns filed drift issues to GITTENSORY_DRIFT_ISSUE_ASSIGNEES when a self-host operator sets it", async () => {
+    const env = createTestEnv({ GITTENSORY_AUTO_FILE_DRIFT_ISSUES: "true", GITTENSORY_DRIFT_ISSUE_TOKEN: "token", GITTENSORY_DRIFT_ISSUE_ASSIGNEES: "alice, ,bob" });
+    await upsertUpstreamDriftReport(env, driftReport("assignee-override"));
+    const calls: GitHubIssueFetchCall[] = [];
+    vi.stubGlobal("fetch", githubIssueFetch({ create: { number: 70, url: "https://github.com/acme/widgets/issues/70" }, calls }));
+    await expect(fileUpstreamDriftIssues(env)).resolves.toMatchObject({ status: "completed", created: 1 });
+    expect(calls.find((call) => call.method === "POST")?.body?.assignees).toEqual(["alice", "bob"]); // trimmed, empty segment dropped
   });
 
   it("handles edge cases while filing upstream drift issues", async () => {
@@ -1453,3 +1482,16 @@ function driftReport(
     updatedAt: "2026-05-30T00:00:00.000Z",
   };
 }
+
+describe("resolveDriftAssignees", () => {
+  it("defaults to the gittensory maintainer when unset, empty, or whitespace-only", () => {
+    expect(resolveDriftAssignees(createTestEnv())).toEqual(["jsonbored"]);
+    expect(resolveDriftAssignees(createTestEnv({ GITTENSORY_DRIFT_ISSUE_ASSIGNEES: "" }))).toEqual(["jsonbored"]);
+    expect(resolveDriftAssignees(createTestEnv({ GITTENSORY_DRIFT_ISSUE_ASSIGNEES: "   " }))).toEqual(["jsonbored"]);
+  });
+
+  it("parses a comma-separated list, trimming and dropping empty segments", () => {
+    expect(resolveDriftAssignees(createTestEnv({ GITTENSORY_DRIFT_ISSUE_ASSIGNEES: "alice" }))).toEqual(["alice"]);
+    expect(resolveDriftAssignees(createTestEnv({ GITTENSORY_DRIFT_ISSUE_ASSIGNEES: " alice , ,bob " }))).toEqual(["alice", "bob"]);
+  });
+});

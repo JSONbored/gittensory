@@ -20,6 +20,7 @@ import {
   getPendingAgentAction,
   getRepository,
   getRepositorySettings,
+  isGlobalAgentFrozen,
   getRepoQueueTrendSnapshot,
   listAgentAuditEvents,
   listCheckSummaries,
@@ -68,6 +69,8 @@ import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import { buildMcpClientTelemetry } from "../services/client-telemetry";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
+import { buildRepoOutcomeCalibration, outcomeCalibrationSummary } from "../services/outcome-calibration";
+import { computeFleetAnalytics } from "../orb/analytics";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import {
   applyMcpPlanningChoices,
@@ -113,7 +116,7 @@ import { AGENT_ACTION_CLASSES, isActingAutonomyLevel, resolveAutonomy } from "..
 import { MAX_FOCUS_MANIFEST_BYTES } from "../signals/focus-manifest";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
-import { buildIssueSlopAssessment, buildSlopAssessment, ISSUE_SLOP_RUBRIC_MARKDOWN, SLOP_RUBRIC_MARKDOWN } from "../signals/slop";
+import { buildIssueSlopAssessment, buildSlopAssessment } from "../signals/slop";
 import { buildRepoDataQuality } from "../signals/data-quality";
 import { PREFLIGHT_LIMITS } from "../signals/preflight-limits";
 import { SCENARIO_MAX_BRANCH_REF_CHARS, SCENARIO_MAX_LINKED_ISSUE_NUMBERS, SCENARIO_MAX_REPO_FULL_NAME_CHARS } from "../scenarios/input-model";
@@ -135,6 +138,24 @@ function decisionPackSummary(login: string, freshness: string, rebuildEnqueued: 
 const ownerRepoShape = {
   owner: z.string().min(1),
   repo: z.string().min(1),
+};
+
+const ownerRepoWindowShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  windowDays: z.number().int().positive().optional(),
+};
+
+const windowOnlyShape = {
+  windowDays: z.number().int().positive().optional(),
+};
+
+const fleetAnalyticsOutputSchema = {
+  windowDays: z.number().optional(),
+  instanceCount: z.number().optional(),
+  fleet: z.unknown().optional(),
+  instances: z.array(z.unknown()).optional(),
+  outliers: z.array(z.unknown()).optional(),
 };
 
 const loginShape = {
@@ -587,6 +608,16 @@ const freshnessResponseOutputSchema = {
   report: z.unknown().optional(),
 };
 
+const maintainerMeasurementReportOutputSchema = {
+  repoFullName: z.string().optional(),
+  generatedAt: z.string().optional(),
+  windowDays: z.number().nullable().optional(),
+  slop: z.unknown().optional(),
+  recommendations: z.unknown().optional(),
+  signals: z.array(z.string()).optional(),
+  status: z.string().optional(),
+};
+
 const contributorProfileOutputSchema = {
   login: z.string().optional(),
   github: z.unknown().optional(),
@@ -1027,6 +1058,28 @@ export class GittensoryMcp {
     );
 
     server.registerTool(
+      "gittensory_get_outcome_calibration",
+      {
+        description:
+          "Return slop-band and recommendation outcome calibration for a repo: whether higher-slop bands merge less often and how agent recommendations are panning out. Maintainer-authenticated; measurement only.",
+        inputSchema: ownerRepoWindowShape,
+        outputSchema: maintainerMeasurementReportOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getOutcomeCalibration(input)),
+    );
+
+    server.registerTool(
+      "gittensory_get_fleet_analytics",
+      {
+        description:
+          "Operator-only: aggregated gate-calibration analytics across the self-host fleet — median merge/close precision, false-positive + reversal rates, cycle-time percentiles, and per-instance outliers. Measurement only.",
+        inputSchema: windowOnlyShape,
+        outputSchema: fleetAnalyticsOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getFleetAnalytics(input)),
+    );
+
+    server.registerTool(
       "gittensory_get_contributor_profile",
       {
         description: "Return an evidence-backed Gittensory contributor profile for a GitHub login.",
@@ -1072,7 +1125,7 @@ export class GittensoryMcp {
       "gittensory_check_slop_risk",
       {
         description:
-          "Assess the deterministic slop risk of a planned change from local diff metadata (paths + line counts) + the PR description — an agent-native, source-free quality self-check. Returns slopRisk (0-100), band, findings, and the rubric. No repo data needed.",
+          "Assess the deterministic slop risk of a planned change from local diff metadata (paths + line counts) + the PR description — an agent-native, source-free quality self-check. Returns band (clean/low/elevated/high) and actionable findings. No repo data needed.",
         inputSchema: checkSlopRiskShape,
         outputSchema: checkSlopRiskOutputSchema,
       },
@@ -1083,7 +1136,7 @@ export class GittensoryMcp {
       "gittensory_check_issue_slop",
       {
         description:
-          "Assess the deterministic slop risk of an issue from its title + body alone (no repo data) — flags clearly low-effort issues (empty body, an unfilled template) for triage. Returns slopRisk (0-100), band, findings, and the rubric. Advisory-only: issues never block.",
+          "Assess the deterministic slop risk of an issue from its title + body alone (no repo data) — flags clearly low-effort issues (empty body, an unfilled template) for triage. Returns band and findings. Advisory-only: issues never block.",
         inputSchema: checkIssueSlopShape,
         outputSchema: checkIssueSlopOutputSchema,
       },
@@ -1884,6 +1937,35 @@ export class GittensoryMcp {
     };
   }
 
+  private async getOutcomeCalibration(input: { owner: string; repo: string; windowDays?: number | undefined }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoAccess(fullName);
+    const report = await buildRepoOutcomeCalibration(this.env, fullName, input.windowDays);
+    return {
+      summary: outcomeCalibrationSummary(fullName, report.slop),
+      data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  // Operator-only gate: the fleet view aggregates ALL self-hosters' calibration, so a session must be an
+  // operator; private-token / static identities are trusted (the same model as the other measurement tools).
+  private async requireOperatorAccess(): Promise<void> {
+    if (this.identity.kind !== "session") return;
+    const scope = await this.loadSessionAccessScope();
+    if (scope.operator) return;
+    throw new Error("Forbidden: operator authority is required for fleet analytics.");
+  }
+
+  private async getFleetAnalytics(input: { windowDays?: number | undefined }): Promise<ToolPayload> {
+    await this.requireOperatorAccess();
+    const report = await computeFleetAnalytics(this.env, input.windowDays !== undefined ? { windowDays: input.windowDays } : {});
+    const merge = report.fleet.mergePrecision !== null ? `${Math.round(report.fleet.mergePrecision * 100)}%` : "n/a";
+    return {
+      summary: `Fleet calibration over ${report.windowDays}d: ${report.instanceCount} instance(s), median merge precision ${merge}, ${report.outliers.length} outlier(s).`,
+      data: report as unknown as Record<string, unknown>,
+    };
+  }
+
   private async loadOpenQueueCounts(fullName: string): Promise<{ openIssues: number; openPullRequests: number }> {
     const [totals, openIssues, openPullRequests] = await Promise.all([
       getLatestRepoGithubTotalsSnapshot(this.env, fullName),
@@ -1936,19 +2018,39 @@ export class GittensoryMcp {
     };
   }
 
+  // Per-actor rate-limit for slop-check tools: 20 calls per 5 min prevents systematic weight enumeration
+  // via controlled inputs. Skips gracefully when RATE_LIMITER is unavailable (test / local environments).
+  private async enforceToolRateLimit(toolName: string): Promise<void> {
+    if (!this.env.RATE_LIMITER) return;
+    const key = `mcp-tool:${toolName}:${this.identity.actor}`;
+    const id = this.env.RATE_LIMITER.idFromName(key);
+    const response = await this.env.RATE_LIMITER.get(id).fetch("https://rate-limit/check", {
+      method: "POST",
+      body: JSON.stringify({ key, limit: 20, windowSeconds: 300 }),
+    });
+    if (response.status === 429) {
+      const body = (await response.json().catch(() => ({}))) as { retryAfterSeconds?: number };
+      throw new Error(`Rate limit exceeded. Retry after ${body.retryAfterSeconds ?? 60}s.`);
+    }
+  }
+
   private async checkSlopRisk(input: z.infer<z.ZodObject<typeof checkSlopRiskShape>>): Promise<ToolPayload> {
+    await this.enforceToolRateLimit("gittensory_check_slop_risk");
     const assessment = buildSlopAssessment(input);
+    // Return band + findings only — omit the exact numeric score and rubric thresholds to prevent
+    // weight reverse-engineering via controlled inputs (#mcp-slop-blunt).
     return {
-      summary: `Slop risk: ${assessment.slopRisk}/100 (${assessment.band}).`,
-      data: { ...assessment, rubric: SLOP_RUBRIC_MARKDOWN } as unknown as Record<string, unknown>,
+      summary: `Slop risk: ${assessment.band}.`,
+      data: { band: assessment.band, findings: assessment.findings } as unknown as Record<string, unknown>,
     };
   }
 
   private async checkIssueSlop(input: z.infer<z.ZodObject<typeof checkIssueSlopShape>>): Promise<ToolPayload> {
+    await this.enforceToolRateLimit("gittensory_check_issue_slop");
     const assessment = buildIssueSlopAssessment(input);
     return {
-      summary: `Issue slop risk: ${assessment.slopRisk}/100 (${assessment.band}).`,
-      data: { ...assessment, rubric: ISSUE_SLOP_RUBRIC_MARKDOWN } as unknown as Record<string, unknown>,
+      summary: `Issue slop risk: ${assessment.band}.`,
+      data: { band: assessment.band, findings: assessment.findings } as unknown as Record<string, unknown>,
     };
   }
 
@@ -2212,7 +2314,7 @@ export class GittensoryMcp {
     const autonomy = settings.autonomy;
     const actingActionClasses = AGENT_ACTION_CLASSES.filter((actionClass) => isActingAutonomyLevel(resolveAutonomy(autonomy, actionClass)));
     const installation = repo?.installationId ? await getInstallation(this.env, repo.installationId) : null;
-    const mode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(this.env), agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun });
+    const mode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(this.env) || (await isGlobalAgentFrozen(this.env)), agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun });
     const permissionReadiness = resolveAgentPermissionReadiness({ autonomy, installationPermissions: installation?.permissions ?? null });
     return {
       summary: `Agent automation for ${fullName}: mode=${mode}, ${actingActionClasses.length} acting class(es), ${pendingActionCount} pending approval(s).`,

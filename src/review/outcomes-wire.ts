@@ -26,7 +26,16 @@
 import { recordAuditEvent } from "../db/repositories";
 import type { GitHubWebhookPayload } from "../types";
 import { errorMessage, nowIso } from "../utils/json";
-import { applyAutoTune, AUTOTUNE_MERGE_PRECISION_FLOOR, type FlagStore, type GateEvalReport, maybeAutoClearHoldOnly } from "./auto-tune";
+import {
+  applyAutoTune,
+  applyCloseAutoTune,
+  AUTOTUNE_CLOSE_PRECISION_FLOOR,
+  AUTOTUNE_MERGE_PRECISION_FLOOR,
+  type FlagStore,
+  type GateEvalReport,
+  maybeAutoClearCloseHoldOnly,
+  maybeAutoClearHoldOnly,
+} from "./auto-tune";
 import { computeGateEval } from "./parity";
 
 /** PURE: parse the PR number an "Reverts #N / Reverts owner/repo#N" body refers to (GitHub's revert PRs).
@@ -58,7 +67,24 @@ export async function isHoldOnly(env: Env, project: string): Promise<boolean> {
   }
 }
 
-/** A live FlagStore over system_flags for the circuit-breaker (applyAutoTune / maybeAutoClearHoldOnly). */
+/** CLOSE-side mirror of {@link isHoldOnly}: is auto-CLOSE disabled (would-close → hold) for this project (or
+ *  globally)? Reads the SAME system_flags table via a single scan and tests the `closehold:` namespace. This is
+ *  the read the close path consults to downgrade a would-CLOSE into a HOLD. Fail-OPEN (false) on a DB error so a
+ *  blip never silently changes the close path. */
+export async function isCloseHoldOnly(env: Env, project: string): Promise<boolean> {
+  try {
+    const res = await env.DB.prepare("SELECT key, value FROM system_flags").all<{ key: string; value: string }>();
+    const set = new Set<string>();
+    for (const r of res.results ?? []) if (flagTruthy(r.value)) set.add(r.key);
+    return set.has("closehold:global") || set.has(`closehold:${project}`);
+  } catch (error) {
+    console.warn(JSON.stringify({ ev: "flags_read_error", message: errorMessage(error).slice(0, 120) }));
+    return false; // fail-OPEN: a DB blip must never silently change the close path
+  }
+}
+
+/** A live FlagStore over system_flags for the circuit-breaker (applyAutoTune / maybeAutoClearHoldOnly +
+ *  applyCloseAutoTune / maybeAutoClearCloseHoldOnly). */
 export function createFlagStore(env: Env): FlagStore {
   return {
     async isHoldOnly(project: string): Promise<boolean> {
@@ -66,6 +92,16 @@ export function createFlagStore(env: Env): FlagStore {
       // breaker is already engaged, so it must read the per-project key, not fold in the global one.
       try {
         const row = await env.DB.prepare("SELECT value FROM system_flags WHERE key = ?").bind(`holdonly:${project}`).first<{ value: string }>();
+        return flagTruthy(row?.value);
+      } catch {
+        return false;
+      }
+    },
+    async isCloseHoldOnly(project: string): Promise<boolean> {
+      // Per-key check (mirrors isHoldOnly): applyCloseAutoTune dedups on whether THIS project's CLOSE breaker is
+      // already engaged, so it reads the per-project `closehold:` key, not the global-or-project read above.
+      try {
+        const row = await env.DB.prepare("SELECT value FROM system_flags WHERE key = ?").bind(`closehold:${project}`).first<{ value: string }>();
         return flagTruthy(row?.value);
       } catch {
         return false;
@@ -166,13 +202,33 @@ async function lastBotActionWasClose(env: Env, targetKey: string): Promise<boole
   try {
     const row = await env.DB
       .prepare(
+        // The executor records performed and dry-run actions as outcome 'completed', with the real mode only in
+        // metadata. Exclude dry-run shadows so a "would close" cannot masquerade as an actual bot close.
+        // 'success' is only a legacy value. (#audit-reversal-reopened)
         `SELECT event_type FROM audit_events
-         WHERE target_key = ? AND event_type LIKE 'agent.action.%' AND outcome = 'success'
+         WHERE target_key = ? AND event_type LIKE 'agent.action.%' AND outcome IN ('success', 'completed')
+           AND COALESCE(json_extract(metadata_json, '$.mode'), 'live') <> 'dry_run'
          ORDER BY created_at DESC LIMIT 1`,
       )
       .bind(targetKey)
       .first<{ event_type: string }>();
     return row?.event_type === "agent.action.close";
+  } catch {
+    return false;
+  }
+}
+
+/** True when our canonical ledger recorded PR #N as MERGED (a `pr_outcome`/decision=merged review_audit row —
+ *  the same store ops.ts reads for reversalRate). A "Reverts #N" PR only marks a reversal of an outcome WE
+ *  observed; otherwise an arbitrary "Reverts #N" in a contributor's merged PR would forge a reversal signal.
+ *  Fail-safe: a read error → false (record nothing rather than a false reversal). (#audit-3.2) */
+async function wasMergeRecorded(env: Env, targetId: string): Promise<boolean> {
+  try {
+    const row = await env.DB
+      .prepare(`SELECT 1 AS hit FROM review_audit WHERE target_id = ? AND event_type = 'pr_outcome' AND decision = 'merged' LIMIT 1`)
+      .bind(targetId)
+      .first<{ hit: number }>();
+    return Boolean(row);
   } catch {
     return false;
   }
@@ -222,9 +278,13 @@ export async function recordReversalSignals(env: Env, eventName: string, payload
     const reverted = parseRevertedPrNumber(pr.body);
     if (!reverted) return;
     const revertedTargetKey = reviewAuditTargetId(repoFullName, reverted);
-    // The reverted PR (#N) had a recorded pr_outcome=merged only if it merged; the reversal_reverted row marks
-    // that merge as later undone so reversalRate/calibration reflect it. (Auto-revert — opening a revert PR — is
-    // a separate, larger feature and intentionally NOT wired here; this records the human-driven revert signal.)
+    // Corroborate before recording: only count a reversal of a merge WE actually observed (#audit-3.2). Without
+    // this, a contributor's legitimately-merged PR whose body cites an arbitrary "Reverts #N" would stamp a
+    // spurious reversal against PR #N, inflating reversalRate/calibration. Mirrors reviewbot's bot-merged guard.
+    if (!(await wasMergeRecorded(env, revertedTargetKey))) return;
+    // The reverted PR (#N) had a recorded pr_outcome=merged; the reversal_reverted row marks that merge as later
+    // undone so reversalRate/calibration reflect it. (Auto-revert — opening a revert PR — is a separate, larger
+    // feature and intentionally NOT wired here; this records the human-driven revert signal.)
     await appendReviewAudit(env, { project, targetId: revertedTargetKey, eventType: "reversal_reverted", summary: `Merged PR #${reverted} was reverted by #${pr.number}.` });
     await recordAuditEvent(env, {
       eventType: "reversal_reverted",
@@ -244,13 +304,17 @@ const BREAKER_EVAL_WINDOW_DAYS = 90;
 
 /**
  * One precision-circuit-breaker tick, run on the scheduled (selftune) cron. Reads the gate-eval confusion
- * matrix over gittensory's OWN recorded pr_outcome/gate_decision rows, then:
- *   • ENGAGES the breaker (holdonly:<project>) for any repo whose merge precision dropped below the floor over
- *     a real sample (applyAutoTune) — the would-MERGE → HOLD downgrade then kicks in on the next merge path.
- *   • AUTO-CLEARS an auto-engaged breaker once its cooldown elapsed AND precision recovered (maybeAutoClearHoldOnly).
- * Strictly TIGHTENING-only: it only ever makes the system MORE cautious; a human clears a breaker that should
- * be cleared early. FAILS SAFE — a thrown error is logged and swallowed (tuning must never break the cron). With
- * no pr_outcome history the eval reads neutral → nothing engages → byte-identical.
+ * matrix over gittensory's OWN recorded pr_outcome/gate_decision rows, then engages/clears BOTH breakers:
+ *   • MERGE: ENGAGES holdonly:<project> for any repo whose merge precision dropped below the floor over a real
+ *     sample (applyAutoTune) — the would-MERGE → HOLD downgrade then kicks in on the next merge path; AUTO-CLEARS
+ *     an auto-engaged breaker once its cooldown elapsed AND precision recovered (maybeAutoClearHoldOnly).
+ *   • CLOSE (symmetric twin): ENGAGES closehold:<project> for any repo whose CLOSE precision dropped below the
+ *     floor (applyCloseAutoTune) — the would-CLOSE → HOLD downgrade kicks in next close path; AUTO-CLEARS the
+ *     same way (maybeAutoClearCloseHoldOnly).
+ * Strictly TIGHTENING-only in both directions: it only ever makes the system MORE cautious; a human clears a
+ * breaker that should be cleared early. FAILS SAFE — a thrown error is logged and swallowed (tuning must never
+ * break the cron). With no pr_outcome history the eval reads neutral → nothing engages → byte-identical. The
+ * close breaker is INERT until selftune is enabled AND close-outcome data is present, exactly like its merge twin.
  */
 export async function runSelfTuneBreaker(env: Env): Promise<void> {
   try {
@@ -261,10 +325,23 @@ export async function runSelfTuneBreaker(env: Env): Promise<void> {
     for (const action of engaged) {
       console.warn(JSON.stringify({ ev: "breaker_engaged", project: action.project, mergePrecision: action.mergePrecision, decided: action.decided, floor: AUTOTUNE_MERGE_PRECISION_FLOOR }));
     }
-    // Auto-clear any auto-engaged breaker that has cooled down + recovered (one per repo present in the report).
+    // CLOSE-side breaker: engage closehold for any repo whose close precision dropped below the floor.
+    const closeEngaged = await applyCloseAutoTune(flags, report);
+    for (const action of closeEngaged) {
+      console.warn(JSON.stringify({ ev: "close_breaker_engaged", project: action.project, closePrecision: action.closePrecision, decided: action.decided, floor: AUTOTUNE_CLOSE_PRECISION_FLOOR }));
+    }
+    // OBSERVABILITY: a single summary line of the engaged close-hold backlog so a human can see, at a glance,
+    // how many (and which) repos are currently holding would-closes for review. Only emitted when ≥1 engaged.
+    if (closeEngaged.length > 0) {
+      console.warn(JSON.stringify({ ev: "closehold_backlog", count: closeEngaged.length, projects: closeEngaged.map((a) => a.project) }));
+    }
+    // Auto-clear any auto-engaged breaker (merge AND close) that has cooled down + recovered (one per repo in the report).
     for (const row of report.rows) {
       if (await maybeAutoClearHoldOnly(flags, report, row.project, nowMs)) {
         console.log(JSON.stringify({ ev: "breaker_auto_cleared", project: row.project }));
+      }
+      if (await maybeAutoClearCloseHoldOnly(flags, report, row.project, nowMs)) {
+        console.log(JSON.stringify({ ev: "close_breaker_auto_cleared", project: row.project }));
       }
     }
   } catch (error) {

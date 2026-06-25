@@ -747,6 +747,53 @@ describe("signal coverage edge cases", () => {
     expect(duplicateBlocked.rows.find((r) => r.key === "gateResult")!.cells[1]).not.toBe(providedGate.cells[1]);
   });
 
+  it("#dup-winner: panel hard-duplicate block is suppressed for the winner, kept for the loser, byte-identical when flag OFF", () => {
+    const directRepo = repo("owner/dupwin");
+    const dupIssue = issue(directRepo.fullName, 42, "Cache invalidation race");
+    // Two open PRs on the same issue: 70 is the lowest open number (the winner), 88 is the loser.
+    const winnerPr = pr(directRepo.fullName, 70, "Fix the cache race", { authorLogin: "miner", linkedIssues: [42], body: "Fixes #42" });
+    const loserPr = pr(directRepo.fullName, 88, "Also fixes the cache race", { authorLogin: "other", linkedIssues: [42], body: "Fixes #42" });
+    const collisions = buildCollisionReport(directRepo.fullName, [dupIssue], [winnerPr, loserPr]);
+    const queueHealth = buildQueueHealth(directRepo, [dupIssue], [winnerPr, loserPr], collisions);
+    const blockSettings = { ...repoSettings(directRepo.fullName), gateCheckMode: "enabled" as const, duplicatePrGateMode: "block" as const };
+    const profile = buildContributorProfile("miner", { login: "miner", topLanguages: ["TypeScript"], source: "github" }, [], []);
+    const detection = { detected: true, source: "official_gittensor_api" as const, reason: "Confirmed.", priorPullRequests: 1, priorMergedPullRequests: 0, priorIssues: 0 };
+    const preflightFor = (target: PullRequestRecord) =>
+      buildPreflightResult({ repoFullName: directRepo.fullName, title: target.title, body: target.body ?? undefined, linkedIssues: target.linkedIssues }, directRepo, [dupIssue], [winnerPr, loserPr]);
+    const baseFor = (target: PullRequestRecord) => ({
+      repo: directRepo,
+      pr: target,
+      profile,
+      detection,
+      queueHealth,
+      collisions,
+      preflight: preflightFor(target),
+      settings: blockSettings,
+    });
+    const gateCell = (args: Parameters<typeof buildPublicPrPanelSignalRows>[0]) =>
+      buildPublicPrPanelSignalRows(args).rows.find((r) => r.key === "gateResult")!.cells[1];
+
+    // Flag OFF: BOTH the winner and the loser hard-block (today's behavior, byte-identical).
+    const offWinner = gateCell(baseFor(winnerPr));
+    const offLoser = gateCell(baseFor(loserPr));
+    expect(offWinner).toBe(offLoser);
+
+    // Flag ON: the winner is NOT blocked (its gate cell differs from the blocked loser's), the loser still blocks.
+    const onWinner = gateCell({ ...baseFor(winnerPr), duplicateWinnerEnabled: true });
+    const onLoser = gateCell({ ...baseFor(loserPr), duplicateWinnerEnabled: true });
+    expect(onWinner).not.toBe(offWinner);
+    expect(onLoser).toBe(offLoser);
+
+    // The comment builder must agree by construction: ON winner is NOT a blocking-merge panel; ON loser is.
+    const winnerComment = buildPublicPrIntelligenceComment({ ...baseFor(winnerPr), duplicateWinnerEnabled: true });
+    const loserComment = buildPublicPrIntelligenceComment({ ...baseFor(loserPr), duplicateWinnerEnabled: true });
+    expect(winnerComment).not.toContain("Gittensory Gate is blocking merge");
+    expect(loserComment).toContain("Gittensory Gate is blocking merge");
+    // Flag OFF on the winner is byte-identical to a blocking panel (today's behavior).
+    const offWinnerComment = buildPublicPrIntelligenceComment(baseFor(winnerPr));
+    expect(offWinnerComment).toContain("Gittensory Gate is blocking merge");
+  });
+
   it("renders opt-in gate panel states for collision and repo evaluation blockers", () => {
     const directRepo = repo("owner/gate");
     const existingIssue = issue(directRepo.fullName, 7, "Cache refresh websocket reconnect failure");
@@ -857,7 +904,7 @@ describe("signal coverage edge cases", () => {
       collisions: buildCollisionReport(directRepo.fullName, [], [currentPr]),
       preflight: buildPreflightResult({ repoFullName: directRepo.fullName, title: "Fix isolated issue", body: "Fixes #99", linkedIssues: [99] }, directRepo, [], [currentPr]),
       settings: gateSettings,
-      review: { present: true, footerText: "Reviewed by the Acme maintainer bot.", note: "Run npm test before pushing.", fields: { relatedWork: false } },
+      review: { present: true, footerText: "Reviewed by the Acme maintainer bot.", note: "Run npm test before pushing.", fields: { relatedWork: false }, profile: null, pathInstructions: [], excludePaths: [], preMergeChecks: [] },
       aiReview: { notes: "The change is focused.\n\n**Suggestions**\n- Add a test for the </details> edge case." },
     });
     expect(customizedComment).toContain("Reviewed by the Acme maintainer bot."); // custom footer lead
@@ -1245,6 +1292,24 @@ describe("signal coverage edge cases", () => {
     expect(scoreComponent(missingValidation, "pr_state")).toMatchObject({ score: 6, evidence: "PR is open as draft.", action: "Mark ready when done." });
     expect(scoreComponent(missingValidation, "queue_pressure")).toMatchObject({ score: 5, action: "Expect slower review." });
 
+    // A body validation NOTE without accompanying test files is capped at 12 (was 25): a one-line "tested" can no
+    // longer fake full validation evidence and lift readiness over a gate threshold on a zero-test PR. (#audit-2.3)
+    const notedButUntested = buildPublicReadinessScore({
+      pr: pr(directRepo.fullName, 43, "Claims tested, no tests", { body: "Tested locally, works fine.", linkedIssues: [1] }),
+      preflight: {
+        ...readyPreflight,
+        status: "ready",
+        reviewBurden: "low",
+        findings: [{ code: "missing_tests", severity: "warning", title: "Tests missing", detail: "No tests found." }],
+      },
+      queueHealth: queueHealthFixture(directRepo.fullName, "low"),
+    });
+    expect(scoreComponent(notedButUntested, "validation")).toMatchObject({
+      score: 12,
+      evidence: "PR body claims validation but no test files accompany the change.",
+      action: "Add tests covering the change.",
+    });
+
     const closedPr = pr(directRepo.fullName, 42, "Closed cleanup", { state: "closed", body: "cleanup", linkedIssues: [] });
     const weak = buildPublicReadinessScore({
       pr: closedPr,
@@ -1518,6 +1583,30 @@ describe("signal coverage edge cases", () => {
     expect(fitOf(matched)).toBe((fitOf(offLanguage) ?? 0) + 10);
     expect(fitOf(unknownLanguage)).toBe(fitOf(offLanguage));
   });
+  it("buildQueueHealth counts draft PRs and fires inactive_draft_prs finding when stale", () => {
+    const directRepo = repo("owner/draft-test");
+    const collisions = buildCollisionReport(directRepo.fullName, [], []);
+    const staleDate = new Date(Date.now() - 20 * 86_400_000).toISOString();
+    const recentDate = new Date().toISOString();
+
+    // A stale draft PR triggers the finding; a recent draft does not.
+    const staleDraftPr = pr(directRepo.fullName, 10, "Draft: refactor auth", { isDraft: true, updatedAt: staleDate });
+    const recentDraftPr = pr(directRepo.fullName, 11, "Draft: add pagination", { isDraft: true, updatedAt: recentDate });
+    const nonDraftPr = pr(directRepo.fullName, 12, "Fix login redirect", { isDraft: false });
+
+    const withStaleDraft = buildQueueHealth(directRepo, [], [staleDraftPr, nonDraftPr], collisions);
+    expect(withStaleDraft.signals.draftPullRequests).toBe(1);
+    expect(withStaleDraft.findings.some((f) => f.code === "inactive_draft_prs")).toBe(true);
+
+    const withRecentDraft = buildQueueHealth(directRepo, [], [recentDraftPr, nonDraftPr], collisions);
+    expect(withRecentDraft.signals.draftPullRequests).toBe(1);
+    expect(withRecentDraft.findings.some((f) => f.code === "inactive_draft_prs")).toBe(false);
+
+    // No drafts: signal is zero and finding is absent.
+    const noDrafts = buildQueueHealth(directRepo, [], [nonDraftPr], collisions);
+    expect(noDrafts.signals.draftPullRequests).toBe(0);
+    expect(noDrafts.findings.some((f) => f.code === "inactive_draft_prs")).toBe(false);
+  });
 });
 
 function repo(fullName: string, overrides: Partial<RegistryRepoConfig> = {}): RepositoryRecord {
@@ -1591,6 +1680,7 @@ function repoSettings(repoFullName: string): RepositorySettings {
     slopGateMode: "off",
     mergeReadinessGateMode: "off",
     manifestPolicyGateMode: "off",
+    selfAuthoredLinkedIssueGateMode: "advisory",
     firstTimeContributorGrace: false,
     slopAiAdvisory: false,
     qualityGateMinScore: null,
@@ -1633,6 +1723,7 @@ function queueHealthFixture(repoFullName: string, level: QueueHealth["level"]): 
       openPullRequests: level === "low" ? 1 : level === "medium" ? 4 : level === "high" ? 9 : 16,
       unlinkedPullRequests: 0,
       stalePullRequests: 0,
+      draftPullRequests: 0,
       maintainerAuthoredPullRequests: 0,
       collisionClusters: 0,
       ageBuckets: { under7Days: 0, days7To30: 0, over30Days: 0 },

@@ -46,6 +46,14 @@ export const DEFAULT_SCORING_CONSTANTS: Record<string, number> = {
   OPEN_PR_THRESHOLD_TOKEN_SCORE: 300,
   MAX_OPEN_PR_THRESHOLD: 30,
   SRC_TOK_SATURATION_SCALE: 58,
+  // Density-era constants (#812): upstream is on the saturation model, but `current_density_model` is still
+  // a supported `activeModel` (types.ts union, the public OpenAPI schema, the DB parser, ~20 test fixtures,
+  // and src/services/score-breakdown.ts). The density branch in preview.ts is therefore NOT dead — it is the
+  // supported alternate/fallback model. Single-sourcing these fallbacks HERE (instead of as silent hardcoded
+  // literals at every constant() call site) closes the duplicate-source-of-truth gap without a breaking
+  // removal of a still-supported model.
+  MIN_TOKEN_SCORE_FOR_BASE_SCORE: 5,
+  MAX_CODE_DENSITY_MULTIPLIER: 1.15,
   // Upstream time-decay (#703): a merged PR's score decays on a sigmoid after a grace period. Modeled here
   // so they no longer surface as unmodeled drift (#690); APPLICATION is opt-in + default-off (see preview).
   TIME_DECAY_GRACE_PERIOD_HOURS: 12,
@@ -56,10 +64,6 @@ export const DEFAULT_SCORING_CONSTANTS: Record<string, number> = {
 
 export const DEFAULT_GITTENSOR_UPSTREAM_REPO = "entrius/gittensor";
 export const DEFAULT_GITTENSOR_UPSTREAM_REF = "test";
-export const SCORING_CONSTANTS_URL =
-  "https://raw.githubusercontent.com/entrius/gittensor/test/gittensor/constants.py";
-export const PROGRAMMING_LANGUAGES_URL =
-  "https://raw.githubusercontent.com/entrius/gittensor/test/gittensor/validator/weights/programming_languages.json";
 
 function scoringUpstreamConfig(env: Env): { repo: string; ref: string } {
   return {
@@ -72,27 +76,79 @@ function upstreamRawUrl(config: { repo: string; ref: string }, path: string): st
   return `https://raw.githubusercontent.com/${config.repo}/${encodeURIComponent(config.ref)}/${path}`;
 }
 
-const SCORING_CONSTANT_NAMES = new Set([...Object.keys(DEFAULT_SCORING_CONSTANTS), "MIN_TOKEN_SCORE_FOR_BASE_SCORE", "MAX_CODE_DENSITY_MULTIPLIER"]);
+// Fetch the HEAD commit SHA of the upstream ref for audit trail. Fail-open: a network hiccup or a
+// missing administration token must never block the constants refresh itself.
+async function fetchUpstreamRefSha(upstream: { repo: string; ref: string }, token: string | undefined): Promise<string | null> {
+  try {
+    const response = await fetch(`https://api.github.com/repos/${upstream.repo}/commits/${encodeURIComponent(upstream.ref)}`, { headers: githubHeaders(token, "application/vnd.github+json") });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { sha?: string };
+    return typeof data.sha === "string" && data.sha.length > 0 ? data.sha : null;
+  } catch {
+    return null;
+  }
+}
+
+// Single source of truth (#812): every recognized upstream constant name is a key of
+// DEFAULT_SCORING_CONSTANTS, so the known-only parser, the unmodeled-drift detector, and the preview-side
+// fallbacks all derive from one place. The density-era constants are included because the density model is
+// still a supported activeModel (see comment above).
+const SCORING_CONSTANT_NAMES = new Set(Object.keys(DEFAULT_SCORING_CONSTANTS));
+
+// Sanity floor for a 200 constants.py body. A real upstream file defines ~30 recognized constants; an HTML
+// interstitial, a Git-LFS pointer, or a truncated body parses to ~0. Below this, treat the body as non-source
+// and fail closed rather than reverting live scoring to defaults under a "raw-github" label. (#audit-3.6)
+const MIN_RECOGNIZED_SCORING_CONSTANTS = 8;
 
 export async function refreshScoringModelSnapshot(env: Env): Promise<ScoringModelSnapshotRecord> {
   const warnings: string[] = [];
   const fetchedAt = nowIso();
   const upstream = scoringUpstreamConfig(env);
-  const constantsUrl = upstreamRawUrl(upstream, "gittensor/constants.py");
-  const programmingLanguagesUrl = upstreamRawUrl(upstream, "gittensor/validator/weights/programming_languages.json");
+  // Pin the fetch to the upstream ref's immutable HEAD commit SHA so a force-push / branch-rename can't silently
+  // change what every repo scores against: resolve ref → SHA first, then fetch the constants AT that SHA (an
+  // atomic SHA↔constants binding, recorded in the payload). Best-effort — if the SHA can't be resolved (a
+  // transient API error) fall back to the mutable ref so a refresh is never blocked purely on the SHA lookup.
+  const upstreamSourceSha = await fetchUpstreamRefSha(upstream, env.GITHUB_PUBLIC_TOKEN);
+  const fetchRef = upstreamSourceSha ?? upstream.ref;
+  // Surface the unpinned fall-back: when the SHA can't be resolved we fetch from the MUTABLE ref, so a later
+  // upstream force-push could change what every repo scores against with no other signal. (#audit-3.6/drift)
+  if (!upstreamSourceSha) warnings.push(`Could not resolve upstream ${upstream.repo}@${upstream.ref} to an immutable commit SHA; fetched from the mutable ref (scoring is unpinned until the next successful resolve).`);
+  const constantsUrl = upstreamRawUrl({ repo: upstream.repo, ref: fetchRef }, "gittensor/constants.py");
+  const programmingLanguagesUrl = upstreamRawUrl({ repo: upstream.repo, ref: fetchRef }, "gittensor/validator/weights/programming_languages.json");
   const [registrySnapshot, constantsResult, languagesResult] = await Promise.all([
     getLatestRegistrySnapshot(env),
     fetchText(constantsUrl, env.GITHUB_PUBLIC_TOKEN),
     fetchJson(programmingLanguagesUrl, env.GITHUB_PUBLIC_TOKEN),
   ]);
 
+  // Parse once. `recognizedCount` tells us whether a 200 body is a REAL constants.py or semantically garbage —
+  // an HTML interstitial, a Git-LFS pointer, or a truncated body — which parses to ~0 known scoring constants.
+  const parsedConstants = constantsResult.ok ? parsePythonNumberConstants(constantsResult.value) : {};
+  const recognizedCount = Object.keys(parsedConstants).filter((name) => SCORING_CONSTANT_NAMES.has(name)).length;
+  const constantsUsable = constantsResult.ok && recognizedCount >= MIN_RECOGNIZED_SCORING_CONSTANTS;
+
+  // FAIL-CLOSED (#scoring-fail-closed, #audit-3.6): a failed OR semantically-garbage constants fetch must NEVER
+  // silently overwrite the last verified upstream constants with hardcoded DEFAULT_SCORING_CONSTANTS — that would
+  // move live scoring with no one noticing. Freeze the last-good snapshot instead (its age is surfaced by
+  // scoringSnapshotStalenessWarning), and only bootstrap to defaults when there is no verified last-good.
+  if (!constantsUsable) {
+    const lastGood = await getLatestScoringModelSnapshot(env);
+    if (lastGood && lastGood.sourceKind !== "fallback") {
+      const reason = constantsResult.ok
+        ? `parsed only ${recognizedCount} recognized constant(s) (expected ≥ ${MIN_RECOGNIZED_SCORING_CONSTANTS}) — body looks truncated or non-source`
+        : constantsResult.error;
+      const frozenNote = `Upstream scoring constants refresh failed (${reason}); froze the last-good snapshot rather than reverting to default constants.`;
+      return { ...lastGood, warnings: [...lastGood.warnings, frozenNote] };
+    }
+  }
+
   let sourceKind: ScoringModelSnapshotRecord["sourceKind"] = "raw-github";
   let constants = { ...DEFAULT_SCORING_CONSTANTS };
   let activeModelConstants: Record<string, number> = {};
   let constantsPayload: Record<string, JsonValue> = {};
 
-  if (constantsResult.ok) {
-    const parsed = parsePythonNumberConstants(constantsResult.value);
+  if (constantsResult.ok && constantsUsable) {
+    const parsed = parsedConstants;
     constants = { ...constants, ...parsed };
     activeModelConstants = parsed;
     const unmodeled = findUnmodeledUpstreamConstants(constantsResult.value);
@@ -106,7 +162,11 @@ export async function refreshScoringModelSnapshot(env: Env): Promise<ScoringMode
     }
   } else {
     sourceKind = "fallback";
-    warnings.push(`Scoring constants fetch failed: ${constantsResult.error}`);
+    warnings.push(
+      constantsResult.ok
+        ? `Scoring constants body parsed only ${recognizedCount} recognized constant(s) (expected ≥ ${MIN_RECOGNIZED_SCORING_CONSTANTS}); using default constants.`
+        : `Scoring constants fetch failed: ${constantsResult.error}`,
+    );
   }
 
   const programmingLanguages = languagesResult.ok ? languagesResult.value : {};
@@ -126,13 +186,14 @@ export async function refreshScoringModelSnapshot(env: Env): Promise<ScoringMode
       constants: constantsPayload,
       programmingLanguagesSourceUrl: programmingLanguagesUrl,
       registryRepoCount: registrySnapshot?.repoCount ?? 0,
+      ...(upstreamSourceSha ? { upstreamSourceSha } : {}),
     },
   };
   await persistScoringModelSnapshot(env, snapshot);
   if (constantsResult.ok) {
     await syncUnmodeledScoringConstantDrift(env, {
       unmodeledConstants: findUnmodeledUpstreamConstants(constantsResult.value),
-      source: { repo: upstream.repo, ref: upstream.ref, commitSha: null },
+      source: { repo: upstream.repo, ref: fetchRef, commitSha: upstreamSourceSha },
     });
   }
   return snapshot;

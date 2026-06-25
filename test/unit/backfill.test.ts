@@ -33,6 +33,7 @@ import {
   enrichInstallationHealth,
   fetchAndStorePullRequestFilesForReview,
   fetchLiveCiAggregate,
+  fetchRequiredStatusContexts,
   refreshContributorActivity,
   refreshInstallationHealth,
   refreshPullRequestDetails,
@@ -435,6 +436,48 @@ describe("GitHub backfill", () => {
     });
   });
 
+  it("surfaces pull_requests:write in the remediation when it is the missing permission (#audit-install-health display)", () => {
+    const health = enrichInstallationHealth({
+      installationId: 126,
+      accountLogin: "JSONbored",
+      repositorySelection: "selected",
+      installedReposCount: 1,
+      registeredInstalledCount: 1,
+      status: "needs_attention",
+      missingPermissions: ["pull_requests"],
+      missingEvents: [],
+      permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+      events: ["issues", "issue_comment", "pull_request", "repository"],
+      checkedAt: "2026-06-05T00:00:00.000Z",
+    });
+
+    expect(health.requiredPermissions).toMatchObject({ pull_requests: "write" }); // not the baseline read
+    expect(health.permissionRemediation).toEqual(
+      expect.arrayContaining([expect.objectContaining({ permission: "pull_requests", requiredAccess: "write", ok: false, action: "Set repository permission pull_requests to write." })]),
+    );
+  });
+
+  it("keeps baseline pull_requests:read remediation when the permission is absent (#audit-install-health least privilege)", () => {
+    const health = enrichInstallationHealth({
+      installationId: 127,
+      accountLogin: "JSONbored",
+      repositorySelection: "selected",
+      installedReposCount: 1,
+      registeredInstalledCount: 1,
+      status: "needs_attention",
+      missingPermissions: ["pull_requests"],
+      missingEvents: [],
+      permissions: { metadata: "read", issues: "write" },
+      events: ["issues", "issue_comment", "pull_request", "repository"],
+      checkedAt: "2026-06-05T00:00:00.000Z",
+    });
+
+    expect(health.requiredPermissions).toMatchObject({ pull_requests: "read" });
+    expect(health.permissionRemediation).toEqual(
+      expect.arrayContaining([expect.objectContaining({ permission: "pull_requests", requiredAccess: "read", ok: false, action: "Set repository permission pull_requests to read." })]),
+    );
+  });
+
   it("requires Checks write only for repos with check runs enabled", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await seedRegisteredRepo(env);
@@ -480,6 +523,49 @@ describe("GitHub backfill", () => {
     );
   });
 
+  it("REGRESSION (#audit-install-health): an acting autonomy requires pull_requests:write, so read-only is needs_attention not healthy", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await seedRegisteredRepo(env);
+    await upsertInstallation(env, {
+      installation: {
+        id: 123,
+        account: { login: "JSONbored", id: 1, type: "User" },
+        repository_selection: "selected",
+        permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+        events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+      },
+    });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);
+    // close:auto ACTS on PR state → the App needs pull_requests:write, not the baseline read.
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { close: "auto" } });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.endsWith("/app/installations/123")) {
+        return Response.json({
+          id: 123,
+          account: { login: "JSONbored", id: 1, type: "User" },
+          repository_selection: "selected",
+          permissions: { metadata: "read", pull_requests: "read", issues: "write" }, // only READ granted
+          events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const refreshed = await refreshInstallationHealth(env);
+
+    expect(refreshed.installations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          installationId: 123,
+          status: "needs_attention", // was falsely "healthy" before the fix
+          missingPermissions: ["pull_requests"],
+          requiredPermissions: expect.objectContaining({ pull_requests: "write" }),
+        }),
+      ]),
+    );
+  });
+
   it("marks comment, label, and check repair impacts disabled by repo settings", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);
@@ -507,6 +593,7 @@ describe("GitHub backfill", () => {
 
     expect(repair.repairSteps).toEqual(["No repair needed."]);
     expect(repair.requiredPermissions).not.toHaveProperty("checks");
+    expect(repair.requiredPermissions.pull_requests).toBe("read"); // non-acting → baseline read, NOT upgraded to write
     expect(repair.modeImpacts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ mode: "comment", enabled: false, affectedRepoCount: 0, action: "No change needed." }),
@@ -514,6 +601,28 @@ describe("GitHub backfill", () => {
         expect.objectContaining({ mode: "check_run", enabled: false, affectedRepoCount: 0, requiredPermissions: [expect.objectContaining({ optional: true })] }),
       ]),
     );
+  });
+
+  it("repair diagnostics upgrade pull_requests to write for an acting autonomy (#audit-install-health display)", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { merge: "auto" } });
+
+    const repair = await buildInstallationRepairDiagnostics(env, {
+      installationId: 123,
+      accountLogin: "JSONbored",
+      repositorySelection: "selected",
+      installedReposCount: 1,
+      registeredInstalledCount: 0,
+      status: "needs_attention",
+      missingPermissions: ["pull_requests"],
+      missingEvents: [],
+      permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+      events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+      checkedAt: "2026-05-28T00:00:00.000Z",
+    });
+
+    expect(repair.requiredPermissions.pull_requests).toBe("write");
   });
 
   it("counts comment-only and label-only repair surfaces separately", async () => {
@@ -2748,6 +2857,292 @@ describe("GitHub backfill", () => {
       expect(aggregate.failingDetails).toEqual([expect.objectContaining({ name: "Gittensory Gate", summary: "External status failed" })]);
     });
 
+    it("treats a required context that never ran (absent from results) as pending, not passed", async () => {
+      // Bypass: requiredContexts = {"validate"}, but CI only returns non-required checks (e.g. CodeQL). The
+      // "validate" job never triggered (fork workflow skipped, matrix split, etc.). Without the absent-check
+      // guard, total > 0 (CodeQL passed) → ciState = "passed" even though the required check never ran.
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) {
+          return Response.json({
+            check_runs: [
+              // Only non-required checks ran — "validate" is absent.
+              { name: "CodeQL", status: "completed", conclusion: "success", app: { slug: "github-advanced-security" } },
+              { name: "Superagent Security Scan", status: "completed", conclusion: "success", app: { slug: "superagent" } },
+            ],
+          });
+        }
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        return new Response("not found", { status: 404 });
+      });
+
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["validate"]));
+
+      expect(aggregate.ciState).toBe("pending"); // required "validate" never ran — must not be "passed"
+      expect(aggregate.failingDetails).toEqual([]);
+    });
+
+    it("keeps bot-owned required contexts as seen (not absent) even though they are excluded from gate logic", async () => {
+      // The existing deadlock-avoidance test: bot-owned required contexts (Gate, Context) in in_progress are
+      // skipped from gate logic, but seenContextNames must still mark them to avoid the absent-check guard
+      // treating them as missing and re-introducing a false anyPending.
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) {
+          return Response.json({
+            check_runs: [
+              { name: "validate", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+              { name: "Gittensory Gate", status: "in_progress", conclusion: null, app: { slug: "gittensory" } },
+            ],
+          });
+        }
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        return new Response("not found", { status: 404 });
+      });
+
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "sha", "tok", new Set(["validate", "Gittensory Gate"]));
+
+      // "Gittensory Gate" is a bot check: present in results (so not absent), excluded from gate logic → passed
+      expect(aggregate.ciState).toBe("passed");
+    });
+
+    it("fold-all: a failed check-runs fetch with an otherwise-green status reads PENDING, not passed (fail-closed)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        // Transient check-runs fetch failure → githubJsonWithHeaders throws → caught → check set unread.
+        if (url.includes("/check-runs?")) return new Response("upstream error", { status: 500 });
+        if (url.includes("/status?")) return Response.json({ statuses: [{ context: "ci/green", state: "success" }] });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+      // Without the fail-closed degrade this would be "passed" (one green status, no failing) — the seam.
+      expect(aggregate.ciState).toBe("pending");
+      expect(aggregate.failingDetails).toEqual([]);
+    });
+
+    it("fold-all: a failed status fetch with an otherwise-green check-run reads PENDING, not passed (fail-closed)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "build", status: "completed", conclusion: "success" }] });
+        if (url.includes("/status?")) return new Response("upstream error", { status: 500 });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+      expect(aggregate.ciState).toBe("pending");
+    });
+
+    it("fold-all: a GitHub-Actions workflow AWAITING APPROVAL (suite not completed) reads PENDING, not passed (#ci-foldall-checksuites / #1799)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        // A fork PR awaiting CI approval: the required workflow never ran → no check-RUNS for it; only the
+        // always-on third-party checks posted (both pass) — the false-green seam.
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "Contributor trust", status: "completed", conclusion: "success", app: { slug: "superagent" } }] });
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        // …but the check-SUITES show the GitHub-Actions workflow as `requested` (queued, awaiting approval).
+        if (url.includes("/check-suites?"))
+          return Response.json({
+            check_suites: [
+              { status: "requested", app: { slug: "github-actions" } },
+              { status: "completed", app: { slug: "superagent" } },
+            ],
+          });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/metagraphed", "forksha", "public-token", null);
+      // Without this hardening the always-on passes alone read "passed" → a false-green approve. Now: pending → held.
+      expect(aggregate.ciState).toBe("pending");
+    });
+
+    it("fold-all: all GitHub-Actions suites COMPLETED → still passed (no false-pending)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "test", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+      expect(aggregate.ciState).toBe("passed");
+    });
+
+    it("fold-all: an UNREADABLE check-suites read with NO first-party check-run reads PENDING, not passed (#review-audit / #1799)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        // Fork PR awaiting approval: only an always-on third-party status; NO first-party GitHub-Actions check-run.
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "license/cla", status: "completed", conclusion: "success", app: { slug: "cla-bot" } }] });
+        if (url.includes("/status?")) return Response.json({ statuses: [{ context: "license/cla", state: "success" }] });
+        if (url.includes("/check-suites?")) return new Response("forbidden", { status: 403 }); // same missing admin:read that forced fold-all
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/metagraphed", "forksha", "public-token", null);
+      // The suites backstop is unreadable AND no first-party run was seen → cannot confirm CI ran → fail closed.
+      expect(aggregate.ciState).toBe("pending");
+    });
+
+    it("fold-all: an UNREADABLE check-suites read still reads PASSED when a first-party check-run was seen (no over-pending)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        // A real (non-fork) PR: the GitHub-Actions workflow ran and passed (a first-party check-run is present).
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "test", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        if (url.includes("/check-suites?")) return new Response("forbidden", { status: 403 });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+      expect(aggregate.ciState).toBe("passed"); // a first-party run was observed and passed; do not over-pend
+    });
+
+    it("fold-all: a non-completed THIRD-PARTY suite is ignored (only first-party GitHub-Actions suites gate)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "test", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        // A third-party app's suite is perpetually "queued" — must NOT pend the gate (only github-actions counts).
+        if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }, { status: "queued", app: { slug: "some-other-app" } }] });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+      expect(aggregate.ciState).toBe("passed");
+    });
+
+    it("ENFORCE-required mode does NOT consult check-suites (the absent-context guard already handles it)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      let suitesFetched = false;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-suites?")) suitesFetched = true;
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "test", status: "completed", conclusion: "success" }] });
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        return new Response("not found", { status: 404 });
+      });
+      // Required = {test} and it passed → passed; the check-suites call is never made in enforce-required mode.
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["test"]));
+      expect(aggregate.ciState).toBe("passed");
+      expect(suitesFetched).toBe(false);
+    });
+
+    it("fold-all: tolerates malformed check-suites (missing app / missing status) without throwing", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "ci", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        if (url.includes("/check-suites?"))
+          return Response.json({
+            check_suites: [
+              { status: "completed" }, // no app → app?.slug ?? "" = "" → not github-actions → ignored
+              { app: { slug: "github-actions" } }, // no status → status ?? "" = "" → not "completed" → pending
+            ],
+          });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+      // The status-less github-actions suite is treated as not-completed (safe direction) → pending.
+      expect(aggregate.ciState).toBe("pending");
+    });
+
+    it("an observed required failure stays FAILED even when a later check-runs page fetch fails", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?") && url.includes("&page=1")) {
+          return Response.json(
+            { check_runs: [{ name: "build", status: "completed", conclusion: "failure", output: { title: "boom" } }] },
+            { headers: { link: '<https://api.github.com/repos/x/y/commits/abc/check-runs?page=2>; rel="next"' } },
+          );
+        }
+        if (url.includes("/check-runs?")) return new Response("upstream error", { status: 500 }); // page 2 fails → incomplete
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+      // Incomplete visibility does NOT override an authoritative observed failure.
+      expect(aggregate.ciState).toBe("failed");
+      expect(aggregate.failingDetails).toEqual([expect.objectContaining({ name: "build" })]);
+    });
+
+    it("reports unverified when both CI sources succeed but return no checks at all", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [] });
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+      expect(aggregate.ciState).toBe("unverified");
+    });
+
+    it("treats a status response with no statuses field as empty (nullish-coalesce branch)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "build", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+        if (url.includes("/status?")) return Response.json({}); // no `statuses` key → exercises `?? []`
+        if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+      expect(aggregate.ciState).toBe("passed");
+    });
+
+    it("paginates commit-statuses so a failing status beyond page 1 is not silently dropped", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [] });
+        if (url.includes("/status?") && url.includes("&page=1")) {
+          return Response.json(
+            { statuses: [{ context: "ci/green", state: "success" }] },
+            { headers: { link: '<https://api.github.com/repos/x/y/commits/abc/status?page=2>; rel="next"' } },
+          );
+        }
+        if (url.includes("/status?")) return Response.json({ statuses: [{ context: "ci/overflow", state: "failure", description: "page-2 failure" }] });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+      expect(aggregate.ciState).toBe("failed");
+      expect(aggregate.failingDetails).toEqual([expect.objectContaining({ name: "ci/overflow" })]);
+    });
+
+  });
+
+  describe("fetchRequiredStatusContexts", () => {
+    it("returns null without fetching when baseRef is missing", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+      expect(await fetchRequiredStatusContexts(env, "JSONbored/gittensory", null, "public-token")).toBeNull();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("returns the live required set when branch protection is readable (both contexts and checks shapes)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        if (input.toString().includes("/protection/required_status_checks")) {
+          return Response.json({ contexts: ["validate", "", null], checks: [{ context: "Superagent Security Scan" }, { context: "  " }] });
+        }
+        return new Response("not found", { status: 404 });
+      });
+      const required = await fetchRequiredStatusContexts(env, "JSONbored/gittensory", "main", "public-token");
+      expect([...(required as Set<string>)].sort()).toEqual(["Superagent Security Scan", "validate"]);
+    });
+
+    it("returns null when the live read fails, even if a stale global fallback is configured (conservative fold-all)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      (env as Env & { GITTENSORY_REQUIRED_CI_CONTEXTS?: string }).GITTENSORY_REQUIRED_CI_CONTEXTS = "stale-required-context";
+      vi.stubGlobal("fetch", async () => new Response("forbidden", { status: 403 }));
+      expect(await fetchRequiredStatusContexts(env, "JSONbored/gittensory", "main", "public-token")).toBeNull();
+    });
   });
 
 });

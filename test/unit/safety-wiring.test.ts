@@ -255,7 +255,7 @@ describe("secret-leak finding in the advisory build", () => {
     expect(out).toContain("### ok.ts (added) +2/-1\n@@\n+const a = 1;");
   });
 
-  it("FLAG-OFF (default): no secret_leak finding is produced — the advisory is unchanged", async () => {
+  it("FLAG-OFF: a concrete leaked secret STILL produces the secret_leak finding (unconditional, #audit-3.4)", async () => {
     const env = createTestEnv({ GITTENSORY_REVIEW_SAFETY: "false" });
     const adv = advisory();
     const files = [
@@ -278,7 +278,8 @@ describe("secret-leak finding in the advisory build", () => {
       pullNumber: 7,
       files,
     });
-    expect(adv.findings).toEqual([]);
+    // The concrete-credential hard block does not depend on GITTENSORY_REVIEW_SAFETY.
+    expect(adv.findings.map((f) => f.code)).toContain("secret_leak");
   });
 
   it("FLAG-ON + files=null: lazily loads the changed files from D1 and still finds the leaked secret", async () => {
@@ -361,6 +362,26 @@ describe("secretLeakFinding scans only ADDED lines", () => {
 
   it("does NOT flag a secret on an unchanged context line", () => {
     const diff = `### src/config.ts (modified) +1/-0\n@@\n const token = "${fakeToken}";\n+const unrelated = 1;`;
+    expect(secretLeakFinding(diff)).toBeNull();
+  });
+
+  it("flags a secret introduced in an added file path", () => {
+    const diff = `### fixtures/${fakeToken}.txt (added) +1/-0\n@@\n+benign fixture content`;
+    expect(secretLeakFinding(diff)?.code).toBe("secret_leak");
+  });
+
+  it("flags a secret introduced in a renamed file path", () => {
+    const diff = `### fixtures/${fakeToken}.txt (renamed) +0/-0\n(no inline patch — binary or too large)`;
+    expect(secretLeakFinding(diff)?.code).toBe("secret_leak");
+  });
+
+  it("does NOT flag a secret in a modified file path header", () => {
+    const diff = `### fixtures/${fakeToken}.txt (modified) +1/-0\n@@\n+const unrelated = 1;`;
+    expect(secretLeakFinding(diff)).toBeNull();
+  });
+
+  it("does NOT flag a secret in a removed file path header", () => {
+    const diff = `### fixtures/${fakeToken}.txt (removed) +0/-1\n@@\n-const unrelated = 1;`;
     expect(secretLeakFinding(diff)).toBeNull();
   });
 });

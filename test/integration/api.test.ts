@@ -368,7 +368,8 @@ describe("api routes", () => {
     const app = createApp();
     const queued: unknown[] = [];
     const env = createTestEnv({
-      JOBS: {
+      // Webhooks route to the dedicated WEBHOOKS lane (#audit-webhook-queue), not the shared JOBS queue.
+      WEBHOOKS: {
         async send(message: unknown) {
           queued.push(message);
         },
@@ -4872,6 +4873,7 @@ describe("api routes", () => {
     expect(toolNames).toContain("gittensory_preflight_local_diff");
     expect(toolNames).toContain("gittensory_preview_local_pr_score");
     expect(toolNames).toContain("gittensory_explain_score_breakdown");
+    expect(toolNames).toContain("gittensory_get_outcome_calibration");
     expect(toolNames).toContain("gittensory_get_registry_changes");
     expect(toolNames).toContain("gittensory_get_upstream_drift");
     expect(toolNames).toContain("gittensory_explain_review_risk");

@@ -20,6 +20,7 @@ import { countByokAiEventsForRepoSince, recordAiUsageEvent, sumAiEstimatedNeuron
 import { sanitizePublicComment } from "../queue-intelligence";
 import { defangReviewInput, isSafetyEnabled } from "../review/safety";
 import { isConvergenceRepoAllowed } from "../review/cutover-gate";
+import type { ReviewProfile } from "../signals/focus-manifest";
 
 /**
  * The best free Workers-AI model pair for review accuracy — two different families for independence,
@@ -33,8 +34,6 @@ export const RELIABLE_FALLBACK_MODELS: readonly [string, string] = [
   "@cf/mistralai/mistral-small-3.1-24b-instruct",
 ];
 
-/** Default consensus confidence floor: BOTH models must be at/above this to report a defect. */
-export const AI_CONSENSUS_FLOOR = 0.9;
 
 const REVIEW_SYSTEM_PROMPT = [
   "You are a senior open-source maintainer giving a FOCUSED, high-signal code review of a single pull request diff.",
@@ -61,6 +60,18 @@ export type AiReviewProviderKey = {
   model?: string | null | undefined;
 };
 
+/**
+ * How the independent reviewer opinions are combined into ONE gate decision (#dual-ai-combiner):
+ *   • `single`     — one reviewer; its verdict IS the decision (a named blocker blocks).
+ *   • `consensus`  — two reviewers; block ONLY when BOTH name a blocker; lone blocker → split (hold). The
+ *                    historical cloud behavior — the default, so an unset `combine` is byte-identical.
+ *   • `synthesis`  — two reviewers run separately, then merge into ONE decision (no split/hold-on-disagree):
+ *                    `onMerge: either` blocks if EITHER flags a blocker; `both` only if all do.
+ */
+export type CombineStrategy = "single" | "consensus" | "synthesis";
+/** Synthesis merge rule — block if `either` reviewer flags a blocker, or only when `both` agree. */
+export type OnMerge = "either" | "both";
+
 export type GittensoryAiReviewInput = {
   repoFullName: string;
   prNumber: number;
@@ -71,6 +82,20 @@ export type GittensoryAiReviewInput = {
   actor?: string | null | undefined;
   /** Effective `aiReviewMode`. `block` additionally runs the consensus-defect pass. */
   mode: "advisory" | "block";
+  /**
+   * How to combine the two reviewer opinions in `block` mode (#dual-ai-combiner). Absent ⇒ `consensus` — the
+   * historical behavior, so the gate decision is byte-identical until a repo/self-host opts into another
+   * strategy. `onMerge` only applies to `synthesis` (default `either`).
+   */
+  combine?: CombineStrategy | null | undefined;
+  onMerge?: OnMerge | null | undefined;
+  /**
+   * The reviewer(s) to run (#dual-ai-combiner). Absent/empty ⇒ the free Workers-AI pair with per-slot fallbacks
+   * (byte-identical to today). A self-host plan supplies named providers instead — `{ model: "claude-code" }`,
+   * `{ model: "codex" }` — addressed by the self-host AI router; `fallback` is Workers-AI-only (a self-host
+   * provider has none). `single` (or a single entry) runs reviewer[0]; consensus/synthesis run [0] and [1].
+   */
+  reviewers?: ReadonlyArray<{ model: string; fallback?: string | null | undefined }> | null | undefined;
   /** Present only when the repo has BYOK on AND a key configured; drives the advisory write-up. */
   providerKey?: AiReviewProviderKey | null | undefined;
   /**
@@ -90,6 +115,20 @@ export type GittensoryAiReviewInput = {
    * to today — no section is appended.
    */
   ragContext?: string | null | undefined;
+  /**
+   * `.gittensory.yml` `review.profile` (#review-profile): adjusts how nitpicky the maintainer review write-up is.
+   * `chill` → surface only blocking defects; `assertive` → also raise minor improvements & nits; absent/`balanced`
+   * → the reviewer prompt is byte-identical to today. PRESENTATION ONLY — it never changes the gate verdict (the
+   * consensus-defect pass still runs the same), just how much advisory detail the prose carries.
+   */
+  profile?: ReviewProfile | null | undefined;
+  /**
+   * `.gittensory.yml` `review.path_instructions` (#review-path-instructions), pre-resolved by the caller to the
+   * entries whose glob matched THIS PR's changed files (via `resolveReviewPathInstructions`) — a ready-to-append
+   * prompt section. Absent / empty ⇒ the reviewer prompt is byte-identical. Public-safe by construction (the
+   * instructions passed the manifest's public-safe filter at parse time).
+   */
+  pathGuidance?: string | null | undefined;
 };
 
 /** A consensus critical defect, already public-safe, ready to become a gate blocker finding. */
@@ -99,9 +138,9 @@ export type GittensoryAiReviewResult =
   | { status: "disabled"; reason: string }
   | { status: "unavailable"; reason: string }
   | { status: "quota_exceeded"; estimatedNeurons: number; remainingBudget: number }
-  | { status: "ok"; advisoryNotes: string | null; consensusDefect: AiConsensusDefect | null; estimatedNeurons: number; reviewerCount: number };
+  | { status: "ok"; advisoryNotes: string | null; consensusDefect: AiConsensusDefect | null; split: boolean; inconclusive: boolean; estimatedNeurons: number; reviewerCount: number };
 
-type ModelReview = {
+export type ModelReview = {
   assessment: string;
   // blockers = concrete must-fix defects in the diff (drive the consensus defect / gate); nits = non-blocking
   // points; suggestions = concrete improvements (rendered alongside nits). reviewbot-parity shape. (#extensive-reviews)
@@ -256,11 +295,25 @@ function buildUserPrompt(input: GittensoryAiReviewInput): string {
   return lines.join("\n");
 }
 
+// `.gittensory.yml` review.profile → an appended tone instruction (#review-profile). `balanced`/absent appends
+// nothing (byte-identical). PRESENTATION ONLY: it shapes how many nits the write-up surfaces, never the verdict.
+const REVIEW_PROFILE_SUFFIX: Record<"chill" | "assertive", string> = {
+  chill:
+    "\n\nReview profile: CHILL. Report ONLY blocking, must-fix defects (bugs, security, data loss, breaking changes). Do NOT raise style preferences, naming, or minor nitpicks — omit them entirely.",
+  assertive:
+    "\n\nReview profile: ASSERTIVE. Beyond blocking defects, also surface minor improvements, style/consistency suggestions, and nitpicks — be thorough and exacting, clearly marking each non-blocking item as a nit.",
+};
+
 /** The effective reviewer SYSTEM prompt. Appends the grounding-discipline suffix when the caller supplied one
- *  (flag GITTENSORY_REVIEW_GROUNDING on); absent/empty (default) → the base prompt, byte-identical to today. */
+ *  (flag GITTENSORY_REVIEW_GROUNDING on), then the `review.profile` tone suffix when set; both absent (default)
+ *  → the base prompt, byte-identical to today. */
 function buildSystemPrompt(input: GittensoryAiReviewInput): string {
-  const suffix = input.grounding?.systemSuffix;
-  return suffix ? `${REVIEW_SYSTEM_PROMPT}${suffix}` : REVIEW_SYSTEM_PROMPT;
+  const groundingSuffix = input.grounding?.systemSuffix ?? "";
+  const profileSuffix = input.profile === "chill" || input.profile === "assertive" ? REVIEW_PROFILE_SUFFIX[input.profile] : "";
+  // `.gittensory.yml` review.path_instructions (#review-path-instructions): the caller pre-resolved the entries
+  // matching this PR's files into a prompt section; empty ⇒ nothing appended (byte-identical).
+  const pathSuffix = input.pathGuidance?.trim() ? input.pathGuidance : "";
+  return `${REVIEW_SYSTEM_PROMPT}${groundingSuffix}${profileSuffix}${pathSuffix}`;
 }
 
 /** One Workers-AI opinion with a per-slot reliable fallback and a 3× retry on the primary. */
@@ -396,10 +449,10 @@ export function composeAdvisoryNotes(reviews: ModelReview[]): string | null {
 }
 
 /** A CONSENSUS defect = BOTH reviews independently name at least one concrete blocker (the severity-disciplined
- *  reviewbot model: a lone blocker in a dual review is a split, not a hard block). `floor` retained for the
- *  caller signature; the consensus here is blocker PRESENCE in both reviews (the prompt's rubric keeps nits out). */
-export function consensusDefectOf(a: ModelReview, b: ModelReview, floor: number): AiConsensusDefect | null {
-  void floor;
+ *  reviewbot model: a lone blocker in a dual review is a split, not a hard block). Requiring two independent
+ *  models to AGREE is itself the precision mechanism — the free Workers-AI models emit no calibrated confidence
+ *  score, so there is no numeric floor to enforce; agreement is the signal. */
+export function consensusDefectOf(a: ModelReview, b: ModelReview): AiConsensusDefect | null {
   if (a.blockers.length === 0 || b.blockers.length === 0) return null;
   const title = toPublicSafe(a.blockers[0] || b.blockers[0] || "AI reviewers agree on a likely blocking defect");
   if (!title) return null; // unsafe title → drop the block entirely (fail-safe)
@@ -407,6 +460,63 @@ export function consensusDefectOf(a: ModelReview, b: ModelReview, floor: number)
   // stays focused on the single core defect instead of repeating the whole blockers list. (#focused-reviews)
   const detail = toPublicSafe(a.blockers[0] || b.blockers[0] || "") ?? "Both AI reviewers independently flagged a concrete must-fix defect in this change.";
   return { title, detail, confidence: 1 };
+}
+
+/** Deterministic SYNTHESIS of one public-safe defect from the reviews that named a blocker — same public-safe
+ *  discipline as `consensusDefectOf` (cite the primary blocker; an unsafe title drops the whole block, fail-safe).
+ *  Used by the `synthesis` and `single` combine strategies. */
+function synthesizeDefect(reviews: ReadonlyArray<ModelReview>): AiConsensusDefect | null {
+  const primary = reviews.flatMap((r) => r.blockers).map((b) => b.trim()).find((b) => b.length > 0);
+  if (!primary) return null;
+  const title = toPublicSafe(primary);
+  if (!title) return null; // unsafe title → drop the block entirely (fail-safe)
+  return { title, detail: title, confidence: 1 }; // cite the primary blocker as both title + detail
+}
+
+/** Combine the independent reviewer opinions into ONE gate decision per the configured strategy (#dual-ai-combiner).
+ *  `reviews` carries one slot per reviewer; a slot is `null` when that reviewer errored or returned unparseable
+ *  output. Returns the gate-relevant trio: a `defect` (→ blocker), `split` (reviewers disagree → HOLD), and
+ *  `inconclusive` (cannot certify → HOLD). FAIL-CLOSED: in every strategy, a missing opinion we needed to clear
+ *  the change yields `inconclusive` rather than a silent pass. The `consensus` branch is byte-identical to the
+ *  historical block-mode logic, so an unset strategy never changes the gate. */
+export function combineReviews(
+  reviews: ReadonlyArray<ModelReview | null>,
+  opts: { strategy: CombineStrategy; onMerge?: OnMerge | null | undefined },
+): { defect: AiConsensusDefect | null; split: boolean; inconclusive: boolean } {
+  const present = reviews.filter((r): r is ModelReview => Boolean(r));
+  const missing = reviews.length - present.length;
+
+  if (opts.strategy === "single") {
+    // One reviewer: its verdict IS the decision (no second opinion to require). A named blocker blocks; a
+    // missing review can't certify the change → hold.
+    const r = present[0];
+    if (!r) return { defect: null, split: false, inconclusive: true };
+    return { defect: r.blockers.length > 0 ? synthesizeDefect([r]) : null, split: false, inconclusive: false };
+  }
+
+  if (opts.strategy === "synthesis") {
+    // Both run separately, then merge into ONE decision — never a split/hold-on-disagreement.
+    const flagged = present.filter((r) => r.blockers.length > 0);
+    if ((opts.onMerge ?? "either") === "both") {
+      // Block only when EVERY expected reviewer is present AND each named a blocker.
+      if (missing > 0) return { defect: null, split: false, inconclusive: true };
+      const all = present.length > 0 && flagged.length === present.length;
+      return { defect: all ? synthesizeDefect(present) : null, split: false, inconclusive: false };
+    }
+    // `either`: any present reviewer's blocker blocks. With no present blocker but a missing opinion we cannot
+    // certify the change is clean → hold (fail-closed).
+    if (flagged.length > 0) return { defect: synthesizeDefect(flagged), split: false, inconclusive: false };
+    return { defect: null, split: false, inconclusive: missing > 0 };
+  }
+
+  // `consensus` (default) — BYTE-IDENTICAL to the historical block-mode pair logic.
+  const [a, b] = reviews;
+  if (a && b) {
+    const defect = consensusDefectOf(a, b);
+    const split = !defect && (a.blockers.length > 0) !== (b.blockers.length > 0);
+    return { defect, split, inconclusive: false };
+  }
+  return { defect: null, split: false, inconclusive: true };
 }
 
 /**
@@ -440,7 +550,22 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
   // own provider account, so they are not counted here (and a BYOK advisory still runs when the free
   // budget is exhausted). Free calls = the consensus pair in block mode (always Workers AI), plus the
   // advisory leg only when it is NOT BYOK.
-  const freeAiCalls = (input.mode === "block" ? 2 : 0) + (input.providerKey ? 0 : 1);
+  // Reviewers + combine strategy (#dual-ai-combiner). DEFAULT = the free Workers-AI pair (per-slot fallbacks)
+  // combined by `consensus` — byte-identical to today. The self-host boot plan (`env.AI_REVIEW_PLAN`) supplies
+  // named providers (e.g. claude-code + codex) and a strategy; an explicit `input` field overrides it. `single`
+  // (or a single configured reviewer) runs ONE opinion; consensus/synthesis run two.
+  const plan = env.AI_REVIEW_PLAN;
+  const configured: ReadonlyArray<{ model: string; fallback?: string | null | undefined }> | null = (input.reviewers?.length ? input.reviewers : plan?.reviewers) ?? null;
+  const primary = configured?.[0] ?? { model: BEST_REVIEW_MODELS[0], fallback: RELIABLE_FALLBACK_MODELS[0] as string | null };
+  const secondary = configured?.[1] ?? { model: BEST_REVIEW_MODELS[1], fallback: RELIABLE_FALLBACK_MODELS[1] as string | null };
+  // Per-slot fallback model (Workers-AI default pair has one; a self-host provider has none → reuse its own model,
+  // i.e. runWorkersOpinion's single-model path).
+  const primaryFallback = primary.fallback ?? primary.model;
+  const secondaryFallback = secondary.fallback ?? secondary.model;
+  const combine: CombineStrategy = input.combine ?? plan?.combine ?? "consensus";
+  const onMerge: OnMerge | null | undefined = input.onMerge ?? plan?.onMerge;
+  const dual = combine !== "single" && (!configured || configured.length > 1);
+  const freeAiCalls = (input.mode === "block" ? (dual ? 2 : 1) : 0) + (input.providerKey ? 0 : 1);
   // Estimate against the EFFECTIVE system prompt (`system`) so grounding's extra context is billed against the
   // budget. Flag-OFF, `system === REVIEW_SYSTEM_PROMPT`, so the estimate is byte-identical to today.
   const estimatedNeurons = freeAiCalls === 0 ? 0 : estimateNeurons(system.length + user.length, maxTokens, freeAiCalls);
@@ -475,31 +600,51 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
     advisoryReview = outcome.review;
     byokFailure = outcome.failure;
   } else {
-    advisoryReview = await runWorkersOpinion(env, BEST_REVIEW_MODELS[0], RELIABLE_FALLBACK_MODELS[0], system, user, maxTokens);
+    advisoryReview = await runWorkersOpinion(env, primary.model, primaryFallback, system, user, maxTokens);
   }
 
   let consensusDefect: AiConsensusDefect | null = null;
   let secondReview: ModelReview | null = null;
+  let aiReviewSplit = false;
+  let inconclusive = false;
   if (input.mode === "block") {
-    // Consensus blocker ALWAYS uses the free Workers-AI pair (provider-independent, never BYOK).
-    const [a, b] = await Promise.all([
-      input.providerKey ? runWorkersOpinion(env, BEST_REVIEW_MODELS[0], RELIABLE_FALLBACK_MODELS[0], system, user, maxTokens) : Promise.resolve(advisoryReview),
-      runWorkersOpinion(env, BEST_REVIEW_MODELS[1], RELIABLE_FALLBACK_MODELS[1], system, user, maxTokens),
-    ]);
-    secondReview = b;
-    if (a && b) consensusDefect = consensusDefectOf(a, b, AI_CONSENSUS_FLOOR);
+    if (dual) {
+      // Two independent reviewers (the free Workers-AI pair by default — provider-independent, never BYOK — or the
+      // configured provider pair on self-host). Reuse the advisory leg's review as the first opinion when it
+      // already ran it (non-BYOK), instead of paying for it twice.
+      const [a, b] = await Promise.all([
+        input.providerKey ? runWorkersOpinion(env, primary.model, primaryFallback, system, user, maxTokens) : Promise.resolve(advisoryReview),
+        runWorkersOpinion(env, secondary.model, secondaryFallback, system, user, maxTokens),
+      ]);
+      secondReview = b;
+      // Combine per the configured strategy (#dual-ai-combiner). Default `consensus` is byte-identical to the
+      // historical logic: block only on agreement, lone blocker → split, a missing opinion → inconclusive
+      // (fail-closed, HELD for a human). `synthesis` merges both into one decision (no split/hold-on-disagree).
+      const combined = combineReviews([a, b], { strategy: combine, onMerge });
+      consensusDefect = combined.defect;
+      aiReviewSplit = combined.split;
+      inconclusive = combined.inconclusive;
+    } else {
+      // Single reviewer: its verdict IS the decision. Reuse the advisory leg (non-BYOK) or run the one reviewer.
+      const a = input.providerKey ? await runWorkersOpinion(env, primary.model, primaryFallback, system, user, maxTokens) : advisoryReview;
+      const combined = combineReviews([a], { strategy: "single" });
+      consensusDefect = combined.defect;
+      inconclusive = combined.inconclusive;
+    }
   }
 
   const reviewsForNotes = [advisoryReview, secondReview].filter((r): r is ModelReview => Boolean(r));
   const advisoryNotes = reviewsForNotes.length > 0 ? composeAdvisoryNotes(reviewsForNotes) : null;
 
-  await record(env, input, "ok", estimatedNeurons, consensusDefect ? "consensus defect" : advisoryNotes ? "advisory notes" : "no usable output", {
+  await record(env, input, "ok", estimatedNeurons, consensusDefect ? "consensus defect" : aiReviewSplit ? "split" : inconclusive ? "inconclusive — held" : advisoryNotes ? "advisory notes" : "no usable output", {
     mode: input.mode,
     byok: Boolean(input.providerKey),
     consensus: Boolean(consensusDefect),
+    split: aiReviewSplit,
+    inconclusive,
     ...(byokFailure ? { byokFailure } : {}),
   });
-  return { status: "ok", advisoryNotes, consensusDefect, estimatedNeurons, reviewerCount: reviewsForNotes.length };
+  return { status: "ok", advisoryNotes, consensusDefect, split: aiReviewSplit, inconclusive, estimatedNeurons, reviewerCount: reviewsForNotes.length };
 }
 
 async function record(
@@ -528,6 +673,8 @@ export const __aiReviewInternals = {
   coerceAiText,
   composeAdvisoryNotes,
   consensusDefectOf,
+  combineReviews,
+  synthesizeDefect,
   toPublicSafe,
   estimateNeurons,
   runWorkersOpinion,

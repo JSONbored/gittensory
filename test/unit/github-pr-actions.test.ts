@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
-import { closePullRequest, createIssueComment, createPullRequestReview, mergePullRequest } from "../../src/github/pr-actions";
+import { closePullRequest, createIssueComment, createPullRequestReview, getLastCloserLogin, mergePullRequest, updatePullRequestBranch } from "../../src/github/pr-actions";
 import { createTestEnv } from "../helpers/d1";
 
 function envWithKey() {
@@ -85,6 +85,192 @@ describe("GitHub PR action primitives (#778)", () => {
     expect(result).toEqual({ id: 5 });
     expect(calls[0]).toMatchObject({ method: "POST", body: { body: "hello" } });
     expect(calls[0]?.url).toMatch(/\/repos\/owner\/repo\/issues\/7\/comments$/);
+  });
+
+  it("walks paginated issue events to find the true most recent closer", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      calls.push(url);
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/17/events")) {
+        const page = new URL(url).searchParams.get("page");
+        if (page === "1") {
+          return Response.json([
+            ...Array.from({ length: 99 }, (_, index) => ({ event: "labeled", actor: { login: `labeler-${index}` } })),
+            { event: "closed", actor: { login: "contributor" } },
+          ], { headers: { link: '<https://api.github.test/issues/17/events?per_page=100&page=2>; rel="last"' } });
+        }
+        if (page === "2") return Response.json([{ event: "closed", actor: { login: "maintainer" } }]);
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 17)).resolves.toEqual({ login: "maintainer", coveredAllPages: true });
+    expect(calls.some((url) => url.includes("per_page=100") && url.includes("page=1"))).toBe(true);
+    expect(calls.some((url) => url.includes("per_page=100") && url.includes("page=2"))).toBe(true);
+  });
+
+  it("returns null when the events API throws (catch path)", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (input.toString().includes("/access_tokens")) return Response.json({ token: "t" });
+      throw new Error("network failure");
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 18)).resolves.toEqual({ login: null, coveredAllPages: false });
+  });
+
+  it("records null lastCloser when the closed event has a null actor", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (input.toString().includes("/access_tokens")) return Response.json({ token: "t" });
+      if (input.toString().includes("/issues/19/events")) return Response.json([{ event: "closed", actor: null }]);
+      return new Response("not found", { status: 404 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 19)).resolves.toEqual({ login: null, coveredAllPages: true });
+  });
+
+  it("reads the newest bounded event pages instead of the oldest prefix", async () => {
+    const fetchedPages: number[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/20/events")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        fetchedPages.push(page);
+        if (page === 1) {
+          return Response.json([{ event: "closed", actor: { login: "stale-contributor" } }], {
+            headers: { link: '<https://api.github.test/issues/20/events?per_page=100&page=12>; rel="last"' },
+          });
+        }
+        const events = Array.from({ length: 100 }, (_, i) =>
+          page === 11 && i === 40 ? { event: "closed", actor: { login: "maintainer" } } : { event: "labeled" },
+        );
+        return Response.json(events);
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 20)).resolves.toEqual({ login: "maintainer", coveredAllPages: false });
+    expect(fetchedPages).toEqual([1, 12, 11]);
+    expect(fetchedPages).not.toContain(2);
+  });
+
+  it("returns null when the newest bounded event pages contain no close event", async () => {
+    const fetchedPages: number[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/21/events")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        fetchedPages.push(page);
+        return Response.json(page === 1 ? [{ event: "closed", actor: { login: "stale-contributor" } }] : [{ event: "labeled" }],
+          page === 1 ? { headers: { link: '<https://api.github.test/issues/21/events?per_page=100&page=12>; rel="last"' } } : undefined);
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 21)).resolves.toEqual({ login: null, coveredAllPages: false });
+    expect(fetchedPages).toEqual([1, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
+  });
+
+  it("falls back to page-1 closer when bounded window (firstPageToRead=2) has no close event", async () => {
+    // lastPage=5 → firstPageToRead = max(2, 5-10+1) = 2; the bounded scan covers pages 5→2 and finds
+    // no closer there → falls through to line 140 with firstPageToRead===2 and returns the page-1 closer.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/22/events")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        const linkHeader = page === 1 ? '<https://api.github.test/issues/22/events?per_page=100&page=5>; rel="last"' : undefined;
+        const events = page === 1 ? [{ event: "closed", actor: { login: "page1-closer" } }] : [{ event: "labeled" }];
+        return Response.json(events, linkHeader ? { headers: { link: linkHeader } } : undefined);
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 22)).resolves.toEqual({ login: "page1-closer", coveredAllPages: true });
+  });
+
+  it("follows rel=next forward when GitHub omits rel=last, finding the later maintainer close (#audit-rel-last)", async () => {
+    // GitHub paginated WITHOUT rel="last" (only rel="next"). Trusting page 1 alone would surface the early
+    // contributor close and miss the later maintainer close on page 2 — a window-evasion fail-OPEN. The forward
+    // scan follows rel="next" to the tail (page 3, no Link) and reports the most recent close.
+    const fetchedPages: number[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/23/events")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        fetchedPages.push(page);
+        if (page === 1) return Response.json([{ event: "closed", actor: { login: "early-contributor" } }], { headers: { link: '<https://api.github.test/issues/23/events?per_page=100&page=2>; rel="next"' } });
+        if (page === 2) return Response.json([{ event: "closed", actor: { login: "maintainer" } }], { headers: { link: '<https://api.github.test/issues/23/events?per_page=100&page=3>; rel="next"' } });
+        return Response.json([{ event: "labeled" }]); // page 3: the tail (no Link header)
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 23)).resolves.toEqual({ login: "maintainer", coveredAllPages: true });
+    expect(fetchedPages).toEqual([1, 2, 3]);
+  });
+
+  it("fails CLOSED when rel=next never terminates within the page budget (no rel=last)", async () => {
+    // Every page advertises rel="next" and never a rel="last": the forward scan exhausts the page budget without
+    // reaching the tail, so it cannot prove no later close exists → coveredAllPages false, login null (fail-closed).
+    const fetchedPages: number[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/25/events")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        fetchedPages.push(page);
+        return Response.json([{ event: "labeled" }], { headers: { link: `<https://api.github.test/issues/25/events?per_page=100&page=${page + 1}>; rel="next"` } });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 25)).resolves.toEqual({ login: null, coveredAllPages: false });
+    expect(fetchedPages).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]); // page 1 + the 10-page budget
+  });
+
+  it("returns null but covered when a rel=next forward scan reaches the tail with no close at all", async () => {
+    // No rel="last", forward scan reaches the tail (page 2, no Link) and finds no close on any page → the latest
+    // close stays undefined → undefined ?? null = null, yet coveredAllPages is true (the whole timeline was read).
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/26/events")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        if (page === 1) return Response.json([{ event: "labeled" }], { headers: { link: '<https://api.github.test/issues/26/events?per_page=100&page=2>; rel="next"' } });
+        return Response.json([{ event: "labeled" }]); // page 2: the tail (no Link header)
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 26)).resolves.toEqual({ login: null, coveredAllPages: true });
+  });
+
+  it("returns null when bounded window (firstPageToRead=2) AND page 1 also have no close event (?? null right branch)", async () => {
+    // lastPage=5 → firstPageToRead=2; pages 2–5 have no closer; page 1 also has no closer →
+    // latestCloserInPage(firstEvents) returns undefined → undefined ?? null = null.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/24/events")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        const linkHeader = page === 1 ? '<https://api.github.test/issues/24/events?per_page=100&page=5>; rel="last"' : undefined;
+        return Response.json([{ event: "labeled" }], linkHeader ? { headers: { link: linkHeader } } : undefined);
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 24)).resolves.toEqual({ login: null, coveredAllPages: true });
+  });
+
+  it("updates branch without an expected head sha (omits expected_head_sha — FALSE branch of the spread ternary)", async () => {
+    const requestBodies: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/pulls/55/update-branch")) {
+        requestBodies.push(String(init?.body ?? ""));
+        return new Response("{}", { status: 201, headers: { "content-type": "application/json" } });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(updatePullRequestBranch(envWithKey(), 123, "owner/repo", 55)).resolves.toBeUndefined();
+    expect(requestBodies.some((b) => !b.includes("expected_head_sha"))).toBe(true);
   });
 });
 
