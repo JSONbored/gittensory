@@ -51,6 +51,10 @@ services:
       # Uncomment for Ollama AI (--profile ollama):
       # AI_PROVIDER: ollama
       # AI_BASE_URL: http://ollama:11434/v1
+      # BROKERED mode — use the central Gittensory Orb App instead of creating your own GitHub App. Install the
+      # Orb App on your repos + set ORB_ENROLLMENT_SECRET in .env (loaded above); the engine then brokers
+      # short-lived GitHub tokens from the Orb on demand (no own App private key). See .env.example.
+      # ORB_BROKER_URL: https://gittensory-api.aethereal.dev   # override only for a private Orb deployment
     volumes:
       - gittensory-data:/data
     depends_on:
@@ -309,8 +313,11 @@ services:
     image: grafana/promtail:3.6.11
     restart: unless-stopped
     profiles: ["observability"]
-    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    command: ["-config.file=/etc/promtail/promtail-config.yml", "-config.expand-env=true"]
     depends_on: [loki, docker-proxy]
+    environment:
+      # Promtail expands this into its Docker label filter so discovery stays inside this Compose project.
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-gittensory}
     volumes:
       - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
       # Persist read positions so restarts don't re-ship the whole log history.
