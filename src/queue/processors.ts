@@ -181,6 +181,7 @@ import { runGittensoryAiReview } from "../services/ai-review";
 import { secretLeakFinding } from "../review/safety";
 import { aiCiRefutationActive, buildReviewGroundingText, checkSummaryText as checkFailureSummaryText, isGroundingEnabled } from "../review/grounding-wire";
 import { buildReviewRagContext, isRagEnabled } from "../review/rag-wire";
+import { evaluateWithSurfaceLane } from "../review/content-lane-wire";
 import { indexRepo, reindexChangedPaths } from "../review/rag-index";
 import { isReputationEnabled, recordReputationOutcome, shouldSkipAiForReputation } from "../review/reputation-wire";
 import { isConvergenceRepoAllowed } from "../review/cutover-gate";
@@ -2542,6 +2543,17 @@ async function maybePublishPrPublicSurface(
 
     const gatePolicy = gateCheckPolicy(settings, readiness.total, confirmedContributor, slopRisk, authorHistory);
     gateEvaluation = gateEnabled ? evaluateGateCheck(advisory, gatePolicy) : undefined;
+    // Deterministic content/registry surface lane (#1255) — flag-gated + per-repo allowlist, byte-identical when
+    // off (evaluateWithSurfaceLane returns the generic evaluation unchanged and resolves no files). A metagraphed
+    // registry-submission PR's surface verdict OVERRIDES the generic gate; the helper preserves a generic HARD
+    // blocker (e.g. a committed secret) and an unreadable head defers. AI-free → independent of the AI reviewer.
+    gateEvaluation = await evaluateWithSurfaceLane(env, repoFullName, gateEnabled, gateEvaluation, {
+      installationId,
+      pr,
+      repo,
+      advisory,
+      getChangedFiles: getReviewFiles,
+    });
     // #554 gate false-positive telemetry: when the gate BLOCKS, record the block (one latest row per PR) so a
     // maintainer can later compute a per-gate-type false-positive rate (blocked-then-merged / blocked).
     // MEASUREMENT only — never adjusts the gate. Best-effort: a write failure must NOT abort finalization

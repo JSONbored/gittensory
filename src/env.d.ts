@@ -136,6 +136,12 @@ declare global {
      *  unreachable when off). Even when ON, retrieval is INERT until a vector index exists for the repo (a
      *  cold/missing index degrades to no context) — the index-population job is a deploy-time follow-up. */
     GITTENSORY_REVIEW_RAG?: string;
+    /** Convergence flag: the deterministic content/registry SURFACE LANE drives the gate for registry-submission
+     *  PRs (metagraphed surfaces[]/providers/candidates). Truthy ON *AND* the repo in GITTENSORY_REVIEW_REPOS —
+     *  see review/content-lane-wire. Default OFF: unset/false takes no new branch, runs no fetch, and leaves the
+     *  gate disposition byte-identical. AI-FREE (pure structured-data adjudication), so independent of the AI
+     *  reviewer; a generic hard blocker (e.g. a committed secret) is always preserved over a surface "merge". */
+    GITTENSORY_REVIEW_CONTENT_LANE?: string;
     /** Convergence (self-improve / auto-tune): when truthy, the ported self-improvement loop
      *  (src/review/auto-tune.ts + auto-apply.ts) runs on the cron tick over gittensory's OWN review-outcome
      *  data — it computes tuning recommendations, SHADOW-SOAKS any STRICTLY-TIGHTENING recommendation in the

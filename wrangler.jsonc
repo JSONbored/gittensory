@@ -86,6 +86,11 @@
     // reviewer prompt byte-identical. Even when ON it is inert until a repo's vector index is populated (the
     // index-population job + cron is a deploy-time follow-up; a cold/missing index degrades to no context).
     "GITTENSORY_REVIEW_RAG": "true",
+    // Convergence (content/registry SURFACE LANE): when truthy AND the repo is in GITTENSORY_REVIEW_REPOS, the
+    // deterministic, AI-FREE surface review drives the gate for registry-submission PRs (metagraphed). Default
+    // OFF (false): the processor takes no new branch + resolves no files, so the gate disposition is byte-
+    // identical until deliberately enabled per-repo. See review/content-lane-wire.
+    "GITTENSORY_REVIEW_CONTENT_LANE": "false",
     // Convergence (self-improve / auto-tune): run the ported self-improvement loop on the cron tick over
     // gittensory's own review-outcome data — compute tuning recommendations, SHADOW-SOAK any strictly-
     // tightening one, and AUTO-PROMOTE it to live ONLY after the soak window passes the gate; every action is
