@@ -82,6 +82,57 @@ export async function registerOrbRelay(env: Env, secret: string, relayUrl: strin
   return { ok: true, installationId: row.installation_id };
 }
 
+const RELAY_RETRY_MAX_ATTEMPTS = 5;
+
+/** Record a failed relay forward in the retry queue. Idempotent on delivery_id — a duplicate insert (e.g. from a
+ *  GitHub redelivery reaching the same event before the retry fires) is silently ignored. */
+export async function storeRelayFailure(
+  env: Env,
+  args: { deliveryId: string; eventName: string; installationId: number; rawBody: string },
+): Promise<void> {
+  await env.DB
+    .prepare(
+      "INSERT INTO orb_relay_failures (delivery_id, event_name, installation_id, raw_body) VALUES (?, ?, ?, ?) ON CONFLICT(delivery_id) DO NOTHING",
+    )
+    .bind(args.deliveryId, args.eventName, args.installationId, args.rawBody)
+    .run();
+}
+
+/** Re-attempt pending relay failures. Called by the `retry-orb-relay` cron job every sweep cycle (≈2 min).
+ *  Each row gets up to RELAY_RETRY_MAX_ATTEMPTS (5) retries within a 1-hour TTL; on success or expiry the row
+ *  is removed. Never throws — a bad DB row or a persistently-down container is silently dropped after exhaustion. */
+export async function retryFailedRelays(env: Env, opts?: { fetchImpl?: typeof fetch }): Promise<void> {
+  // Prune rows whose TTL has elapsed or whose attempt budget is exhausted.
+  await env.DB
+    .prepare("DELETE FROM orb_relay_failures WHERE expires_at < datetime('now') OR attempts >= ?")
+    .bind(RELAY_RETRY_MAX_ATTEMPTS)
+    .run();
+  const { results } = await env.DB
+    .prepare(
+      "SELECT delivery_id, event_name, installation_id, raw_body FROM orb_relay_failures WHERE expires_at >= datetime('now') AND attempts < ?",
+    )
+    .bind(RELAY_RETRY_MAX_ATTEMPTS)
+    .all<{ delivery_id: string; event_name: string; installation_id: number; raw_body: string }>();
+  if (!results.length) return;
+  await Promise.all(
+    results.map(async (row) => {
+      const result = await forwardOrbEvent(
+        env,
+        { eventName: row.event_name, installationId: row.installation_id, deliveryId: row.delivery_id, rawBody: row.raw_body },
+        opts?.fetchImpl,
+      );
+      if (result === "forwarded" || result === "skipped") {
+        await env.DB.prepare("DELETE FROM orb_relay_failures WHERE delivery_id = ?").bind(row.delivery_id).run();
+      } else {
+        await env.DB
+          .prepare("UPDATE orb_relay_failures SET attempts = attempts + 1, last_attempt_at = datetime('now') WHERE delivery_id = ?")
+          .bind(row.delivery_id)
+          .run();
+      }
+    }),
+  );
+}
+
 /** Forward a webhook event to the brokered self-host registered for this installation. BEST-EFFORT + fail-safe:
  *  a non-forwardable event, no registered relay, or ANY error returns without throwing (the Orb's webhook 202
  *  stands; reliability hardening — a retry queue for a down container — is a follow-up). The body is HMAC-signed
