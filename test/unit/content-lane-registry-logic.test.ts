@@ -5,6 +5,10 @@ import {
   assessProviderDocument,
   candidateRegistryKey,
   classifyPrScope,
+  classifyRegistryPrScope,
+  isRegistrySubmissionScope,
+  METAGRAPHED_LANE_SPEC,
+  type RegistryLaneSpec,
   computeGrounding,
   containsSecretLikeText,
   deriveRegistryIdentityTokens,
@@ -238,6 +242,61 @@ describe("classifyPrScope", () => {
   });
   it("is not-direct when no submission file is present", () => {
     expect(classifyPrScope(["README.md"]).scope).toBe("not-direct-submission");
+  });
+});
+
+describe("classifyRegistryPrScope (generic surface model, metagraphed spec)", () => {
+  const spec = METAGRAPHED_LANE_SPEC;
+  it("recognizes a subnet entry-submission with an allowed generated-artifact companion", () => {
+    const r = classifyRegistryPrScope(spec, ["registry/subnets/actual.json", "public/metagraph/index.json"]);
+    expect(r.scope).toBe("entry-submission");
+    expect(r.directFile).toBe("registry/subnets/actual.json");
+    expect(r.isProvider).toBe(false);
+    expect(isRegistrySubmissionScope(r.scope)).toBe(true);
+  });
+
+  it("recognizes an entry-submission whose flat debut provider is an allowed companion", () => {
+    const r = classifyRegistryPrScope(spec, ["registry/subnets/allways.json", "registry/providers/allways.json"]);
+    expect(r.scope).toBe("entry-submission");
+    expect(r.directFile).toBe("registry/subnets/allways.json");
+  });
+
+  it("recognizes a standalone flat provider-submission (no subnet file)", () => {
+    const r = classifyRegistryPrScope(spec, ["registry/providers/cacheon.json"]);
+    expect(r.scope).toBe("provider-submission");
+    expect(r.directFile).toBe("registry/providers/cacheon.json");
+    expect(r.isProvider).toBe(true);
+  });
+
+  it("is mixed-files when an out-of-scope file rides along", () => {
+    expect(classifyRegistryPrScope(spec, ["registry/subnets/actual.json", "src/index.ts"]).scope).toBe("mixed-files");
+  });
+
+  it("does NOT adopt the retired candidate path or the retired providers/community/ subdir", () => {
+    // a lone retired candidate file is not an entry/provider → not a direct submission
+    expect(classifyRegistryPrScope(spec, ["registry/candidates/community/foo.json"]).scope).toBe("not-direct-submission");
+    // a retired-subdir provider is not the flat pattern → not adopted as a provider submission
+    expect(classifyRegistryPrScope(spec, ["registry/providers/community/foo.json"]).scope).toBe("not-direct-submission");
+    // and riding alongside a real subnet entry, the retired path makes it mixed-files
+    expect(classifyRegistryPrScope(spec, ["registry/subnets/actual.json", "registry/candidates/community/foo.json"]).scope).toBe("mixed-files");
+  });
+
+  it("is not-direct for no submission, and >1 entry file", () => {
+    expect(classifyRegistryPrScope(spec, ["README.md"]).scope).toBe("not-direct-submission");
+    expect(classifyRegistryPrScope(spec, ["registry/subnets/a.json", "registry/subnets/b.json"]).scope).toBe("not-direct-submission");
+    expect(isRegistrySubmissionScope("not-direct-submission")).toBe(false);
+  });
+
+  it("tolerates a nullish file list and falsy entries (the ?? [] / || '' guards)", () => {
+    expect(classifyRegistryPrScope(spec, undefined as unknown as string[]).scope).toBe("not-direct-submission");
+    expect(classifyRegistryPrScope(spec, [null as unknown as string, "registry/subnets/actual.json"]).scope).toBe("entry-submission");
+  });
+
+  it("works for a minimal spec with no provider/artifact patterns (a bare registry)", () => {
+    const bare: RegistryLaneSpec = { entryFilePattern: /^data\/[a-z]+\.json$/ };
+    expect(classifyRegistryPrScope(bare, ["data/x.json"]).scope).toBe("entry-submission");
+    expect(classifyRegistryPrScope(bare, ["data/x.json", "data/y.json"]).scope).toBe("not-direct-submission");
+    expect(classifyRegistryPrScope(bare, ["data/x.json", "other.json"]).scope).toBe("mixed-files");
   });
 });
 

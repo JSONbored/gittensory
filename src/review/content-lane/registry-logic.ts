@@ -709,3 +709,74 @@ export function classifyPrScope(changedFiles: string[]): ScopeResult {
 export function isDirectSubmissionScope(scope: PrScope): boolean {
   return scope === "direct-candidate" || scope === "direct-provider";
 }
+
+// ── Surface model (generic registry content-lane) ─────────────────────────────────────────────────
+//
+// The candidate-file model above is metagraphed's RETIRED lane. The current model: a community contribution
+// appends entries to an array field of ONE registry "entry file" (e.g. registry/subnets/<slug>.json::surfaces[]),
+// optionally with one flat companion provider file. To stay MODULAR — many maintainers will install gittensory
+// over wildly different registries — the engine is parameterized by a RegistryLaneSpec rather than hard-coding
+// metagraphed's paths; metagraphed is just the FIRST spec, and a spec can later be loaded from per-repo
+// .gittensory.yml config so a new registry needs config, not a gittensory code change.
+
+/** Describes where a registry keeps its community-editable entry files + allowed companions. */
+export interface RegistryLaneSpec {
+  /** The file a contribution edits to add entries, e.g. /^registry\/subnets\/<slug>\.json$/. */
+  entryFilePattern: RegExp;
+  /** Optional flat companion debut-provider file, e.g. /^registry\/providers\/<slug>\.json$/ (flat only). */
+  providerFilePattern?: RegExp;
+  /** Optional generated artifacts a valid PR must regenerate — allowed companions. */
+  artifactPattern?: RegExp;
+}
+
+export type RegistryPrScope = "entry-submission" | "provider-submission" | "mixed-files" | "not-direct-submission";
+
+export interface RegistryScopeResult {
+  scope: RegistryPrScope;
+  directFile: string | null;
+  isProvider: boolean;
+}
+
+/**
+ * Generic surface-model scope classifier: in scope when the PR edits exactly ONE entry file (or, entry-free,
+ * one flat provider file); the spec's provider + artifact files are allowed companions; any other path —
+ * including a retired candidate path the registry no longer accepts — makes it mixed-files.
+ */
+export function classifyRegistryPrScope(spec: RegistryLaneSpec, changedFiles: string[]): RegistryScopeResult {
+  const files = (changedFiles ?? []).map((f) => String(f || "").trim()).filter(Boolean);
+  const entryFiles = files.filter((f) => spec.entryFilePattern.test(f));
+  const providerFiles = spec.providerFilePattern ? files.filter((f) => spec.providerFilePattern!.test(f)) : [];
+  const isEntryPr = entryFiles.length === 1;
+  const isProviderPr = entryFiles.length === 0 && providerFiles.length === 1;
+  if (!isEntryPr && !isProviderPr) {
+    return { scope: "not-direct-submission", directFile: null, isProvider: false };
+  }
+  const isAllowed = (f: string): boolean =>
+    spec.entryFilePattern.test(f) || (spec.providerFilePattern?.test(f) ?? false) || (spec.artifactPattern?.test(f) ?? false);
+  if (files.some((f) => !isAllowed(f))) {
+    return { scope: "mixed-files", directFile: null, isProvider: false };
+  }
+  // isEntryPr/isProviderPr each guarantee exactly one match (guarded by the early return), so [0] is always
+  // defined; the `?? null` only satisfies noUncheckedIndexedAccess and can never fire.
+  /* v8 ignore start */
+  return isProviderPr
+    ? { scope: "provider-submission", directFile: providerFiles[0] ?? null, isProvider: true }
+    : { scope: "entry-submission", directFile: entryFiles[0] ?? null, isProvider: false };
+  /* v8 ignore stop */
+}
+
+export function isRegistrySubmissionScope(scope: RegistryPrScope): boolean {
+  return scope === "entry-submission" || scope === "provider-submission";
+}
+
+// metagraphed's spec — the first RegistryLaneSpec. surfaces[] live in registry/subnets/<slug>.json; providers
+// are FLAT registry/providers/<slug>.json (the community/ subdir was retired). A PR touching the old
+// registry/candidates/community/* path matches none of these → mixed-files / not-direct (correctly not adopted
+// as a valid submission; metagraphed CI hard-fails it).
+export const SUBNET_ENTRY_PATTERN = /^registry\/subnets\/[a-z0-9][a-z0-9-]*\.json$/;
+export const FLAT_PROVIDER_PATTERN = /^registry\/providers\/[a-z0-9][a-z0-9-]*\.json$/;
+export const METAGRAPHED_LANE_SPEC: RegistryLaneSpec = {
+  entryFilePattern: SUBNET_ENTRY_PATTERN,
+  providerFilePattern: FLAT_PROVIDER_PATTERN,
+  artifactPattern: ARTIFACT_PATTERN,
+};
