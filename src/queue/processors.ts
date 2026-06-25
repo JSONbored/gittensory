@@ -2560,12 +2560,16 @@ async function maybePublishPrPublicSurface(
     const preMergeChecks = resolveReviewPreMergeChecks(await loadRepoFocusManifest(env, repoFullName).catch(() => null));
     if (preMergeChecks.length > 0) {
       const checkFiles = await getReviewFiles(); // memoized — reuses the gate/slop diff when already resolved
+      // An empty resolved file set means the changed paths could not be resolved (a PR always touches >=1 file),
+      // so a path-gated check cannot be evaluated — pass filesResolved=false so an ENFORCED whenPaths check HOLDS
+      // the gate (re-evaluates later) instead of silently skipping a hard requirement into an auto-merge (#review-audit).
       advisory.findings.push(
         ...evaluatePreMergeChecks(preMergeChecks, {
           title: pr.title,
           body: pr.body,
           labels: pr.labels,
           changedPaths: checkFiles.map((file) => file.path),
+          filesResolved: checkFiles.length > 0,
         }),
       );
     }
