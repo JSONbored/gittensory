@@ -788,6 +788,13 @@ async function maybeRunAgentMaintenance(
   const planned = planAgentMaintenanceActions({
     conclusion: gate.conclusion,
     blockerTitles: gate.blockers.map((blocker) => blocker.title),
+    // CI-refutation (#ai-ci-refutation): thread the blocker CODES so the planner can suppress an AI-judgment-only
+    // failure (ai_consensus_defect / ai_review_split) on a green-CI PR — the deterministic validator overrules the
+    // model hallucination, so a clean+green PR MERGES instead of being false-closed. Gated under the SAME condition
+    // as the converged AI review that produces these defects (grounding feeds the CI truth to the reviewer; this
+    // ENFORCES it). Flag-OFF / non-convergence repo ⇒ codes omitted ⇒ the planner's refutation is a no-op
+    // (byte-identical verdict). The codes are public-safe finding identifiers (no rubric/scoring/reward terms).
+    ...(isGroundingEnabled(env) && isConvergenceRepoAllowed(env, repoFullName) ? { gateBlockerCodes: gate.blockers.map((blocker) => blocker.code) } : {}),
     autonomy: settings.autonomy,
     autoMaintain: settings.autoMaintain,
     slopGateMinScore: settings.slopGateMinScore,

@@ -13,6 +13,19 @@ const DEFAULT_SLOP_GATE_MIN_SCORE = 60;
 // every action is independently gated by its own autonomy class, and the irreversible ones (merge / close)
 // demand strong positive signals.
 
+// AI-JUDGMENT blocker codes (#ai-ci-refutation): a gate failure driven by these is the dual-model AI reviewer's
+// OPINION, not a deterministic fact. The free Workers-AI pair hallucinates the same plausible-but-wrong defect
+// (e.g. inferring a JSON field is "required" from sibling data, or claiming "schema validation fails" / "the test
+// count is wrong" on a PR whose CI is GREEN). Grounding already feeds the finished CI status to the reviewer, but
+// the model can ignore it — so when the gate FAILED *solely* because of these codes AND the deterministic CI is
+// GREEN (the real validator passed), the AI claim is refuted by reality and must NOT auto-close the PR. The AI
+// concern stays visible in the review comment as an advisory; the disposition follows the deterministic signals
+// (a clean + green PR MERGES). This NEVER routes to manual review (only the guardrail path does), and it NEVER
+// overrides a deterministic blocker (secret_leak / duplicate / missing-issue / slop / quality / manifest): it
+// applies ONLY when EVERY blocker is one of these AND CI passed. `ai_review_inconclusive` is deliberately EXCLUDED
+// — that is a "could not review" HOLD, not a false defect.
+const AI_JUDGMENT_BLOCKER_CODES = new Set<string>(["ai_consensus_defect", "ai_review_split"]);
+
 // The bucket labels the layer applies to reflect the gate verdict. Namespaced so a maintainer can filter on
 // them and they never collide with project labels.
 export const AGENT_LABEL_READY = "gittensory:ready-to-merge";
@@ -62,6 +75,11 @@ export type PlannedAgentAction = {
 export type AgentActionPlanInput = {
   conclusion: GateCheckConclusion;
   blockerTitles: string[];
+  // The gate's blocking finding CODES (parallel to blockerTitles). Used by the CI-refutation rule
+  // (#ai-ci-refutation): when the gate FAILED solely because of AI-judgment blockers and CI is green, the
+  // AI claim is refuted by the deterministic validator. Optional/absent (e.g. callers that don't thread it,
+  // or the refutation gated OFF at the boundary) ⇒ the refutation is a no-op and the verdict is unchanged.
+  gateBlockerCodes?: string[] | undefined;
   autonomy: AutonomyPolicy | null | undefined;
   // Optional so the trigger can pass raw repo settings; both fall back to conservative defaults here.
   autoMaintain?: AutoMaintainPolicy | undefined;
@@ -236,10 +254,23 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // Settle-before-decide: never approve / merge / close on a half-finished CI run.
   if (input.ciState === "pending") return actions;
 
+  // CI-refutation of an AI-judgment-only failure (#ai-ci-refutation). When the gate FAILED *solely* because the
+  // dual-model AI reviewer flagged a defect (ai_consensus_defect / ai_review_split) but the deterministic CI is
+  // GREEN, the AI claim is refuted by the real validator → downgrade the verdict to SUCCESS for the disposition so
+  // a clean+green PR MERGES instead of being false-closed on a model hallucination. Requires EVERY blocker to be an
+  // AI-judgment code (a mixed failure with any deterministic blocker — duplicate / secret / slop / missing-issue /
+  // manifest — keeps `failure` and still closes) AND CI === passed (a red/unverified CI is the real signal and is
+  // never overridden). Empty/absent codes (the rule gated OFF at the boundary, or a non-AI failure) ⇒ no-op, so the
+  // verdict is byte-identical. The effective `conclusion` drives every gate-verdict decision below; the AI concern
+  // still surfaces in the review comment (an advisory finding), it just no longer auto-closes a green PR.
+  const aiJudgmentOnlyFailure =
+    input.conclusion === "failure" && (input.gateBlockerCodes?.length ?? 0) > 0 && (input.gateBlockerCodes ?? []).every((code) => AI_JUDGMENT_BLOCKER_CODES.has(code));
+  const conclusion: GateCheckConclusion = aiJudgmentOnlyFailure && ciPassed ? "success" : input.conclusion;
+
   // Only SUCCESS earns the review-good auto-merge. A NEUTRAL gate flows (no longer silently returns []) but is
   // NOT auto-merged — it falls through to a HELD + labeled state for review. (Auto-merging a neutral / grace
   // PR is a separate trust/policy decision, deliberately NOT bundled into the harm-stop.) (#harm-stop)
-  const gatePassing = input.conclusion === "success";
+  const gatePassing = conclusion === "success";
   // A changed path matching a hard guardrail forces manual review (suppresses auto-MERGE / auto-approve / auto-close).
   // Fail SAFE on UNKNOWN paths (#1062): when guardrails are configured but the changed-file set is empty (cache
   // not yet / no longer populated), we cannot prove the PR doesn't touch a guarded path, so treat it as a hit —
@@ -287,7 +318,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // have folded in optional / third-party checks and must keep the hard-guardrail manual hold.
   // (Rebase-if-behind already ran above, so a red CI here is on the latest base — not a stale-base artifact.) (#ci-fail-closes-guarded)
   const redVerifiedRequiredCi = ciFailed && input.ciRequiredContextsVerified === true;
-  const willClose = isContributor && acting("close") && (redVerifiedRequiredCi || (!guardrailHit && (ciFailed || input.conclusion === "failure" || isConflict)));
+  const willClose = isContributor && acting("close") && (redVerifiedRequiredCi || (!guardrailHit && (ciFailed || conclusion === "failure" || isConflict)));
   // Linked-issue HARD-RULE close (#linked-issue-hard-rules). A DETERMINISTIC verdict about the LINKED ISSUE
   // (owner-assigned / missing point-label / maintainer-only) — NOT an AI verdict, so there is no hallucination
   // to guard against: this close fires REGARDLESS of `guardrailHit`. It still only ever closes a CONTRIBUTOR
@@ -336,10 +367,10 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     const reason = linkedIssueCloseInFlight
       ? `linked-issue hard rule: ${linkedIssueHardRule?.reason ?? "ineligible linked issue"}`
       : !reviewGood
-        ? `verdict=${input.conclusion}${ciReason ? `; ${ciReason}` : ""}`
+        ? `verdict=${conclusion}${ciReason ? `; ${ciReason}` : ""}`
         : heldForManualReview
-          ? `verdict=${input.conclusion}; guarded path → manual review`
-          : `verdict=${input.conclusion}; CI green`;
+          ? `verdict=${conclusion}; guarded path → manual review`
+          : `verdict=${conclusion}; CI green`;
     if (!hasLabel(input.pr.labels, label)) {
       actions.push({ actionClass: "label", requiresApproval: approval("label"), reason, label });
     }
