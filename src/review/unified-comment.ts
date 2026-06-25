@@ -510,3 +510,33 @@ export function buildUnifiedReviewInput(opts: {
     ...(opts.verdictReason !== undefined ? { verdictReason: opts.verdictReason } : {}),
   };
 }
+
+// ── Reviewing-in-progress placeholder ────────────────────────────────────────────────────────────
+//
+// Posted BEFORE the AI review runs so contributors see the bot is actively working rather than
+// silent. Uses GitHub's IMPORTANT alert type (purple sidebar) — the one un-used final-state color.
+// This is NOT a UnifiedCommentStatus: it is a transient pre-verdict placeholder, not a terminal
+// review outcome. The createOrUpdatePrIntelligenceComment upsert replaces it in-place once the
+// final verdict is ready. (#reviewing-placeholder)
+
+const REVIEWING_SQUARE = "🟪";
+
+/** Render the transient "🟪 reviewing…" placeholder body. Caller must prepend PR_PANEL_COMMENT_MARKER
+ *  before posting so the upsert updates the existing bot comment instead of creating a duplicate.
+ *  Pure and public-safe-by-construction (brand is angle-escaped; no raw caller text embedded). */
+export function renderReviewingPlaceholder(ctx: { brand?: string } = {}): string {
+  const brand = escapePublicHtmlAngles(ctx.brand ?? "Gittensory");
+  const inner = [
+    REVIEWING_SQUARE.repeat(12),
+    `### 🔍 ${brand} is reviewing…`,
+    "AI analysis is in progress. This comment will update when the review is complete.",
+    `<sub>${STATUS_META.ready.square} Safe / merged · ${STATUS_META.advisory.square} Advisory · ${STATUS_META.held.square} Held for review · ${STATUS_META.blocked.square} Blocked / closed · ${REVIEWING_SQUARE} Reviewing</sub>`,
+  ].join("\n\n");
+  return asAlert("IMPORTANT", inner);
+}
+
+/** Returns true when the reviewing placeholder should be posted before the AI review runs.
+ *  Pure helper so both branches are testable without async setup. */
+export function shouldPostReviewingPlaceholder(args: { aiReviewWillRun: boolean; mode: string; willComment: boolean }): boolean {
+  return args.aiReviewWillRun && args.mode === "live" && args.willComment;
+}

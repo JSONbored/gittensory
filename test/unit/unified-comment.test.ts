@@ -3,9 +3,11 @@ import {
   buildUnifiedReviewInput,
   deriveUnifiedStatus,
   type DualReviewNote,
+  renderReviewingPlaceholder,
   renderUnifiedReviewComment,
   type ReviewNotes,
   type ReviewRecommendation,
+  shouldPostReviewingPlaceholder,
   type UnifiedCommentContext,
   type UnifiedReviewInput,
 } from "../../src/review/unified-comment";
@@ -388,5 +390,70 @@ describe("buildUnifiedReviewInput", () => {
     expect(input.readiness).toEqual({ ciState: "passed" });
     expect(input.merged).toBe(true);
     expect(input.verdictReason).toBe("auto-merged after green CI");
+  });
+});
+
+describe("renderReviewingPlaceholder", () => {
+  it("renders the IMPORTANT (purple) GitHub alert type", () => {
+    const body = renderReviewingPlaceholder();
+    expect(body).toContain("[!IMPORTANT]");
+  });
+
+  it("includes the 🟪 reviewing square in the body and legend", () => {
+    const body = renderReviewingPlaceholder();
+    // Appears at least twice: the repeating banner and the legend entry.
+    expect(body.split("🟪").length).toBeGreaterThan(2);
+    expect(body).toContain("🟪 Reviewing");
+  });
+
+  it("includes the reviewing-in-progress prose", () => {
+    const body = renderReviewingPlaceholder();
+    expect(body).toContain("is reviewing");
+    expect(body).toContain("in progress");
+    expect(body).toContain("will update when the review is complete");
+  });
+
+  it("uses the default brand when none is provided", () => {
+    expect(renderReviewingPlaceholder()).toContain("Gittensory is reviewing");
+  });
+
+  it("respects a custom brand override", () => {
+    expect(renderReviewingPlaceholder({ brand: "MyBot" })).toContain("MyBot is reviewing");
+  });
+
+  it("angle-escapes HTML in the brand to prevent comment injection", () => {
+    const body = renderReviewingPlaceholder({ brand: "<script>alert(1)</script>" });
+    expect(body).not.toContain("<script>");
+    expect(body).toContain("&lt;script&gt;");
+  });
+
+  it("includes the full legend row with all four final-state colors", () => {
+    const body = renderReviewingPlaceholder();
+    expect(body).toContain("🟩");
+    expect(body).toContain("🟦");
+    expect(body).toContain("🟨");
+    expect(body).toContain("🟥");
+  });
+});
+
+describe("shouldPostReviewingPlaceholder", () => {
+  it("returns true when AI will run, mode is live, and a comment will be posted", () => {
+    expect(shouldPostReviewingPlaceholder({ aiReviewWillRun: true, mode: "live", willComment: true })).toBe(true);
+  });
+
+  it("returns false when AI review will not run", () => {
+    expect(shouldPostReviewingPlaceholder({ aiReviewWillRun: false, mode: "live", willComment: true })).toBe(false);
+  });
+
+  it("returns false in dry-run mode — placeholder must never write to GitHub in non-live mode", () => {
+    expect(shouldPostReviewingPlaceholder({ aiReviewWillRun: true, mode: "dry_run", willComment: true })).toBe(false);
+  });
+
+  it("returns false in paused mode", () => {
+    expect(shouldPostReviewingPlaceholder({ aiReviewWillRun: true, mode: "paused", willComment: true })).toBe(false);
+  });
+
+  it("returns false when no comment will be posted — avoids a permanent orphaned purple comment", () => {
+    expect(shouldPostReviewingPlaceholder({ aiReviewWillRun: true, mode: "live", willComment: false })).toBe(false);
   });
 });

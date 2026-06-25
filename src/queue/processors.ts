@@ -171,7 +171,7 @@ import { buildUnifiedCommentBody, isUnifiedReviewCommentEnabled } from "../revie
 import { screenshotsAllowed } from "../review/visual-wire";
 import { isVisualPath } from "../review/visual/paths";
 import { buildCapture, type CaptureRoute } from "../review/visual/capture";
-import type { CheckFailureDetail, MergeReadiness } from "../review/unified-comment";
+import { renderReviewingPlaceholder, shouldPostReviewingPlaceholder, type CheckFailureDetail, type MergeReadiness } from "../review/unified-comment";
 import { buildIssueSlopAssessment, buildSlopAssessment, type SlopBand } from "../signals/slop";
 import { runGittensoryAiSlopAdvisory } from "../services/ai-slop";
 import { decidePublicSurface } from "../signals/settings-preview";
@@ -2637,6 +2637,13 @@ async function maybePublishPrPublicSurface(
     // resolve only when the review will actually run (aiReviewMode !== off + a head SHA + not explicitly skipped)
     // to keep gate-only and advisory-sweep repos free of an extra file resolve.
     const aiReviewWillRun = !webhook.skipAiReview && settings.aiReviewMode !== "off" && Boolean(advisory.headSha);
+    // Post a transient "🟪 reviewing…" placeholder BEFORE the AI runs so contributors see the bot
+    // is actively working rather than silent. In-place upsert: once the final verdict is ready it
+    // overwrites this comment. Best-effort — a failed post never aborts the review. (#reviewing-placeholder)
+    if (shouldPostReviewingPlaceholder({ aiReviewWillRun, mode, willComment: decision.willComment })) {
+      const placeholderBody = `${PR_PANEL_COMMENT_MARKER}\n\n${renderReviewingPlaceholder()}`;
+      await createOrUpdatePrIntelligenceComment(env, installationId, repoFullName, pr.number, placeholderBody, { mode }).catch(() => undefined);
+    }
     if (aiReviewWillRun) {
       // `.gittensory.yml` review.profile + review.path_instructions + review.exclude_paths (#review-profile /
       // #review-path-instructions / #review-exclude-paths): resolve from the manifest (cached from settings
