@@ -20,6 +20,7 @@ import { countByokAiEventsForRepoSince, recordAiUsageEvent, sumAiEstimatedNeuron
 import { sanitizePublicComment } from "../queue-intelligence";
 import { defangReviewInput, isSafetyEnabled } from "../review/safety";
 import { isConvergenceRepoAllowed } from "../review/cutover-gate";
+import type { ReviewProfile } from "../signals/focus-manifest";
 
 /**
  * The best free Workers-AI model pair for review accuracy — two different families for independence,
@@ -88,6 +89,13 @@ export type GittensoryAiReviewInput = {
    * to today — no section is appended.
    */
   ragContext?: string | null | undefined;
+  /**
+   * `.gittensory.yml` `review.profile` (#review-profile): adjusts how nitpicky the maintainer review write-up is.
+   * `chill` → surface only blocking defects; `assertive` → also raise minor improvements & nits; absent/`balanced`
+   * → the reviewer prompt is byte-identical to today. PRESENTATION ONLY — it never changes the gate verdict (the
+   * consensus-defect pass still runs the same), just how much advisory detail the prose carries.
+   */
+  profile?: ReviewProfile | null | undefined;
 };
 
 /** A consensus critical defect, already public-safe, ready to become a gate blocker finding. */
@@ -254,11 +262,22 @@ function buildUserPrompt(input: GittensoryAiReviewInput): string {
   return lines.join("\n");
 }
 
+// `.gittensory.yml` review.profile → an appended tone instruction (#review-profile). `balanced`/absent appends
+// nothing (byte-identical). PRESENTATION ONLY: it shapes how many nits the write-up surfaces, never the verdict.
+const REVIEW_PROFILE_SUFFIX: Record<"chill" | "assertive", string> = {
+  chill:
+    "\n\nReview profile: CHILL. Report ONLY blocking, must-fix defects (bugs, security, data loss, breaking changes). Do NOT raise style preferences, naming, or minor nitpicks — omit them entirely.",
+  assertive:
+    "\n\nReview profile: ASSERTIVE. Beyond blocking defects, also surface minor improvements, style/consistency suggestions, and nitpicks — be thorough and exacting, clearly marking each non-blocking item as a nit.",
+};
+
 /** The effective reviewer SYSTEM prompt. Appends the grounding-discipline suffix when the caller supplied one
- *  (flag GITTENSORY_REVIEW_GROUNDING on); absent/empty (default) → the base prompt, byte-identical to today. */
+ *  (flag GITTENSORY_REVIEW_GROUNDING on), then the `review.profile` tone suffix when set; both absent (default)
+ *  → the base prompt, byte-identical to today. */
 function buildSystemPrompt(input: GittensoryAiReviewInput): string {
-  const suffix = input.grounding?.systemSuffix;
-  return suffix ? `${REVIEW_SYSTEM_PROMPT}${suffix}` : REVIEW_SYSTEM_PROMPT;
+  const groundingSuffix = input.grounding?.systemSuffix ?? "";
+  const profileSuffix = input.profile === "chill" || input.profile === "assertive" ? REVIEW_PROFILE_SUFFIX[input.profile] : "";
+  return `${REVIEW_SYSTEM_PROMPT}${groundingSuffix}${profileSuffix}`;
 }
 
 /** One Workers-AI opinion with a per-slot reliable fallback and a 3× retry on the primary. */

@@ -173,7 +173,7 @@ import type { CheckFailureDetail, MergeReadiness } from "../review/unified-comme
 import { buildIssueSlopAssessment, buildSlopAssessment, type SlopBand } from "../signals/slop";
 import { runGittensoryAiSlopAdvisory } from "../services/ai-slop";
 import { decidePublicSurface } from "../signals/settings-preview";
-import { buildFocusManifestGuidance } from "../signals/focus-manifest";
+import { buildFocusManifestGuidance, type ReviewProfile } from "../signals/focus-manifest";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
@@ -2022,6 +2022,10 @@ export async function runAiReviewForAdvisory(
     // review + grounding + RAG use these instead of re-reading the stored rows — so a review that fired before
     // detail-sync still sees the REAL diff (FIX B). Omitted (e.g. unit tests) → fall back to the stored read.
     files?: Awaited<ReturnType<typeof listPullRequestFiles>> | undefined;
+    // `.gittensory.yml` review.profile (#review-profile), resolved by the caller from the (already-cached)
+    // manifest. Threaded in (not loaded here) so the AI review path makes no extra manifest fetch — absent ⇒
+    // null ⇒ balanced ⇒ the reviewer prompt is byte-identical.
+    reviewProfile?: ReviewProfile | null | undefined;
   },
 ): Promise<{ notes: string; reviewerCount: number } | undefined> {
   const packAllowsAnyAuthorBlockingReview = args.settings.gatePack === "oss-anti-slop" && args.settings.aiReviewMode === "block";
@@ -2087,6 +2091,7 @@ export async function runAiReviewForAdvisory(
       providerKey,
       grounding,
       ragContext,
+      profile: args.reviewProfile ?? null,
     });
     if (result.status !== "ok") return undefined;
     if (result.consensusDefect) {
@@ -2515,6 +2520,10 @@ async function maybePublishPrPublicSurface(
     // to keep gate-only and advisory-sweep repos free of an extra file resolve.
     const aiReviewWillRun = !webhook.skipAiReview && settings.aiReviewMode !== "off" && Boolean(advisory.headSha);
     if (aiReviewWillRun) {
+      // `.gittensory.yml` review.profile (#review-profile): resolve from the manifest (cached from settings
+      // resolution, so a cheap cache hit — no extra fetch) and thread it into the AI review so chill/assertive
+      // shapes the write-up. Absent ⇒ null ⇒ balanced ⇒ byte-identical prompt. Fail-safe to null on any read error.
+      const reviewProfile = (await loadRepoFocusManifest(env, repoFullName).catch(() => null))?.review.profile ?? null;
       aiReview = await runAiReviewForAdvisory(env, {
         settings,
         advisory,
@@ -2523,6 +2532,7 @@ async function maybePublishPrPublicSurface(
         author,
         confirmedContributor,
         files: await getReviewFiles(),
+        reviewProfile,
       });
     }
 

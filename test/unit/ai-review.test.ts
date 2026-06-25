@@ -123,6 +123,36 @@ describe("runGittensoryAiReview advisory mode", () => {
   });
 });
 
+describe("review.profile shapes the reviewer system prompt (#review-profile)", () => {
+  const systemPromptOf = (run: ReturnType<typeof vi.fn>): string => ((run.mock.calls[0]?.[1] as { messages?: Array<{ content?: string }> })?.messages?.[0]?.content ?? "");
+  const runProfile = async (profile: GittensoryAiReviewInput["profile"]) => {
+    const run = vi.fn(async () => ({ response: reviewJson() }));
+    const env = createTestEnv({ AI: { run } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI_DAILY_NEURON_BUDGET: "100000" });
+    await runGittensoryAiReview(env, { ...baseInput, profile });
+    return systemPromptOf(run);
+  };
+
+  it("chill appends the CHILL tone instruction (suppress nits)", async () => {
+    const system = await runProfile("chill");
+    expect(system).toContain("CHILL");
+    expect(system).not.toContain("ASSERTIVE");
+  });
+
+  it("assertive appends the ASSERTIVE tone instruction (also raise nits)", async () => {
+    const system = await runProfile("assertive");
+    expect(system).toContain("ASSERTIVE");
+    expect(system).not.toContain("CHILL");
+  });
+
+  it("absent / null profile leaves the prompt byte-identical (no profile suffix)", async () => {
+    const withNull = await runProfile(null);
+    const without = await runProfile(undefined);
+    expect(withNull).not.toMatch(/CHILL|ASSERTIVE/);
+    expect(without).not.toMatch(/CHILL|ASSERTIVE/);
+    expect(withNull).toBe(without);
+  });
+});
+
 describe("runGittensoryAiReview block mode (consensus)", () => {
   function envWith(run: (model: string) => Promise<unknown>) {
     return createTestEnv({ AI: { run: vi.fn(run) } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI_DAILY_NEURON_BUDGET: "100000" });

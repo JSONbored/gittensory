@@ -428,7 +428,7 @@ describe("compileFocusManifestPolicy", () => {
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
       gate: { present: false, enabled: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, firstTimeContributorGrace: null },
       settings: {},
-      review: { present: false, footerText: null, note: null, fields: {} },
+      review: { present: false, footerText: null, note: null, fields: {}, profile: null },
       warnings: [],
     });
     expect(policy.publicSafe.entryGuidance).toContain("Keep PRs focused.");
@@ -1034,5 +1034,26 @@ describe("parseFocusManifest review config", () => {
     const reparsed = parseFocusManifest({ review: reviewConfigToJson(original.review) });
     expect(reparsed.review).toEqual(original.review);
     expect(reviewConfigToJson(parseFocusManifest({}).review)).toBeNull();
+  });
+
+  it("parses review.profile (chill/assertive), normalizes balanced→null, and round-trips (#review-profile)", () => {
+    expect(parseFocusManifest({ review: { profile: "chill" } }).review.profile).toBe("chill");
+    expect(parseFocusManifest({ review: { profile: "ASSERTIVE" } }).review.profile).toBe("assertive"); // case-insensitive
+    // `balanced` is the default → normalizes to null, and a balanced-only block is NOT "present".
+    expect(parseFocusManifest({ review: { profile: "balanced" } }).review.profile).toBeNull();
+    expect(parseFocusManifest({ review: { profile: "balanced" } }).review.present).toBe(false);
+    // A profile-only manifest IS present and survives the reviewConfigToJson round-trip.
+    const chill = parseFocusManifest({ review: { profile: "chill" } });
+    expect(chill.review.present).toBe(true);
+    expect(parseFocusManifest({ review: reviewConfigToJson(chill.review) }).review).toEqual(chill.review);
+  });
+
+  it("ignores an invalid review.profile with a warning", () => {
+    const m = parseFocusManifest({ review: { profile: "spicy" } });
+    expect(m.review.profile).toBeNull();
+    expect(m.warnings.some((w) => /review\.profile.*chill.*balanced.*assertive/.test(w))).toBe(true);
+    const m2 = parseFocusManifest({ review: { profile: 42 } });
+    expect(m2.review.profile).toBeNull();
+    expect(m2.warnings.some((w) => /review\.profile.*must be a string/.test(w))).toBe(true);
   });
 });

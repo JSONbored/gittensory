@@ -80,6 +80,13 @@ export type FocusManifestSettings = Partial<
 export const REVIEW_FIELD_KEYS = ["linkedIssue", "relatedWork", "reviewLoad", "validationEvidence", "openPrQueue", "contributorContext", "gateResult"] as const;
 export type ReviewFieldKey = (typeof REVIEW_FIELD_KEYS)[number];
 
+// `review.profile` (#review-profile): how nitpicky the AI maintainer review is. `chill` = surface only blocking
+// defects (bugs/security/breakage), suppress style nits; `assertive` = also raise minor improvements & nits;
+// `balanced` (default / absent) leaves the reviewer prompt byte-identical. A presentation knob only — it NEVER
+// changes the gate verdict, only how much advisory detail the review write-up carries.
+export const REVIEW_PROFILES = ["chill", "balanced", "assertive"] as const;
+export type ReviewProfile = (typeof REVIEW_PROFILES)[number];
+
 /**
  * Maintainer overrides for the public review-panel CONTENT, declared under `review:`. Customizes the
  * panel without changing what gittensory measures: a custom public-safe footer lead line, a custom intro
@@ -92,6 +99,8 @@ export type FocusManifestReviewConfig = {
   footerText: string | null;
   note: string | null;
   fields: Partial<Record<ReviewFieldKey, boolean>>;
+  /** `review.profile`: chill / balanced / assertive. null (absent) = balanced = byte-identical reviewer prompt. */
+  profile: ReviewProfile | null;
 };
 
 /**
@@ -186,7 +195,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicNotes: [],
   gate: { ...EMPTY_GATE_CONFIG },
   settings: {},
-  review: { present: false, footerText: null, note: null, fields: {} },
+  review: { present: false, footerText: null, note: null, fields: {}, profile: null },
   warnings: [],
 };
 
@@ -199,7 +208,7 @@ export function isFocusManifestPublicSafe(text: string): boolean {
 }
 
 function emptyManifest(source: FocusManifestSource, warnings: string[] = []): FocusManifest {
-  return { ...EMPTY_MANIFEST, source, warnings, gate: { ...EMPTY_GATE_CONFIG }, settings: {}, review: { present: false, footerText: null, note: null, fields: {} } };
+  return { ...EMPTY_MANIFEST, source, warnings, gate: { ...EMPTY_GATE_CONFIG }, settings: {}, review: { present: false, footerText: null, note: null, fields: {}, profile: null } };
 }
 
 function normalizeStringList(value: JsonValue | undefined, field: string, warnings: string[]): string[] {
@@ -477,7 +486,7 @@ function parsePublicSafeText(value: JsonValue | undefined, field: string, warnin
  * throws; invalid/unsafe values are dropped with warnings.
  */
 function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestReviewConfig {
-  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {} };
+  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, profile: null };
   if (value === undefined || value === null) return empty;
   if (typeof value !== "object" || Array.isArray(value)) {
     warnings.push(`Manifest field "review" must be a mapping; ignoring it.`);
@@ -497,7 +506,23 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
   }
   const footerText = footerRecord ? parsePublicSafeText(footerRecord.text, "review.footer.text", warnings) : null;
   const note = parsePublicSafeText(r.note, "review.note", warnings);
-  return { present: footerText !== null || note !== null || Object.keys(fields).length > 0, footerText, note, fields };
+  const profile = parseReviewProfile(r.profile, warnings);
+  return { present: footerText !== null || note !== null || profile !== null || Object.keys(fields).length > 0, footerText, note, fields, profile };
+}
+
+/** Parse `review.profile` — one of chill / balanced / assertive (case-insensitive). `balanced` normalizes to
+ *  null (the default, so the reviewer prompt stays byte-identical). Any other value is ignored with a warning. */
+function parseReviewProfile(value: JsonValue | undefined, warnings: string[]): ReviewProfile | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") {
+    warnings.push(`Manifest "review.profile" must be a string (chill | balanced | assertive); ignoring it.`);
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "balanced") return null; // default → no prompt change
+  if (normalized === "chill" || normalized === "assertive") return normalized;
+  warnings.push(`Manifest "review.profile" must be one of chill / balanced / assertive; ignoring "${value.slice(0, 32)}".`);
+  return null;
 }
 
 /** Serialize the review config for the cache round-trip; returns null when nothing is set. */
@@ -506,6 +531,7 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
   const out: Record<string, JsonValue> = {};
   if (review.footerText !== null) out.footer = { text: review.footerText };
   if (review.note !== null) out.note = review.note;
+  if (review.profile !== null) out.profile = review.profile;
   if (Object.keys(review.fields).length > 0) out.fields = { ...review.fields } as Record<string, JsonValue>;
   return out;
 }
