@@ -126,7 +126,7 @@ import { handleOrbIngest, readOrbIngestBody } from "../orb/ingest";
 import { handleOrbWebhook } from "../orb/webhook";
 import { handleOrbOAuthCallback } from "../orb/oauth";
 import { brokerOrbToken, isOrbBrokerEnabled, issueOrbEnrollment } from "../orb/broker";
-import { registerOrbRelay } from "../orb/relay";
+import { readOrbRelayRegisterBody, registerValidatedOrbRelay, validateOrbRelayEnrollment } from "../orb/relay";
 import { computeFleetAnalytics } from "../orb/analytics";
 import { handleMcpRequest } from "../mcp/server";
 import { buildOpenApiSpec } from "../openapi/spec";
@@ -2900,10 +2900,19 @@ export function createApp() {
     const auth = c.req.header("authorization") ?? "";
     const secret = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
     if (!secret) return c.json({ error: "missing_enrollment_secret" }, 401);
-    const body = (await c.req.json().catch(() => null)) as { relayUrl?: unknown } | null;
+    const enrollment = await validateOrbRelayEnrollment(c.env, secret);
+    if ("error" in enrollment) return c.json(enrollment, enrollment.error === "invalid_enrollment" ? 401 : 403);
+    const rawBody = await readOrbRelayRegisterBody(c.req.raw, c.req.header("content-length"));
+    if (rawBody === null) return c.json({ error: "payload_too_large" }, 413);
+    let body: { relayUrl?: unknown } | null;
+    try {
+      body = JSON.parse(rawBody) as { relayUrl?: unknown };
+    } catch {
+      body = null;
+    }
     const relayUrl = typeof body?.relayUrl === "string" ? body.relayUrl.trim() : "";
     if (!relayUrl) return c.json({ error: "missing_relay_url" }, 400);
-    const result = await registerOrbRelay(c.env, secret, relayUrl);
+    const result = await registerValidatedOrbRelay(c.env, enrollment, secret, relayUrl);
     if ("error" in result) {
       const status = result.error === "invalid_enrollment" ? 401 : result.error === "installation_not_eligible" ? 403 : result.error === "encryption_unavailable" ? 500 : 400;
       return c.json(result, status);

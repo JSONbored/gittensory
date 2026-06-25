@@ -79,18 +79,34 @@ describe("POST /v1/orb/relay/register", () => {
     expect(await ok.json()).toMatchObject({ ok: true, installationId: 710 });
   });
 
-  it("maps each failure to its status: 401 bad secret, 403 ineligible, 400 SSRF, 500 no-encryption", async () => {
+  it("maps each failure to its status: 401 bad secret, 403 ineligible, 400 SSRF, 413 too-large body, 500 no-encryption", async () => {
     const e = brokeredEnv();
     const sBad = "Bearer orbsec_bad";
     expect((await app.request("/v1/orb/relay/register", { method: "POST", headers: { authorization: sBad }, body: JSON.stringify({ relayUrl: "https://x.example" }) }, e)).status).toBe(401);
     const s1 = await enroll(e, 711);
     expect((await app.request("/v1/orb/relay/register", { method: "POST", headers: { authorization: `Bearer ${s1}` }, body: JSON.stringify({ relayUrl: "http://127.0.0.1" }) }, e)).status).toBe(400);
+    expect((await app.request("/v1/orb/relay/register", { method: "POST", headers: { authorization: `Bearer ${s1}` }, body: JSON.stringify({ relayUrl: `${"https://x.example/"}${"a".repeat(4096)}` }) }, e)).status).toBe(413);
     const s2 = await enroll(e, 712);
     await db(e).prepare("UPDATE orb_github_installations SET registered=0 WHERE installation_id=712").run();
     expect((await app.request("/v1/orb/relay/register", { method: "POST", headers: { authorization: `Bearer ${s2}` }, body: JSON.stringify({ relayUrl: "https://x.example" }) }, e)).status).toBe(403);
     const noEnc = createTestEnv({ ORB_BROKER_ENABLED: "true" });
     const s3 = await enroll(noEnc, 713);
     expect((await app.request("/v1/orb/relay/register", { method: "POST", headers: { authorization: `Bearer ${s3}` }, body: JSON.stringify({ relayUrl: "https://x.example/relay" }) }, noEnc)).status).toBe(500);
+  });
+
+  it("rejects an invalid enrollment before reading the registration body", async () => {
+    const e = brokeredEnv();
+    let bodyAccesses = 0;
+    const req = new Request("http://localhost/v1/orb/relay/register", { method: "POST", headers: { authorization: "Bearer orbsec_bad" } });
+    Object.defineProperty(req, "body", {
+      get() {
+        bodyAccesses += 1;
+        throw new Error("body should not be read before enrollment validation");
+      },
+    });
+    const res = await app.fetch(req, e);
+    expect(res.status).toBe(401);
+    expect(bodyAccesses).toBe(0);
   });
 });
 
