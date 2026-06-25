@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveAiReviewerPlan, resolveModel, resolveProviderNames, routeProviders } from "../../src/selfhost/ai";
+import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveAiReviewerPlan, resolveEffort, resolveModel, resolveProviderNames, routeProviders } from "../../src/selfhost/ai";
 
 describe("resolveModel (#979 — never leak the Workers-AI default to a self-host backend)", () => {
   const WORKERS_DEFAULT = "@cf/meta/llama-3.1-8b-instruct-fp8-fast";
@@ -14,6 +14,19 @@ describe("resolveModel (#979 — never leak the Workers-AI default to a self-hos
   });
   it("passes through a real model the core supplied", () => {
     expect(resolveModel(undefined, "gpt-4o", "sonnet")).toBe("gpt-4o");
+  });
+});
+
+describe("resolveEffort (#selfhost-effort — Claude Code intelligence dial, default high)", () => {
+  it("passes a valid level through, trimmed + lowercased", () => {
+    expect(resolveEffort("low")).toBe("low");
+    expect(resolveEffort("  Medium ")).toBe("medium");
+    expect(resolveEffort("MAX")).toBe("max");
+  });
+  it("defaults to high when unset or unrecognized so a typo can't downgrade reviews", () => {
+    expect(resolveEffort(undefined)).toBe("high"); // ?? right side
+    expect(resolveEffort("")).toBe("high"); // present but not in the valid set
+    expect(resolveEffort("ultra")).toBe("high"); // unrecognized → safe default
   });
 });
 
@@ -294,6 +307,22 @@ describe("subscription CLI helpers + fail-safe", () => {
     expect(out.response).toBe("review text");
     expect(capturedEnv.ANTHROPIC_API_KEY).toBeUndefined(); // scrubbed
     expect(capturedEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe("t");
+  });
+
+  it("Claude Code pins the default model (claude-sonnet-4-6) + --effort high; AI_MODEL/AI_EFFORT override", async () => {
+    let seen: string[] = [];
+    const cap: StubSpawn = async (_c, a) => {
+      seen = a;
+      return { stdout: JSON.stringify({ type: "result", result: "ok" }), code: 0 };
+    };
+    // empty model id (the dual-router default) + no AI_MODEL → pinned claude-sonnet-4-6; no AI_EFFORT → high
+    await createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t" }, cap).run("", { prompt: "x" });
+    expect(seen[seen.indexOf("--model") + 1]).toBe("claude-sonnet-4-6");
+    expect(seen[seen.indexOf("--effort") + 1]).toBe("high");
+    // operator overrides flow through to the argv
+    await createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t", AI_MODEL: "claude-opus-4-8", AI_EFFORT: "low" }, cap).run("", { prompt: "x" });
+    expect(seen[seen.indexOf("--model") + 1]).toBe("claude-opus-4-8");
+    expect(seen[seen.indexOf("--effort") + 1]).toBe("low");
   });
 
   it("Codex: 0.142+ exec flags (no --ask-for-approval, has --skip-git-repo-check); --model only when configured", async () => {

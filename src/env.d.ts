@@ -37,11 +37,13 @@ declare global {
     AI_GATEWAY_ID?: string;
     /** Self-host AI provider selection + dual-review config (#dual-ai-combiner). `AI_PROVIDER` is a comma list of
      *  providers (claude-code, codex, anthropic, ollama, …); `AI_COMBINE` picks single|consensus|synthesis (default
-     *  synthesis for two); `AI_ON_MERGE` is the synthesis rule either|both. `AI_REVIEW_PLAN` is the resolved plan
+     *  synthesis for two); `AI_ON_MERGE` is the synthesis rule either|both. `AI_EFFORT` is the Claude Code
+     *  intelligence dial (low|medium|high|xhigh|max, default high). `AI_REVIEW_PLAN` is the resolved plan
      *  (computed from these at boot in server.ts and read at the review call site); undefined on cloud. */
     AI_PROVIDER?: string;
     AI_COMBINE?: string;
     AI_ON_MERGE?: string;
+    AI_EFFORT?: string;
     AI_REVIEW_PLAN?: { reviewers: Array<{ model: string }>; combine: import("./services/ai-review").CombineStrategy; onMerge?: import("./services/ai-review").OnMerge | undefined };
     ADMIN_GITHUB_LOGINS?: string;
     GITHUB_WEBHOOK_SECRET: string;
