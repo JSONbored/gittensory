@@ -115,6 +115,7 @@ describe("forwardOrbEvent", () => {
   it("SKIPS a non-forwardable event, a missing installation, and an enrolled install with no relay registered", async () => {
     const e = brokeredEnv();
     expect(await forwardOrbEvent(e, { eventName: "installation", installationId: 1, deliveryId: "d", rawBody: "{}" })).toBe("skipped");
+    expect(await forwardOrbEvent(e, { eventName: "check_run", installationId: 1, deliveryId: "d", rawBody: "{}" })).toBe("skipped"); // excluded: CI firehose
     expect(await forwardOrbEvent(e, { eventName: "pull_request", installationId: null, deliveryId: "d", rawBody: "{}" })).toBe("skipped");
     await enroll(e, 801);
     expect(await forwardOrbEvent(e, { eventName: "pull_request", installationId: 801, deliveryId: "d", rawBody: "{}" })).toBe("skipped"); // enrolled, no relay

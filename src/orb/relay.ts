@@ -11,11 +11,14 @@ import { decryptSecret, encryptSecret } from "../utils/crypto";
 // The events a brokered container needs to review/act on. Installation-lifecycle + other Orb-internal events are
 // deliberately NOT forwarded (the container runs under the CENTRAL Orb App, not its own, so it must not treat
 // those as its own installation state).
+// check_run is intentionally excluded: CI emits one per job per repo (thousands/day), making it a firehose that
+// would flood self-host containers. check_suite fires once per push/PR sync and is sufficient — the engine
+// re-reviews on suite completion (#1371: processors.ts handles both check_run and check_suite for that trigger,
+// so dropping check_run here is lossless for brokered containers).
 const RELAY_FORWARD_EVENTS = new Set([
   "pull_request",
   "pull_request_review",
   "pull_request_review_comment",
-  "check_run",
   "check_suite",
   "issue_comment",
   "issues",
