@@ -2926,6 +2926,36 @@ export function createApp() {
     return c.json({ instanceId, registered: registered === 1 });
   });
 
+  // Central Orb GitHub App installation registry — the onboarding gate. Every installation the Orb App webhook
+  // records lands at registered=0; only REGISTERED ones count toward the global public counter (getOrbGlobalStats)
+  // and are eligible for token brokering. Bearer-gated by the `/v1/internal/*` middleware (INTERNAL_JOB_TOKEN). The
+  // list shows pending + registered installs so an operator knows what they're opting in.
+  app.get("/v1/internal/orb/installations", async (c) => {
+    const rows = await c.env.DB
+      .prepare(
+        `SELECT installation_id AS installationId, account_login AS accountLogin, account_type AS accountType,
+                repository_selection AS repositorySelection, registered, suspended_at AS suspendedAt,
+                removed_at AS removedAt, first_seen_at AS firstSeenAt, last_event_at AS lastEventAt
+         FROM orb_github_installations ORDER BY last_event_at DESC`,
+      )
+      .all<{ installationId: number; accountLogin: string | null; accountType: string | null; repositorySelection: string | null; registered: number; suspendedAt: string | null; removedAt: string | null; firstSeenAt: string; lastEventAt: string }>();
+    return c.json({ installations: (rows.results ?? []).map((r) => ({ ...r, registered: r.registered === 1 })) });
+  });
+
+  // Opt an installation into (or out of) the registry. Body: { installationId, registered? } (registered defaults
+  // true). 404 when the installation isn't recorded yet — an install MUST arrive via the webhook first (unlike the
+  // fleet instances there's no account context to upsert a never-seen installation from).
+  app.post("/v1/internal/orb/installations/register", async (c) => {
+    const payload = (await c.req.json().catch(() => null)) as { installationId?: unknown; registered?: unknown } | null;
+    const installationId = Number(payload?.installationId);
+    if (!Number.isInteger(installationId) || installationId <= 0) return c.json({ error: "installationId required" }, 400);
+    const existing = await c.env.DB.prepare("SELECT installation_id FROM orb_github_installations WHERE installation_id = ?").bind(installationId).first();
+    if (!existing) return c.json({ error: "installation_not_found" }, 404);
+    const registered = payload?.registered === false ? 0 : 1;
+    await c.env.DB.prepare("UPDATE orb_github_installations SET registered = ? WHERE installation_id = ?").bind(registered, installationId).run();
+    return c.json({ installationId, registered: registered === 1 });
+  });
+
   // Convergence (ops / observability, flag GITTENSORY_REVIEW_OPS). Cross-repo review-OUTCOME aggregate (gate-block
   // ledger + recommendation/slop calibration) for an operator dashboard. Bearer-gated by the `/v1/internal/*`
   // middleware above (INTERNAL_JOB_TOKEN). Flag-OFF (default) → 404, so the endpoint does not exist and the
