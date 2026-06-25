@@ -39,6 +39,13 @@ describe("GitHub mention commands", () => {
       reason: "known false positive, shipping",
     });
     expect(parseGittensoryMentionCommand("gittensory preflight")).toBeNull();
+    // A mention of a DIFFERENT account whose handle merely starts with "gittensory" must not be parsed as a
+    // bare @gittensory command (GitHub never resolves @gittensory-bot to @gittensory).
+    expect(parseGittensoryMentionCommand("@gittensory-bot please take a look")).toBeNull();
+    expect(parseGittensoryMentionCommand("@gittensory2 ping")).toBeNull();
+    expect(parseGittensoryMentionCommand("@gittensorybot ask q")).toBeNull();
+    // ...but real punctuation/whitespace boundaries after the handle still parse.
+    expect(parseGittensoryMentionCommand("@gittensory, preflight please")?.name).toBe("help");
     expect(isMaintainerOnlyCommand("queue-summary")).toBe(true);
     expect(isMaintainerOnlyCommand("preflight")).toBe(false);
   });

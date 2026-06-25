@@ -162,7 +162,10 @@ export type MaintainerQueueDigest = {
 
 export function parseGittensoryMentionCommand(body: string | null | undefined): GittensoryMentionCommand | null {
   if (!body) return null;
-  const match = body.match(/(?:^|\s)@gittensory(?:\s+([a-z-]+))?([^\n\r]*)/i);
+  // `(?![\w-])` keeps the handle from matching as a PREFIX of a longer GitHub username: a comment that
+  // mentions a different account like `@gittensory-bot` / `@gittensory2` must NOT be parsed as a bare
+  // `@gittensory help`. GitHub usernames are word chars + hyphen, so the boundary excludes both.
+  const match = body.match(/(?:^|\s)@gittensory(?![\w-])(?:\s+([a-z-]+))?([^\n\r]*)/i);
   if (!match) return null;
   const requested = (match[1]?.toLowerCase() || "help") as GittensoryMentionCommandName | GittensoryActionCommandName;
   if (ACTION_COMMANDS.has(requested as GittensoryActionCommandName)) {
