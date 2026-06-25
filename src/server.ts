@@ -24,7 +24,7 @@ import {
   setupAuthCookieValue,
   timingSafeStrEqual,
 } from "./selfhost/setup-wizard";
-import { isOrbBrokerMode } from "./orb/broker-client";
+import { isOrbBrokerMode, registerOrbRelayTarget } from "./orb/broker-client";
 import { exportOrbBatch } from "./selfhost/orb-collector";
 import { createD1Adapter, nodeSqliteDriver } from "./selfhost/d1-adapter";
 import { readiness } from "./selfhost/health";
@@ -373,6 +373,16 @@ async function main(): Promise<void> {
       .catch((error) => console.error(JSON.stringify({ level: "error", event: "selfhost_orb_export_error", error: error instanceof Error ? error.message : "unknown error" })));
   void runOrbExport(); // flush any pending events at startup
   setInterval(runOrbExport, 3_600_000); // then hourly
+
+  // Brokered self-host: register our public relay URL with the central Orb so it forwards this install's events
+  // here (best-effort, fire-and-forget — a no-op unless ORB_ENROLLMENT_SECRET + PUBLIC_API_ORIGIN are set).
+  void registerOrbRelayTarget({
+    ORB_ENROLLMENT_SECRET: process.env.ORB_ENROLLMENT_SECRET,
+    ORB_BROKER_URL: process.env.ORB_BROKER_URL,
+    PUBLIC_API_ORIGIN: process.env.PUBLIC_API_ORIGIN,
+  })
+    .then((r) => { if (r !== "skipped") console.log(JSON.stringify({ event: "selfhost_orb_relay_register", result: r })); })
+    .catch(() => {});
 
   // Graceful shutdown: stop accepting HTTP, let the queue finish, close the backend.
   let shuttingDown = false;

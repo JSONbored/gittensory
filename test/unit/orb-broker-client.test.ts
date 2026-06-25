@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchBrokeredInstallationToken, isOrbBrokerMode } from "../../src/orb/broker-client";
+import { fetchBrokeredInstallationToken, isOrbBrokerMode, registerOrbRelayTarget } from "../../src/orb/broker-client";
 
 /** A fetch stub that records the URL + init and returns a fixed response. */
 function captureFetch(resp: Response): { fetchImpl: typeof fetch; calls: { url: string; init?: RequestInit | undefined }[] } {
@@ -51,5 +51,32 @@ describe("fetchBrokeredInstallationToken", () => {
   it("throws when the broker response has no token", async () => {
     const fetchImpl = (async () => Response.json({ installationId: 1 })) as typeof fetch;
     await expect(fetchBrokeredInstallationToken({ ORB_ENROLLMENT_SECRET: "s" }, fetchImpl)).rejects.toThrow(/did not include a token/);
+  });
+});
+
+describe("registerOrbRelayTarget", () => {
+  it("skips unless broker mode AND a public origin are configured", async () => {
+    expect(await registerOrbRelayTarget({})).toBe("skipped"); // not broker mode
+    expect(await registerOrbRelayTarget({ ORB_ENROLLMENT_SECRET: "s" })).toBe("skipped"); // no PUBLIC_API_ORIGIN
+  });
+
+  it("POSTs the relay URL (origin + /v1/orb/relay) to the broker with the enrollment secret; trailing slashes stripped", async () => {
+    const { fetchImpl, calls } = captureFetch(new Response("ok"));
+    expect(await registerOrbRelayTarget({ ORB_ENROLLMENT_SECRET: "orbsec_x", PUBLIC_API_ORIGIN: "https://me.example/", ORB_BROKER_URL: "https://broker.example/" }, fetchImpl)).toBe("registered");
+    expect(calls[0]?.url).toBe("https://broker.example/v1/orb/relay/register"); // ORB_BROKER_URL trailing slash stripped
+    expect((calls[0]?.init?.headers as Record<string, string>).authorization).toBe("Bearer orbsec_x");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ relayUrl: "https://me.example/v1/orb/relay" }); // PUBLIC_API_ORIGIN trailing slash stripped
+  });
+
+  it("uses the default broker base when ORB_BROKER_URL is unset", async () => {
+    const { fetchImpl, calls } = captureFetch(new Response("ok"));
+    await registerOrbRelayTarget({ ORB_ENROLLMENT_SECRET: "s", PUBLIC_API_ORIGIN: "https://me.example" }, fetchImpl);
+    expect(calls[0]?.url).toBe("https://gittensory-api.aethereal.dev/v1/orb/relay/register");
+  });
+
+  it("returns failed on a non-ok response or a thrown fetch (never blocks boot)", async () => {
+    const cfg = { ORB_ENROLLMENT_SECRET: "s", PUBLIC_API_ORIGIN: "https://me.example" };
+    expect(await registerOrbRelayTarget(cfg, (async () => new Response("no", { status: 403 })) as typeof fetch)).toBe("failed");
+    expect(await registerOrbRelayTarget(cfg, (async () => { throw new Error("down"); }) as typeof fetch)).toBe("failed");
   });
 });

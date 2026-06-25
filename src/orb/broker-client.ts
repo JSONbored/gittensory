@@ -43,3 +43,28 @@ export async function fetchBrokeredInstallationToken(
   const expiresAtMs = payload.expiresAt ? Date.parse(payload.expiresAt) : Date.now() + 50 * 60_000;
   return { token: payload.token, installationId: payload.installationId ?? 0, expiresAtMs };
 }
+
+/** Self-register this container's PUBLIC relay URL with the central Orb on boot, so the Orb forwards this install's
+ *  events to us (the event half of brokered review). BEST-EFFORT: skipped unless broker mode + a public origin are
+ *  configured, and any failure (Orb down, install not registered yet, non-public origin rejected) just means no
+ *  relay until the next boot — it never blocks startup or throws. The relay URL is the container's public origin +
+ *  /v1/orb/relay (the receiver); the Orb SSRF-validates it, so PUBLIC_API_ORIGIN must be a real public https host. */
+export async function registerOrbRelayTarget(
+  env: { ORB_ENROLLMENT_SECRET?: string | undefined; ORB_BROKER_URL?: string | undefined; PUBLIC_API_ORIGIN?: string | undefined },
+  fetchImpl: typeof fetch = fetch,
+): Promise<"registered" | "skipped" | "failed"> {
+  if (!isOrbBrokerMode(env) || !env.PUBLIC_API_ORIGIN) return "skipped";
+  const base = (env.ORB_BROKER_URL ?? DEFAULT_BROKER_URL).replace(/\/+$/, "");
+  const relayUrl = `${env.PUBLIC_API_ORIGIN.replace(/\/+$/, "")}/v1/orb/relay`;
+  try {
+    const res = await fetchImpl(`${base}/v1/orb/relay/register`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.ORB_ENROLLMENT_SECRET}`, "content-type": "application/json" }, // present — isOrbBrokerMode required it
+      body: JSON.stringify({ relayUrl }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return res.ok ? "registered" : "failed";
+  } catch {
+    return "failed";
+  }
+}
