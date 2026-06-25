@@ -6,6 +6,8 @@
 // review proceeds deterministically. Every path returns `{ response: string }` (or throws → the caller
 // records an error and degrades — never a silent wrong answer).
 
+import type { CombineStrategy, OnMerge } from "../services/ai-review";
+
 interface AiRunOptions {
   messages?: Array<{ role: string; content: string }>;
   prompt?: string;
@@ -282,19 +284,50 @@ export function routeProviders(providers: Array<{ name: string; ai: SelfHostAi }
   };
 }
 
+/** Build the credentialed providers named in AI_PROVIDER (any without a credential are silently dropped), in
+ *  order, lowercased. Shared by the adapter and the dual-review plan so they never disagree about which providers
+ *  exist (e.g. an uncredentialed entry can't become a "reviewer" the router would then miss). */
+function buildProviders(env: Record<string, string | undefined>): Array<{ name: string; ai: SelfHostAi }> {
+  return (env.AI_PROVIDER ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+    .map((name) => ({ name, ai: buildProvider(name, env) }))
+    .filter((p): p is { name: string; ai: SelfHostAi } => Boolean(p.ai));
+}
+
+/** The credentialed self-host provider names from AI_PROVIDER, in order. Empty when unconfigured. */
+export function resolveProviderNames(env: Record<string, string | undefined>): string[] {
+  return buildProviders(env).map((p) => p.name);
+}
+
 /** Select the self-host AI provider(s) from AI_PROVIDER. A comma-separated list of TWO+ providers is addressable
  *  by name for dual review (see `routeProviders`) and otherwise falls back through them in order; a single
  *  provider is used directly. Returns undefined when unconfigured or no provider has its credential. */
 export function createSelfHostAi(env: Record<string, string | undefined>): SelfHostAi | undefined {
-  const raw = (env.AI_PROVIDER ?? "").trim().toLowerCase();
-  if (!raw) return undefined;
-  const providers = raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((name) => ({ name, ai: buildProvider(name, env) }))
-    .filter((p): p is { name: string; ai: SelfHostAi } => Boolean(p.ai));
+  const providers = buildProviders(env);
   if (providers.length === 0) return undefined;
   if (providers.length === 1) return providers[0]?.ai;
   return routeProviders(providers);
+}
+
+const COMBINE_STRATEGIES = new Set<CombineStrategy>(["single", "consensus", "synthesis"]);
+const ON_MERGE_RULES = new Set<OnMerge>(["either", "both"]);
+
+/** Resolve the self-host dual-review plan from env: the credentialed providers become the reviewer(s), `AI_COMBINE`
+ *  the strategy (default `synthesis` for two — "both review, one synthesized decision"), `AI_ON_MERGE` the
+ *  synthesis rule. Returns undefined when no provider is configured (cloud, or AI off) so ai-review keeps its
+ *  byte-identical Workers-AI consensus default; one provider ⇒ `single`; two+ ⇒ the configured strategy over the
+ *  first two. The result is attached to the self-host env at boot and passed to runGittensoryAiReview. */
+export function resolveAiReviewerPlan(
+  env: Record<string, string | undefined>,
+): { reviewers: Array<{ model: string }>; combine: CombineStrategy; onMerge: OnMerge | undefined } | undefined {
+  const names = resolveProviderNames(env);
+  if (names.length === 0) return undefined;
+  if (names.length === 1) return { reviewers: [{ model: names[0] as string }], combine: "single", onMerge: undefined };
+  const rawCombine = (env.AI_COMBINE ?? "").trim().toLowerCase() as CombineStrategy;
+  const combine: CombineStrategy = COMBINE_STRATEGIES.has(rawCombine) ? rawCombine : "synthesis";
+  const rawOnMerge = (env.AI_ON_MERGE ?? "").trim().toLowerCase() as OnMerge;
+  const onMerge = ON_MERGE_RULES.has(rawOnMerge) ? rawOnMerge : undefined;
+  return { reviewers: names.slice(0, 2).map((model) => ({ model })), combine, onMerge };
 }

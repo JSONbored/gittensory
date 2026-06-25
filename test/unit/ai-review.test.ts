@@ -294,6 +294,58 @@ describe("Workers AI fallback + degraded output", () => {
   });
 });
 
+describe("runGittensoryAiReview self-host dual-AI plan (#dual-ai-combiner)", () => {
+  const planEnv = (plan: { reviewers: Array<{ model: string }>; combine: string; onMerge?: string }, run: (model: string) => Promise<unknown>) =>
+    createTestEnv({ AI: { run: vi.fn(run) } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI_DAILY_NEURON_BUDGET: "100000", AI_REVIEW_PLAN: plan as never });
+
+  it("single provider: runs ONE named reviewer and its blocker IS the decision", async () => {
+    const seen: string[] = [];
+    const env = planEnv({ reviewers: [{ model: "claude-code" }], combine: "single" }, async (model) => {
+      seen.push(model);
+      return { response: reviewJson({ present: true, title: "Null deref in src/a.ts" }) };
+    });
+    const result = await runGittensoryAiReview(env, { ...baseInput, mode: "block" });
+    expect(result.status === "ok" && result.consensusDefect?.title).toContain("Null deref");
+    expect(seen).toEqual(["claude-code"]); // exactly one reviewer, addressed by name
+  });
+
+  it("dual synthesis (either): runs claude-code AND codex; EITHER blocker decides, never a split", async () => {
+    const seen: string[] = [];
+    const env = planEnv({ reviewers: [{ model: "claude-code" }, { model: "codex" }], combine: "synthesis", onMerge: "either" }, async (model) => {
+      seen.push(model);
+      return model === "codex" ? { response: reviewJson({ present: true, title: "Race condition in src/x.ts" }) } : { response: reviewJson({ present: false }) };
+    });
+    const result = await runGittensoryAiReview(env, { ...baseInput, mode: "block" });
+    if (result.status !== "ok") throw new Error("expected ok");
+    expect(result.consensusDefect?.title).toContain("Race condition"); // codex's lone blocker decides under synthesis/either
+    expect(result.split).toBe(false); // synthesis never splits
+    expect([...seen].sort()).toEqual(["claude-code", "codex"]);
+  });
+
+  it("single + BYOK: the provider writes the advisory; the one decision reviewer runs via the router", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ content: [{ type: "text", text: reviewJson({ assessment: "Frontier advisory." }) }] }), { status: 200 })));
+    const seen: string[] = [];
+    const env = planEnv({ reviewers: [{ model: "claude-code" }], combine: "single" }, async (model) => {
+      seen.push(model);
+      return { response: reviewJson({ present: true, title: "Bug in src/a.ts" }) };
+    });
+    const result = await runGittensoryAiReview(env, { ...baseInput, mode: "block", providerKey: { provider: "anthropic", key: "sk-ant" } });
+    if (result.status !== "ok") throw new Error("expected ok");
+    expect(result.consensusDefect?.title).toContain("Bug"); // the single Workers-AI/router reviewer's blocker decides
+    expect(seen).toEqual(["claude-code"]); // the decision reviewer ran once; the advisory came from BYOK (fetch)
+  });
+
+  it("explicit input.reviewers/combine/onMerge override the env plan", async () => {
+    const seen: string[] = [];
+    const env = planEnv({ reviewers: [{ model: "claude-code" }, { model: "codex" }], combine: "synthesis" }, async (model) => {
+      seen.push(model);
+      return { response: reviewJson({ present: false }) };
+    });
+    await runGittensoryAiReview(env, { ...baseInput, mode: "block", reviewers: [{ model: "ollama" }, { model: "groq" }], combine: "synthesis", onMerge: "both" });
+    expect([...seen].sort()).toEqual(["groq", "ollama"]); // input reviewers win over the env plan
+  });
+});
+
 describe("pure helpers", () => {
   it("toPublicSafe drops forbidden public text and neutralizes markdown, mentions, links, and control characters", () => {
     expect(toPublicSafe("This change is solid.")).toBe("This change is solid.");

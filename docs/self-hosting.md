@@ -104,6 +104,19 @@ and only the AI **summary** degrades to "unavailable". To enable AI, set `AI_PRO
 e.g. `AI_PROVIDER=anthropic,ollama` uses the Anthropic API first and falls back to a local Ollama model if it
 errors. If every provider fails, the AI summary degrades to "unavailable" and the review still runs.
 
+**Dual review (consensus / synthesis).** With **two** providers, `AI_PROVIDER=claude-code,codex` runs *both* as
+independent reviewers and combines them per `AI_COMBINE` (#dual-ai-combiner):
+
+| `AI_COMBINE` | Decision | Notes |
+|---|---|---|
+| `single` | one reviewer's verdict (auto when only one provider) | a named blocker blocks |
+| `consensus` | block only when **both** flag a critical defect; lone flag → **hold** for a human | most conservative |
+| `synthesis` *(default for two)* | both review, then **one merged decision** | `AI_ON_MERGE=either` blocks if either flags (default), `both` only when both do |
+
+In `block` mode the combined decision drives the gate; in `advisory` mode it's notes only. Every strategy is
+fail-closed — if a reviewer can't return a usable verdict, the PR is **held** for a human, never auto-merged. The
+free Cloudflare Workers-AI pair remains the cloud default (`consensus`) — these knobs are for self-host providers.
+
 **Subscription CLIs in the image.** The `claude-code` / `codex` providers need their CLI present. Build the
 image with `--build-arg INSTALL_AI_CLIS=true` (or `docker compose build --build-arg INSTALL_AI_CLIS=true`) to
 bake them in, then provide `CLAUDE_CODE_OAUTH_TOKEN` / codex auth at run time. No credentials are baked in.

@@ -89,6 +89,13 @@ export type GittensoryAiReviewInput = {
    */
   combine?: CombineStrategy | null | undefined;
   onMerge?: OnMerge | null | undefined;
+  /**
+   * The reviewer(s) to run (#dual-ai-combiner). Absent/empty ⇒ the free Workers-AI pair with per-slot fallbacks
+   * (byte-identical to today). A self-host plan supplies named providers instead — `{ model: "claude-code" }`,
+   * `{ model: "codex" }` — addressed by the self-host AI router; `fallback` is Workers-AI-only (a self-host
+   * provider has none). `single` (or a single entry) runs reviewer[0]; consensus/synthesis run [0] and [1].
+   */
+  reviewers?: ReadonlyArray<{ model: string; fallback?: string | null | undefined }> | null | undefined;
   /** Present only when the repo has BYOK on AND a key configured; drives the advisory write-up. */
   providerKey?: AiReviewProviderKey | null | undefined;
   /**
@@ -543,7 +550,22 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
   // own provider account, so they are not counted here (and a BYOK advisory still runs when the free
   // budget is exhausted). Free calls = the consensus pair in block mode (always Workers AI), plus the
   // advisory leg only when it is NOT BYOK.
-  const freeAiCalls = (input.mode === "block" ? 2 : 0) + (input.providerKey ? 0 : 1);
+  // Reviewers + combine strategy (#dual-ai-combiner). DEFAULT = the free Workers-AI pair (per-slot fallbacks)
+  // combined by `consensus` — byte-identical to today. The self-host boot plan (`env.AI_REVIEW_PLAN`) supplies
+  // named providers (e.g. claude-code + codex) and a strategy; an explicit `input` field overrides it. `single`
+  // (or a single configured reviewer) runs ONE opinion; consensus/synthesis run two.
+  const plan = env.AI_REVIEW_PLAN;
+  const configured: ReadonlyArray<{ model: string; fallback?: string | null | undefined }> | null = (input.reviewers?.length ? input.reviewers : plan?.reviewers) ?? null;
+  const primary = configured?.[0] ?? { model: BEST_REVIEW_MODELS[0], fallback: RELIABLE_FALLBACK_MODELS[0] as string | null };
+  const secondary = configured?.[1] ?? { model: BEST_REVIEW_MODELS[1], fallback: RELIABLE_FALLBACK_MODELS[1] as string | null };
+  // Per-slot fallback model (Workers-AI default pair has one; a self-host provider has none → reuse its own model,
+  // i.e. runWorkersOpinion's single-model path).
+  const primaryFallback = primary.fallback ?? primary.model;
+  const secondaryFallback = secondary.fallback ?? secondary.model;
+  const combine: CombineStrategy = input.combine ?? plan?.combine ?? "consensus";
+  const onMerge: OnMerge | null | undefined = input.onMerge ?? plan?.onMerge;
+  const dual = combine !== "single" && (!configured || configured.length > 1);
+  const freeAiCalls = (input.mode === "block" ? (dual ? 2 : 1) : 0) + (input.providerKey ? 0 : 1);
   // Estimate against the EFFECTIVE system prompt (`system`) so grounding's extra context is billed against the
   // budget. Flag-OFF, `system === REVIEW_SYSTEM_PROMPT`, so the estimate is byte-identical to today.
   const estimatedNeurons = freeAiCalls === 0 ? 0 : estimateNeurons(system.length + user.length, maxTokens, freeAiCalls);
@@ -578,7 +600,7 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
     advisoryReview = outcome.review;
     byokFailure = outcome.failure;
   } else {
-    advisoryReview = await runWorkersOpinion(env, BEST_REVIEW_MODELS[0], RELIABLE_FALLBACK_MODELS[0], system, user, maxTokens);
+    advisoryReview = await runWorkersOpinion(env, primary.model, primaryFallback, system, user, maxTokens);
   }
 
   let consensusDefect: AiConsensusDefect | null = null;
@@ -586,19 +608,29 @@ export async function runGittensoryAiReview(env: Env, input: GittensoryAiReviewI
   let aiReviewSplit = false;
   let inconclusive = false;
   if (input.mode === "block") {
-    // Consensus blocker ALWAYS uses the free Workers-AI pair (provider-independent, never BYOK).
-    const [a, b] = await Promise.all([
-      input.providerKey ? runWorkersOpinion(env, BEST_REVIEW_MODELS[0], RELIABLE_FALLBACK_MODELS[0], system, user, maxTokens) : Promise.resolve(advisoryReview),
-      runWorkersOpinion(env, BEST_REVIEW_MODELS[1], RELIABLE_FALLBACK_MODELS[1], system, user, maxTokens),
-    ]);
-    secondReview = b;
-    // Combine the two opinions per the configured strategy (#dual-ai-combiner). Default `consensus` is
-    // byte-identical to the historical logic: block only on agreement, lone blocker → split, a missing
-    // opinion → inconclusive (fail-closed, HELD for a human rather than silently auto-merged).
-    const combined = combineReviews([a, b], { strategy: input.combine ?? "consensus", onMerge: input.onMerge });
-    consensusDefect = combined.defect;
-    aiReviewSplit = combined.split;
-    inconclusive = combined.inconclusive;
+    if (dual) {
+      // Two independent reviewers (the free Workers-AI pair by default — provider-independent, never BYOK — or the
+      // configured provider pair on self-host). Reuse the advisory leg's review as the first opinion when it
+      // already ran it (non-BYOK), instead of paying for it twice.
+      const [a, b] = await Promise.all([
+        input.providerKey ? runWorkersOpinion(env, primary.model, primaryFallback, system, user, maxTokens) : Promise.resolve(advisoryReview),
+        runWorkersOpinion(env, secondary.model, secondaryFallback, system, user, maxTokens),
+      ]);
+      secondReview = b;
+      // Combine per the configured strategy (#dual-ai-combiner). Default `consensus` is byte-identical to the
+      // historical logic: block only on agreement, lone blocker → split, a missing opinion → inconclusive
+      // (fail-closed, HELD for a human). `synthesis` merges both into one decision (no split/hold-on-disagree).
+      const combined = combineReviews([a, b], { strategy: combine, onMerge });
+      consensusDefect = combined.defect;
+      aiReviewSplit = combined.split;
+      inconclusive = combined.inconclusive;
+    } else {
+      // Single reviewer: its verdict IS the decision. Reuse the advisory leg (non-BYOK) or run the one reviewer.
+      const a = input.providerKey ? await runWorkersOpinion(env, primary.model, primaryFallback, system, user, maxTokens) : advisoryReview;
+      const combined = combineReviews([a], { strategy: "single" });
+      consensusDefect = combined.defect;
+      inconclusive = combined.inconclusive;
+    }
   }
 
   const reviewsForNotes = [advisoryReview, secondReview].filter((r): r is ModelReview => Boolean(r));

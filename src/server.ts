@@ -12,7 +12,7 @@ import { DatabaseSync } from "node:sqlite";
 import { serve } from "@hono/node-server";
 import worker from "./index";
 import { processJob } from "./queue/processors";
-import { createSelfHostAi } from "./selfhost/ai";
+import { createSelfHostAi, resolveAiReviewerPlan } from "./selfhost/ai";
 import {
   cookieValue,
   credentialsToEnv,
@@ -176,6 +176,10 @@ async function main(): Promise<void> {
 
   const ai = createSelfHostAi(process.env);
   if (ai) console.log(JSON.stringify({ event: "selfhost_ai_provider", provider: process.env.AI_PROVIDER }));
+  // Dual-review plan (#dual-ai-combiner): resolve which provider(s) review + how to combine, attached to env
+  // below so the review call site uses it. Undefined for a single provider's default review or no AI.
+  const aiReviewPlan = resolveAiReviewerPlan(process.env);
+  if (aiReviewPlan) console.log(JSON.stringify({ event: "selfhost_ai_review_plan", reviewers: aiReviewPlan.reviewers.map((r) => r.model), combine: aiReviewPlan.combine }));
 
   // Redis fixed-window rate limiter + webhook dedup cache (else absent when REDIS_URL is unset).
   let rateLimiter: DurableObjectNamespace | undefined;
@@ -205,6 +209,7 @@ async function main(): Promise<void> {
     DB: backend.db,
     JOBS: backend.queue.binding,
     AI: ai,
+    ...(aiReviewPlan ? { AI_REVIEW_PLAN: aiReviewPlan } : {}),
     // Qdrant takes priority; falls back to the backend's built-in vectorize (pgvector or sqlite-vec)
     ...(vectorizeOverride ? { VECTORIZE: vectorizeOverride } : backend.vectorize ? { VECTORIZE: backend.vectorize } : {}),
     ...(rateLimiter ? { RATE_LIMITER: rateLimiter } : {}),
