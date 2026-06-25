@@ -125,6 +125,7 @@ import { handleGitHubWebhook } from "../github/webhook";
 import { handleOrbIngest, readOrbIngestBody } from "../orb/ingest";
 import { handleOrbWebhook } from "../orb/webhook";
 import { handleOrbOAuthCallback } from "../orb/oauth";
+import { brokerOrbToken, isOrbBrokerEnabled, issueOrbEnrollment } from "../orb/broker";
 import { computeFleetAnalytics } from "../orb/analytics";
 import { handleMcpRequest } from "../mcp/server";
 import { buildOpenApiSpec } from "../openapi/spec";
@@ -2873,6 +2874,18 @@ export function createApp() {
   // Post-install / OAuth landing — the App's Callback URL. Token-exempt; GitHub drives the redirect after a
   // maintainer installs or updates the Orb App. Lands on a real page instead of a 401.
   app.get("/v1/orb/oauth/callback", handleOrbOAuthCallback);
+  // Token-broker exchange: a self-hosted container presents its enrollment secret (Bearer) → a short-lived
+  // GitHub installation token for the BOUND install. Token-exempt (the enrollment secret IS the auth); flag-gated
+  // (404 until ORB_BROKER_ENABLED); the installation_id is read server-side from the enrollment, never the request.
+  app.post("/v1/orb/token", async (c) => {
+    if (!isOrbBrokerEnabled(c.env)) return c.json({ error: "not_found" }, 404);
+    const auth = c.req.header("authorization") ?? "";
+    const secret = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+    if (!secret) return c.json({ error: "missing_enrollment_secret" }, 401);
+    const result = await brokerOrbToken(c.env, secret);
+    if ("error" in result) return c.json(result, result.error === "invalid_enrollment" ? 401 : 403);
+    return c.json(result);
+  });
 
   // Gittensory Orb (#1255) — central fleet-calibration collector. Receives anonymized, reversal-aware
   // outcome batches from self-hosted instances. No auth required: all data is HMAC-anonymized by the sender;
@@ -2958,6 +2971,19 @@ export function createApp() {
     const registered = payload?.registered === false ? 0 : 1;
     await c.env.DB.prepare("UPDATE orb_github_installations SET registered = ? WHERE installation_id = ?").bind(registered, installationId).run();
     return c.json({ installationId, registered: registered === 1 });
+  });
+
+  // Operator-only: issue a one-time token-broker enrollment secret for a REGISTERED install, to hand to that
+  // maintainer's self-hosted container. The secret is returned ONCE (stored only hashed). Bearer-gated by the
+  // /v1/internal/* middleware (INTERNAL_JOB_TOKEN); flag-gated (404 until ORB_BROKER_ENABLED).
+  app.post("/v1/internal/orb/enrollments", async (c) => {
+    if (!isOrbBrokerEnabled(c.env)) return c.json({ error: "not_found" }, 404);
+    const payload = (await c.req.json().catch(() => null)) as { installationId?: unknown } | null;
+    const installationId = Number(payload?.installationId);
+    if (!Number.isInteger(installationId) || installationId <= 0) return c.json({ error: "installationId required" }, 400);
+    const result = await issueOrbEnrollment(c.env, installationId);
+    if ("error" in result) return c.json(result, result.error === "installation_not_found" ? 404 : 409);
+    return c.json(result); // { enrollId, secret } — secret shown exactly once
   });
 
   // Convergence (ops / observability, flag GITTENSORY_REVIEW_OPS). Cross-repo review-OUTCOME aggregate (gate-block
@@ -4908,6 +4934,7 @@ function requiresApiToken(path: string): boolean {
   if (path === "/v1/github/webhook") return false;
   if (path === "/v1/orb/webhook") return false;
   if (path === "/v1/orb/oauth/callback") return false;
+  if (path === "/v1/orb/token") return false;
   if (path === "/v1/orb/ingest") return false;
   if (path.startsWith("/v1/internal/")) return false;
   return path.startsWith("/v1/");
