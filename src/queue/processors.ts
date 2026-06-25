@@ -173,7 +173,7 @@ import type { CheckFailureDetail, MergeReadiness } from "../review/unified-comme
 import { buildIssueSlopAssessment, buildSlopAssessment, type SlopBand } from "../signals/slop";
 import { runGittensoryAiSlopAdvisory } from "../services/ai-slop";
 import { decidePublicSurface } from "../signals/settings-preview";
-import { buildFocusManifestGuidance, type ReviewProfile } from "../signals/focus-manifest";
+import { buildFocusManifestGuidance, resolveReviewPathInstructions, resolveReviewPromptOverrides, type ReviewPathInstruction, type ReviewProfile } from "../signals/focus-manifest";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
@@ -2026,6 +2026,10 @@ export async function runAiReviewForAdvisory(
     // manifest. Threaded in (not loaded here) so the AI review path makes no extra manifest fetch — absent ⇒
     // null ⇒ balanced ⇒ the reviewer prompt is byte-identical.
     reviewProfile?: ReviewProfile | null | undefined;
+    // `.gittensory.yml` review.path_instructions (#review-path-instructions), resolved by the caller from the
+    // cached manifest. The CONFIG (not a fetch) is threaded in; the per-PR glob match against `files` happens
+    // here (pure), so the AI path makes no extra manifest fetch. Absent/empty ⇒ byte-identical reviewer prompt.
+    reviewPathInstructions?: ReviewPathInstruction[] | undefined;
   },
 ): Promise<{ notes: string; reviewerCount: number } | undefined> {
   const packAllowsAnyAuthorBlockingReview = args.settings.gatePack === "oss-anti-slop" && args.settings.aiReviewMode === "block";
@@ -2092,6 +2096,10 @@ export async function runAiReviewForAdvisory(
       grounding,
       ragContext,
       profile: args.reviewProfile ?? null,
+      pathGuidance: resolveReviewPathInstructions(
+        args.reviewPathInstructions ?? [],
+        files.map((file) => file.path),
+      ),
     });
     if (result.status !== "ok") return undefined;
     if (result.consensusDefect) {
@@ -2520,10 +2528,11 @@ async function maybePublishPrPublicSurface(
     // to keep gate-only and advisory-sweep repos free of an extra file resolve.
     const aiReviewWillRun = !webhook.skipAiReview && settings.aiReviewMode !== "off" && Boolean(advisory.headSha);
     if (aiReviewWillRun) {
-      // `.gittensory.yml` review.profile (#review-profile): resolve from the manifest (cached from settings
-      // resolution, so a cheap cache hit — no extra fetch) and thread it into the AI review so chill/assertive
-      // shapes the write-up. Absent ⇒ null ⇒ balanced ⇒ byte-identical prompt. Fail-safe to null on any read error.
-      const reviewProfile = (await loadRepoFocusManifest(env, repoFullName).catch(() => null))?.review.profile ?? null;
+      // `.gittensory.yml` review.profile + review.path_instructions (#review-profile / #review-path-instructions):
+      // resolve from the manifest (cached from settings resolution, so a cheap cache hit — no extra fetch) and
+      // thread them into the AI review. Profile shapes nitpickiness; path-instructions add per-path guidance.
+      // Absent ⇒ byte-identical prompt. Fail-safe to defaults on any read error (resolveReviewPromptOverrides).
+      const { profile: reviewProfile, pathInstructions: reviewPathInstructions } = resolveReviewPromptOverrides(await loadRepoFocusManifest(env, repoFullName).catch(() => null));
       aiReview = await runAiReviewForAdvisory(env, {
         settings,
         advisory,
@@ -2533,6 +2542,7 @@ async function maybePublishPrPublicSurface(
         confirmedContributor,
         files: await getReviewFiles(),
         reviewProfile,
+        reviewPathInstructions,
       });
     }
 

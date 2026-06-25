@@ -151,6 +151,20 @@ describe("review.profile shapes the reviewer system prompt (#review-profile)", (
     expect(without).not.toMatch(/CHILL|ASSERTIVE/);
     expect(withNull).toBe(without);
   });
+
+  it("pathGuidance is appended to the system prompt; empty/absent leaves it byte-identical (#review-path-instructions)", async () => {
+    const systemPromptOf = (run: ReturnType<typeof vi.fn>): string => ((run.mock.calls[0]?.[1] as { messages?: Array<{ content?: string }> })?.messages?.[0]?.content ?? "");
+    const runGuidance = async (pathGuidance: string | undefined) => {
+      const run = vi.fn(async () => ({ response: reviewJson() }));
+      const env = createTestEnv({ AI: { run } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI_DAILY_NEURON_BUDGET: "100000" });
+      await runGittensoryAiReview(env, { ...baseInput, pathGuidance });
+      return systemPromptOf(run);
+    };
+    expect(await runGuidance("\n\nPath-specific review instructions:\n- `src/**`: Enforce null checks.")).toContain("Enforce null checks.");
+    // Absent or whitespace-only → no append.
+    expect(await runGuidance(undefined)).not.toContain("Path-specific review instructions");
+    expect(await runGuidance("   ")).not.toContain("Path-specific review instructions");
+  });
 });
 
 describe("runGittensoryAiReview block mode (consensus)", () => {

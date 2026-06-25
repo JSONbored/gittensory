@@ -96,6 +96,13 @@ export type GittensoryAiReviewInput = {
    * consensus-defect pass still runs the same), just how much advisory detail the prose carries.
    */
   profile?: ReviewProfile | null | undefined;
+  /**
+   * `.gittensory.yml` `review.path_instructions` (#review-path-instructions), pre-resolved by the caller to the
+   * entries whose glob matched THIS PR's changed files (via `resolveReviewPathInstructions`) — a ready-to-append
+   * prompt section. Absent / empty ⇒ the reviewer prompt is byte-identical. Public-safe by construction (the
+   * instructions passed the manifest's public-safe filter at parse time).
+   */
+  pathGuidance?: string | null | undefined;
 };
 
 /** A consensus critical defect, already public-safe, ready to become a gate blocker finding. */
@@ -277,7 +284,10 @@ const REVIEW_PROFILE_SUFFIX: Record<"chill" | "assertive", string> = {
 function buildSystemPrompt(input: GittensoryAiReviewInput): string {
   const groundingSuffix = input.grounding?.systemSuffix ?? "";
   const profileSuffix = input.profile === "chill" || input.profile === "assertive" ? REVIEW_PROFILE_SUFFIX[input.profile] : "";
-  return `${REVIEW_SYSTEM_PROMPT}${groundingSuffix}${profileSuffix}`;
+  // `.gittensory.yml` review.path_instructions (#review-path-instructions): the caller pre-resolved the entries
+  // matching this PR's files into a prompt section; empty ⇒ nothing appended (byte-identical).
+  const pathSuffix = input.pathGuidance?.trim() ? input.pathGuidance : "";
+  return `${REVIEW_SYSTEM_PROMPT}${groundingSuffix}${profileSuffix}${pathSuffix}`;
 }
 
 /** One Workers-AI opinion with a per-slot reliable fallback and a 3× retry on the primary. */

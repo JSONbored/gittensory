@@ -101,7 +101,17 @@ export type FocusManifestReviewConfig = {
   fields: Partial<Record<ReviewFieldKey, boolean>>;
   /** `review.profile`: chill / balanced / assertive. null (absent) = balanced = byte-identical reviewer prompt. */
   profile: ReviewProfile | null;
+  /** `review.path_instructions`: per-path natural-language guidance handed to the AI reviewer when the PR's
+   *  changed files match the glob. Empty (default) ⇒ byte-identical reviewer prompt. (#review-path-instructions) */
+  pathInstructions: ReviewPathInstruction[];
 };
+
+/** One `review.path_instructions[]` entry: a manifest path glob + the public-safe instructions to apply when a
+ *  changed file matches it. */
+export type ReviewPathInstruction = { path: string; instructions: string };
+
+// A hard cap so a hostile/huge manifest can't bloat the reviewer prompt (mirrors REVIEW_FIELD_KEYS discipline).
+const MAX_PATH_INSTRUCTIONS = 50;
 
 /**
  * Normalized maintainer focus manifest. Repo owners declare which work areas are wanted,
@@ -195,7 +205,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicNotes: [],
   gate: { ...EMPTY_GATE_CONFIG },
   settings: {},
-  review: { present: false, footerText: null, note: null, fields: {}, profile: null },
+  review: { present: false, footerText: null, note: null, fields: {}, profile: null, pathInstructions: [] },
   warnings: [],
 };
 
@@ -208,7 +218,7 @@ export function isFocusManifestPublicSafe(text: string): boolean {
 }
 
 function emptyManifest(source: FocusManifestSource, warnings: string[] = []): FocusManifest {
-  return { ...EMPTY_MANIFEST, source, warnings, gate: { ...EMPTY_GATE_CONFIG }, settings: {}, review: { present: false, footerText: null, note: null, fields: {}, profile: null } };
+  return { ...EMPTY_MANIFEST, source, warnings, gate: { ...EMPTY_GATE_CONFIG }, settings: {}, review: { present: false, footerText: null, note: null, fields: {}, profile: null, pathInstructions: [] } };
 }
 
 function normalizeStringList(value: JsonValue | undefined, field: string, warnings: string[]): string[] {
@@ -486,7 +496,7 @@ function parsePublicSafeText(value: JsonValue | undefined, field: string, warnin
  * throws; invalid/unsafe values are dropped with warnings.
  */
 function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestReviewConfig {
-  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, profile: null };
+  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, profile: null, pathInstructions: [] };
   if (value === undefined || value === null) return empty;
   if (typeof value !== "object" || Array.isArray(value)) {
     warnings.push(`Manifest field "review" must be a mapping; ignoring it.`);
@@ -507,7 +517,51 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
   const footerText = footerRecord ? parsePublicSafeText(footerRecord.text, "review.footer.text", warnings) : null;
   const note = parsePublicSafeText(r.note, "review.note", warnings);
   const profile = parseReviewProfile(r.profile, warnings);
-  return { present: footerText !== null || note !== null || profile !== null || Object.keys(fields).length > 0, footerText, note, fields, profile };
+  const pathInstructions = parseReviewPathInstructions(r.path_instructions, warnings);
+  return {
+    present: footerText !== null || note !== null || profile !== null || pathInstructions.length > 0 || Object.keys(fields).length > 0,
+    footerText,
+    note,
+    fields,
+    profile,
+    pathInstructions,
+  };
+}
+
+/** Parse `review.path_instructions` — an array of `{ path, instructions }` entries. Each must have a non-empty
+ *  string `path` (a manifest glob) and PUBLIC-SAFE string `instructions`; invalid/unsafe entries are dropped with
+ *  a warning. Capped at MAX_PATH_INSTRUCTIONS so a huge manifest can't bloat the reviewer prompt. */
+function parseReviewPathInstructions(value: JsonValue | undefined, warnings: string[]): ReviewPathInstruction[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    warnings.push(`Manifest "review.path_instructions" must be a list of { path, instructions }; ignoring it.`);
+    return [];
+  }
+  const out: ReviewPathInstruction[] = [];
+  for (const [index, entry] of value.entries()) {
+    if (out.length >= MAX_PATH_INSTRUCTIONS) {
+      warnings.push(`Manifest "review.path_instructions" is capped at ${MAX_PATH_INSTRUCTIONS} entries; dropping the rest.`);
+      break;
+    }
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      warnings.push(`Manifest "review.path_instructions[${index}]" must be a mapping with path + instructions; ignoring it.`);
+      continue;
+    }
+    const e = entry as Record<string, JsonValue>;
+    const path = typeof e.path === "string" ? e.path.trim() : "";
+    if (!path) {
+      warnings.push(`Manifest "review.path_instructions[${index}].path" must be a non-empty string; ignoring the entry.`);
+      continue;
+    }
+    if (e.instructions === undefined || e.instructions === null) {
+      warnings.push(`Manifest "review.path_instructions[${index}].instructions" is required; ignoring the entry.`);
+      continue;
+    }
+    const instructions = parsePublicSafeText(e.instructions, `review.path_instructions[${index}].instructions`, warnings);
+    if (instructions === null) continue; // non-string / empty / not-public-safe → already warned
+    out.push({ path, instructions });
+  }
+  return out;
 }
 
 /** Parse `review.profile` — one of chill / balanced / assertive (case-insensitive). `balanced` normalizes to
@@ -532,8 +586,31 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
   if (review.footerText !== null) out.footer = { text: review.footerText };
   if (review.note !== null) out.note = review.note;
   if (review.profile !== null) out.profile = review.profile;
+  if (review.pathInstructions.length > 0) out.path_instructions = review.pathInstructions.map((entry) => ({ path: entry.path, instructions: entry.instructions }));
   if (Object.keys(review.fields).length > 0) out.fields = { ...review.fields } as Record<string, JsonValue>;
   return out;
+}
+
+/**
+ * Resolve the `review.path_instructions` that APPLY to a PR — those whose glob matches at least one changed path
+ * — into a single prompt section for the AI reviewer, or "" when none match (so the prompt stays byte-identical).
+ * Pure; uses the same manifest path-glob semantics (`matchesManifestPath`) as the rest of the manifest. Capped to
+ * keep the prompt bounded. (#review-path-instructions)
+ */
+export function resolveReviewPathInstructions(pathInstructions: ReviewPathInstruction[], changedPaths: string[]): string {
+  if (pathInstructions.length === 0 || changedPaths.length === 0) return "";
+  const applicable = pathInstructions.filter((entry) => changedPaths.some((path) => matchesManifestPath(path, entry.path)));
+  if (applicable.length === 0) return "";
+  const lines = applicable.map((entry) => `- \`${entry.path}\`: ${entry.instructions}`);
+  return `\n\nPath-specific review instructions from the maintainer — apply these to the changed files that match each glob:\n${lines.join("\n")}`;
+}
+
+/** Resolve the AI-reviewer prompt overrides (`review.profile` + `review.path_instructions`) from a possibly-null
+ *  manifest (null = load failure). A null manifest yields the byte-identical defaults. Centralized so the AI-review
+ *  caller threads both in one place with the null-manifest branch covered here (unit-tested) rather than inline in
+ *  the processor. (#review-profile / #review-path-instructions) */
+export function resolveReviewPromptOverrides(manifest: FocusManifest | null): { profile: ReviewProfile | null; pathInstructions: ReviewPathInstruction[] } {
+  return { profile: manifest?.review.profile ?? null, pathInstructions: manifest?.review.pathInstructions ?? [] };
 }
 
 /**

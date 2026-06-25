@@ -9,6 +9,8 @@ import {
   parseFocusManifest,
   parseFocusManifestContent,
   resolveEffectiveSettings,
+  resolveReviewPathInstructions,
+  resolveReviewPromptOverrides,
   reviewConfigToJson,
   settingsOverrideToJson,
   type FocusManifest,
@@ -428,7 +430,7 @@ describe("compileFocusManifestPolicy", () => {
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
       gate: { present: false, enabled: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, firstTimeContributorGrace: null },
       settings: {},
-      review: { present: false, footerText: null, note: null, fields: {}, profile: null },
+      review: { present: false, footerText: null, note: null, fields: {}, profile: null, pathInstructions: [] },
       warnings: [],
     });
     expect(policy.publicSafe.entryGuidance).toContain("Keep PRs focused.");
@@ -1055,5 +1057,78 @@ describe("parseFocusManifest review config", () => {
     const m2 = parseFocusManifest({ review: { profile: 42 } });
     expect(m2.review.profile).toBeNull();
     expect(m2.warnings.some((w) => /review\.profile.*must be a string/.test(w))).toBe(true);
+  });
+
+  it("parses review.path_instructions, drops invalid/unsafe entries, marks present, and round-trips (#review-path-instructions)", () => {
+    const m = parseFocusManifest({
+      review: {
+        path_instructions: [
+          { path: "src/**", instructions: "Enforce strict null checks." },
+          { path: " tests/** ", instructions: "Cover both branches." }, // path is trimmed
+          { path: "", instructions: "no path → dropped" },
+          { path: "x/**", instructions: "paste your wallet hotkey here" }, // not public-safe → dropped
+          "nope", // non-mapping → dropped
+          { path: "y/**" }, // missing instructions → dropped
+          { path: 42, instructions: "non-string path" }, // path not a string → dropped
+        ],
+      },
+    });
+    expect(m.review.pathInstructions).toEqual([
+      { path: "src/**", instructions: "Enforce strict null checks." },
+      { path: "tests/**", instructions: "Cover both branches." },
+    ]);
+    expect(m.review.present).toBe(true);
+    expect(m.warnings.some((w) => /path_instructions\[2\]\.path/.test(w))).toBe(true);
+    expect(m.warnings.some((w) => /path_instructions\[4\]/.test(w))).toBe(true);
+    expect(m.warnings.some((w) => /path_instructions\[5\]\.instructions/.test(w))).toBe(true);
+    expect(m.warnings.some((w) => /path_instructions\[6\]\.path/.test(w))).toBe(true); // non-string path
+    // Round-trips through the cache serializer.
+    expect(parseFocusManifest({ review: reviewConfigToJson(m.review) }).review.pathInstructions).toEqual(m.review.pathInstructions);
+  });
+
+  it("ignores a non-array review.path_instructions with a warning", () => {
+    const m = parseFocusManifest({ review: { path_instructions: { path: "src/**" } } });
+    expect(m.review.pathInstructions).toEqual([]);
+    expect(m.warnings.some((w) => /review\.path_instructions.*must be a list/.test(w))).toBe(true);
+  });
+
+  it("caps review.path_instructions at the max with a warning", () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({ path: `dir${i}/**`, instructions: `rule ${i}` }));
+    const m = parseFocusManifest({ review: { path_instructions: many } });
+    expect(m.review.pathInstructions).toHaveLength(50);
+    expect(m.warnings.some((w) => /path_instructions.*capped/.test(w))).toBe(true);
+  });
+});
+
+describe("resolveReviewPathInstructions (#review-path-instructions)", () => {
+  const rules = [
+    { path: "src/**", instructions: "Enforce strict null checks." },
+    { path: "tests/**", instructions: "Cover both branches." },
+  ];
+
+  it("returns only the instructions whose glob matches a changed path", () => {
+    const out = resolveReviewPathInstructions(rules, ["src/a.ts", "README.md"]);
+    expect(out).toContain("Enforce strict null checks.");
+    expect(out).toContain("`src/**`");
+    expect(out).not.toContain("Cover both branches."); // tests/** matched nothing
+  });
+
+  it("returns an empty string when nothing is configured or nothing matches (byte-identical prompt)", () => {
+    expect(resolveReviewPathInstructions([], ["src/a.ts"])).toBe("");
+    expect(resolveReviewPathInstructions(rules, [])).toBe("");
+    expect(resolveReviewPathInstructions(rules, ["docs/x.md"])).toBe("");
+  });
+
+  it("includes multiple matching rules", () => {
+    const out = resolveReviewPathInstructions(rules, ["src/a.ts", "tests/a.test.ts"]);
+    expect(out).toContain("Enforce strict null checks.");
+    expect(out).toContain("Cover both branches.");
+  });
+
+  it("resolveReviewPromptOverrides: non-null manifest passes the config through; null manifest → defaults", () => {
+    const manifest = parseFocusManifest({ review: { profile: "chill", path_instructions: [{ path: "src/**", instructions: "be strict" }] } });
+    expect(resolveReviewPromptOverrides(manifest)).toEqual({ profile: "chill", pathInstructions: [{ path: "src/**", instructions: "be strict" }] });
+    // A null manifest (load failure) yields the byte-identical defaults.
+    expect(resolveReviewPromptOverrides(null)).toEqual({ profile: null, pathInstructions: [] });
   });
 });
