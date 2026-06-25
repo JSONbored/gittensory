@@ -51,6 +51,13 @@ declare global {
     /** Master flag for the Orb token-broker (enrollment OAuth + /v1/orb/token). Default-off: every broker route
      *  early-404s until this is "true", so the deploy is byte-identical until an operator enables it. */
     ORB_BROKER_ENABLED?: string;
+    /** SELF-HOST broker CLIENT: the one-time enrollment secret the operator issued for this install. When set, the
+     *  engine sources GitHub installation tokens from the central Orb (POST /v1/orb/token) instead of a local App
+     *  key. Cloud never sets it ⇒ inert there. See src/orb/broker-client. (A secret — never commit a real value.) */
+    ORB_ENROLLMENT_SECRET?: string;
+    /** Override the Orb broker base URL the self-host client calls (default https://gittensory-api.aethereal.dev);
+     *  point at a private gittensory deployment if you self-host the broker too. */
+    ORB_BROKER_URL?: string;
     GITHUB_APP_PRIVATE_KEY: string;
     GITHUB_APP_ID: string;
     GITHUB_APP_SLUG: string;
