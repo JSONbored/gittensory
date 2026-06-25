@@ -208,6 +208,7 @@ async function main(): Promise<void> {
     ...process.env,
     DB: backend.db,
     JOBS: backend.queue.binding,
+    WEBHOOKS: backend.queue.binding, // the brokered relay receiver enqueues via WEBHOOKS; both lanes share the in-process queue
     AI: ai,
     ...(aiReviewPlan ? { AI_REVIEW_PLAN: aiReviewPlan } : {}),
     // Qdrant takes priority; falls back to the backend's built-in vectorize (pgvector or sqlite-vec)
