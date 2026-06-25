@@ -4870,7 +4870,10 @@ function isPrivateBountyLifecycleFinding(code: string): boolean {
 }
 
 function containsPrivatePublicTerm(value: string): boolean {
-  return /\b(reward|payout|farming|wallet|hotkey|trust score|raw trust|estimated score|scoreability|likely_duplicate|reviewability\s*\d)\b/i.test(value);
+  // Plural forms must be caught too: this is the sole public-safe gate at its call sites (no scrub
+  // partner like the unified-comment bridge's), so a bare-singular term would leak "rewards"/"wallets"
+  // onto a public comment. Mirror the `s?` plural-aware sibling denylists (advisory.ts, queue-intelligence.ts).
+  return /\b(rewards?|payouts?|farming|wallets?|hotkeys?|trust scores?|raw trust|estimated scores?|scoreability|likely_duplicate|reviewability\s*\d)\b/i.test(value);
 }
 
 function sanitizePanelText(value: string): string {

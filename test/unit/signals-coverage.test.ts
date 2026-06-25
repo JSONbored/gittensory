@@ -689,6 +689,39 @@ describe("signal coverage edge cases", () => {
     expect(maintainerComment).not.toMatch(/reward|wallet|hotkey|trust score|farming/i);
   });
 
+  it("drops PLURAL private terms from public finding titles, not just singular forms (regression: backstop missed plurals)", () => {
+    const directRepo = repo("owner/plural");
+    const prRecord = pr(directRepo.fullName, 77, "Improve docs", { authorLogin: "miner", linkedIssues: [5], body: "Fixes #5" });
+    const profile = buildContributorProfile("miner", { login: "miner", topLanguages: [], source: "github" }, [], []);
+    const basePreflight = buildPreflightResult(
+      { repoFullName: directRepo.fullName, title: "Improve docs", body: "Fixes #5", changedFiles: ["src/docs.ts"], linkedIssues: [5] },
+      directRepo,
+      [],
+      [],
+    );
+    const titlesFor = (title: string): string[] =>
+      buildPublicCommentSignalBundle({
+        repo: directRepo,
+        pr: prRecord,
+        profile,
+        detection: { detected: true, source: "official_gittensor_api", reason: "Confirmed by official API.", priorPullRequests: 1, priorMergedPullRequests: 0, priorIssues: 0 },
+        queueHealth: buildQueueHealth(directRepo, [], [], buildCollisionReport(directRepo.fullName, [], [])),
+        collisions: buildCollisionReport(directRepo.fullName, [], []),
+        preflight: { ...basePreflight, findings: [{ code: "info_note", severity: "warning", title, detail: "n/a", action: "n/a" }, ...basePreflight.findings] },
+        settings: repoSettings(directRepo.fullName),
+      }).publicFindingTitles as string[];
+
+    // The public-safe backstop is the SOLE gate here (unlike the unified-comment bridge, which scrubs
+    // plural-aware terms BEFORE this drop-test), so it must catch plurals exactly like singulars.
+    for (const term of ["rewards", "payouts", "wallets", "hotkeys", "trust scores", "estimated scores"]) {
+      expect(titlesFor(`Quarterly ${term} summary`).some((t) => t.toLowerCase().includes(term))).toBe(false);
+    }
+    // Control: singular forms were already dropped — pins that the plural fix did not regress them.
+    for (const term of ["reward", "payout", "wallet", "hotkey", "trust score", "estimated score"]) {
+      expect(titlesFor(`Quarterly ${term} summary`).some((t) => t.toLowerCase().includes(term))).toBe(false);
+    }
+  });
+
   it("buildPublicPrPanelSignalRows derives the gate conclusion across provided/fallback paths (#1007 unified-panel extraction)", () => {
     const directRepo = repo("owner/panel");
     const collisions = buildCollisionReport(directRepo.fullName, [], []);
