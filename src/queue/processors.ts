@@ -1664,6 +1664,17 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
       // was by the bot / repo owner / admin, re-close it and skip the re-review. Self-closes (the contributor
       // closed their own PR) stay reopenable; the bot's own nightly-re-review reopens are exempt.
       if (payload.action === "reopened" && installationId && (await maybeRecloseDisallowedReopen(env, deliveryId, installationId, repoFullName, pr, payload).catch(() => false))) {
+        // Stamp the delivery processed like every other owning path — the early return otherwise leaves the
+        // webhook_events row stuck at "queued"/its body hash, mis-reporting the delivery as un-acked (#review-audit).
+        await recordWebhookEvent(env, {
+          deliveryId,
+          eventName,
+          action: payload.action,
+          installationId: payload.installation?.id,
+          repositoryFullName: payload.repository?.full_name,
+          payloadHash: "processed",
+          status: "processed",
+        });
         return;
       }
       // Resolve settings first so the self-authored live-fetch fallback only fires when its gate is in block mode.
@@ -3462,6 +3473,12 @@ async function maybeRecloseDisallowedReopen(
   // NOT touch GitHub, and dry-run records the would-be re-close without acting — so a dry-run is truly inert and
   // the global kill-switch is a COMPLETE stop. This close path previously bypassed pause/freeze/dry-run entirely.
   const reopenSettings = await resolveRepositorySettings(env, repoFullName);
+  // Honor the autonomy floor like every other write path (sweepRepoRegate / the live-action handler / the
+  // draft-dodge sibling all gate on isAgentConfigured): on an OBSERVE-only / un-opted-in repo (autonomy {} =
+  // deny-by-default) the agent must take NO action, so do not re-close. resolveAgentActionMode is orthogonal to
+  // autonomy (it only reflects pause/freeze/dry-run) and returns "live" for an unconfigured repo, so without this
+  // the re-close would genuinely reach GitHub on a repo that never authorized any action (#review-audit).
+  if (!isAgentConfigured(reopenSettings.autonomy)) return false;
   const reopenMode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(env) || (await isGlobalAgentFrozen(env)), agentPaused: reopenSettings.agentPaused, agentDryRun: reopenSettings.agentDryRun });
   if (reopenMode !== "live") {
     await recordAuditEvent(env, {
@@ -3497,6 +3514,10 @@ async function maybeRecloseDisallowedReopen(
 }
 
 async function maybeProcessGittensoryMentionCommand(env: Env, deliveryId: string, payload: GitHubWebhookPayload): Promise<boolean> {
+  // Only act on a NEWLY-created comment (mirrors maybeProcessGateOverrideCommand / maybeProcessPlanCommand). Without
+  // this an `edited` comment re-runs the agent + rewrites the card, and a `deleted` command still posts an answer
+  // card for a command that no longer exists (#review-audit).
+  if (payload.action !== "created") return false;
   const command = parseGittensoryMentionCommand(payload.comment?.body);
   if (!command) return false;
   // Action commands (e.g. gate-override) are handled by their own dispatch earlier in processGitHubWebhook;
