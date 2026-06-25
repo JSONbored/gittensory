@@ -2064,9 +2064,10 @@ export async function runAiReviewForAdvisory(
         : null;
     // FIX B: prefer the caller's pre-resolved files (real diff even on a pre-sync first review); fall back to
     // the stored read when the caller didn't pass them (e.g. unit tests calling this function directly).
-    // review.exclude_paths (#review-exclude-paths): drop maintainer-excluded files (generated/lockfiles) so the
-    // AI review (diff + grounding + RAG) ignores them; empty excludePaths ⇒ the same array (byte-identical).
-    const files = excludeReviewPaths(args.files ?? (await listPullRequestFiles(env, args.repoFullName, args.pr.number)), args.reviewExcludePaths ?? []);
+    // review.exclude_paths (#review-exclude-paths): advisory-mode prose can skip generated/lockfiles, but block
+    // mode is gate-relevant and must review the full diff so excluded paths cannot bypass AI consensus blockers.
+    const allFiles = args.files ?? (await listPullRequestFiles(env, args.repoFullName, args.pr.number));
+    const files = args.settings.aiReviewMode === "block" ? allFiles : excludeReviewPaths(allFiles, args.reviewExcludePaths ?? []);
     // Grounding (convergence, flag-gated by GITTENSORY_REVIEW_GROUNDING). Build the FINISHED CI status + the full
     // content of the changed files so the reviewer verifies its claims against reality instead of guessing.
     // Flag-OFF (default) → we take no new branch at all: NO check/repo load, NO file fetch, and `grounding`
