@@ -249,6 +249,17 @@ export function deriveUnifiedStatus(input: UnifiedReviewInput, ctx: UnifiedComme
   if (status === "ready" && input.readiness && input.readiness.ciState !== "passed") {
     return input.readiness.ciState === "failed" ? "blocked" : "held";
   }
+  // Merge-state gate — "safe to merge" also requires the PR to be MERGEABLE. A `dirty` (base conflict) PR
+  // cannot merge as-is → BLOCKED; a `behind` PR needs a rebase first → HELD. This stops the green "safe to
+  // merge" / "Approved" headline from contradicting a `dirty`/`behind` merge-state chip (the #4220 report,
+  // where the headline said "safe to merge" while the chip read `dirty`). Other states — clean, a not-yet-
+  // computed `unknown`, or a `blocked` that the bot's own pending approval will clear — do not downgrade.
+  // (#ready-needs-mergeable)
+  if (status === "ready" && input.readiness?.mergeStateLabel) {
+    const mergeState = input.readiness.mergeStateLabel.toLowerCase();
+    if (mergeState === "dirty") return "blocked";
+    if (mergeState === "behind") return "held";
+  }
   return status;
 }
 

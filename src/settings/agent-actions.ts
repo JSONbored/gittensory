@@ -406,7 +406,11 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // OWNER/automation PR is HELD via the needs-human label + the (non-blocking) unified review comment — never a
   // formal request-changes. (#no-request-changes) Either merge/approve, or close, with the rare manual hold left
   // open + commented, never blocked.
-  if (reviewGood && !heldForManualReview && !linkedIssueCloseInFlight && acting("approve") && input.pr.reviewDecision !== "APPROVED" && !alreadyApprovedThisHead) {
+  // Never APPROVE a base-conflicting PR: it is closed below (willClose on isConflict), so a "Gittensory approves —
+  // safe to merge" review on a PR we're about to close is incoherent (and a stale approval strands the PR if it
+  // later goes green). A `behind`/`blocked` PR is fine to approve (it is rebased pre-review or the approval clears
+  // the block); only a hard `dirty` conflict is excluded here. (#ready-needs-mergeable, the #4220 report) */
+  if (reviewGood && !heldForManualReview && !linkedIssueCloseInFlight && !isConflict && acting("approve") && input.pr.reviewDecision !== "APPROVED" && !alreadyApprovedThisHead) {
     actions.push({
       actionClass: "approve",
       requiresApproval: approval("approve"),

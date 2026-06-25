@@ -73,6 +73,18 @@ describe("planAgentMaintenanceActions (#778)", () => {
     expect(failing).not.toContain("request_changes");
   });
 
+  it("NEVER approves a base-conflicting PR — it is closed, not approved (#4220)", () => {
+    // A green+passing but `dirty` (base-conflict) contributor PR is closed for the conflict; it must NOT also
+    // get a spurious "Gittensory approves — safe to merge" review on its way out.
+    const conflicting = classes(
+      planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto", close: "auto" }, ciState: "passed", pr: { labels: [], mergeableState: "dirty" } })),
+    );
+    expect(conflicting).not.toContain("approve");
+    expect(conflicting).toContain("close");
+    // A clean PR with the same verdict DOES approve (the conflict is the only difference).
+    expect(classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto" }, ciState: "passed", pr: { labels: [], mergeableState: "clean" } })))).toContain("approve");
+  });
+
   describe("re-approval idempotency on the head SHA (stop the re-approve loop)", () => {
     const good = { conclusion: "success" as const, autonomy: { approve: "auto" as const }, ciState: "passed" as const };
 

@@ -52,6 +52,19 @@ describe("deriveUnifiedStatus", () => {
     expect(deriveUnifiedStatus({ ...base, recommendations: [], blockers: ["leaks a secret"] })).toBe("blocked");
   });
 
+  it("a non-mergeable merge state is NEVER safe-to-merge — dirty(conflict)→blocked, behind→held, even over a merge verdict (#4220)", () => {
+    // The reported bug: green CI + merge verdict but a `dirty` base conflict rendered "safe to merge".
+    expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "dirty" } })).toBe("blocked");
+    expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "DIRTY" } })).toBe("blocked"); // case-insensitive
+    expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "behind" } })).toBe("held");
+    // A clean (or not-yet-computed / pending-bot-approval) merge state still renders ready.
+    expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "clean" } })).toBe("ready");
+    expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "unknown" } })).toBe("ready");
+    expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "blocked" } })).toBe("ready");
+    // No mergeStateLabel at all → no downgrade.
+    expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed" } })).toBe("ready");
+  });
+
   it("an explicit merge verdict is authoritative — ready even with a raised concern", () => {
     expect(deriveUnifiedStatus({ ...base, decision: "merge", blockers: ["minor"] })).toBe("ready");
   });
