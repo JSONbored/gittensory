@@ -21,6 +21,7 @@ import {
   extractCookieValue,
   isAuthorizedGitHubSessionLogin,
   revokeSession,
+  timingSafeEqual,
   type AuthIdentity,
 } from "../auth/security";
 import { normalizeGittBountySnapshot } from "../bounties/ingest";
@@ -2920,7 +2921,7 @@ export function createApp() {
   // ⇒ the collector REQUIRES it, so an operator can lock the write path down after distributing the matching
   // ORB_COLLECTOR_TOKEN to exporters. Bounded by a hard body ceiling, and dedup'd via UNIQUE(instance_id, repo_hash, pr_hash).
   app.post("/v1/orb/ingest", async (c) => {
-    if (!isAuthorizedOrbIngest(c.env, extractBearerToken(c.req.header("authorization")))) return c.json({ error: "unauthorized" }, 401);
+    if (!(await isAuthorizedOrbIngest(c.env, extractBearerToken(c.req.header("authorization"))))) return c.json({ error: "unauthorized" }, 401);
     const body = await readOrbIngestBody(c.req.raw, c.req.header("content-length"));
     if (body === null) return c.json({ error: "payload_too_large" }, 413);
     if (!body) return c.json({ error: "invalid_request" }, 400);
@@ -4951,9 +4952,11 @@ function toIsoQueryDate(value: string): string | undefined {
 // OPEN (matching today's live fleet — deploying this is non-breaking). Once the operator sets the token, the
 // collector REQUIRES an exact bearer match, so the write path can be locked down after the matching
 // ORB_COLLECTOR_TOKEN is rolled out to exporters.
-function isAuthorizedOrbIngest(env: Env, token: string | undefined): boolean {
+async function isAuthorizedOrbIngest(env: Env, token: string | undefined): Promise<boolean> {
   if (!env.ORB_INGEST_TOKEN) return true;
-  return token === env.ORB_INGEST_TOKEN;
+  // Constant-time compare (mirrors every other secret check in auth/security) — a `===` here is timing-attack
+  // vulnerable for a shared secret.
+  return timingSafeEqual(token, env.ORB_INGEST_TOKEN);
 }
 
 function requiresApiToken(path: string): boolean {
