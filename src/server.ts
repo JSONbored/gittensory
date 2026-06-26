@@ -28,7 +28,7 @@ import {
 import { isOrbBrokerMode, registerOrbRelayTarget } from "./orb/broker-client";
 import { exportOrbBatch } from "./selfhost/orb-collector";
 import { createD1Adapter, nodeSqliteDriver } from "./selfhost/d1-adapter";
-import { readiness, type ReadinessProbe } from "./selfhost/health";
+import { readiness, sqliteBackupAdvisory, type ReadinessProbe } from "./selfhost/health";
 import { gauge, incr, observe, renderMetrics } from "./selfhost/metrics";
 import { runSelfHostMigrations } from "./selfhost/migrate";
 import { createPgAdapter } from "./selfhost/pg-adapter";
@@ -177,6 +177,10 @@ async function main(): Promise<void> {
   const usePostgres = !!databaseUrl && /^postgres(ql)?:\/\//i.test(databaseUrl);
   const backend = usePostgres ? await buildPostgresBackend(databaseUrl as string, consume) : buildSqliteBackend(consume);
   console.log(JSON.stringify({ event: "selfhost_backend", backend: usePostgres ? "postgres" : "sqlite" }));
+  // Data-safety advisory (#8): warn LOUDLY at boot if running on a single SQLite file with no acknowledged backup,
+  // so an operator doesn't run with zero durability while /ready answers 200.
+  const backupAdvisory = sqliteBackupAdvisory({ usingSqlite: !usePostgres, backupAcknowledged: process.env.BACKUP_ACKNOWLEDGED === "true" });
+  if (backupAdvisory) console.warn(JSON.stringify({ level: "warn", event: "selfhost_backup_advisory", message: backupAdvisory }));
 
   const applied = await runSelfHostMigrations(backend.db, process.env.MIGRATIONS_DIR ?? "migrations");
   console.log(JSON.stringify({ event: "selfhost_migrations_applied", count: applied }));

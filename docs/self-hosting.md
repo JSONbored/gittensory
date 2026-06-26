@@ -238,11 +238,13 @@ accepted. Unset ⇒ the public file is fetched exactly as before.
   in-flight job, checkpoints the WAL, and closes the DB before exiting.
 - **Logs** are structured JSON (`selfhost_listening`, `selfhost_migrations_applied`, `selfhost_ai_provider`,
   `selfhost_queue_recovered`, `selfhost_job_dead`, `selfhost_cron_error`, `selfhost_shutdown`, …).
-- **Data + backup.** Everything is the single SQLite file on the `gittensory-data` volume (WAL mode). Back up
-  by snapshotting the volume or copying the `.sqlite` file. Migrations are idempotent and re-checked at boot.
-  For **continuous, point-in-time backup**, enable the optional [Litestream](https://litestream.io) sidecar in
+- **Data + backup (do NOT skip).** Everything is the single SQLite file on the `gittensory-data` volume (WAL
+  mode), so **without a backup, losing the volume loses all review state** — and `/ready` still answers `200`,
+  so the gap is silent. The container logs a loud `selfhost_backup_advisory` warning at boot until you set up a
+  backup. For **continuous, point-in-time backup**, enable the [Litestream](https://litestream.io) sidecar in
   `docker-compose.yml` (copy `litestream.yml.example` → `litestream.yml`, set your bucket + credentials); it
-  streams every change to S3/B2/MinIO/R2.
+  streams every change to S3/B2/MinIO/R2. Then set **`BACKUP_ACKNOWLEDGED=true`** to silence the warning. (For
+  multi-instance, use `DATABASE_URL=postgres://…` and back up Postgres instead.)
 - **App-level metrics.** Enable `GITTENSORY_REVIEW_OPS=true` for the read-only gate-block anomaly scan and the
   bearer-gated `GET /v1/internal/ops/stats` aggregate.
 
