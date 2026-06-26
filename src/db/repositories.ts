@@ -3788,6 +3788,7 @@ export async function recordWebhookEvent(
     .onConflictDoUpdate({
       target: webhookEvents.deliveryId,
       set: {
+        payloadHash: args.payloadHash,
         status: args.status,
         errorSummary: args.errorSummary,
         processedAt: args.status === "processed" || args.status === "error" ? nowIso() : undefined,
