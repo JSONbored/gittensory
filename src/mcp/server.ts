@@ -1821,7 +1821,7 @@ export class GittensoryMcp {
 
   private async getMaintainerNoise(input: { owner: string; repo: string }): Promise<ToolPayload> {
     const fullName = `${input.owner}/${input.repo}`;
-    await this.requireRepoAccess(fullName);
+    await this.requireRepoApprovalQueueAccess(fullName);
     const report = await loadMaintainerNoiseReport(this.env, fullName);
     return {
       summary: maintainerNoiseSummary(report),
