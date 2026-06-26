@@ -4056,6 +4056,7 @@ async function maybePublishPrPublicSurface(
   let aiReview:
     | { notes: string; reviewerCount: number; inlineFindings?: InlineFinding[] }
     | undefined;
+  let inlineCommentsEnabledForReview = false;
   let gateFinalized = false;
   // The PR's changed files are needed by the slop/manifest gates, the AI review + grounding + RAG, the secret
   // scan, the check-run, and the unified comment. Resolve them AT MOST ONCE per review and share across the
@@ -4322,6 +4323,11 @@ async function maybePublishPrPublicSurface(
           excludePaths: reviewExcludePaths,
         } = resolveReviewPromptOverrides(
           await loadRepoFocusManifest(env, repoFullName).catch(() => null),
+        );
+        inlineCommentsEnabledForReview = shouldRequestInlineFindings(
+          env,
+          repoFullName,
+          reviewInlineComments,
         );
         aiReview = await runAiReviewForAdvisory(env, {
           settings,
@@ -4917,6 +4923,7 @@ async function maybePublishPrPublicSurface(
       commitId: advisory.headSha,
       getFiles: getReviewFiles,
       mode,
+      inlineCommentsEnabled: inlineCommentsEnabledForReview,
     });
   }
   if (decision.willLabel) {

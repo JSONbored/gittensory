@@ -973,9 +973,11 @@ export async function runGittensoryAiReview(
   );
   const advisoryNotes =
     reviewsForNotes.length > 0 ? composeAdvisoryNotes(reviewsForNotes) : null;
-  // Line-anchored inline findings (#inline-comments): empty unless the caller asked for them (the prompt suffix
-  // is conditional) AND the model emitted any. Inert until the posting path (PR B) consumes them.
-  const inlineFindings = composeInlineFindings(reviewsForNotes);
+  // Line-anchored inline findings (#inline-comments): only propagate model output when the resolved feature gate
+  // asked for it. AI output is PR-author-influenced, so the prompt suffix is not an authorization boundary.
+  const inlineFindings = input.inlineFindings
+    ? composeInlineFindings(reviewsForNotes)
+    : [];
 
   await record(
     env,
