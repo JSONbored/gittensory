@@ -323,12 +323,33 @@ async function main(): Promise<void> {
     const { createRedisCache } = await import("./selfhost/redis-cache");
     rateLimiter = createRedisRateLimiter(redisClient);
     webhookCache = createRedisCache(redisClient);
+    // Persist the installation-token cache in Redis so warm GitHub App tokens survive restarts/deploys and are
+    // shared across replicas (the in-isolate Map otherwise re-mints — an Orb round-trip — per replica/cold start).
+    const { createRedisTokenCache } =
+      await import("./selfhost/redis-token-cache");
+    const { setInstallationTokenStore, setGitHubResponseCache } =
+      await import("./github/app");
+    setInstallationTokenStore(createRedisTokenCache(redisClient));
+    // Short-TTL cache for safe GitHub GET responses (dedups the ~24 reads per review). Default 20s; 0 disables.
+    const ghCacheTtl = Math.max(
+      0,
+      Number(process.env.GITHUB_CACHE_TTL_SECONDS ?? "20"),
+    );
+    if (ghCacheTtl > 0) {
+      const { createRedisResponseCache } =
+        await import("./selfhost/redis-response-cache");
+      setGitHubResponseCache(createRedisResponseCache(redisClient, ghCacheTtl));
+    }
     readinessProbes.push({
       name: "redis",
       check: () => withTimeout(redisClient.ping().then(() => true)),
     });
     console.log(
-      JSON.stringify({ event: "selfhost_rate_limiter", backend: "redis" }),
+      JSON.stringify({
+        event: "selfhost_rate_limiter",
+        backend: "redis",
+        githubResponseCacheTtl: ghCacheTtl,
+      }),
     );
   }
 
