@@ -28,6 +28,16 @@ impact.
 - Evading review boundaries by reopening closed work without addressing the stated reason.
 - Attempting to bypass authentication, rate limits, GitHub App permissions, or Cloudflare Worker
   controls.
+- Manipulating the review bot or automated gate — embedding hidden or misleading instructions in
+  code, comments, PR titles/bodies, file contents, or commit messages to influence the AI review or
+  pass the gate (prompt injection).
+- Circumventing CI or the gate — disabling or weakening tests, faking or gaming coverage,
+  fabricating tests to satisfy Codecov, or editing CI to skip required checks.
+- Submitting malicious or destructive code — malware, backdoors, secret exfiltration, malicious
+  dependencies, destructive migrations, or anything intended to damage the codebase, its data, or
+  production systems.
+- Abusing system resources — webhook floods, deliberately triggering expensive re-reviews or CI
+  runs, or attempts to exhaust the review bot's compute or credits.
 
 ## Enforcement
 
@@ -48,6 +58,15 @@ Enforcement is proportional and escalates with intent and repetition:
 - Plagiarism and ban-evasion — copying another contributor's work, or returning under a new account
   after a block — result in an immediate **permanent block from contributing across all of our
   repositories** (`JSONbored/gittensory`, `JSONbored/metagraphed`, `JSONbored/awesome-claude`).
+
+## Contribution Terms
+
+By submitting, you affirm the work is your own original work and that you have the right to contribute
+it under this repository's license. Contributing is not an entitlement: contribution scoring and any
+Gittensor rewards are set by the subnet's on-chain hyperparameters and validators, not by us, and all
+decisions — merge, close, scope, policy, timing, labels, and blocks — are at maintainer discretion and
+final. Report security issues privately (below) rather than exploiting or weaponizing them in a PR;
+good-faith research is welcome through that channel.
 
 For security issues, use GitHub private vulnerability reporting:
 
