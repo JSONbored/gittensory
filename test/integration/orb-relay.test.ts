@@ -254,7 +254,7 @@ describe("retryFailedRelays", () => {
     await registerOrbRelay(e, secret, "https://c.example/v1/orb/relay");
     await storeRelayFailure(e, { deliveryId: "retry-ok", eventName: "pull_request", installationId: 9100, rawBody: "{}" });
     const fetchOk = (() => Promise.resolve(new Response("ok", { status: 200 }))) as typeof fetch;
-    await retryFailedRelays(e, { fetchImpl: fetchOk });
+    await retryFailedRelays(e, { fetchImpl: fetchOk, resolveHostname: async () => ["203.0.113.10"] });
     const row = await db(e).prepare("SELECT delivery_id FROM orb_relay_failures WHERE delivery_id='retry-ok'").first();
     expect(row ?? null).toBeNull(); // row removed on success
   });
@@ -265,7 +265,7 @@ describe("retryFailedRelays", () => {
     await registerOrbRelay(e, secret, "https://c.example/v1/orb/relay");
     await storeRelayFailure(e, { deliveryId: "retry-fail", eventName: "pull_request", installationId: 9101, rawBody: "{}" });
     const fetchFail = (() => Promise.resolve(new Response("bad", { status: 503 }))) as typeof fetch;
-    await retryFailedRelays(e, { fetchImpl: fetchFail });
+    await retryFailedRelays(e, { fetchImpl: fetchFail, resolveHostname: async () => ["203.0.113.10"] });
     const row = await db(e).prepare("SELECT attempts FROM orb_relay_failures WHERE delivery_id='retry-fail'").first<{ attempts: number }>();
     expect(row?.attempts).toBe(1);
   });
@@ -300,7 +300,7 @@ describe("retryFailedRelays", () => {
       return new Response("bad", { status: 503 });
     }) as typeof fetch;
 
-    await retryFailedRelays(e, { fetchImpl: fetchFail });
+    await retryFailedRelays(e, { fetchImpl: fetchFail, resolveHostname: async () => ["203.0.113.10"] });
 
     expect(calls).toBe(25);
     expect(maxActive).toBeLessThanOrEqual(5);

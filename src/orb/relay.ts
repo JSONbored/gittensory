@@ -134,7 +134,7 @@ export async function storeRelayFailure(
  *  Each row gets up to RELAY_RETRY_MAX_ATTEMPTS (5) retries within a 1-hour TTL; on success or expiry the row
  *  is removed. Never throws — a bad DB row or a persistently-down container is dropped (with an alertable log,
  *  below) after exhaustion. */
-export async function retryFailedRelays(env: Env, opts?: { fetchImpl?: typeof fetch }): Promise<void> {
+export async function retryFailedRelays(env: Env, opts?: { fetchImpl?: typeof fetch; resolveHostname?: RelayDnsResolver }): Promise<void> {
   // Prune rows whose TTL has elapsed or whose attempt budget is exhausted.
   const pruned = await env.DB
     .prepare("DELETE FROM orb_relay_failures WHERE expires_at < datetime('now') OR attempts >= ?")
@@ -159,6 +159,7 @@ export async function retryFailedRelays(env: Env, opts?: { fetchImpl?: typeof fe
       env,
       { eventName: row.event_name, installationId: row.installation_id, deliveryId: row.delivery_id, rawBody: row.raw_body },
       opts?.fetchImpl,
+      opts?.resolveHostname,
     );
     if (result === "forwarded" || result === "skipped") {
       await env.DB.prepare("DELETE FROM orb_relay_failures WHERE delivery_id = ?").bind(row.delivery_id).run();
