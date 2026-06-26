@@ -9,6 +9,14 @@ import { renderBrief } from "../dist/render.js";
 import { buildBrief } from "../dist/brief.js";
 import { scanPatch, scanSecrets } from "../dist/analyzers/secret-scan.js";
 import { scanLicenses } from "../dist/analyzers/license-check.js";
+import { scanInstallScripts } from "../dist/analyzers/install-scripts.js";
+
+const npmFetch =
+  (scripts, time = {}) =>
+  async () => ({
+    ok: true,
+    json: async () => ({ versions: { "1.0.0": { scripts } }, time }),
+  });
 
 const licFetch =
   (licenses, ok = true) =>
@@ -313,6 +321,82 @@ test("buildBrief: license analyzer runs alongside the others", async () => {
     assert.equal(brief.findings.license.length, 1);
     assert.equal(brief.findings.license[0].classification, "copyleft");
     assert.match(brief.promptSection, /AGPL-3.0/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("scanInstallScripts: flags npm deps with install hooks, skips clean + non-npm + non-ok", async () => {
+  const flagged = await scanInstallScripts(
+    pkgPatch("evil"),
+    npmFetch(
+      { postinstall: "node steal.js" },
+      { "1.0.0": "2026-01-01T00:00:00Z" },
+    ),
+  );
+  assert.equal(flagged.length, 1);
+  assert.deepEqual(flagged[0].hooks, ["postinstall"]);
+  assert.equal(flagged[0].publishedAt, "2026-01-01T00:00:00Z");
+  const clean = await scanInstallScripts(
+    pkgPatch("good"),
+    npmFetch({ test: "jest" }),
+  );
+  assert.equal(clean.length, 0);
+  const py = await scanInstallScripts(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [{ path: "requirements.txt", patch: "+evil==1.0.0" }],
+    },
+    npmFetch({ postinstall: "x" }),
+  );
+  assert.equal(py.length, 0);
+  const fail = await scanInstallScripts(pkgPatch("x"), async () => ({
+    ok: false,
+    json: async () => ({}),
+  }));
+  assert.equal(fail.length, 0);
+});
+
+test("renderBrief: renders the install-script block", () => {
+  const r = renderBrief({
+    installScript: [
+      {
+        package: "evil",
+        version: "1.0.0",
+        hooks: ["preinstall", "postinstall"],
+        publishedAt: "2026-06-01T00:00:00Z",
+      },
+    ],
+  });
+  assert.match(r.promptSection, /install scripts \(supply-chain risk/);
+  assert.match(
+    r.promptSection,
+    /`evil@1.0.0` runs preinstall\/postinstall on install \(published 2026-06-01\)/,
+  );
+});
+
+test("buildBrief: install-script analyzer runs alongside the others", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("registry.npmjs.org"))
+      return {
+        ok: true,
+        json: async () => ({
+          versions: { "1.0.0": { scripts: { postinstall: "x" } } },
+          time: {},
+        }),
+      };
+    if (u.includes("deps.dev"))
+      return { ok: true, json: async () => ({ licenses: ["MIT"] }) };
+    return { ok: true, json: async () => ({ vulns: [] }) };
+  };
+  try {
+    const brief = await buildBrief(pkgPatch("evil"));
+    assert.equal(brief.analyzerStatus.installScript, "ok");
+    assert.equal(brief.findings.installScript.length, 1);
+    assert.match(brief.promptSection, /supply-chain risk/);
   } finally {
     globalThis.fetch = realFetch;
   }

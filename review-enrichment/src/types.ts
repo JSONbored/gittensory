@@ -59,11 +59,20 @@ export interface LicenseFinding {
   classification: "copyleft" | "unknown";
 }
 
+/** A newly-added/upgraded npm dependency version that runs install lifecycle scripts (supply-chain risk). */
+export interface InstallScriptFinding {
+  package: string;
+  version: string;
+  hooks: string[];
+  publishedAt: string | null;
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
   secret?: SecretFinding[];
   license?: LicenseFinding[];
+  installScript?: InstallScriptFinding[];
 }
 
 export type AnalyzerStatus = "ok" | "degraded" | "skipped";

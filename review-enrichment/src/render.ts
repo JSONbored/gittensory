@@ -57,6 +57,21 @@ export function renderBrief(
     }
   }
 
+  const installScripts = findings.installScript ?? [];
+  if (installScripts.length) {
+    lines.push(
+      "### Dependency install scripts (supply-chain risk — review before merging)",
+    );
+    for (const dep of installScripts) {
+      const when = dep.publishedAt
+        ? ` (published ${dep.publishedAt.slice(0, 10)})`
+        : "";
+      lines.push(
+        `- \`${dep.package}@${dep.version}\` runs ${dep.hooks.join("/")} on install${when}`,
+      );
+    }
+  }
+
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 
   const header =
