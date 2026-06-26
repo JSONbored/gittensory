@@ -72,8 +72,10 @@ import {
   fetchAndStorePullRequestFilesForReview,
   fetchLinkedIssueFacts,
   fetchLiveCiAggregate,
+  fetchLivePullRequestHeadSha,
   fetchLivePullRequestMergeState,
   fetchLivePullRequestReviewDecision,
+  fetchLivePullRequestState,
   fetchOpenPullRequestNumbersForCommit,
   fetchRequiredStatusContexts,
   refreshContributorActivity,
@@ -169,7 +171,7 @@ import { buildUnifiedCommentBody, isUnifiedReviewCommentEnabled } from "../revie
 import { screenshotsAllowed } from "../review/visual-wire";
 import { isVisualPath } from "../review/visual/paths";
 import { buildCapture, type CaptureRoute } from "../review/visual/capture";
-import type { CheckFailureDetail, MergeReadiness } from "../review/unified-comment";
+import { renderReviewingPlaceholder, shouldPostReviewingPlaceholder, type CheckFailureDetail, type MergeReadiness } from "../review/unified-comment";
 import { buildIssueSlopAssessment, buildSlopAssessment, type SlopBand } from "../signals/slop";
 import { runGittensoryAiSlopAdvisory } from "../services/ai-slop";
 import { decidePublicSurface } from "../signals/settings-preview";
@@ -902,10 +904,13 @@ async function reReviewStoredPullRequest(
   // a rebase fired a synchronize, or CI is still running — the synchronize / CI-completion webhook re-triggers
   // once the head is current and CI has settled (the sweep backstops a missed event).
   if (!(await prReadyForReview(env, installationId, repoFullName, pr, settings, deliveryId))) return;
-  const [otherOpenPullRequests, linkedIssueAuthorLogins] = await Promise.all([
+  const [cachedOtherOpenPullRequests, linkedIssueAuthorLogins] = await Promise.all([
     listOtherOpenPullRequests(env, repoFullName, prNumber),
     resolveLinkedIssueAuthorLogins(env, installationId, repoFullName, pr.linkedIssues, settings.selfAuthoredLinkedIssueGateMode === "block"),
   ]);
+  // #dup-winner / audit #15: drop any cached-open duplicate sibling already closed on GitHub before the advisory
+  // (and the disposition below) elect the cluster winner, so the real lowest-OPEN PR is never demoted+auto-closed.
+  const otherOpenPullRequests = await reconcileLiveDuplicateSiblings(env, installationId, repoFullName, pr, cachedOtherOpenPullRequests);
   const advisory = buildPullRequestAdvisory(repo, pr, {
     otherOpenPullRequests,
     requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings),
@@ -1687,11 +1692,14 @@ async function processGitHubWebhook(env: Env, deliveryId: string, eventName: str
       }
       // Resolve settings first so the self-authored live-fetch fallback only fires when its gate is in block mode.
       const settings = await resolveRepositorySettings(env, repoFullName);
-      const [repo, otherOpenPullRequests, linkedIssueAuthorLogins] = await Promise.all([
+      const [repo, cachedOtherOpenPullRequests, linkedIssueAuthorLogins] = await Promise.all([
         getRepository(env, repoFullName),
         listOtherOpenPullRequests(env, repoFullName, pr.number),
         resolveLinkedIssueAuthorLogins(env, installationId, repoFullName, pr.linkedIssues, settings.selfAuthoredLinkedIssueGateMode === "block"),
       ]);
+      // #dup-winner / audit #15: drop any cached-open duplicate sibling already closed on GitHub before the
+      // advisory (and the disposition) elect the cluster winner, so the real lowest-OPEN PR is never auto-closed.
+      const otherOpenPullRequests = await reconcileLiveDuplicateSiblings(env, installationId, repoFullName, pr, cachedOtherOpenPullRequests);
       const advisory = buildPullRequestAdvisory(repo, pr, {
         otherOpenPullRequests,
         requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings),
@@ -2097,9 +2105,10 @@ export async function runAiReviewForAdvisory(
         : null;
     // FIX B: prefer the caller's pre-resolved files (real diff even on a pre-sync first review); fall back to
     // the stored read when the caller didn't pass them (e.g. unit tests calling this function directly).
-    // review.exclude_paths (#review-exclude-paths): drop maintainer-excluded files (generated/lockfiles) so the
-    // AI review (diff + grounding + RAG) ignores them; empty excludePaths ⇒ the same array (byte-identical).
-    const files = excludeReviewPaths(args.files ?? (await listPullRequestFiles(env, args.repoFullName, args.pr.number)), args.reviewExcludePaths ?? []);
+    // review.exclude_paths (#review-exclude-paths): advisory-mode prose can skip generated/lockfiles, but block
+    // mode is gate-relevant and must review the full diff so excluded paths cannot bypass AI consensus blockers.
+    const allFiles = args.files ?? (await listPullRequestFiles(env, args.repoFullName, args.pr.number));
+    const files = args.settings.aiReviewMode === "block" ? allFiles : excludeReviewPaths(allFiles, args.reviewExcludePaths ?? []);
     // Grounding (convergence, flag-gated by GITTENSORY_REVIEW_GROUNDING). Build the FINISHED CI status + the full
     // content of the changed files so the reviewer verifies its claims against reality instead of guessing.
     // Flag-OFF (default) → we take no new branch at all: NO check/repo load, NO file fetch, and `grounding`
@@ -2273,7 +2282,47 @@ export function dupWinnerLinkedDuplicateCount(openSiblingNumbers: number[], prNu
   return openSiblingNumbers.length;
 }
 
-function linkedIssueDuplicatePullRequestsForGate(pr: PullRequestRecord, pullRequests: PullRequestRecord[]): number[] {
+/**
+ * Live-reconcile the duplicate cluster's open siblings before the winner is elected (#dup-winner / audit #15).
+ *
+ * The stored open-PR cache ({@link listOtherOpenPullRequests}) lags GitHub: a sibling that was closed/merged on
+ * GitHub but is still cached `open` would keep "winning" the duplicate cluster, demoting the real lowest-OPEN PR
+ * to a loser and auto-closing it via the `duplicate_pr_risk` blocker. Only a LOWER-numbered overlapping sibling
+ * can demote this PR from winner, so re-fetch the LIVE state of just those siblings and drop any that are no
+ * longer open. Then the downstream election ({@link isDuplicateClusterWinner}) reflects ground truth.
+ *
+ * FAIL-OPEN to the stored state: a sibling is dropped ONLY on a positive "not open" confirmation — an unreadable
+ * live fetch keeps it, so a transient GitHub hiccup never newly spares a real loser. Flag-OFF (default), no
+ * linked issues, or no lower overlapping sibling ⇒ returns the input unchanged with no extra API calls.
+ */
+export async function reconcileLiveDuplicateSiblings(
+  env: Env,
+  installationId: number | null,
+  repoFullName: string,
+  pr: PullRequestRecord,
+  otherOpenPullRequests: PullRequestRecord[],
+): Promise<PullRequestRecord[]> {
+  if (env.GITTENSORY_DUPLICATE_WINNER !== "true") return otherOpenPullRequests;
+  const linkedIssues = new Set(pr.linkedIssues);
+  if (linkedIssues.size === 0) return otherOpenPullRequests;
+  const lowerOverlapping = otherOpenPullRequests.filter(
+    (other) => other.number < pr.number && other.state === "open" && other.linkedIssues.some((issue) => linkedIssues.has(issue)),
+  );
+  if (lowerOverlapping.length === 0) return otherOpenPullRequests;
+  const installationToken = installationId === null ? undefined : await createInstallationToken(env, installationId).catch(() => undefined);
+  const token = installationToken ?? env.GITHUB_PUBLIC_TOKEN;
+  const staleClosed = new Set<number>();
+  await Promise.all(
+    lowerOverlapping.map(async (sibling) => {
+      const liveState = await fetchLivePullRequestState(env, repoFullName, sibling.number, token).catch(() => undefined);
+      if (liveState !== undefined && liveState !== "open") staleClosed.add(sibling.number);
+    }),
+  );
+  if (staleClosed.size === 0) return otherOpenPullRequests;
+  return otherOpenPullRequests.filter((other) => !staleClosed.has(other.number));
+}
+
+export function linkedIssueDuplicatePullRequestsForGate(pr: PullRequestRecord, pullRequests: PullRequestRecord[]): number[] {
   const linkedIssues = new Set(pr.linkedIssues);
   if (linkedIssues.size === 0) return [];
   return [
@@ -2589,6 +2638,13 @@ async function maybePublishPrPublicSurface(
     // resolve only when the review will actually run (aiReviewMode !== off + a head SHA + not explicitly skipped)
     // to keep gate-only and advisory-sweep repos free of an extra file resolve.
     const aiReviewWillRun = !webhook.skipAiReview && settings.aiReviewMode !== "off" && Boolean(advisory.headSha);
+    // Post a transient "🟪 reviewing…" placeholder BEFORE the AI runs so contributors see the bot
+    // is actively working rather than silent. In-place upsert: once the final verdict is ready it
+    // overwrites this comment. Best-effort — a failed post never aborts the review. (#reviewing-placeholder)
+    if (shouldPostReviewingPlaceholder({ aiReviewWillRun, mode, willComment: decision.willComment })) {
+      const placeholderBody = `${PR_PANEL_COMMENT_MARKER}\n\n${renderReviewingPlaceholder()}`;
+      await createOrUpdatePrIntelligenceComment(env, installationId, repoFullName, pr.number, placeholderBody, { mode }).catch(() => undefined);
+    }
     if (aiReviewWillRun) {
       // `.gittensory.yml` review.profile + review.path_instructions + review.exclude_paths (#review-profile /
       // #review-path-instructions / #review-exclude-paths): resolve from the manifest (cached from settings
@@ -2672,6 +2728,10 @@ async function maybePublishPrPublicSurface(
           gatePolicy,
           {
             checkRunId: pendingGateCheckRunId,
+            // #5 (audit): publish the AUTHORITATIVE surface-lane-merged verdict so the check-run conclusion matches
+            // the disposition; without this the check re-derives the generic verdict and shows green on a surface-
+            // lane reject/manual PR that is actually auto-closed/held. Undefined (gate off) ⇒ re-derive (identical).
+            gate: gateEvaluation,
           },
           mode,
         );
@@ -2826,6 +2886,12 @@ async function maybePublishPrPublicSurface(
       // RC2: only branch-protection-required checks gate the PR; a red codecov/* is surfaced but never blocks.
       const requiredContexts = await fetchRequiredStatusContexts(env, repoFullName, pr.baseRef ?? repo?.defaultBranch, ciToken ?? env.GITHUB_PUBLIC_TOKEN);
       const liveCi = await fetchLiveCiAggregate(env, repoFullName, pr.headSha, ciToken ?? env.GITHUB_PUBLIC_TOKEN, requiredContexts);
+      // Live merge-state too — the SAME source the disposition uses (planAgentMaintenanceActions reads liveMergeState).
+      // The stored pr.mergeableState lags GitHub's async recompute, so a base-conflicting PR could read `clean` here
+      // ("✅ safe to merge") while the disposition reads the live `dirty` and auto-CLOSES it — the exact #4220
+      // contradiction. (#review-audit / #ready-needs-mergeable)
+      const liveMergeState = await fetchLivePullRequestMergeState(env, repoFullName, pr.number, ciToken ?? env.GITHUB_PUBLIC_TOKEN).catch(() => undefined);
+      const mergeStateLabel = liveMergeState ?? pr.mergeableState; // fail-safe to the stored value
       const ciState: MergeReadiness["ciState"] = liveCi.ciState === "passed" ? "passed" : liveCi.ciState === "failed" ? "failed" : "unverified";
       // Per-failed-check WHY (codecov %/test/lint reason) from each check-run output or commit-status
       // description — capped + public-safe (name + short reason only). The renderer lists these under the CI chip.
@@ -2836,7 +2902,7 @@ async function maybePublishPrPublicSurface(
       }));
       const mergeReadiness: MergeReadiness = {
         ciState,
-        ...(pr.mergeableState ? { mergeStateLabel: pr.mergeableState } : {}),
+        ...(mergeStateLabel ? { mergeStateLabel } : {}),
         ...(failingDetails.length > 0 ? { failingChecks: failingDetails.map((detail) => detail.name) } : {}),
         ...(failingDetails.length > 0 ? { failingDetails } : {}),
       };
@@ -2855,6 +2921,13 @@ async function maybePublishPrPublicSurface(
         unifiedFiles.map((file) => file.path),
         await loadHardGuardrailGlobs(env, repoFullName),
       );
+      // Held-vs-closed parity (#8/#9): the disposition NEVER auto-closes an owner / automation-bot PR, so a gate
+      // "close" verdict on one must headline "held", not "Closed". Compute the same author classification the
+      // planner uses (repo-owner login match + protected automation author) and thread it to the comment.
+      const commentRepoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")) : "";
+      const commentAuthorLogin = pr.authorLogin ?? "";
+      const neverClosed =
+        (commentAuthorLogin.length > 0 && commentAuthorLogin.toLowerCase() === commentRepoOwner.toLowerCase()) || isProtectedAutomationAuthor(pr.authorLogin);
       const { rows, readinessTotal } = buildPublicPrPanelSignalRows({ repo, pr, profile, detection, queueHealth, collisions, preflight, settings, gate: commentGate, duplicateWinnerEnabled });
       // Visual before/after capture (visual-capture port). Fires ONLY when (1) the global flag + per-repo
       // cutover gate both allow it (screenshotsAllowed) AND (2) the PR touches WEB-VISIBLE files (isVisualPath
@@ -2901,6 +2974,7 @@ async function maybePublishPrPublicSurface(
         ...(aiReview?.reviewerCount !== undefined ? { reviewerCount: aiReview.reviewerCount } : {}),
         mergeReadiness,
         heldForReview,
+        neverClosed,
         extraCollapsibles: buildPublicSafeCollapsibles({
           repo,
           pr,
@@ -3054,6 +3128,19 @@ async function recordGithubProductUsage(
 }
 
 /**
+ * Resolve the head SHA a `gate-override` should neutralize (#16 / audit). The stored `pr.headSha` lags GitHub
+ * when a commit lands between the override comment and its processing, so re-fetch the LIVE head and override
+ * THAT commit (the neutral check-run is per-commit by design). FAIL-OPEN: an unreadable live fetch returns the
+ * cached head, so a transient GitHub hiccup never strands the override — it just targets the stored SHA as before.
+ * Mirrors the rebase path's live re-fetch (prReadyForReview) and the dup-winner live reconcile.
+ */
+export async function resolveOverrideHeadSha(env: Env, installationId: number, repoFullName: string, pr: PullRequestRecord): Promise<string | null | undefined> {
+  const token = (await createInstallationToken(env, installationId).catch(() => undefined)) ?? env.GITHUB_PUBLIC_TOKEN;
+  const liveHeadSha = await fetchLivePullRequestHeadSha(env, repoFullName, pr.number, token);
+  return liveHeadSha ?? pr.headSha;
+}
+
+/**
  * Handle `@gittensory gate-override <reason>` on a PR thread. SECURITY-SENSITIVE: this finalizes the Gate
  * check to neutral for the current commit, so authorization MUST come from real repo permission
  * (resolveRealRepoPermissionAssociation → getRepositoryCollaboratorPermission), never the spoofable
@@ -3118,7 +3205,13 @@ async function maybeProcessGateOverrideCommand(env: Env, deliveryId: string, pay
     return true;
   }
 
-  const { advisory } = await buildAuthorizedPrActionAdvisory(env, repoFullName, pr, settings);
+  // #16 (audit): the cached pr.headSha can be stale if a commit landed between the comment and this processing.
+  // The override is a per-commit neutral check-run, so posting it on the cached SHA is a silent no-op on the LIVE
+  // head (whose Gate check stays blocking). Re-fetch the live head and override THAT commit (fail-open to the
+  // cached head), then thread it through the advisory so the check-run + audit target the right SHA.
+  const headForOverride = await resolveOverrideHeadSha(env, installationId, repoFullName, pr);
+  const prAtLiveHead = headForOverride === pr.headSha ? pr : { ...pr, headSha: headForOverride };
+  const { advisory } = await buildAuthorizedPrActionAdvisory(env, repoFullName, prAtLiveHead, settings);
   const safeReason = sanitizePublicComment((command.reason ?? "").trim() || "No reason provided.");
   await createOrUpdateOverriddenGateCheckRun(env, installationId, repoFullName, advisory, { actor, reason: safeReason });
   await recordAuditEvent(env, {
@@ -3127,7 +3220,7 @@ async function maybeProcessGateOverrideCommand(env: Env, deliveryId: string, pay
     targetKey: `${repoFullName}#${pr.number}`,
     outcome: "completed",
     detail: safeReason,
-    metadata: { deliveryId, repoFullName, headSha: advisory.headSha ?? null },
+    metadata: { deliveryId, repoFullName, headSha: advisory.headSha ?? null, cachedHeadSha: pr.headSha ?? null },
   });
   const confirmation = sanitizePublicComment(
     [
