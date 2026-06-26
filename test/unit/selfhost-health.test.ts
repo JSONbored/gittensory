@@ -1,7 +1,15 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { createD1Adapter, nodeSqliteDriver } from "../../src/selfhost/d1-adapter";
-import { readiness } from "../../src/selfhost/health";
+import { readiness, sqliteBackupAdvisory } from "../../src/selfhost/health";
+
+describe("sqliteBackupAdvisory (#8 data-safety)", () => {
+  it("warns on SQLite without an acknowledged backup, and is silent otherwise", () => {
+    expect(sqliteBackupAdvisory({ usingSqlite: true, backupAcknowledged: false })).toMatch(/single SQLite file with no acknowledged backup/);
+    expect(sqliteBackupAdvisory({ usingSqlite: true, backupAcknowledged: true })).toBeNull(); // operator acknowledged
+    expect(sqliteBackupAdvisory({ usingSqlite: false, backupAcknowledged: false })).toBeNull(); // Postgres
+  });
+});
 
 describe("readiness (#982)", () => {
   it("is not ready until the migrations table has applied rows", async () => {

@@ -42,3 +42,12 @@ export async function readiness(db: D1Database, probes: ReadinessProbe[] = []): 
   }
   return { ok: Object.values(checks).every(Boolean), checks };
 }
+
+/** Boot-time DATA-SAFETY advisory. A single SQLite file with no acknowledged backup is a data-loss SPOF — yet
+ *  `/ready` would still answer 200, so an operator can run with zero durability believing they're healthy. Returns
+ *  the warning to log at boot (or null on Postgres, or once the operator sets `BACKUP_ACKNOWLEDGED=true` after
+ *  wiring Litestream or another backup). */
+export function sqliteBackupAdvisory(opts: { usingSqlite: boolean; backupAcknowledged: boolean }): string | null {
+  if (!opts.usingSqlite || opts.backupAcknowledged) return null;
+  return "Running on a single SQLite file with no acknowledged backup — if the volume is lost, ALL review state is lost. Enable the Litestream sidecar (docs/self-hosting.md §6) to stream the WAL to S3/B2/MinIO, then set BACKUP_ACKNOWLEDGED=true to silence this warning. (Multi-instance: use DATABASE_URL=postgres://… instead.)";
+}
