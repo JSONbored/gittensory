@@ -834,6 +834,8 @@ NOVELTY_BONUS_SCALAR = 3
     // Malformed or empty bracket classes mirror Python fnmatch: they never throw or over-match.
     expect(labelMultiplierFor({ "[z-a]": 2 }, ["a"])).toBe(1);
     expect(labelMultiplierFor({ "[!]": 2 }, ["!"])).toBe(1);
+    // An empty `[]` class stays literal too (the `rawBody === ""` arm): pattern `[]` matches only the label `[]`.
+    expect(labelMultiplierFor({ "[]": 2 }, ["[]"])).toBe(2);
     // A `[` with no closing bracket is a literal, not a class.
     expect(labelMultiplierFor({ "a[b": 0.7 }, ["a[b"])).toBe(0.7);
     // Regex metacharacters in a literal key stay literal: `.` matches only a dot, not any char.
