@@ -14,21 +14,28 @@ import { scanInstallScripts } from "./analyzers/install-scripts.js";
 import { scanActionPins } from "./analyzers/actions-pin.js";
 import { renderBrief } from "./render.js";
 
-type AnalyzerFn = (req: EnrichRequest) => Promise<unknown>;
+type AnalyzerFn = (req: EnrichRequest, signal: AbortSignal) => Promise<unknown>;
 
 // The analyzer registry. More land behind this same shape: license (#1475), secret (#1476), static (#1477), history (#1478).
 const ANALYZERS: Record<keyof BriefFindings, AnalyzerFn> = {
-  dependency: (req) => scanDependencies(req),
+  dependency: (req, signal) => scanDependencies(req, fetch, { signal }),
   secret: (req) => scanSecrets(req),
   license: (req) => scanLicenses(req),
   installScript: (req) => scanInstallScripts(req),
   actionPin: (req) => scanActionPins(req),
 };
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+function runWithTimeout<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+): Promise<T> {
+  const controller = new AbortController();
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("analyzer_timeout")), ms);
-    promise.then(
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error("analyzer_timeout"));
+    }, ms);
+    run(controller.signal).then(
       (value) => {
         clearTimeout(timer);
         resolve(value);
@@ -56,7 +63,10 @@ export async function buildBrief(req: EnrichRequest): Promise<ReviewBrief> {
   await Promise.all(
     requested.map(async (name) => {
       try {
-        const result = await withTimeout(ANALYZERS[name](req), budgetMs);
+        const result = await runWithTimeout(
+          (signal) => ANALYZERS[name](req, signal),
+          budgetMs,
+        );
         findings[name] = result as never;
         analyzerStatus[name] = "ok";
       } catch {

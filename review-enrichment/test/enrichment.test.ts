@@ -469,3 +469,83 @@ test("buildBrief: action-pin analyzer runs (pure, no network)", async () => {
     globalThis.fetch = realFetch;
   }
 });
+
+test("extractDependencyChanges: caps manifest files and patch lines", () => {
+  const changes = extractDependencyChanges(
+    [
+      {
+        path: "package.json",
+        patch: ['+    "first": "1.0.0",', '+    "second": "1.0.0",'].join(
+          "\n",
+        ),
+      },
+      { path: "nested/package.json", patch: '+    "third": "1.0.0",' },
+    ],
+    { maxManifestFiles: 1, maxPatchLinesPerFile: 1 },
+  );
+
+  assert.deepEqual(
+    changes.map((change) => change.package),
+    ["first"],
+  );
+});
+
+test("scanDependencies: caps OSV queries and forwards abort signals", async () => {
+  const seenSignals = [];
+  const files = Array.from({ length: 3 }, (_, index) => ({
+    path: "package.json",
+    patch: `+    "pkg-${index}": "1.0.0",`,
+  }));
+
+  const controller = new AbortController();
+  const findings = await scanDependencies(
+    { repoFullName: "o/r", prNumber: 1, files },
+    async (_url, init) => {
+      seenSignals.push(init.signal);
+      return { ok: true, json: async () => ({ vulns: [] }) };
+    },
+    { signal: controller.signal, limits: { maxDependencyQueries: 2 } },
+  );
+
+  assert.equal(findings.length, 0);
+  assert.equal(seenSignals.length, 2);
+  assert.ok(seenSignals.every((signal) => signal instanceof AbortSignal));
+});
+
+test("buildBrief: timeout aborts dependency scan so OSV work stops", async () => {
+  const realFetch = globalThis.fetch;
+  const signals = [];
+  let fetchCount = 0;
+  globalThis.fetch = async (_url, init) => {
+    fetchCount += 1;
+    signals.push(init.signal);
+    return await new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(new Error("aborted")), {
+        once: true,
+      });
+    });
+  };
+
+  try {
+    const brief = await buildBrief({
+      repoFullName: "o/r",
+      prNumber: 10,
+      analyzers: ["dependency"],
+      budget: { timeoutMs: 1 },
+      files: Array.from({ length: 5 }, (_, index) => ({
+        path: "package.json",
+        patch: `+    "pkg-${index}": "1.0.0",`,
+      })),
+    });
+
+    assert.equal(brief.partial, true);
+    assert.equal(brief.analyzerStatus.dependency, "degraded");
+    assert.equal(fetchCount, 1);
+    assert.equal(signals.length, 1);
+    assert.equal(signals[0].aborted, true);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(fetchCount, 1);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
