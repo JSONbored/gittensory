@@ -376,8 +376,12 @@ MAX_FILE_SIZE_BYTES = 1_000_000
 RECYCLE_UID = 0
 ISSUES_TREASURY_UID = 111
 MAX_ISSUE_ID = 999_999
+EMISSION_SHARE_TOLERANCE = 1e-9
 `);
     expect(operationalOnly).toEqual([]);
+    // EMISSION_SHARE_TOLERANCE is an emission-share-sum epsilon, not a scoring dimension; the parser does
+    // read its `1e-9` exponent literal (#992), so it must be excluded explicitly or it drifts forever (#809).
+    expect(operationalOnly).not.toContain("EMISSION_SHARE_TOLERANCE");
 
     const withScoringGap = findUnmodeledUpstreamConstants(`
 SECONDS_PER_DAY = 86400
@@ -829,6 +833,16 @@ NOVELTY_BONUS_SCALAR = 3
     // `[seq]` / `[!seq]` character classes.
     expect(labelMultiplierFor({ "[bf]ug": 1.4 }, ["bug"])).toBe(1.4);
     expect(labelMultiplierFor({ "[!x]ug": 1.3 }, ["bug"])).toBe(1.3);
+    expect(labelMultiplierFor({ "[^x]ug": 1.3 }, ["bug"])).toBe(1);
+    expect(labelMultiplierFor({ "[^x]ug": 1.3 }, ["^ug"])).toBe(1.3);
+    // Malformed or empty bracket classes mirror Python fnmatch: they never throw or over-match.
+    expect(labelMultiplierFor({ "[z-a]": 2 }, ["a"])).toBe(1);
+    expect(labelMultiplierFor({ "[!]": 2 }, ["!"])).toBe(1);
+    // An empty `[]` class stays literal too (the `rawBody === ""` arm): pattern `[]` matches only the label `[]`.
+    expect(labelMultiplierFor({ "[]": 2 }, ["[]"])).toBe(2);
+    // An ASCENDING range (`[a-c]`) has a `-` but is NOT descending, so it compiles as a real class (the other
+    // arm of the descending-range check): `b` is in `[a-c]`, so `[a-c]ug` matches `bug`.
+    expect(labelMultiplierFor({ "[a-c]ug": 1.5 }, ["bug"])).toBe(1.5);
     // A `[` with no closing bracket is a literal, not a class.
     expect(labelMultiplierFor({ "a[b": 0.7 }, ["a[b"])).toBe(0.7);
     // Regex metacharacters in a literal key stay literal: `.` matches only a dot, not any char.
