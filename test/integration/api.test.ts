@@ -4876,6 +4876,7 @@ describe("api routes", () => {
     const toolNames = toolsPayload.result.tools.map((tool) => tool.name);
     expect(toolNames).toContain("gittensory_get_repo_context");
     expect(toolNames).toContain("gittensory_get_maintainer_noise");
+    expect(toolNames).toContain("gittensory_get_maintainer_lane");
     expect(toolNames).toContain("gittensory_get_issue_quality");
     expect(toolNames).toContain("gittensory_get_burden_forecast");
     expect(toolNames).toContain("gittensory_get_contributor_profile");
