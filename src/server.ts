@@ -36,6 +36,7 @@ import { createPgQueue } from "./selfhost/pg-queue";
 import { createPgVectorize, initPgVectorize } from "./selfhost/pg-vectorize";
 import { createSqliteQueue } from "./selfhost/sqlite-queue";
 import { createSqliteVectorize } from "./selfhost/vectorize";
+import { createFsBlobStore } from "./selfhost/blob-store";
 import { makeLocalManifestReader } from "./selfhost/private-config";
 import { setLocalManifestReader } from "./signals/focus-manifest-loader";
 import type { JobMessage } from "./types";
@@ -237,6 +238,10 @@ async function main(): Promise<void> {
     // Visual review: when BROWSER_WS_ENDPOINT is set, expose a truthy BROWSER binding so shot.ts's
     // `if (!env.BROWSER) return` guard is bypassed; the puppeteer stub then connects via WS.
     ...(process.env.BROWSER_WS_ENDPOINT ? { BROWSER: {} } : {}),
+    // Visual screenshot persistence (#10): bind an fs-backed REVIEW_AUDIT store when REVIEW_AUDIT_DIR is set so
+    // captured PNGs are cached + served from /gittensory/shot?key=… instead of re-rendering on demand. Unset ⇒
+    // no binding ⇒ on-demand behavior, byte-identical to before.
+    ...(process.env.REVIEW_AUDIT_DIR ? { REVIEW_AUDIT: createFsBlobStore(process.env.REVIEW_AUDIT_DIR) } : {}),
   } as unknown as Env;
 
   gauge("gittensory_queue_pending", () => backend.queue.size());

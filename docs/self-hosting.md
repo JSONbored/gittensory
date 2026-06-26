@@ -269,7 +269,10 @@ is **not** available on the Postgres backend yet — it degrades to no-context.
 
 These are Cloudflare-platform features; they degrade cleanly and the core reviewer is unaffected:
 
-- **Visual PR capture** (Browser Rendering binding) — off; reviews run text-only.
+- **Visual PR capture** — off by default (reviews run text-only). To enable on self-host: point
+  `BROWSER_WS_ENDPOINT` at a browserless/chrome sidecar **and** set `REVIEW_AUDIT_DIR` so captured screenshots
+  persist (an fs-backed store standing in for the cloud's R2 bucket); without `REVIEW_AUDIT_DIR` captures degrade
+  to on-demand re-render.
 - **Distributed rate limiting** (RateLimiter Durable Object) — off by default; set `REDIS_URL` for a
   Redis-backed fixed-window limiter (see §7). Otherwise put a reverse proxy / WAF in front.
 - **Vectorize-backed RAG** and **R2 audit storage** — inert unless you wire equivalent backends.
