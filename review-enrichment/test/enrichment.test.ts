@@ -499,6 +499,66 @@ test("extractVersionPins: Dockerfile FROM + .nvmrc + go.mod; latest skipped", ()
   ); // node:latest skipped
 });
 
+test("extractVersionPins: caps attacker-controlled EOL scan input", () => {
+  const pins = extractVersionPins([
+    {
+      path: "Dockerfile",
+      patch:
+        "@@ -1,0 +1,100 @@\n" +
+        Array.from(
+          { length: 100 },
+          (_, index) => `+FROM node:18.0.${index}`,
+        ).join("\n"),
+    },
+  ]);
+
+  assert.equal(pins.length, 80);
+  assert.equal(pins[0].version, "18.0.0");
+  assert.equal(pins.at(-1).version, "18.0.79");
+});
+
+test("scanEol: caches endoflife.date cycles per product", async () => {
+  const requested: string[] = [];
+  const findings = await scanEol(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [
+        {
+          path: "Dockerfile",
+          patch: [
+            "@@ -1,0 +1,4 @@",
+            "+FROM node:18.0.0",
+            "+FROM node:18.0.1",
+            "+FROM python:3.8",
+            "+FROM node:20.0.0",
+          ].join("\n"),
+        },
+      ],
+    },
+    async (url) => {
+      requested.push(String(url));
+      return {
+        ok: true,
+        json: async () =>
+          String(url).includes("python")
+            ? [{ cycle: "3.8", eol: "2024-10-07" }]
+            : [
+                { cycle: "18", eol: "2023-06-01" },
+                { cycle: "20", eol: "2026-07-01" },
+              ],
+      };
+    },
+    NOW,
+  );
+
+  assert.deepEqual(requested, [
+    "https://endoflife.date/api/nodejs.json",
+    "https://endoflife.date/api/python.json",
+  ]);
+  assert.equal(findings.length, 4);
+});
+
 test("scanEol: flags EOL + EOL-soon, skips current + fetch-fail (injected now)", async () => {
   const cycles = [
     { cycle: "18", eol: "2023-06-01" },
