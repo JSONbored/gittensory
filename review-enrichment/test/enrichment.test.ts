@@ -14,6 +14,17 @@ import {
   scanWorkflowPins,
   scanActionPins,
 } from "../dist/analyzers/actions-pin.js";
+import { scanEol, extractVersionPins } from "../dist/analyzers/eol-check.js";
+
+const NOW = new Date("2026-06-26").getTime();
+const eolFetch =
+  (cycles, ok = true) =>
+  async () => ({ ok, json: async () => cycles });
+const dockerfilePatch = (tag) => ({
+  repoFullName: "o/r",
+  prNumber: 1,
+  files: [{ path: "Dockerfile", patch: `@@ -1,0 +1,1 @@\n+FROM node:${tag}` }],
+});
 
 const npmFetch =
   (scripts, time = {}) =>
@@ -465,6 +476,93 @@ test("buildBrief: action-pin analyzer runs (pure, no network)", async () => {
     assert.equal(brief.analyzerStatus.actionPin, "ok");
     assert.equal(brief.findings.actionPin.length, 1);
     assert.match(brief.promptSection, /Unpinned GitHub Actions/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("extractVersionPins: Dockerfile FROM + .nvmrc + go.mod; latest skipped", () => {
+  const pins = extractVersionPins([
+    {
+      path: "Dockerfile",
+      patch: "@@ -1,0 +1,2 @@\n+FROM python:3.8-slim\n+FROM node:latest",
+    },
+    { path: ".nvmrc", patch: "@@ -1,0 +1,1 @@\n+v18.17.0" },
+    { path: "go.mod", patch: "@@ -1,0 +1,1 @@\n+go 1.20" },
+  ]);
+  const byProduct = Object.fromEntries(pins.map((p) => [p.product, p]));
+  assert.equal(byProduct.python.version, "3.8");
+  assert.equal(byProduct.nodejs.version, "18.17.0");
+  assert.equal(byProduct.go.version, "1.20");
+  assert.ok(
+    !pins.some((p) => p.product === "nodejs" && p.file === "Dockerfile"),
+  ); // node:latest skipped
+});
+
+test("scanEol: flags EOL + EOL-soon, skips current + fetch-fail (injected now)", async () => {
+  const cycles = [
+    { cycle: "18", eol: "2023-06-01" },
+    { cycle: "20", eol: "2026-07-01" },
+    { cycle: "22", eol: "2027-04-30" },
+    { cycle: "24", eol: false },
+  ];
+  const fetchImpl = eolFetch(cycles);
+  assert.equal(
+    (await scanEol(dockerfilePatch("18"), fetchImpl, NOW))[0].status,
+    "eol",
+  );
+  assert.equal(
+    (await scanEol(dockerfilePatch("20"), fetchImpl, NOW))[0].status,
+    "soon",
+  );
+  assert.equal(
+    (await scanEol(dockerfilePatch("22"), fetchImpl, NOW)).length,
+    0,
+  );
+  assert.equal(
+    (await scanEol(dockerfilePatch("24"), fetchImpl, NOW)).length,
+    0,
+  ); // eol:false
+  assert.equal(
+    (await scanEol(dockerfilePatch("18"), eolFetch([], false), NOW)).length,
+    0,
+  );
+});
+
+test("renderBrief: renders the EOL block", () => {
+  const r = renderBrief({
+    eol: [
+      {
+        file: "Dockerfile",
+        product: "nodejs",
+        version: "18",
+        eol: "2023-06-01",
+        status: "eol",
+      },
+    ],
+  });
+  assert.match(r.promptSection, /End-of-life runtimes/);
+  assert.match(
+    r.promptSection,
+    /pins nodejs 18 — \*\*END-OF-LIFE\*\* \(EOL 2023-06-01\)/,
+  );
+});
+
+test("buildBrief: eol analyzer runs (real now, 2023 cycle is past)", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) =>
+    String(url).includes("endoflife.date")
+      ? { ok: true, json: async () => [{ cycle: "18", eol: "2023-06-01" }] }
+      : { ok: true, json: async () => ({}) };
+  try {
+    const brief = await buildBrief({
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [{ path: "Dockerfile", patch: "@@ -1,0 +1,1 @@\n+FROM node:18" }],
+    });
+    assert.equal(brief.analyzerStatus.eol, "ok");
+    assert.equal(brief.findings.eol.length, 1);
+    assert.match(brief.promptSection, /End-of-life runtimes/);
   } finally {
     globalThis.fetch = realFetch;
   }
