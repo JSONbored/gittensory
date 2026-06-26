@@ -402,6 +402,56 @@ test("scanInstallScripts: flags npm deps with install hooks, skips clean + non-n
   assert.equal(fail.length, 0);
 });
 
+test("scanInstallScripts: validates npm names and encodes the full registry path", async () => {
+  const calls: string[] = [];
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    return {
+      ok: true,
+      json: async () => ({
+        versions: { "1.0.0": { scripts: { install: "x" } } },
+      }),
+    };
+  };
+  const findings = await scanInstallScripts(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [
+        {
+          path: "package.json",
+          patch: [
+            '+    "@scope/pkg": "1.0.0",',
+            '+    "core-js#` **inject** `": "1.0.0",',
+            '+    "bad-version": "1.0.0 || 2.0.0",',
+          ].join("\n"),
+        },
+      ],
+    },
+    fetchImpl,
+  );
+  assert.deepEqual(calls, ["https://registry.npmjs.org/%40scope%2Fpkg"]);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].package, "@scope/pkg");
+});
+
+test("renderBrief: escapes install-script markdown and control characters", () => {
+  const r = renderBrief({
+    installScript: [
+      {
+        package: "core-js` **inject**\nnext",
+        version: "1.0.0",
+        hooks: ["postinstall"],
+        publishedAt: null,
+      },
+    ],
+  });
+  assert.ok(
+    r.promptSection.includes("core\\-js\\` \\*\\*inject\\*\\* next@1\\.0\\.0"),
+  );
+  assert.doesNotMatch(r.promptSection, /core-js` \*\*inject\*\*/);
+});
+
 test("renderBrief: renders the install-script block", () => {
   const r = renderBrief({
     installScript: [
@@ -416,7 +466,7 @@ test("renderBrief: renders the install-script block", () => {
   assert.match(r.promptSection, /install scripts \(supply-chain risk/);
   assert.match(
     r.promptSection,
-    /`evil@1.0.0` runs preinstall\/postinstall on install \(published 2026-06-01\)/,
+    /`evil@1\\.0\\.0` runs preinstall\/postinstall on install \(published 2026-06-01\)/,
   );
 });
 
