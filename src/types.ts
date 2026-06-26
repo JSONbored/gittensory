@@ -548,6 +548,11 @@ export type RepositorySettings = {
    *  AI themselves. Default false — opt-in via `.gittensory.yml gate.aiReview.allAuthors`. Independent of
    *  `aiReviewMode`: `off` still means no AI; this only widens WHO an enabled review covers. */
   aiReviewAllAuthors: boolean;
+  /** When TRUE, the repo OWNER's (and maintainer's) own PRs are eligible for auto-CLOSE like a contributor's
+   *  (still subject to the `close` autonomy class + the same adverse-signal conditions). Default FALSE — owner
+   *  PRs are exempt from auto-close (merge or manual-hold only). Per-repo configurable so maintainers choose
+   *  rather than inheriting a hardwired opinion. */
+  closeOwnerAuthors: boolean;
   autoLabelEnabled: boolean;
   gittensorLabel: string;
   createMissingLabel: boolean;

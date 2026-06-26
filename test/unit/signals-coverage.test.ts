@@ -1851,7 +1851,7 @@ function repoSettings(repoFullName: string): RepositorySettings {
     privateTrustEnabled: true,
     aiReviewMode: "off",
     aiReviewByok: false,
-    aiReviewAllAuthors: false,
+    aiReviewAllAuthors: false, closeOwnerAuthors: false,
   };
 }
 

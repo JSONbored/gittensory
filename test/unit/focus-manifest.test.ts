@@ -924,12 +924,12 @@ describe("parseFocusManifest gate config", () => {
     expect((gateConfigToJson(m.gate) as { aiReview: { allAuthors: boolean } }).aiReview.allAuthors).toBe(true);
     expect(parseFocusManifest({ gate: gateConfigToJson(m.gate) }).gate).toEqual(m.gate); // round-trips
     expect(parseFocusManifest({ gate: { aiReview: { allAuthors: "yes" } } }).warnings.some((w) => /gate\.aiReview\.allAuthors/.test(w))).toBe(true);
-    const eff = resolveEffectiveSettings({ aiReviewAllAuthors: false } as unknown as RepositorySettings, m);
+    const eff = resolveEffectiveSettings({ aiReviewAllAuthors: false , closeOwnerAuthors: false} as unknown as RepositorySettings, m);
     expect(eff.aiReviewAllAuthors).toBe(true);
     // Absent ⇒ null ⇒ the gate alias leaves the DB value untouched.
     const noFlag = parseFocusManifest({ gate: { aiReview: { mode: "advisory" } } });
     expect(noFlag.gate.aiReviewAllAuthors).toBeNull();
-    expect(resolveEffectiveSettings({ aiReviewAllAuthors: true } as unknown as RepositorySettings, noFlag).aiReviewAllAuthors).toBe(true);
+    expect(resolveEffectiveSettings({ aiReviewAllAuthors: true , closeOwnerAuthors: false} as unknown as RepositorySettings, noFlag).aiReviewAllAuthors).toBe(true);
   });
 
   it("parses the features: block (per-repo converged-feature toggles), round-trips it, and makes the manifest present", () => {
@@ -951,9 +951,9 @@ describe("parseFocusManifest gate config", () => {
   });
 
   it("parses aiReviewAllAuthors from the settings: block (generic override)", () => {
-    const parsed = parseFocusManifest({ settings: { aiReviewAllAuthors: true } });
+    const parsed = parseFocusManifest({ settings: { aiReviewAllAuthors: true , closeOwnerAuthors: false} });
     expect(parsed.settings.aiReviewAllAuthors).toBe(true);
-    expect(resolveEffectiveSettings({ aiReviewAllAuthors: false } as unknown as RepositorySettings, parsed).aiReviewAllAuthors).toBe(true);
+    expect(resolveEffectiveSettings({ aiReviewAllAuthors: false , closeOwnerAuthors: false} as unknown as RepositorySettings, parsed).aiReviewAllAuthors).toBe(true);
   });
 
   it("parses gate.aiReview provider + model (config-as-code) and rejects an unknown provider", () => {

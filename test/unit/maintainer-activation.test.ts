@@ -49,7 +49,7 @@ function settings(overrides: Partial<RepositorySettings> = {}): RepositorySettin
     privateTrustEnabled: true,
     aiReviewMode: "off",
     aiReviewByok: false,
-    aiReviewAllAuthors: false,
+    aiReviewAllAuthors: false, closeOwnerAuthors: false,
     ...overrides,
   };
 }

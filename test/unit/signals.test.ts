@@ -408,7 +408,7 @@ describe("world-class backend signals", () => {
       privateTrustEnabled: true,
       aiReviewMode: "off" as const,
       aiReviewByok: false,
-      aiReviewAllAuthors: false,
+      aiReviewAllAuthors: false, closeOwnerAuthors: false,
     };
     const collisions = buildCollisionReport(repo.fullName, issues, pullRequests);
     const queueHealth = buildQueueHealth(repo, issues, pullRequests, collisions);
@@ -461,7 +461,7 @@ describe("world-class backend signals", () => {
       privateTrustEnabled: true,
       aiReviewMode: "off" as const,
       aiReviewByok: false,
-      aiReviewAllAuthors: false,
+      aiReviewAllAuthors: false, closeOwnerAuthors: false,
     };
     const collisions = buildCollisionReport(repo.fullName, issues, pullRequests);
     const queueHealth = buildQueueHealth(repo, issues, pullRequests, collisions);
@@ -534,7 +534,7 @@ describe("world-class backend signals", () => {
       privateTrustEnabled: true,
       aiReviewMode: "off" as const,
       aiReviewByok: false,
-      aiReviewAllAuthors: false,
+      aiReviewAllAuthors: false, closeOwnerAuthors: false,
     };
     const collisions = buildCollisionReport(repo.fullName, issues, pullRequests);
     const queueHealth = buildQueueHealth(repo, issues, pullRequests, collisions);
@@ -628,7 +628,7 @@ describe("world-class backend signals", () => {
       privateTrustEnabled: true,
       aiReviewMode: "off" as const,
       aiReviewByok: false,
-      aiReviewAllAuthors: false,
+      aiReviewAllAuthors: false, closeOwnerAuthors: false,
     };
     const undetected = detectGittensorContributor("newbie", currentPr, [currentPr], []);
     const cachedDetected = detectGittensorContributor("oktofeesh1", currentPr, [currentPr, { ...currentPr, number: 10, mergedAt: "2026-05-01T00:00:00.000Z" }], []);
@@ -697,7 +697,7 @@ describe("world-class backend signals", () => {
       privateTrustEnabled: true,
       aiReviewMode: "off" as const,
       aiReviewByok: false,
-      aiReviewAllAuthors: false,
+      aiReviewAllAuthors: false, closeOwnerAuthors: false,
     };
 
     const comment = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings });
@@ -810,7 +810,7 @@ describe("world-class backend signals", () => {
         privateTrustEnabled: true,
         aiReviewMode: "off",
         aiReviewByok: false,
-        aiReviewAllAuthors: false,
+        aiReviewAllAuthors: false, closeOwnerAuthors: false,
       },
     });
     expect(publicPreflight.findings.map((finding) => finding.code)).toContain("linked_issue_bounty_historical");

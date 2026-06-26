@@ -39,7 +39,7 @@ describe("maintainer AI-review config route", () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ aiReviewMode: "block", aiReviewByok: true, aiReviewProvider: "anthropic", aiReviewModel: "claude-3-5-sonnet-latest", aiReviewAllAuthors: true });
+    expect(await res.json()).toMatchObject({ aiReviewMode: "block", aiReviewByok: true, aiReviewProvider: "anthropic", aiReviewModel: "claude-3-5-sonnet-latest", aiReviewAllAuthors: true , closeOwnerAuthors: false});
     const settings = await getRepositorySettings(env, REPO);
     expect(settings.aiReviewMode).toBe("block");
     expect(settings.aiReviewAllAuthors).toBe(true); // persisted + read back (DB column round-trip)

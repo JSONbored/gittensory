@@ -136,7 +136,7 @@ describe("runAiReviewForAdvisory", () => {
     // is what lets it through — only the new flag.
     const adv = advisory();
     const result = await runAiReviewForAdvisory(aiEnv(async () => ({ response: notesOnlyJson() })), {
-      settings: { aiReviewMode: "advisory", gatePack: "gittensor", aiReviewAllAuthors: true } as RepositorySettings,
+      settings: { aiReviewMode: "advisory", gatePack: "gittensor", aiReviewAllAuthors: true , closeOwnerAuthors: false} as RepositorySettings,
       advisory: adv,
       repoFullName: "acme/widgets",
       pr,

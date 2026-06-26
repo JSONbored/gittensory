@@ -2258,6 +2258,7 @@ export function createApp() {
       aiReviewProvider: updated.aiReviewProvider ?? null,
       aiReviewModel: updated.aiReviewModel ?? null,
       aiReviewAllAuthors: updated.aiReviewAllAuthors,
+      closeOwnerAuthors: updated.closeOwnerAuthors,
     });
   });
 
