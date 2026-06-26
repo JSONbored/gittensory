@@ -6954,6 +6954,70 @@ describe("agentMaintenanceHeadMatchesGate", () => {
     expect(agentMaintenanceHeadMatchesGate(undefined, "current")).toBe(true);
     expect(agentMaintenanceHeadMatchesGate("reviewed", null)).toBe(true);
   });
+
+  it("REGRESSION (#stale-head): a newer synchronize that advances the stored head before maintenance acts blocks the stale-gate auto-merge", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      action: "created",
+      installation: {
+        id: 123,
+        account: { login: "JSONbored", id: 1, type: "User" },
+        target_type: "User",
+        repository_selection: "all",
+        permissions: { metadata: "read", pull_requests: "write", issues: "write" },
+        events: ["pull_request"],
+      },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    // Clean, mergeable, approved, green CI + merge:auto + approve:auto + close:auto — this PR WOULD be auto-acted.
+    // The ONLY thing that must stop it is the stale-head guard in maybeRunAgentMaintenance.
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      autonomy: { merge: "auto", approve: "auto", close: "auto" },
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/commits/stale1/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/stale1/status")) return Response.json({ statuses: [] });
+      if (url.includes("/check-runs")) return Response.json({ id: 902 }, { status: 201 });
+      return new Response("not found", { status: 404 });
+    });
+
+    // Simulate the concurrent-queue race the guard defends against: the gate evaluated head "stale1", but by the
+    // time maintenance re-reads the persisted row a newer `synchronize` has advanced the stored head to "newer2".
+    // maybeRunAgentMaintenance re-reads via getPullRequest, so divert that read to the advanced head.
+    const realGetPullRequest = repositoriesModule.getPullRequest;
+    const spy = vi.spyOn(repositoriesModule, "getPullRequest").mockImplementation(async (...callArgs) => {
+      const row = await realGetPullRequest(...callArgs);
+      return row ? { ...row, headSha: "newer2" } : row;
+    });
+    try {
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "stale-head-no-maintenance",
+        eventName: "pull_request",
+        payload: {
+          action: "opened",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: { number: 71, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "stale1" }, labels: [], body: "Closes #1", mergeable_state: "clean", reviewDecision: "APPROVED" },
+        },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+
+    // No terminal maintenance action of ANY class fires: the gate verdict belonged to the now-stale head.
+    const acted = await env.DB.prepare("select count(*) as n from audit_events where event_type in ('agent.action.merge','agent.action.approve','agent.action.close')").first<{ n: number }>();
+    expect(acted?.n).toBe(0);
+  });
 });
 
 describe("one-shot reopen prevention", () => {
