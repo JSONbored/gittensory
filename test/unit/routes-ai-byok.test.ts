@@ -35,13 +35,14 @@ describe("maintainer AI-review config route", () => {
     await upsertRepositorySettings(env, { repoFullName: REPO, gateCheckMode: "enabled", gittensorLabel: "custom-label", blacklistLabel: "abuse" });
     const res = await app.request(
       `/v1/repos/${REPO}/ai-review`,
-      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "block", byok: true, provider: "anthropic", model: "claude-3-5-sonnet-latest" }) },
+      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "block", byok: true, provider: "anthropic", model: "claude-3-5-sonnet-latest", allAuthors: true }) },
       env,
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ aiReviewMode: "block", aiReviewByok: true, aiReviewProvider: "anthropic", aiReviewModel: "claude-3-5-sonnet-latest" });
+    expect(await res.json()).toMatchObject({ aiReviewMode: "block", aiReviewByok: true, aiReviewProvider: "anthropic", aiReviewModel: "claude-3-5-sonnet-latest", aiReviewAllAuthors: true });
     const settings = await getRepositorySettings(env, REPO);
     expect(settings.aiReviewMode).toBe("block");
+    expect(settings.aiReviewAllAuthors).toBe(true); // persisted + read back (DB column round-trip)
     expect(settings.gateCheckMode).toBe("enabled"); // preserved
     expect(settings.gittensorLabel).toBe("custom-label"); // preserved
     expect(settings.blacklistLabel).toBe("abuse"); // #1425 round-trips through the DB

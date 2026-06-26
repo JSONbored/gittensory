@@ -542,6 +542,12 @@ export type RepositorySettings = {
   /** Config-as-code model override for the BYOK advisory write-up (e.g. "claude-3-5-sonnet-latest").
    *  `null` = use the key record's model, else a conservative per-provider default. */
   aiReviewModel?: string | null | undefined;
+  /** Review EVERY PR's author, not only confirmed Gittensor contributors. The AI maintainer review is
+   *  confirmed-contributor-gated by default (an AI-spend guard). When true the review runs for any author —
+   *  intended for a self-host operator who wants real reviews on all PRs (incl. their own) and pays for the
+   *  AI themselves. Default false — opt-in via `.gittensory.yml gate.aiReview.allAuthors`. Independent of
+   *  `aiReviewMode`: `off` still means no AI; this only widens WHO an enabled review covers. */
+  aiReviewAllAuthors: boolean;
   autoLabelEnabled: boolean;
   gittensorLabel: string;
   createMissingLabel: boolean;

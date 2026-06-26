@@ -233,6 +233,7 @@ import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
 import { loadGatePrecisionReport } from "../services/gate-precision";
 import { computeOpsStats, isOpsEnabled } from "../review/ops-wire";
 import { computeParityReadiness, isParityAuditEnabled } from "../review/parity-wire";
+import { isRagEnabled } from "../review/rag-wire";
 import { getPublicStats, isPublicStatsEnabled } from "../review/public-stats";
 import { buildMaintainerQualityDashboard, isMaintainerQualityDataStale } from "../services/maintainer-quality-dashboard";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
@@ -619,6 +620,7 @@ const repositorySettingsSchema = z.object({
   aiReviewByok: z.boolean().default(false),
   aiReviewProvider: z.enum(["anthropic", "openai"]).nullable().optional(),
   aiReviewModel: z.string().trim().min(1).max(120).nullable().optional(),
+  aiReviewAllAuthors: z.boolean().default(false),
   autoLabelEnabled: z.boolean().default(true),
   gittensorLabel: z.string().trim().min(1).max(50).default("gittensor"),
   blacklistLabel: z.string().trim().min(1).max(50).default("slop"),
@@ -710,6 +712,7 @@ const repositoryAiReviewSchema = z.object({
   byok: z.boolean().default(false),
   provider: z.enum(["anthropic", "openai"]).nullable().optional(),
   model: z.string().trim().min(1).max(120).nullable().optional(),
+  allAuthors: z.boolean().default(false),
 });
 
 const contributorIssueDraftGenerateSchema = z.object({
@@ -2246,6 +2249,7 @@ export function createApp() {
       aiReviewByok: parsed.data.byok,
       aiReviewProvider: parsed.data.provider,
       aiReviewModel: parsed.data.model,
+      aiReviewAllAuthors: parsed.data.allAuthors,
     });
     // getRepositorySettings normalizes these to a concrete value or null (never undefined).
     return c.json({
@@ -2253,6 +2257,7 @@ export function createApp() {
       aiReviewByok: updated.aiReviewByok,
       aiReviewProvider: updated.aiReviewProvider ?? null,
       aiReviewModel: updated.aiReviewModel ?? null,
+      aiReviewAllAuthors: updated.aiReviewAllAuthors,
     });
   });
 
@@ -3056,6 +3061,21 @@ export function createApp() {
     return c.json({ ok: true, status: "queued" }, 202);
   });
 
+  // Operator-facing RAG (re)index trigger for a self-host maintainer. Bearer-gated by the `/v1/internal/*`
+  // middleware (INTERNAL_JOB_TOKEN). With NO body it enqueues the fan-out (re-indexes every RAG-active configured +
+  // registered repo); with `{ "repoFullName": "owner/repo" }` it indexes just that repo. Either way the job is
+  // gated downstream by convergedFeatureActive, so a repo where RAG is off is a no-op. 404 when RAG is globally off
+  // so the endpoint doesn't exist on a deploy that isn't running RAG. This is how an operator adds/indexes a new
+  // repo on demand instead of waiting for the 6-hourly cron.
+  app.post("/v1/internal/jobs/rag-index", async (c) => {
+    if (!isRagEnabled(c.env)) return c.json({ error: "not_found" }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as { repoFullName?: unknown };
+    const repoFullName = typeof body?.repoFullName === "string" && body.repoFullName.trim().length > 0 ? body.repoFullName.trim() : undefined;
+    const message: JobMessage = { type: "rag-index-repo", requestedBy: "api", ...(repoFullName ? { repoFullName } : {}) };
+    await c.env.JOBS.send(message);
+    return c.json({ ok: true, status: "queued", scope: repoFullName ?? "all-configured-repos" }, 202);
+  });
+
   app.post("/v1/internal/jobs/refresh-registry/run", async (c) => {
     return c.json(await refreshRegistry(c.env));
   });
@@ -3365,6 +3385,7 @@ export function createApp() {
         aiReviewByok: parsed.data.aiReviewByok,
         aiReviewProvider: parsed.data.aiReviewProvider,
         aiReviewModel: parsed.data.aiReviewModel,
+        aiReviewAllAuthors: parsed.data.aiReviewAllAuthors,
         autoLabelEnabled: parsed.data.autoLabelEnabled,
         gittensorLabel: parsed.data.gittensorLabel,
         blacklistLabel: parsed.data.blacklistLabel,
