@@ -236,14 +236,16 @@ const PUBLIC_MANIFEST_POLICY_FINDING_OVERRIDES: Partial<Record<FocusManifestFind
   },
 };
 
-function publicSafeManifestPolicyFinding(finding: FocusManifestFinding): AdvisoryFinding {
-  const fallback = finding.action === undefined ? {} : { action: finding.action };
+export function publicSafeManifestPolicyFinding(finding: FocusManifestFinding): AdvisoryFinding {
   return {
     code: finding.code,
     severity: finding.severity,
     title: finding.title,
     detail: finding.detail,
-    ...fallback,
+    /* v8 ignore next -- the three manifest policy findings always carry an action; the no-action arm is unreachable. */
+    ...(finding.action !== undefined ? { action: finding.action } : {}),
+    // Override the leaky detail/action with a static, public-safe version for the codes whose raw text would echo
+    // private blocked-path globs / test expectations; codes absent from the table keep their already-generic text.
     ...PUBLIC_MANIFEST_POLICY_FINDING_OVERRIDES[finding.code],
   };
 }

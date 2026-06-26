@@ -51,7 +51,8 @@ describe("MCP gittensory_predict_gate", () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "widgets", full_name: "acme/widgets" });
     // Public config: oss-anti-slop (no account needed), manifest path policy in block mode, dist/** blocked.
-    await upsertRepoFocusManifest(env, "acme/widgets", { gate: { pack: "oss-anti-slop", manifestPolicy: "block" }, blockedPaths: ["dist/**"] });
+    // Stored as a PUBLIC repo_file manifest — predict_gate reads only public config (#selfhost-app-id / #1405).
+    await upsertRepoFocusManifest(env, "acme/widgets", { gate: { pack: "oss-anti-slop", manifestPolicy: "block" }, blockedPaths: ["dist/**"] }, "repo_file");
     const client = await connect(env);
 
     const result = await client.callTool({
