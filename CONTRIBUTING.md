@@ -70,6 +70,14 @@ Do not open PRs for:
   farm Gittensor rewards is a hard violation and results in a **permanent block from contributing
   across all of our repositories**. See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
+Filing your own issue and then opening a PR that resolves it is welcome, and a PR with no linked
+issue is fine — neither is farming. What is against policy is **using more than one account you
+control (alt / sock-puppet accounts) — e.g. one account opening issues for another to "resolve" —
+to inflate contribution credit**, along with manufacturing low-value/slop issues and bulk
+point-chasing PRs. Farmed work earns no linked-issue bonus, and repeat or any confirmed
+multi-account farming is closed on sight and blocked. Enforcement is proportional; the full ladder
+is in [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+
 ## Before Opening A PR
 
 - Search existing issues and PRs to avoid duplicate work.

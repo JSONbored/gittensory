@@ -34,10 +34,20 @@ impact.
 Maintainers may edit or delete comments, close issues or PRs, block users, or report abuse when
 behavior violates this Code of Conduct, the contribution guidelines, or GitHub's terms.
 
-Plagiarism and other deliberate attempts to cheat, copy from other contributors, or farm Gittensor
-rewards through stolen or duplicated PRs are treated as a hard violation: offenders are
-**permanently blocked from contributing**, and the block applies across all of our repositories
-(`JSONbored/gittensory`, `JSONbored/metagraphed`, `JSONbored/awesome-claude`).
+Enforcement is proportional and escalates with intent and repetition:
+
+- Opening your own issue and then submitting a PR that resolves it is welcome, and a PR with no
+  linked issue is fine — neither is farming.
+- Off-scope or low-effort work is closed or relabeled, with no further penalty.
+- Reward-farming is against policy: using more than one account under the same person's control
+  (alt / sock-puppet accounts) — for example, one account opening issues for another account to
+  "resolve" — or manufacturing low-value/slop issues and bulk point-chasing PRs to inflate
+  contribution credit. Linked issues from farming are closed so the work earns no bonus credit, and
+  a warning is issued; continuing after a warning, or any confirmed multi-account (sock-puppet)
+  farming, results in submissions being closed and labeled on sight and a block from contributing.
+- Plagiarism and ban-evasion — copying another contributor's work, or returning under a new account
+  after a block — result in an immediate **permanent block from contributing across all of our
+  repositories** (`JSONbored/gittensory`, `JSONbored/metagraphed`, `JSONbored/awesome-claude`).
 
 For security issues, use GitHub private vulnerability reporting:
 
