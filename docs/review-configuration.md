@@ -154,6 +154,14 @@ Everything a maintainer can toggle in the dashboard can be set as code under `se
 | Autonomy dial | `autonomy` | per-action-class level (`observe`…`auto`) | `{}` (= `observe`, deny-by-default) |
 | Auto-maintain policy | `autoMaintain` | `{ mergeMethod, requireApprovals }` | `squash` / `1` |
 | Command authorization | `commandAuthorization` | role policy | built-in default policy |
+| Contributor blacklist | `contributorBlacklist` | list of `{ login, reason?, evidence?, addedAt? }` (login required) | `[]` |
+| Blacklist label | `blacklistLabel` | string | `slop` |
+
+The **contributor blacklist** is layered like every other setting (`.gittensory.yml`
+`settings.contributorBlacklist` > database) and is unioned with the shared/global list. Logins are
+public data, so entries carry only public-safe metadata (a `reason`, `evidence` URLs, an `addedAt`
+date) — never wallets, hotkeys, trust scores, or private values. `blacklistLabel` (default `slop`) is
+the label the engine applies to a blacklisted author's PR.
 
 ### Example `.gittensory.yml`
 
@@ -196,6 +204,14 @@ settings:
   checkRunMode: enabled
   checkRunDetailLevel: standard
   badgeEnabled: true
+  blacklistLabel: slop
+  contributorBlacklist:
+    - login: known-plagiarist
+      reason: plagiarism
+      evidence:
+        - https://github.com/owner/repo/pull/1
+      addedAt: "2026-06-26"
+    - bad-farmer            # bare login shorthand is also accepted
 ```
 
 ---
