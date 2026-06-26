@@ -921,10 +921,20 @@ function labelPatternToRegExp(pattern: string): RegExp {
         // No closing bracket: fnmatch treats the `[` as a literal character.
         regex += "\\[";
       } else {
-        let body = pattern.slice(i, close).replace(/\\/g, "\\\\");
-        // `[!seq]` is fnmatch's negated class; RegExp spells negation as `[^seq]`.
-        if (body.startsWith("!")) body = `^${body.slice(1)}`;
-        regex += `[${body}]`;
+        const rawBody = pattern.slice(i, close);
+        if (rawBody === "" || rawBody === "!") {
+          // Empty classes and bare `[!]` stay literal in Python fnmatch instead of compiling as classes.
+          regex += `\\[${escapeRegExpLiteral(rawBody)}\\]`;
+        } else if (hasDescendingCharacterRange(rawBody)) {
+          // Python fnmatch treats invalid ranges like `[z-a]` as a never-match pattern; RegExp throws.
+          regex += "(?!)";
+        } else {
+          let body = rawBody.replace(/\\/g, "\\\\");
+          // `[!seq]` is fnmatch's negated class; RegExp spells negation as `[^seq]`.
+          if (body.startsWith("!")) body = `^${body.slice(1)}`;
+          else if (body.startsWith("^")) body = `\\${body}`;
+          regex += `[${body}]`;
+        }
         i = close + 1;
       }
     } else if (/[.+^${}()|\]\\]/.test(char)) {
@@ -934,6 +944,18 @@ function labelPatternToRegExp(pattern: string): RegExp {
     }
   }
   return new RegExp(`^${regex}$`, "i");
+}
+
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasDescendingCharacterRange(body: string): boolean {
+  const start = body.startsWith("!") ? 1 : 0;
+  for (let i = start + 1; i < body.length - 1; i += 1) {
+    if (body.charAt(i) === "-" && body.charCodeAt(i - 1) > body.charCodeAt(i + 1)) return true;
+  }
+  return false;
 }
 
 function decideLinkedIssueMultiplier(
@@ -1199,13 +1221,19 @@ function constant(constants: Record<string, number>, key: string): number {
  * Resolve a repo's time-decay curve: each parameter is the repo's per-repo override (from the registry's
  * `scoring.time_decay`) when present, else the global default constant from the live scoring snapshot.
  * Mirrors upstream's `resolve_time_decay` (RepoTimeDecayConfig overlaid on the module constants).
+ *
+ * Parity note (#1320): upstream coerces ONLY `grace_period_hours` to an integer
+ * (`grace_period_hours=int(pick(...))`) while the three curve params stay floats. A maintainer may legally
+ * configure a fractional grace (upstream validates `0 <= grace_period_hours <= 168`), so the resolved grace
+ * must be truncated toward zero to match the validator — otherwise a PR aged between `trunc(grace)` and
+ * `grace` is treated as fresh in the preview but already decaying upstream.
  */
 export function resolveTimeDecay(
   constants: Record<string, number>,
   overrides?: RepoTimeDecayOverrides | null,
 ): { gracePeriodHours: number; sigmoidMidpointDays: number; sigmoidSteepness: number; minMultiplier: number } {
   return {
-    gracePeriodHours: pickOverride(overrides?.gracePeriodHours, constant(constants, "TIME_DECAY_GRACE_PERIOD_HOURS")),
+    gracePeriodHours: Math.trunc(pickOverride(overrides?.gracePeriodHours, constant(constants, "TIME_DECAY_GRACE_PERIOD_HOURS"))),
     sigmoidMidpointDays: pickOverride(overrides?.sigmoidMidpointDays, constant(constants, "TIME_DECAY_SIGMOID_MIDPOINT")),
     sigmoidSteepness: pickOverride(overrides?.sigmoidSteepness, constant(constants, "TIME_DECAY_SIGMOID_STEEPNESS_SCALAR")),
     minMultiplier: pickOverride(overrides?.minMultiplier, constant(constants, "TIME_DECAY_MIN_MULTIPLIER")),

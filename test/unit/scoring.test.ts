@@ -376,8 +376,12 @@ MAX_FILE_SIZE_BYTES = 1_000_000
 RECYCLE_UID = 0
 ISSUES_TREASURY_UID = 111
 MAX_ISSUE_ID = 999_999
+EMISSION_SHARE_TOLERANCE = 1e-9
 `);
     expect(operationalOnly).toEqual([]);
+    // EMISSION_SHARE_TOLERANCE is an emission-share-sum epsilon, not a scoring dimension; the parser does
+    // read its `1e-9` exponent literal (#992), so it must be excluded explicitly or it drifts forever (#809).
+    expect(operationalOnly).not.toContain("EMISSION_SHARE_TOLERANCE");
 
     const withScoringGap = findUnmodeledUpstreamConstants(`
 SECONDS_PER_DAY = 86400
@@ -829,6 +833,16 @@ NOVELTY_BONUS_SCALAR = 3
     // `[seq]` / `[!seq]` character classes.
     expect(labelMultiplierFor({ "[bf]ug": 1.4 }, ["bug"])).toBe(1.4);
     expect(labelMultiplierFor({ "[!x]ug": 1.3 }, ["bug"])).toBe(1.3);
+    expect(labelMultiplierFor({ "[^x]ug": 1.3 }, ["bug"])).toBe(1);
+    expect(labelMultiplierFor({ "[^x]ug": 1.3 }, ["^ug"])).toBe(1.3);
+    // Malformed or empty bracket classes mirror Python fnmatch: they never throw or over-match.
+    expect(labelMultiplierFor({ "[z-a]": 2 }, ["a"])).toBe(1);
+    expect(labelMultiplierFor({ "[!]": 2 }, ["!"])).toBe(1);
+    // An empty `[]` class stays literal too (the `rawBody === ""` arm): pattern `[]` matches only the label `[]`.
+    expect(labelMultiplierFor({ "[]": 2 }, ["[]"])).toBe(2);
+    // An ASCENDING range (`[a-c]`) has a `-` but is NOT descending, so it compiles as a real class (the other
+    // arm of the descending-range check): `b` is in `[a-c]`, so `[a-c]ug` matches `bug`.
+    expect(labelMultiplierFor({ "[a-c]ug": 1.5 }, ["bug"])).toBe(1.5);
     // A `[` with no closing bracket is a literal, not a class.
     expect(labelMultiplierFor({ "a[b": 0.7 }, ["a[b"])).toBe(0.7);
     // Regex metacharacters in a literal key stay literal: `.` matches only a dot, not any char.
@@ -1745,6 +1759,23 @@ NOVELTY_BONUS_SCALAR = 3
       expect(calculateTimeDecay(18, c, { gracePeriodHours: 24 })).toBe(1);
       // A shorter midpoint decays faster: 50% point moves from 10d to 5d (120h).
       expect(calculateTimeDecay(120, c, { sigmoidMidpointDays: 5 })).toBeCloseTo(0.5, 5);
+    });
+
+    it("truncates a fractional grace_period_hours override toward zero, mirroring upstream int() (#1320)", () => {
+      const c = DEFAULT_SCORING_CONSTANTS;
+      // Upstream resolve_time_decay does `grace_period_hours=int(pick(...))` — and only that field. A
+      // fractional override (legal under upstream's 0..168 range check) resolves to its truncated integer,
+      // while the float curve params are untouched.
+      expect(resolveTimeDecay(c, { gracePeriodHours: 13.9 }).gracePeriodHours).toBe(13);
+      expect(resolveTimeDecay(c, { gracePeriodHours: 13.9, sigmoidSteepness: 0.4 })).toEqual({
+        gracePeriodHours: 13,
+        sigmoidMidpointDays: 10,
+        sigmoidSteepness: 0.4,
+        minMultiplier: 0.05,
+      });
+      // The boundary case the bug hid: a PR aged between trunc(grace) and grace is already decaying
+      // upstream (13.5 >= 13), so the preview must decay it too rather than reporting it as fresh.
+      expect(calculateTimeDecay(13.5, c, { gracePeriodHours: 13.9 })).toBeLessThan(1);
     });
 
     it("applies each live repo's resolved curve in the preview (per-repo, not global)", () => {
