@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "../../src/api/routes";
 import { issueOrbEnrollment } from "../../src/orb/broker";
-import { forwardOrbEvent, registerOrbRelay, relaySignature, relayVerify, retryFailedRelays, storeRelayFailure } from "../../src/orb/relay";
+import { forwardOrbEvent, MAX_ORB_RELAY_REGISTER_BODY_BYTES, readOrbRelayRegisterBody, registerOrbRelay, relaySignature, relayVerify, retryFailedRelays, storeRelayFailure } from "../../src/orb/relay";
 import { createTestEnv, type TestD1Database } from "../helpers/d1";
 
 const db = (e: Env) => e.DB as unknown as TestD1Database;
@@ -107,6 +107,34 @@ describe("POST /v1/orb/relay/register", () => {
     const res = await app.fetch(req, e);
     expect(res.status).toBe(401);
     expect(bodyAccesses).toBe(0);
+  });
+});
+
+describe("readOrbRelayRegisterBody", () => {
+  it("returns an empty string when the request has no body stream", async () => {
+    // A request without a body (e.g. a bodyless POST) has request.body === null — the empty-body path.
+    const req = new Request("http://localhost/v1/orb/relay/register", { method: "POST" });
+    expect(req.body).toBeNull();
+    expect(await readOrbRelayRegisterBody(req, null)).toBe(""); // null content-length → declared null → empty stream
+    expect(await readOrbRelayRegisterBody(req, undefined)).toBe(""); // undefined header → typeof !== "string" arm
+  });
+
+  it("rejects an oversized DECLARED content-length up front (before touching the stream)", async () => {
+    // Past the ceiling: parseContentLength returns a valid integer that exceeds MAX → short-circuit to null.
+    const req = new Request("http://localhost/v1/orb/relay/register", { method: "POST", body: "{}" });
+    expect(await readOrbRelayRegisterBody(req, String(MAX_ORB_RELAY_REGISTER_BODY_BYTES + 1))).toBeNull();
+  });
+
+  it("ignores a malformed or negative content-length and reads the actual body", async () => {
+    // Number("abc")=NaN and "-1"<0 → parseContentLength returns null → the declared-too-large guard is skipped.
+    expect(await readOrbRelayRegisterBody(new Request("http://localhost/r", { method: "POST", body: "{}" }), "abc")).toBe("{}"); // non-integer
+    expect(await readOrbRelayRegisterBody(new Request("http://localhost/r", { method: "POST", body: "{}" }), "-1")).toBe("{}"); // negative
+  });
+
+  it("returns null when the STREAMED body exceeds the ceiling regardless of the declared length", async () => {
+    // No content-length declared, but the stream itself runs past MAX → reader is cancelled, null returned.
+    const req = new Request("http://localhost/r", { method: "POST", body: "x".repeat(MAX_ORB_RELAY_REGISTER_BODY_BYTES + 1) });
+    expect(await readOrbRelayRegisterBody(req, null)).toBeNull();
   });
 });
 
