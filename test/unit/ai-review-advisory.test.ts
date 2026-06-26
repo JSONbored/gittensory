@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildAiReviewDiff, runAiReviewForAdvisory } from "../../src/queue/processors";
+import { buildAiReviewDiff, runAiReviewForAdvisory, shouldStartAiReviewForAdvisory } from "../../src/queue/processors";
 import { BEST_REVIEW_MODELS } from "../../src/services/ai-review";
 import { upsertRepositoryAiKey } from "../../src/db/repositories";
 import type { Advisory, PullRequestFileRecord, RepositorySettings } from "../../src/types";
@@ -65,6 +65,35 @@ function aiEnv(run: () => Promise<unknown>, flags = true) {
     AI_DAILY_NEURON_BUDGET: "100000",
   });
 }
+
+describe("shouldStartAiReviewForAdvisory", () => {
+  const enabledEnv = () => aiEnv(async () => ({ response: notesOnlyJson() }));
+  const base = { settings: { aiReviewMode: "advisory", gatePack: "gittensor" } as RepositorySettings, advisory: advisory(), repoFullName: "acme/widgets", author: "alice", confirmedContributor: true };
+
+  it("matches the AI review entry gates before the reviewing placeholder is posted", async () => {
+    await expect(shouldStartAiReviewForAdvisory(enabledEnv(), base)).resolves.toBe(true);
+    await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, skipAiReview: true })).resolves.toBe(false);
+    await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, settings: { aiReviewMode: "off" } as RepositorySettings })).resolves.toBe(false);
+    await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, confirmedContributor: false })).resolves.toBe(false);
+    await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, settings: { aiReviewMode: "block", gatePack: "oss-anti-slop" } as RepositorySettings, confirmedContributor: false })).resolves.toBe(true);
+    const noSha = advisory();
+    delete (noSha as Partial<Advisory>).headSha;
+    await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, advisory: noSha })).resolves.toBe(false);
+  });
+
+  it("does not start when AI comments are disabled or the Workers AI binding is unavailable", async () => {
+    const commentsDisabled = createTestEnv({ AI: { run: vi.fn() } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "false" });
+    await expect(shouldStartAiReviewForAdvisory(commentsDisabled, base)).resolves.toBe(false);
+    const missingBinding = createTestEnv({ AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+    await expect(shouldStartAiReviewForAdvisory(missingBinding, base)).resolves.toBe(false);
+  });
+
+  it("does not start when the reputation gate downgrades the PR to deterministic-only", async () => {
+    const env = createTestEnv({ AI: { run: vi.fn() } as unknown as Ai, AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", GITTENSORY_REVIEW_REPUTATION: "true", GITTENSORY_REVIEW_REPOS: "acme/widgets" });
+    await env.DB.prepare("INSERT INTO submitter_stats (project, submitter, submissions, merged, closed, manual, last_seen) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)").bind("acme/widgets", "alice", 8, 0, 8, 0).run();
+    await expect(shouldStartAiReviewForAdvisory(env, base)).resolves.toBe(false);
+  });
+});
 
 describe("runAiReviewForAdvisory", () => {
   it("no-ops when aiReviewMode is off", async () => {

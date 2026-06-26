@@ -294,6 +294,7 @@ import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import {
+  isEnabled,
   runGittensoryAiReview,
   type InlineFinding,
 } from "../services/ai-review";
@@ -3381,6 +3382,23 @@ export function buildSecretScanDiff(
  * Fully fail-safe: disabled / ineligible author / no head SHA / non-ok AI / any thrown error → no finding
  * and no notes.
  */
+
+export async function shouldStartAiReviewForAdvisory(
+  env: Env,
+  args: {
+    settings: RepositorySettings;
+    advisory: Pick<Awaited<ReturnType<typeof buildPullRequestAdvisory>>, "headSha">;
+    repoFullName: string;
+    author: string | null;
+    confirmedContributor: boolean;
+    skipAiReview?: boolean | undefined;
+  },
+): Promise<boolean> {
+  const packAllowsAnyAuthorBlockingReview = args.settings.gatePack === "oss-anti-slop" && args.settings.aiReviewMode === "block";
+  if (args.skipAiReview || args.settings.aiReviewMode === "off" || (!args.confirmedContributor && !packAllowsAnyAuthorBlockingReview) || !args.advisory.headSha || !isEnabled(env.AI_SUMMARIES_ENABLED) || !isEnabled(env.AI_PUBLIC_COMMENTS_ENABLED) || !env.AI) return false;
+  return !(isReputationEnabled(env) && isConvergenceRepoAllowed(env, args.repoFullName) && (await shouldSkipAiForReputation(env, { project: args.repoFullName, submitter: args.author })));
+}
+
 export async function runAiReviewForAdvisory(
   env: Env,
   args: {
@@ -4271,10 +4289,15 @@ async function maybePublishPrPublicSurface(
       settings.contributorBlacklist,
     );
     const aiReviewWillRun =
-      !webhook.skipAiReview &&
-      settings.aiReviewMode !== "off" &&
-      Boolean(advisory.headSha) &&
-      !authorBlacklisted;
+      !authorBlacklisted &&
+      (await shouldStartAiReviewForAdvisory(env, {
+        settings,
+        advisory,
+        repoFullName,
+        author,
+        confirmedContributor,
+        skipAiReview: webhook.skipAiReview,
+      }));
     // Post a transient "🟪 reviewing…" placeholder BEFORE the AI runs so contributors see the bot
     // is actively working rather than silent. In-place upsert: once the final verdict is ready it
     // overwrites this comment. Best-effort — a failed post never aborts the review. (#reviewing-placeholder)
