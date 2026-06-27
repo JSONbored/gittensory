@@ -715,7 +715,7 @@ const repositoryAiReviewSchema = z.object({
   provider: z.enum(["anthropic", "openai"]).nullable().optional(),
   model: z.string().trim().min(1).max(120).nullable().optional(),
   allAuthors: z.boolean().default(false),
-  closeOwnerAuthors: z.boolean().default(false),
+  closeOwnerAuthors: z.boolean().optional(),
 });
 
 const contributorIssueDraftGenerateSchema = z.object({
@@ -2253,7 +2253,7 @@ export function createApp() {
       aiReviewProvider: parsed.data.provider,
       aiReviewModel: parsed.data.model,
       aiReviewAllAuthors: parsed.data.allAuthors,
-      closeOwnerAuthors: parsed.data.closeOwnerAuthors,
+      closeOwnerAuthors: parsed.data.closeOwnerAuthors ?? current.closeOwnerAuthors,
     });
     // getRepositorySettings normalizes these to a concrete value or null (never undefined).
     return c.json({

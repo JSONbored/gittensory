@@ -62,6 +62,22 @@ describe("maintainer AI-review config route", () => {
     expect((await getRepositorySettings(env, REPO)).closeOwnerAuthors).toBe(false);
   });
 
+  it("preserves closeOwnerAuthors when an AI-review update omits it", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
+    await upsertRepositorySettings(env, { repoFullName: REPO, closeOwnerAuthors: true });
+
+    const res = await app.request(
+      `/v1/repos/${REPO}/ai-review`,
+      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "advisory", byok: false }) },
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ aiReviewMode: "advisory", closeOwnerAuthors: true });
+    expect((await getRepositorySettings(env, REPO)).closeOwnerAuthors).toBe(true);
+  });
+
   it("accepts a config without provider/model (stored as null)", async () => {
     const app = createApp();
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
