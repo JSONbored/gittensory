@@ -359,6 +359,13 @@ describe("subscription CLI helpers + fail-safe", () => {
     const stub: StubSpawn = async () => ({ stdout: JSON.stringify({ is_error: true, api_error_status: 401, result: "Failed to authenticate" }), code: 0 });
     await expect(createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t" }, stub).run("m", { prompt: "x" })).rejects.toThrow(/claude_code_error_401/);
   });
+  it("surfaces the structured stdout error on a NON-ZERO exit (precise status, not opaque exit code) (#1610)", async () => {
+    // Regression: an unknown model exits 1 with the error envelope in STDOUT ({is_error,api_error_status:404}) and
+    // EMPTY stderr. The exit-code throw used to win → `claude_code_exit_1: ` (blank, undiagnosable). Now the
+    // structured status is checked first → `claude_code_error_404`, the signal that surfaces in logs + Sentry.
+    const stub: StubSpawn = async () => ({ stdout: JSON.stringify({ is_error: true, api_error_status: 404, result: "There's an issue with the selected model (claude-code)." }), code: 1, stderr: "" });
+    await expect(createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t" }, stub).run("m", { prompt: "x" })).rejects.toThrow(/claude_code_error_404/);
+  });
   it("Claude Code returns the model text on success and scrubs billable keys", async () => {
     let capturedEnv: Record<string, string | undefined> = {};
     const stub: StubSpawn = async (_c, _a, o) => {

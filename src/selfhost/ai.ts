@@ -295,9 +295,14 @@ export function createClaudeCodeAi(parentEnv: Record<string, string | undefined>
         ["--print", "--output-format", "json", "--model", claudeModel, "--permission-mode", "plan", "--effort", effort, "--disallowedTools", "Bash,Edit,Write,WebFetch,WebSearch"],
         { env, input: prompt, timeoutMs: resolveCliTimeoutMs(parentEnv), cwd: await isolatedCliCwd() },
       );
-      if (code !== 0) throw new Error(`claude_code_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "", [token]).slice(0, 500)}`);
+      // Surface the STRUCTURED error envelope FIRST. `claude --output-format json` reports API/auth/model errors in its
+      // stdout JSON ({is_error,api_error_status}) on a NON-ZERO exit too — e.g. an unknown model exits 1 with the 404
+      // envelope in stdout and EMPTY stderr. Checking it before the exit code turns an opaque `claude_code_exit_1: `
+      // (the #1610 symptom) into a precise `claude_code_error_404` — the signal that makes a reviewer outage
+      // diagnosable in logs + Sentry instead of a dead end.
       const errStatus = claudeErrorStatus(stdout);
       if (errStatus) throw new Error(`claude_code_error_${errStatus}`);
+      if (code !== 0) throw new Error(`claude_code_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "", [token]).slice(0, 500)}`);
       const text = extractCliText(stdout);
       if (!text) throw new Error("claude_code_empty_output");
       return { response: text };
