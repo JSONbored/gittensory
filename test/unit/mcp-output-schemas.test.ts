@@ -14,6 +14,7 @@ const TOOLS_WITH_OUTPUT_SCHEMA = [
   "gittensory_get_repo_context",
   "gittensory_get_maintainer_noise",
   "gittensory_get_label_audit",
+  "gittensory_get_maintainer_lane",
   "gittensory_get_burden_forecast",
   "gittensory_get_repo_outcome_patterns",
   "gittensory_get_outcome_calibration",
@@ -244,6 +245,21 @@ describe("MCP tool calls return schema-valid structured content", () => {
     expect(data.repoFullName).toBe("octo/demo");
     expect(typeof data.trustedPipelineReady).toBe("boolean");
     expect(Array.isArray(data.suspiciousConfiguredLabels)).toBe(true);
+    expect(JSON.stringify(data)).not.toMatch(/hotkey|coldkey|wallet|payout|reward/i);
+  });
+
+  it("gittensory_get_maintainer_lane returns a structured lane triage report for a repo", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "demo", full_name: "octo/demo", private: false, owner: { login: "octo" }, default_branch: "main" });
+    await upsertPullRequestFromGitHub(env, "octo/demo", { number: 1, title: "Fix retry backoff", state: "open", user: { login: "alice" }, body: "" });
+    const { client } = await connectTestClient(env);
+    const result = await client.callTool({ name: "gittensory_get_maintainer_lane", arguments: { owner: "octo", repo: "demo" } });
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.repoFullName).toBe("octo/demo");
+    expect(typeof data.maintainerCutConfigured).toBe("boolean");
+    expect(data.lane).toBeTruthy();
+    expect(data.contributorIntakeHealth).toBeTruthy();
     expect(JSON.stringify(data)).not.toMatch(/hotkey|coldkey|wallet|payout|reward/i);
   });
 

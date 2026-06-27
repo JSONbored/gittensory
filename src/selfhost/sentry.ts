@@ -87,11 +87,10 @@ export function captureReviewFailure(
   });
 }
 
-/** Forward a structured `console.log` line to Sentry when it is an ERROR-level log. The engine logs operational
- *  failures (orb_broker_unavailable, gate-check errors, relay drops, …) as `console.log(JSON.stringify({ level:
- *  "error", event, … }))` — so wrapping console.log with this surfaces EVERY such error as a Sentry issue with NO
- *  per-site wiring. No-op when Sentry is off, the line isn't a JSON object string, or its level isn't error/fatal —
- *  routine logs (audit/info/no-level: job_complete, regate_sweep_throttled, …) are intentionally skipped. */
+/** Forward a structured console line to Sentry when it is an ERROR-level log. The engine logs operational
+ *  failures (orb_broker_unavailable, gate-check errors, relay drops, …) as JSON strings, often via console.error.
+ *  No-op when Sentry is off, the line isn't a JSON object string, or its level isn't error/fatal — routine logs
+ *  (audit/info/no-level: job_complete, regate_sweep_throttled, …) are intentionally skipped. */
 export function forwardStructuredLogToSentry(line: unknown): void {
   if (!active || !Sentry) return;
   if (typeof line !== "string" || line.charCodeAt(0) !== 123 /* "{" */) return;
@@ -129,4 +128,35 @@ export async function flushSentry(timeoutMs = 2000): Promise<void> {
 export function resetSentryForTest(): void {
   Sentry = undefined;
   active = false;
+}
+
+interface StructuredLogConsole {
+  log: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+}
+
+/** Install central structured-log forwarding for both stdout and stderr sinks used by self-host. */
+export function installStructuredLogForwarding(
+  target: StructuredLogConsole = console,
+): void {
+  const baseConsoleLog = target.log.bind(target);
+  const baseConsoleError = target.error.bind(target);
+  let forwardingToSentry = false;
+  const forward = (line: unknown): void => {
+    if (forwardingToSentry) return;
+    forwardingToSentry = true;
+    try {
+      forwardStructuredLogToSentry(line);
+    } finally {
+      forwardingToSentry = false;
+    }
+  };
+  target.log = (...args: unknown[]): void => {
+    baseConsoleLog(...args);
+    forward(args[0]);
+  };
+  target.error = (...args: unknown[]): void => {
+    baseConsoleError(...args);
+    forward(args[0]);
+  };
 }
