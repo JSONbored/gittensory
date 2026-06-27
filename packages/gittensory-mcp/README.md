@@ -49,6 +49,7 @@ gittensory-mcp init-client --print codex --agent-profile miner-planner
 gittensory-mcp completion bash
 gittensory-mcp completion zsh
 gittensory-mcp completion fish
+gittensory-mcp completion powershell
 gittensory-mcp decision-pack --login jsonbored --json
 gittensory-mcp repo-decision --login jsonbored --repo we-promise/sure --json
 gittensory-mcp analyze-branch --login jsonbored --json
@@ -79,7 +80,7 @@ Add `--json` for machine-readable output:
 
 ### Shell completion
 
-`gittensory-mcp completion <bash|zsh|fish>` prints a tab-completion script for your shell. It completes top-level commands and the subcommands of `profile`, `cache`, and `agent`. Add `--json` to get `{ "shell": "...", "script": "..." }` for tooling.
+`gittensory-mcp completion <bash|zsh|fish|powershell>` prints a tab-completion script for your shell. It completes top-level commands and the subcommands of `profile`, `cache`, `agent`, and `maintain`. Add `--json` to get `{ "shell": "...", "script": "..." }` for tooling.
 
 ```sh
 # bash (add to ~/.bashrc)
@@ -90,6 +91,11 @@ source <(gittensory-mcp completion zsh)
 
 # fish
 gittensory-mcp completion fish > ~/.config/fish/completions/gittensory-mcp.fish
+```
+
+```powershell
+# PowerShell (add to your $PROFILE)
+gittensory-mcp completion powershell | Out-String | Invoke-Expression
 ```
 
 For near-term what-if scoreability, pass the situational assumptions explicitly:
