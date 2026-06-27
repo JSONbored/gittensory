@@ -796,6 +796,7 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
   if (review.note !== null) out.note = review.note;
   if (review.profile !== null) out.profile = review.profile;
   if (review.inlineComments !== null) out.inline_comments = review.inlineComments;
+  if (review.instructions !== null) out.instructions = review.instructions;
   if (review.pathInstructions.length > 0) out.path_instructions = review.pathInstructions.map((entry) => ({ path: entry.path, instructions: entry.instructions }));
   if (review.excludePaths.length > 0) out.exclude_paths = [...review.excludePaths];
   if (review.preMergeChecks.length > 0) {
