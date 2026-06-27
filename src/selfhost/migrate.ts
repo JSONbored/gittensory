@@ -14,15 +14,16 @@ export async function runSelfHostMigrations(db: D1Database, dir: string): Promis
   let count = 0;
   for (const file of files) {
     if (applied.has(file)) continue;
-    try {
-      await db.exec(readFileSync(join(dir, file), "utf8"));
-    } catch (error) {
-      // Idempotency (#migrate-drift): a renumbered/duplicated migration whose schema change is ALREADY present (e.g. a
-      // column added under an earlier filename by a prior deploy, then renumbered before merge) must not crash-loop the
-      // boot. "duplicate column" / "already exists" means the target schema is satisfied — record the file applied and
-      // continue. Any OTHER error is a real failure and still aborts the boot.
-      if (!/duplicate column|already exists/i.test(errorMessage(error)))
-        throw error;
+    const sql = readFileSync(join(dir, file), "utf8").replace(/--.*$/gm, "");
+    for (const statement of sql.split(";").map((part) => part.trim()).filter(Boolean)) {
+      try {
+        await db.exec(`${statement};`);
+      } catch (error) {
+        // Idempotency (#migrate-drift): tolerate duplicate DDL per statement so a drifted multi-step migration
+        // still executes the remaining schema changes before the file is recorded as applied.
+        if (!/duplicate column|already exists/i.test(errorMessage(error)))
+          throw error;
+      }
     }
     await db.prepare("INSERT INTO _selfhost_migrations (name, applied_at) VALUES (?, ?)").bind(file, new Date().toISOString()).run();
     count += 1;

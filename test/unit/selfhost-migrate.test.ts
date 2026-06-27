@@ -36,4 +36,16 @@ describe("runSelfHostMigrations (#980)", () => {
     const db2 = createD1Adapter(nodeSqliteDriver(new DatabaseSync(":memory:") as never));
     await expect(runSelfHostMigrations(db2, dir2)).rejects.toThrow();
   });
+
+  it("continues later statements before recording a drifted migration as applied", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gtmig-"));
+    writeFileSync(join(dir, "0001_base.sql"), "CREATE TABLE t (id INTEGER, x INTEGER);");
+    writeFileSync(join(dir, "0002_drifted.sql"), "ALTER TABLE t ADD COLUMN x INTEGER; ALTER TABLE t ADD COLUMN y INTEGER;");
+    const db = createD1Adapter(nodeSqliteDriver(new DatabaseSync(":memory:") as never));
+
+    expect(await runSelfHostMigrations(db, dir)).toBe(2);
+    expect(await db.prepare("SELECT y FROM t").all()).toMatchObject({ success: true });
+    expect(await runSelfHostMigrations(db, dir)).toBe(0);
+  });
+
 });
