@@ -64,14 +64,15 @@ export function captureError(
   });
 }
 
-/** Capture a degraded/failed review at WARNING level, tagged by repo/PR/SHA for triage. No-op when off. */
+/** Capture a failed review at ERROR level, tagged by repo/PR/SHA for triage. A review that cannot be produced is a
+ *  real failure the maintainer must SEE — not a warning that hides in the noise. No-op when off. */
 export function captureReviewFailure(
   error: unknown,
   context?: Record<string, unknown>,
 ): void {
   if (!active || !Sentry) return;
   Sentry.withScope((scope) => {
-    scope.setLevel("warning");
+    scope.setLevel("error");
     if (context) {
       scope.setContext("review", context);
       for (const tag of ["owner", "repo", "pr", "head_sha"]) {
@@ -83,6 +84,38 @@ export function captureReviewFailure(
     Sentry!.captureException(
       error instanceof Error ? error : new Error(String(error)),
     );
+  });
+}
+
+/** Forward a structured `console.log` line to Sentry when it is an ERROR-level log. The engine logs operational
+ *  failures (orb_broker_unavailable, gate-check errors, relay drops, …) as `console.log(JSON.stringify({ level:
+ *  "error", event, … }))` — so wrapping console.log with this surfaces EVERY such error as a Sentry issue with NO
+ *  per-site wiring. No-op when Sentry is off, the line isn't a JSON object string, or its level isn't error/fatal —
+ *  routine logs (audit/info/no-level: job_complete, regate_sweep_throttled, …) are intentionally skipped. */
+export function forwardStructuredLogToSentry(line: unknown): void {
+  if (!active || !Sentry) return;
+  if (typeof line !== "string" || line.charCodeAt(0) !== 123 /* "{" */) return;
+  let obj: Record<string, unknown>;
+  try {
+    // A "{"-prefixed string that parses is always an object (else JSON.parse throws → caught below).
+    obj = JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return; // not JSON — an ordinary log line
+  }
+  const level = obj.level;
+  if (level !== "error" && level !== "fatal") return;
+  const severity = level === "fatal" ? "fatal" : "error";
+  const title =
+    typeof obj.event === "string"
+      ? obj.event
+      : typeof obj.message === "string"
+        ? obj.message
+        : "error";
+  Sentry.withScope((scope) => {
+    scope.setLevel(severity);
+    scope.setContext("log", obj);
+    if (typeof obj.event === "string") scope.setTag("event", obj.event);
+    Sentry!.captureMessage(title, severity);
   });
 }
 
