@@ -380,7 +380,7 @@ async function main(): Promise<void> {
   let vectorizeOverride: Vectorize | undefined;
   if (process.env.QDRANT_URL) {
     const qdrantUrl = process.env.QDRANT_URL;
-    const { createQdrantVectorize, initQdrantCollection } =
+    const { createQdrantVectorize, initQdrantCollection, qdrantReadyzUrl } =
       await import("./selfhost/qdrant-vectorize");
     // Retry until Qdrant accepts the collection PUT — the container may still be booting when we start.
     await retryUntilReady("qdrant", () => initQdrantCollection(qdrantUrl));
@@ -389,7 +389,7 @@ async function main(): Promise<void> {
       name: "qdrant",
       check: () =>
         withTimeout(
-          fetch(qdrantUrl, { signal: AbortSignal.timeout(1500) })
+          fetch(qdrantReadyzUrl(qdrantUrl), { signal: AbortSignal.timeout(1500) })
             .then((r) => r.ok)
             .catch(() => false),
         ),
