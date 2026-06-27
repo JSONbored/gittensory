@@ -421,6 +421,56 @@ test("scanInstallScripts: flags npm deps with install hooks, skips clean + non-n
   assert.equal(fail.length, 0);
 });
 
+test("scanInstallScripts: validates npm names and encodes the full registry path", async () => {
+  const calls: string[] = [];
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    return {
+      ok: true,
+      json: async () => ({
+        versions: { "1.0.0": { scripts: { install: "x" } } },
+      }),
+    };
+  };
+  const findings = await scanInstallScripts(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [
+        {
+          path: "package.json",
+          patch: [
+            '+    "@scope/pkg": "1.0.0",',
+            '+    "core-js#` **inject** `": "1.0.0",',
+            '+    "bad-version": "1.0.0 || 2.0.0",',
+          ].join("\n"),
+        },
+      ],
+    },
+    fetchImpl,
+  );
+  assert.deepEqual(calls, ["https://registry.npmjs.org/%40scope%2Fpkg"]);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].package, "@scope/pkg");
+});
+
+test("renderBrief: escapes install-script markdown and control characters", () => {
+  const r = renderBrief({
+    installScript: [
+      {
+        package: "core-js` **inject**\nnext",
+        version: "1.0.0",
+        hooks: ["postinstall"],
+        publishedAt: null,
+      },
+    ],
+  });
+  assert.ok(
+    r.promptSection.includes("core\\-js\\` \\*\\*inject\\*\\* next@1\\.0\\.0"),
+  );
+  assert.doesNotMatch(r.promptSection, /core-js` \*\*inject\*\*/);
+});
+
 test("renderBrief: renders the install-script block", () => {
   const r = renderBrief({
     installScript: [
@@ -435,7 +485,7 @@ test("renderBrief: renders the install-script block", () => {
   assert.match(r.promptSection, /install scripts \(supply-chain risk/);
   assert.match(
     r.promptSection,
-    /`evil@1.0.0` runs preinstall\/postinstall on install \(published 2026-06-01\)/,
+    /`evil@1\\.0\\.0` runs preinstall\/postinstall on install \(published 2026-06-01\)/,
   );
 });
 
@@ -479,6 +529,24 @@ test("scanWorkflowPins: flags unpinned third-party actions, skips official + SHA
   assert.equal(findings[0].action, "tj-actions/changed-files");
   assert.equal(findings[0].ref, "v44");
   assert.equal(findings[0].line, 3);
+});
+
+test("scanWorkflowPins: flags unpinned third-party actions with YAML-equivalent uses keys", () => {
+  const patch = [
+    "@@ -1,0 +1,3 @@",
+    "+      - uses : tj-actions/changed-files@v44",
+    "+      - \"uses\": third-party/action@main",
+    "+      - 'uses' : quoted/action@v1",
+  ].join("\n");
+  const findings = scanWorkflowPins(".github/workflows/ci.yml", patch);
+  assert.deepEqual(
+    findings.map(({ action, ref, line }) => ({ action, ref, line })),
+    [
+      { action: "tj-actions/changed-files", ref: "v44", line: 1 },
+      { action: "third-party/action", ref: "main", line: 2 },
+      { action: "quoted/action", ref: "v1", line: 3 },
+    ],
+  );
 });
 
 test("scanActionPins: only scans .github/workflows/* files", async () => {
@@ -545,6 +613,66 @@ test("extractVersionPins: Dockerfile FROM + .nvmrc + go.mod; latest skipped", ()
   assert.ok(
     !pins.some((p) => p.product === "nodejs" && p.file === "Dockerfile"),
   ); // node:latest skipped
+});
+
+test("extractVersionPins: caps attacker-controlled EOL scan input", () => {
+  const pins = extractVersionPins([
+    {
+      path: "Dockerfile",
+      patch:
+        "@@ -1,0 +1,100 @@\n" +
+        Array.from(
+          { length: 100 },
+          (_, index) => `+FROM node:18.0.${index}`,
+        ).join("\n"),
+    },
+  ]);
+
+  assert.equal(pins.length, 80);
+  assert.equal(pins[0].version, "18.0.0");
+  assert.equal(pins.at(-1).version, "18.0.79");
+});
+
+test("scanEol: caches endoflife.date cycles per product", async () => {
+  const requested: string[] = [];
+  const findings = await scanEol(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [
+        {
+          path: "Dockerfile",
+          patch: [
+            "@@ -1,0 +1,4 @@",
+            "+FROM node:18.0.0",
+            "+FROM node:18.0.1",
+            "+FROM python:3.8",
+            "+FROM node:20.0.0",
+          ].join("\n"),
+        },
+      ],
+    },
+    async (url) => {
+      requested.push(String(url));
+      return {
+        ok: true,
+        json: async () =>
+          String(url).includes("python")
+            ? [{ cycle: "3.8", eol: "2024-10-07" }]
+            : [
+                { cycle: "18", eol: "2023-06-01" },
+                { cycle: "20", eol: "2026-07-01" },
+              ],
+      };
+    },
+    NOW,
+  );
+
+  assert.deepEqual(requested, [
+    "https://endoflife.date/api/nodejs.json",
+    "https://endoflife.date/api/python.json",
+  ]);
+  assert.equal(findings.length, 4);
 });
 
 test("scanEol: flags EOL + EOL-soon, skips current + fetch-fail (injected now)", async () => {

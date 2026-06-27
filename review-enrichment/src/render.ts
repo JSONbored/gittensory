@@ -26,6 +26,14 @@ const SEVERITY_RANK: Record<string, number> = {
   unknown: 4,
 };
 
+function promptText(value: string): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\\/g, "\\\\")
+    .replace(/`/g, "\\`")
+    .replace(/([*_{}[\]()#+.!|-])/g, "\\$1");
+}
+
 /** Build the `promptSection` (verbatim splice) + a one-line `systemSuffix` from the findings. Empty when nothing found. */
 export function renderBrief(
   findings: BriefFindings,
@@ -83,7 +91,7 @@ export function renderBrief(
         ? ` (published ${dep.publishedAt.slice(0, 10)})`
         : "";
       lines.push(
-        `- \`${dep.package}@${dep.version}\` runs ${dep.hooks.join("/")} on install${when}`,
+        `- \`${promptText(dep.package)}@${promptText(dep.version)}\` runs ${promptText(dep.hooks.join("/"))} on install${when}`,
       );
     }
   }
