@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { clearInstallationTokenCacheForTest } from "../../src/github/app";
-import { buildAuthorizedPrActionAdvisory, gateCheckPolicy, resolveLinkedIssueAuthorLogins, shouldCollectLinkedIssueEvidence, shouldCollectSlopEvidence, shouldRunSlopAiAdvisory } from "../../src/queue/processors";
+import { buildAuthorizedPrActionAdvisory, gateCheckPolicy, resolveLinkedIssueAuthorLogins, shouldCollectLinkedIssueEvidence, shouldCollectSlopEvidence, shouldRefreshFilesForPreMergeChecks, shouldRunSlopAiAdvisory } from "../../src/queue/processors";
 import { createTestEnv } from "../helpers/d1";
 import { upsertIssueFromGitHub, upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { evaluateGateCheck } from "../../src/rules/advisory";
 import { parseFocusManifest, resolveEffectiveSettings } from "../../src/signals/focus-manifest";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import type { Advisory, PullRequestRecord, RepositorySettings } from "../../src/types";
 
 function settings(over: Partial<RepositorySettings> = {}): RepositorySettings {
@@ -264,6 +265,35 @@ describe("merge-readiness evidence collection (#551)", () => {
     expect(shouldCollectSlopEvidence(settings({ slopGateMode: "off", mergeReadinessGateMode: "block" }))).toBe(true);
     expect(shouldCollectSlopEvidence(settings({ slopGateMode: "off", mergeReadinessGateMode: "advisory" }))).toBe(true);
     expect(shouldCollectSlopEvidence(settings({ slopGateMode: "off", mergeReadinessGateMode: "off" }))).toBe(false);
+  });
+
+  it("refreshes files when pre-merge checks are path-gated (#review-pre-merge-checks)", async () => {
+    const env = createTestEnv();
+
+    expect(await shouldRefreshFilesForPreMergeChecks(env, "JSONbored/gittensory")).toBe(false);
+
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", {
+      review: { pre_merge_checks: [{ name: "Approval", require_label: "approved" }] },
+    });
+    expect(await shouldRefreshFilesForPreMergeChecks(env, "JSONbored/gittensory")).toBe(false);
+
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", {
+      review: { pre_merge_checks: [{ name: "Migration approval", require_label: "approved", when_paths: ["migrations/**"] }] },
+    });
+    expect(await shouldRefreshFilesForPreMergeChecks(env, "JSONbored/gittensory")).toBe(true);
+  });
+
+  it("fails safe to false when the focus-manifest load throws (#review-pre-merge-checks)", async () => {
+    // A manifest-load failure must NOT trigger a refresh — the `.catch(() => null)` fail-safe resolves to an
+    // empty check set, so `.some()` is false and the path-gated refresh stays off.
+    const env = createTestEnv({
+      DB: {
+        prepare() {
+          throw new Error("D1 unavailable");
+        },
+      } as unknown as Env["DB"],
+    });
+    expect(await shouldRefreshFilesForPreMergeChecks(env, "JSONbored/gittensory")).toBe(false);
   });
 
   it("runs AI slop advisory only when the slop gate is explicitly enabled", () => {
@@ -545,5 +575,66 @@ describe("buildAuthorizedPrActionAdvisory self-authored parity (#self-authored-p
     const pr: PullRequestRecord = { repoFullName: "owner/missing", number: 101, title: "Fix something", state: "open", authorLogin: "someone", body: "Closes #14", labels: [], linkedIssues: [14] };
     const { advisory } = await buildAuthorizedPrActionAdvisory(env, "owner/missing", pr, settings({ selfAuthoredLinkedIssueGateMode: "advisory" }));
     expect(advisory.findings.some((finding) => finding.code === "self_authored_linked_issue")).toBe(false);
+  });
+});
+
+describe("size + guardrail manual-review HOLD (#gate-size / #gate-guardrail)", () => {
+  const clean = (): Advisory => ({ ...missingIssueAdvisory(), findings: [] });
+  it("holds (neutral) an oversized PR; passes under thresholds; off/unset = no hold", () => {
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 12, changedLineCount: 10 }).conclusion).toBe("neutral"); // > 10 files
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 2, changedLineCount: 600 }).conclusion).toBe("neutral"); // > 500 lines
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 9, changedLineCount: 499 }).conclusion).toBe("success"); // under both thresholds
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "off", changedFileCount: 50, changedLineCount: 9000 }).conclusion).toBe("success"); // gate off ⇒ no hold
+    expect(evaluateGateCheck(clean(), { changedFileCount: 50, changedLineCount: 9000 }).conclusion).toBe("success"); // mode unset ⇒ no hold
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory" }).conclusion).toBe("success"); // no counts ⇒ 0 ⇒ no hold
+  });
+  it("holds (neutral) on a guardrail hit, surfacing the hold finding in warnings", () => {
+    const out = evaluateGateCheck(clean(), { guardrailHit: true });
+    expect(out.conclusion).toBe("neutral");
+    expect(out.warnings.map((w) => w.code)).toContain("guardrail_hold");
+  });
+  it("a real hard blocker WINS over a size/guardrail hold (failure, not neutral)", () => {
+    const out = evaluateGateCheck(missingIssueAdvisory(), { linkedIssueGateMode: "block", sizeGateMode: "advisory", changedFileCount: 50, changedLineCount: 9000, guardrailHit: true });
+    expect(out.conclusion).toBe("failure");
+  });
+  it("resolveEffectiveSettings maps gate.size.mode → sizeGateMode", () => {
+    const eff = resolveEffectiveSettings(settings({}), parseFocusManifest({ gate: { size: { mode: "advisory" } } }));
+    expect(eff.sizeGateMode).toBe("advisory");
+  });
+});
+
+describe("dry-run disposition (#gate-dryrun): would-be verdict without enforcing", () => {
+  // #disposition-redesign: the dry-run shadow promotes ONLY the AI sub-gate. CLOSE is driven by AI confidence; the
+  // advisory signals (linked issue, readiness/quality, slop, duplicates) can NEVER drive a would-be close.
+  const aiDefect = (): Advisory => ({
+    ...missingIssueAdvisory(),
+    findings: [{ code: "ai_consensus_defect", title: "AI consensus defect", severity: "warning", detail: "both models flagged a real defect", action: "fix it" }],
+  });
+  it("an advisory AI defect previews a would-be close (AI sub-gate is the only one promoted)", () => {
+    const out = evaluateGateCheck(aiDefect(), { dryRun: true, aiReviewGateMode: "advisory" });
+    expect(out.conclusion).toBe("success"); // POSTED — non-blocking (AI is advisory)
+    expect(out.displayConclusion).toBe("failure"); // would-be — drives the "close" verdict in the comment
+  });
+  it("a MISSING LINKED ISSUE never drives a dry-run close (advisory-only signal)", () => {
+    const out = evaluateGateCheck(missingIssueAdvisory(), { dryRun: true, linkedIssueGateMode: "advisory" });
+    expect(out.conclusion).toBe("success");
+    expect(out.displayConclusion).toBe("success"); // NOT promoted ⇒ no would-be close
+  });
+  it("a LOW READINESS score never drives a dry-run close (advisory-only signal)", () => {
+    const out = evaluateGateCheck({ ...missingIssueAdvisory(), findings: [] }, { dryRun: true, qualityGateMode: "advisory", qualityGateMinScore: 70, readinessScore: 40 });
+    expect(out.displayConclusion).toBe("success"); // readiness is advisory-only, never promoted to a close
+  });
+  it("a clean PR in dry-run shows a would-be PASS (displayConclusion = success)", () => {
+    const clean = { ...missingIssueAdvisory(), findings: [] };
+    expect(evaluateGateCheck(clean, { dryRun: true, aiReviewGateMode: "advisory" }).displayConclusion).toBe("success");
+  });
+  it("outside dry-run, displayConclusion is absent (the verdict falls back to the posted conclusion)", () => {
+    const out = evaluateGateCheck(aiDefect(), { aiReviewGateMode: "advisory" });
+    expect(out.conclusion).toBe("success");
+    expect(out.displayConclusion).toBeUndefined();
+  });
+  it("resolveEffectiveSettings maps gate.dryRun → gateDryRun", () => {
+    const eff = resolveEffectiveSettings(settings({}), parseFocusManifest({ gate: { dryRun: true } }));
+    expect(eff.gateDryRun).toBe(true);
   });
 });
