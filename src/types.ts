@@ -376,6 +376,12 @@ export type AdvisoryFinding = {
   detail: string;
   action?: string;
   publicText?: string;
+  /** Calibrated confidence in [0,1] for an AI-judgment finding (`ai_consensus_defect` / `ai_review_split`) — the
+   *  reviewer's own probability that the flagged blocker is a real defect (#8). The gate's `aiReviewCloseConfidence`
+   *  threshold uses it: an AI defect blocks ONLY when this clears the floor. Absent for deterministic findings (they
+   *  carry no model confidence); an absent/unparseable reviewer confidence degrades to 1.0 upstream, so omitting it
+   *  here behaves exactly like today. */
+  confidence?: number;
 };
 
 export type Advisory = {
@@ -556,6 +562,12 @@ export type RepositorySettings = {
    *  AI themselves. Default false — opt-in via `.gittensory.yml gate.aiReview.allAuthors`. Independent of
    *  `aiReviewMode`: `off` still means no AI; this only widens WHO an enabled review covers. */
   aiReviewAllAuthors: boolean;
+  /** Minimum calibrated AI-reviewer confidence (0-1) for an AI defect to BLOCK under `aiReviewMode: block` (#7).
+   *  A dual-model consensus defect / split blocks only when its finding `confidence >= aiReviewCloseConfidence`;
+   *  below-threshold AI defects stay advisory (visible, never block). Config-as-code only — set via
+   *  `.gittensory.yml gate.aiReview.closeConfidence` (no dashboard/DB column); unset ⇒ the gate uses the 0.9
+   *  default. Clamped to [0,1] at parse time. */
+  aiReviewCloseConfidence?: number | null | undefined;
   /** When TRUE, the repo OWNER's (and maintainer's) own PRs are eligible for auto-CLOSE like a contributor's
    *  (still subject to the `close` autonomy class + the same adverse-signal conditions). Default FALSE — owner
    *  PRs are exempt from auto-close (merge or manual-hold only). Per-repo configurable so maintainers choose

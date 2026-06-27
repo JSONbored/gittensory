@@ -212,6 +212,23 @@ describe("runAiReviewForAdvisory", () => {
     expect(result?.notes).toContain("Likely crash.");
   });
 
+  it("threads the calibrated MIN consensus confidence onto the ai_consensus_defect finding (#8)", async () => {
+    const adv = advisory();
+    // Two reviewers agree on a blocker but with DIFFERENT confidences (0.95 vs 0.6) → the finding carries the min.
+    const json = (confidence: number) => JSON.stringify({ assessment: "Likely crash.", blockers: ["Null dereference of a possibly-null value in src/a.ts."], nits: [], suggestions: [], confidence });
+    const run = (async (model: string) => ({ response: model === BEST_REVIEW_MODELS[0] ? json(0.95) : json(0.6) })) as unknown as () => Promise<unknown>;
+    await runAiReviewForAdvisory(aiEnv(run), {
+      settings: { aiReviewMode: "block" } as RepositorySettings,
+      advisory: adv,
+      repoFullName: "acme/widgets",
+      pr,
+      author: "alice",
+      confirmedContributor: true,
+    });
+    expect(adv.findings[0]?.code).toBe("ai_consensus_defect");
+    expect(adv.findings[0]?.confidence).toBe(0.6); // weaker reviewer governs the gate floor
+  });
+
   it("appends an ai_review_inconclusive finding (fail-closed hold) when block-mode AI lacks a second opinion, surfacing it to Sentry as an error", async () => {
     const adv = advisory();
     // The first slot parses; the second slot's primary AND its reliable fallback fail → no consensus possible.
@@ -277,6 +294,23 @@ describe("runAiReviewForAdvisory", () => {
     expect(adv.findings.map((f) => f.code)).toEqual(["ai_review_split"]); // applied to the advisory (gate blocker)
     expect(result?.findings.map((f) => f.code)).toEqual(["ai_review_split"]); // returned for the AI cache to persist
     expect(result?.notes).toBeDefined();
+  });
+
+  it("threads the lone flagging reviewer's calibrated confidence onto the ai_review_split finding (#8)", async () => {
+    const adv = advisory();
+    // Only the FIRST reviewer flags a blocker, at confidence 0.45 → split, and the finding carries 0.45.
+    const flagged = JSON.stringify({ assessment: "Likely crash.", blockers: ["Null deref in src/a.ts."], nits: [], suggestions: [], confidence: 0.45 });
+    const run = (async (model: string) => ({ response: model === BEST_REVIEW_MODELS[0] ? flagged : notesOnlyJson() })) as unknown as () => Promise<unknown>;
+    await runAiReviewForAdvisory(aiEnv(run), {
+      settings: { aiReviewMode: "block" } as RepositorySettings,
+      advisory: adv,
+      repoFullName: "acme/widgets",
+      pr,
+      author: "alice",
+      confirmedContributor: true,
+    });
+    expect(adv.findings[0]?.code).toBe("ai_review_split");
+    expect(adv.findings[0]?.confidence).toBe(0.45);
   });
 
   it("uses the caller's pre-resolved files (FIX B) instead of the stored read, so the model sees the real diff", async () => {

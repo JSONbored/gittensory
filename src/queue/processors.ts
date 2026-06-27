@@ -3356,6 +3356,9 @@ export function gateCheckPolicy(
     qualityGateMode: settings.qualityGateMode,
     qualityGateMinScore: settings.qualityGateMinScore ?? null,
     aiReviewGateMode: settings.aiReviewMode,
+    // Calibrated AI close-confidence floor (#7) — config-as-code via `.gittensory.yml gate.aiReview.closeConfidence`,
+    // resolved into settings upstream. `null`/undefined ⇒ advisory.ts applies the 0.9 default.
+    aiReviewCloseConfidence: settings.aiReviewCloseConfidence ?? null,
     readinessScore: readinessScore ?? null,
     slopGateMode: settings.slopGateMode,
     mergeReadinessGateMode: settings.mergeReadinessGateMode,
@@ -3762,6 +3765,8 @@ export async function runAiReviewForAdvisory(
         detail: result.consensusDefect.detail,
         action:
           "Resolve the flagged defect, or override if the AI reviewers are mistaken, then re-run the gate.",
+        // Calibrated confidence (#8): the gate blocks this defect only when it clears aiReviewCloseConfidence.
+        confidence: result.consensusDefect.confidence,
       });
     } else if (result.split) {
       // The reviewers DISAGREED — exactly one flagged a blocking defect. reviewbot's quorum: ANY reviewer
@@ -3775,6 +3780,14 @@ export async function runAiReviewForAdvisory(
           "One AI reviewer independently flagged a concrete must-fix defect in this change (the other did not). Under the quorum rule, a single rejection closes the PR; see the review notes for specifics.",
         action:
           "Resolve the flagged defect and open a new pull request, or override if the reviewers are mistaken.",
+        // Calibrated confidence (#8) of the lone flagging reviewer; the gate blocks only when it clears
+        // aiReviewCloseConfidence. A consensus split ALWAYS carries this (combineReviews sets it whenever split is
+        // true), so the spread is effectively unconditional; the guard is a defensive belt-and-braces — an absent
+        // value would degrade to 1.0 in the threshold check (advisory.ts `?? 1`), matching today's always-block.
+        /* v8 ignore next 3 -- a split always carries splitConfidence; the absent arm is an unreachable guard. */
+        ...(result.splitConfidence !== undefined
+          ? { confidence: result.splitConfidence }
+          : {}),
       });
     } else if (result.inconclusive) {
       // Fail-CLOSED (#ai-fail-closed): block-mode AI could not return a usable verdict. Hold the PR for a human

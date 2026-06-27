@@ -23,6 +23,12 @@ export type GateCheckPolicy = {
   /** When `block`, a dual-model AI consensus defect (`ai_consensus_defect` finding) becomes a hard
    *  blocker. Defaults to advisory — AI never blocks unless the maintainer opts in. */
   aiReviewGateMode?: GateRuleMode | undefined;
+  /** Minimum calibrated confidence (0-1) for an AI-judgment defect (`ai_consensus_defect` / `ai_review_split`) to
+   *  BLOCK under `aiReviewGateMode: block` (#7). The finding blocks only when its `confidence >= this`; below-threshold
+   *  AI defects stay advisory (visible, never block). `null`/undefined ⇒ the 0.9 default. A finding with no
+   *  confidence (deterministic, or a graceful-fallback AI defect) is treated as 1.0 and always clears the floor —
+   *  matching the historical always-block behavior. */
+  aiReviewCloseConfidence?: number | null | undefined;
   readinessScore?: number | null | undefined;
   /** When `block`, the deterministic slop score becomes a hard blocker once `slopRisk >= slopGateMinScore`
    *  (default threshold 60, the `high` band). Defaults to off/advisory — slop never blocks unless opted in. */
@@ -477,7 +483,7 @@ function evaluateGateCheckCore(advisoryResult: Advisory, policy: GateCheckPolicy
   // Merge-readiness composite (#551): when set, escalate every sub-gate to its mode so they roll into one
   // pass/fail. When off, this is a no-op and each sub-gate keeps its own mode.
   const effective = applyMergeReadinessGate(policy);
-  const configuredBlockers = advisoryResult.findings.filter((finding) => isConfiguredGateBlocker(finding.code, effective));
+  const configuredBlockers = advisoryResult.findings.filter((finding) => isConfiguredGateBlocker(finding, effective));
   const qualityBlocker = buildQualityGateBlocker(effective);
   const slopBlocker = buildSlopGateBlocker(effective);
   const blockers = [...configuredBlockers, ...(qualityBlocker ? [qualityBlocker] : []), ...(slopBlocker ? [slopBlocker] : [])];
@@ -810,17 +816,29 @@ function isEvaluationBlocker(code: string): boolean {
   return code === "repo_not_registered" || code === "repo_not_seen" || code === "pr_not_cached" || code === "pre_merge_check_unresolved";
 }
 
-function isConfiguredGateBlocker(code: string, policy: GateCheckPolicy): boolean {
+// Default minimum calibrated confidence for an AI defect to BLOCK (#7) — used when the repo set `aiReview: block`
+// without a `closeConfidence`. 0.9 = block only on a high-confidence AI defect; below that stays advisory.
+const DEFAULT_AI_REVIEW_CLOSE_CONFIDENCE = 0.9;
+
+function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPolicy): boolean {
+  const code = finding.code;
   // Missing linked issue defaults to ADVISORY — issues aren't always available, so it only blocks when a
   // repo explicitly opts in with linkedIssueGateMode: "block". Duplicates still default to blocking.
   if (code === "missing_linked_issue") return gateMode(policy.linkedIssueGateMode ?? "advisory") === "block";
   if (code === "duplicate_pr_risk") return gateMode(policy.duplicatePrGateMode ?? "block") === "block";
   // A dual-model AI consensus defect blocks ONLY when the maintainer opted into aiReview: block. It is the
-  // most conservative AI signal (two independent models, high confidence) but still confirmed-contributor
-  // gated by evaluateGateCheck, and advisory by default.
+  // most conservative AI signal (two independent models) but still confirmed-contributor gated by
+  // evaluateGateCheck, and advisory by default.
   // A consensus defect (both reviewers) OR a SPLIT (one reviewer flagged a blocker the other did not) both block
-  // when aiReviewGateMode is `block` — reviewbot's quorum: ANY reviewer rejection closes the PR. (#ai-review-split)
-  if (code === "ai_consensus_defect" || code === "ai_review_split") return gateMode(policy.aiReviewGateMode ?? "advisory") === "block";
+  // when aiReviewGateMode is `block` AND the finding's CALIBRATED confidence clears the close-confidence floor (#7):
+  // the historical hardcoded `confidence: 1` always blocked, so a below-floor AI defect now stays advisory (visible,
+  // never closes) instead of false-closing. A finding with no confidence (graceful fallback) is treated as 1.0 and
+  // always clears the floor — byte-identical to today's behavior. (#ai-review-split)
+  if (code === "ai_consensus_defect" || code === "ai_review_split") {
+    if (gateMode(policy.aiReviewGateMode ?? "advisory") !== "block") return false;
+    const confidence = finding.confidence ?? 1;
+    return confidence >= (policy.aiReviewCloseConfidence ?? DEFAULT_AI_REVIEW_CLOSE_CONFIDENCE);
+  }
   // A leaked-secret finding (`secret_leak`) ALWAYS hard-blocks: a committed credential must be removed and
   // rotated before merge, with no opt-in. This finding is produced ONLY by the flag-gated safety scan
   // (GITTENSORY_REVIEW_SAFETY); when the flag is off the finding never exists, so this branch is unreachable and the
