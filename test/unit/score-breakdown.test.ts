@@ -385,6 +385,7 @@ describe("explainScoreBreakdown", () => {
     expect(blockedBreakdown.components.find((entry) => entry.component === "mergedHistoryMultiplier")).toMatchObject({
       band: "blocked",
       summary: expect.stringMatching(/below the upstream floor/i),
+      lever: expect.stringMatching(/Land more merged PRs/i),
     });
     expect(blockedBreakdown.components.find((entry) => entry.component === "issueDiscoveryHistoryMultiplier")).toMatchObject({
       band: "blocked",

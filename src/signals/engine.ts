@@ -654,7 +654,7 @@ export function solverTokenScoreIndexFromGittensor(profile: Pick<ContributorProf
 function solverMeetsValidIssueTokenFloor(prNumber: number, options?: IssueDiscoveryLifecycleOptions): boolean {
   const score = options?.solverTokenScoreByPr?.get(prNumber);
   if (score === undefined) return true;
-  const floor = options?.minValidIssueTokenScore ?? DEFAULT_SCORING_CONSTANTS.MIN_TOKEN_SCORE_FOR_VALID_ISSUE;
+  const floor = options?.minValidIssueTokenScore ?? (DEFAULT_SCORING_CONSTANTS.MIN_TOKEN_SCORE_FOR_VALID_ISSUE as number);
   return score >= floor;
 }
 

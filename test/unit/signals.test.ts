@@ -1374,6 +1374,41 @@ describe("world-class backend signals", () => {
     expect(validLifecycle.states[0]).toMatchObject({ state: "valid_solved" });
   });
 
+  it("keeps valid_solved when solver PR token score is absent from the index (#808)", () => {
+    const issueDiscoveryRepo: RepositoryRecord = {
+      ...repo,
+      registryConfig: { ...repo.registryConfig!, issueDiscoveryShare: 1, maintainerCut: 0 },
+    };
+    const solvedIssue: IssueRecord = {
+      ...issues[0]!,
+      number: 45,
+      title: "Unscored solve",
+      state: "closed",
+      labels: ["bug"],
+      body: "Detailed solved body ".repeat(20),
+      linkedPrs: [56],
+      updatedAt: "2026-05-20T00:00:00.000Z",
+    };
+    const solverPr: PullRequestRecord = {
+      ...pullRequests[0]!,
+      number: 56,
+      authorLogin: "solver",
+      authorAssociation: "NONE",
+      linkedIssues: [45],
+      mergedAt: "2026-05-25T00:00:00.000Z",
+      state: "merged",
+    };
+    const lifecycle = buildIssueDiscoveryLifecycleReport(
+      issueDiscoveryRepo,
+      [solvedIssue],
+      [solverPr],
+      repo.fullName,
+      [],
+      { minValidIssueTokenScore: 5, solverTokenScoreByPr: new Map() },
+    );
+    expect(lifecycle.states[0]).toMatchObject({ state: "valid_solved" });
+  });
+
   it("builds a solver token score index from official Gittensor pull request rows (#808)", () => {
     const profile = buildContributorProfile(
       "miner",
@@ -1413,7 +1448,7 @@ describe("world-class backend signals", () => {
     );
     const index = solverTokenScoreIndexFromGittensor(profile);
     expect(index.get(9)).toBe(12);
-    expect(solverTokenScoreIndexFromGittensor({ login: "miner", generatedAt: "", github: { login: "miner", source: "github" }, source: "github_cache", registeredRepoActivity: { pullRequests: 0, mergedPullRequests: 0, issues: 0, reposTouched: [], dominantLabels: [] }, trustSignals: { evidenceScore: 0, level: "new", unlinkedOpenPullRequests: 0, maintainerAssociatedPullRequests: 0 } })).toEqual(new Map());
+    expect(solverTokenScoreIndexFromGittensor({ gittensor: undefined })).toEqual(new Map());
   });
 
   it("ignores non-finite token scores and clamps negative values in the solver index (#808)", () => {
