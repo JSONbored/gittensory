@@ -113,6 +113,21 @@ describe("buildPredictedGateVerdict", () => {
     expect(result.blockers.some((b) => b.code === "duplicate_pr_risk")).toBe(true);
   });
 
+  it("surfaces the missing-linked-issue blocker under composite mergeReadiness even when linkedIssue is unset (#merge-readiness-parity)", () => {
+    // mergeReadiness:block forces the composite linked-issue sub-gate to block; the live gate collects
+    // linked-issue evidence whenever merge-readiness is on (shouldCollectLinkedIssueEvidence), so the
+    // predictor must surface the finding here too — otherwise it shows a false success while the live gate
+    // one-shot auto-closes the PR. linkedIssue is left unset (null), so only the mergeReadiness term applies.
+    const blocked = verdict({ gate: { duplicates: "off", mergeReadiness: "block" }, input: { body: "no issue here", linkedIssues: [] }, issues: [] });
+    expect(blocked.conclusion).toBe("failure");
+    expect(blocked.blockers.some((b) => b.code === "missing_linked_issue")).toBe(true);
+
+    // With neither linkedIssue nor mergeReadiness set, no missing-linked-issue finding is created (the
+    // false/false arm of the new condition) — matching the live gate, which collects no linked-issue evidence.
+    const noGate = verdict({ gate: { duplicates: "off" }, input: { body: "no issue here", linkedIssues: [] }, issues: [] });
+    expect(noGate.blockers.some((b) => b.code === "missing_linked_issue")).toBe(false);
+  });
+
   it("honors public gate.firstTimeContributorGrace with predicted author history", () => {
     const newcomer = verdict({
       gate: { duplicates: "block", firstTimeContributorGrace: true },
