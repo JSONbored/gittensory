@@ -93,6 +93,17 @@ export interface RedosFinding {
   pattern: string;
 }
 
+/** An added code block that is a near-verbatim copy of existing repo code (copy-paste instead of
+ *  importing the helper). Cited as headFile:headLine vs sourceFile:sourceLine. */
+export interface DuplicationFinding {
+  headFile: string;
+  headLine: number;
+  sourceFile: string;
+  sourceLine: number;
+  lineCount: number;
+  similarity: number;
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -102,6 +113,7 @@ export interface BriefFindings {
   installScript?: InstallScriptFinding[];
   eol?: EolFinding[];
   redos?: RedosFinding[];
+  duplication?: DuplicationFinding[];
 }
 
 export type AnalyzerStatus = "ok" | "degraded" | "skipped";

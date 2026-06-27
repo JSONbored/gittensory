@@ -21,6 +21,14 @@ import {
   scanPatchForRedos,
   scanRedos,
 } from "../dist/analyzers/redos.js";
+import {
+  normalizeForFingerprint,
+  computeFingerprint,
+  fingerprintContainment,
+  extractAddedBlocks,
+  findBestSourceLine,
+  scanVerbatimDuplication,
+} from "../dist/analyzers/verbatim-duplication.js";
 
 const NOW = new Date("2026-06-26").getTime();
 const eolFetch =
@@ -933,6 +941,354 @@ test("buildBrief: eol analyzer runs (real now, 2023 cycle is past)", async () =>
     assert.equal(brief.analyzerStatus.eol, "ok");
     assert.equal(brief.findings.eol.length, 1);
     assert.match(brief.promptSection, /End-of-life runtimes/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+// ── Verbatim-duplication analyzer (#1520) ──────────────────────────────────────
+
+test("normalizeForFingerprint: lowercases and collapses whitespace", () => {
+  assert.equal(normalizeForFingerprint("  Hello\t\nWorld  "), "hello world");
+  assert.equal(normalizeForFingerprint("const X = 1;"), "const x = 1;");
+  assert.equal(normalizeForFingerprint(""), "");
+  // Consecutive whitespace including newlines → single space.
+  assert.equal(normalizeForFingerprint("a\n\n\tb"), "a b");
+});
+
+test("computeFingerprint: returns a non-empty Set for text longer than k, empty for short text", () => {
+  // Fewer than k characters → empty fingerprint.
+  assert.equal(computeFingerprint("hi").size, 0);
+  // A longer string produces fingerprints.
+  const fps = computeFingerprint("function add(a, b) { return a + b; }");
+  assert.ok(fps.size > 0);
+  // Identical text produces the same fingerprint.
+  const fps2 = computeFingerprint("function add(a, b) { return a + b; }");
+  assert.deepEqual([...fps].sort(), [...fps2].sort());
+  // Completely different text produces different fingerprints.
+  const fps3 = computeFingerprint("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+  const intersection = [...fps].filter((h) => fps3.has(h));
+  assert.ok(intersection.length < fps.size, "different text should share few fingerprints");
+});
+
+test("fingerprintContainment: returns fraction of block fps in source fps", () => {
+  // Same text → 1.0 containment.
+  const t = "export function greet(name) { return hello + name; }";
+  const fps = computeFingerprint(normalizeForFingerprint(t));
+  assert.equal(fingerprintContainment(fps, fps), 1);
+
+  // Disjoint sets → 0.
+  const aFps = new Set([1, 2, 3]);
+  const bFps = new Set([4, 5, 6]);
+  assert.equal(fingerprintContainment(aFps, bFps), 0);
+
+  // Partial overlap.
+  const c = new Set([1, 2, 3, 4]);
+  const d = new Set([1, 2, 5, 6]);
+  assert.equal(fingerprintContainment(c, d), 0.5);
+
+  // Empty block → 0 (not NaN).
+  assert.equal(fingerprintContainment(new Set(), fps), 0);
+});
+
+test("extractAddedBlocks: groups consecutive added lines into blocks, skips small blocks", () => {
+  const patch = [
+    "@@ -1,3 +1,10 @@",
+    " context",
+    "+line one",
+    "+line two",
+    "+line three",
+    " context",
+    "+block2 line1",
+    "+block2 line2",
+    "+block2 line3",
+    "+block2 line4",
+    "+block2 line5",
+  ].join("\n");
+
+  const blocks = extractAddedBlocks("src/foo.ts", patch);
+  // First block has only 3 lines → below MIN_BLOCK_LINES=5, skipped.
+  // Second block has 5 lines → included.
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].headFile, "src/foo.ts");
+  assert.equal(blocks[0].lineCount, 5);
+  assert.equal(blocks[0].headLine, 6); // block2 starts at new-file line 6
+});
+
+test("extractAddedBlocks: hunk reset correctly assigns line numbers across multiple hunks", () => {
+  const patch = [
+    "@@ -1,1 +1,6 @@",
+    "+a1",
+    "+a2",
+    "+a3",
+    "+a4",
+    "+a5",
+    "@@ -20,1 +26,5 @@",
+    "+b1",
+    "+b2",
+    "+b3",
+    "+b4",
+    "+b5",
+  ].join("\n");
+
+  const blocks = extractAddedBlocks("src/x.ts", patch);
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0].headLine, 1);
+  assert.equal(blocks[1].headLine, 26);
+});
+
+test("findBestSourceLine: locates the window with highest containment, returns null below threshold", () => {
+  // Build a block whose normalised text appears verbatim in lines 4-8 of the source.
+  const blockLines = [
+    "function sum(a, b) {",
+    "  return a + b;",
+    "}",
+    "function mul(a, b) {",
+    "  return a * b;",
+  ];
+  const blockText = normalizeForFingerprint(blockLines.join("\n"));
+  const blockFps = computeFingerprint(blockText);
+
+  const sourceLines = [
+    "// header comment",
+    "const PI = 3.14;",
+    "const E = 2.71;",
+    "function sum(a, b) {",
+    "  return a + b;",
+    "}",
+    "function mul(a, b) {",
+    "  return a * b;",
+    "}",
+    "export { sum, mul };",
+  ];
+  const sourceLinesNorm = sourceLines.map((l) => normalizeForFingerprint(l));
+
+  const line = findBestSourceLine(blockFps, blockLines.length, sourceLinesNorm);
+  // Any window from line 2-5 (1-indexed) fully contains the block; exact value depends on hashes.
+  assert.ok(line !== null, "should find a match");
+  assert.ok(line >= 1 && line <= 6, `expected line in 1-6, got ${line}`);
+
+  // Source shorter than block → null.
+  assert.equal(findBestSourceLine(blockFps, 100, sourceLinesNorm), null);
+});
+
+test("scanVerbatimDuplication: returns [] when githubToken or headSha is absent", async () => {
+  const neverFetch = async () => { throw new Error("should not fetch"); };
+  assert.deepEqual(
+    await scanVerbatimDuplication({ repoFullName: "o/r", prNumber: 1 }, neverFetch),
+    [],
+  );
+  assert.deepEqual(
+    await scanVerbatimDuplication({ repoFullName: "o/r", prNumber: 1, githubToken: "tok" }, neverFetch),
+    [],
+  );
+  assert.deepEqual(
+    await scanVerbatimDuplication({ repoFullName: "o/r", prNumber: 1, headSha: "abc" }, neverFetch),
+    [],
+  );
+});
+
+test("scanVerbatimDuplication: skips files with no patch or non-code extensions", async () => {
+  const neverFetch = async () => { throw new Error("should not fetch"); };
+  // Only a README (no language match) and a patched file with no content → no blocks → no fetches.
+  const findings = await scanVerbatimDuplication(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: "abc",
+      githubToken: "tok",
+      files: [
+        { path: "README.md", patch: "@@ -1,0 +1,1 @@\n+hello" },
+        { path: "src/x.ts" },  // no patch
+      ],
+    },
+    neverFetch,
+  );
+  assert.deepEqual(findings, []);
+});
+
+test("scanVerbatimDuplication: returns [] on tree API failure, fail-safe", async () => {
+  const findings = await scanVerbatimDuplication(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: "abc",
+      githubToken: "tok",
+      files: [{ path: "src/a.ts", patch: "@@ -1,0 +1,6 @@\n+a\n+b\n+c\n+d\n+e\n+f" }],
+    },
+    async () => ({ ok: false, json: async () => ({}) }),
+  );
+  assert.deepEqual(findings, []);
+});
+
+test("scanVerbatimDuplication: detects near-verbatim copy and reports headFile:headLine + sourceFile:sourceLine", async () => {
+  // Build a duplicated block: 8 added lines whose text also appears in a repo file.
+  const sharedCode = [
+    "export function validate(input) {",
+    "  if (!input) throw new Error('missing');",
+    "  const trimmed = input.trim();",
+    "  if (trimmed.length === 0) throw new Error('empty');",
+    "  return trimmed.toLowerCase();",
+    "}",
+    "export function sanitize(value) {",
+    "  return value.replace(/[^a-z0-9]/g, '');",
+    "}",
+  ].join("\n");
+
+  const prPatch =
+    "@@ -1,0 +5,9 @@\n" +
+    sharedCode
+      .split("\n")
+      .map((l) => `+${l}`)
+      .join("\n");
+
+  const sourceContent = [
+    "// utilities",
+    "const VERSION = '1.0.0';",
+    "",
+    sharedCode,
+    "",
+    "export const NAME = 'util';",
+  ].join("\n");
+
+  // Mock: tree returns one same-language file; blob returns the source content.
+  const mockFetch = async (url: string) => {
+    if (String(url).includes("/git/trees/")) {
+      return {
+        ok: true,
+        json: async () => ({
+          tree: [{ path: "src/utils.ts", type: "blob", sha: "blob1", size: sourceContent.length }],
+        }),
+      };
+    }
+    if (String(url).includes("/git/blobs/")) {
+      const encoded = Buffer.from(sourceContent, "utf-8").toString("base64");
+      return { ok: true, json: async () => ({ encoding: "base64", content: encoded }) };
+    }
+    return { ok: false, json: async () => ({}) };
+  };
+
+  const findings = await scanVerbatimDuplication(
+    {
+      repoFullName: "owner/repo",
+      prNumber: 42,
+      headSha: "deadbeef",
+      githubToken: "tok",
+      files: [{ path: "src/helpers.ts", patch: prPatch }],
+    },
+    mockFetch as typeof fetch,
+  );
+
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].headFile, "src/helpers.ts");
+  assert.equal(findings[0].headLine, 5);
+  assert.equal(findings[0].sourceFile, "src/utils.ts");
+  assert.ok(findings[0].sourceLine > 0);
+  assert.equal(findings[0].lineCount, 9);
+  assert.ok(findings[0].similarity >= 0.65, `expected similarity ≥ 0.65, got ${findings[0].similarity}`);
+});
+
+test("scanVerbatimDuplication: ignores PR-modified files in source candidates", async () => {
+  const sharedCode = Array.from({ length: 8 }, (_, i) => `const line${i} = ${i};`).join("\n");
+  const prPatch = "@@ -1,0 +1,8 @@\n" + sharedCode.split("\n").map((l) => `+${l}`).join("\n");
+
+  const mockFetch = async (url: string) => {
+    if (String(url).includes("/git/trees/")) {
+      return {
+        ok: true,
+        json: async () => ({
+          // The only candidate file IS the file being modified — should be excluded.
+          tree: [{ path: "src/target.ts", type: "blob", sha: "blob1", size: 200 }],
+        }),
+      };
+    }
+    // Should never fetch a blob since the only candidate is excluded.
+    throw new Error("blob fetch should not happen");
+  };
+
+  const findings = await scanVerbatimDuplication(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: "abc",
+      githubToken: "tok",
+      files: [{ path: "src/target.ts", patch: prPatch }],
+    },
+    mockFetch as typeof fetch,
+  );
+  assert.deepEqual(findings, []);
+});
+
+test("scanVerbatimDuplication: forwards abort signal to fetch calls", async () => {
+  const controller = new AbortController();
+  const signals: AbortSignal[] = [];
+
+  const trackingFetch = async (_url: string, init?: RequestInit): Promise<Response> => {
+    if (init?.signal) signals.push(init.signal as AbortSignal);
+    if (String(_url).includes("/git/trees/")) {
+      return {
+        ok: true,
+        json: async () => ({ tree: [] }),
+      } as Response;
+    }
+    return { ok: false, json: async () => ({}) } as Response;
+  };
+
+  await scanVerbatimDuplication(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: "abc",
+      githubToken: "tok",
+      files: [{ path: "src/a.ts", patch: "@@ -1,0 +1,6 @@\n+a\n+b\n+c\n+d\n+e\n+f" }],
+    },
+    trackingFetch as typeof fetch,
+    { signal: controller.signal },
+  );
+
+  assert.ok(signals.length > 0, "abort signal should be forwarded");
+  assert.ok(signals.every((s) => s === controller.signal));
+});
+
+test("renderBrief: renders the duplication block with head:line and source:line citation", () => {
+  const r = renderBrief({
+    duplication: [
+      {
+        headFile: "src/new.ts",
+        headLine: 15,
+        sourceFile: "src/existing.ts",
+        sourceLine: 42,
+        lineCount: 8,
+        similarity: 0.82,
+      },
+    ],
+  });
+  assert.match(r.promptSection, /Near-verbatim code duplication/);
+  assert.match(r.promptSection, /`src\/new\.ts:15`/);
+  assert.match(r.promptSection, /`src\/existing\.ts:42`/);
+  assert.match(r.promptSection, /~8 lines, 82% match/);
+  assert.match(r.promptSection, /refactor to import/);
+});
+
+test("buildBrief: duplication analyzer runs and is wired into the orchestrator", async () => {
+  const realFetch = globalThis.fetch;
+  // Tree returns no same-language files → analyzer returns [] successfully (not degraded).
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/git/trees/")) {
+      return { ok: true, json: async () => ({ tree: [] }) };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    const brief = await buildBrief({
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: "abc",
+      githubToken: "test-tok",
+      files: [{ path: "src/x.ts", patch: "@@ -1,0 +1,6 @@\n+a\n+b\n+c\n+d\n+e\n+f" }],
+    });
+    assert.equal(brief.analyzerStatus.duplication, "ok");
+    assert.deepEqual(brief.findings.duplication, []);
   } finally {
     globalThis.fetch = realFetch;
   }

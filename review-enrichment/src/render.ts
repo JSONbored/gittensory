@@ -129,6 +129,19 @@ export function renderBrief(
     }
   }
 
+  const duplications = findings.duplication ?? [];
+  if (duplications.length) {
+    lines.push(
+      "### Near-verbatim code duplication (import the existing helper instead of copying)",
+    );
+    for (const item of duplications) {
+      const pct = Math.round(item.similarity * 100);
+      lines.push(
+        `- ${safeCodeSpan(`${item.headFile}:${item.headLine}`)} duplicates ${safeCodeSpan(`${item.sourceFile}:${item.sourceLine}`)} (~${item.lineCount} lines, ${pct}% match) — refactor to import or extract a shared helper`,
+      );
+    }
+  }
+
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 
   const header =
