@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveAiReviewerPlan, resolveCliTimeoutMs, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, redactSecrets, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
+import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveAiReviewerPlan, resolveCliTimeoutMs, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, redactSecrets, routeProviders, summarizeCliStderr, subscriptionCliEnv } from "../../src/selfhost/ai";
 
 describe("resolveModel (#979 — never leak the Workers-AI default to a self-host backend)", () => {
   const WORKERS_DEFAULT = "@cf/meta/llama-3.1-8b-instruct-fp8-fast";
@@ -456,16 +456,16 @@ describe("subscription CLI helpers + fail-safe", () => {
     await expect(createCodexAi({}, empty).run("gpt-5", { prompt: "x" })).rejects.toThrow(/codex_empty_output/);
   });
 
-  it("surfaces the CLI's stderr in the non-zero-exit error (diagnosable failures, #26)", async () => {
-    // Without stderr in the message, a `claude_code_exit_1` / `codex_exit_1` is an opaque dead-end; with it the real
-    // cause (auth, rate limit, model-not-supported) reaches the logs + Sentry. (stderr-present branch of `?? ""`.)
+  it("surfaces a safe stderr summary in the non-zero-exit error (diagnosable failures, #26)", async () => {
+    // Raw stderr can contain prompt/config/auth material; the error keeps the useful class of failure without
+    // copying the untrusted text into logs + Sentry.
     const claudeErr: StubSpawn = async () => ({ stdout: "", code: 1, stderr: "Invalid API key · auth_error" });
     await expect(
       createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t" }, claudeErr).run("m", { prompt: "x" }),
-    ).rejects.toThrow(/claude_code_exit_1: Invalid API key/);
+    ).rejects.toThrow(/claude_code_exit_1: auth_error/);
     const codexErr: StubSpawn = async () => ({ stdout: "", code: 1, stderr: "stream error: rate limit reached" });
     await expect(createCodexAi({}, codexErr).run("m", { prompt: "x" })).rejects.toThrow(
-      /codex_exit_1: stream error: rate limit reached/,
+      /codex_exit_1: rate_limit/,
     );
   });
 
@@ -477,12 +477,12 @@ describe("subscription CLI helpers + fail-safe", () => {
     expect(err).toContain("claude_code_exit_1:");
     expect(err).not.toContain(token);
     expect(err).not.toContain("sk-ant-api03");
-    expect(err).toContain("[redacted]");
+    expect(err).toContain("auth_error");
   });
 
   it("redacts key-shaped tokens from codex stderr (no env token to key off) (#1605 sec)", async () => {
     const leaky: StubSpawn = async () => ({ stdout: "", code: 1, stderr: "auth failed: ghp_ABCDEFGHIJ0123456789KLMNOPQRSTUV" });
-    await expect(createCodexAi({}, leaky).run("m", { prompt: "x" })).rejects.toThrow(/codex_exit_1: auth failed: \[redacted\]/);
+    await expect(createCodexAi({}, leaky).run("m", { prompt: "x" })).rejects.toThrow(/codex_exit_1: auth_error/);
   });
 
   it("defaultSpawn captures a failing CLI's stderr and surfaces it on the exit error (#26)", async () => {
@@ -497,7 +497,7 @@ describe("subscription CLI helpers + fail-safe", () => {
     try {
       await expect(
         createClaudeCodeAi({ ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "t" }).run("sonnet", { prompt: "x" }),
-      ).rejects.toThrow(/claude_code_exit_1: BOOM: auth failed/);
+      ).rejects.toThrow(/claude_code_exit_1: auth_error/);
     } finally {
       process.env.PATH = origPath;
     }
@@ -538,5 +538,25 @@ describe("redactSecrets — strip credentials from untrusted CLI stderr before i
     expect(redactSecrets("Invalid API key · auth_error")).toBe("Invalid API key · auth_error");
     // "disk-usage-report-2024-summary" must survive — the \b anchor prevents an in-word `sk-` false positive
     expect(redactSecrets("disk-usage-report-2024-summary failed")).toBe("disk-usage-report-2024-summary failed");
+  });
+});
+
+describe("summarizeCliStderr — classify untrusted CLI stderr without logging raw text", () => {
+  it("classifies common operational failures using only allowlisted summaries", () => {
+    expect(summarizeCliStderr("Invalid API key · auth_error")).toBe("auth_error");
+    expect(summarizeCliStderr("stream error: rate limit reached")).toBe("rate_limit");
+    expect(summarizeCliStderr("model gpt-x is not supported on this account")).toBe("model_not_supported");
+    expect(summarizeCliStderr("request timed out at deadline")).toBe("timeout");
+    expect(summarizeCliStderr("EACCES: permission denied")).toBe("permission_denied");
+  });
+
+  it("withholds arbitrary stderr, including proxy credentials and prompt text", () => {
+    const stderr = "proxy http://user:p@ssw0rd@example.test failed while handling prompt: private repo text";
+    expect(summarizeCliStderr(stderr)).toBe("stderr_captured");
+  });
+
+  it("returns no_stderr for absent or empty stderr", () => {
+    expect(summarizeCliStderr(undefined)).toBe("no_stderr");
+    expect(summarizeCliStderr("   ")).toBe("no_stderr");
   });
 });

@@ -275,6 +275,19 @@ export function redactSecrets(text: string, knownSecrets: readonly string[] = []
   return out;
 }
 
+/** Turn untrusted CLI stderr into a bounded, allowlisted hint. Stderr can echo auth files, proxy URLs, prompts, or
+ *  config values in formats we do not know how to redact, and exhausted-provider errors flow to Sentry. Keep the
+ *  operational signal that made exit codes diagnosable (#26) without copying arbitrary stderr into logs. */
+export function summarizeCliStderr(stderr: string | undefined, knownSecrets: readonly string[] = []): string {
+  const safe = redactSecrets(stderr ?? "", knownSecrets).toLowerCase();
+  if (/\bauth(?:entication)?\b|api key|oauth|token|credential|unauthorized|forbidden/.test(safe)) return "auth_error";
+  if (/rate.?limit|too many requests|\b429\b/.test(safe)) return "rate_limit";
+  if (/model.*(?:not supported|unsupported|unknown|not found|invalid)|(?:not supported|unsupported).*model/.test(safe)) return "model_not_supported";
+  if (/timeout|timed out|deadline/.test(safe)) return "timeout";
+  if (/permission denied|eacces|eperm/.test(safe)) return "permission_denied";
+  return safe.trim() ? "stderr_captured" : "no_stderr";
+}
+
 /** Claude Code subscription (CLAUDE_CODE_OAUTH_TOKEN via `claude setup-token`). Headless, read-only, JSON. */
 export function createClaudeCodeAi(parentEnv: Record<string, string | undefined>, spawnImpl?: SpawnFn): SelfHostAi {
   return {
@@ -295,7 +308,7 @@ export function createClaudeCodeAi(parentEnv: Record<string, string | undefined>
         ["--print", "--output-format", "json", "--model", claudeModel, "--permission-mode", "plan", "--effort", effort, "--disallowedTools", "Bash,Edit,Write,WebFetch,WebSearch"],
         { env, input: prompt, timeoutMs: resolveCliTimeoutMs(parentEnv), cwd: await isolatedCliCwd() },
       );
-      if (code !== 0) throw new Error(`claude_code_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "", [token]).slice(0, 500)}`);
+      if (code !== 0) throw new Error(`claude_code_exit_${code ?? "null"}: ${summarizeCliStderr(stderr, [token])}`);
       const errStatus = claudeErrorStatus(stdout);
       if (errStatus) throw new Error(`claude_code_error_${errStatus}`);
       const text = extractCliText(stdout);
@@ -329,7 +342,7 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
         timeoutMs: resolveCliTimeoutMs(parentEnv),
         cwd: await isolatedCliCwd(),
       });
-      if (code !== 0) throw new Error(`codex_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "").slice(0, 500)}`);
+      if (code !== 0) throw new Error(`codex_exit_${code ?? "null"}: ${summarizeCliStderr(stderr)}`);
       const text = extractCliText(stdout);
       if (!text) throw new Error("codex_empty_output");
       return { response: text };
