@@ -34,6 +34,12 @@ function promptText(value: string): string {
     .replace(/([*_{}[\]()#+.!|-])/g, "\\$1");
 }
 
+function formatBytes(n: number): string {
+  if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${n} B`;
+}
+
 /** Build the `promptSection` (verbatim splice) + a one-line `systemSuffix` from the findings. Empty when nothing found. */
 export function renderBrief(
   findings: BriefFindings,
@@ -126,6 +132,20 @@ export function renderBrief(
       lines.push(
         `- ${safeCodeSpan(`${item.file}:${item.line}`)} — ${safeCodeSpan(item.pattern)} nests an unbounded quantifier inside an unbounded-quantified group; bound the repetition or rewrite without nesting`,
       );
+    }
+  }
+
+  const assets = findings.assetWeight ?? [];
+  if (assets.length) {
+    lines.push(
+      "### Heavy binary assets (optimize, or move to a CDN / Git LFS)",
+    );
+    for (const item of assets) {
+      const detail =
+        item.status === "added"
+          ? `adds ${formatBytes(item.bytes)}`
+          : `grows +${formatBytes(item.deltaBytes)} to ${formatBytes(item.bytes)}`;
+      lines.push(`- ${safeCodeSpan(item.path)} ${detail}`);
     }
   }
 

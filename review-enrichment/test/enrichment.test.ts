@@ -21,6 +21,7 @@ import {
   scanPatchForRedos,
   scanRedos,
 } from "../dist/analyzers/redos.js";
+import { scanAssetWeight } from "../dist/analyzers/asset-weight.js";
 
 const NOW = new Date("2026-06-26").getTime();
 const eolFetch =
@@ -933,6 +934,135 @@ test("buildBrief: eol analyzer runs (real now, 2023 cycle is past)", async () =>
     assert.equal(brief.analyzerStatus.eol, "ok");
     assert.equal(brief.findings.eol.length, 1);
     assert.match(brief.promptSection, /End-of-life runtimes/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+const treeReply = (tree) => ({ ok: true, json: async () => ({ tree }) });
+
+test("scanAssetWeight: flags a large newly-added binary, ignores small + non-binary files", async () => {
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: "HEAD",
+      githubToken: "t",
+      files: [
+        { path: "img/logo.png", status: "added" },
+        { path: "icon.svg", status: "added" },
+        { path: "src/x.ts", status: "added" },
+        { path: "tiny.gif", status: "added" },
+      ],
+    },
+    async () =>
+      treeReply([
+        { path: "img/logo.png", type: "blob", size: 250000 },
+        { path: "tiny.gif", type: "blob", size: 2000 },
+      ]),
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].path, "img/logo.png");
+  assert.equal(findings[0].status, "added");
+  assert.equal(findings[0].bytes, 250000);
+  assert.equal(findings[0].deltaBytes, 250000);
+});
+
+test("scanAssetWeight: flags a binary that GREW past the threshold (base vs head)", async () => {
+  const fetchImpl = async (url) =>
+    String(url).includes("BASE")
+      ? treeReply([{ path: "video.mp4", type: "blob", size: 50000 }])
+      : treeReply([{ path: "video.mp4", type: "blob", size: 250000 }]);
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: "HEAD",
+      baseSha: "BASE",
+      githubToken: "t",
+      files: [{ path: "video.mp4", status: "modified" }],
+    },
+    fetchImpl,
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].status, "grown");
+  assert.equal(findings[0].deltaBytes, 200000);
+  assert.equal(findings[0].bytes, 250000);
+});
+
+test("scanAssetWeight: small growth is not flagged", async () => {
+  const fetchImpl = async (url) =>
+    String(url).includes("BASE")
+      ? treeReply([{ path: "a.png", type: "blob", size: 300000 }])
+      : treeReply([{ path: "a.png", type: "blob", size: 310000 }]);
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: "HEAD",
+      baseSha: "BASE",
+      githubToken: "t",
+      files: [{ path: "a.png", status: "modified" }],
+    },
+    fetchImpl,
+  );
+  assert.deepEqual(findings, []);
+});
+
+test("scanAssetWeight: fail-safe — no token, no binaries, or failed fetch returns []", async () => {
+  const tree = async () => treeReply([{ path: "a.png", type: "blob", size: 999999 }]);
+  assert.deepEqual(
+    await scanAssetWeight(
+      { repoFullName: "o/r", prNumber: 1, headSha: "HEAD", files: [{ path: "a.png", status: "added" }] },
+      tree,
+    ),
+    [],
+  ); // no token
+  assert.deepEqual(
+    await scanAssetWeight(
+      { repoFullName: "o/r", prNumber: 1, headSha: "HEAD", githubToken: "t", files: [{ path: "readme.md", status: "added" }] },
+      tree,
+    ),
+    [],
+  ); // no binary files
+  assert.deepEqual(
+    await scanAssetWeight(
+      { repoFullName: "o/r", prNumber: 1, headSha: "HEAD", githubToken: "t", files: [{ path: "a.png", status: "added" }] },
+      async () => ({ ok: false, json: async () => ({}) }),
+    ),
+    [],
+  ); // tree fetch not OK
+});
+
+test("renderBrief: renders the asset-weight block with human-readable sizes", () => {
+  const r = renderBrief({
+    assetWeight: [
+      { path: "img/logo.png", bytes: 2500000, deltaBytes: 2500000, status: "added" },
+      { path: "v.mp4", bytes: 300000, deltaBytes: 200000, status: "grown" },
+    ],
+  });
+  assert.match(r.promptSection, /Heavy binary assets/);
+  assert.match(r.promptSection, /`img\/logo\.png` adds 2\.4 MB/);
+  assert.match(r.promptSection, /`v\.mp4` grows \+195 KB to 293 KB/);
+});
+
+test("buildBrief: asset-weight analyzer runs", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) =>
+    String(url).includes("git/trees")
+      ? treeReply([{ path: "big.png", type: "blob", size: 300000 }])
+      : { ok: true, json: async () => ({}) };
+  try {
+    const brief = await buildBrief({
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: "HEAD",
+      githubToken: "t",
+      files: [{ path: "big.png", status: "added" }],
+    });
+    assert.equal(brief.analyzerStatus.assetWeight, "ok");
+    assert.equal(brief.findings.assetWeight.length, 1);
+    assert.match(brief.promptSection, /Heavy binary assets/);
   } finally {
     globalThis.fetch = realFetch;
   }
