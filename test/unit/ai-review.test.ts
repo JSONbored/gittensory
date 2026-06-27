@@ -9,11 +9,13 @@ import { createTestEnv } from "../helpers/d1";
 
 const {
   parseModelReview,
+  parseReviewConfidence,
   coerceAiText,
   composeAdvisoryNotes,
   composeInlineFindings,
   consensusDefectOf,
   combineReviews,
+  synthesizeDefect,
   toPublicSafe,
   runWorkersOpinion,
 } = __aiReviewInternals;
@@ -30,6 +32,7 @@ type ModelReviewShape = {
   nits: string[];
   suggestions: string[];
   inlineFindings: InlineFinding[];
+  confidence: number;
 };
 const reviewWithFindings = (
   inlineFindings: InlineFinding[],
@@ -39,6 +42,7 @@ const reviewWithFindings = (
   nits: [],
   suggestions: [],
   inlineFindings,
+  confidence: 1,
 });
 
 function reviewJson(
@@ -902,13 +906,39 @@ describe("pure helpers", () => {
     expect(parsed?.blockers).toEqual(["X in src/a.ts"]);
   });
 
+  it("parseReviewConfidence uses a present value, falls back to 1.0 when absent/garbage, and clamps to [0,1] (#8)", () => {
+    expect(parseReviewConfidence(0.75)).toBe(0.75); // present, in range → used verbatim
+    expect(parseReviewConfidence(0)).toBe(0); // explicit zero is honored (not treated as falsy/absent)
+    expect(parseReviewConfidence(undefined)).toBe(1); // absent → fallback 1.0
+    expect(parseReviewConfidence("0.5")).toBe(1); // non-number → fallback 1.0
+    expect(parseReviewConfidence(Number.NaN)).toBe(1); // non-finite → fallback 1.0
+    expect(parseReviewConfidence(1.7)).toBe(1); // above range → clamped to 1
+    expect(parseReviewConfidence(-0.3)).toBe(0); // below range → clamped to 0
+  });
+
+  it("parseModelReview threads a calibrated confidence and defaults it to 1.0 when absent/unparseable (#8)", () => {
+    const withConfidence = parseModelReview(
+      '{"assessment":"leak in b.ts","blockers":["Unclosed handle in src/b.ts"],"nits":[],"suggestions":[],"confidence":0.4}',
+    );
+    expect(withConfidence?.confidence).toBe(0.4); // present value used
+    const noConfidence = parseModelReview(
+      reviewJson({ present: true, title: "Null deref in src/a.ts" }),
+    );
+    expect(noConfidence?.confidence).toBe(1); // absent → fallback 1.0
+    const garbageConfidence = parseModelReview(
+      '{"assessment":"ok","blockers":["X in src/a.ts"],"nits":[],"suggestions":[],"confidence":"high"}',
+    );
+    expect(garbageConfidence?.confidence).toBe(1); // unparseable → fallback 1.0
+  });
+
   describe("combineReviews (#dual-ai-combiner)", () => {
-    const r = (blockers: string[]) => ({
+    const r = (blockers: string[], confidence = 1) => ({
       assessment: "",
       suggestions: [],
       nits: [],
       blockers,
       inlineFindings: [],
+      confidence,
     });
     const clean = r([]);
     const blocked = r(["Null deref in src/a.ts"]);
@@ -1017,6 +1047,47 @@ describe("pure helpers", () => {
         }),
       ).toEqual({ defect: null, split: false, inconclusive: false }); // unsafe title dropped
     });
+
+    it("a consensus defect carries the MIN of the two reviewers' confidences (#8)", () => {
+      const defect = combineReviews(
+        [r(["Null deref in src/a.ts"], 0.95), r(["Null deref in src/a.ts"], 0.6)],
+        { strategy: "consensus" },
+      ).defect;
+      expect(defect?.confidence).toBe(0.6); // weaker reviewer governs
+    });
+
+    it("single: the synthesized defect carries that one reviewer's confidence (#8)", () => {
+      const defect = combineReviews([r(["Null deref in src/a.ts"], 0.42)], {
+        strategy: "single",
+      }).defect;
+      expect(defect?.confidence).toBe(0.42);
+    });
+
+    it("a SPLIT carries the lone flagging reviewer's confidence — from whichever slot flagged (#8)", () => {
+      // reviewer A flags → splitConfidence = A's confidence
+      const aFlags = combineReviews(
+        [r(["Null deref in src/a.ts"], 0.55), clean],
+        { strategy: "consensus" },
+      );
+      expect(aFlags.split).toBe(true);
+      expect(aFlags.splitConfidence).toBe(0.55);
+      // reviewer B flags → splitConfidence = B's confidence (exercises the other side of the ternary)
+      const bFlags = combineReviews(
+        [clean, r(["Off-by-one in src/b.ts"], 0.3)],
+        { strategy: "consensus" },
+      );
+      expect(bFlags.split).toBe(true);
+      expect(bFlags.splitConfidence).toBe(0.3);
+      // no split → splitConfidence is absent (consensus + both-clean cases)
+      expect(
+        combineReviews([blocked, blocked], { strategy: "consensus" })
+          .splitConfidence,
+      ).toBeUndefined();
+      expect(
+        combineReviews([clean, clean], { strategy: "consensus" })
+          .splitConfidence,
+      ).toBeUndefined();
+    });
   });
 
   it("consensusDefectOf requires a concrete blocker in BOTH reviews and drops unsafe titles", () => {
@@ -1026,6 +1097,7 @@ describe("pure helpers", () => {
       nits: [],
       blockers,
       inlineFindings: [],
+      confidence: 1,
     });
     expect(
       consensusDefectOf(
@@ -1050,6 +1122,7 @@ describe("pure helpers", () => {
       nits: [],
       blockers: [""],
       inlineFindings: [],
+      confidence: 1,
     };
     const b = {
       assessment: "",
@@ -1057,6 +1130,7 @@ describe("pure helpers", () => {
       nits: [],
       blockers: ["Race condition in src/x.ts"],
       inlineFindings: [],
+      confidence: 1,
     };
     expect(consensusDefectOf(a, b)?.title).toBe("Race condition in src/x.ts");
   });
@@ -1068,10 +1142,31 @@ describe("pure helpers", () => {
       nits: [],
       blockers: [""],
       inlineFindings: [],
+      confidence: 1,
     };
     const out = consensusDefectOf(blank, { ...blank, blockers: [""] });
     expect(out?.title).toContain("AI reviewers agree"); // both blockers[0] falsy → default title
     expect(out?.detail).toContain("independently flagged"); // joined detail empty → default detail
+  });
+
+  it("synthesizeDefect cites the FLAGGING reviewer's blocker + confidence, skipping an earlier clean reviewer (#8)", () => {
+    const review = (blockers: string[], confidence: number) => ({
+      assessment: "",
+      suggestions: [],
+      nits: [],
+      blockers,
+      inlineFindings: [],
+      confidence,
+    });
+    // first reviewer is clean → the title + confidence must come from the SECOND (flagging) reviewer.
+    const out = synthesizeDefect([
+      review([], 0.99),
+      review(["Off-by-one in src/b.ts"], 0.35),
+    ]);
+    expect(out?.title).toBe("Off-by-one in src/b.ts");
+    expect(out?.confidence).toBe(0.35);
+    // no reviewer with a non-blank blocker → null (fail-safe).
+    expect(synthesizeDefect([review([""], 0.5)])).toBeNull();
   });
 
   it("runWorkersOpinion returns null without a binding and handles a single-model (no distinct fallback) list", async () => {
@@ -1113,6 +1208,7 @@ describe("pure helpers", () => {
           nits: ["reward"],
           blockers: [],
           inlineFindings: [],
+          confidence: 1,
         },
       ]),
     ).toBeNull();
@@ -1311,6 +1407,7 @@ describe("pure helpers", () => {
       nits: over.nits ?? [],
       blockers: over.blockers ?? [],
       inlineFindings: [],
+      confidence: 1,
     });
     const assessmentOnly = composeAdvisoryNotes([
       review({ assessment: "Looks good." }),
@@ -1334,6 +1431,7 @@ describe("pure helpers", () => {
       nits: ["Rename x."],
       blockers: ["Null deref in src/a.ts."],
       inlineFindings: [],
+      confidence: 1,
     };
     const b = {
       assessment: "Second look.",
@@ -1341,6 +1439,7 @@ describe("pure helpers", () => {
       nits: ["Rename x.", "Tighten the type."],
       blockers: ["Null deref in src/a.ts.", "Off-by-one in the loop bound."],
       inlineFindings: [],
+      confidence: 1,
     };
     const out = composeAdvisoryNotes([a, b]) ?? "";
     expect(out).toContain("Solid change."); // first reviewer's assessment wins

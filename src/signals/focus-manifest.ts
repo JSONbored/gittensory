@@ -33,6 +33,9 @@ export type FocusManifestGateConfig = {
   aiReviewProvider: "anthropic" | "openai" | null;
   aiReviewModel: string | null;
   aiReviewAllAuthors: boolean | null;
+  /** `gate.aiReview.closeConfidence` (#7): minimum calibrated AI-reviewer confidence (0-1) for an AI defect to BLOCK
+   *  under `aiReview.mode: block`. null (unset) ⇒ the gate's 0.9 default. Clamped to [0,1] at parse time. */
+  aiReviewCloseConfidence: number | null;
   mergeReadiness: GateRuleMode | null;
   manifestPolicy: GateRuleMode | null;
   selfAuthoredLinkedIssue: GateRuleMode | null;
@@ -247,6 +250,7 @@ const EMPTY_GATE_CONFIG: FocusManifestGateConfig = {
   aiReviewProvider: null,
   aiReviewModel: null,
   aiReviewAllAuthors: null,
+  aiReviewCloseConfidence: null,
   mergeReadiness: null,
   manifestPolicy: null,
   selfAuthoredLinkedIssue: null,
@@ -360,6 +364,18 @@ function normalizeOptionalScore(value: JsonValue | undefined, field: string, war
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+/** Normalize an optional confidence threshold in [0,1] (#7) — a fractional value (NOT a 0-100 score), so it is
+ *  clamped into range WITHOUT rounding. Absent/null ⇒ null (the resolver leaves the gate's 0.9 default in place);
+ *  a non-finite/non-number value is ignored with a warning. */
+function normalizeOptionalConfidence(value: JsonValue | undefined, field: string, warnings: string[]): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    warnings.push(`Manifest gate field "${field}" must be a number between 0 and 1; ignoring it.`);
+    return null;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
 /**
  * Parse the optional `gate:` mapping. Every field stays `null` when unset so the resolver can layer
  * this OVER DB settings without clobbering. A nested `readiness: { mode, minScore }` block is accepted.
@@ -408,6 +424,7 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     aiReviewProvider: normalizeOptionalEnum(aiReviewRecord?.provider, "gate.aiReview.provider", ["anthropic", "openai"] as const, warnings),
     aiReviewModel: normalizeOptionalString(aiReviewRecord?.model, "gate.aiReview.model", warnings),
     aiReviewAllAuthors: normalizeOptionalBoolean(aiReviewRecord?.allAuthors, "gate.aiReview.allAuthors", warnings),
+    aiReviewCloseConfidence: normalizeOptionalConfidence(aiReviewRecord?.closeConfidence, "gate.aiReview.closeConfidence", warnings),
     mergeReadiness: normalizeOptionalGateMode(record.mergeReadiness, "gate.mergeReadiness", warnings),
     manifestPolicy: normalizeOptionalGateMode(record.manifestPolicy, "gate.manifestPolicy", warnings),
     selfAuthoredLinkedIssue: normalizeOptionalGateMode(record.selfAuthoredLinkedIssue, "gate.selfAuthoredLinkedIssue", warnings),
@@ -430,6 +447,7 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     gate.aiReviewProvider !== null ||
     gate.aiReviewModel !== null ||
     gate.aiReviewAllAuthors !== null ||
+    gate.aiReviewCloseConfidence !== null ||
     gate.mergeReadiness !== null ||
     gate.manifestPolicy !== null ||
     gate.selfAuthoredLinkedIssue !== null ||
@@ -463,13 +481,14 @@ export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
     if (gate.slopAiAdvisory !== null) slop.aiAdvisory = gate.slopAiAdvisory;
     out.slop = slop;
   }
-  if (gate.aiReviewMode !== null || gate.aiReviewByok !== null || gate.aiReviewProvider !== null || gate.aiReviewModel !== null || gate.aiReviewAllAuthors !== null) {
+  if (gate.aiReviewMode !== null || gate.aiReviewByok !== null || gate.aiReviewProvider !== null || gate.aiReviewModel !== null || gate.aiReviewAllAuthors !== null || gate.aiReviewCloseConfidence !== null) {
     const aiReview: Record<string, JsonValue> = {};
     if (gate.aiReviewMode !== null) aiReview.mode = gate.aiReviewMode;
     if (gate.aiReviewByok !== null) aiReview.byok = gate.aiReviewByok;
     if (gate.aiReviewProvider !== null) aiReview.provider = gate.aiReviewProvider;
     if (gate.aiReviewModel !== null) aiReview.model = gate.aiReviewModel;
     if (gate.aiReviewAllAuthors !== null) aiReview.allAuthors = gate.aiReviewAllAuthors;
+    if (gate.aiReviewCloseConfidence !== null) aiReview.closeConfidence = gate.aiReviewCloseConfidence;
     out.aiReview = aiReview;
   }
   if (gate.mergeReadiness !== null) out.mergeReadiness = gate.mergeReadiness;
@@ -940,6 +959,7 @@ export function resolveEffectiveSettings(dbSettings: RepositorySettings, manifes
   if (gate.aiReviewProvider !== null) effective.aiReviewProvider = gate.aiReviewProvider;
   if (gate.aiReviewModel !== null) effective.aiReviewModel = gate.aiReviewModel;
   if (gate.aiReviewAllAuthors !== null) effective.aiReviewAllAuthors = gate.aiReviewAllAuthors;
+  if (gate.aiReviewCloseConfidence !== null) effective.aiReviewCloseConfidence = gate.aiReviewCloseConfidence;
   if (gate.mergeReadiness !== null) effective.mergeReadinessGateMode = gate.mergeReadiness;
   if (gate.manifestPolicy !== null) effective.manifestPolicyGateMode = gate.manifestPolicy;
   if (gate.selfAuthoredLinkedIssue !== null) effective.selfAuthoredLinkedIssueGateMode = gate.selfAuthoredLinkedIssue;

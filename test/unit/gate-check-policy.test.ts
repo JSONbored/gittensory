@@ -213,6 +213,68 @@ describe("AI consensus defect gate blocker", () => {
   });
 });
 
+describe("AI close-confidence threshold gate (#7)", () => {
+  const aiDefectWith = (confidence: number | undefined): Advisory => ({
+    ...missingIssueAdvisory(),
+    findings: [{ code: "ai_consensus_defect", title: "AI reviewers agree on a likely critical defect", severity: "critical", detail: "Both models flagged a null deref.", action: "Resolve it.", ...(confidence !== undefined ? { confidence } : {}) }],
+  });
+  const splitDefectWith = (confidence: number): Advisory => ({
+    ...missingIssueAdvisory(),
+    findings: [{ code: "ai_review_split", title: "An AI reviewer flagged a likely blocking defect", severity: "critical", detail: "One reviewer flagged it.", action: "Resolve it.", confidence }],
+  });
+
+  it("blocks when mode=block AND confidence >= the default 0.9 floor", () => {
+    const out = evaluateGateCheck(aiDefectWith(0.95), gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true));
+    expect(out.conclusion).toBe("failure");
+    expect(out.blockers.map((f) => f.code)).toEqual(["ai_consensus_defect"]);
+  });
+
+  it("does NOT block when mode=block but confidence < the floor — the AI defect stays advisory (#7)", () => {
+    const out = evaluateGateCheck(aiDefectWith(0.5), gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true));
+    expect(out.conclusion).toBe("success"); // below 0.9 → not a blocker, never closes
+    expect(out.blockers).toEqual([]);
+  });
+
+  it("blocks exactly AT the floor (>= boundary) and not just below it", () => {
+    // policy.aiReviewCloseConfidence is threaded onto the policy from settings.
+    const policy = gateCheckPolicy(settings({ aiReviewMode: "block", aiReviewCloseConfidence: 0.7 }), null, true);
+    expect(evaluateGateCheck(aiDefectWith(0.7), policy).conclusion).toBe("failure"); // == threshold → blocks
+    expect(evaluateGateCheck(aiDefectWith(0.69), policy).conclusion).toBe("success"); // just below → advisory
+  });
+
+  it("honors a custom aiReviewCloseConfidence (the `?? 0.9` default is NOT used when set) (#7)", () => {
+    // A high custom floor of 0.99 keeps a 0.95 defect advisory (the 0.9 default would have blocked it).
+    const strict = gateCheckPolicy(settings({ aiReviewMode: "block", aiReviewCloseConfidence: 0.99 }), null, true);
+    expect(evaluateGateCheck(aiDefectWith(0.95), strict).conclusion).toBe("success");
+    // A low custom floor of 0.3 blocks a 0.5 defect that the 0.9 default would have left advisory.
+    const lenient = gateCheckPolicy(settings({ aiReviewMode: "block", aiReviewCloseConfidence: 0.3 }), null, true);
+    expect(evaluateGateCheck(aiDefectWith(0.5), lenient).conclusion).toBe("failure");
+  });
+
+  it("a finding WITHOUT a confidence degrades to 1.0 and blocks under the default floor (graceful fallback) (#7)", () => {
+    const out = evaluateGateCheck(aiDefectWith(undefined), gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true));
+    expect(out.conclusion).toBe("failure"); // no confidence → treated as 1.0 → always clears 0.9
+  });
+
+  it("never blocks when mode=advisory, regardless of a high confidence (#7)", () => {
+    expect(evaluateGateCheck(aiDefectWith(1), gateCheckPolicy(settings({ aiReviewMode: "advisory" }), null, true)).conclusion).toBe("success");
+  });
+
+  it("applies the same confidence floor to an ai_review_split finding (#7)", () => {
+    const policy = gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true);
+    expect(evaluateGateCheck(splitDefectWith(0.95), policy).conclusion).toBe("failure"); // clears 0.9 → blocks
+    expect(evaluateGateCheck(splitDefectWith(0.5), policy).conclusion).toBe("success"); // below 0.9 → advisory
+  });
+
+  it("resolveEffectiveSettings maps gate.aiReview.closeConfidence (clamped) into the policy floor (#7)", () => {
+    const eff = resolveEffectiveSettings(settings({ aiReviewMode: "off" }), parseFocusManifest({ gate: { aiReview: { mode: "block", closeConfidence: 0.4 } } }));
+    expect(eff.aiReviewCloseConfidence).toBe(0.4);
+    expect(eff.aiReviewMode).toBe("block");
+    // a 0.5 defect clears the configured 0.4 floor → blocks (it would NOT under the 0.9 default).
+    expect(evaluateGateCheck(aiDefectWith(0.5), gateCheckPolicy(eff, null, true)).conclusion).toBe("failure");
+  });
+});
+
 describe("slop gate (#530/#532)", () => {
   function cleanAdvisory(): Advisory {
     return { ...missingIssueAdvisory(), findings: [] };

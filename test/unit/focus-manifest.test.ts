@@ -477,7 +477,7 @@ describe("compileFocusManifestPolicy", () => {
       issueDiscoveryPolicy: "neutral",
       maintainerNotes: [],
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
-      gate: { present: false, enabled: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null },
+      gate: { present: false, enabled: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null },
       settings: {},
       review: { present: false, footerText: null, note: null, fields: {}, profile: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
       features: { present: false, rag: null, reputation: null, unifiedComment: null, safety: null },
@@ -766,7 +766,7 @@ describe("parseFocusManifest gate config", () => {
   it("parses a full gate section including the readiness block", () => {
     const m = parseFocusManifest({ gate: { linkedIssue: "block", duplicates: "advisory", readiness: { mode: "block", minScore: 70 } } });
     expect(m.present).toBe(true);
-    expect(m.gate).toEqual({ present: true, enabled: null, pack: null, linkedIssue: "block", duplicates: "advisory", readinessMode: "block", readinessMinScore: 70, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null });
+    expect(m.gate).toEqual({ present: true, enabled: null, pack: null, linkedIssue: "block", duplicates: "advisory", readinessMode: "block", readinessMinScore: 70, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null });
   });
 
   it("parses gate.mergeReadiness + gate.firstTimeContributorGrace, round-trips them, and warns on bad values (#822)", () => {
@@ -931,6 +931,29 @@ describe("parseFocusManifest gate config", () => {
     const noFlag = parseFocusManifest({ gate: { aiReview: { mode: "advisory" } } });
     expect(noFlag.gate.aiReviewAllAuthors).toBeNull();
     expect(resolveEffectiveSettings({ aiReviewAllAuthors: true , closeOwnerAuthors: false} as unknown as RepositorySettings, noFlag).aiReviewAllAuthors).toBe(true);
+  });
+
+  it("parses gate.aiReview.closeConfidence, clamps to [0,1], makes the gate present, round-trips + resolves it, and warns on a bad value (#7)", () => {
+    // closeConfidence alone makes the gate present, serializes back under gate.aiReview.closeConfidence, and the
+    // gate alias projects it onto effective settings.
+    const m = parseFocusManifest({ gate: { aiReview: { closeConfidence: 0.75 } } });
+    expect(m.gate.present).toBe(true);
+    expect(m.gate.aiReviewCloseConfidence).toBe(0.75);
+    expect((gateConfigToJson(m.gate) as { aiReview: { closeConfidence: number } }).aiReview.closeConfidence).toBe(0.75);
+    expect(parseFocusManifest({ gate: gateConfigToJson(m.gate) }).gate).toEqual(m.gate); // round-trips
+    // Clamped to [0,1] WITHOUT rounding (a fractional confidence, not a 0-100 score).
+    expect(parseFocusManifest({ gate: { aiReview: { closeConfidence: 1.5 } } }).gate.aiReviewCloseConfidence).toBe(1);
+    expect(parseFocusManifest({ gate: { aiReview: { closeConfidence: -0.2 } } }).gate.aiReviewCloseConfidence).toBe(0);
+    expect(parseFocusManifest({ gate: { aiReview: { closeConfidence: 0.333 } } }).gate.aiReviewCloseConfidence).toBe(0.333); // not rounded
+    // A non-number value warns and is dropped (stays null).
+    expect(parseFocusManifest({ gate: { aiReview: { closeConfidence: "high" } } }).warnings.some((w) => /gate\.aiReview\.closeConfidence/.test(w))).toBe(true);
+    expect(parseFocusManifest({ gate: { aiReview: { closeConfidence: "high" } } }).gate.aiReviewCloseConfidence).toBeNull();
+    // The gate alias projects it onto effective settings; absent ⇒ null ⇒ the DB value (here undefined) is untouched.
+    const eff = resolveEffectiveSettings({ aiReviewCloseConfidence: undefined } as unknown as RepositorySettings, m);
+    expect(eff.aiReviewCloseConfidence).toBe(0.75);
+    const noFlag = parseFocusManifest({ gate: { aiReview: { mode: "advisory" } } });
+    expect(noFlag.gate.aiReviewCloseConfidence).toBeNull();
+    expect(resolveEffectiveSettings({ aiReviewCloseConfidence: 0.6 } as unknown as RepositorySettings, noFlag).aiReviewCloseConfidence).toBe(0.6);
   });
 
   it("parses the features: block (per-repo converged-feature toggles), round-trips it, and makes the manifest present", () => {

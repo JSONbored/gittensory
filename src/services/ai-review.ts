@@ -49,9 +49,10 @@ const REVIEW_SYSTEM_PROMPT = [
   "You are a senior open-source maintainer giving a FOCUSED, high-signal code review of a single pull request diff.",
   "Read each meaningful hunk and review like a careful human; judge ONLY the diff and the context provided.",
   "Respond with ONLY a JSON object of this exact shape (no prose, no code fence):",
-  '{"assessment": string, "blockers": string[], "nits": string[], "suggestions": string[]}',
+  '{"assessment": string, "blockers": string[], "nits": string[], "suggestions": string[], "confidence": number}',
   "- assessment: a substantive but CONCISE summary (2-4 sentences) — what the change does, whether it is correct, and the most notable detail. Specific to THIS diff; never a generic one-liner and never hedging ('appears to', 'seems to').",
   "- blockers: each ONE sentence naming a defect that WILL break the code as written — a missing import/symbol (ReferenceError), a logic error that produces wrong output, a security hole, data loss, a build/test breakage, or an API/contract break. Reference the file (and function/line). Empty [] if there are genuinely none.",
+  "- confidence: a single number in [0,1] — your CALIBRATED probability that the blockers above are REAL, must-fix defects (not false positives). Use 1.0 only when you are certain the diff itself breaks; use 0.5 for a genuine coin-flip; lower it when you cannot fully see the breaking code or the defect is speculative. When blockers is empty, set confidence to 1.0.",
   "- nits: each ONE sentence — a NON-blocking point: style, naming, a missing doc, or DEFENSIVE hardening ('should handle the empty case', 'consider catching errors', 'add validation'). File-reference where you can.",
   "- suggestions: a few concrete, file-referenced improvements (may overlap nits).",
   "BE SELECTIVE — report only the findings that genuinely matter. List at MOST ~3 blockers and ~5 nits, keeping only the most important; prefer signal over volume and do NOT pad the lists.",
@@ -193,6 +194,9 @@ export type GittensoryAiReviewResult =
       advisoryNotes: string | null;
       consensusDefect: AiConsensusDefect | null;
       split: boolean;
+      /** Calibrated confidence of the lone reviewer whose blocker caused a SPLIT (#8), so the `ai_review_split`
+       *  finding carries the same confidence as a consensus defect would. Present only when `split` is true. */
+      splitConfidence?: number;
       inconclusive: boolean;
       estimatedNeurons: number;
       reviewerCount: number;
@@ -216,6 +220,11 @@ export type ModelReview = {
   blockers: string[];
   nits: string[];
   suggestions: string[];
+  // Calibrated confidence in [0,1] (#8): the reviewer's own probability that its blocker(s) are a REAL defect. Drives
+  // the gate's `aiReviewCloseConfidence` floor (an AI defect blocks only when confidence clears it). parseModelReview
+  // sets it from the model's `confidence` field; an absent/unparseable/out-of-range value degrades to 1.0 (FALLBACK),
+  // so behavior matches the historical hardcoded `confidence: 1` until a calibrated value is actually present.
+  confidence: number;
   // Line-anchored findings for inline PR review comments (#inline-comments). ALWAYS present (parseModelReview
   // sets []); populated only when the caller asked for them (input.inlineFindings) AND the model emitted any.
   inlineFindings: InlineFinding[];
@@ -352,6 +361,20 @@ export function extractLastJsonObject(text: string): string | null {
   return last;
 }
 
+/** Default reviewer confidence when the model omits a usable `confidence` (#8) — 1.0, so an absent/garbage value
+ *  degrades to EXACTLY the historical hardcoded `confidence: 1` (a defect always cleared the floor). Shared by the
+ *  parser and the combiners so the fallback is identical everywhere. */
+export const DEFAULT_REVIEW_CONFIDENCE = 1;
+
+/** Coerce a model's `confidence` field to a calibrated value in [0,1] (#8). A finite number is clamped into range;
+ *  anything else (absent, NaN/±Infinity — which JSON can't even encode — string, etc.) falls back to 1.0 so the gate
+ *  degrades to today's always-block behavior rather than silently un-blocking a real defect. PURE. */
+export function parseReviewConfidence(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value))
+    return DEFAULT_REVIEW_CONFIDENCE;
+  return Math.min(1, Math.max(0, value));
+}
+
 /** Parse a model's JSON review into a normalized {@link ModelReview}, or null when unparseable. */
 export function parseModelReview(text: string): ModelReview | null {
   const jsonText = extractLastJsonObject(text);
@@ -393,6 +416,9 @@ export function parseModelReview(text: string): ModelReview | null {
     const nits = toList(obj.nits);
     const suggestions = toList(obj.suggestions);
     const inlineFindings = toInlineFindings(obj.inlineFindings);
+    // Calibrated reviewer confidence (#8): clamp the model's `confidence` to [0,1]; an absent/garbage value falls
+    // back to 1.0 (parseReviewConfidence) so the gate degrades to the historical always-block behavior.
+    const confidence = parseReviewConfidence(obj.confidence);
     if (assessment === INCOHERENT_DIFF_ASSESSMENT) return null;
     if (
       !assessment &&
@@ -401,7 +427,7 @@ export function parseModelReview(text: string): ModelReview | null {
       suggestions.length === 0
     )
       return null;
-    return { assessment, blockers, nits, suggestions, inlineFindings };
+    return { assessment, blockers, nits, suggestions, inlineFindings, confidence };
   } catch {
     return null;
   }
@@ -692,8 +718,8 @@ export function composeInlineFindings(reviews: ModelReview[]): InlineFinding[] {
 
 /** A CONSENSUS defect = BOTH reviews independently name at least one concrete blocker (the severity-disciplined
  *  reviewbot model: a lone blocker in a dual review is a split, not a hard block). Requiring two independent
- *  models to AGREE is itself the precision mechanism — the free Workers-AI models emit no calibrated confidence
- *  score, so there is no numeric floor to enforce; agreement is the signal. */
+ *  models to AGREE is itself the precision mechanism; the calibrated confidence (#8) ADDS a numeric floor on top —
+ *  a consensus is only as strong as its WEAKER reviewer, so the defect carries `min(a.confidence, b.confidence)`. */
 export function consensusDefectOf(
   a: ModelReview,
   b: ModelReview,
@@ -710,23 +736,30 @@ export function consensusDefectOf(
   const detail =
     toPublicSafe(a.blockers[0] || b.blockers[0] || "") ??
     "Both AI reviewers independently flagged a concrete must-fix defect in this change.";
-  return { title, detail, confidence: 1 };
+  // The consensus is only as strong as the WEAKER reviewer: take the minimum of the two confidences (#8).
+  return { title, detail, confidence: Math.min(a.confidence, b.confidence) };
 }
 
 /** Deterministic SYNTHESIS of one public-safe defect from the reviews that named a blocker — same public-safe
  *  discipline as `consensusDefectOf` (cite the primary blocker; an unsafe title drops the whole block, fail-safe).
- *  Used by the `synthesis` and `single` combine strategies. */
+ *  Used by the `synthesis` and `single` combine strategies. The defect carries the CONFIDENCE of the reviewer that
+ *  supplied the cited primary blocker (#8) — for `single` that is that one reviewer's confidence. */
 function synthesizeDefect(
   reviews: ReadonlyArray<ModelReview>,
 ): AiConsensusDefect | null {
-  const primary = reviews
-    .flatMap((r) => r.blockers)
+  // Find the FIRST reviewer with a non-blank blocker so the cited title + the carried confidence come from the
+  // SAME reviewer (a flat-map would divorce the blocker text from its reviewer's confidence).
+  const source = reviews.find((r) =>
+    r.blockers.some((b) => b.trim().length > 0),
+  );
+  const primary = source?.blockers
     .map((b) => b.trim())
     .find((b) => b.length > 0);
-  if (!primary) return null;
+  if (!source || !primary) return null;
   const title = toPublicSafe(primary);
   if (!title) return null; // unsafe title → drop the block entirely (fail-safe)
-  return { title, detail: title, confidence: 1 }; // cite the primary blocker as both title + detail
+  // cite the primary blocker as both title + detail; confidence = the flagging reviewer's calibrated confidence.
+  return { title, detail: title, confidence: source.confidence };
 }
 
 /** Combine the independent reviewer opinions into ONE gate decision per the configured strategy (#dual-ai-combiner).
@@ -738,7 +771,13 @@ function synthesizeDefect(
 export function combineReviews(
   reviews: ReadonlyArray<ModelReview | null>,
   opts: { strategy: CombineStrategy; onMerge?: OnMerge | null | undefined },
-): { defect: AiConsensusDefect | null; split: boolean; inconclusive: boolean } {
+): {
+  defect: AiConsensusDefect | null;
+  split: boolean;
+  inconclusive: boolean;
+  /** The lone-flagging reviewer's calibrated confidence when `split` is true (#8); absent otherwise. */
+  splitConfidence?: number;
+} {
   const present = reviews.filter((r): r is ModelReview => Boolean(r));
   const missing = reviews.length - present.length;
 
@@ -779,12 +818,21 @@ export function combineReviews(
     return { defect: null, split: false, inconclusive: missing > 0 };
   }
 
-  // `consensus` (default) — BYTE-IDENTICAL to the historical block-mode pair logic.
+  // `consensus` (default) — the historical block-mode pair logic, now ALSO surfacing the split's confidence (#8).
   const [a, b] = reviews;
   if (a && b) {
     const defect = consensusDefectOf(a, b);
     const split = !defect && a.blockers.length > 0 !== b.blockers.length > 0;
-    return { defect, split, inconclusive: false };
+    // On a split, exactly one reviewer flagged a blocker — carry THAT reviewer's confidence so the
+    // `ai_review_split` finding gates on the same calibrated floor a consensus defect would.
+    return split
+      ? {
+          defect,
+          split,
+          inconclusive: false,
+          splitConfidence: a.blockers.length > 0 ? a.confidence : b.confidence,
+        }
+      : { defect, split, inconclusive: false };
   }
   return { defect: null, split: false, inconclusive: true };
 }
@@ -948,6 +996,7 @@ export async function runGittensoryAiReview(
   let consensusDefect: AiConsensusDefect | null = null;
   let secondReview: ModelReview | null = null;
   let aiReviewSplit = false;
+  let splitConfidence: number | undefined;
   let inconclusive = false;
   if (input.mode === "block") {
     if (dual) {
@@ -981,6 +1030,7 @@ export async function runGittensoryAiReview(
       const combined = combineReviews([a, b], { strategy: combine, onMerge });
       consensusDefect = combined.defect;
       aiReviewSplit = combined.split;
+      splitConfidence = combined.splitConfidence;
       inconclusive = combined.inconclusive;
     } else {
       // Single reviewer: its verdict IS the decision. Reuse the advisory leg (non-BYOK) or run the one reviewer.
@@ -1039,6 +1089,9 @@ export async function runGittensoryAiReview(
     advisoryNotes,
     consensusDefect,
     split: aiReviewSplit,
+    // Carry the split's calibrated confidence (#8) so the caller can gate `ai_review_split` on the same floor as a
+    // consensus defect. Only present on a split (combineReviews leaves it undefined otherwise).
+    ...(splitConfidence !== undefined ? { splitConfidence } : {}),
     inconclusive,
     estimatedNeurons,
     reviewerCount: reviewsForNotes.length,
@@ -1084,6 +1137,7 @@ async function record(
 
 export const __aiReviewInternals = {
   parseModelReview,
+  parseReviewConfidence,
   coerceAiText,
   composeAdvisoryNotes,
   composeInlineFindings,
