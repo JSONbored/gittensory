@@ -145,20 +145,45 @@ const RELAY_RETRY_CONCURRENCY = 5;
 // (and bounds the ack list), and the TTL drops events the engine never came back for (a long-down container).
 const RELAY_PENDING_BATCH_SIZE = 50;
 const RELAY_PENDING_TTL_HOURS = 24;
+const RELAY_PENDING_MAX_PER_INSTALLATION = 500;
 
 export type RelayPendingEvent = { deliveryId: string; eventName: string; rawBody: string };
 
+/** Drop pull-mode rows that exceeded the raw-body retention window, even if their engine never polls. */
+async function pruneRelayPending(env: Env): Promise<number> {
+  const pruned = await env.DB
+    .prepare("DELETE FROM orb_relay_pending WHERE created_at < datetime('now', '-' || ? || ' hours')")
+    .bind(RELAY_PENDING_TTL_HOURS)
+    .run();
+  return pruned.meta.changes;
+}
+
 /** Enqueue a pull-mode event for an installation. Idempotent on delivery_id (mirrors storeRelayFailure) — a GitHub
- *  redelivery reaching the Orb twice never double-queues. */
+ *  redelivery reaching the Orb twice never double-queues. Prunes expired rows and caps each install's backlog first so
+ *  an offline/malicious pull enrollment cannot retain raw webhook bodies indefinitely. */
 export async function enqueueRelayPending(
   env: Env,
   args: { deliveryId: string; installationId: number; eventName: string; rawBody: string },
 ): Promise<void> {
+  await pruneRelayPending(env);
   await env.DB
     .prepare(
       "INSERT INTO orb_relay_pending (delivery_id, installation_id, event_name, raw_body) VALUES (?, ?, ?, ?) ON CONFLICT(delivery_id) DO NOTHING",
     )
     .bind(args.deliveryId, args.installationId, args.eventName, args.rawBody)
+    .run();
+  await env.DB
+    .prepare(
+      `DELETE FROM orb_relay_pending
+       WHERE installation_id = ?
+         AND delivery_id IN (
+           SELECT delivery_id FROM orb_relay_pending
+           WHERE installation_id = ?
+           ORDER BY created_at DESC, delivery_id DESC
+           LIMIT -1 OFFSET ?
+         )`,
+    )
+    .bind(args.installationId, args.installationId, RELAY_PENDING_MAX_PER_INSTALLATION)
     .run();
 }
 
@@ -172,10 +197,7 @@ export async function pullRelayPending(
   opts?: { ack?: string[] | undefined; limit?: number | undefined },
 ): Promise<RelayPendingEvent[]> {
   // Prune rows the engine never came back for (same datetime() comparison style as retryFailedRelays).
-  await env.DB
-    .prepare("DELETE FROM orb_relay_pending WHERE created_at < datetime('now', '-' || ? || ' hours')")
-    .bind(RELAY_PENDING_TTL_HOURS)
-    .run();
+  await pruneRelayPending(env);
 
   const ack = opts?.ack?.slice(0, RELAY_PENDING_BATCH_SIZE) ?? [];
   if (ack.length) {
