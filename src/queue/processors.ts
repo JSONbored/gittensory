@@ -1510,7 +1510,9 @@ async function reReviewStoredPullRequest(
   }
   // Operator review flow: rebase-if-behind → wait for ALL CI to finish → only THEN review. Defers (returns) when
   // a rebase fired a synchronize, or CI is still running — the synchronize / CI-completion webhook re-triggers
-  // once the head is current and CI has settled (the sweep backstops a missed event).
+  // once the head is current and CI has settled (the sweep backstops a missed event). REST-budget dedup
+  // (#audit-rate-headroom): thread the already-fetched live PR's `mergeable_state` so prReadyForReview reuses it
+  // instead of issuing a second `GET /pulls/{n}` for the behind-base check.
   if (
     !(await prReadyForReview(
       env,
@@ -1519,6 +1521,7 @@ async function reReviewStoredPullRequest(
       pr,
       settings,
       deliveryId,
+      { liveMergeState: live?.mergeable_state ?? undefined },
     ))
   )
     return;
@@ -1625,6 +1628,12 @@ async function prReadyForReview(
   pr: PullRequestRecord,
   settings: RepositorySettings,
   deliveryId: string,
+  // REST-budget dedup (#audit-rate-headroom): the re-gate sweep already fetched the FULL live PR once (the resync
+  // `GET /pulls/{n}`), whose `mergeable_state` is exactly what the behind-base check needs. When the caller passes
+  // it, REUSE it instead of issuing a second `GET /pulls/{n}` here. `undefined` ⇒ no payload (the webhook path,
+  // which has no pre-fetched live PR) ⇒ fall back to the live fetch. The shared installation REST bucket is one
+  // hourly budget across all repos, so removing the duplicate GET halves the per-regate `GET /pulls/{n}` cost.
+  options: { liveMergeState?: string | undefined } = {},
 ): Promise<boolean> {
   // Only gate an OPEN, non-draft, agent-configured PR. A closed PR (the live path also runs on `closed` to
   // finalize / record reputation) must NOT be rebased or CI-waited — proceed so finalization runs.
@@ -1640,13 +1649,14 @@ async function prReadyForReview(
       () => undefined,
     )) ?? env.GITHUB_PUBLIC_TOKEN;
   if (!token) return true;
-  // 1) rebase if BEHIND base — the synchronize on the new head re-triggers this flow on the merged result.
-  const liveMergeState = await fetchLivePullRequestMergeState(
-    env,
-    repoFullName,
-    pr.number,
-    token,
-  ).catch(() => undefined);
+  // 1) rebase if BEHIND base — the synchronize on the new head re-triggers this flow on the merged result. Reuse a
+  // caller-supplied mergeable_state (the sweep's resync payload) to skip a redundant `GET /pulls/{n}`; fall back to
+  // the live fetch only when no payload was threaded (the webhook path). fetchLivePullRequestMergeState fails open
+  // internally (swallows its own fetch errors → undefined), so the fallback needs no extra catch — mirroring the
+  // resync's fetchLivePullRequest call above.
+  const liveMergeState =
+    options.liveMergeState ??
+    (await fetchLivePullRequestMergeState(env, repoFullName, pr.number, token));
   if (liveMergeState === "behind") {
     const autonomyLevel = resolveAutonomy(settings.autonomy, "update_branch");
     const installation = await getInstallation(env, installationId);
