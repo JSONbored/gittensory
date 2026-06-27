@@ -675,6 +675,26 @@ test("scanRedos: scans every changed file's added lines, caps to its budget", as
   assert.equal(findings[0].file, "src/a.ts");
 });
 
+test("scanPatchForRedos: stops scanning once the finding budget is exhausted", () => {
+  const patch = [
+    "@@ -1,0 +1,4 @@",
+    "+const first = /(a+)+$/;",
+    "+const second = /(b+)+$/;",
+    "+const third = /(c+)+$/;",
+    "+const fourth = /(d+)+$/;",
+  ].join("\n");
+
+  const findings = scanPatchForRedos("src/x.ts", patch, { maxFindings: 2 });
+
+  assert.deepEqual(
+    findings.map(({ line, pattern }) => ({ line, pattern })),
+    [
+      { line: 1, pattern: "(a+)+$" },
+      { line: 2, pattern: "(b+)+$" },
+    ],
+  );
+});
+
 test("renderBrief: renders the ReDoS block, code-spanning + sanitizing the pattern", () => {
   const r = renderBrief({
     redos: [
