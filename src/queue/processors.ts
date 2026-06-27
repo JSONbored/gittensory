@@ -74,6 +74,7 @@ import {
   fetchAndStorePullRequestFilesForReview,
   fetchLinkedIssueFacts,
   fetchLiveCiAggregate,
+  fetchLivePullRequest,
   fetchLivePullRequestHeadSha,
   fetchLivePullRequestMergeState,
   fetchLivePullRequestReviewDecision,
@@ -279,6 +280,7 @@ import { runGittensoryAiSlopAdvisory } from "../services/ai-slop";
 import { decidePublicSurface } from "../signals/settings-preview";
 import {
   buildFocusManifestGuidance,
+  composeRepoReviewContext,
   excludeReviewPaths,
   resolveReviewPathInstructions,
   resolveReviewPreMergeChecks,
@@ -287,7 +289,10 @@ import {
   type ReviewPathInstruction,
   type ReviewProfile,
 } from "../signals/focus-manifest";
-import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
+import {
+  loadRepoFocusManifest,
+  loadRepoReviewContext,
+} from "../signals/focus-manifest-loader";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import {
@@ -1476,11 +1481,38 @@ async function reReviewStoredPullRequest(
     getRepository(env, repoFullName),
     resolveRepositorySettings(env, repoFullName),
   ]);
-  const pr = await getPullRequest(env, repoFullName, prNumber);
+  let pr = await getPullRequest(env, repoFullName, prNumber);
   if (!pr || pr.state !== "open") return;
+  // #sweep-resync: RESYNC the stored PR to its LIVE head before reviewing. The self-host relay can drop the
+  // `synchronize` webhook (relay down), so a push/rebase never refreshes the stored head SHA + cached files; the
+  // sweep would then review a STALE diff and the AI fail-closes it as INCOHERENT_DIFF, stranding the PR in "held".
+  // Fetch the live PR, and if its head drifted, upsert it + refresh the files so the review runs on the current
+  // head. FAIL OPEN: any token/fetch/undefined-head hiccup proceeds with the stored `pr` (never stall the sweep).
+  const resyncToken =
+    (await createInstallationToken(env, installationId).catch(
+      () => undefined,
+    )) ?? env.GITHUB_PUBLIC_TOKEN;
+  const live = await fetchLivePullRequest(
+    env,
+    repoFullName,
+    prNumber,
+    resyncToken,
+  );
+  if (live?.head?.sha && live.head.sha !== pr.headSha) {
+    await upsertPullRequestFromGitHub(env, repoFullName, live).catch(
+      () => undefined,
+    );
+    await refreshPullRequestDetails(env, repoFullName, prNumber).catch(
+      () => undefined,
+    );
+    /* v8 ignore next -- the row was just upserted above, so the re-read always returns it; `?? pr` is belt-and-suspenders fail-open. */
+    pr = (await getPullRequest(env, repoFullName, prNumber)) ?? pr;
+  }
   // Operator review flow: rebase-if-behind → wait for ALL CI to finish → only THEN review. Defers (returns) when
   // a rebase fired a synchronize, or CI is still running — the synchronize / CI-completion webhook re-triggers
-  // once the head is current and CI has settled (the sweep backstops a missed event).
+  // once the head is current and CI has settled (the sweep backstops a missed event). REST-budget dedup
+  // (#audit-rate-headroom): thread the already-fetched live PR's `mergeable_state` so prReadyForReview reuses it
+  // instead of issuing a second `GET /pulls/{n}` for the behind-base check.
   if (
     !(await prReadyForReview(
       env,
@@ -1489,6 +1521,7 @@ async function reReviewStoredPullRequest(
       pr,
       settings,
       deliveryId,
+      { liveMergeState: live?.mergeable_state ?? undefined },
     ))
   )
     return;
@@ -1595,6 +1628,12 @@ async function prReadyForReview(
   pr: PullRequestRecord,
   settings: RepositorySettings,
   deliveryId: string,
+  // REST-budget dedup (#audit-rate-headroom): the re-gate sweep already fetched the FULL live PR once (the resync
+  // `GET /pulls/{n}`), whose `mergeable_state` is exactly what the behind-base check needs. When the caller passes
+  // it, REUSE it instead of issuing a second `GET /pulls/{n}` here. `undefined` ⇒ no payload (the webhook path,
+  // which has no pre-fetched live PR) ⇒ fall back to the live fetch. The shared installation REST bucket is one
+  // hourly budget across all repos, so removing the duplicate GET halves the per-regate `GET /pulls/{n}` cost.
+  options: { liveMergeState?: string | undefined } = {},
 ): Promise<boolean> {
   // Only gate an OPEN, non-draft, agent-configured PR. A closed PR (the live path also runs on `closed` to
   // finalize / record reputation) must NOT be rebased or CI-waited — proceed so finalization runs.
@@ -1610,13 +1649,14 @@ async function prReadyForReview(
       () => undefined,
     )) ?? env.GITHUB_PUBLIC_TOKEN;
   if (!token) return true;
-  // 1) rebase if BEHIND base — the synchronize on the new head re-triggers this flow on the merged result.
-  const liveMergeState = await fetchLivePullRequestMergeState(
-    env,
-    repoFullName,
-    pr.number,
-    token,
-  ).catch(() => undefined);
+  // 1) rebase if BEHIND base — the synchronize on the new head re-triggers this flow on the merged result. Reuse a
+  // caller-supplied mergeable_state (the sweep's resync payload) to skip a redundant `GET /pulls/{n}`; fall back to
+  // the live fetch only when no payload was threaded (the webhook path). fetchLivePullRequestMergeState fails open
+  // internally (swallows its own fetch errors → undefined), so the fallback needs no extra catch — mirroring the
+  // resync's fetchLivePullRequest call above.
+  const liveMergeState =
+    options.liveMergeState ??
+    (await fetchLivePullRequestMergeState(env, repoFullName, pr.number, token));
   if (liveMergeState === "behind") {
     const autonomyLevel = resolveAutonomy(settings.autonomy, "update_branch");
     const installation = await getInstallation(env, installationId);
@@ -3297,6 +3337,11 @@ export function gateCheckPolicy(
   confirmedContributor?: boolean,
   slopRisk?: number | null,
   authorHistory?: { mergedPrCount: number; closedUnmergedPrCount: number },
+  sizeContext?: {
+    changedFileCount: number;
+    changedLineCount: number;
+    guardrailHit: boolean;
+  },
 ) {
   // `settings` is already the EFFECTIVE config (`.gittensory.yml` > DB > defaults), resolved upstream by
   // resolveRepositorySettings, so the blocker modes here reflect the repo's config file directly.
@@ -3311,6 +3356,9 @@ export function gateCheckPolicy(
     qualityGateMode: settings.qualityGateMode,
     qualityGateMinScore: settings.qualityGateMinScore ?? null,
     aiReviewGateMode: settings.aiReviewMode,
+    // Calibrated AI close-confidence floor (#7) — config-as-code via `.gittensory.yml gate.aiReview.closeConfidence`,
+    // resolved into settings upstream. `null`/undefined ⇒ advisory.ts applies the 0.9 default.
+    aiReviewCloseConfidence: settings.aiReviewCloseConfidence ?? null,
     readinessScore: readinessScore ?? null,
     slopGateMode: settings.slopGateMode,
     mergeReadinessGateMode: settings.mergeReadinessGateMode,
@@ -3322,6 +3370,15 @@ export function gateCheckPolicy(
     slopGateMinScore: settings.slopGateMinScore ?? null,
     slopRisk: slopRisk ?? null,
     confirmedContributor: confirmedContributorForPack,
+    // PR-size + guardrail manual-review HOLD (#gate-size / #gate-guardrail): the MODE comes from config; the
+    // thresholds default to 10 files / 500 lines (advisory.ts constants); the live counts + guardrail-hit come from
+    // the per-PR sizeContext threaded by the caller.
+    sizeGateMode: settings.sizeGateMode,
+    changedFileCount: sizeContext?.changedFileCount ?? null,
+    changedLineCount: sizeContext?.changedLineCount ?? null,
+    guardrailHit: sizeContext?.guardrailHit ?? false,
+    // #gate-dryrun: render the would-be merge/close/manual verdict (advisory promoted to block) without enforcing.
+    dryRun: settings.gateDryRun ?? false,
   };
 }
 
@@ -3469,8 +3526,23 @@ export async function shouldStartAiReviewForAdvisory(
     skipAiReview?: boolean | undefined;
   },
 ): Promise<boolean> {
-  const packAllowsAnyAuthorBlockingReview = args.settings.gatePack === "oss-anti-slop" && args.settings.aiReviewMode === "block";
-  if (args.skipAiReview || args.settings.aiReviewMode === "off" || (!args.confirmedContributor && !packAllowsAnyAuthorBlockingReview) || !args.advisory.headSha || !isEnabled(env.AI_SUMMARIES_ENABLED) || !isEnabled(env.AI_PUBLIC_COMMENTS_ENABLED) || !env.AI) return false;
+  const packAllowsAnyAuthorBlockingReview =
+    args.settings.gatePack === "oss-anti-slop" &&
+    args.settings.aiReviewMode === "block";
+  const reviewableAuthor =
+    args.confirmedContributor ||
+    packAllowsAnyAuthorBlockingReview ||
+    args.settings.aiReviewAllAuthors;
+  if (
+    args.skipAiReview ||
+    args.settings.aiReviewMode === "off" ||
+    !reviewableAuthor ||
+    !args.advisory.headSha ||
+    !isEnabled(env.AI_SUMMARIES_ENABLED) ||
+    !isEnabled(env.AI_PUBLIC_COMMENTS_ENABLED) ||
+    !env.AI
+  )
+    return false;
   return !(isReputationEnabled(env) && isConvergenceRepoAllowed(env, args.repoFullName) && (await shouldSkipAiForReputation(env, { project: args.repoFullName, submitter: args.author })));
 }
 
@@ -3495,6 +3567,10 @@ export async function runAiReviewForAdvisory(
     // cached manifest. The CONFIG (not a fetch) is threaded in; the per-PR glob match against `files` happens
     // here (pure), so the AI path makes no extra manifest fetch. Absent/empty ⇒ byte-identical reviewer prompt.
     reviewPathInstructions?: ReviewPathInstruction[] | undefined;
+    // `.gittensory.yml` review.instructions (#review-instructions): a repo-level maintainer brief, resolved by the
+    // caller from the cached manifest, handed to the reviewer on EVERY review (bounded + public-safe at parse time).
+    // Absent/null ⇒ byte-identical reviewer prompt.
+    reviewInstructions?: string | null | undefined;
     // `.gittensory.yml` review.exclude_paths (#review-exclude-paths), resolved by the caller from the cached
     // manifest. Globs whose files are dropped from the AI review (diff + grounding + RAG) — generated/lockfiles
     // the maintainer doesn't want reviewed. Empty ⇒ every file is reviewed (byte-identical). The gate is unaffected.
@@ -3677,6 +3753,7 @@ export async function runAiReviewForAdvisory(
         args.reviewPathInstructions ?? [],
         files.map((file) => file.path),
       ),
+      repoInstructions: args.reviewInstructions ?? null,
     });
     if (result.status !== "ok") return undefined;
     const findings: AdvisoryFinding[] = [];
@@ -3688,6 +3765,8 @@ export async function runAiReviewForAdvisory(
         detail: result.consensusDefect.detail,
         action:
           "Resolve the flagged defect, or override if the AI reviewers are mistaken, then re-run the gate.",
+        // Calibrated confidence (#8): the gate blocks this defect only when it clears aiReviewCloseConfidence.
+        confidence: result.consensusDefect.confidence,
       });
     } else if (result.split) {
       // The reviewers DISAGREED — exactly one flagged a blocking defect. reviewbot's quorum: ANY reviewer
@@ -3701,6 +3780,14 @@ export async function runAiReviewForAdvisory(
           "One AI reviewer independently flagged a concrete must-fix defect in this change (the other did not). Under the quorum rule, a single rejection closes the PR; see the review notes for specifics.",
         action:
           "Resolve the flagged defect and open a new pull request, or override if the reviewers are mistaken.",
+        // Calibrated confidence (#8) of the lone flagging reviewer; the gate blocks only when it clears
+        // aiReviewCloseConfidence. A consensus split ALWAYS carries this (combineReviews sets it whenever split is
+        // true), so the spread is effectively unconditional; the guard is a defensive belt-and-braces — an absent
+        // value would degrade to 1.0 in the threshold check (advisory.ts `?? 1`), matching today's always-block.
+        /* v8 ignore next 3 -- a split always carries splitConfidence; the absent arm is an unreachable guard. */
+        ...(result.splitConfidence !== undefined
+          ? { confidence: result.splitConfidence }
+          : {}),
       });
     } else if (result.inconclusive) {
       // Fail-CLOSED (#ai-fail-closed): block-mode AI could not return a usable verdict. Hold the PR for a human
@@ -3713,6 +3800,16 @@ export async function runAiReviewForAdvisory(
           "The dual-model AI review did not return a usable verdict for this change.",
         action:
           "The gate is held for a human reviewer rather than passed automatically; it re-evaluates on the next update.",
+      });
+      // A review that could not be produced is a real failure the maintainer must SEE — surface it to Sentry as an
+      // ERROR (this also covers the INCOHERENT_DIFF bail, which parses to a missing opinion → inconclusive). (#1468)
+      captureReviewFailure(new Error("AI review inconclusive — no usable verdict for the PR head"), {
+        kind: "review",
+        reason: "ai_review_inconclusive",
+        owner: args.repoFullName.split("/")[0],
+        repo: args.repoFullName,
+        pr: args.pr.number,
+        head_sha: args.advisory.headSha,
       });
     }
     args.advisory.findings.push(...findings);
@@ -4466,6 +4563,7 @@ async function maybePublishPrPublicSurface(
           profile: reviewProfile,
           inlineComments: reviewInlineComments,
           pathInstructions: reviewPathInstructions,
+          instructions: manifestReviewInstructions,
           excludePaths: reviewExcludePaths,
         } = resolveReviewPromptOverrides(
           await loadRepoFocusManifest(env, repoFullName).catch(() => null),
@@ -4475,6 +4573,21 @@ async function maybePublishPrPublicSurface(
           repoFullName,
           reviewInlineComments,
         );
+        // Per-repo review CONTEXT (#review-skills): fold the container-private review/CLAUDE.md guide + the matching
+        // review/skills/*.md modules into the SAME review-instructions slot, so reviews follow each repo's conventions.
+        // Glob-gated for cost (only skills matching the changed files are injected); absent config dir ⇒ empty ⇒
+        // byte-identical prompt. getReviewFiles() is memoized, so the second call reuses the loaded diff.
+        const reviewInstructions =
+          [
+            manifestReviewInstructions,
+            composeRepoReviewContext(
+              await loadRepoReviewContext(repoFullName),
+              (await getReviewFiles()).map((file) => file.path),
+            ),
+          ]
+            .map((part) => part?.trim())
+            .filter(Boolean)
+            .join("\n\n") || null;
         aiReview = await runAiReviewForAdvisory(env, {
           settings,
           advisory,
@@ -4485,6 +4598,7 @@ async function maybePublishPrPublicSurface(
           files: await getReviewFiles(),
           reviewProfile,
           reviewPathInstructions,
+          reviewInstructions,
           reviewExcludePaths,
           reviewInlineComments,
         });
@@ -4520,12 +4634,28 @@ async function maybePublishPrPublicSurface(
       pr.number,
     );
 
+    // PR-size + guardrail manual-review HOLD (#gate-size / #gate-guardrail): compute the live change size + the
+    // guardrail-hit from the resolved files (getReviewFiles is memoized — no extra fetch) so the gate can HOLD an
+    // oversized or guardrail-touching PR (neutral → "manual" verdict), visible even in advisory/dry-run.
+    const sizeGateFiles = await getReviewFiles();
+    const gateSizeContext = {
+      changedFileCount: sizeGateFiles.length,
+      changedLineCount: sizeGateFiles.reduce(
+        (n, f) => n + f.additions + f.deletions,
+        0,
+      ),
+      guardrailHit: isGuardrailHit(
+        changedPathsForGuardrail(sizeGateFiles),
+        await loadHardGuardrailGlobs(env, repoFullName),
+      ),
+    };
     const gatePolicy = gateCheckPolicy(
       settings,
       readiness.total,
       confirmedContributor,
       slopRisk,
       authorHistory,
+      gateSizeContext,
     );
     gateEvaluation = gateEnabled
       ? evaluateGateCheck(advisory, gatePolicy)

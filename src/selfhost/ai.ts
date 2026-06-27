@@ -394,6 +394,20 @@ export function resolveProviderNames(env: Record<string, string | undefined>): s
   return buildProviders(env).map((p) => p.name);
 }
 
+/** CLI-subscription providers need their binary present on PATH; keep boot preflight parsing identical to AI_PROVIDER. */
+export function resolveRequiredCliProviders(env: Record<string, string | undefined>): Array<{ provider: string; cli: string }> {
+  const seen = new Set<string>();
+  return resolveProviderNames(env)
+    .map((provider) =>
+      provider === "claude-code" ? { provider, cli: "claude" } : provider === "codex" ? { provider, cli: "codex" } : undefined,
+    )
+    .filter((required): required is { provider: string; cli: string } => {
+      if (!required || seen.has(required.provider)) return false;
+      seen.add(required.provider);
+      return true;
+    });
+}
+
 /** Select the self-host AI provider(s) from AI_PROVIDER. A comma-separated list of TWO+ providers is addressable
  *  by name for dual review (see `routeProviders`) and otherwise falls back through them in order; a single
  *  provider is used directly. Returns undefined when unconfigured or no provider has its credential. */

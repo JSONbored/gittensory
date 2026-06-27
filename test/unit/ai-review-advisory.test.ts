@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAiReviewDiff, runAiReviewForAdvisory, shouldStartAiReviewForAdvisory } from "../../src/queue/processors";
-import { BEST_REVIEW_MODELS } from "../../src/services/ai-review";
+import { BEST_REVIEW_MODELS, INCOHERENT_DIFF_ASSESSMENT } from "../../src/services/ai-review";
+import * as sentryModule from "../../src/selfhost/sentry";
 import { upsertRepositoryAiKey } from "../../src/db/repositories";
 import type { Advisory, PullRequestFileRecord, RepositorySettings } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
@@ -76,6 +77,13 @@ describe("shouldStartAiReviewForAdvisory", () => {
     await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, skipAiReview: true })).resolves.toBe(false);
     await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, settings: { aiReviewMode: "off" } as RepositorySettings })).resolves.toBe(false);
     await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, confirmedContributor: false })).resolves.toBe(false);
+    await expect(
+      shouldStartAiReviewForAdvisory(enabledEnv(), {
+        ...base,
+        settings: { aiReviewMode: "advisory", gatePack: "gittensor", aiReviewAllAuthors: true } as RepositorySettings,
+        confirmedContributor: false,
+      }),
+    ).resolves.toBe(true);
     await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, settings: { aiReviewMode: "block", gatePack: "oss-anti-slop" } as RepositorySettings, confirmedContributor: false })).resolves.toBe(true);
     const noSha = advisory();
     delete (noSha as Partial<Advisory>).headSha;
@@ -204,11 +212,29 @@ describe("runAiReviewForAdvisory", () => {
     expect(result?.notes).toContain("Likely crash.");
   });
 
-  it("appends an ai_review_inconclusive finding (fail-closed hold) when block-mode AI lacks a second opinion", async () => {
+  it("threads the calibrated MIN consensus confidence onto the ai_consensus_defect finding (#8)", async () => {
+    const adv = advisory();
+    // Two reviewers agree on a blocker but with DIFFERENT confidences (0.95 vs 0.6) → the finding carries the min.
+    const json = (confidence: number) => JSON.stringify({ assessment: "Likely crash.", blockers: ["Null dereference of a possibly-null value in src/a.ts."], nits: [], suggestions: [], confidence });
+    const run = (async (model: string) => ({ response: model === BEST_REVIEW_MODELS[0] ? json(0.95) : json(0.6) })) as unknown as () => Promise<unknown>;
+    await runAiReviewForAdvisory(aiEnv(run), {
+      settings: { aiReviewMode: "block" } as RepositorySettings,
+      advisory: adv,
+      repoFullName: "acme/widgets",
+      pr,
+      author: "alice",
+      confirmedContributor: true,
+    });
+    expect(adv.findings[0]?.code).toBe("ai_consensus_defect");
+    expect(adv.findings[0]?.confidence).toBe(0.6); // weaker reviewer governs the gate floor
+  });
+
+  it("appends an ai_review_inconclusive finding (fail-closed hold) when block-mode AI lacks a second opinion, surfacing it to Sentry as an error", async () => {
     const adv = advisory();
     // The first slot parses; the second slot's primary AND its reliable fallback fail → no consensus possible.
     const run = (async (model: string) => ({ response: model === BEST_REVIEW_MODELS[0] ? notesOnlyJson() : "garbage" })) as unknown as () => Promise<unknown>;
     const env = aiEnv(run);
+    const captureSpy = vi.spyOn(sentryModule, "captureReviewFailure");
     const result = await runAiReviewForAdvisory(env, {
       settings: { aiReviewMode: "block" } as RepositorySettings,
       advisory: adv,
@@ -219,6 +245,36 @@ describe("runAiReviewForAdvisory", () => {
     });
     expect(adv.findings.map((f) => f.code)).toEqual(["ai_review_inconclusive"]);
     expect(result?.notes).toBeDefined(); // the single parseable opinion still produces advisory notes
+    // The unproducible review is reported to Sentry with PR context so the maintainer can SEE it (#1468).
+    expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), {
+      kind: "review",
+      reason: "ai_review_inconclusive",
+      owner: "acme",
+      repo: "acme/widgets",
+      pr: 3,
+      head_sha: "sha3",
+    });
+    captureSpy.mockRestore();
+  });
+
+  it("surfaces the INCOHERENT_DIFF bail to Sentry as a review failure (stale-head review)", async () => {
+    const adv = advisory();
+    // Both reviewers return the INCOHERENT_DIFF assessment — the diff is out of sync with the PR head, so each
+    // opinion parses to null → the combiner yields `inconclusive`, the same review-failure path as a missing opinion.
+    const incoherent = JSON.stringify({ assessment: INCOHERENT_DIFF_ASSESSMENT, blockers: [], nits: [], suggestions: [] });
+    const env = aiEnv((async () => ({ response: incoherent })) as unknown as () => Promise<unknown>);
+    const captureSpy = vi.spyOn(sentryModule, "captureReviewFailure");
+    await runAiReviewForAdvisory(env, {
+      settings: { aiReviewMode: "block" } as RepositorySettings,
+      advisory: adv,
+      repoFullName: "acme/widgets",
+      pr,
+      author: "alice",
+      confirmedContributor: true,
+    });
+    expect(adv.findings.map((f) => f.code)).toEqual(["ai_review_inconclusive"]);
+    expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ reason: "ai_review_inconclusive", repo: "acme/widgets", head_sha: "sha3" }));
+    captureSpy.mockRestore();
   });
 
   it("appends an ai_review_split finding (lone-blocker HOLD) when the two block-mode reviewers disagree", async () => {
@@ -238,6 +294,23 @@ describe("runAiReviewForAdvisory", () => {
     expect(adv.findings.map((f) => f.code)).toEqual(["ai_review_split"]); // applied to the advisory (gate blocker)
     expect(result?.findings.map((f) => f.code)).toEqual(["ai_review_split"]); // returned for the AI cache to persist
     expect(result?.notes).toBeDefined();
+  });
+
+  it("threads the lone flagging reviewer's calibrated confidence onto the ai_review_split finding (#8)", async () => {
+    const adv = advisory();
+    // Only the FIRST reviewer flags a blocker, at confidence 0.45 → split, and the finding carries 0.45.
+    const flagged = JSON.stringify({ assessment: "Likely crash.", blockers: ["Null deref in src/a.ts."], nits: [], suggestions: [], confidence: 0.45 });
+    const run = (async (model: string) => ({ response: model === BEST_REVIEW_MODELS[0] ? flagged : notesOnlyJson() })) as unknown as () => Promise<unknown>;
+    await runAiReviewForAdvisory(aiEnv(run), {
+      settings: { aiReviewMode: "block" } as RepositorySettings,
+      advisory: adv,
+      repoFullName: "acme/widgets",
+      pr,
+      author: "alice",
+      confirmedContributor: true,
+    });
+    expect(adv.findings[0]?.code).toBe("ai_review_split");
+    expect(adv.findings[0]?.confidence).toBe(0.45);
   });
 
   it("uses the caller's pre-resolved files (FIX B) instead of the stored read, so the model sees the real diff", async () => {

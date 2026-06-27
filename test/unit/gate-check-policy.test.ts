@@ -213,6 +213,68 @@ describe("AI consensus defect gate blocker", () => {
   });
 });
 
+describe("AI close-confidence threshold gate (#7)", () => {
+  const aiDefectWith = (confidence: number | undefined): Advisory => ({
+    ...missingIssueAdvisory(),
+    findings: [{ code: "ai_consensus_defect", title: "AI reviewers agree on a likely critical defect", severity: "critical", detail: "Both models flagged a null deref.", action: "Resolve it.", ...(confidence !== undefined ? { confidence } : {}) }],
+  });
+  const splitDefectWith = (confidence: number): Advisory => ({
+    ...missingIssueAdvisory(),
+    findings: [{ code: "ai_review_split", title: "An AI reviewer flagged a likely blocking defect", severity: "critical", detail: "One reviewer flagged it.", action: "Resolve it.", confidence }],
+  });
+
+  it("blocks when mode=block AND confidence >= the default 0.9 floor", () => {
+    const out = evaluateGateCheck(aiDefectWith(0.95), gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true));
+    expect(out.conclusion).toBe("failure");
+    expect(out.blockers.map((f) => f.code)).toEqual(["ai_consensus_defect"]);
+  });
+
+  it("does NOT block when mode=block but confidence < the floor — the AI defect stays advisory (#7)", () => {
+    const out = evaluateGateCheck(aiDefectWith(0.5), gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true));
+    expect(out.conclusion).toBe("success"); // below 0.9 → not a blocker, never closes
+    expect(out.blockers).toEqual([]);
+  });
+
+  it("blocks exactly AT the floor (>= boundary) and not just below it", () => {
+    // policy.aiReviewCloseConfidence is threaded onto the policy from settings.
+    const policy = gateCheckPolicy(settings({ aiReviewMode: "block", aiReviewCloseConfidence: 0.7 }), null, true);
+    expect(evaluateGateCheck(aiDefectWith(0.7), policy).conclusion).toBe("failure"); // == threshold → blocks
+    expect(evaluateGateCheck(aiDefectWith(0.69), policy).conclusion).toBe("success"); // just below → advisory
+  });
+
+  it("honors a custom aiReviewCloseConfidence (the `?? 0.9` default is NOT used when set) (#7)", () => {
+    // A high custom floor of 0.99 keeps a 0.95 defect advisory (the 0.9 default would have blocked it).
+    const strict = gateCheckPolicy(settings({ aiReviewMode: "block", aiReviewCloseConfidence: 0.99 }), null, true);
+    expect(evaluateGateCheck(aiDefectWith(0.95), strict).conclusion).toBe("success");
+    // A low custom floor of 0.3 blocks a 0.5 defect that the 0.9 default would have left advisory.
+    const lenient = gateCheckPolicy(settings({ aiReviewMode: "block", aiReviewCloseConfidence: 0.3 }), null, true);
+    expect(evaluateGateCheck(aiDefectWith(0.5), lenient).conclusion).toBe("failure");
+  });
+
+  it("a finding WITHOUT a confidence degrades to 1.0 and blocks under the default floor (graceful fallback) (#7)", () => {
+    const out = evaluateGateCheck(aiDefectWith(undefined), gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true));
+    expect(out.conclusion).toBe("failure"); // no confidence → treated as 1.0 → always clears 0.9
+  });
+
+  it("never blocks when mode=advisory, regardless of a high confidence (#7)", () => {
+    expect(evaluateGateCheck(aiDefectWith(1), gateCheckPolicy(settings({ aiReviewMode: "advisory" }), null, true)).conclusion).toBe("success");
+  });
+
+  it("applies the same confidence floor to an ai_review_split finding (#7)", () => {
+    const policy = gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true);
+    expect(evaluateGateCheck(splitDefectWith(0.95), policy).conclusion).toBe("failure"); // clears 0.9 → blocks
+    expect(evaluateGateCheck(splitDefectWith(0.5), policy).conclusion).toBe("success"); // below 0.9 → advisory
+  });
+
+  it("resolveEffectiveSettings maps gate.aiReview.closeConfidence (clamped) into the policy floor (#7)", () => {
+    const eff = resolveEffectiveSettings(settings({ aiReviewMode: "off" }), parseFocusManifest({ gate: { aiReview: { mode: "block", closeConfidence: 0.4 } } }));
+    expect(eff.aiReviewCloseConfidence).toBe(0.4);
+    expect(eff.aiReviewMode).toBe("block");
+    // a 0.5 defect clears the configured 0.4 floor → blocks (it would NOT under the 0.9 default).
+    expect(evaluateGateCheck(aiDefectWith(0.5), gateCheckPolicy(eff, null, true)).conclusion).toBe("failure");
+  });
+});
+
 describe("slop gate (#530/#532)", () => {
   function cleanAdvisory(): Advisory {
     return { ...missingIssueAdvisory(), findings: [] };
@@ -575,5 +637,66 @@ describe("buildAuthorizedPrActionAdvisory self-authored parity (#self-authored-p
     const pr: PullRequestRecord = { repoFullName: "owner/missing", number: 101, title: "Fix something", state: "open", authorLogin: "someone", body: "Closes #14", labels: [], linkedIssues: [14] };
     const { advisory } = await buildAuthorizedPrActionAdvisory(env, "owner/missing", pr, settings({ selfAuthoredLinkedIssueGateMode: "advisory" }));
     expect(advisory.findings.some((finding) => finding.code === "self_authored_linked_issue")).toBe(false);
+  });
+});
+
+describe("size + guardrail manual-review HOLD (#gate-size / #gate-guardrail)", () => {
+  const clean = (): Advisory => ({ ...missingIssueAdvisory(), findings: [] });
+  it("holds (neutral) an oversized PR; passes under thresholds; off/unset = no hold", () => {
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 12, changedLineCount: 10 }).conclusion).toBe("neutral"); // > 10 files
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 2, changedLineCount: 600 }).conclusion).toBe("neutral"); // > 500 lines
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 9, changedLineCount: 499 }).conclusion).toBe("success"); // under both thresholds
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "off", changedFileCount: 50, changedLineCount: 9000 }).conclusion).toBe("success"); // gate off ⇒ no hold
+    expect(evaluateGateCheck(clean(), { changedFileCount: 50, changedLineCount: 9000 }).conclusion).toBe("success"); // mode unset ⇒ no hold
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory" }).conclusion).toBe("success"); // no counts ⇒ 0 ⇒ no hold
+  });
+  it("holds (neutral) on a guardrail hit, surfacing the hold finding in warnings", () => {
+    const out = evaluateGateCheck(clean(), { guardrailHit: true });
+    expect(out.conclusion).toBe("neutral");
+    expect(out.warnings.map((w) => w.code)).toContain("guardrail_hold");
+  });
+  it("a real hard blocker WINS over a size/guardrail hold (failure, not neutral)", () => {
+    const out = evaluateGateCheck(missingIssueAdvisory(), { linkedIssueGateMode: "block", sizeGateMode: "advisory", changedFileCount: 50, changedLineCount: 9000, guardrailHit: true });
+    expect(out.conclusion).toBe("failure");
+  });
+  it("resolveEffectiveSettings maps gate.size.mode → sizeGateMode", () => {
+    const eff = resolveEffectiveSettings(settings({}), parseFocusManifest({ gate: { size: { mode: "advisory" } } }));
+    expect(eff.sizeGateMode).toBe("advisory");
+  });
+});
+
+describe("dry-run disposition (#gate-dryrun): would-be verdict without enforcing", () => {
+  // #disposition-redesign: the dry-run shadow promotes ONLY the AI sub-gate. CLOSE is driven by AI confidence; the
+  // advisory signals (linked issue, readiness/quality, slop, duplicates) can NEVER drive a would-be close.
+  const aiDefect = (): Advisory => ({
+    ...missingIssueAdvisory(),
+    findings: [{ code: "ai_consensus_defect", title: "AI consensus defect", severity: "warning", detail: "both models flagged a real defect", action: "fix it" }],
+  });
+  it("an advisory AI defect previews a would-be close (AI sub-gate is the only one promoted)", () => {
+    const out = evaluateGateCheck(aiDefect(), { dryRun: true, aiReviewGateMode: "advisory" });
+    expect(out.conclusion).toBe("success"); // POSTED — non-blocking (AI is advisory)
+    expect(out.displayConclusion).toBe("failure"); // would-be — drives the "close" verdict in the comment
+  });
+  it("a MISSING LINKED ISSUE never drives a dry-run close (advisory-only signal)", () => {
+    const out = evaluateGateCheck(missingIssueAdvisory(), { dryRun: true, linkedIssueGateMode: "advisory" });
+    expect(out.conclusion).toBe("success");
+    expect(out.displayConclusion).toBe("success"); // NOT promoted ⇒ no would-be close
+  });
+  it("a LOW READINESS score never drives a dry-run close (advisory-only signal)", () => {
+    const out = evaluateGateCheck({ ...missingIssueAdvisory(), findings: [] }, { dryRun: true, qualityGateMode: "advisory", qualityGateMinScore: 70, readinessScore: 40 });
+    expect(out.displayConclusion).toBe("success"); // readiness is advisory-only, never promoted to a close
+  });
+  it("a clean PR in dry-run shows a would-be PASS (displayConclusion = success)", () => {
+    const clean = { ...missingIssueAdvisory(), findings: [] };
+    expect(evaluateGateCheck(clean, { dryRun: true, aiReviewGateMode: "advisory" }).displayConclusion).toBe("success");
+  });
+  it("outside dry-run, displayConclusion is absent (the verdict falls back to the posted conclusion)", () => {
+    const out = evaluateGateCheck(aiDefect(), { aiReviewGateMode: "advisory" });
+    expect(out.conclusion).toBe("success");
+    expect(out.displayConclusion).toBeUndefined();
+  });
+  it("resolveEffectiveSettings maps gate.dryRun → gateDryRun", () => {
+    const eff = resolveEffectiveSettings(settings({}), parseFocusManifest({ gate: { dryRun: true } }));
+    expect(eff.gateDryRun).toBe(true);
   });
 });

@@ -128,7 +128,7 @@ import { handleOrbIngest, readOrbIngestBody } from "../orb/ingest";
 import { handleOrbWebhook } from "../orb/webhook";
 import { handleOrbOAuthCallback } from "../orb/oauth";
 import { brokerOrbToken, isOrbBrokerEnabled, issueOrbEnrollment } from "../orb/broker";
-import { readOrbRelayRegisterBody, registerValidatedOrbRelay, validateOrbRelayEnrollment } from "../orb/relay";
+import { pullRelayPending, readOrbRelayRegisterBody, registerValidatedOrbRelay, validateOrbRelayEnrollment } from "../orb/relay";
 import { computeFleetAnalytics } from "../orb/analytics";
 import { handleMcpRequest } from "../mcp/server";
 import { buildOpenApiSpec } from "../openapi/spec";
@@ -715,7 +715,7 @@ const repositoryAiReviewSchema = z.object({
   provider: z.enum(["anthropic", "openai"]).nullable().optional(),
   model: z.string().trim().min(1).max(120).nullable().optional(),
   allAuthors: z.boolean().default(false),
-  closeOwnerAuthors: z.boolean().default(false),
+  closeOwnerAuthors: z.boolean().optional(),
 });
 
 const contributorIssueDraftGenerateSchema = z.object({
@@ -2253,7 +2253,7 @@ export function createApp() {
       aiReviewProvider: parsed.data.provider,
       aiReviewModel: parsed.data.model,
       aiReviewAllAuthors: parsed.data.allAuthors,
-      closeOwnerAuthors: parsed.data.closeOwnerAuthors,
+      closeOwnerAuthors: parsed.data.closeOwnerAuthors ?? current.closeOwnerAuthors,
     });
     // getRepositorySettings normalizes these to a concrete value or null (never undefined).
     return c.json({
@@ -2930,20 +2930,47 @@ export function createApp() {
     if ("error" in enrollment) return c.json(enrollment, enrollment.error === "invalid_enrollment" ? 401 : 403);
     const rawBody = await readOrbRelayRegisterBody(c.req.raw, c.req.header("content-length"));
     if (rawBody === null) return c.json({ error: "payload_too_large" }, 413);
-    let body: { relayUrl?: unknown } | null;
+    let body: { relayUrl?: unknown; mode?: unknown } | null;
     try {
-      body = JSON.parse(rawBody) as { relayUrl?: unknown };
+      body = JSON.parse(rawBody) as { relayUrl?: unknown; mode?: unknown };
     } catch {
       body = null;
     }
+    // Pull mode (#16): a tailnet container registers to PULL events (no relay_url to push to). Default 'push'.
+    const mode = body?.mode === "pull" ? "pull" : body?.mode === "push" || body?.mode === undefined ? "push" : null;
+    if (mode === null) return c.json({ error: "invalid_mode" }, 400);
     const relayUrl = typeof body?.relayUrl === "string" ? body.relayUrl.trim() : "";
-    if (!relayUrl) return c.json({ error: "missing_relay_url" }, 400);
-    const result = await registerValidatedOrbRelay(c.env, enrollment, secret, relayUrl);
+    if (mode === "push" && !relayUrl) return c.json({ error: "missing_relay_url" }, 400);
+    const result = await registerValidatedOrbRelay(c.env, enrollment, secret, relayUrl, mode);
     if ("error" in result) {
       const status = result.error === "invalid_enrollment" ? 401 : result.error === "installation_not_eligible" ? 403 : result.error === "encryption_unavailable" ? 500 : 400;
       return c.json(result, status);
     }
     return c.json(result);
+  });
+
+  // Pull-mode relay drain (#16) — a brokered self-host behind NAT/tailnet can't be PUSHED events, so it PULLS its
+  // queued events here (the engine drives this outbound). Auth: the container's own enrollment secret (Bearer).
+  // Body (optional) `{ ack: string[] }` acks the delivery_ids it durably accepted on its previous pull (deleted
+  // before the next batch is returned). Flag-gated (404 until enabled).
+  app.post("/v1/orb/relay/pull", async (c) => {
+    if (!isOrbBrokerEnabled(c.env)) return c.json({ error: "not_found" }, 404);
+    const auth = c.req.header("authorization") ?? "";
+    const secret = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+    if (!secret) return c.json({ error: "missing_enrollment_secret" }, 401);
+    const enrollment = await validateOrbRelayEnrollment(c.env, secret);
+    if ("error" in enrollment) return c.json(enrollment, enrollment.error === "invalid_enrollment" ? 401 : 403);
+    const rawBody = await readOrbRelayRegisterBody(c.req.raw, c.req.header("content-length"));
+    if (rawBody === null) return c.json({ error: "payload_too_large" }, 413);
+    let ack: string[] | undefined;
+    try {
+      const body = rawBody ? (JSON.parse(rawBody) as { ack?: unknown }) : null;
+      if (Array.isArray(body?.ack)) ack = body.ack.filter((id): id is string => typeof id === "string");
+    } catch {
+      ack = undefined; // tolerate an empty/invalid body — just no ack this round
+    }
+    const events = await pullRelayPending(c.env, enrollment.installationId, { ack });
+    return c.json({ events }, 200);
   });
 
   // Gittensory Orb (#1255) — central fleet-calibration collector. Receives anonymized, reversal-aware outcome
@@ -5029,6 +5056,7 @@ function requiresApiToken(path: string): boolean {
   if (path === "/v1/orb/oauth/callback") return false;
   if (path === "/v1/orb/token") return false;
   if (path === "/v1/orb/relay/register") return false;
+  if (path === "/v1/orb/relay/pull") return false;
   if (path === "/v1/orb/ingest") return false;
   if (path.startsWith("/v1/internal/")) return false;
   return path.startsWith("/v1/");

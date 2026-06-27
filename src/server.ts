@@ -17,6 +17,7 @@ import {
   createOpenAiCompatibleAi,
   createSelfHostAi,
   resolveAiReviewerPlan,
+  resolveRequiredCliProviders,
 } from "./selfhost/ai";
 import {
   cookieValue,
@@ -46,9 +47,20 @@ import { createPgVectorize, initPgVectorize } from "./selfhost/pg-vectorize";
 import { createSqliteQueue } from "./selfhost/sqlite-queue";
 import { createSqliteVectorize } from "./selfhost/vectorize";
 import { createFsBlobStore } from "./selfhost/blob-store";
-import { makeLocalManifestReader } from "./selfhost/private-config";
-import { captureError, flushSentry, initSentry } from "./selfhost/sentry";
-import { setLocalManifestReader } from "./signals/focus-manifest-loader";
+import {
+  makeLocalManifestReader,
+  makeLocalReviewContextReader,
+} from "./selfhost/private-config";
+import {
+  captureError,
+  flushSentry,
+  initSentry,
+  installStructuredLogForwarding,
+} from "./selfhost/sentry";
+import {
+  setLocalManifestReader,
+  setLocalReviewContextReader,
+} from "./signals/focus-manifest-loader";
 import type { JobMessage } from "./types";
 
 /** Resolve `<NAME>_FILE` env vars (Docker secrets / multi-line keys) into `<NAME>` at startup. */
@@ -225,6 +237,11 @@ async function main(): Promise<void> {
   setLocalManifestReader(
     makeLocalManifestReader(process.env.GITTENSORY_REPO_CONFIG_DIR),
   );
+  // Per-repo review CONTEXT (#review-skills): the same config dir also holds `<repo>/review/CLAUDE.md` + skills/*.md,
+  // injected into the reviewer prompt so reviews follow each repo's conventions. Unset dir ⇒ null reader ⇒ no change.
+  setLocalReviewContextReader(
+    makeLocalReviewContextReader(process.env.GITTENSORY_REPO_CONFIG_DIR),
+  );
   // Error tracking (#1468): opt-in via SENTRY_DSN — a complete no-op when unset. When on, capture uncaught crashes
   // + unhandled rejections (flush before exit for the fatal case); per-subsystem captures (queue dead-letter,
   // review failures) are wired at their sites.
@@ -244,6 +261,9 @@ async function main(): Promise<void> {
       captureError(reason, { kind: "unhandledRejection" });
       console.error(reason);
     });
+    // Central error forwarding (#1468): operational failures are structured JSON logs emitted through stdout and
+    // stderr. Wrap both sinks so every level:"error"/"fatal" line surfaces as a Sentry issue WITHOUT per-site wiring.
+    installStructuredLogForwarding();
   }
   const startedAt = Date.now();
 
@@ -317,27 +337,19 @@ async function main(): Promise<void> {
   // Fail-LOUD preflight (#1566): a CLI-subscription provider (claude-code/codex) reviews by spawning the CLI as a
   // subprocess; if the binary is absent (image built without INSTALL_AI_CLIS=true) the spawn ENOENTs and EVERY AI
   // review silently degrades to "no usable output". Shout at boot so the misconfig is obvious, never invisible.
-  const requiredCli =
-    process.env.AI_PROVIDER === "claude-code"
-      ? "claude"
-      : process.env.AI_PROVIDER === "codex"
-        ? "codex"
-        : null;
-  if (
-    requiredCli &&
-    !(process.env.PATH ?? "")
-      .split(delimiter)
-      .some((d) => d && existsSync(join(d, requiredCli)))
-  )
+  const pathDirs = (process.env.PATH ?? "").split(delimiter);
+  for (const { provider, cli } of resolveRequiredCliProviders(process.env)) {
+    if (pathDirs.some((d) => d && existsSync(join(d, cli)))) continue;
     console.error(
       JSON.stringify({
         level: "error",
         event: "selfhost_ai_cli_missing",
-        provider: process.env.AI_PROVIDER,
-        cli: requiredCli,
-        message: `AI_PROVIDER=${process.env.AI_PROVIDER} but '${requiredCli}' is not on PATH — every AI review will produce NO output. Rebuild the image with --build-arg INSTALL_AI_CLIS=true (or use the published image) and authenticate the CLI.`,
+        provider,
+        cli,
+        message: `AI_PROVIDER=${process.env.AI_PROVIDER} includes ${provider} but '${cli}' is not on PATH — every ${provider} AI review will produce NO output. Rebuild the image with --build-arg INSTALL_AI_CLIS=true (or use the published image) and authenticate the CLI.`,
       }),
     );
+  }
   // Dedicated RAG embed provider (keeps the review chain frontier-only): when AI_EMBED_BASE_URL is set, embeddings
   // route to a SEPARATE openai-compatible endpoint (e.g. ollama at http://ollama:11434/v1, model bge-m3) instead of
   // the review chain — so a Claude/Codex outage never falls reviews back to a weak local model. Unset ⇒ absent ⇒
