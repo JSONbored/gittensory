@@ -216,7 +216,7 @@ type SpawnFn = (
   cmd: string,
   args: string[],
   opts: { env: Record<string, string | undefined>; input?: string; timeoutMs: number; cwd?: string },
-) => Promise<{ stdout: string; code: number | null }>;
+) => Promise<{ stdout: string; code: number | null; stderr?: string }>;
 
 async function defaultSpawn(): Promise<SpawnFn> {
   const cp = await import("node:child_process");
@@ -225,6 +225,9 @@ async function defaultSpawn(): Promise<SpawnFn> {
       const stdio: ["pipe", "pipe", "pipe"] = ["pipe", "pipe", "pipe"];
       const child = cp.spawn(cmd, args, { cwd: o.cwd, env: o.env as NodeJS.ProcessEnv, stdio });
       let stdout = "";
+      // Capture stderr too — the CLI's actual error (auth, rate limit, model-not-supported, OOM) lands here, and
+      // it's what makes a `claude_code_exit_1` / `codex_exit_1` diagnosable instead of an opaque exit code (#26).
+      let stderr = "";
       /* v8 ignore start */ // a 120s subprocess timeout is not unit-testable without a 2-minute wait
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
@@ -232,19 +235,44 @@ async function defaultSpawn(): Promise<SpawnFn> {
       }, o.timeoutMs);
       /* v8 ignore stop */
       child.stdout?.on("data", (d: Buffer) => (stdout += d.toString("utf8")));
+      child.stderr?.on("data", (d: Buffer) => (stderr += d.toString("utf8")));
       child.on("error", (e) => {
         clearTimeout(timer);
         reject(e);
       });
       child.on("close", (code) => {
         clearTimeout(timer);
-        resolve({ stdout, code });
+        resolve({ stdout, code, stderr });
       });
       if (o.input != null) {
         child.stdin?.write(o.input);
         child.stdin?.end();
       }
     });
+}
+
+/** Credential/token shapes that must never reach logs or Sentry. High-precision (prefixed key formats + JWT, each
+ *  anchored on a word boundary) so genuine diagnostics — auth/rate-limit/model errors — survive redaction. */
+const SECRET_PATTERNS: readonly RegExp[] = [
+  /\bsk-[A-Za-z0-9_-]{16,}/g, // OpenAI / Anthropic keys (sk-..., sk-ant-..., sk-proj-...)
+  /\bgh[oprsu]_[A-Za-z0-9]{20,}/g, // GitHub PAT / OAuth / server / refresh tokens
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/g, // GitHub fine-grained PAT
+  /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g, // JWT (header.payload.signature)
+  /\bAKIA[0-9A-Z]{16}/g, // AWS access key id
+];
+
+/** Redact secrets from untrusted CLI stderr before it enters an error message that flows to logs/Sentry. The
+ *  claude/codex subprocesses can echo back the OAuth token we hand them via env (or a key from a config they read),
+ *  and the central Sentry forwarder only scrubs secret-KEYED fields, never free-text — so a token inside an error
+ *  string would otherwise leak. Strips the caller's known secret values exactly, then well-known token shapes. */
+export function redactSecrets(text: string, knownSecrets: readonly string[] = []): string {
+  let out = text;
+  for (const secret of knownSecrets) {
+    // Length-guard so a short/empty token (e.g. a stubbed "t") can't blank out unrelated diagnostic text.
+    if (secret.length >= 8) out = out.split(secret).join("[redacted]");
+  }
+  for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, "[redacted]");
+  return out;
 }
 
 /** Claude Code subscription (CLAUDE_CODE_OAUTH_TOKEN via `claude setup-token`). Headless, read-only, JSON. */
@@ -262,12 +290,12 @@ export function createClaudeCodeAi(parentEnv: Record<string, string | undefined>
       const spawn = spawnImpl ?? (await defaultSpawn());
       const claudeModel = resolveModel(configuredModel(parentEnv), model, "claude-sonnet-4-6");
       const effort = resolveEffort(parentEnv.AI_EFFORT);
-      const { stdout, code } = await spawn(
+      const { stdout, code, stderr } = await spawn(
         "claude",
         ["--print", "--output-format", "json", "--model", claudeModel, "--permission-mode", "plan", "--effort", effort, "--disallowedTools", "Bash,Edit,Write,WebFetch,WebSearch"],
         { env, input: prompt, timeoutMs: resolveCliTimeoutMs(parentEnv), cwd: await isolatedCliCwd() },
       );
-      if (code !== 0) throw new Error(`claude_code_exit_${code ?? "null"}`);
+      if (code !== 0) throw new Error(`claude_code_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "", [token]).slice(0, 500)}`);
       const errStatus = claudeErrorStatus(stdout);
       if (errStatus) throw new Error(`claude_code_error_${errStatus}`);
       const text = extractCliText(stdout);
@@ -296,12 +324,12 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
       const args = ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only"];
       if (codexModel) args.push("--model", codexModel);
       args.push("--", prompt);
-      const { stdout, code } = await spawn("codex", args, {
+      const { stdout, code, stderr } = await spawn("codex", args, {
         env,
         timeoutMs: resolveCliTimeoutMs(parentEnv),
         cwd: await isolatedCliCwd(),
       });
-      if (code !== 0) throw new Error(`codex_exit_${code ?? "null"}`);
+      if (code !== 0) throw new Error(`codex_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "").slice(0, 500)}`);
       const text = extractCliText(stdout);
       if (!text) throw new Error("codex_empty_output");
       return { response: text };

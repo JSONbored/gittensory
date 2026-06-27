@@ -354,6 +354,34 @@ describe("retryFailedRelays", () => {
 });
 
 describe("enqueueRelayPending", () => {
+  it("prunes expired rows before enqueueing so offline pull-mode installs cannot retain raw bodies indefinitely", async () => {
+    const e = brokeredEnv();
+    await db(e).prepare("INSERT INTO orb_relay_pending (delivery_id, installation_id, event_name, raw_body, created_at) VALUES (?, ?, ?, ?, datetime('now', '-25 hours'))").bind("stale-before-enqueue", 9599, "pull_request", '{"stale":true}').run();
+    await enqueueRelayPending(e, { deliveryId: "fresh-after-prune", installationId: 9600, eventName: "pull_request", rawBody: '{"fresh":true}' });
+
+    const stale = await db(e).prepare("SELECT delivery_id FROM orb_relay_pending WHERE delivery_id='stale-before-enqueue'").first();
+    const fresh = await db(e).prepare("SELECT raw_body FROM orb_relay_pending WHERE delivery_id='fresh-after-prune'").first<{ raw_body: string }>();
+    expect(stale ?? null).toBeNull();
+    expect(fresh?.raw_body).toBe('{"fresh":true}');
+  });
+
+  it("caps each installation's pending queue by dropping the oldest overflow rows", async () => {
+    const e = brokeredEnv();
+    for (let i = 0; i < 501; i += 1) {
+      await enqueueRelayPending(e, { deliveryId: `cap-${String(i).padStart(3, "0")}`, installationId: 9601, eventName: "pull_request", rawBody: JSON.stringify({ i }) });
+    }
+    await enqueueRelayPending(e, { deliveryId: "other-install", installationId: 9602, eventName: "pull_request", rawBody: "{}" });
+
+    const count = await db(e).prepare("SELECT COUNT(*) AS n FROM orb_relay_pending WHERE installation_id=9601").first<{ n: number }>();
+    const dropped = await db(e).prepare("SELECT delivery_id FROM orb_relay_pending WHERE delivery_id='cap-000'").first();
+    const newest = await db(e).prepare("SELECT delivery_id FROM orb_relay_pending WHERE delivery_id='cap-500'").first();
+    const other = await db(e).prepare("SELECT delivery_id FROM orb_relay_pending WHERE delivery_id='other-install'").first();
+    expect(count?.n).toBe(500);
+    expect(dropped ?? null).toBeNull();
+    expect(newest ?? null).not.toBeNull();
+    expect(other ?? null).not.toBeNull();
+  });
+
   it("inserts a pending row; duplicate delivery_id is silently ignored (ON CONFLICT DO NOTHING)", async () => {
     const e = brokeredEnv();
     await enqueueRelayPending(e, { deliveryId: "pend-1", installationId: 9600, eventName: "pull_request", rawBody: '{"n":1}' });

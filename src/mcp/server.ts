@@ -72,6 +72,7 @@ import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outco
 import { buildRepoOutcomeCalibration, outcomeCalibrationSummary } from "../services/outcome-calibration";
 import { computeFleetAnalytics } from "../orb/analytics";
 import { loadMaintainerNoiseReport, maintainerNoiseSummary } from "../services/maintainer-noise";
+import { loadLabelAudit, labelAuditSummary } from "../services/label-audit";
 import { loadMaintainerLaneReport, maintainerLaneSummary } from "../services/maintainer-lane";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import {
@@ -612,6 +613,19 @@ const maintainerNoiseOutputSchema = {
   summary: z.string().optional(),
 };
 
+const labelAuditOutputSchema = {
+  repoFullName: z.string().optional(),
+  generatedAt: z.string().optional(),
+  configuredLabels: z.array(z.string()).optional(),
+  liveLabels: z.array(z.string()).optional(),
+  observedLabels: z.array(z.unknown()).optional(),
+  missingConfiguredLabels: z.array(z.string()).optional(),
+  suspiciousConfiguredLabels: z.array(z.string()).optional(),
+  trustedPipelineReady: z.boolean().optional(),
+  findings: z.array(z.unknown()).optional(),
+  summary: z.string().optional(),
+};
+
 const maintainerLaneOutputSchema = {
   repoFullName: z.string().optional(),
   generatedAt: z.string().optional(),
@@ -1074,6 +1088,16 @@ export class GittensoryMcp {
         outputSchema: maintainerNoiseOutputSchema,
       },
       async (input) => this.toolResult(await this.getMaintainerNoise(input)),
+    );
+
+    server.registerTool(
+      "gittensory_get_label_audit",
+      {
+        description: "Return the repo's label-policy audit: configured-vs-live labels, missing configured labels, suspicious status/source-style labels, and trusted-label-pipeline readiness for label-multiplier scoring. Maintainer-authenticated; advisory only.",
+        inputSchema: ownerRepoShape,
+        outputSchema: labelAuditOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getLabelAudit(input)),
     );
 
     server.registerTool(
@@ -1849,6 +1873,16 @@ export class GittensoryMcp {
     const report = await loadMaintainerNoiseReport(this.env, fullName);
     return {
       summary: maintainerNoiseSummary(report),
+      data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getLabelAudit(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoAccess(fullName);
+    const report = await loadLabelAudit(this.env, fullName);
+    return {
+      summary: labelAuditSummary(report),
       data: report as unknown as Record<string, unknown>,
     };
   }

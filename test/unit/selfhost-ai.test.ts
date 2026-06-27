@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveAiReviewerPlan, resolveCliTimeoutMs, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
+import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveAiReviewerPlan, resolveCliTimeoutMs, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, redactSecrets, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
 
 describe("resolveModel (#979 — never leak the Workers-AI default to a self-host backend)", () => {
   const WORKERS_DEFAULT = "@cf/meta/llama-3.1-8b-instruct-fp8-fast";
@@ -52,7 +52,7 @@ describe("resolveCliTimeoutMs (#selfhost — subprocess timeout scales with effo
 
 afterEach(() => vi.unstubAllGlobals());
 
-type SpawnResult = { stdout: string; code: number | null };
+type SpawnResult = { stdout: string; code: number | null; stderr?: string };
 type StubSpawn = (
   cmd: string,
   args: string[],
@@ -456,6 +456,53 @@ describe("subscription CLI helpers + fail-safe", () => {
     await expect(createCodexAi({}, empty).run("gpt-5", { prompt: "x" })).rejects.toThrow(/codex_empty_output/);
   });
 
+  it("surfaces the CLI's stderr in the non-zero-exit error (diagnosable failures, #26)", async () => {
+    // Without stderr in the message, a `claude_code_exit_1` / `codex_exit_1` is an opaque dead-end; with it the real
+    // cause (auth, rate limit, model-not-supported) reaches the logs + Sentry. (stderr-present branch of `?? ""`.)
+    const claudeErr: StubSpawn = async () => ({ stdout: "", code: 1, stderr: "Invalid API key · auth_error" });
+    await expect(
+      createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t" }, claudeErr).run("m", { prompt: "x" }),
+    ).rejects.toThrow(/claude_code_exit_1: Invalid API key/);
+    const codexErr: StubSpawn = async () => ({ stdout: "", code: 1, stderr: "stream error: rate limit reached" });
+    await expect(createCodexAi({}, codexErr).run("m", { prompt: "x" })).rejects.toThrow(
+      /codex_exit_1: stream error: rate limit reached/,
+    );
+  });
+
+  it("redacts the OAuth token and key-shaped tokens from claude stderr before they reach the error (#1605 sec)", async () => {
+    // The CLI can echo the token we hand it via env; it must never land in an error string forwarded to Sentry.
+    const token = "oauth-tok-abcdef123456";
+    const leaky: StubSpawn = async () => ({ stdout: "", code: 1, stderr: `fatal: rejected token ${token} (key sk-ant-api03-ABCDEFGHIJKLMNOPqrstuvwx)` });
+    const err = await createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: token }, leaky).run("m", { prompt: "x" }).catch((e: Error) => e.message);
+    expect(err).toContain("claude_code_exit_1:");
+    expect(err).not.toContain(token);
+    expect(err).not.toContain("sk-ant-api03");
+    expect(err).toContain("[redacted]");
+  });
+
+  it("redacts key-shaped tokens from codex stderr (no env token to key off) (#1605 sec)", async () => {
+    const leaky: StubSpawn = async () => ({ stdout: "", code: 1, stderr: "auth failed: ghp_ABCDEFGHIJ0123456789KLMNOPQRSTUV" });
+    await expect(createCodexAi({}, leaky).run("m", { prompt: "x" })).rejects.toThrow(/codex_exit_1: auth failed: \[redacted\]/);
+  });
+
+  it("defaultSpawn captures a failing CLI's stderr and surfaces it on the exit error (#26)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fakecli-"));
+    const fake = join(dir, "claude");
+    // a fake `claude` that reads stdin (so the parent's write never EPIPEs), then writes to STDERR and exits non-zero
+    // — the real failure shape we previously couldn't diagnose.
+    writeFileSync(fake, "#!/usr/bin/env node\nlet i='';process.stdin.on('data',d=>i+=d);process.stdin.on('end',()=>{process.stderr.write('BOOM: auth failed');process.exit(1);});\n");
+    chmodSync(fake, 0o755);
+    const origPath = process.env.PATH;
+    process.env.PATH = `${dir}:${origPath ?? ""}`;
+    try {
+      await expect(
+        createClaudeCodeAi({ ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "t" }).run("sonnet", { prompt: "x" }),
+      ).rejects.toThrow(/claude_code_exit_1: BOOM: auth failed/);
+    } finally {
+      process.env.PATH = origPath;
+    }
+  });
+
   it("defaultSpawn rejects when the CLI binary is missing (error handler)", async () => {
     const origPath = process.env.PATH;
     process.env.PATH = "/nonexistent-gittensory-empty";
@@ -469,5 +516,27 @@ describe("subscription CLI helpers + fail-safe", () => {
   it("extractCliText falls back to the last JSON line (JSONL) and is empty when none parse", () => {
     expect(extractCliText('not json\n{"result":"x"}')).toBe("x");
     expect(extractCliText("not json\nstill not json")).toBe("");
+  });
+});
+
+describe("redactSecrets — strip credentials from untrusted CLI stderr before it reaches logs/Sentry (#1605 sec)", () => {
+  it("redacts caller-known secret values (>= 8 chars) and leaves short ones untouched", () => {
+    expect(redactSecrets("token=supersecretvalue used", ["supersecretvalue"])).toBe("token=[redacted] used");
+    // a short known value must NOT blank out unrelated text (length-guard false branch)
+    expect(redactSecrets("the cat sat", ["cat"])).toBe("the cat sat");
+  });
+
+  it("redacts well-known token shapes with no known-value list (default arg)", () => {
+    expect(redactSecrets("key sk-ant-api03-ABCDEFGHIJKLMNOPqrstuvwx12")).toBe("key [redacted]");
+    expect(redactSecrets("pat ghp_ABCDEFGHIJ0123456789KLMNOPQRSTUV")).toBe("pat [redacted]");
+    expect(redactSecrets("fine github_pat_ABCDEFGHIJ0123456789KLMNO")).toBe("fine [redacted]");
+    expect(redactSecrets("jwt eyJhbGciOi.eyJzdWIiOi.S1gnaTuRe99")).toBe("jwt [redacted]");
+    expect(redactSecrets("aws AKIAIOSFODNN7EXAMPLE here")).toBe("aws [redacted] here");
+  });
+
+  it("leaves benign diagnostics intact, including words that merely contain a token prefix", () => {
+    expect(redactSecrets("Invalid API key · auth_error")).toBe("Invalid API key · auth_error");
+    // "disk-usage-report-2024-summary" must survive — the \b anchor prevents an in-word `sk-` false positive
+    expect(redactSecrets("disk-usage-report-2024-summary failed")).toBe("disk-usage-report-2024-summary failed");
   });
 });
