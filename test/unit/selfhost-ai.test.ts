@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveAiReviewerPlan, resolveCliTimeoutMs, resolveEffort, resolveModel, resolveProviderNames, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
+import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveAiReviewerPlan, resolveCliTimeoutMs, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
 
 describe("resolveModel (#979 — never leak the Workers-AI default to a self-host backend)", () => {
   const WORKERS_DEFAULT = "@cf/meta/llama-3.1-8b-instruct-fp8-fast";
@@ -214,6 +214,19 @@ describe("resolveProviderNames + resolveAiReviewerPlan (#dual-ai-combiner)", () 
     expect(resolveProviderNames({ AI_PROVIDER: "  Claude-Code , CODEX " })).toEqual(["claude-code", "codex"]); // CLI providers always credentialed
     expect(resolveProviderNames({ AI_PROVIDER: "anthropic,ollama" })).toEqual(["ollama"]); // anthropic dropped (no key); ollama needs none
     expect(resolveProviderNames({ AI_PROVIDER: "anthropic,ollama", ANTHROPIC_API_KEY: "sk-ant" })).toEqual(["anthropic", "ollama"]);
+  });
+
+  it("resolveRequiredCliProviders mirrors comma-list AI_PROVIDER parsing for boot preflight", () => {
+    expect(resolveRequiredCliProviders({})).toEqual([]);
+    expect(resolveRequiredCliProviders({ AI_PROVIDER: "ollama,anthropic" })).toEqual([]);
+    expect(resolveRequiredCliProviders({ AI_PROVIDER: "  Claude-Code , CODEX , ollama " })).toEqual([
+      { provider: "claude-code", cli: "claude" },
+      { provider: "codex", cli: "codex" },
+    ]);
+    expect(resolveRequiredCliProviders({ AI_PROVIDER: "claude-code,codex,claude-code" })).toEqual([
+      { provider: "claude-code", cli: "claude" },
+      { provider: "codex", cli: "codex" },
+    ]);
   });
 
   it("resolveAiReviewerPlan: undefined with no provider; single ⇒ single; two ⇒ default synthesis", () => {

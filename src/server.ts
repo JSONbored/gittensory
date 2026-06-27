@@ -17,6 +17,7 @@ import {
   createOpenAiCompatibleAi,
   createSelfHostAi,
   resolveAiReviewerPlan,
+  resolveRequiredCliProviders,
 } from "./selfhost/ai";
 import {
   cookieValue,
@@ -328,27 +329,19 @@ async function main(): Promise<void> {
   // Fail-LOUD preflight (#1566): a CLI-subscription provider (claude-code/codex) reviews by spawning the CLI as a
   // subprocess; if the binary is absent (image built without INSTALL_AI_CLIS=true) the spawn ENOENTs and EVERY AI
   // review silently degrades to "no usable output". Shout at boot so the misconfig is obvious, never invisible.
-  const requiredCli =
-    process.env.AI_PROVIDER === "claude-code"
-      ? "claude"
-      : process.env.AI_PROVIDER === "codex"
-        ? "codex"
-        : null;
-  if (
-    requiredCli &&
-    !(process.env.PATH ?? "")
-      .split(delimiter)
-      .some((d) => d && existsSync(join(d, requiredCli)))
-  )
+  const pathDirs = (process.env.PATH ?? "").split(delimiter);
+  for (const { provider, cli } of resolveRequiredCliProviders(process.env)) {
+    if (pathDirs.some((d) => d && existsSync(join(d, cli)))) continue;
     console.error(
       JSON.stringify({
         level: "error",
         event: "selfhost_ai_cli_missing",
-        provider: process.env.AI_PROVIDER,
-        cli: requiredCli,
-        message: `AI_PROVIDER=${process.env.AI_PROVIDER} but '${requiredCli}' is not on PATH — every AI review will produce NO output. Rebuild the image with --build-arg INSTALL_AI_CLIS=true (or use the published image) and authenticate the CLI.`,
+        provider,
+        cli,
+        message: `AI_PROVIDER=${process.env.AI_PROVIDER} includes ${provider} but '${cli}' is not on PATH — every ${provider} AI review will produce NO output. Rebuild the image with --build-arg INSTALL_AI_CLIS=true (or use the published image) and authenticate the CLI.`,
       }),
     );
+  }
   // Dedicated RAG embed provider (keeps the review chain frontier-only): when AI_EMBED_BASE_URL is set, embeddings
   // route to a SEPARATE openai-compatible endpoint (e.g. ollama at http://ollama:11434/v1, model bge-m3) instead of
   // the review chain — so a Claude/Codex outage never falls reviews back to a weak local model. Unset ⇒ absent ⇒
