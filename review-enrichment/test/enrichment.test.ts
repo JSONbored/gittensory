@@ -21,6 +21,12 @@ import {
   scanPatchForRedos,
   scanRedos,
 } from "../dist/analyzers/redos.js";
+import {
+  codeOnly,
+  detectSecretLog,
+  scanPatchForSecretLog,
+  scanSecretLog,
+} from "../dist/analyzers/secret-log.js";
 
 const NOW = new Date("2026-06-26").getTime();
 const eolFetch =
@@ -933,6 +939,119 @@ test("buildBrief: eol analyzer runs (real now, 2023 cycle is past)", async () =>
     assert.equal(brief.analyzerStatus.eol, "ok");
     assert.equal(brief.findings.eol.length, 1);
     assert.match(brief.promptSection, /End-of-life runtimes/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("codeOnly: blanks string messages, keeps ${...} interpolation bodies", () => {
+  assert.equal(codeOnly('"a secret here"'), " ");
+  assert.equal(codeOnly("'plain'"), " ");
+  assert.ok(codeOnly("`x=${apiKey}`").includes("apiKey"));
+  assert.ok(!codeOnly("`logging the password now`").includes("password"));
+  assert.equal(
+    codeOnly("req.headers.authorization"),
+    "req.headers.authorization",
+  );
+});
+
+test("detectSecretLog: flags sensitive data into a sink as CODE, not string messages", () => {
+  assert.equal(
+    detectSecretLog("console.log(req.headers.authorization);")?.category,
+    "secret",
+  );
+  assert.equal(
+    detectSecretLog("logger.info(`token=${apiKey}`);")?.category,
+    "secret",
+  );
+  assert.equal(detectSecretLog("log.error(user.password);")?.category, "secret");
+  assert.equal(detectSecretLog("console.debug(account.ssn);")?.category, "pii");
+  assert.equal(detectSecretLog("console.log(req);")?.category, "request-object");
+  assert.equal(
+    detectSecretLog("process.stdout.write(session.cookie);")?.sink,
+    "process.stdout.write",
+  );
+  // NOT flagged — sensitive word only in a string message, no sink, or a benign interpolation:
+  assert.equal(
+    detectSecretLog('console.log("password reset email sent");'),
+    null,
+  );
+  assert.equal(detectSecretLog('logger.info("request received");'), null);
+  assert.equal(detectSecretLog("const token = readToken();"), null);
+  assert.equal(detectSecretLog("logger.info(`user ${id} signed in`);"), null);
+  assert.equal(detectSecretLog("console.error(error);"), null);
+  // innocuous request scalars are NOT dumps:
+  assert.equal(detectSecretLog("console.log(req.method, req.url);"), null);
+  assert.equal(detectSecretLog("console.log(req.path);"), null);
+  // but a whole request or a sensitive sub-object IS:
+  assert.equal(
+    detectSecretLog("console.log(req.body);")?.category,
+    "request-object",
+  );
+});
+
+test("scanPatchForSecretLog: line-cited via hunk header; ignores context + safe lines", () => {
+  const patch = [
+    "@@ -1,1 +1,4 @@",
+    " const ok = true;",
+    "+console.log(req.headers.authorization);",
+    '+console.log("user signed in");',
+    "+logger.info(`ssn=${user.ssn}`);",
+  ].join("\n");
+  const findings = scanPatchForSecretLog("src/a.ts", patch);
+  assert.deepEqual(
+    findings.map(({ file, line, category }) => ({ file, line, category })),
+    [
+      { file: "src/a.ts", line: 2, category: "secret" },
+      { file: "src/a.ts", line: 4, category: "pii" },
+    ],
+  );
+  assert.equal(findings[0].sink, "console.log");
+});
+
+test("scanSecretLog: scans every changed file's added lines, caps to its budget", async () => {
+  const findings = await scanSecretLog({
+    repoFullName: "o/r",
+    prNumber: 1,
+    files: [
+      { path: "a.ts", patch: "@@ -1,0 +1,1 @@\n+console.log(user.password);" },
+      { path: "b.ts", patch: "@@ -1,0 +1,1 @@\n+console.log('hello world');" },
+      { path: "c.md", patch: undefined },
+    ],
+  });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].file, "a.ts");
+});
+
+test("renderBrief: renders the secret-log block, code-spanning + sanitizing", () => {
+  const r = renderBrief({
+    secretLog: [
+      { file: "src/a.ts", line: 9, sink: "console.log", category: "secret" },
+    ],
+  });
+  assert.match(r.promptSection, /Secrets \/ PII reaching a log/);
+  assert.match(r.promptSection, /`src\/a\.ts:9`/);
+  assert.match(r.promptSection, /`console\.log`/);
+  assert.match(r.promptSection, /a secret\/credential/);
+});
+
+test("buildBrief: secret-log analyzer runs (pure, no network)", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+  try {
+    const brief = await buildBrief({
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [
+        {
+          path: "src/a.ts",
+          patch: "@@ -1,0 +1,1 @@\n+console.log(req.headers.authorization);",
+        },
+      ],
+    });
+    assert.equal(brief.analyzerStatus.secretLog, "ok");
+    assert.equal(brief.findings.secretLog.length, 1);
+    assert.match(brief.promptSection, /Secrets \/ PII reaching a log/);
   } finally {
     globalThis.fetch = realFetch;
   }
