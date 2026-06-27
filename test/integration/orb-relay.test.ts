@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "../../src/api/routes";
 import { issueOrbEnrollment } from "../../src/orb/broker";
+import { relayForward } from "../../src/orb/webhook";
 import { enqueueRelayPending, forwardOrbEvent, MAX_ORB_RELAY_REGISTER_BODY_BYTES, pullRelayPending, readOrbRelayRegisterBody, registerOrbRelay, relaySignature, relayVerify, retryFailedRelays, storeRelayFailure } from "../../src/orb/relay";
 import { createTestEnv, type TestD1Database } from "../helpers/d1";
 
@@ -194,6 +195,24 @@ describe("forwardOrbEvent", () => {
     await registerOrbRelay(e, secret, "https://c.example/v1/orb/relay");
     const noKey = { ...e, TOKEN_ENCRYPTION_SECRET: undefined } as unknown as Env; // same DB, key removed
     expect(await forwardOrbEvent(noKey, { eventName: "pull_request", installationId: 803, deliveryId: "d", rawBody: "{}" })).toBe("skipped");
+  });
+});
+
+describe("relayForward (deferred forward + failure persistence, #orb-ack-fast)", () => {
+  it("persists a FAILED push to orb_relay_failures so the retry cron re-attempts it", async () => {
+    const e = brokeredEnv();
+    const secret = await enroll(e, 820);
+    await registerOrbRelay(e, secret, "https://c.example/v1/orb/relay");
+    await relayForward(e, { eventName: "pull_request", installationId: 820, deliveryId: "rf-fail", rawBody: "{}" }, (() => Promise.resolve(new Response("no", { status: 503 }))) as typeof fetch);
+    const row = await db(e).prepare("SELECT installation_id, event_name FROM orb_relay_failures WHERE delivery_id='rf-fail'").first<{ installation_id: number; event_name: string }>();
+    expect(row).toMatchObject({ installation_id: 820, event_name: "pull_request" });
+  });
+
+  it("does NOT persist when the forward is skipped (enrolled but no relay) and never throws", async () => {
+    const e = brokeredEnv();
+    await enroll(e, 821); // enrolled, but no relay registered → forwardOrbEvent skips before any fetch
+    await expect(relayForward(e, { eventName: "pull_request", installationId: 821, deliveryId: "rf-skip", rawBody: "{}" })).resolves.toBeUndefined();
+    expect(await db(e).prepare("SELECT delivery_id FROM orb_relay_failures WHERE delivery_id='rf-skip'").first()).toBeFalsy();
   });
 });
 
