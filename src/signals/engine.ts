@@ -26,6 +26,7 @@ import type { GittensorContributorSnapshot } from "../gittensor/api";
 import { nowIso } from "../utils/json";
 import { sanitizePublicComment } from "../queue-intelligence";
 import { projectLinkedIssueMultiplierForPlannedSolve, type LinkedIssueMultiplierStatus } from "../scoring/preview";
+import { DEFAULT_SCORING_CONSTANTS } from "../scoring/model";
 import { hasLocalTestEvidence } from "./test-evidence";
 import { isDuplicateClusterWinner } from "./duplicate-winner";
 import { PREFLIGHT_LIMITS } from "./preflight-limits";
@@ -161,6 +162,7 @@ export type ContributorProfile = {
     usdPerDay: number;
     totals: GittensorContributorSnapshot["totals"];
     repositories: GittensorContributorSnapshot["repositories"];
+    pullRequests: GittensorContributorSnapshot["pullRequests"];
   } | undefined;
   registeredRepoActivity: {
     pullRequests: number;
@@ -632,6 +634,29 @@ export type IssueQualityReport = {
 };
 
 export type IssueDiscoveryLifecycleState = "open" | "closed_not_solved" | "solved" | "valid_solved" | "stale" | "duplicate" | "invalid";
+
+export type IssueDiscoveryLifecycleOptions = {
+  minValidIssueTokenScore?: number | undefined;
+  solverTokenScoreByPr?: ReadonlyMap<number, number> | undefined;
+};
+
+/** Build a PR-number → upstream tokenScore index from an official Gittensor contributor snapshot. */
+export function solverTokenScoreIndexFromGittensor(profile: Pick<ContributorProfile, "gittensor">): Map<number, number> {
+  const index = new Map<number, number>();
+  for (const pr of profile.gittensor?.pullRequests ?? []) {
+    if (typeof pr.tokenScore === "number" && Number.isFinite(pr.tokenScore)) {
+      index.set(pr.number, Math.max(0, pr.tokenScore));
+    }
+  }
+  return index;
+}
+
+function solverMeetsValidIssueTokenFloor(prNumber: number, options?: IssueDiscoveryLifecycleOptions): boolean {
+  const score = options?.solverTokenScoreByPr?.get(prNumber);
+  if (score === undefined) return true;
+  const floor = options?.minValidIssueTokenScore ?? (DEFAULT_SCORING_CONSTANTS.MIN_TOKEN_SCORE_FOR_VALID_ISSUE as number);
+  return score >= floor;
+}
 
 export type IssueLinkageRecord = {
   status: "raw" | "plausible" | "validated" | "invalid" | "unavailable";
@@ -1253,6 +1278,7 @@ function buildGittensorContributorProfile(
       usdPerDay: snapshot.usdPerDay,
       totals: snapshot.totals,
       repositories: snapshot.repositories,
+      pullRequests: snapshot.pullRequests,
     },
     registeredRepoActivity: {
       pullRequests: snapshot.totals.pullRequests,
@@ -1573,7 +1599,12 @@ export function buildRoleContext(args: {
 // still gets solved credit from merged PR evidence while self-solved issue loops do not
 // inflate valid issue-discovery credit. (Contributor-wide recent-merged solver PRs are not
 // loaded here, so detection uses the cached pull_requests set.)
-function cachedSolvedIssueCounts(issues: IssueRecord[], pullRequests: PullRequestRecord[], lane: LaneAdvice): { solvedIssues: number; validSolvedIssues: number } {
+function cachedSolvedIssueCounts(
+  issues: IssueRecord[],
+  pullRequests: PullRequestRecord[],
+  lane: LaneAdvice,
+  lifecycleOptions?: IssueDiscoveryLifecycleOptions,
+): { solvedIssues: number; validSolvedIssues: number } {
   let solvedIssues = 0;
   let validSolvedIssues = 0;
   for (const issue of issues) {
@@ -1581,7 +1612,7 @@ function cachedSolvedIssueCounts(issues: IssueRecord[], pullRequests: PullReques
 
     // Issue linkedPrs can be parsed from contributor-controlled issue body text. Cache-derived
     // outcome counts only trust solver links carried by the merged PR record itself.
-    const state = classifyIssueDiscoveryLifecycle({ ...issue, linkedPrs: [] }, pullRequests, [], lane).state;
+    const state = classifyIssueDiscoveryLifecycle({ ...issue, linkedPrs: [] }, pullRequests, [], lane, undefined, lifecycleOptions).state;
     if (state === "valid_solved") {
       validSolvedIssues += 1;
       solvedIssues += 1;
@@ -1638,7 +1669,10 @@ export function buildContributorOutcomeHistory(args: {
       // Like every field above, issue-discovery solved counts fall back to cache (the issue
       // lifecycle), not a literal 0, when official Gittensor data is absent for this repo.
       const laneAdvice = buildLaneAdvice(repo, repoFullName);
-      const cachedDiscovery = cachedSolvedIssueCounts(cachedIssues, cachedPrs, laneAdvice);
+      const lifecycleOptions: IssueDiscoveryLifecycleOptions = {
+        solverTokenScoreByPr: solverTokenScoreIndexFromGittensor(args.profile),
+      };
+      const cachedDiscovery = cachedSolvedIssueCounts(cachedIssues, cachedPrs, laneAdvice, lifecycleOptions);
       const solvedIssues = official?.solvedIssues ?? cachedDiscovery.solvedIssues;
       const validSolvedIssues = official?.validSolvedIssues ?? cachedDiscovery.validSolvedIssues;
       const roleContext = buildRoleContext({ login: args.login, repo, repoFullName, pullRequests: args.pullRequests, issues: args.issues, profile: args.profile });
@@ -2957,6 +2991,7 @@ export function buildIssueDiscoveryLifecycleReport(
   pullRequests: PullRequestRecord[],
   fullName: string,
   recentMergedPullRequests: RecentMergedPullRequestRecord[] = [],
+  lifecycleOptions?: IssueDiscoveryLifecycleOptions,
 ): IssueDiscoveryLifecycleReport {
   const lane = buildLaneAdvice(repo, fullName);
   // One-time PR-by-issue index so each per-issue classification is an O(1) lookup, not a full PR rescan.
@@ -2966,7 +3001,7 @@ export function buildIssueDiscoveryLifecycleReport(
   };
   const states = issues
     .slice(0, 300)
-    .map((issue) => classifyIssueDiscoveryLifecycle(issue, pullRequests, recentMergedPullRequests, lane, linkedIndex))
+    .map((issue) => classifyIssueDiscoveryLifecycle(issue, pullRequests, recentMergedPullRequests, lane, linkedIndex, lifecycleOptions))
     .sort((left, right) => lifecycleRank(left.state) - lifecycleRank(right.state) || left.number - right.number);
   return {
     repoFullName: fullName,
@@ -3328,12 +3363,14 @@ function classifyIssueDiscoveryLifecycle(
   recentMergedPullRequests: RecentMergedPullRequestRecord[],
   lane: LaneAdvice,
   linkedIndex?: { open: Map<number, PullRequestRecord[]>; merged: Map<number, RecentMergedPullRequestRecord[]> },
+  lifecycleOptions?: IssueDiscoveryLifecycleOptions,
 ): IssueDiscoveryLifecycleReport["states"][number] {
   // With a prebuilt index (the per-repo lifecycle report) look up this issue's linked PRs in O(1); ad-hoc
   // single-issue callers pass no index and fall back to the original filter. Both yield array-order results.
   const linkedOpenPrs = linkedIndex ? (linkedIndex.open.get(issue.number) ?? []) : pullRequests.filter((pr) => pr.linkedIssues.includes(issue.number));
   const linkedMergedPrs = linkedIndex ? (linkedIndex.merged.get(issue.number) ?? []) : recentMergedPullRequests.filter((pr) => pr.linkedIssues.includes(issue.number));
   const mergedSolverPrs = [...linkedOpenPrs.filter((pr) => pr.mergedAt || pr.state === "merged"), ...linkedMergedPrs];
+  const tokenQualifiedSolverPrs = mergedSolverPrs.filter((pr) => solverMeetsValidIssueTokenFloor(pr.number, lifecycleOptions));
   const solvedByPullRequests = [...new Set(mergedSolverPrs.map((pr) => pr.number))].sort((left, right) => left - right);
   const issueAuthorLogin = issue.authorLogin;
   const selfSolvedLoop = Boolean(issueAuthorLogin && mergedSolverPrs.length > 0 && mergedSolverPrs.every((pr) => sameLogin(pr.authorLogin, issueAuthorLogin)));
@@ -3341,12 +3378,16 @@ function classifyIssueDiscoveryLifecycle(
   const stale = daysSince(issue.updatedAt ?? issue.createdAt) > 90;
   const duplicate = labels.some((label) => /duplicate/.test(label));
   const invalid = labels.some((label) => /invalid|wontfix|not planned|won't fix/.test(label));
+  const tokenFloorDowngrade =
+    mergedSolverPrs.length > 0 &&
+    tokenQualifiedSolverPrs.length === 0 &&
+    mergedSolverPrs.some((pr) => lifecycleOptions?.solverTokenScoreByPr?.has(pr.number));
   const state: IssueDiscoveryLifecycleState = duplicate
     ? "duplicate"
     : invalid
       ? "invalid"
-      : solvedByPullRequests.length > 0
-        ? (lane.lane === "issue_discovery" || lane.lane === "split") && !selfSolvedLoop
+      : mergedSolverPrs.length > 0
+        ? (lane.lane === "issue_discovery" || lane.lane === "split") && !selfSolvedLoop && tokenQualifiedSolverPrs.length > 0
           ? "valid_solved"
           : "solved"
         : issue.state !== "open"
@@ -3358,6 +3399,9 @@ function classifyIssueDiscoveryLifecycle(
     ...(duplicate ? ["Issue carries duplicate labeling."] : []),
     ...(invalid ? ["Issue carries invalid or not-planned labeling."] : []),
     ...(solvedByPullRequests.length > 0 ? [`Linked solver PR(s): ${solvedByPullRequests.map((number) => `#${number}`).join(", ")}.`] : []),
+    ...(tokenFloorDowngrade
+      ? ["Linked solver PR token score is below the upstream valid-issue floor; cache treats this as solved but not valid issue-discovery evidence."]
+      : []),
     ...(selfSolvedLoop ? ["Linked solver PR author matches the issue reporter; cache treats this as solved but not valid issue-discovery evidence."] : []),
     ...(issue.state !== "open" && solvedByPullRequests.length === 0 ? ["Issue is closed without cached solver PR evidence."] : []),
     ...(stale && issue.state === "open" ? ["Issue is stale in cached metadata."] : []),

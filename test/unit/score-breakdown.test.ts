@@ -51,6 +51,20 @@ const repo: RepositoryRecord = {
   },
 };
 
+const snapshot808: ScoringModelSnapshotRecord = {
+  ...snapshot,
+  constants: {
+    ...snapshot.constants,
+    OPEN_ISSUE_SPAM_BASE_THRESHOLD: 2,
+    OPEN_ISSUE_SPAM_TOKEN_SCORE_PER_SLOT: 300,
+    MAX_OPEN_ISSUE_THRESHOLD: 30,
+    MIN_VALID_MERGED_PRS: 3,
+    MIN_VALID_SOLVED_ISSUES: 3,
+    MIN_ISSUE_CREDIBILITY: 0.8,
+    MIN_TOKEN_SCORE_FOR_VALID_ISSUE: 5,
+  },
+};
+
 describe("explainScoreBreakdown", () => {
   it("explains each multiplier with a concrete improvement lever", () => {
     const preview = buildScorePreview({
@@ -79,9 +93,13 @@ describe("explainScoreBreakdown", () => {
         "contributionBonus",
         "labelMultiplier",
         "issueMultiplier",
+        "validIssueTokenGate",
         "credibilityMultiplier",
         "reviewPenaltyMultiplier",
         "openPrMultiplier",
+        "openIssueMultiplier",
+        "mergedHistoryMultiplier",
+        "issueDiscoveryHistoryMultiplier",
       ]),
     );
     for (const component of breakdown.components) {
@@ -276,5 +294,149 @@ describe("explainScoreBreakdown", () => {
     const breakdown = explainScoreBreakdown(preview);
     expect(breakdown.components.find((entry) => entry.component === "credibilityMultiplier")).toMatchObject({ band: "blocked" });
     expect(breakdown.components.find((entry) => entry.component === "openPrMultiplier")).toMatchObject({ band: "blocked" });
+  });
+
+  it("explains the valid-issue token floor for linked-issue previews (#808)", () => {
+    const preview = buildScorePreview({
+      repo,
+      snapshot,
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 2,
+        totalTokenScore: 40,
+        sourceLines: 40,
+        openPrCount: 0,
+        credibility: 1,
+        linkedIssueMode: "standard",
+        linkedIssueContext: { status: "raw", source: "github_cache", issueNumbers: [12] },
+      },
+    });
+    const breakdown = explainScoreBreakdown(preview);
+    expect(breakdown.components.find((entry) => entry.component === "validIssueTokenGate")).toMatchObject({
+      band: "reduced",
+      summary: expect.stringMatching(/valid-issue token floor/i),
+    });
+  });
+
+  it("explains #808 history and spam multiplier branches in score breakdown", () => {
+    const issueDiscoveryRepo: RepositoryRecord = {
+      ...repo,
+      registryConfig: { ...repo.registryConfig!, issueDiscoveryShare: 0.25 },
+    };
+    const baseInput = {
+      repoFullName: issueDiscoveryRepo.fullName,
+      sourceTokenScore: 60,
+      totalTokenScore: 90,
+      sourceLines: 50,
+      openPrCount: 0,
+      credibility: 1,
+      linkedIssueMode: "standard" as const,
+      linkedIssueContext: { status: "raw" as const, source: "github_cache" as const, issueNumbers: [12] },
+    };
+
+    const healthy = buildScorePreview({
+      repo: issueDiscoveryRepo,
+      snapshot: snapshot808,
+      input: {
+        ...baseInput,
+        sourceTokenScore: 8,
+        openIssueCount: 2,
+        mergedPullRequests: 4,
+        validSolvedIssues: 4,
+        issueCredibility: 0.9,
+      },
+    });
+    const healthyBreakdown = explainScoreBreakdown(healthy);
+    expect(healthyBreakdown.components.find((entry) => entry.component === "validIssueTokenGate")).toMatchObject({
+      band: "full",
+      summary: expect.stringMatching(/meets the upstream valid-issue token floor/i),
+      lever: expect.stringMatching(/substantive source changes/i),
+    });
+    expect(healthyBreakdown.components.find((entry) => entry.component === "openIssueMultiplier")).toMatchObject({
+      band: "full",
+      summary: expect.stringMatching(/within the spam allowance/i),
+    });
+    expect(healthyBreakdown.components.find((entry) => entry.component === "mergedHistoryMultiplier")).toMatchObject({
+      band: "full",
+      summary: expect.stringMatching(/Merged PR history \(4\) meets/i),
+    });
+    expect(healthyBreakdown.components.find((entry) => entry.component === "issueDiscoveryHistoryMultiplier")).toMatchObject({
+      band: "full",
+      summary: expect.stringMatching(/4 valid solved, private context 0.9/i),
+    });
+
+    const blocked = buildScorePreview({
+      repo: issueDiscoveryRepo,
+      snapshot: snapshot808,
+      input: {
+        ...baseInput,
+        openIssueCount: 3,
+        mergedPullRequests: 1,
+        validSolvedIssues: 1,
+        issueCredibility: 0.5,
+      },
+    });
+    const blockedBreakdown = explainScoreBreakdown(blocked);
+    expect(blockedBreakdown.components.find((entry) => entry.component === "openIssueMultiplier")).toMatchObject({
+      band: "blocked",
+      summary: expect.stringMatching(/exceeds the spam allowance/i),
+      lever: expect.stringMatching(/Close excess open issues/i),
+    });
+    expect(blockedBreakdown.components.find((entry) => entry.component === "mergedHistoryMultiplier")).toMatchObject({
+      band: "blocked",
+      summary: expect.stringMatching(/below the upstream floor/i),
+      lever: expect.stringMatching(/Land more merged PRs/i),
+    });
+    expect(blockedBreakdown.components.find((entry) => entry.component === "issueDiscoveryHistoryMultiplier")).toMatchObject({
+      band: "blocked",
+      summary: "private context",
+    });
+
+    const unknownHistory = buildScorePreview({
+      repo: issueDiscoveryRepo,
+      snapshot: snapshot808,
+      input: { ...baseInput, sourceTokenScore: 8 },
+    });
+    const unknownBreakdown = explainScoreBreakdown(unknownHistory);
+    expect(unknownBreakdown.components.find((entry) => entry.component === "mergedHistoryMultiplier")?.summary).toMatch(
+      /unknown; the upstream merged-history floor is not blocking/i,
+    );
+    expect(unknownBreakdown.components.find((entry) => entry.component === "issueDiscoveryHistoryMultiplier")?.summary).toMatch(
+      /unknown; validity floors are not blocking/i,
+    );
+  });
+
+  it("formats blocked history summaries when observed counts are absent (#808)", () => {
+    const base = buildScorePreview({
+      repo,
+      snapshot: snapshot808,
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 40,
+        totalTokenScore: 60,
+        sourceLines: 50,
+        openPrCount: 0,
+        credibility: 1,
+        linkedIssueMode: "standard",
+        linkedIssueContext: { status: "raw", source: "github_cache", issueNumbers: [12] },
+      },
+    });
+    const mergedBlocked = explainScoreBreakdown({
+      ...base,
+      scoreEstimate: { ...base.scoreEstimate, mergedHistoryMultiplier: 0 },
+      gates: { ...base.gates, mergedPullRequests: undefined },
+    });
+    expect(mergedBlocked.components.find((entry) => entry.component === "mergedHistoryMultiplier")?.summary).toMatch(
+      /Merged PR history \(0\) is below the upstream floor/i,
+    );
+
+    const issueDiscoveryBlocked = explainScoreBreakdown({
+      ...base,
+      scoreEstimate: { ...base.scoreEstimate, issueDiscoveryHistoryMultiplier: 0 },
+      gates: { ...base.gates, validSolvedIssues: undefined, issueCredibility: undefined },
+    });
+    expect(issueDiscoveryBlocked.components.find((entry) => entry.component === "issueDiscoveryHistoryMultiplier")?.summary).toBe(
+      "private context",
+    );
   });
 });

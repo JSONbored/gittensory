@@ -1664,6 +1664,68 @@ NOVELTY_BONUS_SCALAR = 3
       const unmodeled = findUnmodeledUpstreamConstants(upstreamSource);
       expect(unmodeled).toEqual([]);
     });
+
+    it("valid-issue token floor warns when linked-issue source tokens are below MIN_TOKEN_SCORE_FOR_VALID_ISSUE (#808)", () => {
+      const issueDiscoveryRepo: RepositoryRecord = {
+        ...repo,
+        registryConfig: { ...repo.registryConfig!, issueDiscoveryShare: 0.25 },
+      };
+      const belowFloor = buildScorePreview({
+        repo: issueDiscoveryRepo,
+        snapshot,
+        input: {
+          repoFullName: issueDiscoveryRepo.fullName,
+          sourceTokenScore: 3,
+          totalTokenScore: 90,
+          sourceLines: 50,
+          openPrCount: 0,
+          credibility: 1,
+          mergedPullRequests: 5,
+          validSolvedIssues: 3,
+          issueCredibility: 0.9,
+          linkedIssueMode: "standard",
+        },
+      });
+      expect(belowFloor.gates.validIssueTokenFloor).toBe(5);
+      expect(belowFloor.gates.validIssueTokenGatePassed).toBe(false);
+      expect(belowFloor.blockedBy.some((b) => b.code === "valid_issue_token_floor")).toBe(true);
+      expect(belowFloor.blockedBy.find((b) => b.code === "valid_issue_token_floor")?.severity).toBe("context");
+      expect(belowFloor.recommendation.actions.some((action) => /valid issue-discovery history/i.test(action))).toBe(true);
+
+      const atFloor = buildScorePreview({
+        repo: issueDiscoveryRepo,
+        snapshot,
+        input: {
+          repoFullName: issueDiscoveryRepo.fullName,
+          sourceTokenScore: 5,
+          totalTokenScore: 90,
+          sourceLines: 50,
+          openPrCount: 0,
+          credibility: 1,
+          mergedPullRequests: 5,
+          validSolvedIssues: 3,
+          issueCredibility: 0.9,
+          linkedIssueMode: "standard",
+        },
+      });
+      expect(atFloor.gates.validIssueTokenGatePassed).toBe(true);
+      expect(atFloor.blockedBy.some((b) => b.code === "valid_issue_token_floor")).toBe(false);
+
+      const directPr = buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 1,
+          totalTokenScore: 90,
+          sourceLines: 50,
+          openPrCount: 0,
+          credibility: 1,
+          linkedIssueMode: "none",
+        },
+      });
+      expect(directPr.gates.validIssueTokenGatePassed).toBe(true);
+    });
   });
 
   describe("upstream time-decay (#703)", () => {
