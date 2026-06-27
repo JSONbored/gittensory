@@ -26,6 +26,7 @@ import {
   captureReviewFailure,
   flushSentry,
   forwardStructuredLogToSentry,
+  installStructuredLogForwarding,
   scrubEvent,
   resetSentryForTest,
 } from "../../src/selfhost/sentry";
@@ -225,5 +226,61 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
     await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
     forwardStructuredLogToSentry(JSON.stringify({ level: "error", code: 500 }));
     expect(mocks.captureMessage).toHaveBeenCalledWith("error", "error");
+  });
+});
+
+describe("installStructuredLogForwarding — central console sink instrumentation (#1468)", () => {
+  const makeConsole = () => {
+    const base = { log: vi.fn(), error: vi.fn() };
+    return { target: { ...base }, base };
+  };
+
+  it("forwards structured level:error logs emitted through console.error (regression)", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    const { target, base } = makeConsole();
+
+    installStructuredLogForwarding(target);
+    target.error(
+      JSON.stringify({
+        level: "error",
+        event: "orb_broker_unavailable",
+        installationId: 1,
+      }),
+    );
+
+    expect(mocks.captureMessage).toHaveBeenCalledWith(
+      "orb_broker_unavailable",
+      "error",
+    );
+    expect(base.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps forwarding structured level:error logs emitted through console.log", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    const { target, base } = makeConsole();
+
+    installStructuredLogForwarding(target);
+    target.log(JSON.stringify({ level: "error", event: "gate_check_failed" }));
+
+    expect(mocks.captureMessage).toHaveBeenCalledWith(
+      "gate_check_failed",
+      "error",
+    );
+    expect(base.log).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not recursively forward if the Sentry path logs while forwarding", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    const { target, base } = makeConsole();
+    installStructuredLogForwarding(target);
+    mocks.captureMessage.mockImplementationOnce(() => {
+      target.error(JSON.stringify({ level: "error", event: "recursive" }));
+    });
+
+    target.error(JSON.stringify({ level: "error", event: "outer" }));
+
+    expect(mocks.captureMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.captureMessage).toHaveBeenCalledWith("outer", "error");
+    expect(base.error).toHaveBeenCalledTimes(2);
   });
 });
