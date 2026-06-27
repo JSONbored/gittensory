@@ -768,6 +768,33 @@ describe("queue processors", () => {
     expect(liveFilesFetched).toBe(true);
   });
 
+  it("#sweep-resync: failed live-head file refresh drops stale cached files before review", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Drifted PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+    await upsertPullRequestFile(env, { repoFullName: "owner/agent-repo", pullNumber: 7, path: "src/old.ts", status: "modified", additions: 1, deletions: 0, changes: 1, payload: { patch: "@@\n+export const oldHead = true;" } });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/pulls/7")) return Response.json({ number: 7, title: "Drifted PR", state: "open", user: { login: "contributor" }, head: { sha: "b8" }, labels: [], body: "Closes #1" });
+      if (url.includes("/pulls/7/files")) return new Response("temporary files outage", { status: 503 });
+      if (url.includes("/commits/b8/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/b8/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await expect(processJob(env, { type: "agent-regate-pr", deliveryId: "resync-file-fail", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 })).resolves.toBeUndefined();
+
+    const stored = await getPullRequest(env, "owner/agent-repo", 7);
+    expect(stored?.headSha).toBe("b8");
+    expect(await listPullRequestFiles(env, "owner/agent-repo", 7)).toEqual([]);
+  });
+
   it("#sweep-resync: re-review does NOT resync when the stored head already matches the live head", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
