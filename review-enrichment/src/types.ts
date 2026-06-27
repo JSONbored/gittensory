@@ -93,7 +93,17 @@ export interface RedosFinding {
   pattern: string;
 }
 
-/** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
+/** A JSDoc/docstring whose @param tags don't match the adjacent function signature after the PR's changes —
+ *  either a stale tag for a removed param, or a missing tag for an added param (#1519). */
+export interface DocCommentFinding {
+  file: string;
+  line: number;
+  fn: string;
+  kind: "stale-param" | "missing-param";
+  param: string;
+}
+
+/** Structured analyzer output. Each analyzer fills its own key. */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
   secret?: SecretFinding[];
@@ -102,6 +112,7 @@ export interface BriefFindings {
   installScript?: InstallScriptFinding[];
   eol?: EolFinding[];
   redos?: RedosFinding[];
+  docComment?: DocCommentFinding[];
 }
 
 export type AnalyzerStatus = "ok" | "degraded" | "skipped";

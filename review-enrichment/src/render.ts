@@ -129,6 +129,22 @@ export function renderBrief(
     }
   }
 
+  const docComments = findings.docComment ?? [];
+  if (docComments.length) {
+    lines.push(
+      "### Doc-comment drift (JSDoc @param mismatch — update the doc-comment before merging)",
+    );
+    for (const item of docComments) {
+      const loc = safeCodeSpan(`${item.file}:${item.line}`);
+      const fn = safeCodeSpan(item.fn);
+      const msg =
+        item.kind === "stale-param"
+          ? `${safeCodeSpan(`@param ${item.param}`)} in JSDoc does not match any parameter of ${fn} — remove or rename`
+          : `${fn} has parameter ${safeCodeSpan(item.param)} with no @param in the JSDoc — add it`;
+      lines.push(`- ${loc} — ${msg}`);
+    }
+  }
+
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 
   const header =
