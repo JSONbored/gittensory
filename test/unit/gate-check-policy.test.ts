@@ -609,10 +609,13 @@ describe("dry-run disposition (#gate-dryrun): would-be verdict without enforcing
     const out = evaluateGateCheck(missingIssueAdvisory(), { dryRun: true, linkedIssueGateMode: "advisory" });
     expect(out.conclusion).toBe("success"); // POSTED — non-blocking pass
     expect(out.displayConclusion).toBe("failure"); // would-be — drives the "close" verdict in the comment
+    expect(out.displayBlockers?.map((finding) => finding.code)).toEqual(["missing_linked_issue"]);
   });
   it("a clean PR in dry-run shows a would-be PASS (displayConclusion = success)", () => {
     const clean = { ...missingIssueAdvisory(), findings: [] };
-    expect(evaluateGateCheck(clean, { dryRun: true, linkedIssueGateMode: "advisory" }).displayConclusion).toBe("success");
+    const out = evaluateGateCheck(clean, { dryRun: true, linkedIssueGateMode: "advisory" });
+    expect(out.displayConclusion).toBe("success");
+    expect(out.displayBlockers).toEqual([]);
   });
   it("outside dry-run, displayConclusion is absent (the verdict falls back to the posted conclusion)", () => {
     const out = evaluateGateCheck(missingIssueAdvisory(), { linkedIssueGateMode: "advisory" });

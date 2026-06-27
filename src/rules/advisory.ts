@@ -80,6 +80,9 @@ export type GateCheckEvaluation = {
   /** Dry-run only (#gate-dryrun): the would-be conclusion (advisory sub-gates promoted to block) used to render the
    *  merge/close/manual verdict. Absent ⇒ the renderer falls back to `conclusion`. Never affects what is posted. */
   displayConclusion?: GateCheckConclusion | undefined;
+  /** Dry-run only (#gate-dryrun): blockers from the would-be evaluation, kept so green-CI AI refutation can reconcile
+   *  the rendered verdict with the same safety rule as the posted gate. Not rendered directly. */
+  displayBlockers?: AdvisoryFinding[] | undefined;
   title: string;
   summary: string;
   blockers: AdvisoryFinding[];
@@ -98,6 +101,11 @@ export function isAiJudgmentOnlyFailure(evaluation: GateCheckEvaluation): boolea
   return evaluation.conclusion === "failure" && evaluation.blockers.length > 0 && evaluation.blockers.every((blocker) => AI_JUDGMENT_BLOCKER_CODES.has(blocker.code));
 }
 
+function isAiJudgmentOnlyDisplayFailure(evaluation: GateCheckEvaluation): boolean {
+  const blockers = evaluation.displayBlockers ?? [];
+  return evaluation.displayConclusion === "failure" && blockers.length > 0 && blockers.every((blocker) => AI_JUDGMENT_BLOCKER_CODES.has(blocker.code));
+}
+
 /**
  * Reconcile a gate evaluation with the deterministic CI for the PUBLIC review comment (#ai-ci-refutation).
  * When the gate FAILED solely on an AI-judgment blocker (ai_consensus_defect / ai_review_split) but the real CI
@@ -110,13 +118,15 @@ export function isAiJudgmentOnlyFailure(evaluation: GateCheckEvaluation): boolea
  * non-AI-only failure ⇒ the evaluation is returned UNCHANGED.
  */
 export function reconcileGateEvaluationForGreenCi(evaluation: GateCheckEvaluation, ciState: "passed" | "failed" | "unverified", enabled: boolean): GateCheckEvaluation {
-  if (!enabled || ciState !== "passed" || !isAiJudgmentOnlyFailure(evaluation)) return evaluation;
+  if (!enabled || ciState !== "passed" || (!isAiJudgmentOnlyFailure(evaluation) && !isAiJudgmentOnlyDisplayFailure(evaluation))) return evaluation;
   return {
     ...evaluation,
     conclusion: "success",
+    displayConclusion: "success",
     title: "Gittensory Gate passed",
     summary: "The AI review raised a concern, but the deterministic checks (CI) are green — the concern is advisory, not blocking.",
     blockers: [],
+    displayBlockers: [],
   };
 }
 
@@ -458,7 +468,7 @@ export function evaluateGateCheck(advisoryResult: Advisory, policy: GateCheckPol
   const result = evaluateGateCheckCore(advisoryResult, policy);
   if (!policy.dryRun) return result;
   const wouldBe = evaluateGateCheckCore(advisoryResult, promoteAdvisoryToBlock(policy));
-  return { ...result, displayConclusion: wouldBe.conclusion };
+  return { ...result, displayConclusion: wouldBe.conclusion, displayBlockers: wouldBe.blockers };
 }
 
 function evaluateGateCheckCore(advisoryResult: Advisory, policy: GateCheckPolicy = {}): GateCheckEvaluation {
