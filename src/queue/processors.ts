@@ -28,6 +28,7 @@ import {
   listOpenPullRequests,
   listPullRequests,
   listPullRequestFiles,
+  deletePullRequestFiles,
   listRecentMergedPullRequests,
   updatePullRequestSlopAssessment,
   listRepoLabels,
@@ -1499,13 +1500,11 @@ async function reReviewStoredPullRequest(
     resyncToken,
   );
   if (live?.head?.sha && live.head.sha !== pr.headSha) {
-    await upsertPullRequestFromGitHub(env, repoFullName, live).catch(
-      () => undefined,
-    );
-    await refreshPullRequestDetails(env, repoFullName, prNumber).catch(
-      () => undefined,
-    );
-    /* v8 ignore next -- the row was just upserted above, so the re-read always returns it; `?? pr` is belt-and-suspenders fail-open. */
+    const resynced = await upsertPullRequestFromGitHub(env, repoFullName, live).catch(() => undefined);
+    const detailRefresh = resynced ? await refreshPullRequestDetails(env, repoFullName, prNumber).catch(() => undefined) : undefined;
+    if (detailRefresh?.status !== "complete") {
+      await deletePullRequestFiles(env, repoFullName, prNumber).catch(() => undefined);
+    }
     pr = (await getPullRequest(env, repoFullName, prNumber)) ?? pr;
   }
   // Operator review flow: rebase-if-behind → wait for ALL CI to finish → only THEN review. Defers (returns) when
