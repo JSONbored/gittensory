@@ -577,3 +577,28 @@ describe("buildAuthorizedPrActionAdvisory self-authored parity (#self-authored-p
     expect(advisory.findings.some((finding) => finding.code === "self_authored_linked_issue")).toBe(false);
   });
 });
+
+describe("size + guardrail manual-review HOLD (#gate-size / #gate-guardrail)", () => {
+  const clean = (): Advisory => ({ ...missingIssueAdvisory(), findings: [] });
+  it("holds (neutral) an oversized PR; passes under thresholds; off/unset = no hold", () => {
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 12, changedLineCount: 10 }).conclusion).toBe("neutral"); // > 10 files
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 2, changedLineCount: 600 }).conclusion).toBe("neutral"); // > 500 lines
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 9, changedLineCount: 499 }).conclusion).toBe("success"); // under both thresholds
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "off", changedFileCount: 50, changedLineCount: 9000 }).conclusion).toBe("success"); // gate off ⇒ no hold
+    expect(evaluateGateCheck(clean(), { changedFileCount: 50, changedLineCount: 9000 }).conclusion).toBe("success"); // mode unset ⇒ no hold
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory" }).conclusion).toBe("success"); // no counts ⇒ 0 ⇒ no hold
+  });
+  it("holds (neutral) on a guardrail hit, surfacing the hold finding in warnings", () => {
+    const out = evaluateGateCheck(clean(), { guardrailHit: true });
+    expect(out.conclusion).toBe("neutral");
+    expect(out.warnings.map((w) => w.code)).toContain("guardrail_hold");
+  });
+  it("a real hard blocker WINS over a size/guardrail hold (failure, not neutral)", () => {
+    const out = evaluateGateCheck(missingIssueAdvisory(), { linkedIssueGateMode: "block", sizeGateMode: "advisory", changedFileCount: 50, changedLineCount: 9000, guardrailHit: true });
+    expect(out.conclusion).toBe("failure");
+  });
+  it("resolveEffectiveSettings maps gate.size.mode → sizeGateMode", () => {
+    const eff = resolveEffectiveSettings(settings({}), parseFocusManifest({ gate: { size: { mode: "advisory" } } }));
+    expect(eff.sizeGateMode).toBe("advisory");
+  });
+});

@@ -505,6 +505,10 @@ export type RepositorySettings = {
    *  score + warnings in context; `block` = ALSO hard-block when slopRisk >= slopGateMinScore (deterministic
    *  only, applies to every author like every blocker). Default `off` — opt-in via .gittensory.yml. */
   slopGateMode: GateRuleMode;
+  /** PR-size manual-review HOLD (#gate-size). `off` (default/absent) = no size hold; `advisory`/`block` = a PR with
+   *  >= 10 changed files OR >= 500 changed (added+deleted) lines that would otherwise pass is HELD for manual review
+   *  (neutral gate → "manual" verdict), never auto-merged and never a hard failure. Opt-in via `gate.size.mode`. */
+  sizeGateMode?: GateRuleMode | undefined;
   /** Merge-readiness gate (#merge-readiness). `off`/`advisory`/`block`. No min-score. Default `off`. */
   mergeReadinessGateMode: GateRuleMode;
   /** Focus-manifest policy gate (#555). When `block`, the focus manifest's declared policy (blocked paths,

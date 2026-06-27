@@ -27,6 +27,7 @@ export type FocusManifestGateConfig = {
   slopMode: GateRuleMode | null;
   slopMinScore: number | null;
   slopAiAdvisory: boolean | null;
+  sizeMode: GateRuleMode | null;
   aiReviewMode: GateRuleMode | null;
   aiReviewByok: boolean | null;
   aiReviewProvider: "anthropic" | "openai" | null;
@@ -239,6 +240,7 @@ const EMPTY_GATE_CONFIG: FocusManifestGateConfig = {
   slopMode: null,
   slopMinScore: null,
   slopAiAdvisory: null,
+  sizeMode: null,
   aiReviewMode: null,
   aiReviewByok: null,
   aiReviewProvider: null,
@@ -382,6 +384,11 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
   if (slop !== undefined && slop !== null && slopRecord === undefined) {
     warnings.push(`Manifest gate field "gate.slop" must be a mapping; ignoring it.`);
   }
+  const size = record.size;
+  const sizeRecord = size !== null && typeof size === "object" && !Array.isArray(size) ? (size as Record<string, JsonValue>) : undefined;
+  if (size !== undefined && size !== null && sizeRecord === undefined) {
+    warnings.push(`Manifest gate field "gate.size" must be a mapping; ignoring it.`);
+  }
   const gate: FocusManifestGateConfig = {
     present: false,
     enabled: normalizeOptionalBoolean(record.enabled, "gate.enabled", warnings),
@@ -393,6 +400,7 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     slopMode: normalizeOptionalGateMode(slopRecord?.mode, "gate.slop.mode", warnings),
     slopMinScore: normalizeOptionalScore(slopRecord?.minScore, "gate.slop.minScore", warnings),
     slopAiAdvisory: normalizeOptionalBoolean(slopRecord?.aiAdvisory, "gate.slop.aiAdvisory", warnings),
+    sizeMode: normalizeOptionalGateMode(sizeRecord?.mode, "gate.size.mode", warnings),
     aiReviewMode: normalizeOptionalGateMode(aiReviewRecord?.mode, "gate.aiReview.mode", warnings),
     aiReviewByok: normalizeOptionalBoolean(aiReviewRecord?.byok, "gate.aiReview.byok", warnings),
     aiReviewProvider: normalizeOptionalEnum(aiReviewRecord?.provider, "gate.aiReview.provider", ["anthropic", "openai"] as const, warnings),
@@ -413,6 +421,7 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     gate.slopMode !== null ||
     gate.slopMinScore !== null ||
     gate.slopAiAdvisory !== null ||
+    gate.sizeMode !== null ||
     gate.aiReviewMode !== null ||
     gate.aiReviewByok !== null ||
     gate.aiReviewProvider !== null ||
@@ -442,6 +451,7 @@ export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
     if (gate.readinessMinScore !== null) readiness.minScore = gate.readinessMinScore;
     out.readiness = readiness;
   }
+  if (gate.sizeMode !== null) out.size = { mode: gate.sizeMode };
   if (gate.slopMode !== null || gate.slopMinScore !== null || gate.slopAiAdvisory !== null) {
     const slop: Record<string, JsonValue> = {};
     if (gate.slopMode !== null) slop.mode = gate.slopMode;
@@ -915,6 +925,7 @@ export function resolveEffectiveSettings(dbSettings: RepositorySettings, manifes
   if (gate.duplicates !== null) effective.duplicatePrGateMode = gate.duplicates;
   if (gate.readinessMode !== null) effective.qualityGateMode = gate.readinessMode;
   if (gate.readinessMinScore !== null) effective.qualityGateMinScore = gate.readinessMinScore;
+  if (gate.sizeMode !== null) effective.sizeGateMode = gate.sizeMode;
   if (gate.slopMode !== null) effective.slopGateMode = gate.slopMode;
   if (gate.slopMinScore !== null) effective.slopGateMinScore = gate.slopMinScore;
   if (gate.slopAiAdvisory !== null) effective.slopAiAdvisory = gate.slopAiAdvisory;

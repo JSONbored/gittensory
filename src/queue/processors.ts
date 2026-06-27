@@ -3301,6 +3301,11 @@ export function gateCheckPolicy(
   confirmedContributor?: boolean,
   slopRisk?: number | null,
   authorHistory?: { mergedPrCount: number; closedUnmergedPrCount: number },
+  sizeContext?: {
+    changedFileCount: number;
+    changedLineCount: number;
+    guardrailHit: boolean;
+  },
 ) {
   // `settings` is already the EFFECTIVE config (`.gittensory.yml` > DB > defaults), resolved upstream by
   // resolveRepositorySettings, so the blocker modes here reflect the repo's config file directly.
@@ -3326,6 +3331,13 @@ export function gateCheckPolicy(
     slopGateMinScore: settings.slopGateMinScore ?? null,
     slopRisk: slopRisk ?? null,
     confirmedContributor: confirmedContributorForPack,
+    // PR-size + guardrail manual-review HOLD (#gate-size / #gate-guardrail): the MODE comes from config; the
+    // thresholds default to 10 files / 500 lines (advisory.ts constants); the live counts + guardrail-hit come from
+    // the per-PR sizeContext threaded by the caller.
+    sizeGateMode: settings.sizeGateMode,
+    changedFileCount: sizeContext?.changedFileCount ?? null,
+    changedLineCount: sizeContext?.changedLineCount ?? null,
+    guardrailHit: sizeContext?.guardrailHit ?? false,
   };
 }
 
@@ -4546,12 +4558,28 @@ async function maybePublishPrPublicSurface(
       pr.number,
     );
 
+    // PR-size + guardrail manual-review HOLD (#gate-size / #gate-guardrail): compute the live change size + the
+    // guardrail-hit from the resolved files (getReviewFiles is memoized — no extra fetch) so the gate can HOLD an
+    // oversized or guardrail-touching PR (neutral → "manual" verdict), visible even in advisory/dry-run.
+    const sizeGateFiles = await getReviewFiles();
+    const gateSizeContext = {
+      changedFileCount: sizeGateFiles.length,
+      changedLineCount: sizeGateFiles.reduce(
+        (n, f) => n + f.additions + f.deletions,
+        0,
+      ),
+      guardrailHit: isGuardrailHit(
+        changedPathsForGuardrail(sizeGateFiles),
+        await loadHardGuardrailGlobs(env, repoFullName),
+      ),
+    };
     const gatePolicy = gateCheckPolicy(
       settings,
       readiness.total,
       confirmedContributor,
       slopRisk,
       authorHistory,
+      gateSizeContext,
     );
     gateEvaluation = gateEnabled
       ? evaluateGateCheck(advisory, gatePolicy)

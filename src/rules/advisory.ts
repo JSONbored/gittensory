@@ -55,6 +55,18 @@ export type GateCheckPolicy = {
    *  regardless of confirmed status, which now affects only on-chain scoring). `undefined` = unresolved.
    *  (#gate-nonconfirmed) */
   confirmedContributor?: boolean | undefined;
+  /** PR-size HOLD (#gate-size). When set (advisory/block), a PR with >= sizeGateMaxFiles changed files OR
+   *  >= sizeGateMaxLines changed (added+deleted) lines that would OTHERWISE pass is HELD for manual review — a
+   *  neutral gate → "manual" verdict, never auto-merged and never a hard failure. Defaults off; thresholds default
+   *  to 10 files / 500 lines. This is a HOLD (advisory dry-run friendly), not a close. */
+  sizeGateMode?: GateRuleMode | undefined;
+  /** Aggregate change size, threaded from the resolved file list (changedLineCount = additions + deletions). */
+  changedFileCount?: number | null | undefined;
+  changedLineCount?: number | null | undefined;
+  /** True when the PR's diff trips a hard guardrail path (caller computes via loadHardGuardrailGlobs + isGuardrailHit).
+   *  A guardrail hit HOLDS an otherwise-passing gate for manual review (neutral → "manual"), never auto-merged.
+   *  Always-on (the guardrail globs default to the crucial/config-as-code/engine paths). (#gate-guardrail) */
+  guardrailHit?: boolean | undefined;
 };
 
 export type GateCheckEvaluation = {
@@ -378,6 +390,40 @@ export function formatCheckRunOutput(
   return annotations.length > 0 ? { title, summary, text, annotations } : { title, summary, text };
 }
 
+const SIZE_HOLD_DEFAULT_MAX_FILES = 10;
+const SIZE_HOLD_DEFAULT_MAX_LINES = 500;
+
+/** Oversized-PR manual-review HOLD finding (#gate-size), or null when the size gate is off or the PR is within both
+ *  thresholds. A HOLD (→ neutral gate → "manual" verdict), never a hard blocker, so it is dry-run/advisory friendly. */
+function buildSizeHoldFinding(policy: GateCheckPolicy): AdvisoryFinding | null {
+  if (!policy.sizeGateMode || policy.sizeGateMode === "off") return null;
+  const files = policy.changedFileCount ?? 0;
+  const lines = policy.changedLineCount ?? 0;
+  if (
+    files < SIZE_HOLD_DEFAULT_MAX_FILES &&
+    lines < SIZE_HOLD_DEFAULT_MAX_LINES
+  )
+    return null;
+  return {
+    code: "oversized_pr",
+    severity: "warning",
+    title: "Large change — held for manual review",
+    detail: `This PR changes ${files} file(s) / ${lines} line(s) (hold threshold: ${SIZE_HOLD_DEFAULT_MAX_FILES} files or ${SIZE_HOLD_DEFAULT_MAX_LINES} lines).`,
+    action: "Split this into smaller, focused PRs, or a maintainer reviews and merges it manually.",
+  };
+}
+
+/** Guardrail-path manual-review HOLD finding (#gate-guardrail). A HOLD (neutral gate), never a hard blocker. */
+function buildGuardrailHoldFinding(): AdvisoryFinding {
+  return {
+    code: "guardrail_hold",
+    severity: "warning",
+    title: "Touches a guarded path — held for manual review",
+    detail: "This PR changes a guardrail-protected path, so it is held for a maintainer to review and merge manually.",
+    action: "A maintainer must review and merge this change.",
+  };
+}
+
 export function evaluateGateCheck(advisoryResult: Advisory, policy: GateCheckPolicy = {}): GateCheckEvaluation {
   const warnings = advisoryResult.findings.filter((finding) => finding.severity === "warning");
   // App/infra state (repo not synced yet, PR not cached): gittensory cannot evaluate this PR yet, so the
@@ -438,6 +484,24 @@ export function evaluateGateCheck(advisoryResult: Advisory, policy: GateCheckPol
         summary: "The AI review could not be completed for this change, so the gate is held for a human reviewer rather than passed automatically. It re-evaluates on the next update.",
         blockers: [],
         warnings,
+      };
+    }
+    // Manual-review HOLD (#gate-size / #gate-guardrail): a PR that would otherwise PASS but is oversized or touches
+    // a guarded path is HELD for a human (neutral → "manual" verdict) rather than auto-approved — never a failure,
+    // so neutral never blocks the merge (dry-run/advisory friendly) and a contributor PR is never auto-closed for size.
+    const sizeHold = buildSizeHoldFinding(effective);
+    const guardrailHold = effective.guardrailHit ? buildGuardrailHoldFinding() : null;
+    const holds = [sizeHold, guardrailHold].filter(
+      (f): f is AdvisoryFinding => f !== null,
+    );
+    if (holds.length > 0) {
+      return {
+        enabled: true,
+        conclusion: "neutral",
+        title: "Gittensory Gate — held for manual review",
+        summary: holds.map((h) => sanitizeForCheckRun(h.title)).join("; "),
+        blockers: [],
+        warnings: [...warnings, ...holds],
       };
     }
     return {
