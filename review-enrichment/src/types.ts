@@ -93,6 +93,15 @@ export interface RedosFinding {
   pattern: string;
 }
 
+/** An added line that passes sensitive data into a logging/stdout sink (a secret, PII, or a dumped request
+ *  object). Reports the location + sink + category only — never the logged value. */
+export interface SecretLogFinding {
+  file: string;
+  line: number;
+  sink: string;
+  category: "secret" | "pii" | "request-object";
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -102,6 +111,7 @@ export interface BriefFindings {
   installScript?: InstallScriptFinding[];
   eol?: EolFinding[];
   redos?: RedosFinding[];
+  secretLog?: SecretLogFinding[];
 }
 
 export type AnalyzerStatus = "ok" | "degraded" | "skipped";
