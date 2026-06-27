@@ -1103,11 +1103,40 @@ describe("CI-refutation of the public comment gate (#ai-ci-refutation)", () => {
   });
 
   it("enabled + green CI + AI-judgment-only failure → SUCCESS with cleared blockers (matches the merge disposition)", () => {
-    const out = reconcileGateEvaluationForGreenCi(failure(["ai_consensus_defect"]), "passed", true);
+    const out = reconcileGateEvaluationForGreenCi(
+      { ...failure(["ai_consensus_defect"]), displayConclusion: "failure", displayBlockers: [finding("ai_consensus_defect")] },
+      "passed",
+      true,
+    );
     expect(out.conclusion).toBe("success");
+    expect(out.displayConclusion).toBe("success");
     expect(out.blockers).toEqual([]);
+    expect(out.displayBlockers).toEqual([]);
     expect(out.title).toBe("Gittensory Gate passed");
     expect(out.summary).toContain("advisory, not blocking");
+  });
+
+  it("reconciles a dry-run AI-only display failure even when the posted gate already passed", () => {
+    const out = reconcileGateEvaluationForGreenCi(
+      { ...failure([]), conclusion: "success", blockers: [], displayConclusion: "failure", displayBlockers: [finding("ai_consensus_defect")] },
+      "passed",
+      true,
+    );
+    expect(out.conclusion).toBe("success");
+    expect(out.displayConclusion).toBe("success");
+    expect(out.blockers).toEqual([]);
+    expect(out.displayBlockers).toEqual([]);
+  });
+
+  it("keeps a dry-run deterministic display failure visible on green CI", () => {
+    const fail = {
+      ...failure([]),
+      conclusion: "success" as const,
+      blockers: [],
+      displayConclusion: "failure" as const,
+      displayBlockers: [finding("duplicate_open_pr")],
+    };
+    expect(reconcileGateEvaluationForGreenCi(fail, "passed", true)).toBe(fail);
   });
 
   it("enabled + green CI + split-only failure → SUCCESS too", () => {
