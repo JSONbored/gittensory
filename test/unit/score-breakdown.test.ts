@@ -405,4 +405,38 @@ describe("explainScoreBreakdown", () => {
       /unknown; validity floors are not blocking/i,
     );
   });
+
+  it("formats blocked history summaries when observed counts are absent (#808)", () => {
+    const base = buildScorePreview({
+      repo,
+      snapshot: snapshot808,
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 40,
+        totalTokenScore: 60,
+        sourceLines: 50,
+        openPrCount: 0,
+        credibility: 1,
+        linkedIssueMode: "standard",
+        linkedIssueContext: { status: "raw", source: "github_cache", issueNumbers: [12] },
+      },
+    });
+    const mergedBlocked = explainScoreBreakdown({
+      ...base,
+      scoreEstimate: { ...base.scoreEstimate, mergedHistoryMultiplier: 0 },
+      gates: { ...base.gates, mergedPullRequests: undefined },
+    });
+    expect(mergedBlocked.components.find((entry) => entry.component === "mergedHistoryMultiplier")?.summary).toMatch(
+      /Merged PR history \(0\) is below the upstream floor/i,
+    );
+
+    const issueDiscoveryBlocked = explainScoreBreakdown({
+      ...base,
+      scoreEstimate: { ...base.scoreEstimate, issueDiscoveryHistoryMultiplier: 0 },
+      gates: { ...base.gates, validSolvedIssues: undefined, issueCredibility: undefined },
+    });
+    expect(issueDiscoveryBlocked.components.find((entry) => entry.component === "issueDiscoveryHistoryMultiplier")?.summary).toBe(
+      "private context",
+    );
+  });
 });
