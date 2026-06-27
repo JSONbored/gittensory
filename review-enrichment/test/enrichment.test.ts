@@ -21,6 +21,13 @@ import {
   scanPatchForRedos,
   scanRedos,
 } from "../dist/analyzers/redos.js";
+import {
+  extractJsDocParams,
+  extractFunctionParams,
+  reconstructLines,
+  scanPatchForDocDrift,
+  scanDocComment,
+} from "../dist/analyzers/doc-comment.js";
 
 const NOW = new Date("2026-06-26").getTime();
 const eolFetch =
@@ -706,6 +713,351 @@ test("buildBrief: ReDoS analyzer runs (pure, no network)", async () => {
     assert.equal(brief.analyzerStatus.redos, "ok");
     assert.equal(brief.findings.redos.length, 1);
     assert.match(brief.promptSection, /ReDoS-prone regex/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+// --- doc-comment drift tests ---
+
+test("extractJsDocParams: bare, typed, [bracket], [bracket=default] forms; skips `this`", () => {
+  const block = [
+    "/**",
+    " * @param name bare",
+    " * @param {string} typed",
+    " * @param {Type} [optBracket] optional",
+    " * @param {number} [withDefault=0] with default",
+    " * @param this TS pseudo-param — should be skipped",
+    " */",
+  ].join("\n");
+  assert.deepEqual(extractJsDocParams(block), [
+    "name",
+    "typed",
+    "optBracket",
+    "withDefault",
+  ]);
+});
+
+test("extractJsDocParams: no @param tags returns empty array", () => {
+  assert.deepEqual(extractJsDocParams("/** Does something. */"), []);
+});
+
+test("extractFunctionParams: simple, optional, default, rest params; skips `this`", () => {
+  const { params, hasDestructured } = extractFunctionParams(
+    "a: string, b?: number, c = 0, ...rest: string[]",
+  );
+  assert.deepEqual(params, ["a", "b", "c", "rest"]);
+  assert.equal(hasDestructured, false);
+});
+
+test("extractFunctionParams: destructured object param sets hasDestructured", () => {
+  const { params, hasDestructured } = extractFunctionParams(
+    "{ name, age }: Person, extra: string",
+  );
+  assert.equal(hasDestructured, true);
+  assert.deepEqual(params, ["extra"]);
+});
+
+test("extractFunctionParams: destructured array param sets hasDestructured", () => {
+  const { hasDestructured } = extractFunctionParams("[first, ...rest]: string[]");
+  assert.equal(hasDestructured, true);
+});
+
+test("extractFunctionParams: skips TS `this` pseudo-param", () => {
+  const { params } = extractFunctionParams("this: Context, x: string");
+  assert.deepEqual(params, ["x"]);
+});
+
+test("extractFunctionParams: empty param list", () => {
+  const { params, hasDestructured } = extractFunctionParams("");
+  assert.deepEqual(params, []);
+  assert.equal(hasDestructured, false);
+});
+
+test("reconstructLines: tags added lines, skips removed, uses hunk header for line numbers", () => {
+  const patch = [
+    "@@ -5,3 +5,4 @@",
+    " context",
+    "+added",
+    "-removed",
+    " another",
+  ].join("\n");
+  const lines = reconstructLines(patch);
+  assert.equal(lines.length, 3);
+  assert.deepEqual(lines[0], { content: "context", isAdded: false, newLine: 5 });
+  assert.deepEqual(lines[1], { content: "added", isAdded: true, newLine: 6 });
+  assert.deepEqual(lines[2], { content: "another", isAdded: false, newLine: 7 });
+});
+
+test("reconstructLines: skips --- and +++ header lines", () => {
+  const patch = [
+    "--- a/src/x.ts",
+    "+++ b/src/x.ts",
+    "@@ -1,0 +1,1 @@",
+    "+const x = 1;",
+  ].join("\n");
+  const lines = reconstructLines(patch);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0]!.isAdded, true);
+  assert.equal(lines[0]!.newLine, 1);
+});
+
+test("reconstructLines: multiple hunks reset line counter", () => {
+  const patch = [
+    "@@ -1,1 +1,1 @@",
+    "+first",
+    "@@ -10,1 +10,1 @@",
+    "+second",
+  ].join("\n");
+  const lines = reconstructLines(patch);
+  assert.equal(lines[0]!.newLine, 1);
+  assert.equal(lines[1]!.newLine, 10);
+});
+
+test("scanPatchForDocDrift: stale-param — @param removed from function but still in JSDoc", () => {
+  const patch = [
+    "@@ -1,7 +1,6 @@",
+    " /**",
+    "  * @param name the name",
+    "  * @param age the age",
+    "  */",
+    "-function greet(name: string, age: number): string {",
+    "+function greet(name: string): string {",
+  ].join("\n");
+  const findings = scanPatchForDocDrift("src/x.ts", patch);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]!.kind, "stale-param");
+  assert.equal(findings[0]!.param, "age");
+  assert.equal(findings[0]!.fn, "greet");
+  assert.equal(findings[0]!.file, "src/x.ts");
+});
+
+test("scanPatchForDocDrift: missing-param — new param added to function with no @param in JSDoc", () => {
+  const patch = [
+    "@@ -1,6 +1,7 @@",
+    " /**",
+    "  * @param name the name",
+    "  */",
+    "-function greet(name: string): string {",
+    "+function greet(name: string, email: string): string {",
+  ].join("\n");
+  const findings = scanPatchForDocDrift("src/x.ts", patch);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]!.kind, "missing-param");
+  assert.equal(findings[0]!.param, "email");
+});
+
+test("scanPatchForDocDrift: no change in JSDoc-function window — pre-existing drift is not flagged", () => {
+  // The JSDoc and function sig are both context lines; only body lines inside the function are added.
+  const patch = [
+    "@@ -1,7 +1,8 @@",
+    " /**",
+    "  * @param name the name",
+    "  * @param stale gone",
+    "  */",
+    " function greet(name: string): string {",
+    "+  return name;",
+    " }",
+  ].join("\n");
+  const findings = scanPatchForDocDrift("src/x.ts", patch);
+  assert.equal(findings.length, 0);
+});
+
+test("scanPatchForDocDrift: JSDoc with no @param tags — nothing to drift against", () => {
+  const patch = [
+    "@@ -1,5 +1,5 @@",
+    "+/**",
+    "+ * Does something.",
+    "+ */",
+    "+function doSomething(x: string): void {",
+  ].join("\n");
+  assert.equal(scanPatchForDocDrift("src/x.ts", patch).length, 0);
+});
+
+test("scanPatchForDocDrift: destructured params — skipped to avoid wrapper-name false positives", () => {
+  const patch = [
+    "@@ -1,5 +1,5 @@",
+    "+/**",
+    "+ * @param options the options",
+    "+ */",
+    "+function configure({ host, port }: Options): void {",
+  ].join("\n");
+  assert.equal(scanPatchForDocDrift("src/x.ts", patch).length, 0);
+});
+
+test("scanPatchForDocDrift: JSDoc not followed by a function — skipped", () => {
+  const patch = [
+    "@@ -1,5 +1,5 @@",
+    "+/**",
+    "+ * @param foo the foo",
+    "+ */",
+    "+const obj = { key: 'value' };",
+  ].join("\n");
+  assert.equal(scanPatchForDocDrift("src/x.ts", patch).length, 0);
+});
+
+test("scanPatchForDocDrift: single-line JSDoc (/** ... */ on one line)", () => {
+  const patch = [
+    "@@ -1,3 +1,3 @@",
+    " /** @param name the name @param stale gone */",
+    "-function greet(name: string, stale: number): void {",
+    "+function greet(name: string): void {",
+  ].join("\n");
+  const findings = scanPatchForDocDrift("src/x.ts", patch);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]!.kind, "stale-param");
+  assert.equal(findings[0]!.param, "stale");
+});
+
+test("scanPatchForDocDrift: class method with modifiers — name extracted correctly", () => {
+  const patch = [
+    "@@ -1,7 +1,6 @@",
+    " /**",
+    "  * @param id the id",
+    "  * @param name the name",
+    "  */",
+    "-  public async update(id: string, name: string): Promise<void> {",
+    "+  public async update(id: string): Promise<void> {",
+  ].join("\n");
+  const findings = scanPatchForDocDrift("src/svc.ts", patch);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]!.fn, "update");
+  assert.equal(findings[0]!.kind, "stale-param");
+  assert.equal(findings[0]!.param, "name");
+});
+
+test("scanPatchForDocDrift: arrow function — name extracted from const binding", () => {
+  const patch = [
+    "@@ -1,6 +1,7 @@",
+    " /**",
+    "  * @param a first",
+    "  */",
+    "-const add = (a: number): number => a;",
+    "+const add = (a: number, b: number): number => a + b;",
+  ].join("\n");
+  const findings = scanPatchForDocDrift("src/x.ts", patch);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]!.fn, "add");
+  assert.equal(findings[0]!.kind, "missing-param");
+  assert.equal(findings[0]!.param, "b");
+});
+
+test("scanPatchForDocDrift: rest param in function matches @param in JSDoc", () => {
+  const patch = [
+    "@@ -1,5 +1,6 @@",
+    "+/**",
+    "+ * @param args the args",
+    "+ */",
+    "+function foo(...args: string[]): void {",
+  ].join("\n");
+  // args is documented and present — no drift
+  assert.equal(scanPatchForDocDrift("src/x.ts", patch).length, 0);
+});
+
+test("scanPatchForDocDrift: unbalanced parens in signature — skipped", () => {
+  const patch = [
+    "@@ -1,5 +1,5 @@",
+    "+/**",
+    "+ * @param x the x",
+    "+ */",
+    "+function broken(x: Map<string, Array<",
+  ].join("\n");
+  // Parens unbalanced across more than 8 lines — extractParamListBody returns null → skip
+  assert.equal(scanPatchForDocDrift("src/x.ts", patch).length, 0);
+});
+
+test("scanPatchForDocDrift: caps at MAX_FINDINGS across one file", () => {
+  // Build a patch with 22 functions each with one stale param
+  const lines: string[] = ["@@ -1,1 +1,110 @@"];
+  for (let k = 0; k < 22; k++) {
+    lines.push(`+/** @param stale gone */`);
+    lines.push(`+function fn${k}(real: string): void {}`);
+  }
+  const findings = scanPatchForDocDrift("src/x.ts", lines.join("\n"));
+  assert.equal(findings.length, 20);
+});
+
+test("scanDocComment: skips non-JS/TS files and files without patches", async () => {
+  const findings = await scanDocComment({
+    repoFullName: "o/r",
+    prNumber: 1,
+    files: [
+      {
+        path: "README.md",
+        patch: "@@ -1,0 +1,2 @@\n+/** @param foo */\n+function bar(baz: string) {}",
+      },
+      { path: "src/a.ts" }, // no patch
+      {
+        path: "src/b.ts",
+        patch: [
+          "@@ -1,5 +1,5 @@",
+          " /**",
+          "  * @param name ok",
+          "  * @param stale gone",
+          "  */",
+          "+function f(name: string) {",
+        ].join("\n"),
+      },
+    ],
+  });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]!.file, "src/b.ts");
+});
+
+test("scanDocComment: caps MAX_FINDINGS across multiple files", async () => {
+  const files = Array.from({ length: 25 }, (_, k) => ({
+    path: `src/f${k}.ts`,
+    patch: `@@ -1,0 +1,2 @@\n+/** @param stale gone */\n+function fn(real: string): void {}`,
+  }));
+  const findings = await scanDocComment({ repoFullName: "o/r", prNumber: 1, files });
+  assert.equal(findings.length, 20);
+});
+
+test("renderBrief: renders stale-param and missing-param doc-comment blocks", () => {
+  const r = renderBrief({
+    docComment: [
+      { file: "src/x.ts", line: 10, fn: "greet", kind: "stale-param", param: "age" },
+      { file: "src/y.ts", line: 20, fn: "configure", kind: "missing-param", param: "timeout" },
+    ],
+  });
+  assert.match(r.promptSection, /Doc-comment drift/);
+  assert.match(r.promptSection, /`src\/x\.ts:10`/);
+  assert.match(r.promptSection, /`@param age`/);
+  assert.match(r.promptSection, /does not match any parameter of `greet`/);
+  assert.match(r.promptSection, /`src\/y\.ts:20`/);
+  assert.match(r.promptSection, /`configure` has parameter `timeout`/);
+  assert.match(r.promptSection, /no @param in the JSDoc/);
+});
+
+test("renderBrief: no doc-comment section when docComment is empty", () => {
+  assert.equal(renderBrief({ docComment: [] }).promptSection, "");
+});
+
+test("buildBrief: doc-comment analyzer runs (pure, no network)", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+  try {
+    const brief = await buildBrief({
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [
+        {
+          path: "src/x.ts",
+          patch: [
+            "@@ -1,5 +1,5 @@",
+            " /**",
+            "  * @param name the name",
+            "  * @param staleParam gone",
+            "  */",
+            "+function greet(name: string): string {",
+          ].join("\n"),
+        },
+      ],
+    });
+    assert.equal(brief.analyzerStatus.docComment, "ok");
+    assert.equal(brief.findings.docComment!.length, 1);
+    assert.equal(brief.findings.docComment![0]!.kind, "stale-param");
+    assert.match(brief.promptSection, /Doc-comment drift/);
   } finally {
     globalThis.fetch = realFetch;
   }

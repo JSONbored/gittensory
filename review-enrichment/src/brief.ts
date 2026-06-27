@@ -14,11 +14,11 @@ import { scanInstallScripts } from "./analyzers/install-scripts.js";
 import { scanActionPins } from "./analyzers/actions-pin.js";
 import { scanEol } from "./analyzers/eol-check.js";
 import { scanRedos } from "./analyzers/redos.js";
+import { scanDocComment } from "./analyzers/doc-comment.js";
 import { renderBrief } from "./render.js";
 
 type AnalyzerFn = (req: EnrichRequest, signal: AbortSignal) => Promise<unknown>;
 
-// The analyzer registry. More land behind this same shape: license (#1475), secret (#1476), static (#1477), history (#1478).
 const ANALYZERS: Record<keyof BriefFindings, AnalyzerFn> = {
   dependency: (req, signal) => scanDependencies(req, fetch, { signal }),
   secret: (req) => scanSecrets(req),
@@ -27,6 +27,7 @@ const ANALYZERS: Record<keyof BriefFindings, AnalyzerFn> = {
   actionPin: (req) => scanActionPins(req),
   eol: (req) => scanEol(req),
   redos: (req) => scanRedos(req),
+  docComment: (req) => scanDocComment(req),
 };
 
 function runWithTimeout<T>(
