@@ -16,6 +16,7 @@ import {
 } from "../dist/analyzers/actions-pin.js";
 import { scanEol, extractVersionPins } from "../dist/analyzers/eol-check.js";
 import {
+  extractRegexSources,
   hasCatastrophicBacktracking,
   scanPatchForRedos,
   scanRedos,
@@ -625,6 +626,20 @@ test("hasCatastrophicBacktracking: flags nested unbounded quantifiers, not linea
   ]) {
     assert.equal(hasCatastrophicBacktracking(safe), false, safe);
   }
+});
+
+test("extractRegexSources: linear scan, no catastrophic backtracking on adversarial char classes (#1503 regression)", () => {
+  // The former LITERAL_RE extractor backtracked exponentially on many empty `[]` classes with no closing slash;
+  // the linear scanner returns immediately (a regression would hang this test).
+  const adversarial = "x = /" + "[]".repeat(800);
+  assert.deepEqual(extractRegexSources(adversarial), []);
+  // Well-formed literals (incl. char classes + flags) and RegExp() ctors still extract correctly:
+  assert.deepEqual(extractRegexSources("const r = /[a-z][0-9]+/g;"), [
+    "[a-z][0-9]+",
+  ]);
+  assert.deepEqual(extractRegexSources('new RegExp("(a+)+")'), ["(a+)+"]);
+  // `a / b` division is not mistaken for a regex literal:
+  assert.deepEqual(extractRegexSources("const n = a / b;"), []);
 });
 
 test("scanPatchForRedos: flags added ReDoS literals + RegExp(...) ctors, line-cited; ignores context + safe regex", () => {
