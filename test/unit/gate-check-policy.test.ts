@@ -604,18 +604,32 @@ describe("size + guardrail manual-review HOLD (#gate-size / #gate-guardrail)", (
 });
 
 describe("dry-run disposition (#gate-dryrun): would-be verdict without enforcing", () => {
-  it("posts the real non-enforcing conclusion but exposes the would-be conclusion as displayConclusion", () => {
-    // advisory linked-issue ⇒ the missing-issue finding does NOT block (posted = success), but promoted to block it WOULD close
-    const out = evaluateGateCheck(missingIssueAdvisory(), { dryRun: true, linkedIssueGateMode: "advisory" });
-    expect(out.conclusion).toBe("success"); // POSTED — non-blocking pass
+  // #disposition-redesign: the dry-run shadow promotes ONLY the AI sub-gate. CLOSE is driven by AI confidence; the
+  // advisory signals (linked issue, readiness/quality, slop, duplicates) can NEVER drive a would-be close.
+  const aiDefect = (): Advisory => ({
+    ...missingIssueAdvisory(),
+    findings: [{ code: "ai_consensus_defect", title: "AI consensus defect", severity: "warning", detail: "both models flagged a real defect", action: "fix it" }],
+  });
+  it("an advisory AI defect previews a would-be close (AI sub-gate is the only one promoted)", () => {
+    const out = evaluateGateCheck(aiDefect(), { dryRun: true, aiReviewGateMode: "advisory" });
+    expect(out.conclusion).toBe("success"); // POSTED — non-blocking (AI is advisory)
     expect(out.displayConclusion).toBe("failure"); // would-be — drives the "close" verdict in the comment
+  });
+  it("a MISSING LINKED ISSUE never drives a dry-run close (advisory-only signal)", () => {
+    const out = evaluateGateCheck(missingIssueAdvisory(), { dryRun: true, linkedIssueGateMode: "advisory" });
+    expect(out.conclusion).toBe("success");
+    expect(out.displayConclusion).toBe("success"); // NOT promoted ⇒ no would-be close
+  });
+  it("a LOW READINESS score never drives a dry-run close (advisory-only signal)", () => {
+    const out = evaluateGateCheck({ ...missingIssueAdvisory(), findings: [] }, { dryRun: true, qualityGateMode: "advisory", qualityGateMinScore: 70, readinessScore: 40 });
+    expect(out.displayConclusion).toBe("success"); // readiness is advisory-only, never promoted to a close
   });
   it("a clean PR in dry-run shows a would-be PASS (displayConclusion = success)", () => {
     const clean = { ...missingIssueAdvisory(), findings: [] };
-    expect(evaluateGateCheck(clean, { dryRun: true, linkedIssueGateMode: "advisory" }).displayConclusion).toBe("success");
+    expect(evaluateGateCheck(clean, { dryRun: true, aiReviewGateMode: "advisory" }).displayConclusion).toBe("success");
   });
   it("outside dry-run, displayConclusion is absent (the verdict falls back to the posted conclusion)", () => {
-    const out = evaluateGateCheck(missingIssueAdvisory(), { linkedIssueGateMode: "advisory" });
+    const out = evaluateGateCheck(aiDefect(), { aiReviewGateMode: "advisory" });
     expect(out.conclusion).toBe("success");
     expect(out.displayConclusion).toBeUndefined();
   });

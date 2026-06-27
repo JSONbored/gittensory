@@ -436,18 +436,16 @@ function buildGuardrailHoldFinding(): AdvisoryFinding {
  *  would-be conclusion. `off`/`block`/unset modes are untouched; non-mode policy (grace, size HOLD, guardrail) is
  *  preserved as-is, so the would-be verdict still honours newcomer grace and the manual-review holds. PURE. */
 function promoteAdvisoryToBlock(policy: GateCheckPolicy): GateCheckPolicy {
+  // #disposition-redesign: the dry-run "would-be" verdict must reflect the REAL disposition model — a CLOSE is driven by
+  // the AI reviewer's confidence + genuine hard blockers (secret/CI/banned) ONLY. The advisory signals — missing linked
+  // issue, readiness/quality, slop, duplicates, manifest policy, self-authored issue — are NEVER close drivers, so they
+  // are deliberately NOT promoted here. Only the AI sub-gate is promoted, so an `advisory` AI defect still previews its
+  // would-be close while a missing linked issue or a low readiness score can never render a "close" verdict.
   const block = (mode: GateRuleMode | undefined): GateRuleMode | undefined => (mode === "advisory" ? "block" : mode);
   return {
     ...policy,
     dryRun: false,
-    linkedIssueGateMode: block(policy.linkedIssueGateMode),
-    duplicatePrGateMode: block(policy.duplicatePrGateMode),
-    qualityGateMode: block(policy.qualityGateMode),
     aiReviewGateMode: block(policy.aiReviewGateMode),
-    slopGateMode: block(policy.slopGateMode),
-    mergeReadinessGateMode: block(policy.mergeReadinessGateMode),
-    manifestPolicyGateMode: block(policy.manifestPolicyGateMode),
-    selfAuthoredLinkedIssueGateMode: block(policy.selfAuthoredLinkedIssueGateMode),
   };
 }
 
