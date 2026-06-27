@@ -1413,6 +1413,127 @@ describe("world-class backend signals", () => {
     );
     const index = solverTokenScoreIndexFromGittensor(profile);
     expect(index.get(9)).toBe(12);
+    expect(solverTokenScoreIndexFromGittensor({ login: "miner", generatedAt: "", github: { login: "miner", source: "github" }, source: "github_cache", registeredRepoActivity: { pullRequests: 0, mergedPullRequests: 0, issues: 0, reposTouched: [], dominantLabels: [] }, trustSignals: { evidenceScore: 0, level: "new", unlinkedOpenPullRequests: 0, maintainerAssociatedPullRequests: 0 } })).toEqual(new Map());
+  });
+
+  it("ignores non-finite token scores and clamps negative values in the solver index (#808)", () => {
+    const profile = buildContributorProfile(
+      "miner",
+      { login: "miner", topLanguages: ["TypeScript"], source: "github" },
+      [],
+      [],
+      [],
+      {
+        source: "gittensor_api",
+        githubId: "1",
+        githubUsername: "miner",
+        isEligible: true,
+        credibility: 1,
+        eligibleRepoCount: 1,
+        issueDiscoveryScore: 0,
+        issueTokenScore: 0,
+        issueCredibility: 1,
+        isIssueEligible: false,
+        issueEligibleRepoCount: 0,
+        alphaPerDay: 0,
+        taoPerDay: 0,
+        usdPerDay: 0,
+        totals: {
+          pullRequests: 3,
+          mergedPullRequests: 3,
+          openPullRequests: 0,
+          closedPullRequests: 0,
+          openIssues: 0,
+          closedIssues: 0,
+          solvedIssues: 0,
+          validSolvedIssues: 0,
+        },
+        repositories: [],
+        pullRequests: [
+          { repoFullName: repo.fullName, number: 1, title: "Bad", state: "merged", score: 1, baseScore: 1, tokenScore: Number.NaN },
+          { repoFullName: repo.fullName, number: 2, title: "Negative", state: "merged", score: 1, baseScore: 1, tokenScore: -4 },
+          { repoFullName: repo.fullName, number: 3, title: "Good", state: "merged", score: 1, baseScore: 1, tokenScore: 7 },
+        ],
+        issueLabels: [],
+      },
+    );
+    const index = solverTokenScoreIndexFromGittensor(profile);
+    expect(index.has(1)).toBe(false);
+    expect(index.get(2)).toBe(0);
+    expect(index.get(3)).toBe(7);
+  });
+
+  it("outcome history counts low-token solver PRs as solved but not valid (#808)", () => {
+    const issueDiscoveryRepo: RepositoryRecord = {
+      ...repo,
+      registryConfig: { ...repo.registryConfig!, issueDiscoveryShare: 1, maintainerCut: 0 },
+    };
+    const solvedIssue: IssueRecord = {
+      ...issues[0]!,
+      number: 44,
+      title: "Low-token solve",
+      state: "closed",
+      authorLogin: "solver",
+      labels: ["bug"],
+      body: "Detailed solved body ".repeat(20),
+      linkedPrs: [],
+      updatedAt: "2026-05-20T00:00:00.000Z",
+    };
+    const solverPr: PullRequestRecord = {
+      ...pullRequests[0]!,
+      number: 55,
+      authorLogin: "solver",
+      authorAssociation: "NONE",
+      linkedIssues: [44],
+      mergedAt: "2026-05-25T00:00:00.000Z",
+      state: "merged",
+    };
+    const profile = buildContributorProfile(
+      "solver",
+      { login: "solver", topLanguages: ["TypeScript"], source: "github" },
+      [solverPr],
+      [solvedIssue],
+      [],
+      {
+        source: "gittensor_api",
+        githubId: "2",
+        githubUsername: "solver",
+        isEligible: true,
+        credibility: 1,
+        eligibleRepoCount: 1,
+        issueDiscoveryScore: 0,
+        issueTokenScore: 0,
+        issueCredibility: 1,
+        isIssueEligible: false,
+        issueEligibleRepoCount: 0,
+        alphaPerDay: 0,
+        taoPerDay: 0,
+        usdPerDay: 0,
+        totals: {
+          pullRequests: 1,
+          mergedPullRequests: 1,
+          openPullRequests: 0,
+          closedPullRequests: 0,
+          openIssues: 0,
+          closedIssues: 1,
+          solvedIssues: 0,
+          validSolvedIssues: 0,
+        },
+        repositories: [],
+        pullRequests: [{ repoFullName: issueDiscoveryRepo.fullName, number: 55, title: "Fix", state: "merged", score: 1, baseScore: 1, tokenScore: 2 }],
+        issueLabels: [],
+      },
+    );
+    const history = buildContributorOutcomeHistory({
+      login: "solver",
+      profile,
+      repositories: [issueDiscoveryRepo],
+      pullRequests: [solverPr],
+      issues: [solvedIssue],
+      repoStats: [],
+    });
+    const outcome = history.repoOutcomes.find((entry) => entry.repoFullName === issueDiscoveryRepo.fullName);
+    expect(outcome).toMatchObject({ solvedIssues: 1, validSolvedIssues: 0 });
   });
 });
 
