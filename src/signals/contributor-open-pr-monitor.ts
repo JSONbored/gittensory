@@ -3,6 +3,7 @@ import { sanitizePublicComment } from "../github/commands";
 import {
   classifyOpenPullRequest,
   detectPendingPrScenario,
+  DRAFT_TITLE_PATTERN,
   loadContributorRepoOpenPrSignals,
   type ClassifiedOpenPullRequest,
   type PendingPrScenarioDetection,
@@ -243,7 +244,7 @@ function duplicatePronePullNumbers(openPullRequests: PullRequestRecord[]): Set<n
 function normalizeTitle(title: string): string {
   return title
     .toLowerCase()
-    .replace(/^\[?\s*draft\s*\]?\s*/i, "")
+    .replace(DRAFT_TITLE_PATTERN, "")
     .replace(/^wip:\s*/i, "")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();

@@ -220,6 +220,26 @@ describe("contributor open PR monitor", () => {
     expect(__contributorOpenPrMonitorInternals.duplicatePronePullNumbers([pr({ number: 42, labels: ["wip"] })]).has(42)).toBe(true);
   });
 
+  it("strips only genuine draft markers when normalizing titles for dedup (regression)", () => {
+    const { duplicatePronePullNumbers } = __contributorOpenPrMonitorInternals;
+
+    // "[draft] X" and "X" are the same work, so stripping the marker collapses them into one cluster.
+    const clustered = duplicatePronePullNumbers([
+      pr({ number: 60, title: "[draft] fix parser bug" }),
+      pr({ number: 61, title: "fix parser bug" }),
+    ]);
+    expect(clustered.has(60)).toBe(true);
+    expect(clustered.has(61)).toBe(true);
+
+    // A title that merely starts with the word "draft" keeps it, so it is not mistaken for "tooling".
+    const distinct = duplicatePronePullNumbers([
+      pr({ number: 62, title: "Draft tooling" }),
+      pr({ number: 63, title: "tooling" }),
+    ]);
+    expect(distinct.has(62)).toBe(false);
+    expect(distinct.has(63)).toBe(false);
+  });
+
   it("covers monitor summaries, guidance, next steps, and file heuristics", () => {
     const { nextStepsForClassification, summarizeMonitor, buildMonitorGuidance, missingTestsFromFiles, priorityRank } =
       __contributorOpenPrMonitorInternals;
