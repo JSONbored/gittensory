@@ -4338,6 +4338,12 @@
                       },
                       "issueCredibility": {
                         "type": "number"
+                      },
+                      "validIssueTokenFloor": {
+                        "type": "number"
+                      },
+                      "validIssueTokenGatePassed": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -4352,7 +4358,9 @@
                       "openIssueCount",
                       "mergedPrFloor",
                       "validSolvedIssuesFloor",
-                      "issueCredibilityFloor"
+                      "issueCredibilityFloor",
+                      "validIssueTokenFloor",
+                      "validIssueTokenGatePassed"
                     ]
                   },
                   "effectiveEstimatedScore": {
@@ -4376,6 +4384,7 @@
                             "open_issue_threshold",
                             "merged_pr_history_floor",
                             "issue_discovery_validity_floor",
+                            "valid_issue_token_floor",
                             "credibility_floor",
                             "review_penalty",
                             "metadata_only",
@@ -4640,6 +4649,12 @@
                       },
                       "issueCredibility": {
                         "type": "number"
+                      },
+                      "validIssueTokenFloor": {
+                        "type": "number"
+                      },
+                      "validIssueTokenGatePassed": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -4654,7 +4669,9 @@
                       "openIssueCount",
                       "mergedPrFloor",
                       "validSolvedIssuesFloor",
-                      "issueCredibilityFloor"
+                      "issueCredibilityFloor",
+                      "validIssueTokenFloor",
+                      "validIssueTokenGatePassed"
                     ]
                   },
                   "effectiveEstimatedScore": {
@@ -4678,6 +4695,7 @@
                             "open_issue_threshold",
                             "merged_pr_history_floor",
                             "issue_discovery_validity_floor",
+                            "valid_issue_token_floor",
                             "credibility_floor",
                             "review_penalty",
                             "metadata_only",
@@ -4942,6 +4960,12 @@
                       },
                       "issueCredibility": {
                         "type": "number"
+                      },
+                      "validIssueTokenFloor": {
+                        "type": "number"
+                      },
+                      "validIssueTokenGatePassed": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -4956,7 +4980,9 @@
                       "openIssueCount",
                       "mergedPrFloor",
                       "validSolvedIssuesFloor",
-                      "issueCredibilityFloor"
+                      "issueCredibilityFloor",
+                      "validIssueTokenFloor",
+                      "validIssueTokenGatePassed"
                     ]
                   },
                   "effectiveEstimatedScore": {
@@ -4980,6 +5006,7 @@
                             "open_issue_threshold",
                             "merged_pr_history_floor",
                             "issue_discovery_validity_floor",
+                            "valid_issue_token_floor",
                             "credibility_floor",
                             "review_penalty",
                             "metadata_only",
@@ -5244,6 +5271,12 @@
                       },
                       "issueCredibility": {
                         "type": "number"
+                      },
+                      "validIssueTokenFloor": {
+                        "type": "number"
+                      },
+                      "validIssueTokenGatePassed": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -5258,7 +5291,9 @@
                       "openIssueCount",
                       "mergedPrFloor",
                       "validSolvedIssuesFloor",
-                      "issueCredibilityFloor"
+                      "issueCredibilityFloor",
+                      "validIssueTokenFloor",
+                      "validIssueTokenGatePassed"
                     ]
                   },
                   "effectiveEstimatedScore": {
@@ -5282,6 +5317,7 @@
                             "open_issue_threshold",
                             "merged_pr_history_floor",
                             "issue_discovery_validity_floor",
+                            "valid_issue_token_floor",
                             "credibility_floor",
                             "review_penalty",
                             "metadata_only",
@@ -5546,6 +5582,12 @@
                       },
                       "issueCredibility": {
                         "type": "number"
+                      },
+                      "validIssueTokenFloor": {
+                        "type": "number"
+                      },
+                      "validIssueTokenGatePassed": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -5560,7 +5602,9 @@
                       "openIssueCount",
                       "mergedPrFloor",
                       "validSolvedIssuesFloor",
-                      "issueCredibilityFloor"
+                      "issueCredibilityFloor",
+                      "validIssueTokenFloor",
+                      "validIssueTokenGatePassed"
                     ]
                   },
                   "effectiveEstimatedScore": {
@@ -5584,6 +5628,7 @@
                             "open_issue_threshold",
                             "merged_pr_history_floor",
                             "issue_discovery_validity_floor",
+                            "valid_issue_token_floor",
                             "credibility_floor",
                             "review_penalty",
                             "metadata_only",
@@ -5757,6 +5802,7 @@
                         "open_issue_threshold",
                         "merged_pr_history_floor",
                         "issue_discovery_validity_floor",
+                        "valid_issue_token_floor",
                         "credibility_floor",
                         "review_penalty",
                         "metadata_only",
@@ -6504,6 +6550,12 @@
               },
               "issueCredibility": {
                 "type": "number"
+              },
+              "validIssueTokenFloor": {
+                "type": "number"
+              },
+              "validIssueTokenGatePassed": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -6518,7 +6570,9 @@
               "openIssueCount",
               "mergedPrFloor",
               "validSolvedIssuesFloor",
-              "issueCredibilityFloor"
+              "issueCredibilityFloor",
+              "validIssueTokenFloor",
+              "validIssueTokenGatePassed"
             ]
           },
           "branchEligibility": {
@@ -6599,6 +6653,7 @@
                     "open_issue_threshold",
                     "merged_pr_history_floor",
                     "issue_discovery_validity_floor",
+                    "valid_issue_token_floor",
                     "credibility_floor",
                     "review_penalty",
                     "metadata_only",
@@ -6805,6 +6860,12 @@
                     },
                     "issueCredibility": {
                       "type": "number"
+                    },
+                    "validIssueTokenFloor": {
+                      "type": "number"
+                    },
+                    "validIssueTokenGatePassed": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -6819,7 +6880,9 @@
                     "openIssueCount",
                     "mergedPrFloor",
                     "validSolvedIssuesFloor",
-                    "issueCredibilityFloor"
+                    "issueCredibilityFloor",
+                    "validIssueTokenFloor",
+                    "validIssueTokenGatePassed"
                   ]
                 },
                 "effectiveEstimatedScore": {
@@ -6843,6 +6906,7 @@
                           "open_issue_threshold",
                           "merged_pr_history_floor",
                           "issue_discovery_validity_floor",
+                          "valid_issue_token_floor",
                           "credibility_floor",
                           "review_penalty",
                           "metadata_only",

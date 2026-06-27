@@ -30,6 +30,7 @@ import {
   detectGittensorContributor,
   isPullRequestInDuplicateCluster,
   shouldPublishPrIntelligenceComment,
+  solverTokenScoreIndexFromGittensor,
   type CollisionReport,
 } from "../../src/signals/engine";
 import { GITTENSOR_HOME_URL } from "../../src/github/footer";
@@ -1319,6 +1320,99 @@ describe("world-class backend signals", () => {
     expect(intake.level).toBe("blocked");
     expect(changeReport).toMatchObject({ addedRepos: ["owner/added"], removedRepos: ["owner/removed"] });
     expect(changeReport.changedRepos[0]?.changes).toEqual(expect.arrayContaining(["label_multipliers changed", "trusted_label_pipeline false -> true"]));
+  });
+
+  it("downgrades valid_solved to solved when official solver PR token score is below MIN_TOKEN_SCORE_FOR_VALID_ISSUE (#808)", () => {
+    const issueDiscoveryRepo: RepositoryRecord = {
+      ...repo,
+      registryConfig: { ...repo.registryConfig!, issueDiscoveryShare: 1, maintainerCut: 0 },
+    };
+    const solvedIssue: IssueRecord = {
+      ...issues[0]!,
+      number: 44,
+      title: "Low-token solve",
+      state: "closed",
+      labels: ["bug"],
+      body: "Detailed solved body ".repeat(20),
+      linkedPrs: [55],
+      updatedAt: "2026-05-20T00:00:00.000Z",
+    };
+    const solverPr: PullRequestRecord = {
+      ...pullRequests[0]!,
+      number: 55,
+      authorLogin: "solver",
+      authorAssociation: "NONE",
+      linkedIssues: [44],
+      mergedAt: "2026-05-25T00:00:00.000Z",
+      state: "merged",
+    };
+    const lifecycle = buildIssueDiscoveryLifecycleReport(
+      issueDiscoveryRepo,
+      [solvedIssue],
+      [solverPr],
+      repo.fullName,
+      [],
+      {
+        minValidIssueTokenScore: 5,
+        solverTokenScoreByPr: new Map([[55, 2]]),
+      },
+    );
+    expect(lifecycle.states[0]).toMatchObject({ number: 44, state: "solved" });
+    expect(lifecycle.states[0]?.reasons.join(" ")).toMatch(/valid-issue floor/i);
+
+    const validLifecycle = buildIssueDiscoveryLifecycleReport(
+      issueDiscoveryRepo,
+      [solvedIssue],
+      [solverPr],
+      repo.fullName,
+      [],
+      {
+        minValidIssueTokenScore: 5,
+        solverTokenScoreByPr: new Map([[55, 8]]),
+      },
+    );
+    expect(validLifecycle.states[0]).toMatchObject({ state: "valid_solved" });
+  });
+
+  it("builds a solver token score index from official Gittensor pull request rows (#808)", () => {
+    const profile = buildContributorProfile(
+      "miner",
+      { login: "miner", topLanguages: ["TypeScript"], source: "github" },
+      [],
+      [],
+      [],
+      {
+        source: "gittensor_api",
+        githubId: "1",
+        githubUsername: "miner",
+        isEligible: true,
+        credibility: 1,
+        eligibleRepoCount: 1,
+        issueDiscoveryScore: 0,
+        issueTokenScore: 0,
+        issueCredibility: 1,
+        isIssueEligible: false,
+        issueEligibleRepoCount: 0,
+        alphaPerDay: 0,
+        taoPerDay: 0,
+        usdPerDay: 0,
+        totals: {
+          pullRequests: 1,
+          mergedPullRequests: 1,
+          openPullRequests: 0,
+          closedPullRequests: 0,
+          openIssues: 0,
+          closedIssues: 0,
+          solvedIssues: 1,
+          validSolvedIssues: 1,
+        },
+        repositories: [],
+        pullRequests: [{ repoFullName: repo.fullName, number: 9, title: "Fix", state: "merged", score: 10, baseScore: 8, tokenScore: 12 }],
+        issueLabels: [],
+      },
+    );
+    const index = solverTokenScoreIndexFromGittensor(profile);
+    expect(index.get(9)).toBe(12);
   });
 });
 

@@ -77,6 +77,83 @@ function openPrBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown 
   };
 }
 
+function openIssueBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
+  const { openIssueMultiplier } = preview.scoreEstimate;
+  const { openIssueCount, openIssueThreshold } = preview.gates;
+  const band = bandForMultiplier(openIssueMultiplier);
+  return {
+    component: "openIssueMultiplier",
+    band,
+    summary:
+      openIssueMultiplier >= 1
+        ? `Open issue count (${openIssueCount}) is within the spam allowance (${openIssueThreshold}).`
+        : `Open issue count (${openIssueCount}) exceeds the spam allowance (${openIssueThreshold}), so issue-discovery pressure is blocked.`,
+    lever:
+      openIssueMultiplier >= 1
+        ? "Keep concurrent open issues within the allowance before filing more issue-discovery work."
+        : "Close excess open issues before relying on additional issue-discovery contributions.",
+    leverageScore: openIssueMultiplier >= 1 ? 8 : 95,
+  };
+}
+
+function mergedHistoryBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
+  const { mergedHistoryMultiplier } = preview.scoreEstimate;
+  const { mergedPrFloor, mergedPullRequests } = preview.gates;
+  const band = bandForMultiplier(mergedHistoryMultiplier);
+  return {
+    component: "mergedHistoryMultiplier",
+    band,
+    summary:
+      mergedHistoryMultiplier >= 1
+        ? mergedPullRequests !== undefined
+          ? `Merged PR history (${mergedPullRequests}) meets the upstream floor (${mergedPrFloor}).`
+          : "Merged PR history is unknown; the upstream merged-history floor is not blocking this preview."
+        : `Merged PR history (${mergedPullRequests ?? 0}) is below the upstream floor (${mergedPrFloor}).`,
+    lever:
+      mergedHistoryMultiplier >= 1
+        ? "Continue building clean merged PR history on this repo."
+        : "Land more merged PRs on this repo before relying on full-strength previews.",
+    leverageScore: mergedHistoryMultiplier >= 1 ? 12 : 90,
+  };
+}
+
+function issueDiscoveryHistoryBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
+  const { issueDiscoveryHistoryMultiplier } = preview.scoreEstimate;
+  const { validSolvedIssues, validSolvedIssuesFloor, issueCredibility, issueCredibilityFloor } = preview.gates;
+  const band = bandForMultiplier(issueDiscoveryHistoryMultiplier);
+  return {
+    component: "issueDiscoveryHistoryMultiplier",
+    band,
+    summary:
+      issueDiscoveryHistoryMultiplier >= 1
+        ? validSolvedIssues !== undefined && issueCredibility !== undefined
+          ? `Issue-discovery history (${validSolvedIssues} valid solved, credibility ${roundBand(issueCredibility)}) meets upstream floors.`
+          : "Issue-discovery history is unknown; validity floors are not blocking this preview."
+        : `Issue-discovery history (${validSolvedIssues ?? 0} valid solved, credibility ${roundBand(issueCredibility ?? 0)}) is below upstream floors (${validSolvedIssuesFloor} valid solved, ${issueCredibilityFloor} credibility).`,
+    lever:
+      issueDiscoveryHistoryMultiplier >= 1
+        ? "Keep building valid solved-issue history with strong issue credibility."
+        : "Close more valid solved issues and improve issue credibility before relying on issue-discovery scoring.",
+    leverageScore: issueDiscoveryHistoryMultiplier >= 1 ? 15 : 88,
+  };
+}
+
+function validIssueTokenBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
+  const { validIssueTokenGatePassed, validIssueTokenFloor } = preview.gates;
+  const band: ScoreMultiplierBand = validIssueTokenGatePassed ? "full" : "reduced";
+  return {
+    component: "validIssueTokenGate",
+    band,
+    summary: validIssueTokenGatePassed
+      ? `Source change size meets the upstream valid-issue token floor (${validIssueTokenFloor}).`
+      : `Source change size is below the upstream valid-issue token floor (${validIssueTokenFloor}), so this linked solve may not count toward valid issue-discovery history.`,
+    lever: validIssueTokenGatePassed
+      ? "Keep the linked solve clearly scoped with substantive source changes."
+      : "Increase meaningful source changes so the linked issue solve can count as valid issue-discovery history upstream.",
+    leverageScore: validIssueTokenGatePassed ? 10 : 55,
+  };
+}
+
 function credibilityBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
   const { credibilityMultiplier } = preview.scoreEstimate;
   const { credibilityObserved, credibilityFloor } = preview.gates;
@@ -213,9 +290,13 @@ export function explainScoreBreakdown(preview: ScorePreviewResult): ScoreBreakdo
     contributionBonusBreakdown(preview),
     labelMultiplierBreakdown(preview),
     issueMultiplierBreakdown(preview),
+    validIssueTokenBreakdown(preview),
     credibilityBreakdown(preview),
     reviewPenaltyBreakdown(preview),
     openPrBreakdown(preview),
+    openIssueBreakdown(preview),
+    mergedHistoryBreakdown(preview),
+    issueDiscoveryHistoryBreakdown(preview),
   ].map((entry) => ({
     ...entry,
     summary: sanitizePublicComment(entry.summary),

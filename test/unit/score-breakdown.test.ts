@@ -79,9 +79,13 @@ describe("explainScoreBreakdown", () => {
         "contributionBonus",
         "labelMultiplier",
         "issueMultiplier",
+        "validIssueTokenGate",
         "credibilityMultiplier",
         "reviewPenaltyMultiplier",
         "openPrMultiplier",
+        "openIssueMultiplier",
+        "mergedHistoryMultiplier",
+        "issueDiscoveryHistoryMultiplier",
       ]),
     );
     for (const component of breakdown.components) {
@@ -276,5 +280,27 @@ describe("explainScoreBreakdown", () => {
     const breakdown = explainScoreBreakdown(preview);
     expect(breakdown.components.find((entry) => entry.component === "credibilityMultiplier")).toMatchObject({ band: "blocked" });
     expect(breakdown.components.find((entry) => entry.component === "openPrMultiplier")).toMatchObject({ band: "blocked" });
+  });
+
+  it("explains the valid-issue token floor for linked-issue previews (#808)", () => {
+    const preview = buildScorePreview({
+      repo,
+      snapshot,
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 2,
+        totalTokenScore: 40,
+        sourceLines: 40,
+        openPrCount: 0,
+        credibility: 1,
+        linkedIssueMode: "standard",
+        linkedIssueContext: { status: "raw", source: "github_cache", issueNumbers: [12] },
+      },
+    });
+    const breakdown = explainScoreBreakdown(preview);
+    expect(breakdown.components.find((entry) => entry.component === "validIssueTokenGate")).toMatchObject({
+      band: "reduced",
+      summary: expect.stringMatching(/valid-issue token floor/i),
+    });
   });
 });
