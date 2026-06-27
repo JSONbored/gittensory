@@ -76,6 +76,13 @@ describe("shouldStartAiReviewForAdvisory", () => {
     await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, skipAiReview: true })).resolves.toBe(false);
     await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, settings: { aiReviewMode: "off" } as RepositorySettings })).resolves.toBe(false);
     await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, confirmedContributor: false })).resolves.toBe(false);
+    await expect(
+      shouldStartAiReviewForAdvisory(enabledEnv(), {
+        ...base,
+        settings: { aiReviewMode: "advisory", gatePack: "gittensor", aiReviewAllAuthors: true } as RepositorySettings,
+        confirmedContributor: false,
+      }),
+    ).resolves.toBe(true);
     await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, settings: { aiReviewMode: "block", gatePack: "oss-anti-slop" } as RepositorySettings, confirmedContributor: false })).resolves.toBe(true);
     const noSha = advisory();
     delete (noSha as Partial<Advisory>).headSha;

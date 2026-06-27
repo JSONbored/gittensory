@@ -3469,8 +3469,23 @@ export async function shouldStartAiReviewForAdvisory(
     skipAiReview?: boolean | undefined;
   },
 ): Promise<boolean> {
-  const packAllowsAnyAuthorBlockingReview = args.settings.gatePack === "oss-anti-slop" && args.settings.aiReviewMode === "block";
-  if (args.skipAiReview || args.settings.aiReviewMode === "off" || (!args.confirmedContributor && !packAllowsAnyAuthorBlockingReview) || !args.advisory.headSha || !isEnabled(env.AI_SUMMARIES_ENABLED) || !isEnabled(env.AI_PUBLIC_COMMENTS_ENABLED) || !env.AI) return false;
+  const packAllowsAnyAuthorBlockingReview =
+    args.settings.gatePack === "oss-anti-slop" &&
+    args.settings.aiReviewMode === "block";
+  const reviewableAuthor =
+    args.confirmedContributor ||
+    packAllowsAnyAuthorBlockingReview ||
+    args.settings.aiReviewAllAuthors;
+  if (
+    args.skipAiReview ||
+    args.settings.aiReviewMode === "off" ||
+    !reviewableAuthor ||
+    !args.advisory.headSha ||
+    !isEnabled(env.AI_SUMMARIES_ENABLED) ||
+    !isEnabled(env.AI_PUBLIC_COMMENTS_ENABLED) ||
+    !env.AI
+  )
+    return false;
   return !(isReputationEnabled(env) && isConvergenceRepoAllowed(env, args.repoFullName) && (await shouldSkipAiForReputation(env, { project: args.repoFullName, submitter: args.author })));
 }
 
