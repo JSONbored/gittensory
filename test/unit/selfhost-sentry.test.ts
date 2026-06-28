@@ -187,7 +187,7 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
     expect(mocks.captureMessage).not.toHaveBeenCalled();
   });
 
-  it("forwards a level:error log titled by event, with context + an event tag", async () => {
+  it("titles a no-message error log with event + a (key=value) summary of its scalar context", async () => {
     await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
     forwardStructuredLogToSentry(
       JSON.stringify({
@@ -206,8 +206,9 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
       "event",
       "orb_broker_unavailable",
     );
+    // No message/error → the title still surfaces WHERE from the structured fields (not a bare slug).
     expect(mocks.captureMessage).toHaveBeenCalledWith(
-      "orb_broker_unavailable",
+      "orb_broker_unavailable (installationId=1)",
       "error",
     );
   });
@@ -247,6 +248,28 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
     forwardStructuredLogToSentry(JSON.stringify({ level: "error", code: 500 }));
     expect(mocks.captureMessage).toHaveBeenCalledWith("error", "error");
   });
+
+  it("uses a bare event title when a no-message error log has no scalar context (empty field-summary)", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    forwardStructuredLogToSentry(
+      JSON.stringify({ level: "error", event: "relay_drained_error" }),
+    );
+    expect(mocks.captureMessage).toHaveBeenCalledWith("relay_drained_error", "error");
+  });
+
+  it("field-summary includes scalar fields but skips non-scalar (array/object) values", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    forwardStructuredLogToSentry(
+      JSON.stringify({
+        level: "error",
+        event: "closehold_backlog",
+        count: 2,
+        projects: ["a", "b"],
+      }),
+    );
+    // count (scalar) is folded into the title; projects (array) stays in the context blob only.
+    expect(mocks.captureMessage).toHaveBeenCalledWith("closehold_backlog (count=2)", "error");
+  });
 });
 
 describe("installStructuredLogForwarding — central console sink instrumentation (#1468)", () => {
@@ -269,7 +292,7 @@ describe("installStructuredLogForwarding — central console sink instrumentatio
     );
 
     expect(mocks.captureMessage).toHaveBeenCalledWith(
-      "orb_broker_unavailable",
+      "orb_broker_unavailable (installationId=1)",
       "error",
     );
     expect(base.error).toHaveBeenCalledTimes(1);
