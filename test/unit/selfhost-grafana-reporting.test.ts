@@ -5,6 +5,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const tmpRoots: string[] = [];
+const sqliteCliAvailable = (() => {
+  try {
+    execFileSync("sqlite3", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 function tmpRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "gittensory-reporting-"));
@@ -33,7 +41,7 @@ function runExporter(root: string, sourceDb: string, outDb: string): void {
   });
 }
 
-describe("Grafana reporting exporter", () => {
+(sqliteCliAvailable ? describe : describe.skip)("Grafana reporting exporter", () => {
   it("copies durable AI usage estimate rows into the redacted reporting database", () => {
     const root = tmpRoot();
     const appDb = join(root, "app.sqlite");
