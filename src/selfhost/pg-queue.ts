@@ -6,6 +6,7 @@ import type { Pool } from "pg";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import { captureError } from "./sentry";
+import { githubRateLimitRetryDelayMs, jobPriority } from "./queue-common";
 import type { JobMessage } from "../types";
 
 const TABLE = "_selfhost_jobs";
@@ -22,19 +23,6 @@ CREATE TABLE IF NOT EXISTS ${TABLE} (
 );
 ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS ${TABLE}_claim ON ${TABLE}(status, run_after, priority);`;
-
-// Webhook-driven work (a fresh PR → its review) jumps ahead of heavy background jobs (rag-index, the regate sweep)
-// so a NEW PR is reviewed promptly instead of waiting behind them in the shared FIFO queue. Per-PR review refreshes
-// sit just below webhooks: they repair stale GitHub surfaces quickly without starving fresh webhook work. Additive:
-// all other jobs stay priority 0 (today's FIFO order). Mirrors sqlite-queue. (#review-latency)
-const PRIORITY_BY_TYPE = new Map([
-  ["github-webhook", 10],
-  ["agent-regate-pr", 9],
-  ["recapture-preview", 9],
-]);
-function jobPriority(payload: string): number {
-  return PRIORITY_BY_TYPE.get(extractPayloadType(payload) ?? "") ?? 0;
-}
 
 export interface PgDurableQueue {
   binding: Queue;
@@ -82,23 +70,7 @@ export function createPgQueue(
 
   async function init(): Promise<void> {
     await pool.query(DDL);
-    const priorityBackfilled =
-      (
-        await pool.query(
-          `UPDATE ${TABLE}
-              SET priority = CASE
-                WHEN payload ~ '"type"[[:space:]]*:[[:space:]]*"github-webhook"' THEN 10
-                WHEN payload ~ '"type"[[:space:]]*:[[:space:]]*"(agent-regate-pr|recapture-preview)"' THEN 9
-                ELSE 0
-              END
-            WHERE status IN ('pending', 'processing')
-              AND priority IS DISTINCT FROM CASE
-                WHEN payload ~ '"type"[[:space:]]*:[[:space:]]*"github-webhook"' THEN 10
-                WHEN payload ~ '"type"[[:space:]]*:[[:space:]]*"(agent-regate-pr|recapture-preview)"' THEN 9
-                ELSE 0
-              END`,
-        )
-      ).rowCount ?? 0;
+    const priorityBackfilled = await backfillJobPriorities();
     if (priorityBackfilled)
       console.log(
         JSON.stringify({
@@ -116,6 +88,23 @@ export function createPgQueue(
       console.log(
         JSON.stringify({ event: "selfhost_queue_recovered", count: recovered }),
       );
+  }
+
+  async function backfillJobPriorities(): Promise<number> {
+    const res = await pool.query(
+      `SELECT id, payload, priority FROM ${TABLE} WHERE status IN ('pending', 'processing')`,
+    );
+    let changed = 0;
+    for (const row of res.rows as Array<{ id: string; payload: string; priority: number | string }>) {
+      const priority = jobPriority(row.payload);
+      if (priority === Number(row.priority ?? 0)) continue;
+      await pool.query(`UPDATE ${TABLE} SET priority=$1 WHERE id=$2`, [
+        priority,
+        row.id,
+      ]);
+      changed += 1;
+    }
+    return changed;
   }
 
   async function enqueue(
@@ -186,6 +175,25 @@ export function createPgQueue(
     } catch (error) {
       const attempts = Number(job.attempts) + 1;
       const errMsg = error instanceof Error ? error.message : "unknown error";
+      const rateLimitDelayMs = githubRateLimitRetryDelayMs(error);
+      if (rateLimitDelayMs !== null) {
+        await pool.query(
+          `UPDATE ${TABLE} SET status='pending', run_after=$1, last_error=$2 WHERE id=$3`,
+          [Date.now() + rateLimitDelayMs, errMsg, job.id],
+        );
+        incr("gittensory_jobs_rate_limited_total");
+        logAudit({
+          event: "job_rate_limited",
+          ts: Date.now(),
+          job_id: job.id,
+          payload_type: extractPayloadType(job.payload),
+          latency_ms: Date.now() - claimedAt,
+          attempts,
+          retry_after_ms: rateLimitDelayMs,
+          error: errMsg,
+        });
+        return true;
+      }
       incr("gittensory_jobs_failed_total");
       if (attempts >= maxRetries) {
         await pool.query(

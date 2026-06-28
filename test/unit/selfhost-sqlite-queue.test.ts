@@ -8,6 +8,12 @@ function makeDriver(): ReturnType<typeof nodeSqliteDriver> {
   return nodeSqliteDriver(new DatabaseSync(":memory:") as never);
 }
 const msg = (t: string): JobMessage => ({ type: t }) as unknown as JobMessage;
+const webhook = (sender: { login: string; type: string }, eventName = "issue_comment", action = "edited"): JobMessage =>
+  ({
+    type: "github-webhook",
+    eventName,
+    payload: { action, sender },
+  }) as unknown as JobMessage;
 const typeOf = (m: JobMessage): string => (m as unknown as { type: string }).type;
 
 describe("createSqliteQueue (durable #980)", () => {
@@ -33,6 +39,9 @@ describe("createSqliteQueue (durable #980)", () => {
     await q.binding.send(msg("github-webhook"), { delaySeconds: 60 });
     await q.binding.send(msg("agent-regate-pr"), { delaySeconds: 60 });
     await q.binding.send(msg("recapture-preview"), { delaySeconds: 60 });
+    await q.binding.send(msg("agent-regate-sweep"), { delaySeconds: 60 });
+    await q.binding.send(webhook({ login: "gittensory-orb[bot]", type: "Bot" }), { delaySeconds: 60 });
+    await q.binding.send(webhook({ login: "maintainer", type: "User" }), { delaySeconds: 60 });
     await q.binding.send(msg("rag-index-repo"), { delaySeconds: 60 });
     await q.binding.send({} as unknown as JobMessage, { delaySeconds: 60 }); // no type → priority 0 fallback
     const { rows } = driver.query(
@@ -46,6 +55,9 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(prio(JSON.stringify(msg("github-webhook")))).toBe(10);
     expect(prio(JSON.stringify(msg("agent-regate-pr")))).toBe(9);
     expect(prio(JSON.stringify(msg("recapture-preview")))).toBe(9);
+    expect(prio(JSON.stringify(msg("agent-regate-sweep")))).toBe(8);
+    expect(prio(JSON.stringify(webhook({ login: "maintainer", type: "User" })))).toBe(10);
+    expect(prio(JSON.stringify(webhook({ login: "gittensory-orb[bot]", type: "Bot" })))).toBe(0);
     expect(prio(JSON.stringify(msg("rag-index-repo")))).toBe(0);
     expect(prio("{}")).toBe(0);
   });
@@ -72,6 +84,10 @@ describe("createSqliteQueue (durable #980)", () => {
       "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 0)",
       [JSON.stringify(msg("github-webhook"))],
     );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 10)",
+      [JSON.stringify(webhook({ login: "gittensory-orb[bot]", type: "Bot" }))],
+    );
 
     createSqliteQueue(driver, async () => undefined);
 
@@ -82,6 +98,7 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(rows.map((row) => row as { payload: string; priority: number })).toEqual([
       { payload: JSON.stringify(msg("agent-regate-pr")), priority: 9 },
       { payload: JSON.stringify(msg("github-webhook")), priority: 10 },
+      { payload: JSON.stringify(webhook({ login: "gittensory-orb[bot]", type: "Bot" })), priority: 0 },
     ]);
   });
 
@@ -152,11 +169,19 @@ describe("createSqliteQueue (durable #980)", () => {
       [JSON.stringify(msg("agent-regate-pr"))],
     );
     driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 8)",
+      [JSON.stringify(msg("agent-regate-sweep"))],
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 0)",
+      [JSON.stringify(webhook({ login: "gittensory-orb[bot]", type: "Bot" }))],
+    );
+    driver.query(
       "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 10)",
       [JSON.stringify(msg("github-webhook"))],
     );
     await q.drain();
-    expect(seen).toEqual(["github-webhook", "agent-regate-pr", "rag-index-repo"]);
+    expect(seen).toEqual(["github-webhook", "agent-regate-pr", "agent-regate-sweep", "rag-index-repo", "github-webhook"]);
   });
 
   it("retries then dead-letters after maxRetries", async () => {
@@ -175,6 +200,39 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(calls).toBe(3);
     expect(q.deadCount()).toBe(1);
     expect(q.size()).toBe(0);
+  });
+
+  it("reschedules GitHub rate-limit failures without consuming the dead-letter budget", async () => {
+    const driver = makeDriver();
+    let calls = 0;
+    const rateLimit = new Error("API rate limit exceeded for installation ID 123");
+    Object.assign(rateLimit, { status: 403 });
+    const q = createSqliteQueue(
+      driver,
+      async () => {
+        calls += 1;
+        throw rateLimit;
+      },
+      { maxRetries: 1, backoffMs: () => 0 },
+    );
+    await q.binding.send(msg("github-webhook"));
+    await q.drain();
+    const { rows } = driver.query(
+      "SELECT status, attempts, run_after, last_error FROM _selfhost_jobs",
+      [],
+    );
+    const row = rows[0] as {
+      status: string;
+      attempts: number;
+      run_after: number;
+      last_error: string;
+    };
+    expect(calls).toBe(1);
+    expect(q.deadCount()).toBe(0);
+    expect(row.status).toBe("pending");
+    expect(row.attempts).toBe(0);
+    expect(row.run_after).toBeGreaterThan(Date.now());
+    expect(row.last_error).toContain("API rate limit exceeded");
   });
 
   it("SURVIVES A RESTART: a fresh queue over the same DB processes a persisted pending job", async () => {

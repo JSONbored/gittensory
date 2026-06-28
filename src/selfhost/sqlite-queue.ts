@@ -7,6 +7,7 @@ import type { SqliteDriver } from "./d1-adapter";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import { captureError } from "./sentry";
+import { githubRateLimitRetryDelayMs, jobPriority } from "./queue-common";
 import type { JobMessage } from "../types";
 
 const TABLE = "_selfhost_jobs";
@@ -24,19 +25,6 @@ CREATE TABLE IF NOT EXISTS ${TABLE} (
 const CLAIM_INDEX_DDL = `
 DROP INDEX IF EXISTS ${TABLE}_claim;
 CREATE INDEX ${TABLE}_claim ON ${TABLE}(status, run_after, priority);`;
-
-// Webhook-driven work (a fresh PR → its review) jumps ahead of heavy background jobs (rag-index ~4min, the regate
-// sweep) so a NEW PR is reviewed promptly instead of waiting behind them in the shared FIFO queue. Per-PR review
-// refreshes sit just below webhooks: they repair stale GitHub surfaces quickly without starving fresh webhook work.
-// Additive: every other job stays priority 0 (today's FIFO order). (#review-latency)
-const PRIORITY_BY_TYPE = new Map([
-  ["github-webhook", 10],
-  ["agent-regate-pr", 9],
-  ["recapture-preview", 9],
-]);
-function jobPriority(payload: string): number {
-  return PRIORITY_BY_TYPE.get(extractPayloadType(payload) ?? "") ?? 0;
-}
 
 export interface DurableQueue {
   binding: Queue;
@@ -179,6 +167,25 @@ export function createSqliteQueue(
     } catch (error) {
       const attempts = job.attempts + 1;
       const errMsg = error instanceof Error ? error.message : "unknown error";
+      const rateLimitDelayMs = githubRateLimitRetryDelayMs(error);
+      if (rateLimitDelayMs !== null) {
+        driver.query(
+          `UPDATE ${TABLE} SET status='pending', run_after=?, last_error=? WHERE id=?`,
+          [Date.now() + rateLimitDelayMs, errMsg, job.id],
+        );
+        incr("gittensory_jobs_rate_limited_total");
+        logAudit({
+          event: "job_rate_limited",
+          ts: Date.now(),
+          job_id: job.id,
+          payload_type: extractPayloadType(job.payload),
+          latency_ms: Date.now() - claimedAt,
+          attempts,
+          retry_after_ms: rateLimitDelayMs,
+          error: errMsg,
+        });
+        return true;
+      }
       incr("gittensory_jobs_failed_total");
       if (attempts >= maxRetries) {
         driver.query(

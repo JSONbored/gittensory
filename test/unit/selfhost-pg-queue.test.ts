@@ -6,6 +6,12 @@ import { createPgQueue } from "../../src/selfhost/pg-queue";
 import type { JobMessage } from "../../src/types";
 
 const msg = (t: string): JobMessage => ({ type: t }) as unknown as JobMessage;
+const webhook = (sender: { login: string; type: string }, eventName = "issue_comment", action = "edited"): JobMessage =>
+  ({
+    type: "github-webhook",
+    eventName,
+    payload: { action, sender },
+  }) as unknown as JobMessage;
 const typeOf = (m: JobMessage): string => (m as unknown as { type: string }).type;
 
 type MockFn = { mockResolvedValueOnce(v: unknown): void };
@@ -51,7 +57,7 @@ describe("createPgQueue (durable #977)", () => {
   it("init() creates the table and recovers stuck-processing jobs", async () => {
     const m = makePool();
     m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // DDL
-    m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // priority backfill
+    m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // priority backfill SELECT
     m.fn.mockResolvedValueOnce({ rows: [], rowCount: 2 }); // recovery UPDATE
     const q = createPgQueue(m.pool, async () => undefined);
     await q.init();
@@ -61,7 +67,7 @@ describe("createPgQueue (durable #977)", () => {
   it("init() handles null rowCount from the recovery query (rowCount ?? 0 nullish arm)", async () => {
     const m = makePool();
     m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // DDL
-    m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // priority backfill
+    m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // priority backfill SELECT
     // pg driver can return null for rowCount on some UPDATE results
     m.fn.mockResolvedValueOnce({ rows: [], rowCount: null });
     const q = createPgQueue(m.pool, async () => undefined);
@@ -69,17 +75,26 @@ describe("createPgQueue (durable #977)", () => {
     expect(m.pool.query).toHaveBeenCalledTimes(3);
   });
 
-  it("init() backfills review-refresh priorities without parsing payload JSON in SQL", async () => {
+  it("init() backfills event-aware priorities with the shared classifier", async () => {
     const m = makePool();
     m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // DDL
-    m.fn.mockResolvedValueOnce({ rows: [], rowCount: 3 }); // priority backfill
+    m.fn.mockResolvedValueOnce({
+      rows: [
+        { id: "a", payload: JSON.stringify(msg("agent-regate-pr")), priority: 0 },
+        { id: "b", payload: JSON.stringify(webhook({ login: "gittensory-orb[bot]", type: "Bot" })), priority: 10 },
+        { id: "c", payload: JSON.stringify(msg("agent-regate-sweep")), priority: 0 },
+      ],
+      rowCount: 3,
+    }); // priority backfill SELECT
+    m.fn.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // update a
+    m.fn.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // update b
+    m.fn.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // update c
     m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // recovery UPDATE
     const q = createPgQueue(m.pool, async () => undefined);
     await q.init();
-    expect(m.pool.query).toHaveBeenNthCalledWith(
-      2,
-      expect.stringContaining("agent-regate-pr|recapture-preview"),
-    );
+    expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("UPDATE _selfhost_jobs SET priority=$1"), [9, "a"]);
+    expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("UPDATE _selfhost_jobs SET priority=$1"), [0, "b"]);
+    expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("UPDATE _selfhost_jobs SET priority=$1"), [8, "c"]);
   });
 
   it("processes a job successfully (job_complete audit emitted)", async () => {
@@ -114,6 +129,33 @@ describe("createPgQueue (durable #977)", () => {
     await q.drain();
     await q.drain(); // second drain processes the retried job
     expect(calls).toBe(2);
+  });
+
+  it("reschedules GitHub rate-limit failures without consuming the dead-letter budget", async () => {
+    const m = makePool();
+    m.enqueueJob("1", { type: "github-webhook" }, 4);
+    const rateLimit = new Error("API rate limit exceeded for installation ID 123");
+    Object.assign(rateLimit, {
+      status: 403,
+      response: { headers: { "retry-after": "120" } },
+    });
+    const q = createPgQueue(
+      m.pool,
+      async () => {
+        throw rateLimit;
+      },
+      { maxRetries: 1, backoffMs: () => 0 },
+    );
+    await q.init();
+    await q.drain();
+    expect(m.pool.query).toHaveBeenCalledWith(
+      expect.stringContaining("SET status='pending', run_after=$1"),
+      expect.arrayContaining([expect.any(Number), "API rate limit exceeded for installation ID 123", "1"]),
+    );
+    expect(m.pool.query).not.toHaveBeenCalledWith(
+      expect.stringContaining("status='dead'"),
+      expect.anything(),
+    );
   });
 
   it("records 'unknown error' when consumer throws a non-Error", async () => {
