@@ -181,8 +181,8 @@ export function readZipEntries(buf: Buffer): ZipEntry[] {
     if (method === 0) {
       data = compData; // stored — no decompression
     } else if (method === 8) {
-      try { data = inflateRawSync(compData); }
-      catch { continue; }
+      try { data = inflateRawSync(compData, { maxOutputLength: MAX_COVERAGE_BYTES }); }
+      catch { continue; } // RangeError from maxOutputLength or corrupt data → skip entry
     } else {
       continue; // unsupported compression method
     }

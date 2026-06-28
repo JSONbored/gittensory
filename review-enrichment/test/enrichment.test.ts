@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { deflateRawSync } from "node:zlib";
 import {
   extractDependencyChanges,
   queryOsv,
@@ -1161,6 +1162,51 @@ test("readZipEntries: returns [] for a buffer that is not a ZIP", () => {
 
 test("readZipEntries: returns [] for an empty buffer", () => {
   assert.deepEqual(readZipEntries(Buffer.alloc(0)), []);
+});
+
+test("readZipEntries: skips DEFLATE entry whose decompressed size exceeds MAX_COVERAGE_BYTES (decompression bomb guard)", () => {
+  // 2 MB + 1 byte of repetitive data — compresses to a tiny payload but exceeds the cap on decompression.
+  const MAX_COVERAGE_BYTES = 2 * 1024 * 1024;
+  const uncompressed = Buffer.alloc(MAX_COVERAGE_BYTES + 1, 0x41);
+  const compressed = deflateRawSync(uncompressed);
+
+  // Build a minimal single-entry ZIP with compression method 8 (DEFLATE).
+  const name = Buffer.from("bomb.txt");
+  const lh = Buffer.alloc(30);
+  lh.writeUInt32LE(0x04034b50, 0); // local file header signature
+  lh.writeUInt16LE(0, 4); lh.writeUInt16LE(0, 6);
+  lh.writeUInt16LE(8, 8); // compression method = DEFLATE
+  lh.writeUInt16LE(0, 10); lh.writeUInt16LE(0, 12); lh.writeUInt32LE(0, 14);
+  lh.writeUInt32LE(compressed.length, 18);
+  lh.writeUInt32LE(uncompressed.length, 22);
+  lh.writeUInt16LE(name.length, 26); lh.writeUInt16LE(0, 28);
+
+  const cdStart = 30 + name.length + compressed.length;
+  const cd = Buffer.alloc(46);
+  cd.writeUInt32LE(0x02014b50, 0); // central directory entry signature
+  cd.writeUInt16LE(0, 4);  // version made by
+  cd.writeUInt16LE(0, 6);  // version needed
+  cd.writeUInt16LE(0, 8);  // general purpose bit flag
+  cd.writeUInt16LE(8, 10); // compression method = DEFLATE
+  cd.writeUInt16LE(0, 12); cd.writeUInt16LE(0, 14);
+  cd.writeUInt32LE(0, 16);
+  cd.writeUInt32LE(compressed.length, 20);
+  cd.writeUInt32LE(uncompressed.length, 24);
+  cd.writeUInt16LE(name.length, 28); cd.writeUInt16LE(0, 30); cd.writeUInt16LE(0, 32);
+  cd.writeUInt16LE(0, 34); cd.writeUInt16LE(0, 36); cd.writeUInt32LE(0, 38);
+  cd.writeUInt32LE(0, 42); // local header offset = 0
+
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4); eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(1, 8); eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(46 + name.length, 12); // central directory size
+  eocd.writeUInt32LE(cdStart, 16);           // central directory offset
+  eocd.writeUInt16LE(0, 20);
+
+  const zip = toArrayBuffer(Buffer.concat([lh, name, compressed, cd, name, eocd]));
+  const entries = readZipEntries(Buffer.from(zip));
+  assert.deepEqual(entries, [], "entry exceeding MAX_COVERAGE_BYTES must be skipped, not returned");
 });
 
 // ── scanCoverageDelta ─────────────────────────────────────────────────────────
