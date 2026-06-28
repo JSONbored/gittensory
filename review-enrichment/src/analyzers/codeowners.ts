@@ -212,49 +212,9 @@ async function fetchCodeowners(
 /** Report changed files whose CODEOWNERS rule does not include the PR author, and surface blast-radius context. */
 export async function scanCodeowners(
   req: EnrichRequest,
-  fetchFn: typeof fetch,
-  opts?: { signal?: AbortSignal },
+  _fetchFn: typeof fetch,
+  _opts?: { signal?: AbortSignal },
 ): Promise<CodeownersFinding[]> {
-  const { repoFullName, githubToken, author, files = [] } = req;
-  if (!githubToken || !author) return [];
-
-  const parts = repoFullName.split("/");
-  const repoOwner = parts[0];
-  const repoName = parts[1];
-  if (
-    !repoOwner ||
-    !repoName ||
-    !SLUG_RE.test(repoOwner) ||
-    !SLUG_RE.test(repoName)
-  )
-    return [];
-
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${githubToken}`,
-    Accept: "application/vnd.github.raw",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-
-  const content = await fetchCodeowners(
-    repoOwner,
-    repoName,
-    headers,
-    fetchFn,
-    opts?.signal,
-  );
-  if (!content) return [];
-
-  const rules = parseCodeowners(content);
-  if (rules.length === 0) return [];
-
-  const findings: CodeownersFinding[] = [];
-  for (const file of files) {
-    if (findings.length >= MAX_FILES_REPORTED) break;
-    const owners = findOwners(rules, file.path);
-    if (owners.length === 0) continue; // unowned file — not a violation
-    if (authorMatchesOwner(author, owners)) continue; // author is listed — no violation
-    findings.push({ file: file.path, owners });
-  }
-
-  return findings;
+  if (req.prefetch?.codeowners) return req.prefetch.codeowners;
+  return [];
 }

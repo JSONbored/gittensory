@@ -1,11 +1,9 @@
-// History analyzer (#1697 / #1478). Uses PR metadata + optional GitHub API access to surface author track
-// record and linked-issue alignment — context the diff-only reviewer cannot infer. Fail-safe: returns a
-// degraded finding set when no token is available (linked-issue parsing still runs on the body).
+// History analyzer (#1697 / #1478). Uses PR metadata plus engine-prefetched GitHub context when provided.
+// Fail-safe: without prefetch, parses linked issues from the body only (no GitHub API in REES).
 import type { EnrichRequest, HistoryFinding, LinkedIssueFinding } from "../types.js";
 
 const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const MAX_LINKED_ISSUES = 8;
-const NEWCOMER_MERGED_THRESHOLD = 3;
 const MAX_BODY_CHARS = 8000;
 
 const LINKED_ISSUE_RE =
@@ -35,139 +33,23 @@ export function extractLinkedIssues(
   return linked;
 }
 
-function parseRepoParts(repoFullName: string): { owner: string; repo: string } | null {
-  const [owner, repo] = repoFullName.split("/");
-  if (!owner || !repo || !SLUG_RE.test(owner) || !SLUG_RE.test(repo)) return null;
-  return { owner, repo };
-}
-
-async function fetchJson<T>(
-  url: string,
-  headers: Record<string, string>,
-  fetchFn: typeof fetch,
-  signal?: AbortSignal,
-): Promise<T | null> {
-  try {
-    const resp = await fetchFn(url, { headers, signal });
-    if (!resp.ok) return null;
-    return (await resp.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
-/** Count merged PRs by the author in this repo (search API, bounded). */
-export async function fetchAuthorMergedCount(
-  repoFullName: string,
-  author: string,
-  githubToken: string,
-  fetchFn: typeof fetch,
-  signal?: AbortSignal,
-): Promise<number | null> {
-  const parts = parseRepoParts(repoFullName);
-  if (!parts || !SLUG_RE.test(author.replace(/^@/, ""))) return null;
-  const q = encodeURIComponent(
-    `repo:${repoFullName} author:${author.replace(/^@/, "")} is:pr is:merged`,
-  );
-  const headers = {
-    Authorization: `Bearer ${githubToken}`,
-    Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-  const payload = await fetchJson<{ total_count?: number }>(
-    `https://api.github.com/search/issues?q=${q}&per_page=1`,
-    headers,
-    fetchFn,
-    signal,
-  );
-  return typeof payload?.total_count === "number" ? payload.total_count : null;
-}
-
-/** Fetch issue state/title for a linked reference. */
-async function fetchLinkedIssue(
-  repo: string,
-  number: number,
-  headers: Record<string, string>,
-  fetchFn: typeof fetch,
-  signal?: AbortSignal,
-): Promise<LinkedIssueFinding> {
-  const parts = parseRepoParts(repo);
-  if (!parts) {
-    return {
-      number,
-      repo,
-      state: null,
-      title: null,
-      aligned: false,
-    };
-  }
-  const payload = await fetchJson<{ state?: string; title?: string }>(
-    `https://api.github.com/repos/${encodeURIComponent(parts.owner)}/${encodeURIComponent(parts.repo)}/issues/${number}`,
-    headers,
-    fetchFn,
-    signal,
-  );
-  const state = payload?.state ?? null;
-  return {
-    number,
-    repo,
-    state,
-    title: payload?.title ?? null,
-    aligned: state === "open" || state === "closed",
-  };
-}
-
-export function classifyAuthorTier(
-  mergedCount: number | null,
-): HistoryFinding["authorTier"] {
-  if (mergedCount === null) return "unknown";
-  return mergedCount < NEWCOMER_MERGED_THRESHOLD ? "newcomer" : "established";
-}
-
-/** Analyzer entrypoint: linked issues + optional author history via GitHub API. */
-export async function scanHistory(
+/** Body-only history fallback when the engine did not prefetch GitHub API results. */
+function historyFromBodyOnly(
   req: EnrichRequest,
-  fetchFn: typeof fetch = fetch,
-  opts?: { signal?: AbortSignal },
-): Promise<HistoryFinding | null> {
+): HistoryFinding | null {
   const author = req.author?.replace(/^@/, "") ?? "";
   if (!author) return null;
-
-  const linkedRefs = extractLinkedIssues(req.body, req.repoFullName);
-  let mergedPrCount: number | null = null;
-  const linkedIssues: LinkedIssueFinding[] = [];
-
-  if (req.githubToken) {
-    const headers = {
-      Authorization: `Bearer ${req.githubToken}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    };
-    mergedPrCount = await fetchAuthorMergedCount(
-      req.repoFullName,
-      author,
-      req.githubToken,
-      fetchFn,
-      opts?.signal,
-    );
-    for (const ref of linkedRefs) {
-      linkedIssues.push(
-        await fetchLinkedIssue(ref.repo, ref.number, headers, fetchFn, opts?.signal),
-      );
-    }
-  } else {
-    for (const ref of linkedRefs) {
-      linkedIssues.push({
-        number: ref.number,
-        repo: ref.repo,
-        state: null,
-        title: null,
-        aligned: true,
-      });
-    }
-  }
-
-  if (!linkedIssues.length && mergedPrCount === null) {
+  const linkedIssues: LinkedIssueFinding[] = extractLinkedIssues(
+    req.body,
+    req.repoFullName,
+  ).map((ref) => ({
+    number: ref.number,
+    repo: ref.repo,
+    state: null,
+    title: null,
+    aligned: true,
+  }));
+  if (!linkedIssues.length) {
     return {
       authorLogin: author,
       mergedPrCount: null,
@@ -175,11 +57,59 @@ export async function scanHistory(
       linkedIssues: [],
     };
   }
-
   return {
     authorLogin: author,
-    mergedPrCount,
-    authorTier: classifyAuthorTier(mergedPrCount),
+    mergedPrCount: null,
+    authorTier: "unknown",
     linkedIssues,
   };
+}
+
+/** Analyzer entrypoint: use engine prefetch when present; otherwise body-only parsing. */
+export async function scanHistory(
+  req: EnrichRequest,
+): Promise<HistoryFinding | null> {
+  if (req.prefetch && "history" in req.prefetch) {
+    return req.prefetch.history ?? null;
+  }
+  return historyFromBodyOnly(req);
+}
+
+// Retained for REES unit tests that exercise GitHub search helpers directly.
+export function classifyAuthorTier(
+  mergedCount: number | null,
+): HistoryFinding["authorTier"] {
+  if (mergedCount === null) return "unknown";
+  return mergedCount < 3 ? "newcomer" : "established";
+}
+
+export async function fetchAuthorMergedCount(
+  repoFullName: string,
+  author: string,
+  githubToken: string,
+  fetchFn: typeof fetch,
+  signal?: AbortSignal,
+): Promise<number | null> {
+  if (!SLUG_RE.test(author.replace(/^@/, ""))) return null;
+  const q = encodeURIComponent(
+    `repo:${repoFullName} author:${author.replace(/^@/, "")} is:pr is:merged`,
+  );
+  try {
+    const resp = await fetchFn(
+      `https://api.github.com/search/issues?q=${q}&per_page=1`,
+      {
+        headers: {
+          Authorization: `Bearer ${githubToken}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        signal,
+      },
+    );
+    if (!resp.ok) return null;
+    const payload = (await resp.json()) as { total_count?: number };
+    return typeof payload.total_count === "number" ? payload.total_count : null;
+  } catch {
+    return null;
+  }
 }

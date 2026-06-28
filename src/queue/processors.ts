@@ -325,7 +325,6 @@ import { buildReviewRagContext, isRagEnabled } from "../review/rag-wire";
 import {
   buildReviewEnrichment,
   isEnrichmentEnabled,
-  resolveEnrichmentGithubToken,
 } from "../review/enrichment-wire";
 import { captureReviewFailure } from "../selfhost/sentry";
 import { evaluateWithSurfaceLane } from "../review/content-lane-wire";
@@ -3736,9 +3735,6 @@ export async function runAiReviewForAdvisory(
     const enrichmentDiff = buildAiReviewDiff(files);
     const enrichmentInstallationId =
       (await getRepository(env, args.repoFullName))?.installationId ?? null;
-    const enrichmentGithubToken = isEnrichmentEnabled(env)
-      ? await resolveEnrichmentGithubToken(env, enrichmentInstallationId)
-      : undefined;
     const enrichment =
       isEnrichmentEnabled(env) && convergedRepoAllowed
         ? await buildReviewEnrichment(env, {
@@ -3748,7 +3744,7 @@ export async function runAiReviewForAdvisory(
             title: args.pr.title,
             body: args.pr.body ?? undefined,
             author: args.author ?? undefined,
-            githubToken: enrichmentGithubToken,
+            installationId: enrichmentInstallationId,
             files,
             diff: enrichmentDiff,
           })

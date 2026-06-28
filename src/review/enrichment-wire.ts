@@ -6,9 +6,14 @@
 // Single env switch: GITTENSORY_REVIEW_ENRICHMENT (+ REES_URL must be set, so the hosted Worker — which sets neither
 // — is unaffected). Default OFF → gathers nothing, prompt byte-identical. FULLY FAIL-SAFE: any timeout / non-200 /
 // network / parse error, or an empty brief, returns undefined and the review proceeds on diff + grounding + RAG.
+//
+// GitHub installation tokens are prefetched in enrichment-prefetch.ts and NEVER serialized into the REES POST body.
 import { sanitizePublicComment } from "../queue-intelligence";
 import { neutralizePromptInjection } from "./prompt-injection";
-import { createInstallationToken } from "../github/app";
+import {
+  prefetchEnrichmentGitHubContext,
+  type EnrichmentPrefetch,
+} from "./enrichment-prefetch";
 import type { PullRequestFileRecord } from "../types";
 
 interface EnrichmentEnv {
@@ -56,23 +61,9 @@ interface EnrichmentInput {
   title?: string | undefined;
   body?: string | undefined;
   author?: string | undefined;
-  githubToken?: string | undefined;
+  installationId?: number | null | undefined;
   files: PullRequestFileRecord[];
   diff: string;
-}
-
-/** Best-effort GitHub token for REES history/codeowners fetches — installation token, then public token. */
-export async function resolveEnrichmentGithubToken(
-  env: Env,
-  installationId: number | null | undefined,
-): Promise<string | undefined> {
-  if (installationId) {
-    const token = await createInstallationToken(env, installationId).catch(
-      () => undefined,
-    );
-    if (token) return token;
-  }
-  return env.GITHUB_PUBLIC_TOKEN ?? undefined;
 }
 
 /** POST the PR to the REES and return the spliceable brief, or undefined on any error/timeout/empty (fail-safe). */
@@ -84,6 +75,16 @@ export async function buildReviewEnrichment(
   const base = cfg.REES_URL?.trim();
   if (!base) return undefined;
   const timeoutMs = Math.max(1000, Number(cfg.REES_TIMEOUT_MS ?? "8000"));
+  const prefetch: EnrichmentPrefetch = await prefetchEnrichmentGitHubContext(
+    env,
+    {
+      repoFullName: input.repoFullName,
+      author: input.author,
+      body: input.body,
+      installationId: input.installationId,
+      files: input.files,
+    },
+  );
   try {
     const response = await fetch(`${base.replace(/\/+$/, "")}/v1/enrich`, {
       method: "POST",
@@ -101,7 +102,7 @@ export async function buildReviewEnrichment(
         title: input.title,
         body: input.body,
         author: input.author,
-        githubToken: input.githubToken,
+        prefetch,
         files: input.files.map((file) => ({
           path: file.path,
           patch:

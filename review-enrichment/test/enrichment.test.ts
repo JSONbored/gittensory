@@ -868,14 +868,13 @@ test("scanCodeowners: reports files not owned by the PR author", async () => {
     {
       repoFullName: "owner/repo",
       prNumber: 1,
-      githubToken: "token",
       author: "alice",
       files: [{ path: "src/app.ts" }, { path: "README.md" }],
+      prefetch: {
+        codeowners: [{ file: "src/app.ts", owners: ["@team/reviewers"] }],
+      },
     },
-    async () => ({
-      ok: true,
-      text: async () => "src/** @team/reviewers\nREADME.md @alice",
-    }),
+    fetch,
   );
 
   assert.deepEqual(findings, [

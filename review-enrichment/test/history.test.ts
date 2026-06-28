@@ -47,7 +47,7 @@ describe("history analyzer", () => {
     );
   });
 
-  it("scanHistory degrades gracefully without a token but still parses links", async () => {
+  it("scanHistory degrades gracefully without prefetch but still parses links", async () => {
     const result = await scanHistory({
       repoFullName: "org/app",
       prNumber: 5,
@@ -68,39 +68,28 @@ describe("history analyzer", () => {
     ]);
   });
 
-  it("scanHistory fetches author history and issue state when token present", async () => {
-    const calls: string[] = [];
-    const fetchFn = (async (url: string) => {
-      calls.push(url);
-      if (url.includes("/search/issues")) {
-        return {
-          ok: true,
-          json: async () => ({ total_count: 1 }),
-        } as Response;
-      }
-      if (url.includes("/issues/7")) {
-        return {
-          ok: true,
-          json: async () => ({ state: "open", title: "Bug in parser" }),
-        } as Response;
-      }
-      return { ok: false, json: async () => ({}) } as Response;
-    }) as typeof fetch;
-
-    const result = await scanHistory(
-      {
-        repoFullName: "org/app",
-        prNumber: 9,
-        author: "dev1",
-        body: "Fixes #7",
-        githubToken: "ghs_test",
-      },
-      fetchFn,
-    );
-    assert.equal(result!.authorTier, "newcomer");
-    assert.equal(result!.linkedIssues[0]?.state, "open");
-    assert.match(result!.linkedIssues[0]?.title ?? "", /Bug in parser/);
-    assert.ok(calls.some((u) => u.includes("/search/issues")));
-    assert.ok(calls.some((u) => u.includes("/issues/7")));
+  it("scanHistory uses engine prefetch when provided", async () => {
+    const prefetched = {
+      authorLogin: "dev1",
+      mergedPrCount: 1,
+      authorTier: "newcomer" as const,
+      linkedIssues: [
+        {
+          number: 7,
+          repo: "org/app",
+          state: "open",
+          title: "Bug in parser",
+          aligned: true,
+        },
+      ],
+    };
+    const result = await scanHistory({
+      repoFullName: "org/app",
+      prNumber: 9,
+      author: "dev1",
+      body: "Fixes #7",
+      prefetch: { history: prefetched },
+    });
+    assert.deepEqual(result, prefetched);
   });
 });

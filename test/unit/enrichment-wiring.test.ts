@@ -66,7 +66,7 @@ async function seedRepoFile(
 }
 
 describe("review-enrichment wired into the processors review (flag GITTENSORY_REVIEW_ENRICHMENT + REES_URL)", () => {
-  it("FLAG-ON via runAiReviewForAdvisory: POSTs the PR to the REES (with bearer) and splices the brief into the prompts", async () => {
+  it("FLAG-ON via runAiReviewForAdvisory: POSTs prefetch (not githubToken) to REES and splices the brief", async () => {
     const seenUser: string[] = [];
     const seenSystem: string[] = [];
     const run = vi.fn(
@@ -87,14 +87,13 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
       AI_PUBLIC_COMMENTS_ENABLED: "true",
       AI_DAILY_NEURON_BUDGET: "100000",
     });
-    // The REES vars are self-host runtime env (not declared on the Worker Env type) — set them as the self-host does.
     Object.assign(env, {
       GITTENSORY_REVIEW_ENRICHMENT: "true",
       REES_URL: "https://rees.example",
       REES_SHARED_SECRET: "sek",
     });
     await seedRepoFile(env, "acme/widgets");
-    mockedToken.mockResolvedValueOnce("install-token-for-rees");
+    mockedToken.mockResolvedValueOnce("install-token-local-only");
     let reesUrl = "";
     let reesAuth: string | null = null;
     let reesBody: Record<string, unknown> | null = null;
@@ -116,6 +115,11 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
             { status: 200 },
           );
         }
+        if (String(url).includes("/search/issues")) {
+          return new Response(JSON.stringify({ total_count: 4 }), {
+            status: 200,
+          });
+        }
         return new Response("nope", { status: 404 });
       });
     try {
@@ -131,27 +135,31 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
         confirmedContributor: true,
         advisory: adv("acme/widgets"),
       });
-      // The enrichment build branch executed: the REES was POSTed at /v1/enrich with the shared-secret bearer.
       expect(reesUrl).toBe("https://rees.example/v1/enrich");
       expect(reesAuth).toBe("Bearer sek");
       expect(reesBody).toMatchObject({
         author: "alice",
         body: "Implements the thing.",
-        githubToken: "install-token-for-rees",
         repoFullName: "acme/widgets",
         prNumber: 7,
       });
-      // The brief's content flows into the user prompt, but the system prompt carries our FIXED
-      // enrichment suffix — the REES-supplied systemSuffix is untrusted and is never spliced in.
+      expect(reesBody!.githubToken).toBeUndefined();
+      expect(reesBody!.prefetch).toMatchObject({
+        history: {
+          authorLogin: "alice",
+          mergedPrCount: 4,
+          authorTier: "established",
+        },
+      });
+      expect(mockedToken).toHaveBeenCalledWith(env, 4242);
       expect(seenUser[0] ?? "").toContain("## EXTERNAL REVIEW BRIEF");
       expect(seenSystem[0] ?? "").toContain("untrusted advisory context");
-      expect(seenSystem[0] ?? "").not.toContain("verified ground truth");
     } finally {
       fetchSpy.mockRestore();
     }
   });
 
-  it("FLAG-ON but repo not allowlisted: resolves token yet skips the REES POST", async () => {
+  it("FLAG-ON but repo not allowlisted: skips prefetch and the REES POST", async () => {
     mockedToken.mockResolvedValueOnce("unused-install-token");
     const run = vi.fn(async () => ({ response: notesJson }));
     const env = createTestEnv({
@@ -183,14 +191,12 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
         advisory: adv("acme/not-allowlisted"),
       });
       expect(reesCalled).toBe(false);
-      expect(mockedToken).toHaveBeenCalledWith(env, 5151);
     } finally {
       fetchSpy.mockRestore();
     }
   });
 
-  it("FLAG-ON with missing author/body/installation: POSTs without optional enrichment fields", async () => {
-    mockedToken.mockRejectedValueOnce(new Error("no app key"));
+  it("FLAG-ON with missing author/body/installation: POSTs prefetch without githubToken", async () => {
     const run = vi.fn(async () => ({ response: notesJson }));
     const env = createTestEnv({
       AI: { run } as unknown as Ai,
@@ -232,8 +238,9 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
       expect(reesBody).toMatchObject({
         repoFullName: "acme/widgets",
         prNumber: 7,
-        githubToken: "public-fallback-token",
+        prefetch: { history: null },
       });
+      expect(reesBody!.githubToken).toBeUndefined();
       expect(reesBody).not.toHaveProperty("author");
       expect(reesBody).not.toHaveProperty("body");
     } finally {

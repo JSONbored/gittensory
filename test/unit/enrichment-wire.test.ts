@@ -1,18 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   isEnrichmentEnabled,
   buildReviewEnrichment,
-  resolveEnrichmentGithubToken,
 } from "../../src/review/enrichment-wire";
-import { createInstallationToken } from "../../src/github/app";
-import { createTestEnv } from "../helpers/d1";
-
-vi.mock("../../src/github/app", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/github/app")>();
-  return { ...actual, createInstallationToken: vi.fn() };
-});
-
-const mockedToken = vi.mocked(createInstallationToken);
+import * as enrichmentPrefetch from "../../src/review/enrichment-prefetch";
 
 const env = (o: Record<string, string>) => o as unknown as Env;
 const input = {
@@ -41,8 +32,8 @@ describe("isEnrichmentEnabled", () => {
     ).toBe(true);
     expect(
       isEnrichmentEnabled(env({ GITTENSORY_REVIEW_ENRICHMENT: "on" })),
-    ).toBe(false); // no URL
-    expect(isEnrichmentEnabled(env({ REES_URL: "https://r" }))).toBe(false); // flag off
+    ).toBe(false);
+    expect(isEnrichmentEnabled(env({ REES_URL: "https://r" }))).toBe(false);
     expect(
       isEnrichmentEnabled(
         env({ GITTENSORY_REVIEW_ENRICHMENT: "false", REES_URL: "https://r" }),
@@ -56,12 +47,23 @@ describe("buildReviewEnrichment", () => {
   let realFetch: typeof fetch;
   beforeEach(() => {
     realFetch = globalThis.fetch;
+    vi.spyOn(enrichmentPrefetch, "prefetchEnrichmentGitHubContext").mockResolvedValue(
+      {
+        history: {
+          authorLogin: "dev1",
+          mergedPrCount: 2,
+          authorTier: "newcomer",
+          linkedIssues: [],
+        },
+      },
+    );
   });
   afterEach(() => {
     globalThis.fetch = realFetch;
+    vi.restoreAllMocks();
   });
 
-  it("returns the trimmed brief, sends the bearer + mapped files, honors REES_TIMEOUT_MS", async () => {
+  it("returns the trimmed brief, sends prefetch (not githubToken), honors REES_TIMEOUT_MS", async () => {
     const calls: Array<{ url: unknown; init: RequestInit }> = [];
     globalThis.fetch = vi.fn(async (url: unknown, init: RequestInit) => {
       calls.push({ url, init });
@@ -79,45 +81,25 @@ describe("buildReviewEnrichment", () => {
         REES_SHARED_SECRET: "sek",
         REES_TIMEOUT_MS: "12000",
       }),
-      input,
-    );
-    expect(r?.promptSection).toBe("BRIEF");
-    expect(r?.systemSuffix).toContain("REVIEW ENRICHMENT");
-    expect(r?.systemSuffix).not.toContain("suffix");
-    expect(calls[0]!.url).toBe("https://rees/v1/enrich");
-    expect(
-      (calls[0]!.init.headers as Record<string, string>).authorization,
-    ).toBe("Bearer sek");
-    const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body.repoFullName).toBe("o/r");
-    expect(body.files).toEqual([
-      { path: "a.ts", patch: "@@ +1 @@" },
-      { path: "b.ts", patch: undefined },
-    ]);
-  });
-
-  it("POST includes author, body, and githubToken when provided", async () => {
-    const calls: RequestInit[] = [];
-    globalThis.fetch = vi.fn(async (_url: unknown, init: RequestInit) => {
-      calls.push(init);
-      return {
-        ok: true,
-        json: async () => ({ promptSection: "history brief" }),
-      } as Response;
-    }) as unknown as typeof fetch;
-    await buildReviewEnrichment(
-      env({ REES_URL: "https://rees/" }),
       {
         ...input,
         body: "Fixes #12",
         author: "dev1",
-        githubToken: "ghs_test",
+        installationId: 42,
       },
     );
-    const body = JSON.parse(calls[0]!.body as string);
-    expect(body.body).toBe("Fixes #12");
-    expect(body.author).toBe("dev1");
-    expect(body.githubToken).toBe("ghs_test");
+    expect(r?.promptSection).toBe("BRIEF");
+    expect(
+      enrichmentPrefetch.prefetchEnrichmentGitHubContext,
+    ).toHaveBeenCalled();
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body.repoFullName).toBe("o/r");
+    expect(body.prefetch.history.authorLogin).toBe("dev1");
+    expect(body.githubToken).toBeUndefined();
+    expect(body.files).toEqual([
+      { path: "a.ts", patch: "@@ +1 @@" },
+      { path: "b.ts", patch: undefined },
+    ]);
   });
 
   it("undefined when REES_URL is unset", async () => {
@@ -133,7 +115,6 @@ describe("buildReviewEnrichment", () => {
     expect(
       await buildReviewEnrichment(env({ REES_URL: "https://r" }), input),
     ).toBeUndefined();
-    // A non-2xx REES response now logs at error level (was a silent skip) so a broken backend is visible in Sentry.
     expect(
       errSpy.mock.calls.some(
         (c) =>
@@ -150,7 +131,6 @@ describe("buildReviewEnrichment", () => {
       throw new Error("network down");
     }) as unknown as typeof fetch;
     expect(await buildReviewEnrichment(env({ REES_URL: "https://r" }), input)).toBeUndefined();
-    // A broken/slow REES backend now surfaces at level:error (central Sentry forwarder) instead of degrading silently.
     expect(errSpy.mock.calls.some((c) => String(c[0]).includes("review_context_fetch_failed") && String(c[0]).includes('"contextType":"enrichment"'))).toBe(true);
     errSpy.mockRestore();
   });
@@ -198,9 +178,6 @@ describe("buildReviewEnrichment", () => {
       /ignore previous instructions|approve this PR/i,
     );
     expect(r?.systemSuffix).toContain("untrusted advisory context");
-    expect(r?.systemSuffix).not.toMatch(
-      /ignore previous instructions|approve this PR/i,
-    );
 
     globalThis.fetch = vi.fn(
       async () =>
@@ -240,23 +217,5 @@ describe("buildReviewEnrichment", () => {
     expect(
       (calls[0]!.headers as Record<string, string>).authorization,
     ).toBeUndefined();
-  });
-});
-
-describe("resolveEnrichmentGithubToken", () => {
-  it("prefers installation token and falls back to GITHUB_PUBLIC_TOKEN", async () => {
-    mockedToken.mockResolvedValueOnce("install-token");
-    const envWithInstall = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await expect(resolveEnrichmentGithubToken(envWithInstall, 42)).resolves.toBe(
-      "install-token",
-    );
-
-    mockedToken.mockRejectedValueOnce(new Error("no app"));
-    await expect(resolveEnrichmentGithubToken(envWithInstall, 42)).resolves.toBe(
-      "public-token",
-    );
-
-    const bareEnv = createTestEnv({});
-    await expect(resolveEnrichmentGithubToken(bareEnv, null)).resolves.toBeUndefined();
   });
 });

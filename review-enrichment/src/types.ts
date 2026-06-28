@@ -18,8 +18,11 @@ export interface EnrichRequest {
     deletions?: number;
   }>;
   diff?: string;
-  /** Short-lived broker token for OSV/license/history fetches. Never logged. */
-  githubToken?: string;
+  /** Engine-prefetched GitHub findings — tokens never cross the REES wire. */
+  prefetch?: {
+    history?: HistoryFinding | null;
+    codeowners?: CodeownersFinding[];
+  };
   budget?: { timeoutMs?: number; maxBriefChars?: number };
   analyzers?: string[];
 }

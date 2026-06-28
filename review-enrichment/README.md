@@ -16,7 +16,9 @@ treats any timeout/error as "no brief" and proceeds.
 | `GET /ready`      | Readiness.                                                                      |
 | `POST /v1/enrich` | `Authorization: Bearer <REES_SHARED_SECRET>` → `EnrichRequest` → `ReviewBrief`. |
 
-See `src/server.ts` for the `EnrichRequest` / `ReviewBrief` contract.
+See `src/server.ts` for the `EnrichRequest` / `ReviewBrief` contract. GitHub installation tokens are prefetched in the
+gittensory engine (`src/review/enrichment-prefetch.ts`) and passed as structured `prefetch` findings — never as raw
+credentials in the POST body.
 
 ## Analyzers (added behind the contract)
 
