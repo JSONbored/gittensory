@@ -2,7 +2,8 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, resolveAiReviewerPlan, resolveCliTimeoutMs, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, redactSecrets, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
+import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, extractCliUsage, resolveAiReviewerPlan, resolveCliTimeoutMs, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, redactSecrets, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
+import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 
 describe("resolveModel (#979 — never leak the Workers-AI default to a self-host backend)", () => {
   const WORKERS_DEFAULT = "@cf/meta/llama-3.1-8b-instruct-fp8-fast";
@@ -50,7 +51,10 @@ describe("resolveCliTimeoutMs (#selfhost — subprocess timeout scales with effo
   });
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  resetMetrics();
+});
 
 type SpawnResult = { stdout: string; code: number | null; stderr?: string };
 type StubSpawn = (
@@ -257,7 +261,10 @@ describe("resolveProviderNames + resolveAiReviewerPlan (#dual-ai-combiner)", () 
 });
 
 describe("branch coverage — defaults + edge inputs", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetMetrics();
+  });
 
   it("chat with no apiKey + empty choices → empty response", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ choices: [] }), { status: 200 })));
@@ -274,6 +281,19 @@ describe("branch coverage — defaults + edge inputs", () => {
   it("extractCliText: non-string result falls through to text", () => {
     expect(extractCliText(JSON.stringify({ result: 5 }))).toBe("");
     expect(extractCliText(JSON.stringify({ text: "t" }))).toBe("t");
+  });
+  it("extractCliUsage reads common JSON and JSONL token/cost fields", () => {
+    expect(extractCliUsage("")).toEqual({});
+    expect(extractCliUsage("not json")).toEqual({});
+    expect(
+      extractCliUsage(
+        [
+          JSON.stringify({ usage: { input_tokens: 10, outputTokens: "5", total_tokens: 15 }, model: "gpt-5" }),
+          JSON.stringify({ tokenUsage: { prompt_tokens: 12, completion_tokens: 6, totalTokens: 18 }, total_cost_usd: "0.07" }),
+          JSON.stringify({ usage_metadata: { costUsd: 0.09 } }),
+        ].join("\n"),
+      ),
+    ).toEqual({ inputTokens: 12, outputTokens: 6, totalTokens: 18, costUsd: 0.09, model: "gpt-5" });
   });
   it("claudeErrorStatus: subtype + unknown fallbacks", () => {
     expect(claudeErrorStatus(JSON.stringify({ is_error: true, subtype: "sub" }))).toBe("sub");
@@ -321,6 +341,8 @@ describe("branch coverage — defaults + edge inputs", () => {
   it("extractCliText reads content + response fields", () => {
     expect(extractCliText(JSON.stringify({ content: "c" }))).toBe("c");
     expect(extractCliText(JSON.stringify({ response: "r" }))).toBe("r");
+    expect(extractCliText(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "codex ok" } }))).toBe("codex ok");
+    expect(extractCliText(JSON.stringify({ type: "item.completed", item: { content: [{ type: "output_text", text: "codex " }, { type: "output_text", text: "ok" }] } }))).toBe("codex ok");
   });
   it("chain wraps a non-Error throw", async () => {
     const p = {
@@ -556,6 +578,20 @@ describe("subscription CLI helpers + fail-safe", () => {
   it("extractCliText falls back to the last JSON line (JSONL) and is empty when none parse", () => {
     expect(extractCliText('not json\n{"result":"x"}')).toBe("x");
     expect(extractCliText("not json\nstill not json")).toBe("");
+  });
+
+  it("records Codex CLI usage metrics from successful JSONL output", async () => {
+    const stdout = [
+      JSON.stringify({ type: "token_count", usage: { input_tokens: 20, output_tokens: 7, total_tokens: 27 }, model: "gpt-5-codex" }),
+      JSON.stringify({ type: "result", result: "review" }),
+    ].join("\n");
+    const ok: StubSpawn = async () => ({ stdout, code: 0 });
+    await createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1", AI_EFFORT: "medium" }, ok).run("", { prompt: "x" });
+    const metrics = await renderMetrics();
+    expect(metrics).toContain('gittensory_ai_requests_total{effort="medium",model="gpt-5-codex",provider="codex"} 1');
+    expect(metrics).toContain('gittensory_ai_input_tokens_total{effort="medium",kind="review",model="gpt-5-codex",provider="codex"} 20');
+    expect(metrics).toContain('gittensory_ai_output_tokens_total{effort="medium",kind="review",model="gpt-5-codex",provider="codex"} 7');
+    expect(metrics).toContain('gittensory_ai_total_tokens_total{effort="medium",model="gpt-5-codex",provider="codex"} 27');
   });
 });
 

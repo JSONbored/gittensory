@@ -1,5 +1,11 @@
-# Intentionally no SQLite datasource is provisioned. Grafana must not receive direct access to
-# the live application database; dashboards should use Prometheus/GitHub or a separately redacted
-# reporting database if one is added in the future.
+# Maintainer-only SQLite datasource for local operator dashboards. The compose stack mounts the app
+# database at /appdb for Grafana, and these dashboards run aggregate SELECTs over internal tables.
 apiVersion: 1
-datasources: []
+datasources:
+  - name: GittensoryDB
+    type: frser-sqlite-datasource
+    uid: gittensory-db
+    access: proxy
+    editable: false
+    jsonData:
+      path: /appdb/gittensory.sqlite

@@ -237,8 +237,9 @@ async function main(): Promise<void> {
   setLocalManifestReader(
     makeLocalManifestReader(process.env.GITTENSORY_REPO_CONFIG_DIR),
   );
-  // Per-repo review CONTEXT (#review-skills): the same config dir also holds `<repo>/review/CLAUDE.md` + skills/*.md,
-  // injected into the reviewer prompt so reviews follow each repo's conventions. Unset dir ⇒ null reader ⇒ no change.
+  // Per-repo review CONTEXT (#review-skills): the same config dir also holds `<repo>/review/AGENTS.md`
+  // (or legacy `<repo>/review/CLAUDE.md`) + skills/*.md, injected into the reviewer prompt so reviews follow each
+  // repo's conventions. Unset dir ⇒ null reader ⇒ no change.
   setLocalReviewContextReader(
     makeLocalReviewContextReader(process.env.GITTENSORY_REPO_CONFIG_DIR),
   );

@@ -886,7 +886,7 @@ export function resolveReviewPreMergeChecks(manifest: FocusManifest | null): Pre
  *  config dir (`<repo>/review/skills/*.md`). `when` is "always" (repo-wide) or a path glob / brace-list that gates it to
  *  matching changed files (cost: only relevant skills are injected). */
 export type RepoReviewSkill = { name: string; when: string; body: string };
-/** The per-repo review CONTEXT (#review-skills): an always-on `review/CLAUDE.md` guide + the skill rubric modules. */
+/** The per-repo review CONTEXT (#review-skills): an always-on `review/AGENTS.md` / `review/CLAUDE.md` guide + skills. */
 export type RepoReviewContext = { guide: string | null; skills: RepoReviewSkill[] };
 
 /** Hard cap on the injected per-repo review context — a cost guard so a runaway guide/skills set can't bloat every

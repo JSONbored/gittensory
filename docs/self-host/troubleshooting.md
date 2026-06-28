@@ -113,6 +113,13 @@ AI review entirely in advisory mode. If you still see repeats, check for an auto
 **Fix:** leave `AI_MODEL` unset for codex — it picks the account's own default. (Don't set a Claude model id on a
 `claude-code,codex` combo: `AI_MODEL` is global and a Claude id breaks codex.)
 
+### `codex_credential_isolation_required`
+
+**Cause:** the Codex subscription reviewer is fail-closed unless you explicitly opt into mounted
+Codex auth, and it rejects `CODEX_HOME` in the app env.
+**Fix:** mount the Codex home at `/data/codex`, leave `CODEX_HOME` unset, and set
+`GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER=1` only on an isolated maintainer deployment.
+
 ### Reviews post as `gittensory-orb`, not your own bot
 
 **Cause:** a brokered self-host borrows tokens from the central Orb App. To post under your own bot identity you

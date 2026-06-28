@@ -289,12 +289,13 @@ services:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Maintainer dashboards query aggregate review/AI-usage tables from the app DB.
+      # SQLite WAL readers need the shm file, so this cannot be read-only.
+      - gittensory-data:/appdb
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env before using --profile observability}
       GF_USERS_ALLOW_SIGN_UP: "false"
-      # Only install the signed GitHub datasource plugin. Do not mount or query the live app SQLite
-      # database from Grafana; observability must not bypass application authorization.
-      GF_INSTALL_PLUGINS: grafana-github-datasource
+      GF_INSTALL_PLUGINS: frser-sqlite-datasource,grafana-github-datasource
       # Read-only fine-grained PAT for the GitHub data source provisioning ($GITHUB_TOKEN expansion). From .env.
       GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
 

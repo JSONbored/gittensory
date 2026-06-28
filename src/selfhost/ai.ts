@@ -7,6 +7,7 @@
 // records an error and degrades — never a silent wrong answer).
 
 import type { CombineStrategy, OnMerge } from "../services/ai-review";
+import { incr } from "./metrics";
 
 interface AiRunOptions {
   messages?: Array<{ role: string; content: string }>;
@@ -196,7 +197,17 @@ export function extractCliText(stdout: string): string {
     try {
       const o = JSON.parse(s) as Record<string, unknown>;
       const text = o.result ?? o.text ?? o.content ?? o.response;
-      return typeof text === "string" ? text : "";
+      if (typeof text === "string") return text;
+      const item = asRecord(o.item);
+      if (typeof item?.text === "string") return item.text;
+      const content = item?.content;
+      if (Array.isArray(content)) {
+        return content
+          .map((part) => asRecord(part)?.text)
+          .filter((part): part is string => typeof part === "string")
+          .join("");
+      }
+      return "";
     } catch {
       return "";
     }
@@ -212,6 +223,91 @@ export function extractCliText(stdout: string): string {
     if (t) return t;
   }
   return "";
+}
+
+export type CliUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+  model?: string;
+};
+
+const INPUT_TOKEN_KEYS = ["input_tokens", "inputTokens", "prompt_tokens", "promptTokens"] as const;
+const OUTPUT_TOKEN_KEYS = ["output_tokens", "outputTokens", "completion_tokens", "completionTokens"] as const;
+const TOTAL_TOKEN_KEYS = ["total_tokens", "totalTokens"] as const;
+const COST_KEYS = ["total_cost_usd", "totalCostUsd", "cost_usd", "costUsd"] as const;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  const n = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+function maxNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
+  let out: number | undefined;
+  for (const key of keys) {
+    const n = finiteNumber(record[key]);
+    if (n !== undefined) out = Math.max(out ?? 0, n);
+  }
+  return out;
+}
+
+function mergeUsage(out: CliUsage, record: Record<string, unknown>): void {
+  const nested = [
+    record,
+    asRecord(record.usage),
+    asRecord(record.token_usage),
+    asRecord(record.tokenUsage),
+    asRecord(record.usage_metadata),
+    asRecord(record.usageMetadata),
+  ].filter((entry): entry is Record<string, unknown> => Boolean(entry));
+  for (const entry of nested) {
+    const inputTokens = maxNumber(entry, INPUT_TOKEN_KEYS);
+    if (inputTokens !== undefined) out.inputTokens = Math.max(out.inputTokens ?? 0, inputTokens);
+    const outputTokens = maxNumber(entry, OUTPUT_TOKEN_KEYS);
+    if (outputTokens !== undefined) out.outputTokens = Math.max(out.outputTokens ?? 0, outputTokens);
+    const totalTokens = maxNumber(entry, TOTAL_TOKEN_KEYS);
+    if (totalTokens !== undefined) out.totalTokens = Math.max(out.totalTokens ?? 0, totalTokens);
+    const costUsd = maxNumber(entry, COST_KEYS);
+    if (costUsd !== undefined) out.costUsd = Math.max(out.costUsd ?? 0, costUsd);
+    if (typeof entry.model === "string" && entry.model.trim()) out.model = entry.model.trim();
+  }
+}
+
+/** Best-effort usage extraction from subscription CLI JSON/JSONL output. Claude Code's authoritative usage is OTEL,
+ *  while Codex JSONL is still evolving, so this accepts common token/cost field spellings and records the largest
+ *  cumulative value seen across the stream. Missing fields simply mean "no metric", never a review failure. */
+export function extractCliUsage(stdout: string): CliUsage {
+  const usage: CliUsage = {};
+  const trimmed = stdout.trim();
+  if (!trimmed) return usage;
+  const parse = (text: string): void => {
+    try {
+      const record = asRecord(JSON.parse(text));
+      if (record) mergeUsage(usage, record);
+    } catch {
+      // Non-JSON output is valid for some CLI failure modes; usage is best-effort only.
+    }
+  };
+  parse(trimmed);
+  for (const line of trimmed.split(/\r?\n/)) {
+    if (line.trim()) parse(line);
+  }
+  return usage;
+}
+
+function recordCliUsageMetrics(provider: string, model: string, effort: string, stdout: string): void {
+  const usage = extractCliUsage(stdout);
+  const labels = { provider, model: usage.model ?? (model || "default"), effort };
+  incr("gittensory_ai_requests_total", labels);
+  incr("gittensory_ai_cost_usd_total", { provider: labels.provider }, usage.costUsd ?? 0);
+  if (usage.inputTokens !== undefined) incr("gittensory_ai_input_tokens_total", { ...labels, kind: "review" }, usage.inputTokens);
+  if (usage.outputTokens !== undefined) incr("gittensory_ai_output_tokens_total", { ...labels, kind: "review" }, usage.outputTokens);
+  if (usage.totalTokens !== undefined) incr("gittensory_ai_total_tokens_total", labels, usage.totalTokens);
 }
 
 /** Claude Code's `--output-format json` exits 0 even on an API/auth error, returning {is_error:true,result:"<msg>"}.
@@ -319,6 +415,7 @@ export function createClaudeCodeAi(parentEnv: Record<string, string | undefined>
       if (code !== 0) throw new Error(`claude_code_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "", [token]).slice(0, 500)}`);
       const text = extractCliText(stdout);
       if (!text) throw new Error("claude_code_empty_output");
+      recordCliUsageMetrics("claude-code", claudeModel, effort, stdout);
       return { response: text };
     },
   };
@@ -351,6 +448,7 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
       if (code !== 0) throw new Error(`codex_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "").slice(0, 500)}`);
       const text = extractCliText(stdout);
       if (!text) throw new Error("codex_empty_output");
+      recordCliUsageMetrics("codex", codexModel, resolveEffort(parentEnv.AI_EFFORT), stdout);
       return { response: text };
     },
   };

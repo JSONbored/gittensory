@@ -4591,8 +4591,9 @@ async function maybePublishPrPublicSurface(
           repoFullName,
           reviewInlineComments,
         );
-        // Per-repo review CONTEXT (#review-skills): fold the container-private review/CLAUDE.md guide + the matching
-        // review/skills/*.md modules into the SAME review-instructions slot, so reviews follow each repo's conventions.
+        // Per-repo review CONTEXT (#review-skills): fold the container-private review/AGENTS.md (or legacy
+        // review/CLAUDE.md) guide + the matching review/skills/*.md modules into the SAME review-instructions slot,
+        // so reviews follow each repo's conventions.
         // Glob-gated for cost (only skills matching the changed files are injected); absent config dir ⇒ empty ⇒
         // byte-identical prompt. getReviewFiles() is memoized, so the second call reuses the loaded diff.
         const reviewInstructions =

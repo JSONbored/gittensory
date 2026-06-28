@@ -37,7 +37,10 @@ RUN if [ "$INSTALL_AI_CLIS" = "true" ]; then apt-get update && apt-get install -
 # claude-code's postinstall downloads its platform-native binary, so scripts must run. Install the optional
 # CLIs as the unprivileged user into a user-owned prefix while /app is still root-owned, keeping lifecycle
 # hooks from mutating the already-copied application bundle during the image build.
-RUN mkdir -p /home/node/.npm-global /home/node/.npm && chown -R node:node /home/node/.npm-global /home/node/.npm
+RUN mkdir -p /home/node/.npm-global /home/node/.npm \
+    && ln -s /data/codex /home/node/.codex \
+    && chown -h node:node /home/node/.codex \
+    && chown -R node:node /home/node/.npm-global /home/node/.npm
 USER node
 RUN if [ "$INSTALL_AI_CLIS" = "true" ]; then npm install -g @anthropic-ai/claude-code@2.1.187 @openai/codex@0.142.0; fi
 USER root

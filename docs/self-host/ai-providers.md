@@ -7,7 +7,7 @@ The reviewer is configured by `AI_PROVIDER`. Reviews degrade deterministically (
 | `AI_PROVIDER`                             | Backend                                                                 | Needs                                                                                   |
 | ----------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `claude-code`                             | Your **Claude** subscription via the `claude` CLI (read-only, headless) | `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`); CLI baked in (`INSTALL_AI_CLIS=true`) |
-| `codex`                                   | Your **Codex** subscription via the `codex` CLI                         | local `codex` auth (mounted), CLI baked in                                              |
+| `codex`                                   | Your **Codex** subscription via the `codex` CLI                         | local `codex` auth mounted at `/data/codex`, CLI baked in, explicit unsafe opt-in       |
 | `anthropic`                               | Native **Anthropic API** (BYOK, per-token billing — no weekly limit)    | `ANTHROPIC_API_KEY`, `AI_MODEL`                                                         |
 | `ollama` / `openai-compatible` / `openai` | Any OpenAI-compatible `/chat/completions` (+ `/embeddings`)             | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`                                                 |
 
@@ -27,6 +27,15 @@ combined per `AI_COMBINE` (`single`/`consensus`/`synthesis`).
 | `AI_EFFORT`     | `high`             | `low \| medium \| high \| xhigh \| max` → `claude --effort`. The engine wants substance, not speed.                                                  |
 | `AI_TIMEOUT_MS` | scales with effort | Subprocess timeout. Unset ⇒ low/med 120s, high 240s, xhigh 360s, **max 600s** (so a big max-effort review isn't killed). Override clamped 30s–30min. |
 
+## Codex subscription reviewer
+
+Codex is intentionally disabled until the operator opts in with
+`GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER=1`. The risk is specific: `codex exec` needs an OAuth
+`auth.json`, and a prompt-influenced read-only review sandbox can still read files. On an isolated
+maintainer deployment, mount the Codex home at `/data/codex`; the image exposes that as the default
+`~/.codex` path for the `node` user. Do not set `CODEX_HOME` in the app environment. The provider
+rejects `CODEX_HOME` so the credential path is not advertised to the subprocess through env.
+
 ## Cost & usage observability
 
 Every provider's token/cost usage is captured and exported to Prometheus — surfaced in the **AI Usage & Cost**
@@ -34,11 +43,13 @@ row of the Grafana dashboard (`:3000`):
 
 | Metric                                                      | Labels                          | Meaning                                                          |
 | ----------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------- |
-| `gittensory_ai_requests_total`                              | `provider, model, kind, effort` | Review/embed calls (the intelligence dial is the `effort` label) |
-| `gittensory_ai_input_tokens_total` / `_output_tokens_total` | `provider, model, kind`         | Token volume per provider/model                                  |
-| `gittensory_ai_cost_usd_total`                              | `provider`                      | Cumulative USD (from Claude Code's `total_cost_usd`)             |
+| `gittensory_ai_requests_total`                              | `provider, model, effort`       | Successful subscription-CLI review calls                         |
+| `gittensory_ai_input_tokens_total` / `_output_tokens_total` | `provider, model, kind, effort` | Token volume per provider/model when the CLI reports it          |
+| `gittensory_ai_total_tokens_total`                          | `provider, model, effort`       | Total token count when the CLI reports it                        |
+| `gittensory_ai_cost_usd_total`                              | `provider`                      | Cumulative USD when the CLI reports a cost field                 |
 
-`kind` is `chat` (reviews) or `embed` (RAG). The embed provider's label is `AI_EMBED_PROVIDER` (default `ollama`).
+`kind` is `review` for the subscription-CLI review path. Claude Code also exports its own OTEL metrics when
+`CLAUDE_CODE_ENABLE_TELEMETRY=1`; Codex cost appears only if the CLI emits a cost field.
 
 ## Token-spend protection
 
