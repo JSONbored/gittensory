@@ -142,6 +142,16 @@ export function renderBrief(
           ? `${safeCodeSpan(`@param ${item.param}`)} in JSDoc does not match any parameter of ${fn} — remove or rename`
           : `${fn} has parameter ${safeCodeSpan(item.param)} with no @param in the JSDoc — add it`;
       lines.push(`- ${loc} — ${msg}`);
+  const codeownersViolations = findings.codeowners ?? [];
+  if (codeownersViolations.length) {
+    const allOwners = new Set(codeownersViolations.flatMap((f) => f.owners));
+    const blastRadius = allOwners.size;
+    lines.push(
+      `### CODEOWNERS violations — ${blastRadius} ownership domain${blastRadius === 1 ? "" : "s"} affected`,
+    );
+    for (const item of codeownersViolations) {
+      const ownerList = item.owners.map((o) => safeCodeSpan(o)).join(", ");
+      lines.push(`- ${safeCodeSpan(item.file)} — owned by ${ownerList}`);
     }
   }
 
