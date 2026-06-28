@@ -610,15 +610,23 @@ describe("world-class backend signals", () => {
     const quality = buildConfigQuality(badRepo, observed, [], repo.fullName);
     const invalid = quality.findings.find((finding) => finding.code === "invalid_label_multipliers");
     expect(invalid).toBeDefined();
-    // Only the non-positive / non-finite / non-numeric multipliers are named (sorted); valid ones are not.
-    expect(invalid?.detail).toMatch(/broken, bug, stale, weird/);
+    // Each bad multiplier is named with its value (sorted); valid ones are not listed.
+    expect(invalid?.detail).toMatch(/broken=NaN, bug=-1, stale=0, weird=x/);
     expect(invalid?.detail).not.toMatch(/good|penalty/);
-    expect(quality.score).toBeLessThan(100);
+    // Four invalid entries deduct the capped 30 points; valid ones do not contribute.
+    const baseline = buildConfigQuality({ ...badRepo, registryConfig: { ...badRepo.registryConfig!, labelMultipliers: { good: 1.2, penalty: 0.5 } } }, observed, [], repo.fullName).score;
+    expect(quality.score).toBe(baseline - 30);
   });
 
   it("does not flag valid positive label multipliers, including penalty (<1) multipliers", () => {
     const okRepo = { ...repo, registryConfig: { ...repo.registryConfig!, labelMultipliers: { feature: 1.25, refactor: 0.5 } } };
     const quality = buildConfigQuality(okRepo, [{ ...issues[0]!, labels: ["feature", "refactor"] }], [], repo.fullName);
+    expect(quality.findings.map((finding) => finding.code)).not.toContain("invalid_label_multipliers");
+  });
+
+  it("treats a repo with no labelMultipliers key as having no invalid multipliers", () => {
+    const noLabelsRepo = { ...repo, registryConfig: { ...repo.registryConfig!, labelMultipliers: undefined as unknown as Record<string, number> } };
+    const quality = buildConfigQuality(noLabelsRepo, [], [], repo.fullName);
     expect(quality.findings.map((finding) => finding.code)).not.toContain("invalid_label_multipliers");
   });
 
