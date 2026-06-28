@@ -75,17 +75,17 @@ export async function buildReviewEnrichment(
   const base = cfg.REES_URL?.trim();
   if (!base) return undefined;
   const timeoutMs = Math.max(1000, Number(cfg.REES_TIMEOUT_MS ?? "8000"));
-  const prefetch: EnrichmentPrefetch = await prefetchEnrichmentGitHubContext(
-    env,
-    {
-      repoFullName: input.repoFullName,
-      author: input.author,
-      body: input.body,
-      installationId: input.installationId,
-      files: input.files,
-    },
-  );
   try {
+    const prefetch: EnrichmentPrefetch = await prefetchEnrichmentGitHubContext(
+      env,
+      {
+        repoFullName: input.repoFullName,
+        author: input.author,
+        body: input.body,
+        installationId: input.installationId,
+        files: input.files,
+      },
+    );
     const response = await fetch(`${base.replace(/\/+$/, "")}/v1/enrich`, {
       method: "POST",
       headers: {

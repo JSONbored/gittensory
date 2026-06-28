@@ -200,6 +200,22 @@ describe("buildReviewEnrichment", () => {
     ).toBeUndefined();
   });
 
+  it("undefined when prefetch throws — fail-safe", async () => {
+    vi.mocked(enrichmentPrefetch.prefetchEnrichmentGitHubContext).mockRejectedValueOnce(
+      new Error("prefetch boom"),
+    );
+    globalThis.fetch = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          json: async () => ({ promptSection: "brief" }),
+        }) as Response,
+    ) as unknown as typeof fetch;
+    expect(
+      await buildReviewEnrichment(env({ REES_URL: "https://r" }), input),
+    ).toBeUndefined();
+  });
+
   it("omits the bearer header when no secret, and defaults systemSuffix to empty", async () => {
     const calls: RequestInit[] = [];
     globalThis.fetch = vi.fn(async (_url: unknown, init: RequestInit) => {

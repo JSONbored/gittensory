@@ -1,7 +1,7 @@
 // GitHub-backed enrichment prefetch (#1697 security fix). Installation tokens stay in the engine —
 // REES receives only derived, public-safe findings over the shared-secret wire, never raw credentials.
 import { createInstallationToken } from "../github/app";
-import { prefetchCodeownersFindings } from "../../review-enrichment/src/analyzers/codeowners.js";
+import { prefetchCodeownersFindings } from "./codeowners-prefetch";
 import type { PullRequestFileRecord } from "../types";
 
 const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
