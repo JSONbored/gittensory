@@ -100,6 +100,8 @@ export interface RevertRecurrenceFinding {
   revertSha: string;
   revertMessage: string;
   matchedLines: number;
+}
+
 /** A changed file governed by a CODEOWNERS rule where the PR author is not listed as an owner (#1515).
  *  The blast radius (distinct ownership domains crossed) is derived at render time from the full findings set. */
 export interface CodeownersFinding {

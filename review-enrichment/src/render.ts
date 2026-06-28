@@ -138,6 +138,10 @@ export function renderBrief(
       const s = f.matchedLines === 1 ? "" : "s";
       lines.push(
         `- ${safeCodeSpan(f.file)} re-introduces ${f.matchedLines} line${s} from revert ${safeCodeSpan(f.revertSha)} — ${promptText(f.revertMessage)}`,
+      );
+    }
+  }
+
   const codeownersViolations = findings.codeowners ?? [];
   if (codeownersViolations.length) {
     const allOwners = new Set(codeownersViolations.flatMap((f) => f.owners));

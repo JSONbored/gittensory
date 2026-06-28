@@ -27,6 +27,7 @@ import {
   extractRemovedLines,
   scanRevertRecurrence,
 } from "../dist/analyzers/revert-recurrence.js";
+import {
   findOwners,
   parseCodeowners,
   patternToRegex,
@@ -1280,6 +1281,28 @@ test("scanRevertRecurrence: no baseSha → query omits sha param", async () => {
   assert.ok(!urls[0].includes("sha="), `sha param should be absent; got ${urls[0]}`);
 });
 
+test("scanRevertRecurrence: repoFullName segments are percent-encoded in both URL forms", async () => {
+  const urls: string[] = [];
+  const fetchImpl = async (url) => {
+    urls.push(String(url));
+    if (String(url).includes("/commits?"))
+      return { ok: true, json: async () => [revertCommit] };
+    return { ok: true, json: async () => ({ files: [] }) };
+  };
+  await scanRevertRecurrence(
+    makeReq({ repoFullName: "owner name/repo name" }),
+    fetchImpl,
+  );
+  assert.ok(
+    urls[0].includes("owner%20name/repo%20name"),
+    `list URL should encode segments; got ${urls[0]}`,
+  );
+  assert.ok(
+    urls[1].includes("owner%20name/repo%20name"),
+    `diff URL should encode segments; got ${urls[1]}`,
+  );
+});
+
 test("scanRevertRecurrence: auth header sent when token present, omitted when absent", async () => {
   const seenHeaders: Record<string, string>[] = [];
   const fetchImpl = async (_url, init) => {
@@ -1481,6 +1504,11 @@ test("buildBrief: revert-recurrence analyzer degrades gracefully on network thro
     // listFileCommits catches the throw and returns [], so revertRecurrence = [] (not degraded)
     assert.equal(brief.analyzerStatus.revertRecurrence, "ok");
     assert.deepEqual(brief.findings.revertRecurrence, []);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("codeOnly: blanks string messages, keeps ${...} interpolation bodies", () => {
   assert.equal(codeOnly('"a secret here"'), " ");
   assert.equal(codeOnly("'plain'"), " ");

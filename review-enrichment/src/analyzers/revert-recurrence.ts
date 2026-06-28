@@ -45,6 +45,10 @@ export function extractRemovedLines(patch: string): Set<string> {
   return lines;
 }
 
+function encodeRepoSlug(repoFullName: string): string {
+  return repoFullName.split("/").map(encodeURIComponent).join("/");
+}
+
 function githubHeaders(token?: string): Record<string, string> {
   const h: Record<string, string> = {
     Accept: "application/vnd.github+json",
@@ -64,7 +68,7 @@ async function listFileCommits(
 ): Promise<Array<{ sha: string; commit: { message: string } }>> {
   try {
     const shaParam = sha ? `&sha=${encodeURIComponent(sha)}` : "";
-    const url = `https://api.github.com/repos/${repoFullName}/commits?path=${encodeURIComponent(path)}&per_page=${MAX_COMMITS_PER_FILE}${shaParam}`;
+    const url = `https://api.github.com/repos/${encodeRepoSlug(repoFullName)}/commits?path=${encodeURIComponent(path)}&per_page=${MAX_COMMITS_PER_FILE}${shaParam}`;
     const resp = await fetchImpl(url, { headers: githubHeaders(token), signal });
     if (!resp.ok) return [];
     const raw = await resp.json();
@@ -84,7 +88,7 @@ async function fetchCommitFiles(
   signal?: AbortSignal,
 ): Promise<Array<{ filename: string; patch?: string }>> {
   try {
-    const url = `https://api.github.com/repos/${repoFullName}/commits/${encodeURIComponent(sha)}`;
+    const url = `https://api.github.com/repos/${encodeRepoSlug(repoFullName)}/commits/${encodeURIComponent(sha)}`;
     const resp = await fetchImpl(url, { headers: githubHeaders(token), signal });
     if (!resp.ok) return [];
     const data = (await resp.json()) as {
