@@ -87,6 +87,10 @@ export function captureReviewFailure(
   });
 }
 
+// The structured-log fields worth indexing as Sentry tags — the dimensions operators filter + group by. Only
+// string|number values are tagged; everything else stays in the full "log" context.
+const SENTRY_LOG_TAG_KEYS = ["repo", "repository", "installationId", "installation_id", "pull", "pullNumber", "pr", "project", "kind", "deliveryId"] as const;
+
 /** Forward a structured console line to Sentry when it is an ERROR-level log. The engine logs operational
  *  failures (orb_broker_unavailable, gate-check errors, relay drops, …) as JSON strings, often via console.error.
  *  No-op when Sentry is off, the line isn't a JSON object string, or its level isn't error/fatal — routine logs
@@ -104,16 +108,22 @@ export function forwardStructuredLogToSentry(line: unknown): void {
   const level = obj.level;
   if (level !== "error" && level !== "fatal") return;
   const severity = level === "fatal" ? "fatal" : "error";
-  const title =
-    typeof obj.event === "string"
-      ? obj.event
-      : typeof obj.message === "string"
-        ? obj.message
-        : "error";
+  const event = typeof obj.event === "string" ? obj.event : undefined;
+  // Lead the Sentry title with the real failure detail (message → error), not just the event slug, so an operator
+  // sees WHAT broke straight from the issue list instead of having to open the context blob.
+  const detail = typeof obj.message === "string" ? obj.message : typeof obj.error === "string" ? obj.error : undefined;
+  const title = event ? (detail ? `${event}: ${detail}` : event) : (detail ?? "error");
   Sentry.withScope((scope) => {
     scope.setLevel(severity);
     scope.setContext("log", obj);
-    if (typeof obj.event === "string") scope.setTag("event", obj.event);
+    if (event) scope.setTag("event", event);
+    // Index the dimensions operators filter + group by, so issues are findable without digging into the context.
+    for (const key of SENTRY_LOG_TAG_KEYS) {
+      const value = obj[key];
+      if (typeof value === "string" || typeof value === "number") scope.setTag(key, String(value));
+    }
+    // Group recurrences of ONE failure into a single issue (by event, not the variable detail that's in the title).
+    if (event) scope.setFingerprint(["gittensory-log", event]);
     Sentry!.captureMessage(title, severity);
   });
 }
