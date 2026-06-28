@@ -21,6 +21,12 @@ import {
   scanPatchForRedos,
   scanRedos,
 } from "../dist/analyzers/redos.js";
+import {
+  isRevertMessage,
+  extractAddedLines,
+  extractRemovedLines,
+  scanRevertRecurrence,
+} from "../dist/analyzers/revert-recurrence.js";
 
 const NOW = new Date("2026-06-26").getTime();
 const eolFetch =
@@ -933,6 +939,453 @@ test("buildBrief: eol analyzer runs (real now, 2023 cycle is past)", async () =>
     assert.equal(brief.analyzerStatus.eol, "ok");
     assert.equal(brief.findings.eol.length, 1);
     assert.match(brief.promptSection, /End-of-life runtimes/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+// --- revert-recurrence ---
+
+test("isRevertMessage: detects standard and manual revert prefixes, ignores non-revert messages", () => {
+  for (const yes of [
+    "Revert 'add config'",
+    "Revert: remove rate limiter",
+    "revert bad deploy",
+    "Revert commit 1234567",
+  ]) {
+    assert.equal(isRevertMessage(yes), true, yes);
+  }
+  for (const no of [
+    "Reverting the config",
+    "fix: handle edge case",
+    "feat: add dashboard",
+    "",
+  ]) {
+    assert.equal(isRevertMessage(no), false, no);
+  }
+});
+
+test("extractAddedLines: returns non-trivial added lines, skips +++ header and short/removed lines", () => {
+  const patch = [
+    "@@ -1,1 +1,4 @@",
+    "+++ b/src/foo.ts",
+    "+const callReallyLongFunctionName = () => doSomething();",
+    "+short",
+    "- removed line that is long enough to pass",
+    " context line not added",
+  ].join("\n");
+  const result = extractAddedLines(patch);
+  assert.ok(result.has("const callReallyLongFunctionName = () => doSomething();"));
+  assert.ok(!result.has("short")); // too short (<8 chars)
+  assert.ok(!result.has("removed line that is long enough to pass")); // not a + line
+  assert.ok(!result.has("+++ b/src/foo.ts")); // header excluded
+});
+
+test("extractRemovedLines: returns non-trivial removed lines, skips --- header and short/added lines", () => {
+  const patch = [
+    "@@ -1,3 +1,1 @@",
+    "--- a/src/foo.ts",
+    "-const callReallyLongFunctionName = () => doSomething();",
+    "-tiny",
+    "+ added line that is long enough to pass",
+  ].join("\n");
+  const result = extractRemovedLines(patch);
+  assert.ok(result.has("const callReallyLongFunctionName = () => doSomething();"));
+  assert.ok(!result.has("tiny")); // too short
+  assert.ok(!result.has("added line that is long enough to pass")); // not a - line
+  assert.ok(!result.has("--- a/src/foo.ts")); // header excluded
+});
+
+const makeReq = (overrides = {}) => ({
+  repoFullName: "owner/repo",
+  prNumber: 42,
+  baseSha: "base123",
+  githubToken: "tok",
+  files: [
+    {
+      path: "src/auth.ts",
+      patch: [
+        "@@ -1,0 +1,5 @@",
+        "+function authenticateUser(token, secret) {",
+        "+  const result = validateToken(token, secret);",
+        "+  return result.isValid ? result.user : null;",
+        "+}",
+      ].join("\n"),
+    },
+  ],
+  ...overrides,
+});
+
+const revertCommit = {
+  sha: "abc1234567890",
+  commit: { message: "Revert 'add auth helper'\n\nThis reverts commit xyz." },
+};
+
+const revertPatch = [
+  "@@ -1,5 +1,0 @@",
+  "-function authenticateUser(token, secret) {",
+  "-  const result = validateToken(token, secret);",
+  "-  return result.isValid ? result.user : null;",
+  "-}",
+].join("\n");
+
+const makeFetch =
+  (commits, commitFiles) =>
+  async (url) => {
+    const u = String(url);
+    if (u.includes("/commits?"))
+      return { ok: true, json: async () => commits };
+    return { ok: true, json: async () => ({ files: commitFiles }) };
+  };
+
+test("scanRevertRecurrence: no files → returns empty", async () => {
+  const r = await scanRevertRecurrence({ repoFullName: "o/r", prNumber: 1 });
+  assert.deepEqual(r, []);
+});
+
+test("scanRevertRecurrence: file has no + lines → skips API call", async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls++;
+    return { ok: true, json: async () => [] };
+  };
+  const r = await scanRevertRecurrence(
+    makeReq({
+      files: [{ path: "src/x.ts", patch: "@@ -1,1 +0,0 @@\n-deleted line here" }],
+    }),
+    fetchImpl,
+  );
+  assert.deepEqual(r, []);
+  assert.equal(calls, 0);
+});
+
+test("scanRevertRecurrence: commit list returns non-ok → no findings", async () => {
+  const fetchImpl = async () => ({ ok: false, json: async () => [] });
+  const r = await scanRevertRecurrence(makeReq(), fetchImpl);
+  assert.deepEqual(r, []);
+});
+
+test("scanRevertRecurrence: commit list fetch throws → no findings", async () => {
+  const fetchImpl = async () => {
+    throw new Error("network error");
+  };
+  const r = await scanRevertRecurrence(makeReq(), fetchImpl);
+  assert.deepEqual(r, []);
+});
+
+test("scanRevertRecurrence: no revert commits in history → no findings", async () => {
+  const nonRevertCommits = [
+    { sha: "aaa", commit: { message: "feat: add login" } },
+    { sha: "bbb", commit: { message: "fix: correct typo" } },
+  ];
+  const r = await scanRevertRecurrence(makeReq(), makeFetch(nonRevertCommits, []));
+  assert.deepEqual(r, []);
+});
+
+test("scanRevertRecurrence: revert commit matches PR additions → finding returned", async () => {
+  const findings = await scanRevertRecurrence(
+    makeReq(),
+    makeFetch(
+      [revertCommit],
+      [{ filename: "src/auth.ts", patch: revertPatch }],
+    ),
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].file, "src/auth.ts");
+  assert.equal(findings[0].revertSha, "abc1234"); // first 7 chars
+  assert.equal(findings[0].revertMessage, "Revert 'add auth helper'"); // first line only
+  assert.ok(findings[0].matchedLines >= 2);
+});
+
+test("scanRevertRecurrence: fewer than MIN_MATCH_LINES overlap → no finding", async () => {
+  // Only one matching line (MIN_MATCH_LINES=2 so this is below threshold)
+  const onlyOneLine = [
+    "@@ -1,2 +1,0 @@",
+    "-function authenticateUser(token, secret) {",
+    "-short",
+  ].join("\n");
+  const r = await scanRevertRecurrence(
+    makeReq(),
+    makeFetch([revertCommit], [{ filename: "src/auth.ts", patch: onlyOneLine }]),
+  );
+  assert.deepEqual(r, []);
+});
+
+test("scanRevertRecurrence: commit diff API returns non-ok → no finding", async () => {
+  let callCount = 0;
+  const fetchImpl = async (url) => {
+    callCount++;
+    const u = String(url);
+    if (u.includes("/commits?")) return { ok: true, json: async () => [revertCommit] };
+    return { ok: false, json: async () => ({}) };
+  };
+  const r = await scanRevertRecurrence(makeReq(), fetchImpl);
+  assert.deepEqual(r, []);
+  assert.equal(callCount, 2); // list + diff attempt
+});
+
+test("scanRevertRecurrence: commit diff fetch throws → no finding (fail-safe)", async () => {
+  let first = true;
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u.includes("/commits?")) return { ok: true, json: async () => [revertCommit] };
+    if (first) {
+      first = false;
+      throw new Error("timeout");
+    }
+    return { ok: true, json: async () => ({ files: [] }) };
+  };
+  const r = await scanRevertRecurrence(makeReq(), fetchImpl);
+  assert.deepEqual(r, []);
+});
+
+test("scanRevertRecurrence: target file not in commit diff → no finding", async () => {
+  const r = await scanRevertRecurrence(
+    makeReq(),
+    makeFetch([revertCommit], [{ filename: "src/other.ts", patch: revertPatch }]),
+  );
+  assert.deepEqual(r, []);
+});
+
+test("scanRevertRecurrence: target file in commit but patch missing → no finding", async () => {
+  const r = await scanRevertRecurrence(
+    makeReq(),
+    makeFetch([revertCommit], [{ filename: "src/auth.ts" }]),
+  );
+  assert.deepEqual(r, []);
+});
+
+test("scanRevertRecurrence: commit diff returns no files field → no finding", async () => {
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u.includes("/commits?")) return { ok: true, json: async () => [revertCommit] };
+    return { ok: true, json: async () => ({}) }; // no `files` key → data.files ?? []
+  };
+  const r = await scanRevertRecurrence(makeReq(), fetchImpl);
+  assert.deepEqual(r, []);
+});
+
+test("scanRevertRecurrence: includes baseSha in commit list query URL", async () => {
+  const urls: string[] = [];
+  const fetchImpl = async (url) => {
+    urls.push(String(url));
+    return { ok: true, json: async () => [] };
+  };
+  await scanRevertRecurrence(makeReq({ baseSha: "deadbeef" }), fetchImpl);
+  assert.ok(urls[0].includes("sha=deadbeef"), `expected sha=deadbeef in ${urls[0]}`);
+});
+
+test("scanRevertRecurrence: no baseSha → query omits sha param", async () => {
+  const urls: string[] = [];
+  const fetchImpl = async (url) => {
+    urls.push(String(url));
+    return { ok: true, json: async () => [] };
+  };
+  await scanRevertRecurrence(makeReq({ baseSha: undefined }), fetchImpl);
+  assert.ok(!urls[0].includes("sha="), `sha param should be absent; got ${urls[0]}`);
+});
+
+test("scanRevertRecurrence: auth header sent when token present, omitted when absent", async () => {
+  const seenHeaders: Record<string, string>[] = [];
+  const fetchImpl = async (_url, init) => {
+    seenHeaders.push(init?.headers ?? {});
+    return { ok: true, json: async () => [] };
+  };
+  await scanRevertRecurrence(makeReq({ githubToken: "mytoken" }), fetchImpl);
+  assert.ok(
+    String(seenHeaders[0]?.Authorization ?? "").includes("mytoken"),
+    "token in Authorization header",
+  );
+  seenHeaders.length = 0;
+  await scanRevertRecurrence(makeReq({ githubToken: undefined }), fetchImpl);
+  assert.ok(
+    !("Authorization" in (seenHeaders[0] ?? {})),
+    "no Authorization header when no token",
+  );
+});
+
+test("scanRevertRecurrence: caps to MAX_FILES (10)", async () => {
+  let listCalls = 0;
+  const fetchImpl = async (url) => {
+    if (String(url).includes("/commits?")) listCalls++;
+    return { ok: true, json: async () => [] };
+  };
+  const files = Array.from({ length: 15 }, (_, i) => ({
+    path: `src/file${i}.ts`,
+    patch: `@@ -0,0 +1,1 @@\n+const longEnoughAddedLine${i} = "hello world";`,
+  }));
+  await scanRevertRecurrence(makeReq({ files }), fetchImpl);
+  assert.equal(listCalls, 10);
+});
+
+test("scanRevertRecurrence: caps to MAX_FINDINGS (15)", async () => {
+  // 3 files × 5 reverts each = 15 potential findings → exactly at cap
+  // Each file has the same added lines; each revert removes those same lines.
+  const addedPatch = [
+    "@@ -0,0 +1,3 @@",
+    "+function authenticateUser(token, secret) {",
+    "+  const result = validateToken(token, secret);",
+    "+  return result.isValid ? result.user : null;",
+  ].join("\n");
+  const files = Array.from({ length: 3 }, (_, i) => ({
+    path: `src/file${i}.ts`,
+    patch: addedPatch,
+  }));
+  const manyReverts = Array.from({ length: 5 }, (_, i) => ({
+    sha: `rev${i}aaaaaaaaa`,
+    commit: { message: `Revert change ${i}` },
+  }));
+  // Track which file triggered the most recent commit-list call so the diff mock
+  // can return a patch for the correct filename.
+  let lastFile = "";
+  const cappingFetch = async (url) => {
+    const u = String(url);
+    if (u.includes("/commits?")) {
+      const m = u.match(/path=([^&]+)/);
+      lastFile = m ? decodeURIComponent(m[1]) : "";
+      return { ok: true, json: async () => manyReverts };
+    }
+    return {
+      ok: true,
+      json: async () => ({ files: [{ filename: lastFile, patch: revertPatch }] }),
+    };
+  };
+  const findings = await scanRevertRecurrence(makeReq({ files }), cappingFetch);
+  assert.equal(findings.length, 15);
+});
+
+test("scanRevertRecurrence: aborted signal stops processing early", async () => {
+  const controller = new AbortController();
+  let listCalls = 0;
+  const fetchImpl = async () => {
+    listCalls++;
+    controller.abort();
+    return { ok: true, json: async () => [] };
+  };
+  const files = Array.from({ length: 5 }, (_, i) => ({
+    path: `src/file${i}.ts`,
+    patch: `@@ -0,0 +1,1 @@\n+const longEnoughAddedLineInFile${i} = true;`,
+  }));
+  await scanRevertRecurrence(makeReq({ files }), fetchImpl, {
+    signal: controller.signal,
+  });
+  assert.ok(listCalls <= 2, `expected at most 2 calls before abort, got ${listCalls}`);
+});
+
+test("scanRevertRecurrence: caps revert checks per file to MAX_REVERT_CHECKS_PER_FILE (5)", async () => {
+  let diffCalls = 0;
+  const manyReverts = Array.from({ length: 10 }, (_, i) => ({
+    sha: `rev${i}111111111`,
+    commit: { message: `Revert commit number ${i}` },
+  }));
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u.includes("/commits?"))
+      return { ok: true, json: async () => manyReverts };
+    diffCalls++;
+    return { ok: true, json: async () => ({ files: [] }) };
+  };
+  await scanRevertRecurrence(makeReq(), fetchImpl);
+  assert.equal(diffCalls, 5); // capped at MAX_REVERT_CHECKS_PER_FILE
+});
+
+test("renderBrief: renders revert-recurrence block with plural line count", () => {
+  const r = renderBrief({
+    revertRecurrence: [
+      {
+        file: "src/auth.ts",
+        revertSha: "abc1234",
+        revertMessage: "Revert add auth helper",
+        matchedLines: 3,
+      },
+    ],
+  });
+  assert.match(r.promptSection, /Re-introduced reverted code/);
+  assert.match(r.promptSection, /`src\/auth\.ts`/);
+  assert.match(r.promptSection, /3 lines/);
+  assert.match(r.promptSection, /`abc1234`/);
+  assert.match(r.promptSection, /Revert add auth helper/);
+});
+
+test("renderBrief: renders revert-recurrence singular line count", () => {
+  const r = renderBrief({
+    revertRecurrence: [
+      {
+        file: "src/x.ts",
+        revertSha: "dead000",
+        revertMessage: "Revert change",
+        matchedLines: 1,
+      },
+    ],
+  });
+  assert.match(r.promptSection, /1 line[^s]/); // "1 line " not "1 lines"
+});
+
+test("buildBrief: revert-recurrence analyzer runs and returns findings", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("api.github.com") && u.includes("/commits?"))
+      return { ok: true, json: async () => [revertCommit] };
+    if (u.includes("api.github.com") && u.includes("/commits/"))
+      return {
+        ok: true,
+        json: async () => ({
+          files: [{ filename: "src/auth.ts", patch: revertPatch }],
+        }),
+      };
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    const brief = await buildBrief({
+      repoFullName: "owner/repo",
+      prNumber: 42,
+      baseSha: "base123",
+      githubToken: "tok",
+      analyzers: ["revertRecurrence"],
+      files: [
+        {
+          path: "src/auth.ts",
+          patch: [
+            "@@ -1,0 +1,4 @@",
+            "+function authenticateUser(token, secret) {",
+            "+  const result = validateToken(token, secret);",
+            "+  return result.isValid ? result.user : null;",
+            "+}",
+          ].join("\n"),
+        },
+      ],
+    });
+    assert.equal(brief.analyzerStatus.revertRecurrence, "ok");
+    assert.ok(brief.findings.revertRecurrence.length >= 1);
+    assert.match(brief.promptSection, /Re-introduced reverted code/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("buildBrief: revert-recurrence analyzer degrades gracefully on network throw", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("api.github.com")) throw new Error("network down");
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    const brief = await buildBrief({
+      repoFullName: "owner/repo",
+      prNumber: 1,
+      githubToken: "tok",
+      analyzers: ["revertRecurrence"],
+      files: [
+        {
+          path: "src/x.ts",
+          patch: "@@ -0,0 +1,1 @@\n+const example = doSomethingUseful();",
+        },
+      ],
+    });
+    // listFileCommits catches the throw and returns [], so revertRecurrence = [] (not degraded)
+    assert.equal(brief.analyzerStatus.revertRecurrence, "ok");
+    assert.deepEqual(brief.findings.revertRecurrence, []);
   } finally {
     globalThis.fetch = realFetch;
   }

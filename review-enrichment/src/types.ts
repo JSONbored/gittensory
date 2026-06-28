@@ -93,6 +93,15 @@ export interface RedosFinding {
   pattern: string;
 }
 
+/** A file in the current PR that re-introduces lines removed by a prior revert commit — a known-problematic
+ *  code path being re-trodden. Only the file path, revert SHA, and match count are reported; no content. */
+export interface RevertRecurrenceFinding {
+  file: string;
+  revertSha: string;
+  revertMessage: string;
+  matchedLines: number;
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -102,6 +111,7 @@ export interface BriefFindings {
   installScript?: InstallScriptFinding[];
   eol?: EolFinding[];
   redos?: RedosFinding[];
+  revertRecurrence?: RevertRecurrenceFinding[];
 }
 
 export type AnalyzerStatus = "ok" | "degraded" | "skipped";

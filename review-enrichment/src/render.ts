@@ -129,6 +129,19 @@ export function renderBrief(
     }
   }
 
+  const revertRecurrences = findings.revertRecurrence ?? [];
+  if (revertRecurrences.length) {
+    lines.push(
+      "### Re-introduced reverted code (known-problematic path re-trodden)",
+    );
+    for (const f of revertRecurrences) {
+      const s = f.matchedLines === 1 ? "" : "s";
+      lines.push(
+        `- ${safeCodeSpan(f.file)} re-introduces ${f.matchedLines} line${s} from revert ${safeCodeSpan(f.revertSha)} — ${promptText(f.revertMessage)}`,
+      );
+    }
+  }
+
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 
   const header =
