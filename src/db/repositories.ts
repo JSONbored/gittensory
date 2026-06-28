@@ -499,6 +499,34 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
   };
 }
 
+/** Read the singleton shared/global contributor blacklist (#1425). Missing table or malformed JSON are
+ *  treated as an empty list so DB hiccups in this path default to no global blocks rather than halting
+ *  processing. A singleton row (`id = 'singleton'`) makes this a global control plane just like
+ *  `global_agent_controls`. */
+export async function getGlobalContributorBlacklist(env: Env): Promise<RepositorySettings["contributorBlacklist"]> {
+  try {
+    const row = await env.DB.prepare("SELECT contributor_blacklist_json FROM global_contributor_blacklist WHERE id = 'singleton'").first<{
+      contributor_blacklist_json: string;
+    }>();
+    return parseContributorBlacklist(row?.contributor_blacklist_json ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+/** Upsert the singleton shared/global contributor blacklist (#1425). Input is normalized/validated once so
+ *  malformed stored data never reaches execution. Returns the normalized persisted list for convenience/tests.
+ */
+export async function upsertGlobalContributorBlacklist(env: Env, input: { contributorBlacklist: unknown; updatedBy?: string | null }): Promise<RepositorySettings["contributorBlacklist"]> {
+  const normalized = normalizeContributorBlacklist(input.contributorBlacklist).entries;
+  await env.DB.prepare(
+    "INSERT INTO global_contributor_blacklist (id, contributor_blacklist_json, updated_at, updated_by) VALUES ('singleton', ?, CURRENT_TIMESTAMP, ?) ON CONFLICT(id) DO UPDATE SET contributor_blacklist_json = excluded.contributor_blacklist_json, updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+  )
+    .bind(jsonString(normalized), input.updatedBy ?? null)
+    .run();
+  return normalized;
+}
+
 export async function upsertRepositorySettings(env: Env, settings: Partial<RepositorySettings> & { repoFullName: string }): Promise<RepositorySettings> {
   const resolved: RepositorySettings = {
     repoFullName: settings.repoFullName,
@@ -1294,7 +1322,10 @@ export async function upsertDigestSubscription(
   const now = nowIso();
   const record: DigestSubscriptionRecord = {
     id: crypto.randomUUID(),
-    login: input.login,
+    // GitHub logins are case-insensitive, so normalize like every sibling subscription path
+    // (notification subscriptions, issue-watch) — otherwise a subscriber stored as "Foo" is missed on a
+    // "foo" lookup and the [login, email] conflict target accumulates case-variant duplicate rows.
+    login: input.login.toLowerCase(),
     email: input.email.toLowerCase(),
     status: input.status ?? "active",
     source: input.source ?? "app",
@@ -1330,7 +1361,7 @@ export async function upsertDigestSubscription(
 
 export async function listDigestSubscriptionsForLogin(env: Env, login: string): Promise<DigestSubscriptionRecord[]> {
   const db = getDb(env.DB);
-  const rows = await db.select().from(digestSubscriptions).where(eq(digestSubscriptions.login, login)).orderBy(desc(digestSubscriptions.updatedAt)).limit(20);
+  const rows = await db.select().from(digestSubscriptions).where(eq(digestSubscriptions.login, login.toLowerCase())).orderBy(desc(digestSubscriptions.updatedAt)).limit(20);
   return rows.map(toDigestSubscriptionRecord);
 }
 
@@ -5277,7 +5308,7 @@ const PRODUCT_USAGE_SENSITIVE_KEY =
   /authorization|cookie|token|secret|password|private[_-]?key|source|body|diff|patch|prompt|raw[_-]?trust|trust[_-]?score|wallet|hotkey|coldkey|seed|mnemonic|local[_-]?path|repo[_-]?root|cwd|scoreability|reviewability|farming/i;
 const PRODUCT_USAGE_SENSITIVE_VALUE =
   /\b(seed phrase|mnemonic|private key|raw trust|trust score|wallet|hotkey|coldkey|scoreability|reviewability|farming|reward estimate|payout)\b/i;
-const PRODUCT_USAGE_LOCAL_PATH = /(?:\/Users|\/home|\/tmp)\/[^\s"',;)]*|[A-Za-z]:\\Users\\[^\s"',;)]*/g;
+const PRODUCT_USAGE_LOCAL_PATH = /(?:\/Users|\/home|\/root|\/var|\/tmp)\/[^\s"',;)]*|[A-Za-z]:\\Users\\[^\s"',;)]*/g;
 const PRODUCT_USAGE_TOKEN_VALUE = /\b(?:ghp_|github_pat_|gts_|glpat-|sk-)[A-Za-z0-9_=-]{8,}/g;
 const PRODUCT_USAGE_BEARER_VALUE = /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi;
 

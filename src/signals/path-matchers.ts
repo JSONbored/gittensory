@@ -29,6 +29,7 @@ const LOCKFILE_NAMES: ReadonlySet<string> = new Set([
   "npm-shrinkwrap.json",
   "yarn.lock",
   "pnpm-lock.yaml",
+  "bun.lock",
   "bun.lockb",
   "cargo.lock",
   "poetry.lock",
@@ -39,6 +40,9 @@ const LOCKFILE_NAMES: ReadonlySet<string> = new Set([
   "uv.lock",
   "packages.lock.json",
   "flake.lock",
+  "deno.lock",
+  "pubspec.lock",
+  "podfile.lock",
 ]);
 
 const DEPENDENCY_MANIFEST_NAMES: ReadonlySet<string> = new Set([
@@ -53,6 +57,11 @@ const DEPENDENCY_MANIFEST_NAMES: ReadonlySet<string> = new Set([
   "build.gradle",
   "build.gradle.kts",
   "pom.xml",
+  "deno.json",
+  "deno.jsonc",
+  "pubspec.yaml",
+  "mix.exs",
+  "go.work",
 ]);
 
 const DOCS_EXTENSIONS: ReadonlySet<string> = new Set(["md", "mdx", "markdown", "rst", "adoc", "asciidoc"]);
@@ -84,8 +93,33 @@ const CONFIG_FILE_NAMES: ReadonlySet<string> = new Set([
   "lefthook.yml",
   "lefthook.yaml",
   ".pre-commit-config.yaml",
+  ".gitleaks.toml",
+  // Coverage service config.
+  ".codecov.yml",
+  ".codecov.yaml",
+  "codecov.yml",
+  "codecov.yaml",
+  // Task-runner config.
+  "taskfile.yml",
+  "taskfile.yaml",
+  "justfile",
+  // Docker Compose deploy config.
+  "docker-compose.yml",
+  "docker-compose.yaml",
+  "compose.yml",
+  "compose.yaml",
+  "docker-compose.override.yml",
+  "docker-compose.override.yaml",
+  "compose.override.yml",
+  "compose.override.yaml",
+  // Hosted deploy config.
+  "caddyfile",
+  "netlify.toml",
+  "vercel.json",
+  "railway.json",
   // Hosted CI pipeline definitions (single-file basenames).
   ".gitlab-ci.yml",
+  "jenkinsfile",
   "azure-pipelines.yml",
   "buf.yaml",
   "buf.gen.yaml",

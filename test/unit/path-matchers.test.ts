@@ -63,6 +63,10 @@ describe("isLockfile", () => {
       "go.sum",
       "uv.lock",
       "poetry.lock",
+      "bun.lock",
+      "deno.lock",
+      "pubspec.lock",
+      "Podfile.lock",
     ]) {
       expect(isLockfile(path)).toBe(true);
     }
@@ -115,7 +119,19 @@ describe("defensive input handling", () => {
 
 describe("isDependencyManifestFile", () => {
   it("matches dependency manifests", () => {
-    for (const path of ["package.json", "Cargo.toml", "go.mod", "requirements.txt", "pyproject.toml", "build.gradle.kts"]) {
+    for (const path of [
+      "package.json",
+      "Cargo.toml",
+      "go.mod",
+      "requirements.txt",
+      "pyproject.toml",
+      "build.gradle.kts",
+      "deno.json",
+      "apps/web/deno.jsonc",
+      "pubspec.yaml",
+      "backend/mix.exs",
+      "go.work",
+    ]) {
       expect(isDependencyManifestFile(path)).toBe(true);
     }
   });
@@ -183,7 +199,28 @@ describe("isConfigFile", () => {
       "mise.toml",
       "lefthook.yml",
       ".pre-commit-config.yaml",
+      ".gitleaks.toml",
+      ".codecov.yml",
+      ".codecov.yaml",
+      "codecov.yml",
+      "codecov.yaml",
+      "Taskfile.yml",
+      "Taskfile.yaml",
+      "justfile",
+      "deploy/docker-compose.yml",
+      "docker-compose.yaml",
+      "compose.yml",
+      "compose.yaml",
+      "docker-compose.override.yml",
+      "docker-compose.override.yaml",
+      "compose.override.yml",
+      "compose.override.yaml",
+      "Caddyfile",
+      "netlify.toml",
+      "vercel.json",
+      "railway.json",
       ".gitlab-ci.yml",
+      "Jenkinsfile",
       "azure-pipelines.yml",
       "buf.yaml",
       "buf.gen.yaml",
@@ -195,8 +232,17 @@ describe("isConfigFile", () => {
     }
   });
 
-  it("does not treat renovate-like source names as config", () => {
-    for (const path of ["src/renovate-helpers.ts", "docs/dependabot-notes.md"]) {
+  it("does not treat source names or doc near-misses as config", () => {
+    for (const path of [
+      "src/renovate-helpers.ts",
+      "docs/dependabot-notes.md",
+      "src/compose.ts",
+      "docs/codecov.yml.md",
+      "docs/docker-compose.yml.md",
+      "src/justfile.ts",
+      "docs/Jenkinsfile.md",
+      "locks/deno.json.lock",
+    ]) {
       expect(isConfigFile(path)).toBe(false);
     }
   });
@@ -233,12 +279,39 @@ describe("classifyChangedFile", () => {
       ["src/api.generated.ts", "generated"],
       ["vendor/lib.go", "vendored"],
       ["package-lock.json", "lockfile"],
+      ["bun.lock", "lockfile"],
+      ["deno.lock", "lockfile"],
+      ["pubspec.lock", "lockfile"],
+      ["ios/Podfile.lock", "lockfile"],
       ["package.json", "dependency_manifest"],
+      ["deno.json", "dependency_manifest"],
+      ["apps/web/deno.jsonc", "dependency_manifest"],
+      ["pubspec.yaml", "dependency_manifest"],
+      ["mix.exs", "dependency_manifest"],
+      ["go.work", "dependency_manifest"],
       ["tsconfig.json", "config"],
       ["vitest.config.ts", "config"],
       ["wrangler.jsonc", "config"],
       ["turbo.json", "config"],
       ["renovate.json", "config"],
+      ["Taskfile.yml", "config"],
+      ["Taskfile.yaml", "config"],
+      ["justfile", "config"],
+      ["docker-compose.yml", "config"],
+      ["docker-compose.yaml", "config"],
+      ["compose.yml", "config"],
+      ["compose.yaml", "config"],
+      ["docker-compose.override.yml", "config"],
+      ["compose.override.yaml", "config"],
+      ["Caddyfile", "config"],
+      ["netlify.toml", "config"],
+      ["vercel.json", "config"],
+      ["railway.json", "config"],
+      [".codecov.yml", "config"],
+      ["codecov.yml", "config"],
+      ["codecov.yaml", "config"],
+      [".gitleaks.toml", "config"],
+      ["Jenkinsfile", "config"],
       [".github/workflows/ci.yml", "config"],
       ["test/unit/app.test.ts", "test"],
       ["README.md", "docs"],
