@@ -15,6 +15,8 @@ import { scanActionPins } from "./analyzers/actions-pin.js";
 import { scanEol } from "./analyzers/eol-check.js";
 import { scanRedos } from "./analyzers/redos.js";
 import { scanRevertRecurrence } from "./analyzers/revert-recurrence.js";
+import { scanCodeowners } from "./analyzers/codeowners.js";
+import { scanSecretLog } from "./analyzers/secret-log.js";
 import { renderBrief } from "./render.js";
 
 type AnalyzerFn = (req: EnrichRequest, signal: AbortSignal) => Promise<unknown>;
@@ -29,6 +31,8 @@ const ANALYZERS: Record<keyof BriefFindings, AnalyzerFn> = {
   eol: (req) => scanEol(req),
   redos: (req) => scanRedos(req),
   revertRecurrence: (req, signal) => scanRevertRecurrence(req, fetch, { signal }),
+  codeowners: (req, signal) => scanCodeowners(req, fetch, { signal }),
+  secretLog: (req, signal) => scanSecretLog(req, signal),
 };
 
 function runWithTimeout<T>(

@@ -100,6 +100,20 @@ export interface RevertRecurrenceFinding {
   revertSha: string;
   revertMessage: string;
   matchedLines: number;
+/** A changed file governed by a CODEOWNERS rule where the PR author is not listed as an owner (#1515).
+ *  The blast radius (distinct ownership domains crossed) is derived at render time from the full findings set. */
+export interface CodeownersFinding {
+  file: string;
+  owners: string[]; // sorted owners from the last-matching CODEOWNERS rule; always non-empty
+}
+
+/** An added line that passes sensitive data into a logging/stdout sink (a secret, PII, or a dumped request
+ *  object). Reports the location + sink + category only — never the logged value. */
+export interface SecretLogFinding {
+  file: string;
+  line: number;
+  sink: string;
+  category: "secret" | "pii" | "request-object";
 }
 
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
@@ -112,6 +126,8 @@ export interface BriefFindings {
   eol?: EolFinding[];
   redos?: RedosFinding[];
   revertRecurrence?: RevertRecurrenceFinding[];
+  codeowners?: CodeownersFinding[];
+  secretLog?: SecretLogFinding[];
 }
 
 export type AnalyzerStatus = "ok" | "degraded" | "skipped";
