@@ -1048,6 +1048,24 @@ export function buildConfigQuality(
       action: "Verify those labels exist and are actually used by maintainers or trusted automation.",
     });
   }
+  // A label multiplier must be a positive, finite number — a penalty multiplier is below 1 but still
+  // positive, so it is valid; 0, negative, NaN, or Infinity are config errors that would silently
+  // misweight scoring. Distinct from notObservedConfiguredLabels (which checks whether a label is *used*,
+  // not whether its multiplier is *valid*).
+  const invalidLabelMultipliers = Object.entries(repo?.registryConfig?.labelMultipliers ?? {})
+    .filter(([, multiplier]) => !(typeof multiplier === "number" && Number.isFinite(multiplier) && multiplier > 0))
+    .map(([label]) => label)
+    .sort();
+  if (invalidLabelMultipliers.length > 0) {
+    score -= Math.min(30, invalidLabelMultipliers.length * 10);
+    findings.push({
+      code: "invalid_label_multipliers",
+      severity: "warning",
+      title: "Configured label multipliers are out of range",
+      detail: `Label multipliers must be positive, finite numbers; these are not: ${invalidLabelMultipliers.join(", ")}.`,
+      action: "Correct these label multipliers to positive numbers in the registry config.",
+    });
+  }
 
   const finalScore = clamp(score, 0, 100);
   return {

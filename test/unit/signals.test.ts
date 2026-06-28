@@ -597,6 +597,31 @@ describe("world-class backend signals", () => {
     expect(noMultiplierQuality.findings.map((finding) => finding.code)).toContain("trusted_labels_without_multipliers");
   });
 
+  it("flags non-positive, non-finite, or non-numeric label multipliers as a config error", () => {
+    const badRepo = {
+      ...repo,
+      registryConfig: {
+        ...repo.registryConfig!,
+        labelMultipliers: { bug: -1, stale: 0, broken: Number.NaN, weird: "x" as unknown as number, good: 1.2, penalty: 0.5 },
+      },
+    };
+    // Observe every configured label so the unrelated "not observed" penalty does not also fire.
+    const observed = [{ ...issues[0]!, labels: ["bug", "stale", "broken", "weird", "good", "penalty"] }];
+    const quality = buildConfigQuality(badRepo, observed, [], repo.fullName);
+    const invalid = quality.findings.find((finding) => finding.code === "invalid_label_multipliers");
+    expect(invalid).toBeDefined();
+    // Only the non-positive / non-finite / non-numeric multipliers are named (sorted); valid ones are not.
+    expect(invalid?.detail).toMatch(/broken, bug, stale, weird/);
+    expect(invalid?.detail).not.toMatch(/good|penalty/);
+    expect(quality.score).toBeLessThan(100);
+  });
+
+  it("does not flag valid positive label multipliers, including penalty (<1) multipliers", () => {
+    const okRepo = { ...repo, registryConfig: { ...repo.registryConfig!, labelMultipliers: { feature: 1.25, refactor: 0.5 } } };
+    const quality = buildConfigQuality(okRepo, [{ ...issues[0]!, labels: ["feature", "refactor"] }], [], repo.fullName);
+    expect(quality.findings.map((finding) => finding.code)).not.toContain("invalid_label_multipliers");
+  });
+
   it("keeps contributor detection and comment modes conservative", () => {
     const currentPr = pullRequests[0]!;
     const settings: RepositorySettings = {
