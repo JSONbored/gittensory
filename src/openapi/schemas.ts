@@ -1290,6 +1290,8 @@ const ScoreGatesSchema = z.object({
   validSolvedIssues: z.number().optional(),
   issueCredibilityFloor: z.number(),
   issueCredibility: z.number().optional(),
+  validIssueTokenFloor: z.number(),
+  validIssueTokenGatePassed: z.boolean(),
 });
 
 const BranchEligibilitySchema = z.object({
@@ -1312,6 +1314,7 @@ const ScoreGateBlockerSchema = z.object({
     "open_issue_threshold",
     "merged_pr_history_floor",
     "issue_discovery_validity_floor",
+    "valid_issue_token_floor",
     "credibility_floor",
     "review_penalty",
     "metadata_only",

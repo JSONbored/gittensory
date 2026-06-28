@@ -115,6 +115,7 @@ export type ScoreGateBlocker = {
     | "open_issue_threshold"
     | "merged_pr_history_floor"
     | "issue_discovery_validity_floor"
+    | "valid_issue_token_floor"
     | "credibility_floor"
     | "review_penalty"
     | "metadata_only"
@@ -209,6 +210,9 @@ export type ScorePreviewResult = {
     issueCredibilityFloor: number;
     /** Observed issue-discovery credibility when supplied; absent when unknown. */
     issueCredibility?: number | undefined;
+    validIssueTokenFloor: number;
+    /** True when the planned PR's source tokens meet MIN_TOKEN_SCORE_FOR_VALID_ISSUE (#808). */
+    validIssueTokenGatePassed: boolean;
   };
   branchEligibility: BranchEligibilityResult;
   effectiveEstimatedScore: number;
@@ -247,6 +251,9 @@ export function buildScorePreview(args: {
     ...(current.scoreEstimate.mergedHistoryMultiplier === 0 ? ["Build merged PR history on this repo before relying on this preview; upstream requires a minimum merged count."] : []),
     ...(current.scoreEstimate.issueDiscoveryHistoryMultiplier === 0
       ? ["Build valid solved-issue history and issue credibility before relying on issue-discovery scoring on this repo."]
+      : []),
+    ...(current.gates.validIssueTokenGatePassed === false
+      ? ["Increase meaningful source change size so this linked-issue solve would count toward valid issue-discovery history upstream."]
       : []),
     ...(current.scoreEstimate.credibilityMultiplier < 1 ? ["Build or wait for contributor credibility evidence before relying on this preview."] : []),
     ...(current.scoreEstimate.reviewPenaltyMultiplier < 1 ? ["Reduce review churn with tighter tests and clearer evidence."] : []),
@@ -414,6 +421,8 @@ function computeScoreCore(
       : validSolvedIssuesObserved >= validSolvedIssuesFloor && issueCredibilityObserved >= issueCredibilityFloor
         ? 1
         : 0;
+  const validIssueTokenFloor = constant(constants, "MIN_TOKEN_SCORE_FOR_VALID_ISSUE");
+  const validIssueTokenGatePassed = !issueDiscoveryRelevant || sourceTokenScore >= validIssueTokenFloor;
   // Upstream time-decay (#703): mirrors upstream's `scored.time_decay_multiplier` applied to a PR's score.
   // Opt-in + env-gated (default off). A fresh PR (prAgeHours below the grace period) yields 1.0, so a normal
   // new-PR preview is unchanged even when enabled — only an aged-PR projection decays.
@@ -474,6 +483,8 @@ function computeScoreCore(
       ...(validSolvedIssuesObserved !== undefined ? { validSolvedIssues: validSolvedIssuesObserved } : {}),
       issueCredibilityFloor,
       ...(issueCredibilityObserved !== undefined ? { issueCredibility: issueCredibilityObserved } : {}),
+      validIssueTokenFloor,
+      validIssueTokenGatePassed,
     },
   };
 }
@@ -735,6 +746,15 @@ function blockedByFor(input: ScorePreviewInput, repo: RepositoryRecord | null, c
             code: "issue_discovery_validity_floor" as const,
             severity: "blocker" as const,
             detail: `Issue-discovery history (${core.gates.validSolvedIssues} valid solved, credibility ${roundScore(core.gates.issueCredibility!)}) is below upstream floors (${core.gates.validSolvedIssuesFloor} valid solved, ${core.gates.issueCredibilityFloor} credibility).`,
+          },
+        ]
+      : []),
+    ...(!core.gates.validIssueTokenGatePassed
+      ? [
+          {
+            code: "valid_issue_token_floor" as const,
+            severity: "context" as const,
+            detail: `Source token score ${roundScore(nonNegative(input.sourceTokenScore))} is below the upstream valid-issue floor ${core.gates.validIssueTokenFloor}; this solve may not count toward valid issue-discovery history.`,
           },
         ]
       : []),
