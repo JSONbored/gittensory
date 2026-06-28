@@ -1043,6 +1043,62 @@ test("scanSecretLog: scans every changed file's added lines, caps to its budget"
   assert.equal(findings[0].file, "a.ts");
 });
 
+test("scanPatchForSecretLog: stops scanning once the finding budget is exhausted", () => {
+  // Fixture patch lines are intentionally scanner-triggering inputs.
+  const patch = [
+    "@@ -1,0 +1,4 @@",
+    "+console.log(user.password);",
+    "+console.log(user.apiKey);",
+    "+console.log(user.secret);",
+    "+console.log(user.accessToken);",
+  ].join("\n");
+
+  const findings = scanPatchForSecretLog("src/a.ts", patch, {
+    maxFindings: 2,
+  });
+
+  assert.deepEqual(
+    findings.map(({ line, category }) => ({ line, category })),
+    [
+      { line: 1, category: "secret" },
+      { line: 2, category: "secret" },
+    ],
+  );
+});
+
+test("scanPatchForSecretLog: returns no findings when the budget is exhausted", () => {
+  const findings = scanPatchForSecretLog(
+    "src/a.ts",
+    "@@ -1,0 +1,1 @@\n+console.log(user.password);",
+    { maxFindings: 0 },
+  );
+
+  assert.deepEqual(findings, []);
+});
+
+test("scanSecretLog: forwards abort signals to the per-file scanner", async () => {
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(
+    () =>
+      scanSecretLog(
+        {
+          repoFullName: "o/r",
+          prNumber: 1,
+          files: [
+            {
+              path: "a.ts",
+              patch: "@@ -1,0 +1,1 @@\n+console.log(user.password);",
+            },
+          ],
+        },
+        controller.signal,
+      ),
+    /analyzer_aborted/,
+  );
+});
+
 test("renderBrief: renders the secret-log block, code-spanning + sanitizing", () => {
   const r = renderBrief({
     secretLog: [
