@@ -28,6 +28,9 @@ services:
   gittensory:
     build:
       context: .
+      args:
+        INSTALL_AI_CLIS: "${INSTALL_AI_CLIS:-false}"
+        INSTALL_VISUAL_REVIEW: "${INSTALL_VISUAL_REVIEW:-false}"
     restart: unless-stopped
     ports:
       # Remove this when using the caddy profile — Caddy becomes the public listener.

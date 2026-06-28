@@ -7,7 +7,7 @@
   "version": 1,
   "refresh": "30s",
   "time": { "from": "now-7d", "to": "now" },
-  "description": "Codex review usage for the self-hosted stack. Live counters come from the app's subscription-CLI adapter; durable review records come from ai_usage_events. USD cost appears only when the Codex CLI emits a cost field.",
+  "description": "Codex review observability for the self-hosted stack. Prometheus panels are subscription-CLI attempt counters for the selected range; durable review records come from ai_usage_events and must be read with their status. USD cost appears only when the Codex CLI emits a cost field.",
   "panels": [
     {
       "id": 1,
@@ -19,47 +19,50 @@
       "id": 2,
       "type": "stat",
       "title": "Reported cost",
-      "description": "USD cost reported by Codex JSON/JSONL output, if available. Subscription CLIs may not emit this.",
+      "description": "USD cost reported by Codex JSON/JSONL output in the selected range, if available. Subscription CLIs may not emit this.",
       "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4, "color": { "mode": "fixed", "fixedColor": "green" } } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "justifyMode": "center" },
-      "targets": [{ "refId": "A", "instant": true, "expr": "sum(gittensory_ai_cost_usd_total{provider=\"codex\"}) or vector(0)" }]
+      "targets": [{ "refId": "A", "instant": true, "expr": "sum(increase(gittensory_ai_cost_usd_total{provider=\"codex\"}[$__range])) or vector(0)" }]
     },
     {
       "id": 3,
       "type": "stat",
-      "title": "CLI requests",
+      "title": "CLI attempts",
+      "description": "Codex CLI attempts in the selected range. Failed or timed-out attempts can still appear here.",
       "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "justifyMode": "center" },
-      "targets": [{ "refId": "A", "instant": true, "expr": "sum(gittensory_ai_requests_total{provider=\"codex\"}) or vector(0)" }]
+      "targets": [{ "refId": "A", "instant": true, "expr": "sum(increase(gittensory_ai_requests_total{provider=\"codex\"}[$__range])) or vector(0)" }]
     },
     {
       "id": 4,
       "type": "stat",
-      "title": "CLI tokens",
+      "title": "Reported CLI tokens",
+      "description": "Tokens reported by Codex CLI output in the selected range. This is not billing-grade cost accounting.",
       "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "justifyMode": "center" },
-      "targets": [{ "refId": "A", "instant": true, "expr": "sum(gittensory_ai_total_tokens_total{provider=\"codex\"}) or (sum(gittensory_ai_input_tokens_total{provider=\"codex\"}) + sum(gittensory_ai_output_tokens_total{provider=\"codex\"})) or vector(0)" }]
+      "targets": [{ "refId": "A", "instant": true, "expr": "sum(increase(gittensory_ai_total_tokens_total{provider=\"codex\"}[$__range])) or (sum(increase(gittensory_ai_input_tokens_total{provider=\"codex\"}[$__range])) + sum(increase(gittensory_ai_output_tokens_total{provider=\"codex\"}[$__range]))) or vector(0)" }]
     },
     {
       "id": 5,
       "type": "stat",
-      "title": "Review records",
+      "title": "Successful review records",
+      "description": "Durable Codex-attributed ai_review_pr records with status=ok.",
       "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "orange" } } },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
       "targets": [
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT count(*) AS reviews FROM ai_usage_events WHERE feature = 'ai_review_pr' AND (('+' || model || '+') LIKE '%+codex+%' OR ('+' || model || '+') LIKE '%+codex:%')",
-          "rawQueryText": "SELECT count(*) AS reviews FROM ai_usage_events WHERE feature = 'ai_review_pr' AND (('+' || model || '+') LIKE '%+codex+%' OR ('+' || model || '+') LIKE '%+codex:%')"
+          "queryText": "SELECT count(*) AS reviews FROM ai_usage_events WHERE feature = 'ai_review_pr' AND status = 'ok' AND (('+' || model || '+') LIKE '%+codex+%' OR ('+' || model || '+') LIKE '%+codex:%')",
+          "rawQueryText": "SELECT count(*) AS reviews FROM ai_usage_events WHERE feature = 'ai_review_pr' AND status = 'ok' AND (('+' || model || '+') LIKE '%+codex+%' OR ('+' || model || '+') LIKE '%+codex:%')"
         }
       ]
     },
@@ -72,7 +75,7 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Requests by model and effort",
+      "title": "CLI attempts by model and effort",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "stacking": { "mode": "none" } } } },
@@ -88,7 +91,7 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "Tokens by direction",
+      "title": "Reported tokens by direction",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "stacking": { "mode": "normal" } } } },
@@ -109,7 +112,7 @@
     {
       "id": 9,
       "type": "row",
-      "title": "Durable review records",
+      "title": "Durable review records (status-aware)",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 }
     },
     {
@@ -133,7 +136,7 @@
     {
       "id": 11,
       "type": "piechart",
-      "title": "Review status",
+      "title": "Review record status",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
       "fieldConfig": { "defaults": { "unit": "short" } },
@@ -150,7 +153,7 @@
     {
       "id": 12,
       "type": "table",
-      "title": "Recent Codex review events",
+      "title": "Recent Codex-attributed review events",
       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 24 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
       "options": { "showHeader": true, "cellHeight": "sm", "sortBy": [{ "displayName": "created_at", "desc": true }] },
