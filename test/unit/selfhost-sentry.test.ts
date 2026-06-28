@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock @sentry/node so the dynamic import inside initSentry() resolves to spies. Hoisted so vi.mock can see it.
 const mocks = vi.hoisted(() => {
-  const scope = { setContext: vi.fn(), setLevel: vi.fn(), setTag: vi.fn() };
+  const scope = { setContext: vi.fn(), setLevel: vi.fn(), setTag: vi.fn(), setFingerprint: vi.fn() };
   return {
     scope,
     init: vi.fn(),
@@ -210,6 +210,26 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
       "orb_broker_unavailable",
       "error",
     );
+  });
+
+  it("leads the title with the real error detail + indexes filterable tags + fingerprints by event (#observability)", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    forwardStructuredLogToSentry(
+      JSON.stringify({
+        level: "error",
+        event: "orb_broker_unavailable",
+        error: "The operation was aborted due to timeout",
+        repo: "JSONbored/gittensory",
+        installationId: 143010787,
+      }),
+    );
+    // The issue TITLE now carries the actual failure, not just the event slug — no hunting through the context blob.
+    expect(mocks.captureMessage).toHaveBeenCalledWith("orb_broker_unavailable: The operation was aborted due to timeout", "error");
+    // The present log dimensions become filterable tags.
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("repo", "JSONbored/gittensory");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("installationId", "143010787");
+    // Recurrences of one failure group into a single issue by event.
+    expect(mocks.scope.setFingerprint).toHaveBeenCalledWith(["gittensory-log", "orb_broker_unavailable"]);
   });
 
   it("forwards a level:fatal log titled by message (no event ⇒ no tag)", async () => {
