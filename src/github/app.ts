@@ -645,6 +645,23 @@ async function createOrUpdateNamedCheckRun(
     return publishedOutcome(data);
   } catch (error) {
     if (isCheckRunPermissionError(error)) {
+      // Capture the ACTUAL response (status + body). A 403 here is often NOT a real permission gap (the App has
+      // Checks:write) — it can be a per-PR access quirk (e.g. a fork-head commit the App can't write to) — and this
+      // log is the only way to tell why, instead of an opaque "permission missing". Surfaces to Sentry with a real
+      // message via console.error (#review-403-context).
+      const e = error as { status?: number; message?: string };
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "check_run_post_denied",
+          repository: `${owner}/${repo}`,
+          status: e.status ?? null,
+          message: (e.message ?? "Resource not accessible by integration").slice(
+            0,
+            300,
+          ),
+        }),
+      );
       return {
         kind: "permission_missing",
         warning:

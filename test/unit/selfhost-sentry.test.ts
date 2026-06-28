@@ -187,28 +187,25 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
     expect(mocks.captureMessage).not.toHaveBeenCalled();
   });
 
-  it("titles a no-message error log with event + a (key=value) summary of its scalar context", async () => {
+  it("titles a no-message error log with event + a SHORT (repo#pr) location, not a field dump", async () => {
     await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
     forwardStructuredLogToSentry(
       JSON.stringify({
         level: "error",
-        event: "orb_broker_unavailable",
-        installationId: 1,
+        event: "gate_check_permission_missing",
+        repository: "JSONbored/awesome-claude",
+        pullNumber: 4240,
+        deliveryId: "regate-sweep:JSONbored/awesome-claude#4240",
       }),
     );
     expect(mocks.scope.setLevel).toHaveBeenCalledWith("error");
-    expect(mocks.scope.setContext).toHaveBeenCalledWith("log", {
-      level: "error",
-      event: "orb_broker_unavailable",
-      installationId: 1,
-    });
     expect(mocks.scope.setTag).toHaveBeenCalledWith(
       "event",
-      "orb_broker_unavailable",
+      "gate_check_permission_missing",
     );
-    // No message/error → the title still surfaces WHERE from the structured fields (not a bare slug).
+    // No message/error → a SHORT location (repo#pr), NOT every field — the long deliveryId stays in tags/context only.
     expect(mocks.captureMessage).toHaveBeenCalledWith(
-      "orb_broker_unavailable (installationId=1)",
+      "gate_check_permission_missing (JSONbored/awesome-claude#4240)",
       "error",
     );
   });
@@ -249,7 +246,7 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
     expect(mocks.captureMessage).toHaveBeenCalledWith("error", "error");
   });
 
-  it("uses a bare event title when a no-message error log has no scalar context (empty field-summary)", async () => {
+  it("uses a bare event title when a no-message error log has no repo to locate it", async () => {
     await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
     forwardStructuredLogToSentry(
       JSON.stringify({ level: "error", event: "relay_drained_error" }),
@@ -257,18 +254,22 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
     expect(mocks.captureMessage).toHaveBeenCalledWith("relay_drained_error", "error");
   });
 
-  it("field-summary includes scalar fields but skips non-scalar (array/object) values", async () => {
+  it("uses (repo) without a pull number, and never dumps other fields into the title", async () => {
     await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
     forwardStructuredLogToSentry(
       JSON.stringify({
         level: "error",
         event: "closehold_backlog",
+        repo: "JSONbored/gittensory",
         count: 2,
         projects: ["a", "b"],
       }),
     );
-    // count (scalar) is folded into the title; projects (array) stays in the context blob only.
-    expect(mocks.captureMessage).toHaveBeenCalledWith("closehold_backlog (count=2)", "error");
+    // Only the repo locates it (no pullNumber); count/projects stay in the context blob, NOT crammed in the title.
+    expect(mocks.captureMessage).toHaveBeenCalledWith(
+      "closehold_backlog (JSONbored/gittensory)",
+      "error",
+    );
   });
 });
 
@@ -292,7 +293,7 @@ describe("installStructuredLogForwarding — central console sink instrumentatio
     );
 
     expect(mocks.captureMessage).toHaveBeenCalledWith(
-      "orb_broker_unavailable (installationId=1)",
+      "orb_broker_unavailable",
       "error",
     );
     expect(base.error).toHaveBeenCalledTimes(1);
@@ -316,12 +317,12 @@ describe("installStructuredLogForwarding — central console sink instrumentatio
     await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
     const { target } = makeConsole();
     installStructuredLogForwarding(target);
-    // No `level` field — previously dropped on the floor; now console.error forwards it as error (with field summary).
+    // No `level` field — previously dropped on the floor; now console.error forwards it as error (short location).
     target.error(
       JSON.stringify({ event: "selfhost_ai_provider_failed", repo: "o/r" }),
     );
     expect(mocks.captureMessage).toHaveBeenCalledWith(
-      "selfhost_ai_provider_failed (repo=o/r)",
+      "selfhost_ai_provider_failed (o/r)",
       "error",
     );
   });
