@@ -185,7 +185,7 @@ export function authorMatchesOwner(author: string, owners: string[]): boolean {
 // ── Network ───────────────────────────────────────────────────────────────────
 
 /** Try each CODEOWNERS location in priority order; return raw content of the first found, or null. */
-async function fetchCodeowners(
+export async function fetchCodeowners(
   owner: string,
   repo: string,
   headers: Record<string, string>,
@@ -196,7 +196,7 @@ async function fetchCodeowners(
     try {
       const resp = await fetchFn(
         `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${path}`,
-        { headers, signal },
+        signal ? { headers, signal } : { headers },
       );
       if (!resp.ok) continue;
       return await resp.text();
@@ -205,6 +205,69 @@ async function fetchCodeowners(
     }
   }
   return null;
+}
+
+// ── Prefetch (engine-side; tokens never cross the REES wire) ─────────────────
+
+/** Match changed files against parsed CODEOWNERS text; report author-absent violations. */
+export function matchCodeownersViolations(
+  content: string,
+  author: string,
+  files: Array<{ path: string }>,
+): CodeownersFinding[] {
+  const rules = parseCodeowners(content);
+  if (rules.length === 0) return [];
+
+  const findings: CodeownersFinding[] = [];
+  for (const file of files) {
+    if (findings.length >= MAX_FILES_REPORTED) break;
+    const owners = findOwners(rules, file.path);
+    if (owners.length === 0) continue;
+    if (authorMatchesOwner(author, owners)) continue;
+    findings.push({ file: file.path, owners });
+  }
+  return findings;
+}
+
+/** Fetch CODEOWNERS from GitHub and return author-absent violations (engine prefetch). */
+export async function prefetchCodeownersFindings(
+  repoFullName: string,
+  author: string,
+  files: Array<{ path: string }>,
+  githubToken: string,
+  fetchFn: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<CodeownersFinding[]> {
+  if (!githubToken || !author) return [];
+
+  const parts = repoFullName.split("/");
+  const repoOwner = parts[0];
+  const repoName = parts[1];
+  if (
+    !repoOwner ||
+    !repoName ||
+    !SLUG_RE.test(repoOwner) ||
+    !SLUG_RE.test(repoName)
+  ) {
+    return [];
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${githubToken}`,
+    Accept: "application/vnd.github.raw",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+
+  const content = await fetchCodeowners(
+    repoOwner,
+    repoName,
+    headers,
+    fetchFn,
+    signal,
+  );
+  if (!content) return [];
+
+  return matchCodeownersViolations(content, author, files);
 }
 
 // ── Analyzer entrypoint ───────────────────────────────────────────────────────

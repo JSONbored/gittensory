@@ -1,6 +1,7 @@
 // GitHub-backed enrichment prefetch (#1697 security fix). Installation tokens stay in the engine —
 // REES receives only derived, public-safe findings over the shared-secret wire, never raw credentials.
 import { createInstallationToken } from "../github/app";
+import { prefetchCodeownersFindings } from "../../review-enrichment/src/analyzers/codeowners.js";
 import type { PullRequestFileRecord } from "../types";
 
 const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
@@ -26,8 +27,14 @@ export interface EnrichmentHistoryFinding {
   linkedIssues: EnrichmentLinkedIssueFinding[];
 }
 
+export interface EnrichmentCodeownersFinding {
+  file: string;
+  owners: string[];
+}
+
 export interface EnrichmentPrefetch {
   history?: EnrichmentHistoryFinding | null;
+  codeowners?: EnrichmentCodeownersFinding[];
 }
 
 export interface EnrichmentPrefetchInput {
@@ -221,8 +228,21 @@ export async function prefetchEnrichmentHistory(
 export async function prefetchEnrichmentGitHubContext(
   env: Env,
   input: EnrichmentPrefetchInput,
+  signal?: AbortSignal,
 ): Promise<EnrichmentPrefetch> {
   const token = await resolveEnrichmentGithubToken(env, input.installationId);
-  const history = await prefetchEnrichmentHistory(input, token);
-  return { history };
+  const [history, codeowners] = await Promise.all([
+    prefetchEnrichmentHistory(input, token, signal),
+    token && input.author && input.files?.length
+      ? prefetchCodeownersFindings(
+          input.repoFullName,
+          input.author,
+          input.files.map((f) => ({ path: f.path })),
+          token,
+          fetch,
+          signal,
+        )
+      : Promise.resolve([]),
+  ]);
+  return { history, codeowners };
 }
