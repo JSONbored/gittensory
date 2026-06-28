@@ -1620,6 +1620,88 @@ test("scanAssetWeight: flags a binary that GREW past the threshold (base vs head
   assert.equal(findings[0].bytes, 250000);
 });
 
+test("scanAssetWeight: flags a renamed binary that grew using its previous path", async () => {
+  const fetchImpl = async (url) =>
+    String(url).includes(BASE_SHA)
+      ? treeReply([{ path: "old/video.mp4", type: "blob", size: 50000 }])
+      : treeReply([{ path: "new/video.mp4", type: "blob", size: 250000 }]);
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      githubToken: "t",
+      files: [
+        {
+          path: "new/video.mp4",
+          status: "renamed",
+          previousPath: "old/video.mp4",
+        },
+      ],
+    },
+    fetchImpl,
+  );
+  assert.deepEqual(findings, [
+    {
+      path: "new/video.mp4",
+      bytes: 250000,
+      deltaBytes: 200000,
+      status: "grown",
+    },
+  ]);
+});
+
+test("scanAssetWeight: flags a copied binary that grew using its previous path", async () => {
+  const fetchImpl = async (url) =>
+    String(url).includes(BASE_SHA)
+      ? treeReply([{ path: "old/data.bin", type: "blob", size: 50000 }])
+      : treeReply([{ path: "copy/data.bin", type: "blob", size: 260000 }]);
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      githubToken: "t",
+      files: [
+        {
+          path: "copy/data.bin",
+          status: "copied",
+          previousPath: "old/data.bin",
+        },
+      ],
+    },
+    fetchImpl,
+  );
+  assert.deepEqual(findings, [
+    {
+      path: "copy/data.bin",
+      bytes: 260000,
+      deltaBytes: 210000,
+      status: "grown",
+    },
+  ]);
+});
+
+test("scanAssetWeight: renamed binaries need a previous path before reporting growth", async () => {
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      githubToken: "t",
+      files: [{ path: "video.mp4", status: "renamed" }],
+    },
+    async (url) =>
+      String(url).includes(BASE_SHA)
+        ? treeReply([{ path: "video.mp4", type: "blob", size: 50000 }])
+        : treeReply([{ path: "video.mp4", type: "blob", size: 250000 }]),
+  );
+  assert.deepEqual(findings, []);
+});
+
 test("scanAssetWeight: small growth is not flagged", async () => {
   const fetchImpl = async (url) =>
     String(url).includes(BASE_SHA)
@@ -1761,20 +1843,27 @@ test("scanAssetWeight: missing baseSha does not reclassify modified binaries as 
   assert.deepEqual(findings, []);
 });
 
-test("buildBrief: asset-weight degrades instead of trusting truncated tree responses", async () => {
+test("buildBrief: asset-weight falls back to candidate paths for truncated tree responses", async () => {
   const realFetch = globalThis.fetch;
-  globalThis.fetch = async (url) =>
-    String(url).includes("git/trees")
-      ? String(url).includes(BASE_SHA)
-        ? {
-            ok: true,
-            json: async () => ({
-              truncated: true,
-              tree: [{ path: "big.png", type: "blob", size: 50000 }],
-            }),
-          }
-        : treeReply([{ path: "big.png", type: "blob", size: 300000 }])
-      : { ok: true, json: async () => ({}) };
+  const apiVersions: Array<string | undefined> = [];
+  globalThis.fetch = async (url, init) => {
+    apiVersions.push(
+      (init?.headers as Record<string, string> | undefined)?.[
+        "X-GitHub-Api-Version"
+      ],
+    );
+    const href = String(url);
+    if (href.includes("git/trees")) {
+      return { ok: true, json: async () => ({ truncated: true, tree: [] }) };
+    }
+    if (href.includes("contents/big.png") && href.includes(HEAD_SHA)) {
+      return { ok: true, json: async () => ({ type: "file", size: 300000 }) };
+    }
+    if (href.includes("contents/big.png") && href.includes(BASE_SHA)) {
+      return { ok: true, json: async () => ({ type: "file", size: 50000 }) };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
   try {
     const brief = await buildBrief({
       repoFullName: "o/r",
@@ -1785,10 +1874,12 @@ test("buildBrief: asset-weight degrades instead of trusting truncated tree respo
       files: [{ path: "big.png", status: "modified" }],
       analyzers: ["assetWeight"],
     });
-    assert.equal(brief.partial, true);
-    assert.equal(brief.analyzerStatus.assetWeight, "degraded");
-    assert.equal(brief.findings.assetWeight, undefined);
-    assert.doesNotMatch(brief.promptSection, /Heavy binary assets/);
+    assert.equal(brief.partial, false);
+    assert.equal(brief.analyzerStatus.assetWeight, "ok");
+    assert.equal(brief.findings.assetWeight?.[0]?.status, "grown");
+    assert.equal(brief.findings.assetWeight?.[0]?.deltaBytes, 250000);
+    assert.match(brief.promptSection, /Heavy binary assets/);
+    assert.ok(apiVersions.every((version) => version === "2022-11-28"));
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -1854,8 +1945,8 @@ test("renderBrief: renders the asset-weight block with human-readable sizes", ()
     ],
   });
   assert.match(r.promptSection, /Heavy binary assets/);
-  assert.match(r.promptSection, /`img\/logo\.png` adds 2\.4 MB/);
-  assert.match(r.promptSection, /`v\.mp4` grows \+195 KB to 293 KB/);
+  assert.match(r.promptSection, /`img\/logo\.png` adds 2\.4 MiB/);
+  assert.match(r.promptSection, /`v\.mp4` grows \+195 KiB to 293 KiB/);
 });
 
 test("buildBrief: asset-weight analyzer reports grown binaries from request file status", async () => {

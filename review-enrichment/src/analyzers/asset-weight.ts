@@ -10,6 +10,7 @@ import type { EnrichRequest, AssetWeightFinding } from "../types.js";
 const MAX_FINDINGS = 50; // keep the brief bounded after evaluating every changed binary candidate
 const THRESHOLD_BYTES = 100 * 1024; // flag a newly-added blob >= 100 KB, or growth >= 100 KB
 const GITHUB_API = "https://api.github.com";
+const GITHUB_API_VERSION = "2022-11-28";
 
 // Extensions that are genuinely binary (text formats like .svg/.json are excluded — their bytes are in the diff).
 const BINARY_EXTS = new Set([
@@ -77,6 +78,32 @@ function isBinaryAsset(path: string): boolean {
   return dot >= 0 && BINARY_EXTS.has(path.slice(dot + 1).toLowerCase());
 }
 
+type EnrichFile = NonNullable<EnrichRequest["files"]>[number];
+
+function basePathForGrowth(file: EnrichFile): string | null {
+  if (file.status === "modified" || file.status === "changed") return file.path;
+  if (file.status === "renamed" || file.status === "copied")
+    return file.previousPath || null;
+  return null;
+}
+
+function githubHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": GITHUB_API_VERSION,
+    "User-Agent": "gittensory-review-enrichment",
+  };
+}
+
+function encodeRepoPath(path: string): string | null {
+  const segments = path.split("/");
+  if (!path || segments.some((seg) => !seg || seg === "." || seg === "..")) {
+    return null;
+  }
+  return segments.map(encodeURIComponent).join("/");
+}
+
 /** Parse `owner/repo`, rejecting anything that isn't exactly two safe segments — no extra `/`, no `.`/`..`
  *  traversal, no query/fragment characters. This stops a hostile `repoFullName` from redirecting the
  *  token-bearing request to another repository. Returns null when unsafe. */
@@ -95,9 +122,8 @@ function parseRepo(
 }
 
 /** Fetch every blob's byte size in the repo's git tree at `sha`. One recursive call. Empty map on an invalid SHA
- *  or a non-OK reply; throws on truncated recursive replies so the orchestrator degrades instead of trusting
- *  partial data. `owner`/`repo` are validated by the caller; every segment is URL-encoded here (defense in depth)
- *  so nothing user-derived can break out of the intended API path. */
+ *  or a non-OK reply. `owner`/`repo` are validated by the caller; every segment is URL-encoded here (defense in
+ *  depth) so nothing user-derived can break out of the intended API path. */
 async function fetchTreeSizes(
   owner: string,
   repo: string,
@@ -105,30 +131,64 @@ async function fetchTreeSizes(
   token: string,
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
-): Promise<Map<string, number>> {
+): Promise<{ sizes: Map<string, number>; truncated: boolean }> {
   const sizes = new Map<string, number>();
-  if (!SHA_RE.test(sha)) return sizes;
+  if (!SHA_RE.test(sha)) return { sizes, truncated: false };
   const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(sha)}?recursive=1`;
   const res = await fetchImpl(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "User-Agent": "gittensory-review-enrichment",
-    },
+    headers: githubHeaders(token),
     signal,
   });
-  if (!res.ok) return sizes;
+  if (!res.ok) return { sizes, truncated: false };
   const json = (await res.json()) as {
     tree?: Array<{ path?: string; type?: string; size?: number }>;
     truncated?: boolean;
   };
-  if (json.truncated) throw new Error("github_tree_truncated");
   for (const entry of json.tree ?? []) {
     if (entry.type === "blob" && typeof entry.size === "number" && entry.path) {
       sizes.set(entry.path, entry.size);
     }
   }
+  return { sizes, truncated: json.truncated === true };
+}
+
+async function fetchPathSizes(
+  owner: string,
+  repo: string,
+  sha: string,
+  token: string,
+  paths: Iterable<string>,
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+): Promise<Map<string, number>> {
+  const sizes = new Map<string, number>();
+  if (!SHA_RE.test(sha)) return sizes;
+  for (const path of new Set(paths)) {
+    const encodedPath = encodeRepoPath(path);
+    if (!encodedPath) continue;
+    const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodedPath}?ref=${encodeURIComponent(sha)}`;
+    const res = await fetchImpl(url, { headers: githubHeaders(token), signal });
+    if (!res.ok) continue;
+    const json = (await res.json()) as { type?: string; size?: number } | unknown[];
+    if (!Array.isArray(json) && typeof json.size === "number") {
+      sizes.set(path, json.size);
+    }
+  }
   return sizes;
+}
+
+async function fetchRelevantSizes(
+  owner: string,
+  repo: string,
+  sha: string,
+  token: string,
+  paths: Iterable<string>,
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+): Promise<Map<string, number>> {
+  const tree = await fetchTreeSizes(owner, repo, sha, token, fetchImpl, signal);
+  if (!tree.truncated) return tree.sizes;
+  return fetchPathSizes(owner, repo, sha, token, paths, fetchImpl, signal);
 }
 
 /** Analyzer entrypoint: flag heavy binary assets the PR adds or grows past the threshold. Pure size arithmetic over
@@ -148,24 +208,25 @@ export async function scanAssetWeight(
   );
   if (!binaries.length) return [];
 
-  const headSizes = await fetchTreeSizes(
+  const headSizes = await fetchRelevantSizes(
     repo.owner,
     repo.repo,
     req.headSha,
     token,
+    binaries.map((file) => file.path),
     fetchImpl,
     options.signal,
   );
-  const needBase = binaries.some(
-    (f) => f.status === "modified" || f.status === "changed",
-  );
+  const basePaths = binaries.flatMap((file) => basePathForGrowth(file) ?? []);
+  const needBase = binaries.some((f) => basePathForGrowth(f) !== null);
   const baseSizes =
     needBase && req.baseSha
-      ? await fetchTreeSizes(
+      ? await fetchRelevantSizes(
           repo.owner,
           repo.repo,
           req.baseSha,
           token,
+          basePaths,
           fetchImpl,
           options.signal,
         )
@@ -188,8 +249,9 @@ export async function scanAssetWeight(
       continue;
     }
 
-    if (file.status === "modified" || file.status === "changed") {
-      const baseBytes = baseSizes.get(file.path);
+    const basePath = basePathForGrowth(file);
+    if (basePath) {
+      const baseBytes = baseSizes.get(basePath);
       if (typeof baseBytes !== "number") continue;
       const deltaBytes = bytes - baseBytes;
       if (deltaBytes < THRESHOLD_BYTES) continue;

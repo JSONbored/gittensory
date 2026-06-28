@@ -13,6 +13,7 @@ export interface EnrichRequest {
   files?: Array<{
     path: string;
     status?: string;
+    previousPath?: string;
     patch?: string;
     additions?: number;
     deletions?: number;

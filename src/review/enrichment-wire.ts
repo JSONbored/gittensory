@@ -84,6 +84,7 @@ export async function buildReviewEnrichment(
         files: input.files.map((file) => ({
           path: file.path,
           status: file.status ?? undefined,
+          previousPath: file.previousFilename ?? undefined,
           patch:
             typeof file.payload?.patch === "string"
               ? file.payload.patch
