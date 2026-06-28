@@ -79,8 +79,10 @@ See [ai-providers.md](./ai-providers.md) for the full provider/model/effort/time
 | Var                                          | Purpose                                                                               |
 | -------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `AI_PROVIDER`                                | `claude-code` / `codex` / `anthropic` / `ollama` / … (comma-list = chain/dual-review) |
-| `AI_MODEL`, `AI_EFFORT`                      | Model id + intelligence dial (low…max, default high)                                  |
-| `AI_TIMEOUT_MS`                              | CLI subprocess timeout override (else scales with effort)                             |
+| `CLAUDE_AI_*`, `CODEX_AI_*`                  | Subscription CLI model, effort, and timeout knobs                                     |
+| `OLLAMA_AI_*`, `OPENAI_COMPATIBLE_AI_*`      | OpenAI-compatible base URL, optional key, and model knobs                             |
+| `OPENAI_AI_MODEL`, `OPENAI_API_KEY`          | OpenAI API reviewer model and key                                                     |
+| `ANTHROPIC_AI_MODEL`, `ANTHROPIC_API_KEY`    | Anthropic API reviewer model and key                                                  |
 | `CLAUDE_CODE_OAUTH_TOKEN`                    | Claude Code subscription token (`claude setup-token`)                                 |
 | `AI_EMBED_BASE_URL` / `_MODEL` / `_PROVIDER` | Dedicated RAG embed provider                                                          |
 | `GITTENSORY_REPO_CONFIG_DIR`                 | Container-private per-repo config dir                                                 |

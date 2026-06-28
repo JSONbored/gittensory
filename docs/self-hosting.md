@@ -108,15 +108,16 @@ and only the AI **summary** degrades to "unavailable". To enable AI, set `AI_PRO
 
 | `AI_PROVIDER`                             | Backend                                                                                                                                   | Extra config                                                                                                                  |
 | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `ollama` / `openai-compatible` / `openai` | any OpenAI-compatible `/chat/completions` endpoint (Ollama, OpenAI, Groq, Together, OpenRouter, vLLM, Gemini's OpenAI-compat endpoint, …) | `AI_BASE_URL`, `AI_API_KEY` (or `OPENAI_API_KEY`), `AI_MODEL`                                                                 |
-| `anthropic`                               | **native Anthropic Messages API** (BYOK — bills your API key)                                                                             | `ANTHROPIC_API_KEY`, `AI_MODEL` (e.g. `claude-sonnet-4-6`)                                                                    |
-| `claude-code`                             | your **Claude** subscription via the `claude` CLI (read-only, headless)                                                                   | `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), `AI_MODEL` (default `claude-sonnet-4-6`), `AI_EFFORT` (default `high`) |
-| `codex`                                   | your **Codex** subscription via the `codex` CLI                                                                                           | local `codex` auth, `AI_MODEL` (e.g. `gpt-5`)                                                                                 |
+| `ollama`                                  | local Ollama `/v1` endpoint                                                                                                               | `OLLAMA_AI_BASE_URL`, `OLLAMA_AI_MODEL`, optional `OLLAMA_AI_API_KEY`                                                         |
+| `openai-compatible`                       | any OpenAI-compatible `/chat/completions` endpoint (Groq, Together, OpenRouter, vLLM, Gemini's OpenAI-compat endpoint, …)                | `OPENAI_COMPATIBLE_AI_BASE_URL`, `OPENAI_COMPATIBLE_AI_MODEL`, optional `OPENAI_COMPATIBLE_AI_API_KEY`                       |
+| `openai`                                  | OpenAI API `/v1` endpoint                                                                                                                 | `OPENAI_API_KEY`, `OPENAI_AI_MODEL`, optional `OPENAI_AI_BASE_URL`                                                            |
+| `anthropic`                               | **native Anthropic Messages API** (BYOK — bills your API key)                                                                             | `ANTHROPIC_API_KEY`, `ANTHROPIC_AI_MODEL`, optional `ANTHROPIC_AI_BASE_URL`                                                   |
+| `claude-code`                             | your **Claude** subscription via the `claude` CLI (read-only, headless)                                                                   | `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_AI_MODEL`, `CLAUDE_AI_EFFORT`, `CLAUDE_AI_TIMEOUT_MS`                                      |
+| `codex`                                   | your **Codex** subscription via the `codex` CLI                                                                                           | local `codex` auth, `CODEX_AI_MODEL`, `CODEX_AI_EFFORT`, `CODEX_AI_TIMEOUT_MS`                                                |
 
-**Review timeout (`AI_TIMEOUT_MS`).** The `claude` / `codex` subprocess timeout. Left unset it **scales with
-`AI_EFFORT`** (low/medium 120s, high 240s, xhigh 360s, max 600s) so a large `max`-effort review isn't SIGKILLed
-mid-generation — the old fixed 120s cap silently dropped long reviews. Set `AI_TIMEOUT_MS` to override (clamped
-30s–30min).
+**Review timeout.** `CLAUDE_AI_TIMEOUT_MS` and `CODEX_AI_TIMEOUT_MS` override the subscription-CLI subprocess
+timeout. Left unset, the timeout scales with the matching provider effort so large reviews are not SIGKILLed
+mid-generation. Overrides are clamped to 30s-30min.
 
 **Fallback chain.** `AI_PROVIDER` accepts a comma-separated list and tries each in order until one succeeds —
 e.g. `AI_PROVIDER=anthropic,ollama` uses the Anthropic API first and falls back to a local Ollama model if it
@@ -143,14 +144,13 @@ bake them in, then provide `CLAUDE_CODE_OAUTH_TOKEN` / codex auth at run time. N
   terminal — it's browser-interactive and prints the token; it has no headless mode). The provider forces the
   subscription token (it scrubs `ANTHROPIC_API_KEY`), so an API key won't be used here — use `AI_PROVIDER=anthropic`
   for API-key billing. The model defaults to `claude-sonnet-4-6` and the reasoning **effort** to `high` (a
-  substantive review, not a fast shallow one); override with `AI_MODEL` (any `claude`-CLI model id or alias —
-  `sonnet`, `opus`, `claude-opus-4-8`, …) and `AI_EFFORT` (`low`|`medium`|`high`|`xhigh`|`max`; the CLI clamps a
-  level above the model's own ceiling).
-- **Codex (ChatGPT subscription).** The `codex` CLI is pre-baked, but self-hosted Codex reviews are fail-closed by
-  default because the CLI stores its OAuth refresh credential in `auth.json` on the same filesystem that the
-  prompt-influenced review sandbox can read. Do **not** copy `~/.codex/auth.json` into the app container or mount a
-  writable Codex home for PR review. Use `claude-code`, an API-key provider, or a local OpenAI-compatible endpoint for
-  automated reviews until Codex offers a credential-isolated non-interactive mode.
+  substantive review, not a fast shallow one); override with `CLAUDE_AI_MODEL` (any `claude`-CLI model id or alias,
+  e.g. `sonnet`, `opus`, `claude-opus-4-8`) and `CLAUDE_AI_EFFORT` (`low`|`medium`|`high`|`xhigh`|`max`; the CLI
+  clamps a level above the model's own ceiling).
+- **Codex (ChatGPT subscription).** Mount the Codex home at `/data/codex`, leave `CODEX_HOME` unset, and opt in with
+  `GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER=1` only on an isolated maintainer deployment. Set
+  `CODEX_AI_MODEL=gpt-5.5` and `CODEX_AI_EFFORT=high` for repeatable Codex reviews. The stack uses Codex standard
+  speed by default; it does not request the fast/priority service tier.
 
 **Local RAG (retrieval-augmented review).** Self-host ships a SQLite-backed vector store, so RAG works without
 Cloudflare Vectorize. Enable it with `GITTENSORY_REVIEW_RAG=true` + the repo in `GITTENSORY_REVIEW_REPOS`, and
@@ -159,14 +159,8 @@ point at an **embedding-capable** OpenAI-compatible provider (Ollama) with a **1
 SQLite DB (`_selfhost_vectors`) and queried by cosine similarity. Without an embedding model, RAG degrades to
 no-context (the review still runs).
 
-> **Set `AI_MODEL`.** The core would otherwise hand the adapter a Cloudflare Workers-AI model id
-> (`@cf/meta/...`) that Ollama / `claude` / `codex` can't use. The adapter ignores that id in favour of
-> `AI_MODEL` (falling back to a provider default), so always set `AI_MODEL` to a real model for your provider.
-> The `claude`/`codex` CLIs must be installed and authenticated in the runtime (a CLI-bearing image variant
-> is a follow-up); without `AI_MODEL` + a working CLI, the call throws and the review degrades.
-
 The local-AI default is Ollama: uncomment the `ollama` service in `docker-compose.yml`, set
-`AI_PROVIDER=ollama` + `AI_BASE_URL=http://ollama:11434/v1`, then `docker compose exec ollama ollama pull
+`AI_PROVIDER=ollama` + `OLLAMA_AI_BASE_URL=http://ollama:11434/v1`, then `docker compose exec ollama ollama pull
 <model>`.
 
 **Subscription safety.** The CLI providers run as a read-only subprocess with billable API keys

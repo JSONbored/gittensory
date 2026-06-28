@@ -8,8 +8,8 @@ The reviewer is configured by `AI_PROVIDER`. Reviews degrade deterministically (
 | ----------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `claude-code`                             | Your **Claude** subscription via the `claude` CLI (read-only, headless) | `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`); CLI baked in (`INSTALL_AI_CLIS=true`) |
 | `codex`                                   | Your **Codex** subscription via the `codex` CLI                         | local `codex` auth mounted at `/data/codex`, CLI baked in, explicit unsafe opt-in       |
-| `anthropic`                               | Native **Anthropic API** (BYOK, per-token billing — no weekly limit)    | `ANTHROPIC_API_KEY`, `AI_MODEL`                                                         |
-| `ollama` / `openai-compatible` / `openai` | Any OpenAI-compatible `/chat/completions` (+ `/embeddings`)             | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`                                                 |
+| `anthropic`                               | Native **Anthropic API** (BYOK, per-token billing — no weekly limit)    | `ANTHROPIC_API_KEY`, `ANTHROPIC_AI_MODEL`                                               |
+| `ollama` / `openai-compatible` / `openai` | Any OpenAI-compatible `/chat/completions` (+ `/embeddings`)             | provider-specific `*_AI_BASE_URL`, `*_AI_API_KEY`, `*_AI_MODEL`                         |
 
 **Chain / fallback:** `AI_PROVIDER` accepts a comma list, tried in order until one succeeds — e.g.
 `AI_PROVIDER=anthropic,ollama`. **Dual review:** two providers (`claude-code,codex`) run as independent reviewers
@@ -21,11 +21,18 @@ combined per `AI_COMBINE` (`single`/`consensus`/`synthesis`).
 
 ## Model & effort (the intelligence dial)
 
-| Var             | Default            | Notes                                                                                                                                                |
-| --------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AI_MODEL`      | provider default   | e.g. `claude-sonnet-4-6`. **Leave unset on a `claude-code,codex` combo** — it's global and a Claude id breaks codex's account default.               |
-| `AI_EFFORT`     | `high`             | `low \| medium \| high \| xhigh \| max` → `claude --effort`. The engine wants substance, not speed.                                                  |
-| `AI_TIMEOUT_MS` | scales with effort | Subprocess timeout. Unset ⇒ low/med 120s, high 240s, xhigh 360s, **max 600s** (so a big max-effort review isn't killed). Override clamped 30s–30min. |
+| Var                          | Default                        | Notes                                                                                 |
+| ---------------------------- | ------------------------------ | ------------------------------------------------------------------------------------- |
+| `CLAUDE_AI_MODEL`            | `claude-sonnet-4-6`            | Any `claude` CLI model id/alias.                                                      |
+| `CLAUDE_AI_EFFORT`           | `high`                         | `low \| medium \| high \| xhigh \| max` -> `claude --effort`.                         |
+| `CLAUDE_AI_TIMEOUT_MS`       | scales with `CLAUDE_AI_EFFORT` | Unset -> low/med 120s, high 240s, xhigh 360s, max 600s. Override clamped 30s-30min.   |
+| `CODEX_AI_MODEL`             | Codex account default          | Set to `gpt-5.5` for repeatable Codex reviews.                                        |
+| `CODEX_AI_EFFORT`            | `high`                         | `low \| medium \| high \| xhigh`; `max` maps to `xhigh`.                              |
+| `CODEX_AI_TIMEOUT_MS`        | scales with `CODEX_AI_EFFORT`  | Unset -> low/med 120s, high 240s, xhigh 360s. Override clamped 30s-30min.             |
+| `OLLAMA_AI_MODEL`            | `llama3.1`                     | Used only by `AI_PROVIDER=ollama`.                                                    |
+| `OPENAI_COMPATIBLE_AI_MODEL` | `llama3.1`                     | Used only by `AI_PROVIDER=openai-compatible`.                                         |
+| `OPENAI_AI_MODEL`            | `llama3.1`                     | Used only by `AI_PROVIDER=openai`; set to a real OpenAI model for API-backed reviews. |
+| `ANTHROPIC_AI_MODEL`         | `claude-sonnet-4-6`            | Used only by `AI_PROVIDER=anthropic`.                                                 |
 
 ## Codex subscription reviewer
 
@@ -35,6 +42,8 @@ Codex is intentionally disabled until the operator opts in with
 maintainer deployment, mount the Codex home at `/data/codex`; the image exposes that as the default
 `~/.codex` path for the `node` user. Do not set `CODEX_HOME` in the app environment. The provider
 rejects `CODEX_HOME` so the credential path is not advertised to the subprocess through env.
+Set `CODEX_AI_MODEL=gpt-5.5` and `CODEX_AI_EFFORT=high` for the current recommended Codex reviewer.
+The stack uses Codex standard speed by default; it does not request the fast/priority service tier.
 
 ## Cost & usage observability
 

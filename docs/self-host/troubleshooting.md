@@ -37,11 +37,12 @@ docker exec gittensory-gittensory-1 sh -c 'which claude && claude --version'
 **Fix:** set `gate.aiReview.allAuthors: true` (or `settings.aiReviewAllAuthors: true`) in the repo's private
 `.gittensory.yml`. See [configuration.md](./configuration.md).
 
-### A large `AI_EFFORT=max` review produces nothing
+### A large high-effort CLI review produces nothing
 
 **Symptom:** big PRs silently get no review; small ones work.
 **Cause:** the CLI subprocess timed out. (Older builds hard-capped at 120s.)
-**Fix:** the timeout now scales with `AI_EFFORT` (max → 600s); override with `AI_TIMEOUT_MS` (clamped 30s–30min).
+**Fix:** the timeout now scales with `CLAUDE_AI_EFFORT` / `CODEX_AI_EFFORT`; override with
+`CLAUDE_AI_TIMEOUT_MS` or `CODEX_AI_TIMEOUT_MS` (clamped 30s-30min).
 
 ---
 
@@ -107,11 +108,11 @@ AI review entirely in advisory mode. If you still see repeats, check for an auto
 **Symptom:** `db:migrations:check` fails on a duplicate number after a rebase.
 **Fix:** renumber your migration to the next free `NNNN_*.sql` (the check prints `Next free:`).
 
-### `codex` "model not supported when using Codex with a ChatGPT account"
+### Codex model / effort is not what you expected
 
-**Cause:** forcing `--model gpt-5-codex` on a ChatGPT-account login fails.
-**Fix:** leave `AI_MODEL` unset for codex — it picks the account's own default. (Don't set a Claude model id on a
-`claude-code,codex` combo: `AI_MODEL` is global and a Claude id breaks codex.)
+**Cause:** Codex model and reasoning are provider-specific. Shared model settings are intentionally not used.
+**Fix:** set `CODEX_AI_MODEL=gpt-5.5` and `CODEX_AI_EFFORT=high` for the current recommended self-host Codex
+reviewer. Leave `CODEX_HOME` unset in the app environment.
 
 ### `codex_credential_isolation_required`
 

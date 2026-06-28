@@ -42,13 +42,28 @@ declare global {
     AI_GATEWAY_ID?: string;
     /** Self-host AI provider selection + dual-review config (#dual-ai-combiner). `AI_PROVIDER` is a comma list of
      *  providers (claude-code, codex, anthropic, ollama, …); `AI_COMBINE` picks single|consensus|synthesis (default
-     *  synthesis for two); `AI_ON_MERGE` is the synthesis rule either|both. `AI_EFFORT` is the Claude Code
-     *  intelligence dial (low|medium|high|xhigh|max, default high). `AI_REVIEW_PLAN` is the resolved plan
+     *  synthesis for two); `AI_ON_MERGE` is the synthesis rule either|both. Provider-specific model/effort/timeout
+     *  vars keep Claude/Codex/OpenAI/Ollama/Anthropic config explicit. `AI_REVIEW_PLAN` is the resolved plan
      *  (computed from these at boot in server.ts and read at the review call site); undefined on cloud. */
     AI_PROVIDER?: string;
     AI_COMBINE?: string;
     AI_ON_MERGE?: string;
-    AI_EFFORT?: string;
+    CLAUDE_AI_MODEL?: string;
+    CLAUDE_AI_EFFORT?: string;
+    CLAUDE_AI_TIMEOUT_MS?: string;
+    CODEX_AI_MODEL?: string;
+    CODEX_AI_EFFORT?: string;
+    CODEX_AI_TIMEOUT_MS?: string;
+    OLLAMA_AI_BASE_URL?: string;
+    OLLAMA_AI_API_KEY?: string;
+    OLLAMA_AI_MODEL?: string;
+    OPENAI_COMPATIBLE_AI_BASE_URL?: string;
+    OPENAI_COMPATIBLE_AI_API_KEY?: string;
+    OPENAI_COMPATIBLE_AI_MODEL?: string;
+    OPENAI_AI_BASE_URL?: string;
+    OPENAI_AI_MODEL?: string;
+    ANTHROPIC_AI_BASE_URL?: string;
+    ANTHROPIC_AI_MODEL?: string;
     AI_REVIEW_PLAN?: { reviewers: Array<{ model: string }>; combine: import("./services/ai-review").CombineStrategy; onMerge?: import("./services/ai-review").OnMerge | undefined };
     ADMIN_GITHUB_LOGINS?: string;
     GITHUB_WEBHOOK_SECRET: string;

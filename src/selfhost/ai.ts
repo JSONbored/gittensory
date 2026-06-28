@@ -29,40 +29,73 @@ function toMessages(options: AiRunOptions): Array<{ role: string; content: strin
 }
 
 /** The core passes a Workers-AI model id (e.g. "@cf/meta/llama-3.1-8b-instruct-fp8-fast") that is meaningless
- *  off-Workers — handing it to Ollama or `claude --model` fails. Prefer the operator-configured model
- *  (AI_MODEL / WORKERS_AI_SUMMARY_MODEL), then any non-Workers model the core passed, then a provider default. */
+ *  off-Workers — handing it to Ollama or `claude --model` fails. Prefer the provider-specific self-host model,
+ *  then any non-Workers model the core passed, then a provider default. */
 export function resolveModel(configured: string | undefined, passed: string, providerDefault: string): string {
   if (configured && configured.trim()) return configured.trim();
   if (passed && !passed.startsWith("@cf/")) return passed;
   return providerDefault;
 }
 
-function configuredModel(env: Record<string, string | undefined>): string | undefined {
-  return env.AI_MODEL ?? env.WORKERS_AI_SUMMARY_MODEL;
+function firstConfigured(...values: Array<string | undefined>): string | undefined {
+  return values.find((value) => value !== undefined && value.trim() !== "");
 }
 
-const VALID_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
-/** Map `AI_EFFORT` (the operator's intelligence dial) to a `claude --effort` level. Defaults to "high" — the
- *  engine wants a substantive review, not a fast shallow one — and falls back to "high" for any unset or
- *  unrecognized value so a typo can't silently downgrade reviews. The CLI clamps a level above the model's
- *  own ceiling (e.g. xhigh on Sonnet) down on its own. */
+function configuredClaudeModel(env: Record<string, string | undefined>): string | undefined {
+  return firstConfigured(env.CLAUDE_AI_MODEL);
+}
+
+function configuredCodexModel(env: Record<string, string | undefined>): string | undefined {
+  return firstConfigured(env.CODEX_AI_MODEL);
+}
+
+function configuredAnthropicModel(env: Record<string, string | undefined>): string | undefined {
+  return firstConfigured(env.ANTHROPIC_AI_MODEL);
+}
+
+function configuredOpenAiCompatibleModel(name: string, env: Record<string, string | undefined>): string | undefined {
+  if (name === "ollama") return firstConfigured(env.OLLAMA_AI_MODEL);
+  if (name === "openai") return firstConfigured(env.OPENAI_AI_MODEL);
+  return firstConfigured(env.OPENAI_COMPATIBLE_AI_MODEL);
+}
+
+const VALID_CLAUDE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const VALID_CODEX_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
+/** Map `CLAUDE_AI_EFFORT` to a `claude --effort` level. Defaults to "high" — the engine wants a substantive
+ *  review, not a fast shallow one — and falls back to "high" for any unset or unrecognized value so a typo can't
+ *  silently downgrade reviews. The CLI clamps a level above the model's own ceiling (e.g. xhigh on Sonnet) down. */
 export function resolveEffort(configured: string | undefined): string {
   const level = (configured ?? "").trim().toLowerCase();
-  return VALID_EFFORTS.has(level) ? level : "high";
+  return VALID_CLAUDE_EFFORTS.has(level) ? level : "high";
+}
+
+/** Map `CODEX_AI_EFFORT` to Codex reasoning effort. Codex currently supports xhigh as its top level, so a
+ *  mistaken `max` preserves intent by resolving to xhigh instead of being dropped. */
+export function resolveCodexEffort(configured: string | undefined): string {
+  const level = (configured ?? "").trim().toLowerCase();
+  if (VALID_CODEX_EFFORTS.has(level)) return level;
+  if (level === "max") return "xhigh";
+  return "high";
 }
 
 // Per-effort subprocess timeout (ms) for the subscription CLIs. A higher effort legitimately runs longer, so the
 // old fixed 120s cap silently SIGKILLed a large max-effort review mid-generation (the review then degrades to
-// nothing). These scale the ceiling with the effort dial; AI_TIMEOUT_MS overrides them outright.
+// nothing). These scale the ceiling with the provider-specific effort dial; provider-specific timeout vars override
+// them outright.
 const EFFORT_TIMEOUT_MS: Record<string, number> = { low: 120_000, medium: 120_000, high: 240_000, xhigh: 360_000, max: 600_000 };
 
-/** Resolve the subscription-CLI subprocess timeout (ms). An explicit `AI_TIMEOUT_MS` wins, clamped to a sane
- *  30s–30min range so a typo can neither hang a worker nor cut a review off after a few seconds. Absent/invalid ⇒
- *  it scales with the `AI_EFFORT` dial (resolveEffort always yields a known level, so the map lookup is total). */
-export function resolveCliTimeoutMs(env: Record<string, string | undefined>): number {
-  const raw = Number(env.AI_TIMEOUT_MS);
+function resolveCliTimeoutFrom(configured: string | undefined, effort: string): number {
+  const raw = Number(configured);
   if (Number.isFinite(raw) && raw > 0) return Math.min(1_800_000, Math.max(30_000, raw));
-  return EFFORT_TIMEOUT_MS[resolveEffort(env.AI_EFFORT)]!;
+  return EFFORT_TIMEOUT_MS[effort]!;
+}
+
+export function resolveClaudeCliTimeoutMs(env: Record<string, string | undefined>): number {
+  return resolveCliTimeoutFrom(firstConfigured(env.CLAUDE_AI_TIMEOUT_MS), resolveEffort(firstConfigured(env.CLAUDE_AI_EFFORT)));
+}
+
+export function resolveCodexCliTimeoutMs(env: Record<string, string | undefined>): number {
+  return resolveCliTimeoutFrom(firstConfigured(env.CODEX_AI_TIMEOUT_MS), resolveCodexEffort(firstConfigured(env.CODEX_AI_EFFORT)));
 }
 
 /** OpenAI-compatible endpoint (Ollama's /v1, OpenAI, vLLM, LM Studio, …) — chat + embeddings. */
@@ -385,6 +418,32 @@ export function redactSecrets(text: string, knownSecrets: readonly string[] = []
   return out;
 }
 
+function errorMessage(error: unknown, knownSecrets: readonly string[] = []): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return redactSecrets(message, knownSecrets).slice(0, 500);
+}
+
+function logSelfHostAiProviderFailed(input: {
+  provider: string;
+  model: string;
+  effort?: string | undefined;
+  timeoutMs?: number | undefined;
+  error: unknown;
+  knownSecrets?: readonly string[] | undefined;
+}): void {
+  console.error(
+    JSON.stringify({
+      level: "error",
+      event: "selfhost_ai_provider_failed",
+      provider: input.provider,
+      model: input.model || "default",
+      ...(input.effort ? { effort: input.effort } : {}),
+      ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
+      error: errorMessage(input.error, input.knownSecrets),
+    }),
+  );
+}
+
 /** Claude Code subscription (CLAUDE_CODE_OAUTH_TOKEN via `claude setup-token`). Headless, read-only, JSON. */
 export function createClaudeCodeAi(parentEnv: Record<string, string | undefined>, spawnImpl?: SpawnFn): SelfHostAi {
   return {
@@ -394,29 +453,35 @@ export function createClaudeCodeAi(parentEnv: Record<string, string | undefined>
       // claude's empty-prompt text answer as "success" and never reach the embed provider → RAG silently breaks.
       if (options.text) throw new Error("claude_code_no_embed");
       const token = parentEnv.CLAUDE_CODE_OAUTH_TOKEN;
-      if (!token) throw new Error("claude_code_no_oauth_token");
-      const env = subscriptionCliEnv(parentEnv, { CLAUDE_CODE_OAUTH_TOKEN: token });
-      const prompt = toMessages(options).map((m) => m.content).join("\n\n");
-      const spawn = spawnImpl ?? (await defaultSpawn());
-      const claudeModel = resolveModel(configuredModel(parentEnv), model, "claude-sonnet-4-6");
-      const effort = resolveEffort(parentEnv.AI_EFFORT);
-      const { stdout, code, stderr } = await spawn(
-        "claude",
-        ["--print", "--output-format", "json", "--model", claudeModel, "--permission-mode", "plan", "--effort", effort, "--disallowedTools", "Bash,Edit,Write,WebFetch,WebSearch"],
-        { env, input: prompt, timeoutMs: resolveCliTimeoutMs(parentEnv), cwd: await isolatedCliCwd() },
-      );
-      // Surface the STRUCTURED error envelope FIRST. `claude --output-format json` reports API/auth/model errors in its
-      // stdout JSON ({is_error,api_error_status}) on a NON-ZERO exit too — e.g. an unknown model exits 1 with the 404
-      // envelope in stdout and EMPTY stderr. Checking it before the exit code turns an opaque `claude_code_exit_1: `
-      // (the #1610 symptom) into a precise `claude_code_error_404` — the signal that makes a reviewer outage
-      // diagnosable in logs + Sentry instead of a dead end.
-      const errStatus = claudeErrorStatus(stdout);
-      if (errStatus) throw new Error(`claude_code_error_${errStatus}`);
-      if (code !== 0) throw new Error(`claude_code_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "", [token]).slice(0, 500)}`);
-      const text = extractCliText(stdout);
-      if (!text) throw new Error("claude_code_empty_output");
-      recordCliUsageMetrics("claude-code", claudeModel, effort, stdout);
-      return { response: text };
+      const claudeModel = resolveModel(configuredClaudeModel(parentEnv), model, "claude-sonnet-4-6");
+      const effort = resolveEffort(firstConfigured(parentEnv.CLAUDE_AI_EFFORT));
+      const timeoutMs = resolveClaudeCliTimeoutMs(parentEnv);
+      try {
+        if (!token) throw new Error("claude_code_no_oauth_token");
+        const env = subscriptionCliEnv(parentEnv, { CLAUDE_CODE_OAUTH_TOKEN: token });
+        const prompt = toMessages(options).map((m) => m.content).join("\n\n");
+        const spawn = spawnImpl ?? (await defaultSpawn());
+        const { stdout, code, stderr } = await spawn(
+          "claude",
+          ["--print", "--output-format", "json", "--model", claudeModel, "--permission-mode", "plan", "--effort", effort, "--disallowedTools", "Bash,Edit,Write,WebFetch,WebSearch"],
+          { env, input: prompt, timeoutMs, cwd: await isolatedCliCwd() },
+        );
+        // Surface the STRUCTURED error envelope FIRST. `claude --output-format json` reports API/auth/model errors in its
+        // stdout JSON ({is_error,api_error_status}) on a NON-ZERO exit too — e.g. an unknown model exits 1 with the 404
+        // envelope in stdout and EMPTY stderr. Checking it before the exit code turns an opaque `claude_code_exit_1: `
+        // (the #1610 symptom) into a precise `claude_code_error_404` — the signal that makes a reviewer outage
+        // diagnosable in logs + Sentry instead of a dead end.
+        const errStatus = claudeErrorStatus(stdout);
+        if (errStatus) throw new Error(`claude_code_error_${errStatus}`);
+        if (code !== 0) throw new Error(`claude_code_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "", [token]).slice(0, 500)}`);
+        const text = extractCliText(stdout);
+        if (!text) throw new Error("claude_code_empty_output");
+        recordCliUsageMetrics("claude-code", claudeModel, effort, stdout);
+        return { response: text };
+      } catch (error) {
+        logSelfHostAiProviderFailed({ provider: "claude-code", model: claudeModel, effort, timeoutMs, error, knownSecrets: token ? [token] : [] });
+        throw error;
+      }
     },
   };
 }
@@ -428,28 +493,36 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
     async run(model, options) {
       // Codex is chat-only here — reject embed requests so the chain routes them to an embed-capable provider.
       if (options.text) throw new Error("codex_no_embed");
-      assertCodexCredentialIsolation(parentEnv);
-      const env = codexCliEnv(parentEnv);
-      const prompt = toMessages(options).map((m) => m.content).join("\n\n");
-      const spawn = spawnImpl ?? (await defaultSpawn());
       // codex 0.142+: `exec` is non-interactive — the old `--ask-for-approval` flag was REMOVED (passing it errors).
       // `--skip-git-repo-check` lets it run outside a git repo. Pass `--model` ONLY when one is explicitly
-      // configured: forcing a model (e.g. the old `gpt-5` default) fails on a ChatGPT-account login with "not
-      // supported", whose default model codex selects on its own.
-      const codexModel = resolveModel(configuredModel(parentEnv), model, "");
-      const args = ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only"];
-      if (codexModel) args.push("--model", codexModel);
-      args.push("--", prompt);
-      const { stdout, code, stderr } = await spawn("codex", args, {
-        env,
-        timeoutMs: resolveCliTimeoutMs(parentEnv),
-        cwd: await isolatedCliCwd(),
-      });
-      if (code !== 0) throw new Error(`codex_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "").slice(0, 500)}`);
-      const text = extractCliText(stdout);
-      if (!text) throw new Error("codex_empty_output");
-      recordCliUsageMetrics("codex", codexModel, resolveEffort(parentEnv.AI_EFFORT), stdout);
-      return { response: text };
+      // configured: otherwise Codex selects the account default.
+      const codexModel = resolveModel(configuredCodexModel(parentEnv), model, "");
+      const effort = resolveCodexEffort(firstConfigured(parentEnv.CODEX_AI_EFFORT));
+      const timeoutMs = resolveCodexCliTimeoutMs(parentEnv);
+      try {
+        assertCodexCredentialIsolation(parentEnv);
+        const env = codexCliEnv(parentEnv);
+        const prompt = toMessages(options).map((m) => m.content).join("\n\n");
+        const spawn = spawnImpl ?? (await defaultSpawn());
+        const args = ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only"];
+        if (codexModel) args.push("--model", codexModel);
+        args.push("-c", `model_reasoning_effort="${effort}"`);
+        const { stdout, code, stderr } = await spawn("codex", args, {
+          env,
+          // `codex exec` reads stdin when no prompt argv is provided; keep PR prompts/diffs out of process listings.
+          input: prompt,
+          timeoutMs,
+          cwd: await isolatedCliCwd(),
+        });
+        if (code !== 0) throw new Error(`codex_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "").slice(0, 500)}`);
+        const text = extractCliText(stdout);
+        if (!text) throw new Error("codex_empty_output");
+        recordCliUsageMetrics("codex", codexModel, effort, stdout);
+        return { response: text };
+      } catch (error) {
+        logSelfHostAiProviderFailed({ provider: "codex", model: codexModel, effort, timeoutMs, error });
+        throw error;
+      }
     },
   };
 }
@@ -461,35 +534,53 @@ export function createChainAi(providers: Array<{ name: string; ai: SelfHostAi }>
   return {
     async run(model, options) {
       let lastError: unknown = new Error("no_ai_providers");
+      const failures: Array<{ provider: string; error: string }> = [];
       for (const p of providers) {
         try {
           return await p.ai.run(model, options);
         } catch (error) {
           lastError = error;
-          console.error(JSON.stringify({ level: "warn", event: "selfhost_ai_provider_failed", provider: p.name, error: error instanceof Error ? error.message : "unknown" }));
+          failures.push({ provider: p.name, error: errorMessage(error) });
+          console.error(JSON.stringify({ level: "warn", event: "selfhost_ai_provider_failed_in_chain", provider: p.name, error: errorMessage(error) }));
         }
       }
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "selfhost_ai_providers_exhausted",
+          provider: failures.length === 1 ? failures[0]?.provider : undefined,
+          model: model || "default",
+          providers: failures.map((failure) => failure.provider),
+          failures,
+          error: errorMessage(lastError),
+        }),
+      );
       throw lastError instanceof Error ? lastError : new Error("all_ai_providers_failed");
     },
   };
 }
 
-/** Build one provider adapter by name (BYO credentials read from provider-specific env, then the generic
- *  AI_API_KEY). Returns undefined when its required credential is missing. */
+/** Build one provider adapter by name. Provider config stays explicit so dual-provider setups cannot accidentally
+ *  reuse the wrong model/base/key across different backends. */
 export function buildProvider(name: string, env: Record<string, string | undefined>): SelfHostAi | undefined {
   switch (name) {
     case "ollama":
     case "openai-compatible":
     case "openai":
       return createOpenAiCompatibleAi({
-        baseUrl: env.AI_BASE_URL ?? (name === "openai" ? "https://api.openai.com/v1" : "http://localhost:11434/v1"),
-        apiKey: env.AI_API_KEY ?? env.OPENAI_API_KEY,
-        model: configuredModel(env),
+        baseUrl:
+          name === "ollama"
+            ? (env.OLLAMA_AI_BASE_URL ?? "http://localhost:11434/v1")
+            : name === "openai"
+              ? (env.OPENAI_AI_BASE_URL ?? "https://api.openai.com/v1")
+              : (env.OPENAI_COMPATIBLE_AI_BASE_URL ?? "http://localhost:11434/v1"),
+        apiKey: name === "ollama" ? env.OLLAMA_AI_API_KEY : name === "openai" ? env.OPENAI_API_KEY : env.OPENAI_COMPATIBLE_AI_API_KEY,
+        model: configuredOpenAiCompatibleModel(name, env),
         embedModel: env.AI_EMBED_MODEL,
       });
     case "anthropic": {
-      const apiKey = env.ANTHROPIC_API_KEY ?? env.AI_API_KEY;
-      return apiKey ? createAnthropicAi({ apiKey, model: configuredModel(env), baseUrl: env.AI_BASE_URL }) : undefined;
+      const apiKey = env.ANTHROPIC_API_KEY;
+      return apiKey ? createAnthropicAi({ apiKey, model: configuredAnthropicModel(env), baseUrl: env.ANTHROPIC_AI_BASE_URL }) : undefined;
     }
     case "claude-code":
       return createClaudeCodeAi(env);

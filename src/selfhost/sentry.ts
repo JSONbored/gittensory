@@ -89,7 +89,7 @@ export function captureReviewFailure(
 
 // The structured-log fields worth indexing as Sentry tags — the dimensions operators filter + group by. Only
 // string|number values are tagged; everything else stays in the full "log" context.
-const SENTRY_LOG_TAG_KEYS = ["repo", "repository", "installationId", "installation_id", "pull", "pullNumber", "pr", "project", "kind", "deliveryId"] as const;
+const SENTRY_LOG_TAG_KEYS = ["repo", "repository", "installationId", "installation_id", "pull", "pullNumber", "pr", "project", "kind", "deliveryId", "provider", "model", "effort", "timeoutMs"] as const;
 
 /** A SHORT location suffix — " (repo#pr)" — for a no-message error title, so the issue list shows WHERE without
  *  dumping every scalar field (which made titles unreadably long, e.g. trailing a full deliveryId). The complete

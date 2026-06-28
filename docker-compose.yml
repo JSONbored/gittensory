@@ -64,7 +64,7 @@ services:
       # QDRANT_URL: http://qdrant:6333
       # Uncomment for Ollama AI (--profile ollama):
       # AI_PROVIDER: ollama
-      # AI_BASE_URL: http://ollama:11434/v1
+      # OLLAMA_AI_BASE_URL: http://ollama:11434/v1
       # BROKERED mode — use the central Gittensory Orb App instead of creating your own GitHub App. Install the
       # Orb App on your repos + set ORB_ENROLLMENT_SECRET in .env (loaded above); the engine then brokers
       # short-lived GitHub tokens from the Orb on demand (no own App private key). See .env.example.
@@ -197,7 +197,7 @@ services:
   # ── Ollama (--profile ollama) ──────────────────────────────────────────────
   # After `docker compose --profile ollama up -d`, pull a model:
   #   docker compose exec ollama ollama pull llama3.2
-  # Then set AI_PROVIDER=ollama and AI_BASE_URL=http://ollama:11434/v1 in .env.
+  # Then set AI_PROVIDER=ollama and OLLAMA_AI_BASE_URL=http://ollama:11434/v1 in .env.
   ollama:
     image: ollama/ollama:0.30.10
     restart: unless-stopped
@@ -220,8 +220,8 @@ services:
       - gittensory-data:/data
       - ./litestream.yml:/etc/litestream.yml:ro
     environment:
-      LITESTREAM_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID}
-      LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY}
+      LITESTREAM_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID:-}
+      LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:-}
       LITESTREAM_ENDPOINT: ${LITESTREAM_ENDPOINT:-}
       LITESTREAM_REGION: ${LITESTREAM_REGION:-us-east-1}
 
@@ -401,7 +401,7 @@ services:
       - NET_ADMIN
       - SYS_MODULE
     environment:
-      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
       TS_STATE_DIR: /var/lib/tailscale
       TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
     volumes:
@@ -421,8 +421,8 @@ services:
     profiles: ["runners"]
     environment:
       RUNNER_SCOPE: ${RUNNER_SCOPE:-repo}
-      REPO_URL: ${RUNNER_REPO_URL}
-      RUNNER_TOKEN: ${RUNNER_TOKEN}
+      REPO_URL: ${RUNNER_REPO_URL:-}
+      RUNNER_TOKEN: ${RUNNER_TOKEN:-}
       ACCESS_TOKEN: ${RUNNER_ACCESS_TOKEN:-}
       RUNNER_NAME: ${RUNNER_NAME:-gittensory-runner}
       LABELS: ${RUNNER_LABELS:-self-hosted,linux,x64}

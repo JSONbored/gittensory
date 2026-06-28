@@ -235,6 +235,27 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
     expect(mocks.scope.setFingerprint).toHaveBeenCalledWith(["gittensory-log", "orb_broker_unavailable"]);
   });
 
+  it("indexes self-host AI provider dimensions as Sentry tags", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    forwardStructuredLogToSentry(
+      JSON.stringify({
+        level: "error",
+        event: "selfhost_ai_provider_failed",
+        provider: "codex",
+        model: "gpt-5.5",
+        effort: "high",
+        timeoutMs: 240000,
+        error: "subscription_cli_timeout",
+      }),
+    );
+    expect(lastCapturedError().name).toBe("selfhost_ai_provider_failed");
+    expect(lastCapturedError().message).toBe("subscription_cli_timeout");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("provider", "codex");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("model", "gpt-5.5");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("effort", "high");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("timeoutMs", "240000");
+  });
+
   it("forwards a level:fatal log titled by message (no event ⇒ no tag)", async () => {
     await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
     forwardStructuredLogToSentry(

@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, extractCliUsage, resolveAiReviewerPlan, resolveCliTimeoutMs, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, redactSecrets, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
+import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, extractCliUsage, resolveAiReviewerPlan, resolveClaudeCliTimeoutMs, resolveCodexCliTimeoutMs, resolveCodexEffort, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, redactSecrets, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 
 describe("resolveModel (#979 — never leak the Workers-AI default to a self-host backend)", () => {
@@ -31,23 +31,34 @@ describe("resolveEffort (#selfhost-effort — Claude Code intelligence dial, def
   });
 });
 
-describe("resolveCliTimeoutMs (#selfhost — subprocess timeout scales with effort, AI_TIMEOUT_MS overrides)", () => {
-  it("scales the default timeout with the AI_EFFORT dial (max needs far more than the old fixed 120s)", () => {
-    expect(resolveCliTimeoutMs({ AI_EFFORT: "low" })).toBe(120_000);
-    expect(resolveCliTimeoutMs({ AI_EFFORT: "medium" })).toBe(120_000);
-    expect(resolveCliTimeoutMs({ AI_EFFORT: "high" })).toBe(240_000);
-    expect(resolveCliTimeoutMs({ AI_EFFORT: "xhigh" })).toBe(360_000);
-    expect(resolveCliTimeoutMs({ AI_EFFORT: "max" })).toBe(600_000);
-    expect(resolveCliTimeoutMs({})).toBe(240_000); // unset effort → resolveEffort defaults to high
+describe("resolveCodexEffort (#selfhost-effort — Codex reasoning effort, explicit provider var)", () => {
+  it("uses Codex-supported levels and maps max to xhigh", () => {
+    expect(resolveCodexEffort("low")).toBe("low");
+    expect(resolveCodexEffort("  Medium ")).toBe("medium");
+    expect(resolveCodexEffort("xhigh")).toBe("xhigh");
+    expect(resolveCodexEffort("max")).toBe("xhigh");
+    expect(resolveCodexEffort("ultra")).toBe("high");
   });
-  it("honors an explicit AI_TIMEOUT_MS, clamped to a sane 30s–30min range", () => {
-    expect(resolveCliTimeoutMs({ AI_TIMEOUT_MS: "300000", AI_EFFORT: "low" })).toBe(300_000); // in-range value wins over the effort scale
-    expect(resolveCliTimeoutMs({ AI_TIMEOUT_MS: "9999999" })).toBe(1_800_000); // clamped down to the 30min ceiling
-    expect(resolveCliTimeoutMs({ AI_TIMEOUT_MS: "1000" })).toBe(30_000); // clamped up to the 30s floor
+});
+
+describe("provider-specific CLI timeouts (#selfhost — no shared timeout ambiguity)", () => {
+  it("scales Claude timeout from CLAUDE_AI_EFFORT and honors CLAUDE_AI_TIMEOUT_MS", () => {
+    expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_EFFORT: "low" })).toBe(120_000);
+    expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_EFFORT: "medium" })).toBe(120_000);
+    expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_EFFORT: "high" })).toBe(240_000);
+    expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_EFFORT: "xhigh" })).toBe(360_000);
+    expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_EFFORT: "max" })).toBe(600_000);
+    expect(resolveClaudeCliTimeoutMs({})).toBe(240_000);
+    expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_TIMEOUT_MS: "300000", CLAUDE_AI_EFFORT: "low" })).toBe(300_000);
   });
-  it("falls back to the effort scale on a non-positive or non-numeric AI_TIMEOUT_MS", () => {
-    expect(resolveCliTimeoutMs({ AI_TIMEOUT_MS: "0", AI_EFFORT: "max" })).toBe(600_000); // 0 is not > 0 → effort path
-    expect(resolveCliTimeoutMs({ AI_TIMEOUT_MS: "abc", AI_EFFORT: "high" })).toBe(240_000); // NaN → effort path
+  it("scales Codex timeout from CODEX_AI_EFFORT and honors CODEX_AI_TIMEOUT_MS", () => {
+    expect(resolveCodexCliTimeoutMs({ CODEX_AI_EFFORT: "low" })).toBe(120_000);
+    expect(resolveCodexCliTimeoutMs({ CODEX_AI_EFFORT: "medium" })).toBe(120_000);
+    expect(resolveCodexCliTimeoutMs({ CODEX_AI_EFFORT: "high" })).toBe(240_000);
+    expect(resolveCodexCliTimeoutMs({ CODEX_AI_EFFORT: "xhigh" })).toBe(360_000);
+    expect(resolveCodexCliTimeoutMs({ CODEX_AI_EFFORT: "max" })).toBe(360_000);
+    expect(resolveCodexCliTimeoutMs({ CODEX_AI_TIMEOUT_MS: "1000" })).toBe(30_000);
+    expect(resolveCodexCliTimeoutMs({ CODEX_AI_TIMEOUT_MS: "9999999" })).toBe(1_800_000);
   });
 });
 
@@ -123,7 +134,7 @@ describe("createSelfHostAi — provider selection", () => {
     expect(createSelfHostAi({})).toBeUndefined();
   });
   it("maps ollama/openai-compatible/claude-code/codex to adapters", () => {
-    expect(typeof createSelfHostAi({ AI_PROVIDER: "ollama", AI_BASE_URL: "http://o/v1" })?.run).toBe("function");
+    expect(typeof createSelfHostAi({ AI_PROVIDER: "ollama", OLLAMA_AI_BASE_URL: "http://o/v1" })?.run).toBe("function");
     expect(typeof createSelfHostAi({ AI_PROVIDER: "claude-code" })?.run).toBe("function");
     expect(typeof createSelfHostAi({ AI_PROVIDER: "codex" })?.run).toBe("function");
     expect(createSelfHostAi({ AI_PROVIDER: "nonsense" })).toBeUndefined();
@@ -207,7 +218,7 @@ describe("routeProviders (#dual-ai-combiner — address one provider by name for
   });
 
   it("createSelfHostAi wires routing for a 2+ provider AI_PROVIDER (addressable by name)", async () => {
-    const ai = createSelfHostAi({ AI_PROVIDER: "anthropic,ollama", ANTHROPIC_API_KEY: "sk-ant", AI_BASE_URL: "http://o/v1" });
+    const ai = createSelfHostAi({ AI_PROVIDER: "anthropic,ollama", ANTHROPIC_API_KEY: "sk-ant", OLLAMA_AI_BASE_URL: "http://o/v1" });
     expect(typeof ai?.run).toBe("function");
   });
 
@@ -220,7 +231,7 @@ describe("routeProviders (#dual-ai-combiner — address one provider by name for
       sentModel = (JSON.parse(init.body) as { model: string }).model;
       return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
     }));
-    const ai = createSelfHostAi({ AI_PROVIDER: "openai-compatible", AI_BASE_URL: "http://o/v1" });
+    const ai = createSelfHostAi({ AI_PROVIDER: "openai-compatible", OPENAI_COMPATIBLE_AI_BASE_URL: "http://o/v1" });
     await ai?.run("openai-compatible", { prompt: "x" }); // the single-provider reviewer-plan address IS the provider name
     expect(sentModel).toBe("llama3.1"); // resolveModel(undefined, "", "llama3.1") — NOT the literal "openai-compatible"
   });
@@ -334,7 +345,7 @@ describe("branch coverage — defaults + edge inputs", () => {
       { role: "user", content: "follow-up" },
     ]);
   });
-  it("buildProvider uses provider-specific default base URLs when AI_BASE_URL is unset", () => {
+  it("buildProvider uses provider-specific default base URLs when provider base URLs are unset", () => {
     expect(typeof buildProvider("openai", {})?.run).toBe("function"); // defaults to https://api.openai.com/v1
     expect(typeof buildProvider("ollama", {})?.run).toBe("function"); // defaults to http://localhost:11434/v1
   });
@@ -403,7 +414,7 @@ describe("subscription CLI helpers + fail-safe", () => {
     expect(capturedEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe("t");
   });
 
-  it("Claude Code pins the default model (claude-sonnet-4-6) + --effort high; AI_MODEL/AI_EFFORT override; timeout scales with effort", async () => {
+  it("Claude Code pins the default model (claude-sonnet-4-6) + --effort high; CLAUDE_AI_* overrides explicitly", async () => {
     let seen: string[] = [];
     let timeout = 0;
     const cap: StubSpawn = async (_c, a, o) => {
@@ -411,13 +422,13 @@ describe("subscription CLI helpers + fail-safe", () => {
       timeout = o.timeoutMs;
       return { stdout: JSON.stringify({ type: "result", result: "ok" }), code: 0 };
     };
-    // empty model id (the dual-router default) + no AI_MODEL → pinned claude-sonnet-4-6; no AI_EFFORT → high
+    // Empty model id (the dual-router default) + no CLAUDE_AI_MODEL → pinned claude-sonnet-4-6; unset effort → high.
     await createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t" }, cap).run("", { prompt: "x" });
     expect(seen[seen.indexOf("--model") + 1]).toBe("claude-sonnet-4-6");
     expect(seen[seen.indexOf("--effort") + 1]).toBe("high");
     expect(timeout).toBe(240_000); // high → 240s (not the old fixed 120s)
-    // operator overrides flow through to the argv + the timeout scale
-    await createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t", AI_MODEL: "claude-opus-4-8", AI_EFFORT: "max" }, cap).run("", { prompt: "x" });
+    // Provider-specific overrides flow through to the argv + timeout scale.
+    await createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t", CLAUDE_AI_MODEL: "claude-opus-4-8", CLAUDE_AI_EFFORT: "max" }, cap).run("", { prompt: "x" });
     expect(seen[seen.indexOf("--model") + 1]).toBe("claude-opus-4-8");
     expect(seen[seen.indexOf("--effort") + 1]).toBe("max");
     expect(timeout).toBe(600_000); // max → 600s, so a large max-effort review isn't SIGKILLed at 120s
@@ -438,34 +449,38 @@ describe("subscription CLI helpers + fail-safe", () => {
     expect((await codexChain.run("bge-m3", { text: ["a"] })).data?.length).toBe(1);
   });
 
-  it("Codex: 0.142+ exec flags (no --ask-for-approval, has --skip-git-repo-check); --model only when configured", async () => {
+  it("Codex: 0.142+ exec flags, stdin prompt, explicit CODEX_AI_* config", async () => {
     let seen: string[] = [];
     let capturedEnv: Record<string, string | undefined> = {};
     let capturedCwd = "";
+    let capturedInput: string | undefined;
     let timeout = 0;
     const ok: StubSpawn = async (_cmd, args, opts) => {
       seen = args;
       capturedEnv = opts.env;
       capturedCwd = opts.cwd ?? "";
+      capturedInput = opts.input;
       timeout = opts.timeoutMs;
       return { stdout: JSON.stringify({ type: "result", result: "codex review" }), code: 0 };
     };
-    // no configured model + the dual-router's empty model id → OMIT --model (codex picks the account default;
-    // forcing e.g. gpt-5 fails on a ChatGPT-account login). And the removed --ask-for-approval must never appear.
+    // No configured model + the dual-router's empty model id → omit --model (Codex picks the account default).
     expect(
-      (await createCodexAi({ PATH: "/bin", WORKER_ONLY_VALUE: "internal", OPENAI_API_KEY: "sk-bill", AI_TIMEOUT_MS: "300000", GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, ok).run("", {
+      (await createCodexAi({ PATH: "/bin", WORKER_ONLY_VALUE: "internal", OPENAI_API_KEY: "sk-bill", CODEX_AI_TIMEOUT_MS: "300000", GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, ok).run("", {
         prompt: "x",
       })).response,
     ).toBe("codex review");
-    expect(seen).toEqual(["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--", "x"]);
+    expect(seen).toEqual(["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "-c", 'model_reasoning_effort="high"']);
     expect(seen).not.toContain("--ask-for-approval");
+    expect(seen).not.toContain("x");
+    expect(capturedInput).toBe("x");
     expect(capturedEnv).toEqual({ PATH: "/bin" });
     expect(capturedCwd).toContain("gittensory-ai-");
-    expect(timeout).toBe(300_000); // codex honors the same AI_TIMEOUT_MS override as Claude Code
-    // an explicit model (AI_MODEL, or a `codex:<model>` reviewer id) IS passed through but not inherited as env.
-    await createCodexAi({ AI_MODEL: "o4-mini", GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, ok).run("", { prompt: "x" });
-    expect(seen.join(" ")).toContain("--model o4-mini");
-    expect(capturedEnv.AI_MODEL).toBeUndefined();
+    expect(timeout).toBe(300_000);
+    // Provider-specific model/effort are passed through.
+    await createCodexAi({ CODEX_AI_MODEL: "gpt-5.5", CODEX_AI_EFFORT: "high", GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, ok).run("", { prompt: "x" });
+    expect(seen.join(" ")).toContain("--model gpt-5.5");
+    expect(seen.join(" ")).toContain('model_reasoning_effort="high"');
+    expect(capturedEnv.CODEX_AI_MODEL).toBeUndefined();
     const bad: StubSpawn = async () => ({ stdout: "", code: 1 });
     await expect(createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, bad).run("", { prompt: "x" })).rejects.toThrow(/codex_exit_1/);
   });
@@ -586,7 +601,7 @@ describe("subscription CLI helpers + fail-safe", () => {
       JSON.stringify({ type: "result", result: "review" }),
     ].join("\n");
     const ok: StubSpawn = async () => ({ stdout, code: 0 });
-    await createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1", AI_EFFORT: "medium" }, ok).run("", { prompt: "x" });
+    await createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1", CODEX_AI_EFFORT: "medium" }, ok).run("", { prompt: "x" });
     const metrics = await renderMetrics();
     expect(metrics).toContain('gittensory_ai_requests_total{effort="medium",model="gpt-5-codex",provider="codex"} 1');
     expect(metrics).toContain('gittensory_ai_input_tokens_total{effort="medium",kind="review",model="gpt-5-codex",provider="codex"} 20');

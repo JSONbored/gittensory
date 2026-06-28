@@ -1117,13 +1117,30 @@ export async function runGittensoryAiReview(
   };
 }
 
-/** The actual configured reviewer label for usage attribution (#1566): the self-host `AI_PROVIDER:AI_MODEL` when set,
- *  else the Worker dual-AI models. Without this, self-host claude-code reviews were mis-logged as the Workers-AI model
- *  ids (`@cf/openai/gpt-oss-120b+…`), which hid the silent claude-CLI-missing outage. */
+const SELF_HOST_REVIEWER_MODEL_ENV: Record<string, string> = {
+  anthropic: "ANTHROPIC_AI_MODEL",
+  "claude-code": "CLAUDE_AI_MODEL",
+  codex: "CODEX_AI_MODEL",
+  ollama: "OLLAMA_AI_MODEL",
+  openai: "OPENAI_AI_MODEL",
+  "openai-compatible": "OPENAI_COMPATIBLE_AI_MODEL",
+};
+
+/** The actual configured reviewer label for usage attribution (#1566): the self-host provider plus its explicit
+ *  provider-specific model when set, else the Worker dual-AI models. Without this, self-host claude-code reviews
+ *  were mis-logged as the Workers-AI model ids (`@cf/openai/gpt-oss-120b+...`), which hid outages. */
 function reviewerModelLabel(env: Env): string {
-  const e = env as unknown as { AI_PROVIDER?: string; AI_MODEL?: string };
+  const e = env as unknown as Record<string, string | undefined>;
   if (!e.AI_PROVIDER) return BEST_REVIEW_MODELS.join("+");
-  return [e.AI_PROVIDER, e.AI_MODEL].filter(Boolean).join(":");
+  return e.AI_PROVIDER.split(",")
+    .map((provider) => provider.trim().toLowerCase())
+    .filter(Boolean)
+    .map((provider) => {
+      const modelEnv = SELF_HOST_REVIEWER_MODEL_ENV[provider];
+      const model = modelEnv ? e[modelEnv]?.trim() : undefined;
+      return model ? `${provider}:${model}` : provider;
+    })
+    .join("+");
 }
 
 async function record(

@@ -148,8 +148,8 @@ describe("runAiReviewForAdvisory", () => {
     // usage event must attribute the ACTUAL configured reviewer — not the hardcoded Workers-AI ids that hid the
     // silent outage. Exercises runWorkersOpinion's now-logging catch + reviewerModelLabel's provider arm.
     const env = aiEnv(async () => { throw new Error("claude CLI not found"); });
-    (env as unknown as { AI_PROVIDER: string; AI_MODEL: string }).AI_PROVIDER = "claude-code";
-    (env as unknown as { AI_PROVIDER: string; AI_MODEL: string }).AI_MODEL = "claude-sonnet-4-6";
+    (env as unknown as { AI_PROVIDER: string; CLAUDE_AI_MODEL: string }).AI_PROVIDER = "claude-code";
+    (env as unknown as { AI_PROVIDER: string; CLAUDE_AI_MODEL: string }).CLAUDE_AI_MODEL = "claude-sonnet-4-6";
     const result = await runAiReviewForAdvisory(env, { settings: { aiReviewMode: "advisory" } as RepositorySettings, advisory: advisory(), repoFullName: "acme/widgets", pr, author: "alice", confirmedContributor: true });
     expect(result).toBeUndefined(); // provider threw → no usable output, degraded not crashed
     const usage = await env.DB.prepare("SELECT model FROM ai_usage_events WHERE feature = 'ai_review_pr' ORDER BY created_at DESC LIMIT 1").first<{ model: string }>();
