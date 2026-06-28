@@ -36,6 +36,17 @@ const DEFAULT_DRIFT_ISSUE_REPO = "JSONbored/gittensory";
 const UPSTREAM_STALE_MS = 2 * 60 * 60 * 1000;
 const REGISTRY_HYPERPARAMETER_DRIFT_LIMIT = 100;
 
+/** True when a ruleset snapshot's `generatedAt` is missing/unparseable or older than the staleness window.
+ *  Unparseable timestamps fail closed (treated as stale) — mirrors the `Number.isFinite(ageMs)` guard in backfill. */
+export function isUpstreamRulesetStale(
+  generatedAt: string,
+  nowMs: number = Date.now(),
+): boolean {
+  const parsedMs = Date.parse(generatedAt);
+  if (!Number.isFinite(parsedMs)) return true;
+  return parsedMs + UPSTREAM_STALE_MS < nowMs;
+}
+
 const TRACKED_SOURCES = [
   { key: "constants", path: "gittensor/constants.py" },
   { key: "registry", path: "gittensor/validator/weights/master_repositories.json" },
@@ -227,7 +238,9 @@ export async function loadUpstreamStatus(env: Env): Promise<UpstreamStatus> {
   const highest = highestSeverity(openReports.map((report) => report.severity));
   const registryHyperparameterDrift = summarizeRegistryHyperparameterDriftReports(openReports);
   const generatedAt = nowIso();
-  const stale = latestRuleset ? Date.parse(latestRuleset.generatedAt) + UPSTREAM_STALE_MS < Date.now() : false;
+  const stale = latestRuleset
+    ? isUpstreamRulesetStale(latestRuleset.generatedAt)
+    : false;
   const affectedAreas = [...new Set(openReports.flatMap((report) => report.affectedAreas))].sort();
   return {
     generatedAt,

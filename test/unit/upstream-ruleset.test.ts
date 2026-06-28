@@ -11,6 +11,7 @@ import {
   detectAndPersistUpstreamDrift,
   buildUpstreamDriftReport,
   fileUpstreamDriftIssues,
+  isUpstreamRulesetStale,
   loadUpstreamStatus,
   registryHyperparameterDriftWarningsForRepo,
   refreshUpstreamDrift,
@@ -794,6 +795,25 @@ describe("upstream ruleset drift tracking", () => {
     const staleEnv = createTestEnv();
     await persistUpstreamRulesetSnapshot(staleEnv, ruleset("stale", "stale-hash", "pending_saturation_model", 1, 0.01, "2026-05-30T00:00:00.000Z"));
     await expect(loadUpstreamStatus(staleEnv)).resolves.toMatchObject({ status: "stale", latestRulesetId: "stale" });
+  });
+
+  it("treats unparseable ruleset generatedAt as stale (fail-closed, #1695)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-30T01:00:00.000Z"));
+    const nowMs = Date.now();
+    expect(isUpstreamRulesetStale("not-a-date", nowMs)).toBe(true);
+    expect(isUpstreamRulesetStale("", nowMs)).toBe(true);
+    expect(isUpstreamRulesetStale("2026-05-30T00:30:00.000Z", nowMs)).toBe(false);
+
+    const badTsEnv = createTestEnv();
+    await persistUpstreamRulesetSnapshot(
+      badTsEnv,
+      ruleset("bad-ts", "bad-hash", "pending_saturation_model", 1, 0.01, "garbage-timestamp"),
+    );
+    await expect(loadUpstreamStatus(badTsEnv)).resolves.toMatchObject({
+      status: "stale",
+      latestRulesetId: "bad-ts",
+    });
   });
 
   it("deduplicates unchanged semantic drift fingerprints and leaves issue filing disabled by default", async () => {
