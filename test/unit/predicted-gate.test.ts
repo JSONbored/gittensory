@@ -50,6 +50,14 @@ describe("buildPredictedGateVerdict", () => {
     expect(result.note).toContain("public .gittensory.yml");
   });
 
+  it("threads gate.aiReview.closeConfidence into the policy without disturbing the public-config verdict (#7)", () => {
+    // The predictor builds the advisory from PUBLIC metadata only (no AI finding exists), so a closeConfidence
+    // floor has nothing to act on — the verdict stays a clean pass. This exercises the truthy `?? null` branch.
+    const result = verdict({ gate: { duplicates: "block", linkedIssue: "advisory", aiReview: { mode: "block", closeConfidence: 0.4 } } });
+    expect(result.conclusion).toBe("success");
+    expect(result.blockers).toHaveLength(0);
+  });
+
   it("predicts a BLOCK when a duplicate PR exists and duplicates:block (the default)", () => {
     // Another open PR already targets the same linked issue → duplicate_pr_risk.
     const result = verdict({ gate: { duplicates: "block" }, pullRequests: [openPr(42, "Retry uploads on 5xx responses", [7])] });
@@ -103,6 +111,21 @@ describe("buildPredictedGateVerdict", () => {
     });
     expect(result.conclusion).toBe("failure");
     expect(result.blockers.some((b) => b.code === "duplicate_pr_risk")).toBe(true);
+  });
+
+  it("surfaces the missing-linked-issue blocker under composite mergeReadiness even when linkedIssue is unset (#merge-readiness-parity)", () => {
+    // mergeReadiness:block forces the composite linked-issue sub-gate to block; the live gate collects
+    // linked-issue evidence whenever merge-readiness is on (shouldCollectLinkedIssueEvidence), so the
+    // predictor must surface the finding here too — otherwise it shows a false success while the live gate
+    // one-shot auto-closes the PR. linkedIssue is left unset (null), so only the mergeReadiness term applies.
+    const blocked = verdict({ gate: { duplicates: "off", mergeReadiness: "block" }, input: { body: "no issue here", linkedIssues: [] }, issues: [] });
+    expect(blocked.conclusion).toBe("failure");
+    expect(blocked.blockers.some((b) => b.code === "missing_linked_issue")).toBe(true);
+
+    // With neither linkedIssue nor mergeReadiness set, no missing-linked-issue finding is created (the
+    // false/false arm of the new condition) — matching the live gate, which collects no linked-issue evidence.
+    const noGate = verdict({ gate: { duplicates: "off" }, input: { body: "no issue here", linkedIssues: [] }, issues: [] });
+    expect(noGate.blockers.some((b) => b.code === "missing_linked_issue")).toBe(false);
   });
 
   it("honors public gate.firstTimeContributorGrace with predicted author history", () => {
