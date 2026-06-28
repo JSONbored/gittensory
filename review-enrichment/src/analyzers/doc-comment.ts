@@ -201,15 +201,6 @@ export function scanPatchForDocDrift(
       continue;
     }
 
-    // Only flag when this PR actually touched something in the JSDoc-signature window.
-    const windowHasChange = lines
-      .slice(docStart, fnIdx + 1)
-      .some((l) => l.isAdded);
-    if (!windowHasChange) {
-      i = docEnd + 1;
-      continue;
-    }
-
     const docParams = extractJsDocParams(docBlock);
     if (docParams.length === 0) {
       i = docEnd + 1;
@@ -217,13 +208,42 @@ export function scanPatchForDocDrift(
     }
 
     // Look across up to 8 lines to handle multi-line signatures.
+    const sigEnd = Math.min(fnIdx + 8, n);
     const sigText = lines
-      .slice(fnIdx, Math.min(fnIdx + 8, n))
+      .slice(fnIdx, sigEnd)
       .map((l) => l.content)
       .join(" ");
+
     const paramListBody = extractParamListBody(sigText);
     if (paramListBody === null) {
       // Can't parse the param list — skip rather than produce a false positive.
+      i = docEnd + 1;
+      continue;
+    }
+
+    // Locate the line holding the closing paren of the param list so the change-gate window
+    // ends exactly at the signature and does not reach into the function body.
+    let sigCloseLineIdx = fnIdx;
+    {
+      let depth = 0;
+      let seenOpen = false;
+      outer: for (let li = fnIdx; li < sigEnd; li++) {
+        for (const ch of lines[li]!.content) {
+          if (ch === "(") { depth++; seenOpen = true; }
+          else if (ch === ")" && seenOpen) {
+            depth--;
+            if (depth === 0) { sigCloseLineIdx = li; break outer; }
+          }
+        }
+      }
+    }
+
+    // Only flag when this PR actually touched the JSDoc-through-signature window.
+    // Bounded by the closing-paren line so body-only changes don't trigger drift checks.
+    const windowHasChange = lines
+      .slice(docStart, sigCloseLineIdx + 1)
+      .some((l) => l.isAdded);
+    if (!windowHasChange) {
       i = docEnd + 1;
       continue;
     }

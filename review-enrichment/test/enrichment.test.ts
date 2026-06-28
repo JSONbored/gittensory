@@ -28,6 +28,7 @@ import {
   scanPatchForDocDrift,
   scanDocComment,
 } from "../dist/analyzers/doc-comment.js";
+import {
   findOwners,
   parseCodeowners,
   patternToRegex,
@@ -1006,6 +1007,26 @@ test("scanPatchForDocDrift: caps at MAX_FINDINGS across one file", () => {
   }
   const findings = scanPatchForDocDrift("src/x.ts", lines.join("\n"));
   assert.equal(findings.length, 20);
+});
+
+test("scanPatchForDocDrift: change on a later line of a multi-line signature is detected", () => {
+  // Regression: windowHasChange must cover the full sig window, not just the first sig line.
+  // The JSDoc and first signature line are context; only a later param line is added.
+  const patch = [
+    "@@ -1,6 +1,7 @@",
+    " /**",
+    "  * @param a first param",
+    "  */",
+    " function foo(",
+    "-  a: string",
+    "+  a: string,",
+    "+  b: number",
+    " ) {}",
+  ].join("\n");
+  const findings = scanPatchForDocDrift("src/x.ts", patch);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]!.kind, "missing-param");
+  assert.equal(findings[0]!.param, "b");
 });
 
 test("scanDocComment: skips non-JS/TS files and files without patches", async () => {
