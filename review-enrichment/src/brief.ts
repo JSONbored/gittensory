@@ -15,6 +15,7 @@ import { scanActionPins } from "./analyzers/actions-pin.js";
 import { scanEol } from "./analyzers/eol-check.js";
 import { scanRedos } from "./analyzers/redos.js";
 import { scanVerbatimDuplication } from "./analyzers/verbatim-duplication.js";
+import { scanCodeowners } from "./analyzers/codeowners.js";
 import { renderBrief } from "./render.js";
 
 type AnalyzerFn = (req: EnrichRequest, signal: AbortSignal) => Promise<unknown>;
@@ -29,6 +30,7 @@ const ANALYZERS: Record<keyof BriefFindings, AnalyzerFn> = {
   eol: (req) => scanEol(req),
   redos: (req) => scanRedos(req),
   duplication: (req, signal) => scanVerbatimDuplication(req, fetch, { signal }),
+  codeowners: (req, signal) => scanCodeowners(req, fetch, { signal }),
 };
 
 function runWithTimeout<T>(
