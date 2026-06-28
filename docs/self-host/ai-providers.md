@@ -2,6 +2,10 @@
 
 The reviewer is configured by `AI_PROVIDER`. Reviews degrade deterministically (no AI) if it's unset.
 
+Deprecated shared knobs (`AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`, `AI_EFFORT`, `AI_TIMEOUT_MS`) fail startup with a
+clear migration error. Use the provider-specific variables below so dual-review setups cannot accidentally reuse the
+wrong model, base URL, key, effort, or timeout.
+
 ## Providers
 
 | `AI_PROVIDER`                             | Backend                                                                 | Needs                                                                                   |

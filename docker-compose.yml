@@ -313,7 +313,7 @@ services:
         condition: service_healthy
     volumes:
       # The exporter needs live DB read access to build the redacted snapshot. Grafana does not get this mount.
-      - gittensory-data:/appdb
+      - gittensory-data:/appdb:ro
       - grafana-reporting-data:/reporting
       - ./scripts/export-grafana-reporting-db.sh:/export-grafana-reporting-db.sh:ro
     environment:

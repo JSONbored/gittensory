@@ -2,7 +2,8 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, extractCliUsage, resolveAiReviewerPlan, resolveClaudeCliTimeoutMs, resolveCodexCliTimeoutMs, resolveCodexEffort, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, redactSecrets, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
+import { assertNoLegacySharedAiEnv, buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, extractCliUsage, resolveAiReviewerPlan, resolveClaudeCliTimeoutMs, resolveCodexCliTimeoutMs, resolveCodexEffort, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, redactSecrets, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
+import { labelSelfHostReviewerModel } from "../../src/selfhost/ai-config";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 
 describe("resolveModel (#979 — never leak the Workers-AI default to a self-host backend)", () => {
@@ -145,6 +146,10 @@ describe("createSelfHostAi — provider selection", () => {
     // "anthropic,ollama" with a key → both build → a chain (a runnable adapter)
     expect(typeof createSelfHostAi({ AI_PROVIDER: "anthropic,ollama", ANTHROPIC_API_KEY: "sk-ant" })?.run).toBe("function");
   });
+  it("fails loudly when deprecated shared AI env knobs are present", () => {
+    expect(() => assertNoLegacySharedAiEnv({ AI_PROVIDER: "ollama", AI_BASE_URL: "http://ollama:11434/v1", AI_MODEL: "llama3.1" })).toThrow(/legacy_shared_ai_config_unsupported: AI_BASE_URL, AI_MODEL/);
+    expect(() => createSelfHostAi({ AI_PROVIDER: "ollama", AI_EFFORT: "high" })).toThrow(/CLAUDE_AI_EFFORT\/CLAUDE_AI_TIMEOUT_MS/);
+  });
 });
 
 describe("createAnthropicAi (#979 native BYOK)", () => {
@@ -254,6 +259,7 @@ describe("resolveProviderNames + resolveAiReviewerPlan (#dual-ai-combiner)", () 
     expect(resolveProviderNames({ AI_PROVIDER: "  Claude-Code , CODEX " })).toEqual(["claude-code", "codex"]); // CLI providers always credentialed
     expect(resolveProviderNames({ AI_PROVIDER: "anthropic,ollama" })).toEqual(["ollama"]); // anthropic dropped (no key); ollama needs none
     expect(resolveProviderNames({ AI_PROVIDER: "anthropic,ollama", ANTHROPIC_API_KEY: "sk-ant" })).toEqual(["anthropic", "ollama"]);
+    expect(resolveProviderNames({ AI_PROVIDER: "openai,ollama" })).toEqual(["ollama"]); // openai requires OPENAI_API_KEY
   });
 
   it("resolveRequiredCliProviders mirrors comma-list AI_PROVIDER parsing for boot preflight", () => {
@@ -279,6 +285,10 @@ describe("resolveProviderNames + resolveAiReviewerPlan (#dual-ai-combiner)", () 
     expect(resolveAiReviewerPlan({ AI_PROVIDER: "claude-code,codex", AI_COMBINE: "consensus", AI_ON_MERGE: "both" })).toMatchObject({ combine: "consensus", onMerge: "both" });
     expect(resolveAiReviewerPlan({ AI_PROVIDER: "claude-code,codex", AI_COMBINE: "garbage", AI_ON_MERGE: "nonsense" })).toMatchObject({ combine: "synthesis", onMerge: undefined }); // invalid → defaults
     expect(resolveAiReviewerPlan({ AI_PROVIDER: "claude-code,codex,ollama" })?.reviewers).toEqual([{ model: "claude-code" }, { model: "codex" }]); // first two
+  });
+
+  it("labels explicit provider:model reviewer ids without consulting env defaults", () => {
+    expect(labelSelfHostReviewerModel(" CODEX:gpt-5.5 ", { CODEX_AI_MODEL: "ignored" })).toBe("codex:gpt-5.5");
   });
 });
 
@@ -358,7 +368,8 @@ describe("branch coverage — defaults + edge inputs", () => {
     ]);
   });
   it("buildProvider uses provider-specific default base URLs when provider base URLs are unset", () => {
-    expect(typeof buildProvider("openai", {})?.run).toBe("function"); // defaults to https://api.openai.com/v1
+    expect(buildProvider("openai", {})).toBeUndefined(); // openai is credentialed and requires OPENAI_API_KEY
+    expect(typeof buildProvider("openai", { OPENAI_API_KEY: "sk-test" })?.run).toBe("function"); // defaults to https://api.openai.com/v1
     expect(typeof buildProvider("ollama", {})?.run).toBe("function"); // defaults to http://localhost:11434/v1
     expect(typeof buildProvider("openai-compatible", {})?.run).toBe("function"); // defaults to http://localhost:11434/v1
   });

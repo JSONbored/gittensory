@@ -162,7 +162,19 @@ describe("runAiReviewForAdvisory", () => {
     const result = await runAiReviewForAdvisory(env, { settings: { aiReviewMode: "advisory" } as RepositorySettings, advisory: advisory(), repoFullName: "acme/widgets", pr, author: "alice", confirmedContributor: true });
     expect(result).toBeUndefined();
     const usage = await env.DB.prepare("SELECT model FROM ai_usage_events WHERE feature = 'ai_review_pr' ORDER BY created_at DESC LIMIT 1").first<{ model: string }>();
-    expect(usage?.model).toBe("codex+unknown-provider");
+    expect(usage?.model).toBe("codex");
+  });
+
+  it("records the resolved self-host reviewer plan instead of raw AI_PROVIDER entries", async () => {
+    const env = aiEnv(async () => { throw new Error("ollama unavailable"); });
+    Object.assign(env as unknown as Record<string, unknown>, {
+      AI_PROVIDER: "anthropic,ollama",
+      AI_REVIEW_PLAN: { reviewers: [{ model: "ollama" }], combine: "single" },
+    });
+    const result = await runAiReviewForAdvisory(env, { settings: { aiReviewMode: "advisory" } as RepositorySettings, advisory: advisory(), repoFullName: "acme/widgets", pr, author: "alice", confirmedContributor: true });
+    expect(result).toBeUndefined();
+    const usage = await env.DB.prepare("SELECT model FROM ai_usage_events WHERE feature = 'ai_review_pr' ORDER BY created_at DESC LIMIT 1").first<{ model: string }>();
+    expect(usage?.model).toBe("ollama");
   });
 
   it("no-ops for a non-confirmed contributor under the gittensor pack and when there is no head SHA", async () => {

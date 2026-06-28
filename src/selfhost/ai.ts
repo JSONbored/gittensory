@@ -7,6 +7,8 @@
 // records an error and degrades — never a silent wrong answer).
 
 import type { CombineStrategy, OnMerge } from "../services/ai-review";
+import { isConfiguredSelfHostProvider, resolveConfiguredProviderNames } from "./ai-config";
+export { assertNoLegacySharedAiEnv } from "./ai-config";
 import { incr } from "./metrics";
 
 interface AiRunOptions {
@@ -584,6 +586,7 @@ export function createChainAi(providers: Array<{ name: string; ai: SelfHostAi }>
 /** Build one provider adapter by name. Provider config stays explicit so dual-provider setups cannot accidentally
  *  reuse the wrong model/base/key across different backends. */
 export function buildProvider(name: string, env: Record<string, string | undefined>): SelfHostAi | undefined {
+  if (!isConfiguredSelfHostProvider(name, env)) return undefined;
   switch (name) {
     case "ollama":
     case "openai-compatible":
@@ -639,17 +642,14 @@ export function routeProviders(providers: Array<{ name: string; ai: SelfHostAi }
  *  order, lowercased. Shared by the adapter and the dual-review plan so they never disagree about which providers
  *  exist (e.g. an uncredentialed entry can't become a "reviewer" the router would then miss). */
 function buildProviders(env: Record<string, string | undefined>): Array<{ name: string; ai: SelfHostAi }> {
-  return (env.AI_PROVIDER ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean)
+  return resolveConfiguredProviderNames(env)
     .map((name) => ({ name, ai: buildProvider(name, env) }))
     .filter((p): p is { name: string; ai: SelfHostAi } => Boolean(p.ai));
 }
 
 /** The credentialed self-host provider names from AI_PROVIDER, in order. Empty when unconfigured. */
 export function resolveProviderNames(env: Record<string, string | undefined>): string[] {
-  return buildProviders(env).map((p) => p.name);
+  return resolveConfiguredProviderNames(env);
 }
 
 /** CLI-subscription providers need their binary present on PATH; keep boot preflight parsing identical to AI_PROVIDER. */
