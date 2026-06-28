@@ -91,6 +91,26 @@ export function captureReviewFailure(
 // string|number values are tagged; everything else stays in the full "log" context.
 const SENTRY_LOG_TAG_KEYS = ["repo", "repository", "installationId", "installation_id", "pull", "pullNumber", "pr", "project", "kind", "deliveryId"] as const;
 
+// Fields already represented in the title/level (or non-scalar) — excluded from the field-summary below so a
+// no-message title isn't padded with redundant or unrenderable values.
+const SENTRY_LOG_META_FIELDS = new Set(["level", "event", "ev", "message", "error", "err", "stack"]);
+
+/** Build a one-line `(key=value, …)` summary of a structured log's SCALAR fields. Many engine error logs carry
+ *  only an event slug + structured context (no `message`/`error`) — without this they'd land in Sentry as a bare
+ *  slug ("gate_check_permission_missing") with no hint of WHERE. This folds the context into the title instead:
+ *  `gate_check_permission_missing (repository=owner/repo, pullNumber=42)`. Empty when there's no scalar context
+ *  beyond the meta fields; capped so a fat log can't blow up the issue title. */
+function summarizeLogFields(obj: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (SENTRY_LOG_META_FIELDS.has(key)) continue;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      parts.push(`${key}=${value}`);
+    }
+  }
+  return parts.length > 0 ? ` (${parts.join(", ").slice(0, 180)})` : "";
+}
+
 /** Forward a structured console line to Sentry when it is an ERROR-level log. The engine logs operational
  *  failures (orb_broker_unavailable, gate-check errors, relay drops, …) as JSON strings, often via console.error.
  *  No-op when Sentry is off, the line isn't a JSON object string, or its level isn't error/fatal — routine logs
@@ -112,7 +132,10 @@ export function forwardStructuredLogToSentry(line: unknown): void {
   // Lead the Sentry title with the real failure detail (message → error), not just the event slug, so an operator
   // sees WHAT broke straight from the issue list instead of having to open the context blob.
   const detail = typeof obj.message === "string" ? obj.message : typeof obj.error === "string" ? obj.error : undefined;
-  const title = event ? (detail ? `${event}: ${detail}` : event) : (detail ?? "error");
+  // Title preference: "event: detail" (real failure text) → "event (key=value, …)" (context-only logs, so the
+  // issue list is never a bare slug) → detail alone → "error". The forwarder can't invent a sentence, but it can
+  // always surface WHERE from the structured fields.
+  const title = event ? (detail ? `${event}: ${detail}` : `${event}${summarizeLogFields(obj)}`) : (detail ?? "error");
   Sentry.withScope((scope) => {
     scope.setLevel(severity);
     scope.setContext("log", obj);
