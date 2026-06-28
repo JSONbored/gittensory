@@ -137,16 +137,16 @@ export function extractAddedBlocks(path: string, patch: string): AddedBlock[] {
 
 /**
  * Slide a window of `blockLineCount` lines over already-normalised source lines and return the
- * 1-indexed start line of the window with the highest fingerprint containment (≥ threshold), or
- * null if no window meets the threshold. The window is slightly widened (+2 lines) to tolerate
- * minor size mismatches between the PR block and the original.
+ * 1-indexed start line of the window with the highest fingerprint containment (≥ threshold) and
+ * that containment score, or null if no window meets the threshold. The window is slightly widened
+ * (+2 lines) to tolerate minor size mismatches between the PR block and the original.
  */
 export function findBestSourceLine(
   blockFps: Set<number>,
   blockLineCount: number,
   sourceLinesNorm: string[],
   threshold = CONTAINMENT_THRESHOLD,
-): number | null {
+): { line: number; containment: number } | null {
   if (sourceLinesNorm.length < blockLineCount) return null;
   const windowSize = blockLineCount + 2;
   let bestLine = -1;
@@ -162,7 +162,7 @@ export function findBestSourceLine(
       bestLine = i + 1;
     }
   }
-  return bestContainment >= threshold ? bestLine : null;
+  return bestContainment >= threshold ? { line: bestLine, containment: bestContainment } : null;
 }
 
 interface TreeEntry {
@@ -291,16 +291,16 @@ export async function scanVerbatimDuplication(
         if (fingerprintContainment(blockFps, sourceFps) < CONTAINMENT_THRESHOLD) continue;
 
         // Phase 2: sliding-window scan to locate the best-matching region in the source.
-        const sourceLine = findBestSourceLine(blockFps, block.lineCount, sourceLinesNorm);
-        if (sourceLine === null) continue;
+        const best = findBestSourceLine(blockFps, block.lineCount, sourceLinesNorm);
+        if (best === null) continue;
 
         findings.push({
           headFile: block.headFile,
           headLine: block.headLine,
           sourceFile: sourcePath,
-          sourceLine,
+          sourceLine: best.line,
           lineCount: block.lineCount,
-          similarity: Math.round(fingerprintContainment(blockFps, sourceFps) * 100) / 100,
+          similarity: Math.round(best.containment * 100) / 100,
         });
       }
     }

@@ -1063,10 +1063,11 @@ test("findBestSourceLine: locates the window with highest containment, returns n
   ];
   const sourceLinesNorm = sourceLines.map((l) => normalizeForFingerprint(l));
 
-  const line = findBestSourceLine(blockFps, blockLines.length, sourceLinesNorm);
+  const result = findBestSourceLine(blockFps, blockLines.length, sourceLinesNorm);
   // Any window from line 2-5 (1-indexed) fully contains the block; exact value depends on hashes.
-  assert.ok(line !== null, "should find a match");
-  assert.ok(line >= 1 && line <= 6, `expected line in 1-6, got ${line}`);
+  assert.ok(result !== null, "should find a match");
+  assert.ok(result.line >= 1 && result.line <= 6, `expected line in 1-6, got ${result.line}`);
+  assert.ok(result.containment >= 0.65, `expected containment ≥ 0.65, got ${result.containment}`);
 
   // Source shorter than block → null.
   assert.equal(findBestSourceLine(blockFps, 100, sourceLinesNorm), null);
