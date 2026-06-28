@@ -146,6 +146,47 @@ describe("GitHub check runs", () => {
     expect(mints).toBe(1);
   });
 
+  it("expires a rejected cached installation token and retries check-run publication once", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    let mints = 0;
+    let rejectedReads = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) {
+        mints += 1;
+        return Response.json({
+          token: mints === 1 ? "stale-token" : "fresh-token",
+          expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+        });
+      }
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      if (url.includes("/commits/stale-head/check-runs") && auth.includes("stale-token")) {
+        rejectedReads += 1;
+        return Response.json({ message: "Bad credentials" }, { status: 401 });
+      }
+      if (url.includes("/commits/stale-head/check-runs")) {
+        expect(auth).toContain("fresh-token");
+        return Response.json({ total_count: 0, check_runs: [] });
+      }
+      if (url.includes("/check-runs") && init?.method === "POST") {
+        expect(auth).toContain("fresh-token");
+        return Response.json({ id: 556, html_url: "https://github.com/checks/556" }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await createOrUpdatePendingGateCheckRun(
+      createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }),
+      556,
+      "JSONbored/gittensory",
+      gateAdvisory("stale-head"),
+    );
+
+    expect(result).toMatchObject({ kind: "published", id: 556 });
+    expect(mints).toBe(2);
+    expect(rejectedReads).toBe(1);
+  });
+
   it("single-flights concurrent cold-cache mints for one install (no thundering herd)", async () => {
     const privateKey = await generatePrivateKeyPem();
     let mints = 0;
