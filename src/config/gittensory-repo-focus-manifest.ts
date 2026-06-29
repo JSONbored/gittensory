@@ -13,6 +13,7 @@ wantedPaths:
   - test/
   - migrations/
   - scripts/
+  - review-enrichment/
   - .github/workflows/
   - wrangler.jsonc
   - apps/gittensory-ui/

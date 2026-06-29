@@ -124,7 +124,7 @@ pasted JSON block will not work in Codex). You'll use these tools in Phases 1 an
 - **Run the pre-start checks** via MCP: `gittensory_check_before_start` (is it claimed / a duplicate
   cluster / already solved?) and, if linking an issue, `gittensory_validate_linked_issue`.
 - **Stay in scope.** The gate's `wantedPaths` are `src/`, `packages/`, `test/`, `migrations/`,
-  `scripts/`, `.github/workflows/`, `wrangler.jsonc`, `apps/gittensory-ui/`. Avoid `blockedPaths`
+  `scripts/`, `review-enrichment/`, `.github/workflows/`, `wrangler.jsonc`, `apps/gittensory-ui/`. Avoid `blockedPaths`
   (`site/`, `CNAME`, `**/lovable/**`). Keep the PR narrow — one coherent change.
 
 ---
