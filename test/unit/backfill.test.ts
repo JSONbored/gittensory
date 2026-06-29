@@ -3338,6 +3338,199 @@ describe("GitHub backfill", () => {
       ]);
     });
 
+    it("paginates review threads so blockers beyond the first page cannot hide", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      const queries: string[] = [];
+      const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (input.toString() !== "https://api.github.com/graphql") return new Response("not found", { status: 404 });
+        const query = JSON.parse(String(init?.body)).query as string;
+        queries.push(query);
+        if (!query.includes("after:")) {
+          return Response.json({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    nodes: [{ isResolved: true, isOutdated: false, path: "resolved.ts", line: 1, comments: { nodes: [{ body: "already resolved", author: { login: "scanner[bot]" } }] } }],
+                    pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+                  },
+                },
+              },
+            },
+          });
+        }
+        return Response.json({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      isResolved: false,
+                      isOutdated: false,
+                      path: "src/hidden.ts",
+                      line: 77,
+                      comments: {
+                        nodes: [
+                          {
+                            body: "**P0:** Hidden second-page review thread must block",
+                            url: "https://github.example/thread/second-page",
+                            author: { login: "superagent-security[bot]" },
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: "cursor-2" },
+                },
+              },
+            },
+          },
+        });
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const blockers = await fetchLiveReviewThreadBlockers(env, "JSONbored/gittensory", 1781, "public-token");
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(queries[0]).toContain("reviewThreads(first: 50)");
+      expect(queries[1]).toContain('reviewThreads(first: 50, after: "cursor-1")');
+      expect(blockers).toEqual([
+        expect.objectContaining({
+          title: "Hidden second-page review thread must block",
+          priority: "P0",
+          path: "src/hidden.ts",
+          line: 77,
+          url: "https://github.example/thread/second-page",
+        }),
+      ]);
+    });
+
+    it("stops review-thread pagination on a repeated cursor without dropping fetched blockers", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      let calls = 0;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        if (input.toString() !== "https://api.github.com/graphql") return new Response("not found", { status: 404 });
+        calls += 1;
+        return Response.json({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes:
+                    calls === 1
+                      ? []
+                      : [
+                          {
+                            isResolved: false,
+                            isOutdated: false,
+                            path: "src/repeated-cursor.ts",
+                            line: 9,
+                            comments: { nodes: [{ body: "**P1:** Repeated cursor blocker", author: { login: "scanner[bot]" } }] },
+                          },
+                        ],
+                  pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+                },
+              },
+            },
+          },
+        });
+      });
+
+      const blockers = await fetchLiveReviewThreadBlockers(env, "JSONbored/gittensory", 1781, "public-token");
+
+      expect(calls).toBe(2);
+      expect(blockers).toEqual([
+        expect.objectContaining({
+          title: "Repeated cursor blocker",
+          path: "src/repeated-cursor.ts",
+          line: 9,
+        }),
+      ]);
+    });
+
+    it("keeps fetched review-thread blockers when a later page is malformed", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      let calls = 0;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        if (input.toString() !== "https://api.github.com/graphql") return new Response("not found", { status: 404 });
+        calls += 1;
+        if (calls === 2) {
+          return Response.json({ data: { repository: { pullRequest: { reviewThreads: null } } } });
+        }
+        return Response.json({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      isResolved: false,
+                      isOutdated: false,
+                      path: "src/fetched-before-malformed-page.ts",
+                      line: 14,
+                      comments: { nodes: [{ body: "**P1:** Fetched blocker before malformed page", author: { login: "scanner[bot]" } }] },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+                },
+              },
+            },
+          },
+        });
+      });
+
+      const blockers = await fetchLiveReviewThreadBlockers(env, "JSONbored/gittensory", 1781, "public-token");
+
+      expect(calls).toBe(2);
+      expect(blockers).toEqual([
+        expect.objectContaining({
+          title: "Fetched blocker before malformed page",
+          path: "src/fetched-before-malformed-page.ts",
+          line: 14,
+        }),
+      ]);
+    });
+
+    it("stops review-thread pagination when GitHub omits the next cursor", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+        if (input.toString() !== "https://api.github.com/graphql") return new Response("not found", { status: 404 });
+        return Response.json({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      isResolved: false,
+                      isOutdated: false,
+                      path: "src/missing-cursor.ts",
+                      line: 12,
+                      comments: { nodes: [{ body: "**P2:** Missing cursor blocker", author: { login: "scanner[bot]" } }] },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: true, endCursor: null },
+                },
+              },
+            },
+          },
+        });
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const blockers = await fetchLiveReviewThreadBlockers(env, "JSONbored/gittensory", 1781, "public-token");
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(blockers).toEqual([
+        expect.objectContaining({
+          title: "Missing cursor blocker",
+          path: "src/missing-cursor.ts",
+          line: 12,
+        }),
+      ]);
+    });
+
     it("ignores resolved, outdated, own-bot, and empty review threads", async () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
