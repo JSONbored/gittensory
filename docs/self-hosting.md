@@ -233,8 +233,9 @@ content-lane are not yet per-repo toggleable and stay on the allowlist.)
   - `GET /health` — binding-free liveness (the container `HEALTHCHECK` uses it).
   - `GET /ready` — readiness: returns `503` until the DB answers **and** migrations are applied
     (`{"ok":true,"checks":{"db":true,"migrations":true}}`). Use it as your orchestrator's readiness probe.
-  - `GET /metrics` — Prometheus text: `gittensory_queue_pending` / `_dead`, `gittensory_jobs_*_total`
-    (enqueued/processed/failed/dead), `gittensory_uptime_seconds`, `gittensory_http_requests_total`.
+  - `GET /metrics` — Prometheus text: `gittensory_queue_pending` / `_dead`, persisted
+    `gittensory_jobs_*_persisted_total` queue counters, in-process `gittensory_jobs_*_total` counters,
+    `gittensory_uptime_seconds`, and `gittensory_http_requests_total`.
 - **Durable queue.** Jobs are persisted in SQLite (`_selfhost_jobs`), not held in memory — a restart or crash
   **re-claims** in-flight work instead of losing it. Failures retry with exponential backoff and dead-letter
   after `maxRetries` (visible via `gittensory_queue_dead`).
@@ -258,10 +259,15 @@ content-lane are not yet per-repo toggleable and stay on the allowlist.)
   dashboard-safe `review_targets` snapshot, preserves older non-overlapping legacy `review_targets`, and copies
   redacted `ai_usage_events` rows into `/reporting/gittensory-reporting.sqlite` every
   `GRAFANA_REPORTING_EXPORT_INTERVAL_SECONDS` seconds (default 30). The SQLite datasource points at that redacted
-  reporting DB. If you override the app SQLite `DATABASE_PATH`, set `GITTENSORY_REPORTING_SOURCE_DB` to the
-  matching exporter mount path, for example `/appdb/custom.sqlite` for `DATABASE_PATH=/data/custom.sqlite`.
+  reporting DB. If the source DB disappears after a successful export, the exporter preserves the last good
+  reporting DB instead of replacing it with an empty snapshot. If you override the app SQLite `DATABASE_PATH`, set
+  `GITTENSORY_REPORTING_SOURCE_DB` to the matching exporter mount path, for example `/appdb/custom.sqlite` for
+  `DATABASE_PATH=/data/custom.sqlite`.
   `DATABASE_URL`/Postgres deployments currently export an empty dashboard-safe DB so Grafana can start;
   Postgres-backed maintainer analytics need a dedicated SQL exporter.
+- **Prometheus history.** The observability profile stores TSDB data in the `prometheus-data` named volume and keeps
+  `PROMETHEUS_RETENTION_TIME` of history (default `180d`). Do not run `docker compose down -v` unless you intend to
+  delete Grafana/Prometheus history.
 - **App-level metrics.** Enable `GITTENSORY_REVIEW_OPS=true` for the read-only gate-block anomaly scan and the
   bearer-gated `GET /v1/internal/ops/stats` aggregate.
 

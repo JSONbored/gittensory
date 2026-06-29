@@ -261,7 +261,7 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
-      - "--storage.tsdb.retention.time=30d"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-180d}"
 
   # Routes Prometheus alerts to your notification channel. Ships SILENT: alerts go to a
   # null receiver until you fill in a receiver in alertmanager/alertmanager.yml.

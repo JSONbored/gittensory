@@ -54,11 +54,27 @@ CREATE INDEX ai_usage_events_model_created_idx ON ai_usage_events(model, created
 SQL
 
 if [ ! -s "$APP_DB" ]; then
+  if [ -s "$OUT_DB" ]; then
+    rm -f "$TMP_DB" "$TMP_DB-wal" "$TMP_DB-shm"
+    echo "reporting export skipped: source database missing at $APP_DB; preserving last good $OUT_DB" >&2
+    exit 1
+  fi
   sqlite3 "$TMP_DB" "PRAGMA quick_check;" | grep -qx "ok"
   mv "$TMP_DB" "$OUT_DB"
   rm -f "$TMP_DB-wal" "$TMP_DB-shm"
   echo "reporting export empty: source database missing at $APP_DB" >&2
   exit 0
+fi
+
+if ! source_table_exists "pull_requests" &&
+   ! source_table_exists "advisories" &&
+   ! source_table_exists "review_targets" &&
+   ! source_table_exists "ai_usage_events"; then
+  if [ -s "$OUT_DB" ]; then
+    rm -f "$TMP_DB" "$TMP_DB-wal" "$TMP_DB-shm"
+    echo "reporting export skipped: no reporting source tables in $APP_DB; preserving last good $OUT_DB" >&2
+    exit 1
+  fi
 fi
 
 if source_table_exists "pull_requests" && source_table_exists "advisories"; then
