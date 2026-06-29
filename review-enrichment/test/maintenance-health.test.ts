@@ -28,27 +28,34 @@ const okJson =
     json: async () => body,
   });
 
-test("fetchNpmSignals reads deprecation, release date, and maintainer count", async () => {
+test("fetchNpmSignals reads deprecation, package activity date, and maintainer count", async () => {
   const signals = await fetchNpmSignals(
     "left-pad",
     "1.0.0",
     okJson({
       versions: { "1.0.0": { deprecated: "Use pad-left instead" } },
-      time: { "1.0.0": "2021-01-01T00:00:00.000Z" },
+      time: {
+        "1.0.0": "2021-01-01T00:00:00.000Z",
+        modified: "2026-01-01T00:00:00.000Z",
+      },
       maintainers: [{ name: "one" }],
     }),
   );
   assert.equal(signals?.deprecatedMessage, "Use pad-left instead");
-  assert.equal(signals?.lastReleaseDate, "2021-01-01T00:00:00.000Z");
+  assert.equal(signals?.lastReleaseDate, "2026-01-01T00:00:00.000Z");
   assert.equal(signals?.maintainers, 1);
 });
 
-test("fetchPypiSignals reads yanked releases and maintainer hints", async () => {
+test("fetchPypiSignals dedupes maintainer name/email into one maintainer hint", async () => {
   const signals = await fetchPypiSignals(
     "demo",
     "2.0.0",
     okJson({
-      info: { maintainer: "alice", deprecated: "Project retired" },
+      info: {
+        maintainer: "alice",
+        maintainer_email: "alice@example.com",
+        deprecated: "Project retired",
+      },
       releases: {
         "2.0.0": [
           {
@@ -83,6 +90,32 @@ test("scanMaintenanceHealth flags npm dependency risks with low-noise reasons", 
       reasons: ["deprecated", "stale-release", "sole-maintainer"],
       deprecatedMessage: "No longer maintained",
       lastReleaseDate: "2021-01-01T00:00:00.000Z",
+      maintainers: 1,
+    },
+  ]);
+});
+
+test("scanMaintenanceHealth does not flag stale-release for an old version in an active npm package", async () => {
+  const findings = await scanMaintenanceHealth(
+    npmPatch("legacy-lib"),
+    okJson({
+      versions: { "1.0.0": {} },
+      time: {
+        "1.0.0": "2021-01-01T00:00:00.000Z",
+        modified: "2026-06-01T00:00:00.000Z",
+      },
+      maintainers: [{ name: "solo" }],
+    }),
+    { now: NOW },
+  );
+  assert.deepEqual(findings, [
+    {
+      ecosystem: "npm",
+      package: "legacy-lib",
+      version: "1.0.0",
+      reasons: ["sole-maintainer"],
+      deprecatedMessage: null,
+      lastReleaseDate: "2026-06-01T00:00:00.000Z",
       maintainers: 1,
     },
   ]);

@@ -75,6 +75,19 @@ interface NpmRegistryDoc {
   maintainers?: unknown[];
 }
 
+function latestNpmActivityDate(
+  time: NpmRegistryDoc["time"],
+): string | null {
+  const modified = toIsoDate(time?.modified);
+  if (modified) return modified;
+  const candidates = Object.entries(time ?? {})
+    .filter(([key]) => key !== "created" && key !== "modified")
+    .map(([, value]) => toIsoDate(value))
+    .filter((value): value is string => Boolean(value))
+    .sort();
+  return candidates.at(-1) ?? null;
+}
+
 export async function fetchNpmSignals(
   name: string,
   version: string,
@@ -93,10 +106,7 @@ export async function fetchNpmSignals(
       typeof versionDoc?.deprecated === "string"
         ? versionDoc.deprecated.replace(/\s+/g, " ").slice(0, 180)
         : null,
-    lastReleaseDate:
-      toIsoDate(data.time?.[version]) ??
-      toIsoDate(data.time?.modified) ??
-      null,
+    lastReleaseDate: latestNpmActivityDate(data.time),
     maintainers: Array.isArray(data.maintainers) ? data.maintainers.length : null,
   };
 }
@@ -134,11 +144,9 @@ export async function fetchPypiSignals(
     .map((item) => toIsoDate(item.upload_time_iso_8601))
     .filter((value): value is string => Boolean(value))
     .sort();
-  const maintainerHints = new Set(
-    [data.info?.maintainer, data.info?.maintainer_email]
-      .map((value) => value?.trim())
-      .filter((value): value is string => Boolean(value)),
-  );
+  const maintainerName = data.info?.maintainer?.trim() || null;
+  const maintainerEmail =
+    maintainerName ? null : data.info?.maintainer_email?.trim() || null;
   const deprecated =
     typeof data.info?.deprecated === "string"
       ? data.info.deprecated
@@ -149,7 +157,7 @@ export async function fetchPypiSignals(
     deprecatedMessage: deprecated,
     yanked: files.some((item) => item.yanked === true),
     lastReleaseDate: uploadTimes.at(-1) ?? null,
-    maintainers: maintainerHints.size ? maintainerHints.size : null,
+    maintainers: maintainerName || maintainerEmail ? 1 : null,
   };
 }
 
