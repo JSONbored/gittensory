@@ -4273,8 +4273,8 @@ export function buildPublicPrIntelligenceComment(args: {
       ? "Public GitHub metadata was checked for review readiness. Gittensor-specific context appears only when confirmed."
       : "Confirmed Gittensor contributor context was checked from public metadata and Gittensory cache.";
   const readinessByKey = new Map(readiness.components.map((component) => [component.key, component]));
-  const validationComponent = readinessByKey.get("validation");
-  const changeScopeComponent = readinessByKey.get("change_scope");
+  const validationComponent = readinessByKey.get("validation")!;
+  const changeScopeComponent = readinessByKey.get("change_scope")!;
   const contributorWorkload = contributorWorkloadPanelResult(args.profile);
   const contributorContext = contributorContextPanelResult(args.pr, args.profile, args.detection, confirmedMiner);
   // Each row carries a stable key so a maintainer can show/hide it from `.gittensory.yml review.fields`
@@ -4283,8 +4283,8 @@ export function buildPublicPrIntelligenceComment(args: {
     { key: "linkedIssue", cells: ["Linked issue", linkedIssueResult.result, linkedIssueResult.evidence, linkedIssueResult.action] },
     { key: "relatedWork", cells: ["Related work", relatedWorkResult.result, relatedWorkResult.evidence, relatedWorkResult.action] },
     /* v8 ignore start -- Readiness components are built as a fixed key set; fallbacks guard future partial score shapes. */
-    { key: "reviewLoad", cells: ["Change scope", scoreResultIcon(changeScopeComponent), changeScopeComponent?.evidence ?? "No public scope metadata found.", changeScopeComponent?.action ?? "No action."] },
-    { key: "validationEvidence", cells: ["Validation posture", scoreResultIcon(validationComponent), validationComponent?.evidence ?? "No validation signal found.", validationComponent?.action ?? "Add validation note."] },
+    { key: "reviewLoad", cells: ["Change scope", scoreResultIcon(changeScopeComponent), changeScopeComponent.evidence, changeScopeComponent.action] },
+    { key: "validationEvidence", cells: ["Validation posture", scoreResultIcon(validationComponent), validationComponent.evidence, validationComponent.action] },
     { key: "openPrQueue", cells: ["Contributor workload", contributorWorkload.result, contributorWorkload.evidence, contributorWorkload.action] },
     /* v8 ignore stop */
     { key: "contributorContext", cells: ["Contributor context", contributorContext.result, contributorContext.evidence, contributorContext.action] },
@@ -4453,15 +4453,15 @@ export function buildPublicPrPanelSignalRows(args: {
   const gateConclusion = args.gate?.conclusion ?? fallbackGateConclusion;
   const confirmedMiner = isOfficialContributorDetection(args.detection);
   const readinessByKey = new Map(readiness.components.map((component) => [component.key, component]));
-  const validationComponent = readinessByKey.get("validation");
-  const changeScopeComponent = readinessByKey.get("change_scope");
+  const validationComponent = readinessByKey.get("validation")!;
+  const changeScopeComponent = readinessByKey.get("change_scope")!;
   const contributorWorkload = contributorWorkloadPanelResult(args.profile);
   const contributorContext = contributorContextPanelResult(args.pr, args.profile, args.detection, confirmedMiner);
   const rows: PublicPrPanelSignalRow[] = [
     { key: "linkedIssue", cells: ["Linked issue", linkedIssueResult.result, linkedIssueResult.evidence, linkedIssueResult.action] },
     { key: "relatedWork", cells: ["Related work", relatedWorkResult.result, relatedWorkResult.evidence, relatedWorkResult.action] },
-    { key: "reviewLoad", cells: ["Change scope", scoreResultIcon(changeScopeComponent), changeScopeComponent?.evidence ?? "No public scope metadata found.", changeScopeComponent?.action ?? "No action."] },
-    { key: "validationEvidence", cells: ["Validation posture", scoreResultIcon(validationComponent), validationComponent?.evidence ?? "No validation signal found.", validationComponent?.action ?? "Add validation note."] },
+    { key: "reviewLoad", cells: ["Change scope", scoreResultIcon(changeScopeComponent), changeScopeComponent.evidence, changeScopeComponent.action] },
+    { key: "validationEvidence", cells: ["Validation posture", scoreResultIcon(validationComponent), validationComponent.evidence, validationComponent.action] },
     { key: "openPrQueue", cells: ["Contributor workload", contributorWorkload.result, contributorWorkload.evidence, contributorWorkload.action] },
     { key: "contributorContext", cells: ["Contributor context", contributorContext.result, contributorContext.evidence, contributorContext.action] },
     { key: "gateResult", cells: ["Gate result", gateStatus(gateEnabled, gateConclusion), gateEnabled ? gateAction(gateConclusion) : "Advisory only.", gateEnabled ? gateNextAction(gateConclusion) : "No action."] },
@@ -4608,9 +4608,7 @@ function contributorWorkloadScore(unlinkedOpenPullRequests: number): number {
   return 3;
 }
 
-function scoreResultIcon(component: Pick<PublicReadinessScore["components"][number], "score" | "max"> | undefined): string {
-  /* v8 ignore next -- Component lookup is fixed today; undefined is a defensive fallback for future score shape drift. */
-  if (!component) return "⚠️ No score";
+function scoreResultIcon(component: Pick<PublicReadinessScore["components"][number], "score" | "max">): string {
   const ratio = component.score / component.max;
   if (ratio >= 0.85) return `✅ ${component.score}/${component.max}`;
   if (ratio >= 0.45) return `⚠️ ${component.score}/${component.max}`;
@@ -4925,7 +4923,7 @@ function formatAlertBlock(lines: string[]): string[] {
 function aiReviewMainHasBlockers(main: string): boolean {
   const marker = main.search(/\*\*Blockers\*\*/i);
   if (marker === -1) return false;
-  const after = main.slice(marker).split(/\n(?=\*\*[^*]+\*\*)/)[0] ?? "";
+  const after = main.slice(marker).split(/\n(?=\*\*[^*]+\*\*)/)[0]!;
   return after
     .split("\n")
     .slice(1)

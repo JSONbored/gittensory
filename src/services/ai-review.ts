@@ -735,16 +735,18 @@ async function runProviderReview(
   );
   const model = providerKey.model || PROVIDER_DEFAULT_MODEL[providerKey.provider];
   if (failure) return { review: null, failure, diagnostic: { model, attempt: 0, status: "provider_error", error: failure } };
-  const review = text ? parseModelReview(text) : null;
+  /* v8 ignore next -- callAiProvider returns a string for every non-failure response; null is a type-level guard. */
+  const textValue = text ?? "";
+  const review = textValue ? parseModelReview(textValue) : null;
   return {
     review,
-    ...(text && !review ? { fallbackNote: text } : {}),
+    ...(textValue && !review ? { fallbackNote: textValue } : {}),
     diagnostic: {
       model,
       attempt: 0,
-      status: review ? "parsed" : text ? "unparseable_output" : "empty_output",
-      responseChars: text?.length ?? 0,
-      hasJsonObject: Boolean(text && extractLastJsonObject(text)),
+      status: review ? "parsed" : textValue ? "unparseable_output" : "empty_output",
+      responseChars: textValue.length,
+      hasJsonObject: Boolean(textValue && extractLastJsonObject(textValue)),
     },
   };
 }
@@ -1123,7 +1125,7 @@ export async function runGittensoryAiReview(
     advisoryReview = outcome.review;
     byokFailure = outcome.failure;
     if (outcome.fallbackNote) fallbackNotes.push(outcome.fallbackNote);
-    if (outcome.diagnostic) reviewDiagnostics.push(outcome.diagnostic);
+    reviewDiagnostics.push(outcome.diagnostic!);
   } else {
     const outcome = await runWorkersOpinion(
       env,
@@ -1208,7 +1210,7 @@ export async function runGittensoryAiReview(
     inconclusive = true;
   const advisoryNotes =
     reviewsForNotes.length > 0
-      ? composeAdvisoryNotes(reviewsForNotes) ?? composeFallbackAdvisoryNotes(fallbackNotes)
+      ? (composeAdvisoryNotes(reviewsForNotes) ?? composeFallbackAdvisoryNotes(fallbackNotes))
       : composeFallbackAdvisoryNotes(fallbackNotes);
   // Line-anchored inline findings (#inline-comments): only propagate model output when the resolved feature gate
   // asked for it. AI output is PR-author-influenced, so the prompt suffix is not an authorization boundary.
@@ -1251,7 +1253,7 @@ export async function runGittensoryAiReview(
     estimatedNeurons,
     reviewerCount: Math.max(reviewsForNotes.length, fallbackNotes.length),
     inlineFindings,
-    ...(reviewDiagnostics.length > 0 ? { reviewDiagnostics } : {}),
+    reviewDiagnostics,
   };
 }
 

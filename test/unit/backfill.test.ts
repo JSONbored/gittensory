@@ -2834,6 +2834,41 @@ describe("GitHub backfill", () => {
       expect(aggregate.nonRequiredFailingDetails.map((detail) => detail.name).sort()).toEqual(["attacker/non-required-check", "attacker/non-required-status"]);
     });
 
+    it("treats a visible required classic status that is still pending as pending CI", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) {
+          return Response.json({
+            check_runs: [
+              { name: "lint", status: "completed", conclusion: "success" },
+            ],
+          });
+        }
+        if (url.includes("/status?")) {
+          return Response.json({
+            statuses: [
+              { context: "codecov/patch", state: "pending", description: "Waiting for report" },
+              { context: "lint", state: "success" },
+            ],
+          });
+        }
+        return new Response("not found", { status: 404 });
+      });
+
+      const aggregate = await fetchLiveCiAggregate(
+        env,
+        "JSONbored/gittensory",
+        "abc123",
+        "public-token",
+        new Set(["codecov/patch", "lint"]),
+      );
+
+      expect(aggregate.ciState).toBe("pending");
+      expect(aggregate.hasPending).toBe(true);
+      expect(aggregate.failingDetails).toEqual([]);
+    });
+
     it("keeps an observed failure failed while still reporting pending CI separately", async () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {

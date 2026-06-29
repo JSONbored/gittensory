@@ -112,6 +112,61 @@ describe("createPgQueue (durable #977)", () => {
     expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("UPDATE _selfhost_jobs SET priority=$1"), [8, "c"]);
   });
 
+  it("init() skips already-normalized priority and job-key rows", async () => {
+    const priorityUpdateSql = "UPDATE _selfhost_jobs SET priority=$1";
+    const jobKeyUpdateSql = "UPDATE _selfhost_jobs SET job_key=$1";
+    const fn = vi.fn().mockImplementation(async (sql: unknown) => {
+      const q = String(sql);
+      if (q.includes("SELECT id, payload, priority")) {
+        return {
+          rows: [
+            { id: "null-priority", payload: JSON.stringify(msg("unknown")), priority: null },
+            {
+              id: "manual",
+              payload: JSON.stringify({
+                type: "agent-regate-pr",
+                deliveryId: "manual-regate:1",
+              }),
+              priority: 99,
+            },
+          ],
+          rowCount: 2,
+        };
+      }
+      if (q.includes("SELECT id, payload, job_key") && q.includes("status IN")) {
+        return {
+          rows: [
+            {
+              id: "keyed",
+              payload: JSON.stringify({
+                type: "agent-regate-sweep",
+                repoFullName: "JSONbored/gittensory",
+              }),
+              job_key: "agent-regate-sweep:jsonbored/gittensory",
+            },
+            { id: "unkeyed", payload: JSON.stringify(msg("unknown")), job_key: null },
+          ],
+          rowCount: 2,
+        };
+      }
+      if (q.includes("WHERE status='processing'")) return { rows: [], rowCount: 0 };
+      if (q.includes("WHERE status='pending' AND run_after<=$1")) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    });
+    const q = createPgQueue({ query: fn } as unknown as Pool, async () => undefined);
+
+    await q.init();
+
+    expect(fn).not.toHaveBeenCalledWith(
+      expect.stringContaining(priorityUpdateSql),
+      expect.anything(),
+    );
+    expect(fn).not.toHaveBeenCalledWith(
+      expect.stringContaining(jobKeyUpdateSql),
+      expect.anything(),
+    );
+  });
+
   it("init() backfills job keys, recovers crashed jobs, and spreads due startup backlog", async () => {
     const oldMin = process.env.QUEUE_STARTUP_JITTER_MIN_JOBS;
     const oldJitter = process.env.QUEUE_STARTUP_JITTER_MS;
@@ -262,6 +317,38 @@ describe("createPgQueue (durable #977)", () => {
     expect(claimSql).toHaveLength(2);
     expect(claimSql[0]).toContain("priority >= $2");
     expect(claimSql[1]).toContain("priority < $2");
+  });
+
+  it("processes a background-lane job when foreground work is empty", async () => {
+    const m = makePool();
+    m.enqueueResult({ rows: [], rowCount: 0 });
+    m.enqueueResult({
+      rows: [
+        {
+          id: "background",
+          payload: JSON.stringify(msg("agent-regate-sweep")),
+          attempts: 0,
+          job_key: "agent-regate-sweep",
+          priority: 0,
+        },
+      ],
+      rowCount: 1,
+    });
+    const seen: string[] = [];
+    const q = createPgQueue(
+      m.pool,
+      async (j) => void seen.push(typeOf(j)),
+      { backgroundConcurrency: 1 },
+    );
+
+    await q.init();
+    await q.drain();
+
+    expect(seen).toEqual(["agent-regate-sweep"]);
+    expect(m.pool.query).toHaveBeenCalledWith(
+      expect.stringContaining("DELETE FROM _selfhost_jobs WHERE id=$1"),
+      ["background"],
+    );
   });
 
   it("dead-letters an unparseable payload (job_dead audit emitted)", async () => {
