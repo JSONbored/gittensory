@@ -91,8 +91,8 @@ Implications for you:
 
 `.gittensory.yml` (the public config you can predict against) sets the gate *modes* (`linkedIssue:
 advisory`, `duplicates: block`, `readiness: advisory/60`, AI review off) and the focus manifest
-(`wantedPaths`: `src/ packages/ test/ migrations/ scripts/ .github/workflows/ wrangler.jsonc
-apps/gittensory-ui/`; `blockedPaths`: `site/ CNAME **/lovable/**`; `linkedIssuePolicy: preferred`;
+(`wantedPaths`: `src/ packages/ test/ migrations/ scripts/ review-enrichment/ .github/workflows/
+wrangler.jsonc apps/gittensory-ui/`; `blockedPaths`: `site/ CNAME **/lovable/**`; `linkedIssuePolicy: preferred`;
 `testExpectations: npm run test:ci`). But the **modes are inputs to the disposition above** — the
 engine still auto-merges the clean case and auto-closes the adverse case. The MCP `predict_gate` uses
 the public config + safe defaults; a clean prediction is necessary but not sufficient (it can't see

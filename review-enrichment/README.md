@@ -43,3 +43,45 @@ Separate service from the engine. Set **Root Directory = `review-enrichment`** s
 `railway.json` + `Dockerfile`. Set `REES_SHARED_SECRET` (same value the engine holds) as a service variable — never
 commit it. The engine reaches the service over Railway **private networking** (`<service>.railway.internal`); no public
 domain is required.
+
+## Sentry releases and source maps
+
+REES supports optional Sentry error reporting and source-map upload for Railway deployments. The Docker image builds
+`dist/*.js.map` with embedded `sourcesContent`, then the runtime startup command injects Sentry debug ids, uploads the
+exact post-injection `dist/` files, records a deploy, removes source maps from the running filesystem, and starts
+`dist/server.js`.
+
+Set these Railway service variables:
+
+| Variable                    | Purpose                                                                 |
+| --------------------------- | ----------------------------------------------------------------------- |
+| `SENTRY_DSN`                | Enables REES error capture. Unset means the SDK is a no-op.             |
+| `SENTRY_AUTH_TOKEN`         | Allows the runtime uploader to create releases and upload source maps.  |
+| `SENTRY_ORG`                | Sentry organization slug.                                               |
+| `SENTRY_PROJECT`            | Sentry project slug.                                                    |
+| `SENTRY_ENVIRONMENT`        | Optional; defaults to Railway's environment name, then `production`.    |
+| `SENTRY_TRACES_SAMPLE_RATE` | Optional; defaults to `0`, so errors report without tracing.            |
+| `SENTRY_RELEASE`            | Optional override. Only set it when that exact REES bundle is uploaded. |
+| `SENTRY_REPOSITORY`         | Optional; defaults to `JSONbored/gittensory` for commit association.    |
+| `REES_SENTRY_UPLOAD_STRICT` | Optional. Set `true` to fail startup if source-map upload fails.        |
+
+By default the release id is `gittensory-rees@<RAILWAY_GIT_COMMIT_SHA>`, using Railway's Git metadata. The Sentry
+GitHub code mapping should be:
+
+| Sentry field      | Value               |
+| ----------------- | ------------------- |
+| Stack Trace Root  | `/app`              |
+| Source Code Root  | `review-enrichment` |
+| Branch            | `main`              |
+
+Do **not** pass `SENTRY_AUTH_TOKEN` as a Docker build arg. Railway deploys this service from Git, and Docker build args
+can leak through image metadata. Keeping the upload at runtime means Sentry sees the same `dist/` files that the service
+executes, without exposing source maps over HTTP.
+
+If Sentry still shows frames such as `/app/dist/server.js`, check:
+
+1. The event's `release` is `gittensory-rees@<same Railway commit sha>` or your exact `SENTRY_RELEASE` override.
+2. The Sentry release has an artifact bundle uploaded for the REES project.
+3. Railway has `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, and `SENTRY_PROJECT` set on the REES service.
+4. The Sentry code mapping is `/app` → `review-enrichment` on branch `main`.
+5. `npm --prefix review-enrichment run validate:sourcemaps` passes locally.
