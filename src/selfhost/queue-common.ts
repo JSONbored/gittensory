@@ -1,3 +1,4 @@
+import { retryableJobDelayMs } from "../queue/retryable";
 import { extractPayloadType } from "./audit";
 
 // Webhook-driven work (a fresh PR -> its review) jumps ahead of heavy background jobs. Per-PR review refreshes
@@ -82,6 +83,10 @@ export function githubRateLimitRetryDelayMs(
     return DEFAULT_GITHUB_RATE_LIMIT_RETRY_MS;
 
   return null;
+}
+
+export function nonConsumingRetryDelayMs(error: unknown): number | null {
+  return githubRateLimitRetryDelayMs(error) ?? retryableJobDelayMs(error);
 }
 
 function clampRetryDelay(delayMs: number): number {

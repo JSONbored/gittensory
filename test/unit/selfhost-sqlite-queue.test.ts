@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nodeSqliteDriver } from "../../src/selfhost/d1-adapter";
 import { createSqliteQueue } from "../../src/selfhost/sqlite-queue";
+import { RetryableJobError } from "../../src/queue/retryable";
 import type { JobMessage } from "../../src/types";
 
 function makeDriver(): ReturnType<typeof nodeSqliteDriver> {
@@ -233,6 +234,41 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(row.attempts).toBe(0);
     expect(row.run_after).toBeGreaterThan(Date.now());
     expect(row.last_error).toContain("API rate limit exceeded");
+  });
+
+  it("reschedules retryable incomplete review jobs without consuming the dead-letter budget", async () => {
+    const driver = makeDriver();
+    let calls = 0;
+    const retryable = new RetryableJobError("AI review did not produce a public summary yet", {
+      retryAfterMs: 5_000,
+      retryKind: "ai_review_public_summary_missing",
+    });
+    const q = createSqliteQueue(
+      driver,
+      async () => {
+        calls += 1;
+        throw retryable;
+      },
+      { maxRetries: 1, backoffMs: () => 0 },
+    );
+    await q.binding.send(msg("agent-regate-pr"));
+    await q.drain();
+    const { rows } = driver.query(
+      "SELECT status, attempts, run_after, last_error FROM _selfhost_jobs",
+      [],
+    );
+    const row = rows[0] as {
+      status: string;
+      attempts: number;
+      run_after: number;
+      last_error: string;
+    };
+    expect(calls).toBe(1);
+    expect(q.deadCount()).toBe(0);
+    expect(row.status).toBe("pending");
+    expect(row.attempts).toBe(0);
+    expect(row.run_after).toBeGreaterThan(Date.now());
+    expect(row.last_error).toContain("AI review did not produce");
   });
 
   it("SURVIVES A RESTART: a fresh queue over the same DB processes a persisted pending job", async () => {

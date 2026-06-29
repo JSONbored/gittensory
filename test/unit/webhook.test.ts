@@ -151,6 +151,46 @@ describe("github webhook queue isolation (#audit-webhook-queue)", () => {
     expect(webhookSends).toBe(1); // routed to the dedicated webhook lane
     expect(jobsSends).toBe(0); // never the shared maintenance queue
   });
+
+  it("drops self-authored app comment webhooks before they add queue pressure", async () => {
+    const env = createTestEnv();
+    let webhookSends = 0;
+    env.WEBHOOKS = { send: async () => void (webhookSends += 1) } as unknown as typeof env.WEBHOOKS;
+    const rawBody = JSON.stringify({
+      action: "edited",
+      repository: { full_name: "JSONbored/gittensory" },
+      installation: { id: 1 },
+      issue: { number: 1701, pull_request: {} },
+      comment: { id: 123, body: "<!-- gittensory-pr-panel:v1 -->", user: { login: "gittensory[bot]", type: "Bot" } },
+      sender: { login: "gittensory[bot]", type: "Bot" },
+    });
+    const signature = await signWebhook(rawBody, env.GITHUB_WEBHOOK_SECRET);
+    const request = new Request("https://example.com/webhook", { method: "POST", body: rawBody });
+    const headers: Record<string, string> = {
+      "x-github-delivery": "self-comment-ignore-1",
+      "x-github-event": "issue_comment",
+      "x-hub-signature-256": signature,
+    };
+    const context = {
+      req: {
+        raw: request,
+        header(name: string) {
+          return headers[name.toLowerCase()] ?? null;
+        },
+      },
+      env,
+      json(payload: unknown, status?: number) {
+        return Response.json(payload, status === undefined ? undefined : { status });
+      },
+    } as unknown as Context<{ Bindings: Env }>;
+
+    const response = await handleGitHubWebhook(context);
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ status: "ignored" });
+    expect(webhookSends).toBe(0);
+    const event = await getWebhookEvent(env, "self-comment-ignore-1");
+    expect(event?.status).toBe("processed");
+  });
 });
 
 describe("handleOrbRelay (brokered self-host relay receiver)", () => {

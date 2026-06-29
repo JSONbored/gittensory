@@ -139,6 +139,13 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).toContain("Checked by Gittensory.");
   });
 
+  it("does not describe a single reviewer as synthesized", () => {
+    const md = renderUnifiedReviewComment({ ...base, reviewerCount: 1, decision: "manual", recommendations: ["manual_review"] }, ctx);
+    expect(md).toContain("`1 AI reviewer`");
+    expect(md).toContain("| **Code review** | ✅ No blockers | 1 reviewer |");
+    expect(md).not.toContain("1 reviewers, synthesized");
+  });
+
   it("wraps the review body in the colored blockquote but renders the re-run checkbox OUTSIDE it (interactive)", () => {
     const md = renderUnifiedReviewComment({ ...base, decision: "merge" }, ctx);
     const lines = md.split("\n");

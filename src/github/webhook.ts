@@ -37,6 +37,8 @@ export async function handleGitHubWebhook(c: Context<{ Bindings: Env }>): Promis
 export async function enqueueVerifiedWebhook(c: Context<{ Bindings: Env }>, deliveryId: string, eventName: string, rawBody: string): Promise<Response> {
   const result = await enqueueWebhookByEnv(c.env, deliveryId, eventName, rawBody);
   switch (result) {
+    case "ignored":
+      return c.json({ ok: true, deliveryId, eventName, status: "ignored" }, 202);
     case "invalid_json":
       return c.json({ error: "invalid_json" }, 400);
     case "duplicate":
@@ -48,7 +50,7 @@ export async function enqueueVerifiedWebhook(c: Context<{ Bindings: Env }>, deli
   }
 }
 
-export type EnqueueWebhookResult = "queued" | "duplicate" | "invalid_json" | "enqueue_failed";
+export type EnqueueWebhookResult = "queued" | "duplicate" | "ignored" | "invalid_json" | "enqueue_failed";
 
 /** Env-based core of the webhook enqueue (parse → dedup → record → WEBHOOKS lane), with NO Hono Context. Shared by
  *  the request-context receiver above AND the pull-mode relay drain loop (server.ts), which has no Context. Returns
@@ -79,6 +81,10 @@ export async function enqueueWebhookByEnv(env: Env, deliveryId: string, eventNam
     repositoryFullName: payload.repository?.full_name,
     payloadHash,
   };
+  if (isSelfAuthoredAppCommentWebhook(env, eventName, payload)) {
+    await recordWebhookEvent(env, { ...eventRow, status: "processed" });
+    return "ignored";
+  }
   await recordWebhookEvent(env, { ...eventRow, status: "queued" });
 
   const message: JobMessage = { type: "github-webhook", deliveryId, eventName, payload };
@@ -95,6 +101,22 @@ export async function enqueueWebhookByEnv(env: Env, deliveryId: string, eventNam
   }
 
   return "queued";
+}
+
+function isSelfAuthoredAppCommentWebhook(
+  env: Env,
+  eventName: string,
+  payload: GitHubWebhookPayload,
+): boolean {
+  if (eventName !== "issue_comment") return false;
+  if (payload.action !== "created" && payload.action !== "edited") return false;
+  const botLogin = `${env.GITHUB_APP_SLUG}[bot]`.toLowerCase();
+  return (
+    payload.sender?.type === "Bot" &&
+    payload.sender.login?.toLowerCase() === botLogin &&
+    payload.comment?.user?.type === "Bot" &&
+    payload.comment.user.login?.toLowerCase() === botLogin
+  );
 }
 
 /** The brokered self-host's relay RECEIVER. The central Orb forwards an event here, HMAC-signed (x-orb-signature-

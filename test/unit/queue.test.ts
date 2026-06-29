@@ -1236,6 +1236,86 @@ describe("queue processors", () => {
     expect(postedBodies[0]).toContain("🟪");
   });
 
+  it("keeps the PR comment and Gate in 🟪 reviewing state when AI review produces no public summary", async () => {
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      AI: {
+        run: async () => ({ response: "not-json" }),
+      } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      aiReviewMode: "block",
+      gatePack: "oss-anti-slop",
+    });
+    const commentBodies: string[] = [];
+    const checkPatches: Array<{ status?: string; conclusion?: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/10/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.endsWith("/pulls/10")) return Response.json({ number: 10, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a10" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+      if (url.includes("/commits/a10/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a10/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/10/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/10/comments") && method === "POST") {
+        commentBodies.push(String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""));
+        return Response.json({ id: 1 }, { status: 201 });
+      }
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 971 }, { status: 201 });
+      if (url.includes("/check-runs/971") && method === "PATCH") {
+        checkPatches.push(JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string });
+        return Response.json({ id: 971 });
+      }
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+
+    await expect(
+      processJob(env, {
+        type: "github-webhook",
+        deliveryId: "reviewing-placeholder-ai-summary-missing",
+        eventName: "pull_request",
+        payload: {
+          action: "opened",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: { number: 10, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a10" }, labels: [], body: "Closes #1" },
+        },
+      }),
+    ).rejects.toThrow(/public summary/i);
+
+    expect(commentBodies).toHaveLength(1);
+    expect(commentBodies[0]).toContain("is reviewing");
+    expect(commentBodies[0]).toContain("🟪");
+    expect(commentBodies[0]).not.toContain("held for maintainer review");
+    expect(commentBodies[0]).not.toContain("Review summary");
+    expect(checkPatches).toHaveLength(0);
+    const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?")
+      .bind("github_app.ai_review_public_summary_missing")
+      .first<{ n: number }>();
+    expect(audit?.n).toBe(1);
+  });
+
   it("agent re-gate sweep re-reviews each stale open PR (installation id) and swallows a failing re-review", async () => {
     const env = createTestEnv({});
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });

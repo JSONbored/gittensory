@@ -7,7 +7,7 @@ import type { SqliteDriver } from "./d1-adapter";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import { captureError } from "./sentry";
-import { githubRateLimitRetryDelayMs, jobPriority } from "./queue-common";
+import { githubRateLimitRetryDelayMs, jobPriority, nonConsumingRetryDelayMs } from "./queue-common";
 import type { JobMessage } from "../types";
 
 const TABLE = "_selfhost_jobs";
@@ -167,13 +167,13 @@ export function createSqliteQueue(
     } catch (error) {
       const attempts = job.attempts + 1;
       const errMsg = error instanceof Error ? error.message : "unknown error";
-      const rateLimitDelayMs = githubRateLimitRetryDelayMs(error);
-      if (rateLimitDelayMs !== null) {
+      const nonConsumingDelayMs = nonConsumingRetryDelayMs(error);
+      if (nonConsumingDelayMs !== null) {
         driver.query(
           `UPDATE ${TABLE} SET status='pending', run_after=?, last_error=? WHERE id=?`,
-          [Date.now() + rateLimitDelayMs, errMsg, job.id],
+          [Date.now() + nonConsumingDelayMs, errMsg, job.id],
         );
-        incr("gittensory_jobs_rate_limited_total");
+        incr(githubRateLimitRetryDelayMs(error) !== null ? "gittensory_jobs_rate_limited_total" : "gittensory_jobs_deferred_total");
         logAudit({
           event: "job_rate_limited",
           ts: Date.now(),
@@ -181,7 +181,7 @@ export function createSqliteQueue(
           payload_type: extractPayloadType(job.payload),
           latency_ms: Date.now() - claimedAt,
           attempts,
-          retry_after_ms: rateLimitDelayMs,
+          retry_after_ms: nonConsumingDelayMs,
           error: errMsg,
         });
         return true;

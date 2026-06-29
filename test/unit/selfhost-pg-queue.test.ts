@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Pool, QueryResult } from "pg";
 import { createPgQueue } from "../../src/selfhost/pg-queue";
+import { RetryableJobError } from "../../src/queue/retryable";
 import type { JobMessage } from "../../src/types";
 
 const msg = (t: string): JobMessage => ({ type: t }) as unknown as JobMessage;
@@ -151,6 +152,32 @@ describe("createPgQueue (durable #977)", () => {
     expect(m.pool.query).toHaveBeenCalledWith(
       expect.stringContaining("SET status='pending', run_after=$1"),
       expect.arrayContaining([expect.any(Number), "API rate limit exceeded for installation ID 123", "1"]),
+    );
+    expect(m.pool.query).not.toHaveBeenCalledWith(
+      expect.stringContaining("status='dead'"),
+      expect.anything(),
+    );
+  });
+
+  it("reschedules retryable incomplete review jobs without consuming the dead-letter budget", async () => {
+    const m = makePool();
+    m.enqueueJob("1", { type: "agent-regate-pr" }, 4);
+    const retryable = new RetryableJobError("AI review did not produce a public summary yet", {
+      retryAfterMs: 5_000,
+      retryKind: "ai_review_public_summary_missing",
+    });
+    const q = createPgQueue(
+      m.pool,
+      async () => {
+        throw retryable;
+      },
+      { maxRetries: 1, backoffMs: () => 0 },
+    );
+    await q.init();
+    await q.drain();
+    expect(m.pool.query).toHaveBeenCalledWith(
+      expect.stringContaining("SET status='pending', run_after=$1"),
+      expect.arrayContaining([expect.any(Number), "AI review did not produce a public summary yet", "1"]),
     );
     expect(m.pool.query).not.toHaveBeenCalledWith(
       expect.stringContaining("status='dead'"),

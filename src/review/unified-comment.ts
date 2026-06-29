@@ -303,7 +303,7 @@ function plural(n: number, one: string): string {
 
 function statusChips(input: UnifiedReviewInput, ctx: UnifiedCommentContext): string {
   const chips: string[] = [`\`${plural(input.changedFiles, "file")}\``];
-  if (input.reviewerCount > 0) chips.push(`\`${input.reviewerCount} AI reviewers\``);
+  if (input.reviewerCount > 0) chips.push(`\`${plural(input.reviewerCount, "AI reviewer")}\``);
   const blockerCount = (input.blockers ?? []).length;
   chips.push(blockerCount ? `\`${plural(blockerCount, "blocker")}\`` : "`no blockers`");
   if (typeof ctx.readinessScore === "number") chips.push(`\`readiness ${Math.round(ctx.readinessScore)}/100\``);
@@ -385,11 +385,17 @@ function failingChecksBlock(readiness: MergeReadiness | undefined): string {
 
 function signalTable(input: UnifiedReviewInput, ctx: UnifiedCommentContext): string {
   const blockerCount = (input.blockers ?? []).length;
+  const reviewerEvidence =
+    input.reviewerCount > 1
+      ? `${input.reviewerCount} reviewers, synthesized`
+      : input.reviewerCount === 1
+        ? "1 reviewer"
+        : "No AI review summary";
   const codeRow: UnifiedSignalRow = {
     label: "Code review",
     state: blockerCount ? "fail" : "ok",
     result: blockerCount ? plural(blockerCount, "blocker") : "No blockers",
-    evidence: input.reviewerCount > 0 ? `${input.reviewerCount} reviewers, synthesized` : "synthesized",
+    evidence: reviewerEvidence,
   };
   const rows = [codeRow, ...(ctx.signals ?? [])];
   const lines = rows.map((r, i) => {

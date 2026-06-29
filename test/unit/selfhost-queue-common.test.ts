@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   githubRateLimitRetryDelayMs,
   jobPriority,
+  nonConsumingRetryDelayMs,
 } from "../../src/selfhost/queue-common";
+import { RetryableJobError } from "../../src/queue/retryable";
 
 const payload = (value: unknown): string => JSON.stringify(value);
 
@@ -74,5 +76,17 @@ describe("self-host queue common helpers", () => {
         1_000_000,
       ),
     ).toBe(8_000);
+  });
+
+  it("extracts non-consuming retry delays from retryable job errors", () => {
+    expect(nonConsumingRetryDelayMs(new Error("boom"))).toBeNull();
+    expect(
+      nonConsumingRetryDelayMs(
+        new RetryableJobError("AI review pending", {
+          retryAfterMs: 1234,
+          retryKind: "ai_review_public_summary_missing",
+        }),
+      ),
+    ).toBe(1234);
   });
 });

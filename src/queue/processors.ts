@@ -264,6 +264,7 @@ import {
 import { isDuplicateClusterWinner } from "../signals/duplicate-winner";
 import { buildUnifiedReviewDiff } from "../review/review-diff";
 import { buildUnifiedCommentBody } from "../review/unified-comment-bridge";
+import { isRetryableJobError, RetryableJobError } from "./retryable";
 import { screenshotsAllowed } from "../review/visual-wire";
 import { isVisualPath } from "../review/visual/paths";
 import { buildCapture, type CaptureRoute } from "../review/visual/capture";
@@ -398,6 +399,7 @@ const PR_PUBLIC_SURFACE_ACTIONS = new Set([
 ]);
 const PR_GATE_CLOSED_ACTIONS = new Set(["closed"]);
 const ISSUE_PLAN_COOLDOWN_MS = 10 * 60 * 1000;
+const AI_REVIEW_INCOMPLETE_RETRY_MS = 5 * 60 * 1000;
 
 /**
  * Run (or dry-run) the data-retention prune across the configured log/snapshot tables and audit the
@@ -1154,7 +1156,7 @@ async function regatePullRequest(
       skipAiReview: settings.aiReviewMode === "off",
     },
   ).catch((error) => {
-    if (isGitHubRateLimitedError(error)) throw error;
+    if (isGitHubRateLimitedError(error) || isRetryableJobError(error)) throw error;
     console.error(
       JSON.stringify({
         level: "warn",
@@ -1583,7 +1585,7 @@ async function reReviewStoredPullRequest(
       ...(options.skipAiReview ? { skipAiReview: true } : {}),
     },
   ).catch((error) => {
-    if (isGitHubRateLimitedError(error)) throw error;
+    if (isGitHubRateLimitedError(error) || isRetryableJobError(error)) throw error;
     console.error(
       JSON.stringify({
         level: "warn",
@@ -1749,10 +1751,34 @@ async function prReadyForReview(
 // (held / needs-human) instead of deferring forever. Generous so a genuinely-slow CI is never cut off early.
 const STUCK_CI_DEFER_MS = 30 * 60 * 1000;
 
+async function getTransientKey(env: Env, key: string): Promise<string | null> {
+  if (!env.SELFHOST_TRANSIENT_CACHE) return null;
+  try {
+    return await env.SELFHOST_TRANSIENT_CACHE.get(key);
+  } catch {
+    return null;
+  }
+}
+
+async function putTransientKey(
+  env: Env,
+  key: string,
+  value: string,
+  ttlSeconds: number,
+): Promise<void> {
+  if (!env.SELFHOST_TRANSIENT_CACHE) return;
+  try {
+    await env.SELFHOST_TRANSIENT_CACHE.set(key, value, ttlSeconds);
+  } catch {
+    // best-effort coalescing only
+  }
+}
+
 /**
- * True when CI for this PR+headSha has been pending past STUCK_CI_DEFER_MS. Stamps the first-seen time in KV
- * (REVIEW_CONFIG) keyed by repo#pr:headSha — a new push is a new SHA, so the window resets per commit. A missing
- * KV / KV hiccup degrades to `false` (never force-finalize → keeps the safe old defer rather than acting early).
+ * True when CI for this PR+headSha has been pending past STUCK_CI_DEFER_MS. Stamps the first-seen time in a
+ * transient cache keyed by repo#pr:headSha — a new push is a new SHA, so the window resets per commit. A missing
+ * cache / cache hiccup degrades to `false` (never force-finalize → keeps the safe old defer rather than acting
+ * early).
  */
 async function ciPendingDeferStuck(
   env: Env,
@@ -1760,14 +1786,12 @@ async function ciPendingDeferStuck(
   prNumber: number,
   headSha: string | null | undefined,
 ): Promise<boolean> {
-  if (!env.REVIEW_CONFIG || !headSha) return false;
+  if (!headSha) return false;
   const key = `ci-pending-first-seen:${repoFullName.toLowerCase()}#${prNumber}:${headSha}`;
   try {
-    const first = await env.REVIEW_CONFIG.get(key);
+    const first = await getTransientKey(env, key);
     if (!first) {
-      await env.REVIEW_CONFIG.put(key, String(Date.now()), {
-        expirationTtl: 7 * 24 * 3600,
-      });
+      await putTransientKey(env, key, String(Date.now()), 7 * 24 * 3600);
       return false;
     }
     const firstMs = Number(first);
@@ -1792,16 +1816,13 @@ const MAX_PREVIEW_POLLS = 5;
 
 /**
  * Coalesce CI-completion re-reviews: claims a per-PR window and returns true if this PR was already re-reviewed
- * within CI_COALESCE_WINDOW_SECONDS (caller skips). KV-backed (REVIEW_CONFIG); a missing KV or a KV hiccup
- * degrades to NO coalescing (returns false — never blocks a re-review, never throws).
+ * within CI_COALESCE_WINDOW_SECONDS (caller skips). Self-host uses the transient Redis cache. A missing cache or
+ * cache hiccup degrades to NO coalescing (returns false — never blocks a re-review, never throws).
  */
 async function ciCompletionCoalesced(env: Env, key: string): Promise<boolean> {
-  if (!env.REVIEW_CONFIG) return false;
   try {
-    if (await env.REVIEW_CONFIG.get(key)) return true; // already handled within the window → skip this event
-    await env.REVIEW_CONFIG.put(key, "1", {
-      expirationTtl: CI_COALESCE_WINDOW_SECONDS,
-    }); // claim the window
+    if (await getTransientKey(env, key)) return true; // already handled within the window → skip this event
+    await putTransientKey(env, key, "1", CI_COALESCE_WINDOW_SECONDS); // claim the window
     return false;
   } catch {
     return false;
@@ -3052,7 +3073,7 @@ async function processGitHubWebhook(
               action: payload.action,
             },
           ).catch((error) => {
-            if (isGitHubRateLimitedError(error)) throw error;
+            if (isGitHubRateLimitedError(error) || isRetryableJobError(error)) throw error;
             console.error(
               JSON.stringify({
                 level: "warn",
@@ -4307,6 +4328,7 @@ async function maybePublishPrPublicSurface(
       }
     | undefined;
   let inlineCommentsEnabledForReview = false;
+  let aiReviewExpected = false;
   let gateFinalized = false;
   // The PR's changed files are needed by the slop/manifest gates, the AI review + grounding + RAG, the secret
   // scan, the check-run, and the unified comment. Resolve them AT MOST ONCE per review and share across the
@@ -4531,9 +4553,11 @@ async function maybePublishPrPublicSurface(
         confirmedContributor,
         skipAiReview: webhook.skipAiReview,
       }));
+    aiReviewExpected = aiReviewWillRun;
     // Post a transient "🟪 reviewing…" placeholder BEFORE the review refresh runs so contributors never see a
     // stale green/yellow/red verdict while the current head is being recomputed. In-place upsert: once the final
-    // verdict is ready it overwrites this comment. Best-effort — a failed post never aborts the review.
+    // verdict is ready it overwrites this comment. GitHub rate-limits still abort so the queue can retry instead
+    // of leaving a stale public surface visible.
     if (
       shouldPostReviewingPlaceholder({
         reviewWillRun: true,
@@ -4542,14 +4566,26 @@ async function maybePublishPrPublicSurface(
       })
     ) {
       const placeholderBody = `${PR_PANEL_COMMENT_MARKER}\n\n${renderReviewingPlaceholder()}`;
-      await createOrUpdatePrIntelligenceComment(
-        env,
-        installationId,
-        repoFullName,
-        pr.number,
-        placeholderBody,
-        { mode },
-      ).catch(() => undefined);
+      try {
+        await createOrUpdatePrIntelligenceComment(
+          env,
+          installationId,
+          repoFullName,
+          pr.number,
+          placeholderBody,
+          { mode },
+        );
+      } catch (error) {
+        if (isGitHubRateLimitedError(error)) throw error;
+        await recordAuditEvent(env, {
+          eventType: "github_app.reviewing_placeholder_failed",
+          actor: author,
+          targetKey: `${repoFullName}#${pr.number}`,
+          outcome: "error",
+          detail: errorMessage(error),
+          metadata: { deliveryId: webhook.deliveryId, repoFullName },
+        }).catch(() => undefined);
+      }
     }
     if (aiReviewWillRun) {
       // #1 self-host AI-review cache: the LLM output for a PR changes only when the code (head SHA) or the review
@@ -4626,6 +4662,35 @@ async function maybePublishPrPublicSurface(
             aiReview,
           ).catch(() => undefined);
       }
+    }
+    if (aiReviewExpected && !aiReview?.notes?.trim()) {
+      const retryError = new RetryableJobError(
+        "AI review did not produce a public summary yet; keeping PR surface in reviewing state",
+        {
+          retryAfterMs: AI_REVIEW_INCOMPLETE_RETRY_MS,
+          retryKind: "ai_review_public_summary_missing",
+        },
+      );
+      await recordAuditEvent(env, {
+        eventType: "github_app.ai_review_public_summary_missing",
+        actor: author,
+        targetKey: `${repoFullName}#${pr.number}`,
+        outcome: "error",
+        detail: retryError.message,
+        metadata: {
+          deliveryId: webhook.deliveryId,
+          repoFullName,
+          retryAfterMs: AI_REVIEW_INCOMPLETE_RETRY_MS,
+        },
+      }).catch(() => undefined);
+      captureReviewFailure(retryError, {
+        kind: "review",
+        reason: "ai_review_public_summary_missing",
+        repo: repoFullName,
+        pr: pr.number,
+        head_sha: advisory.headSha,
+      });
+      throw retryError;
     }
 
     // Secrets-scan (#audit-3.4): always scans the REAL resolved diff and, on a CONCRETE credential hit, appends a
@@ -4803,7 +4868,7 @@ async function maybePublishPrPublicSurface(
       }
     }
   } catch (error) {
-    if (isGitHubRateLimitedError(error)) throw error;
+    if (isGitHubRateLimitedError(error) || isRetryableJobError(error)) throw error;
     // The pending Gate check was posted but evaluation could not finish. Finalize it to a neutral
     // (non-blocking) terminal state so it never hangs in_progress; it re-runs on the next push. Only when
     // the gate was enabled, a pending check id exists, and a real conclusion was not already published.

@@ -25,6 +25,12 @@ declare global {
      *  force MANUAL review (no auto-merge / auto-close). Optional — absent ⇒ the conservative
      *  DEFAULT_CRUCIAL_GUARDRAIL_GLOBS fallback applies (CI workflows + scripts still guarded). */
     REVIEW_CONFIG?: KVNamespace;
+    /** Self-host transient cache for short-lived coalescing/backpressure keys. */
+    SELFHOST_TRANSIENT_CACHE?: {
+      get(key: string): Promise<string | null>;
+      set(key: string, value: string, ttlSeconds: number): Promise<void>;
+      del?(key: string): Promise<void>;
+    };
     /** TODO (convergence follow-up): a per-PR LOCK Durable Object (`SubmissionLock` mutex) is a separate,
      *  more-involved sub-task — it needs the ported DO class + its own migration tag, not just a binding here.
      *  Deliberately NOT declared in this chunk; the review path keeps its current concurrency behavior. */

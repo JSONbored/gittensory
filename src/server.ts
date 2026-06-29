@@ -465,6 +465,7 @@ async function main(): Promise<void> {
     AI: ai,
     ...(embedAi ? { AI_EMBED: embedAi as unknown as Ai } : {}),
     ...(aiReviewPlan ? { AI_REVIEW_PLAN: aiReviewPlan } : {}),
+    ...(webhookCache ? { SELFHOST_TRANSIENT_CACHE: webhookCache } : {}),
     // Qdrant takes priority; falls back to the backend's built-in vectorize (pgvector or sqlite-vec)
     ...(vectorizeOverride
       ? { VECTORIZE: vectorizeOverride }
