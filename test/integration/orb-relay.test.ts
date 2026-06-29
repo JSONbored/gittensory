@@ -181,6 +181,19 @@ describe("forwardOrbEvent", () => {
     expect(calls[0]?.init?.body).toBe(body);
   });
 
+  it("forwards to the most recently registered enrollment when an installation has multiple enrolled rows (#1783)", async () => {
+    const e = brokeredEnv();
+    // Re-enrollment inserts a second `enrolled` row for the same installation (the install is already seeded,
+    // so only issueOrbEnrollment runs again); row A stays enrolled with no relay.
+    await enroll(e, 815); // row A — enrolled, never registers a relay
+    const secretB = ((await issueOrbEnrollment(e, 815)) as { secret: string }).secret; // row B — the current container
+    await registerOrbRelay(e, secretB, "https://new-host.example/v1/orb/relay"); // register the relay on row B only
+    const { fetchImpl, calls } = capture(new Response("ok"));
+    // Without ordering, the arbitrary first row could be A (no relay) → "skipped"; the fix must pick B.
+    expect(await forwardOrbEvent(e, { eventName: "pull_request", installationId: 815, deliveryId: "d-1783", rawBody: "{}" }, fetchImpl)).toBe("forwarded");
+    expect(calls[0]?.url).toBe("https://new-host.example/v1/orb/relay");
+  });
+
   it("returns FAILED (never throws) on a non-ok response or a thrown fetch — the Orb 202 always stands", async () => {
     const e = brokeredEnv();
     const secret = await enroll(e, 802);
