@@ -13,6 +13,7 @@ export interface EnrichRequest {
   files?: Array<{
     path: string;
     status?: string;
+    previousPath?: string;
     patch?: string;
     additions?: number;
     deletions?: number;
@@ -100,6 +101,18 @@ export interface RevertRecurrenceFinding {
   revertSha: string;
   revertMessage: string;
   matchedLines: number;
+/** A newly-added dependency (npm/PyPI) lacking a published provenance attestation, or a binary/vendored file
+ *  committed without auditable source — supply-chain integrity risks the no-checkout reviewer cannot verify. */
+export interface ProvenanceFinding {
+  kind: "no-attestation" | "binary" | "vendored";
+  /** Ecosystem — set for no-attestation findings. */
+  ecosystem?: string;
+  /** Package name — set for no-attestation findings. */
+  package?: string;
+  /** Resolved version — set for no-attestation findings. */
+  version?: string;
+  /** File path — set for binary and vendored findings. */
+  file?: string;
 }
 
 /** A changed file governed by a CODEOWNERS rule where the PR author is not listed as an owner (#1515).
@@ -118,6 +131,15 @@ export interface SecretLogFinding {
   category: "secret" | "pii" | "request-object";
 }
 
+/** A heavy binary asset the PR adds or grows. `bytes` is the size at headSha; `deltaBytes` is the growth vs base
+ *  (equal to `bytes` for a newly-added file). */
+export interface AssetWeightFinding {
+  path: string;
+  bytes: number;
+  deltaBytes: number;
+  status: "added" | "grown";
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -128,8 +150,10 @@ export interface BriefFindings {
   eol?: EolFinding[];
   redos?: RedosFinding[];
   revertRecurrence?: RevertRecurrenceFinding[];
+  provenance?: ProvenanceFinding[];
   codeowners?: CodeownersFinding[];
   secretLog?: SecretLogFinding[];
+  assetWeight?: AssetWeightFinding[];
 }
 
 export type AnalyzerStatus = "ok" | "degraded" | "skipped";

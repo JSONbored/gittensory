@@ -21,6 +21,15 @@ import {
   scanPatchForRedos,
   scanRedos,
 } from "../dist/analyzers/redos.js";
+import { scanAssetWeight } from "../dist/analyzers/asset-weight.js";
+import {
+  classifyAddedFile,
+  isSafeToCheck,
+  hasNpmAttestation,
+  hasPypiProvenance,
+  matchesPypiVersion,
+  scanProvenance,
+} from "../dist/analyzers/provenance.js";
 import {
   isRevertMessage,
   extractAddedLines,
@@ -1452,6 +1461,740 @@ test("buildBrief: revert-recurrence analyzer runs and returns findings", async (
           files: [{ filename: "src/auth.ts", patch: revertPatch }],
         }),
       };
+// ---------------------------------------------------------------------------
+// classifyAddedFile
+// ---------------------------------------------------------------------------
+
+test("classifyAddedFile: vendored path, minified, binary extension, and normal source file", () => {
+  assert.equal(classifyAddedFile("vendor/lib/util.js"), "vendored");
+  assert.equal(classifyAddedFile("src/vendor/foo.ts"), "vendored");
+  assert.equal(classifyAddedFile("third-party/tool/main.c"), "vendored");
+  assert.equal(classifyAddedFile("node_modules/pkg/index.js"), "vendored");
+  assert.equal(classifyAddedFile("dist/bundle.min.js"), "vendored");
+  assert.equal(classifyAddedFile("public/styles.min.css"), "vendored");
+  assert.equal(classifyAddedFile("tools/helper.min.mjs"), "vendored");
+  assert.equal(classifyAddedFile("native/module.exe"), "binary");
+  assert.equal(classifyAddedFile("lib/native.so"), "binary");
+  assert.equal(classifyAddedFile("target/app.jar"), "binary");
+  assert.equal(classifyAddedFile("build/output.wasm"), "binary");
+  assert.equal(classifyAddedFile("src/utils.ts"), null);
+  assert.equal(classifyAddedFile("README.md"), null);
+});
+
+// ---------------------------------------------------------------------------
+// isSafeToCheck
+// ---------------------------------------------------------------------------
+
+test("isSafeToCheck: returns true for valid pkg + version", () => {
+  assert.equal(isSafeToCheck("lodash", "4.17.21"), true);
+  assert.equal(isSafeToCheck("@scope/pkg", "1.0.0-beta.1"), true);
+});
+
+test("isSafeToCheck: returns false when pkg exceeds MAX_PKG_LEN (200)", () => {
+  assert.equal(isSafeToCheck("x".repeat(201), "1.0.0"), false);
+});
+
+test("isSafeToCheck: returns false when version exceeds MAX_VER_LEN (100)", () => {
+  assert.equal(isSafeToCheck("pkg", "1".repeat(101)), false);
+});
+
+test("isSafeToCheck: returns false when version contains unsafe chars (spaces, pipes)", () => {
+  assert.equal(isSafeToCheck("pkg", "1.0.0 || 2.0.0"), false);
+  assert.equal(isSafeToCheck("pkg", "1.0.0!"), false);
+});
+
+// ---------------------------------------------------------------------------
+// hasNpmAttestation
+// ---------------------------------------------------------------------------
+
+test("hasNpmAttestation: returns false on 404 (no attestation)", async () => {
+  const result = await hasNpmAttestation(
+    "no-attest-pkg",
+    "1.0.0",
+    async () => ({ ok: false, status: 404, json: async () => ({}) }),
+  );
+  assert.equal(result, false);
+});
+
+test("hasNpmAttestation: returns true when attestations array is non-empty", async () => {
+  const result = await hasNpmAttestation(
+    "attested-pkg",
+    "1.0.0",
+    async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ attestations: [{ predicateType: "slsa" }] }),
+    }),
+  );
+  assert.equal(result, true);
+});
+
+test("hasNpmAttestation: returns false when attestations array is empty", async () => {
+  const result = await hasNpmAttestation(
+    "empty-attest",
+    "1.0.0",
+    async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ attestations: [] }),
+    }),
+  );
+  assert.equal(result, false);
+});
+
+test("hasNpmAttestation: returns true (fail-safe) on non-404 registry error", async () => {
+  const result = await hasNpmAttestation(
+    "pkg",
+    "1.0.0",
+    async () => ({ ok: false, status: 500, json: async () => ({}) }),
+  );
+  assert.equal(result, true);
+});
+
+test("hasNpmAttestation: returns true (fail-safe) when fetch throws", async () => {
+  const result = await hasNpmAttestation("pkg", "1.0.0", async () => {
+    throw new Error("network down");
+  });
+  assert.equal(result, true);
+});
+
+test("hasNpmAttestation: returns true (fail-safe) when signal is already aborted", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let called = false;
+  const result = await hasNpmAttestation(
+    "pkg",
+    "1.0.0",
+    async () => {
+      called = true;
+      return { ok: true, status: 200, json: async () => ({ attestations: [] }) };
+    },
+    controller.signal,
+  );
+  assert.equal(result, true);
+  assert.equal(called, false); // fetch must not be called after abort
+});
+
+// ---------------------------------------------------------------------------
+// hasPypiProvenance
+// ---------------------------------------------------------------------------
+
+test("hasPypiProvenance: returns true when matching file has provenance field", async () => {
+  const result = await hasPypiProvenance(
+    "requests",
+    "2.31.0",
+    async () => ({
+      ok: true,
+      json: async () => ({
+        files: [
+          {
+            filename: "requests-2.31.0-py3-none-any.whl",
+            provenance: "https://files.pythonhosted.org/.../requests-2.31.0-py3-none-any.whl.provenance",
+          },
+        ],
+      }),
+    }),
+  );
+  assert.equal(result, true);
+});
+
+test("hasPypiProvenance: returns false when matching file lacks provenance field", async () => {
+  const result = await hasPypiProvenance(
+    "requests",
+    "2.31.0",
+    async () => ({
+      ok: true,
+      json: async () => ({
+        files: [{ filename: "requests-2.31.0-py3-none-any.whl" }],
+      }),
+    }),
+  );
+  assert.equal(result, false);
+});
+
+test("hasPypiProvenance: returns true (fail-safe) when no file matches the version", async () => {
+  const result = await hasPypiProvenance(
+    "requests",
+    "2.31.0",
+    async () => ({
+      ok: true,
+      json: async () => ({
+        files: [{ filename: "requests-2.30.0-py3-none-any.whl" }],
+      }),
+    }),
+  );
+  assert.equal(result, true);
+});
+
+test("hasPypiProvenance: returns true (fail-safe) on non-ok response", async () => {
+  const result = await hasPypiProvenance(
+    "requests",
+    "2.31.0",
+    async () => ({ ok: false, json: async () => ({}) }),
+  );
+  assert.equal(result, true);
+});
+
+test("hasPypiProvenance: returns true (fail-safe) when fetch throws", async () => {
+  const result = await hasPypiProvenance("requests", "2.31.0", async () => {
+    throw new Error("network down");
+  });
+  assert.equal(result, true);
+});
+
+test("hasPypiProvenance: returns true (fail-safe) when signal is already aborted", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let called = false;
+  const result = await hasPypiProvenance(
+    "requests",
+    "2.31.0",
+    async () => {
+      called = true;
+      return { ok: true, json: async () => ({ files: [] }) };
+    },
+    controller.signal,
+  );
+  assert.equal(result, true);
+  assert.equal(called, false);
+});
+
+test("hasPypiProvenance: passes Accept header for PEP 740 simple API", async () => {
+  let capturedHeaders;
+  await hasPypiProvenance("requests", "2.31.0", async (_url, init) => {
+    capturedHeaders = init?.headers;
+    return {
+      ok: true,
+      json: async () => ({
+        files: [{ filename: "requests-2.31.0-py3-none-any.whl" }],
+      }),
+    };
+  });
+  assert.equal(
+    capturedHeaders?.["Accept"] ?? capturedHeaders?.Accept,
+    "application/vnd.pypi.simple.v1+json",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// matchesPypiVersion
+// ---------------------------------------------------------------------------
+
+test("matchesPypiVersion: matches wheel filename for exact version", () => {
+  assert.equal(matchesPypiVersion("requests-2.31.0-py3-none-any.whl", "requests", "2.31.0"), true);
+});
+
+test("matchesPypiVersion: matches sdist .tar.gz filename for exact version", () => {
+  assert.equal(matchesPypiVersion("requests-2.31.0.tar.gz", "requests", "2.31.0"), true);
+});
+
+test("matchesPypiVersion: matches sdist .zip filename for exact version", () => {
+  assert.equal(matchesPypiVersion("requests-2.31.0.zip", "requests", "2.31.0"), true);
+});
+
+test("matchesPypiVersion: rejects post-release suffix (version substring of longer version)", () => {
+  // 2.31.0 is a substring of 2.31.0.post1 — must NOT match
+  assert.equal(matchesPypiVersion("requests-2.31.0.post1-py3-none-any.whl", "requests", "2.31.0"), false);
+});
+
+test("matchesPypiVersion: rejects version with shared numeric suffix (prefix overlap)", () => {
+  // 2.31.0 is a substring of 12.31.0 — must NOT match
+  assert.equal(matchesPypiVersion("requests-12.31.0-py3-none-any.whl", "requests", "2.31.0"), false);
+});
+
+test("matchesPypiVersion: matches hyphenated package name normalised to underscore in wheel", () => {
+  // PyPI normalises my-package → my_package in wheel filenames (PEP 503)
+  assert.equal(matchesPypiVersion("my_package-1.0.0-py3-none-any.whl", "my-package", "1.0.0"), true);
+});
+
+test("matchesPypiVersion: rejects filename from a different package", () => {
+  assert.equal(matchesPypiVersion("other-requests-2.31.0-py3-none-any.whl", "requests", "2.31.0"), false);
+});
+
+test("hasPypiProvenance: returns true (fail-safe) when only post-release file exists for version", async () => {
+  // The API returns requests-2.31.0.post1 files; no file for exact 2.31.0 → can't determine → don't flag
+  const result = await hasPypiProvenance(
+    "requests",
+    "2.31.0",
+    async () => ({
+      ok: true,
+      json: async () => ({
+        files: [{ filename: "requests-2.31.0.post1-py3-none-any.whl" }],
+      }),
+    }),
+  );
+  assert.equal(result, true);
+});
+
+test("hasPypiProvenance: returns true (fail-safe) when only a different version with shared suffix exists", async () => {
+  // 12.31.0 contains "2.31.0" as substring; must not be treated as a match for version 2.31.0
+  const result = await hasPypiProvenance(
+    "requests",
+    "2.31.0",
+    async () => ({
+      ok: true,
+      json: async () => ({
+        files: [{ filename: "requests-12.31.0-py3-none-any.whl" }],
+      }),
+    }),
+  );
+  assert.equal(result, true);
+});
+
+// ---------------------------------------------------------------------------
+// scanProvenance
+// ---------------------------------------------------------------------------
+
+test("scanProvenance: flags added binary and vendored files, skips modified and source files", async () => {
+  const findings = await scanProvenance(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [
+        { path: "vendor/lib/util.js", status: "added" },
+        { path: "native/module.exe", status: "added" },
+        { path: "src/app.ts", status: "added" },           // source — null
+        { path: "native/old.exe", status: "modified" },    // not added — skip
+        { path: "removed.exe", status: "removed" },        // not added — skip
+      ],
+    },
+    async () => { throw new Error("should not fetch"); },
+  );
+  assert.equal(findings.length, 2);
+  assert.equal(findings[0].kind, "vendored");
+  assert.equal(findings[0].file, "vendor/lib/util.js");
+  assert.equal(findings[1].kind, "binary");
+  assert.equal(findings[1].file, "native/module.exe");
+});
+
+test("scanProvenance: flags npm dep without attestation, skips one with attestation", async () => {
+  const findings = await scanProvenance(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [
+        {
+          path: "package.json",
+          patch: [
+            '+    "no-attest-pkg": "1.0.0",',
+            '+    "attested-pkg": "2.0.0",',
+          ].join("\n"),
+        },
+      ],
+    },
+    async (url) => {
+      const u = String(url);
+      if (u.includes("no-attest-pkg")) return { ok: false, status: 404, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ attestations: [{ predicateType: "slsa" }] }) };
+    },
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "no-attestation");
+  assert.equal(findings[0].package, "no-attest-pkg");
+  assert.equal(findings[0].version, "1.0.0");
+  assert.equal(findings[0].ecosystem, "npm");
+});
+
+test("scanProvenance: flags PyPI dep without provenance", async () => {
+  const findings = await scanProvenance(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [
+        {
+          path: "requirements.txt",
+          patch: "+requests==2.31.0",
+        },
+      ],
+    },
+    async () => ({
+      ok: true,
+      json: async () => ({
+        files: [{ filename: "requests-2.31.0-py3-none-any.whl" }],
+      }),
+    }),
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "no-attestation");
+  assert.equal(findings[0].ecosystem, "PyPI");
+  assert.equal(findings[0].package, "requests");
+  assert.equal(findings[0].version, "2.31.0");
+});
+
+test("scanProvenance: skips Go ecosystem (no attestation API)", async () => {
+  let fetchCalled = false;
+  const findings = await scanProvenance(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [{ path: "go.mod", patch: "+\texample.com/pkg v1.0.0" }],
+    },
+    async () => {
+      fetchCalled = true;
+      return { ok: true, status: 200, json: async () => ({ attestations: [] }) };
+    },
+  );
+  assert.equal(findings.length, 0);
+  assert.equal(fetchCalled, false);
+});
+
+test("scanProvenance: abort signal stops attestation loop", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const files = Array.from({ length: 5 }, (_, i) => ({
+    path: "package.json",
+    patch: `+    "pkg-${i}": "1.0.0",`,
+  }));
+  // Abort before the loop processes anything
+  controller.abort();
+  await scanProvenance(
+    { repoFullName: "o/r", prNumber: 1, files },
+    async () => {
+      calls++;
+      return { ok: false, status: 404, json: async () => ({}) };
+    },
+    { signal: controller.signal },
+  );
+  assert.equal(calls, 0);
+});
+
+test("scanProvenance: caps findings at MAX_FINDINGS (binary detection path)", async () => {
+  const files = Array.from({ length: 35 }, (_, i) => ({
+    path: `build/artifact-${i}.exe`,
+    status: "added",
+  }));
+  const findings = await scanProvenance(
+    { repoFullName: "o/r", prNumber: 1, files },
+    async () => { throw new Error("should not fetch"); },
+  );
+  assert.equal(findings.length, 30); // MAX_FINDINGS
+});
+
+test("scanProvenance: caps findings at MAX_FINDINGS (attestation path)", async () => {
+  // 25 binary findings + 26 npm packages: after binary scan (25), the attestation loop adds 5 more
+  // before hitting MAX_FINDINGS=30 and breaking — verifying the guard in the attestation path.
+  const binaryFiles = Array.from({ length: 25 }, (_, i) => ({
+    path: `build/a${i}.exe`,
+    status: "added",
+  }));
+  const npmPatch = Array.from(
+    { length: 26 },
+    (_, i) => `+    "pkg-${i}": "1.0.0",`,
+  ).join("\n");
+  const findings = await scanProvenance(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [...binaryFiles, { path: "package.json", patch: npmPatch }],
+    },
+    async () => ({ ok: false, status: 404, json: async () => ({}) }),
+  );
+  assert.equal(findings.length, 30);
+});
+
+test("scanProvenance: skips deps that fail isSafeToCheck (overly long name or invalid version chars)", async () => {
+  let fetchCalled = false;
+  const longName = "x".repeat(201);
+  const findings = await scanProvenance(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [
+        {
+          path: "package.json",
+          // long package name → isSafeToCheck A false → continue (no fetch)
+          patch: `+    "${longName}": "1.0.0",`,
+        },
+      ],
+    },
+    async () => {
+      fetchCalled = true;
+      return { ok: false, status: 404, json: async () => ({}) };
+    },
+  );
+  assert.equal(fetchCalled, false);
+  assert.deepEqual(findings, []);
+});
+
+test("scanProvenance: handles undefined files gracefully", async () => {
+  const findings = await scanProvenance(
+    { repoFullName: "o/r", prNumber: 1 },
+    async () => { throw new Error("should not fetch"); },
+  );
+  assert.deepEqual(findings, []);
+});
+
+const treeReply = (tree) => ({ ok: true, json: async () => ({ tree }) });
+const HEAD_SHA = "1111111111111111111111111111111111111111";
+const BASE_SHA = "2222222222222222222222222222222222222222";
+
+test("scanAssetWeight: flags a large newly-added binary, ignores small + non-binary files", async () => {
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      githubToken: "t",
+      files: [
+        { path: "img/logo.png", status: "added" },
+        { path: "icon.svg", status: "added" },
+        { path: "src/x.ts", status: "added" },
+        { path: "tiny.gif", status: "added" },
+      ],
+    },
+    async () =>
+      treeReply([
+        { path: "img/logo.png", type: "blob", size: 250000 },
+        { path: "tiny.gif", type: "blob", size: 2000 },
+      ]),
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].path, "img/logo.png");
+  assert.equal(findings[0].status, "added");
+  assert.equal(findings[0].bytes, 250000);
+  assert.equal(findings[0].deltaBytes, 250000);
+});
+
+test("scanAssetWeight: evaluates large binaries after the first 50 candidate paths", async () => {
+  const smallFiles = Array.from({ length: 50 }, (_, i) => ({
+    path: `small-${i}.png`,
+    status: "added",
+  }));
+  const files = [...smallFiles, { path: "late-large.png", status: "added" }];
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      githubToken: "t",
+      files,
+    },
+    async () =>
+      treeReply([
+        ...smallFiles.map((file) => ({
+          path: file.path,
+          type: "blob",
+          size: 2000,
+        })),
+        { path: "late-large.png", type: "blob", size: 10_000_000 },
+      ]),
+  );
+  assert.deepEqual(findings, [
+    {
+      path: "late-large.png",
+      bytes: 10_000_000,
+      deltaBytes: 10_000_000,
+      status: "added",
+    },
+  ]);
+});
+
+test("scanAssetWeight: caps findings after ranking by size, not by PR file order", async () => {
+  const files = Array.from({ length: 51 }, (_, i) => ({
+    path: `asset-${i}.png`,
+    status: "added",
+  }));
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      githubToken: "t",
+      files,
+    },
+    async () =>
+      treeReply(
+        files.map((file, i) => ({
+          path: file.path,
+          type: "blob",
+          size: i === 50 ? 10_000_000 : 150000,
+        })),
+      ),
+  );
+  assert.equal(findings.length, 50);
+  assert.equal(findings[0].path, "asset-50.png");
+  assert.equal(findings[0].bytes, 10_000_000);
+});
+
+test("scanAssetWeight: flags a binary that GREW past the threshold (base vs head)", async () => {
+  const fetchImpl = async (url) =>
+    String(url).includes(BASE_SHA)
+      ? treeReply([{ path: "video.mp4", type: "blob", size: 50000 }])
+      : treeReply([{ path: "video.mp4", type: "blob", size: 250000 }]);
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      githubToken: "t",
+      files: [{ path: "video.mp4", status: "modified" }],
+    },
+    fetchImpl,
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].status, "grown");
+  assert.equal(findings[0].deltaBytes, 200000);
+  assert.equal(findings[0].bytes, 250000);
+});
+
+test("scanAssetWeight: flags a renamed binary that grew using its previous path", async () => {
+  const fetchImpl = async (url) =>
+    String(url).includes(BASE_SHA)
+      ? treeReply([{ path: "old/video.mp4", type: "blob", size: 50000 }])
+      : treeReply([{ path: "new/video.mp4", type: "blob", size: 250000 }]);
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      githubToken: "t",
+      files: [
+        {
+          path: "new/video.mp4",
+          status: "renamed",
+          previousPath: "old/video.mp4",
+        },
+      ],
+    },
+    fetchImpl,
+  );
+  assert.deepEqual(findings, [
+    {
+      path: "new/video.mp4",
+      bytes: 250000,
+      deltaBytes: 200000,
+      status: "grown",
+    },
+  ]);
+});
+
+test("scanAssetWeight: flags a copied binary as an added heavy path", async () => {
+  const fetchImpl = async (url) => {
+    assert.doesNotMatch(String(url), new RegExp(BASE_SHA));
+    return treeReply([{ path: "copy/data.bin", type: "blob", size: 10485760 }]);
+  };
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      githubToken: "t",
+      files: [
+        {
+          path: "copy/data.bin",
+          status: "copied",
+          previousPath: "old/data.bin",
+        },
+      ],
+    },
+    fetchImpl,
+  );
+  assert.deepEqual(findings, [
+    {
+      path: "copy/data.bin",
+      bytes: 10485760,
+      deltaBytes: 10485760,
+      status: "added",
+    },
+  ]);
+});
+
+test("scanAssetWeight: renamed binaries need a previous path before reporting growth", async () => {
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      githubToken: "t",
+      files: [{ path: "video.mp4", status: "renamed" }],
+    },
+    async (url) =>
+      String(url).includes(BASE_SHA)
+        ? treeReply([{ path: "video.mp4", type: "blob", size: 50000 }])
+        : treeReply([{ path: "video.mp4", type: "blob", size: 250000 }]),
+  );
+  assert.deepEqual(findings, []);
+});
+
+test("scanAssetWeight: small growth is not flagged", async () => {
+  const fetchImpl = async (url) =>
+    String(url).includes(BASE_SHA)
+      ? treeReply([{ path: "a.png", type: "blob", size: 300000 }])
+      : treeReply([{ path: "a.png", type: "blob", size: 310000 }]);
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      githubToken: "t",
+      files: [{ path: "a.png", status: "modified" }],
+    },
+    fetchImpl,
+  );
+  assert.deepEqual(findings, []);
+});
+
+// ---------------------------------------------------------------------------
+// renderBrief: provenance block
+// ---------------------------------------------------------------------------
+
+test("renderBrief: renders no-attestation, binary, and vendored sections", () => {
+  const r = renderBrief({
+    provenance: [
+      { kind: "no-attestation", ecosystem: "npm", package: "evil", version: "1.0.0" },
+      { kind: "binary", file: "build/tool.exe" },
+      { kind: "vendored", file: "vendor/lib/helper.js" },
+    ],
+  });
+  assert.match(r.promptSection, /Dependencies without provenance attestation/);
+  assert.match(r.promptSection, /`evil@1\.0\.0` \(npm\)/);
+  assert.match(r.promptSection, /no published SLSA\/sigstore attestation/);
+  assert.match(r.promptSection, /Binary files committed/);
+  assert.match(r.promptSection, /`build\/tool\.exe`/);
+  assert.match(r.promptSection, /Vendored or minified code committed/);
+  assert.match(r.promptSection, /`vendor\/lib\/helper\.js`/);
+  assert.match(r.systemSuffix, /verified ground truth/);
+});
+
+test("renderBrief: empty provenance array produces no provenance section", () => {
+  const r = renderBrief({ provenance: [] });
+  assert.equal(r.promptSection, "");
+});
+
+test("renderBrief: provenance escapes control chars and backticks in file paths", () => {
+  const r = renderBrief({
+    provenance: [
+      { kind: "binary", file: "build/tool`\n### injected" },
+    ],
+  });
+  assert.doesNotMatch(r.promptSection, /\n### injected/);
+  assert.match(r.promptSection, /binary artifact without source documentation/);
+});
+
+test("renderBrief: only binary section rendered when no no-attestation or vendored findings", () => {
+  const r = renderBrief({
+    provenance: [{ kind: "binary", file: "native/x.exe" }],
+  });
+  assert.match(r.promptSection, /Binary files committed/);
+  assert.doesNotMatch(r.promptSection, /provenance attestation/);
+  assert.doesNotMatch(r.promptSection, /Vendored/);
+});
+
+// ---------------------------------------------------------------------------
+// buildBrief: provenance analyzer integration
+// ---------------------------------------------------------------------------
+
+test("buildBrief: provenance analyzer runs, flags binary file and missing npm attestation", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("attestations"))
+      return { ok: false, status: 404, json: async () => ({}) };
     return { ok: true, json: async () => ({}) };
   };
   try {
@@ -1477,6 +2220,16 @@ test("buildBrief: revert-recurrence analyzer runs and returns findings", async (
     assert.equal(brief.analyzerStatus.revertRecurrence, "ok");
     assert.ok(brief.findings.revertRecurrence.length >= 1);
     assert.match(brief.promptSection, /Re-introduced reverted code/);
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [
+        { path: "native/tool.exe", status: "added" },
+        { path: "package.json", patch: '+    "no-attest": "1.0.0",' },
+      ],
+    });
+    assert.equal(brief.analyzerStatus.provenance, "ok");
+    assert.ok(brief.findings.provenance.length >= 2);
+    assert.match(brief.promptSection, /provenance/);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -1486,6 +2239,72 @@ test("buildBrief: revert-recurrence analyzer degrades gracefully on network thro
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     if (String(url).includes("api.github.com")) throw new Error("network down");
+test("scanAssetWeight: failed base fetch does not reclassify modified binaries as added", async () => {
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      githubToken: "t",
+      files: [
+        { path: "video.mp4", status: "modified" },
+        { path: "clip.mov", status: "changed" },
+        { path: "poster.png", status: "added" },
+      ],
+    },
+    async (url) =>
+      String(url).includes(BASE_SHA)
+        ? { ok: false, json: async () => ({}) }
+        : treeReply([
+            { path: "video.mp4", type: "blob", size: 250000 },
+            { path: "clip.mov", type: "blob", size: 260000 },
+            { path: "poster.png", type: "blob", size: 270000 },
+          ]),
+  );
+  assert.deepEqual(findings, [
+    {
+      path: "poster.png",
+      bytes: 270000,
+      deltaBytes: 270000,
+      status: "added",
+    },
+  ]);
+});
+
+test("scanAssetWeight: missing baseSha does not reclassify modified binaries as added", async () => {
+  const findings = await scanAssetWeight(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      githubToken: "t",
+      files: [{ path: "video.mp4", status: "modified" }],
+    },
+    async () => treeReply([{ path: "video.mp4", type: "blob", size: 250000 }]),
+  );
+  assert.deepEqual(findings, []);
+});
+
+test("buildBrief: asset-weight falls back to candidate paths for truncated tree responses", async () => {
+  const realFetch = globalThis.fetch;
+  const apiVersions: Array<string | undefined> = [];
+  globalThis.fetch = async (url, init) => {
+    apiVersions.push(
+      (init?.headers as Record<string, string> | undefined)?.[
+        "X-GitHub-Api-Version"
+      ],
+    );
+    const href = String(url);
+    if (href.includes("git/trees")) {
+      return { ok: true, json: async () => ({ truncated: true, tree: [] }) };
+    }
+    if (href.includes("contents/big.png") && href.includes(HEAD_SHA)) {
+      return { ok: true, json: async () => ({ type: "file", size: 300000 }) };
+    }
+    if (href.includes("contents/big.png") && href.includes(BASE_SHA)) {
+      return { ok: true, json: async () => ({ type: "file", size: 50000 }) };
+    }
     return { ok: true, json: async () => ({}) };
   };
   try {
@@ -1504,6 +2323,112 @@ test("buildBrief: revert-recurrence analyzer degrades gracefully on network thro
     // listFileCommits catches the throw and returns [], so revertRecurrence = [] (not degraded)
     assert.equal(brief.analyzerStatus.revertRecurrence, "ok");
     assert.deepEqual(brief.findings.revertRecurrence, []);
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      githubToken: "t",
+      files: [{ path: "big.png", status: "modified" }],
+      analyzers: ["assetWeight"],
+    });
+    assert.equal(brief.partial, false);
+    assert.equal(brief.analyzerStatus.assetWeight, "ok");
+    assert.equal(brief.findings.assetWeight?.[0]?.status, "grown");
+    assert.equal(brief.findings.assetWeight?.[0]?.deltaBytes, 250000);
+    assert.match(brief.promptSection, /Heavy binary assets/);
+    assert.ok(apiVersions.every((version) => version === "2022-11-28"));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("scanAssetWeight: fail-safe — no token, no binaries, or failed fetch returns []", async () => {
+  const tree = async () =>
+    treeReply([{ path: "a.png", type: "blob", size: 999999 }]);
+  assert.deepEqual(
+    await scanAssetWeight(
+      { repoFullName: "o/r", prNumber: 1, headSha: HEAD_SHA, files: [{ path: "a.png", status: "added" }] },
+      tree,
+    ),
+    [],
+  ); // no token
+  assert.deepEqual(
+    await scanAssetWeight(
+      { repoFullName: "o/r", prNumber: 1, headSha: HEAD_SHA, githubToken: "t", files: [{ path: "readme.md", status: "added" }] },
+      tree,
+    ),
+    [],
+  ); // no binary files
+  assert.deepEqual(
+    await scanAssetWeight(
+      { repoFullName: "o/r", prNumber: 1, headSha: HEAD_SHA, githubToken: "t", files: [{ path: "a.png", status: "added" }] },
+      async () => ({ ok: false, json: async () => ({}) }),
+    ),
+    [],
+  ); // tree fetch not OK
+});
+
+test("scanAssetWeight: rejects path-traversal repoFullName + non-SHA refs (no token-bearing fetch)", async () => {
+  let fetched = false;
+  const spy = async () => {
+    fetched = true;
+    return treeReply([{ path: "a.png", type: "blob", size: 999999 }]);
+  };
+  const file = { path: "a.png", status: "added" };
+  for (const repoFullName of ["a/b/../../x/y", "../evil", "owner/repo/extra", "o/.."]) {
+    assert.deepEqual(
+      await scanAssetWeight(
+        { repoFullName, prNumber: 1, headSha: HEAD_SHA, githubToken: "t", files: [file] },
+        spy,
+      ),
+      [],
+    );
+  }
+  assert.deepEqual(
+    await scanAssetWeight(
+      { repoFullName: "o/r", prNumber: 1, headSha: "main", githubToken: "t", files: [file] },
+      spy,
+    ),
+    [],
+  );
+  assert.equal(fetched, false, "the token-bearing fetch never runs for unsafe input");
+});
+
+test("renderBrief: renders the asset-weight block with human-readable sizes", () => {
+  const r = renderBrief({
+    assetWeight: [
+      { path: "img/logo.png", bytes: 2500000, deltaBytes: 2500000, status: "added" },
+      { path: "v.mp4", bytes: 300000, deltaBytes: 200000, status: "grown" },
+    ],
+  });
+  assert.match(r.promptSection, /Heavy binary assets/);
+  assert.match(r.promptSection, /`img\/logo\.png` adds 2\.4 MiB/);
+  assert.match(r.promptSection, /`v\.mp4` grows \+195 KiB to 293 KiB/);
+});
+
+test("buildBrief: asset-weight analyzer reports grown binaries from request file status", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) =>
+    String(url).includes("git/trees")
+      ? String(url).includes(BASE_SHA)
+        ? treeReply([{ path: "big.png", type: "blob", size: 50000 }])
+        : treeReply([{ path: "big.png", type: "blob", size: 300000 }])
+      : { ok: true, json: async () => ({}) };
+  try {
+    const brief = await buildBrief({
+      repoFullName: "o/r",
+      prNumber: 1,
+      headSha: HEAD_SHA,
+      baseSha: BASE_SHA,
+      githubToken: "t",
+      files: [{ path: "big.png", status: "modified" }],
+    });
+    assert.equal(brief.analyzerStatus.assetWeight, "ok");
+    assert.equal(brief.findings.assetWeight.length, 1);
+    assert.equal(brief.findings.assetWeight[0].status, "grown");
+    assert.equal(brief.findings.assetWeight[0].deltaBytes, 250000);
+    assert.match(brief.promptSection, /Heavy binary assets/);
+    assert.match(brief.promptSection, /grows/);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -1673,6 +2598,24 @@ test("buildBrief: secret-log analyzer runs (pure, no network)", async () => {
     assert.equal(brief.analyzerStatus.secretLog, "ok");
     assert.equal(brief.findings.secretLog.length, 1);
     assert.match(brief.promptSection, /Secrets \/ PII reaching a log/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("buildBrief: provenance analyzer fetch failure fails safe", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("network down"); };
+  try {
+    const brief = await buildBrief({
+      repoFullName: "o/r",
+      prNumber: 1,
+      analyzers: ["provenance"],
+      files: [{ path: "package.json", patch: '+    "pkg": "1.0.0",' }],
+    });
+    assert.equal(brief.analyzerStatus.provenance, "ok");
+    assert.equal(brief.partial, false);
+    assert.deepEqual(brief.findings.provenance, []);
   } finally {
     globalThis.fetch = realFetch;
   }

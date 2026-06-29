@@ -11,7 +11,13 @@ const input = {
   headSha: "abc",
   title: "t",
   files: [
-    { path: "a.ts", payload: { patch: "@@ +1 @@" } },
+    { path: "a.ts", status: "modified", payload: { patch: "@@ +1 @@" } },
+    {
+      path: "renamed.png",
+      status: "renamed",
+      previousFilename: "old.png",
+      payload: { patch: "@@ +2 @@" },
+    },
     { path: "b.ts" },
   ] as never,
   diff: "the diff",
@@ -81,8 +87,14 @@ describe("buildReviewEnrichment", () => {
     const body = JSON.parse(calls[0]!.init.body as string);
     expect(body.repoFullName).toBe("o/r");
     expect(body.files).toEqual([
-      { path: "a.ts", patch: "@@ +1 @@" },
-      { path: "b.ts", patch: undefined },
+      { path: "a.ts", status: "modified", previousPath: undefined, patch: "@@ +1 @@" },
+      {
+        path: "renamed.png",
+        status: "renamed",
+        previousPath: "old.png",
+        patch: "@@ +2 @@",
+      },
+      { path: "b.ts", status: undefined, patch: undefined },
     ]);
   });
 

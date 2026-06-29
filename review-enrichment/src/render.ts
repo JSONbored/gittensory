@@ -34,6 +34,12 @@ function promptText(value: string): string {
     .replace(/([*_{}[\]()#+.!|-])/g, "\\$1");
 }
 
+function formatBytes(n: number): string {
+  if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MiB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KiB`;
+  return `${n} B`;
+}
+
 /** Build the `promptSection` (verbatim splice) + a one-line `systemSuffix` from the findings. Empty when nothing found. */
 export function renderBrief(
   findings: BriefFindings,
@@ -139,6 +145,38 @@ export function renderBrief(
       lines.push(
         `- ${safeCodeSpan(f.file)} re-introduces ${f.matchedLines} line${s} from revert ${safeCodeSpan(f.revertSha)} — ${promptText(f.revertMessage)}`,
       );
+  const provenance = findings.provenance ?? [];
+  if (provenance.length) {
+    const noAttest = provenance.filter((f) => f.kind === "no-attestation");
+    const binaries = provenance.filter((f) => f.kind === "binary");
+    const vendored = provenance.filter((f) => f.kind === "vendored");
+    if (noAttest.length) {
+      lines.push(
+        "### Dependencies without provenance attestation (supply-chain integrity risk)",
+      );
+      for (const f of noAttest) {
+        lines.push(
+          `- ${safeCodeSpan(`${f.package!}@${f.version!}`)} (${f.ecosystem!}): no published SLSA/sigstore attestation — package was not built through a verifiable CI pipeline`,
+        );
+      }
+    }
+    if (binaries.length) {
+      lines.push("### Binary files committed (no reviewable source)");
+      for (const f of binaries) {
+        lines.push(
+          `- ${safeCodeSpan(f.file!)} — binary artifact without source documentation`,
+        );
+      }
+    }
+    if (vendored.length) {
+      lines.push(
+        "### Vendored or minified code committed (audit source before merging)",
+      );
+      for (const f of vendored) {
+        lines.push(
+          `- ${safeCodeSpan(f.file!)} — vendored or minified code without upstream source reference`,
+        );
+      }
     }
   }
 
@@ -170,6 +208,20 @@ export function renderBrief(
       lines.push(
         `- ${safeCodeSpan(`${item.file}:${item.line}`)} — ${safeCodeSpan(item.sink)} writes ${what} to a log/stdout sink; redact or remove`,
       );
+    }
+  }
+
+  const assets = findings.assetWeight ?? [];
+  if (assets.length) {
+    lines.push(
+      "### Heavy binary assets (optimize, or move to a CDN / Git LFS)",
+    );
+    for (const item of assets) {
+      const detail =
+        item.status === "added"
+          ? `adds ${formatBytes(item.bytes)}`
+          : `grows +${formatBytes(item.deltaBytes)} to ${formatBytes(item.bytes)}`;
+      lines.push(`- ${safeCodeSpan(item.path)} ${detail}`);
     }
   }
 
