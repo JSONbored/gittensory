@@ -328,8 +328,10 @@ describe("miner dashboard recommendation metadata", () => {
           {
             repoFullName: "JSONbored/gittensory",
             actionKind: "open_new_direct_pr",
-            // /root/ and /var/ were already covered here; C:/Users/ (forward-slash) is now covered via the shared source.
-            rerunWhen: "Rerun when PRs change at /root/work/repo, /var/log/app.log, and C:/Users/alice/repo.",
+            // /root/ and /var/ were already covered here; C:/Users/ (forward-slash) and the lower-case drive
+            // form (c:\Users\...) are now covered via the shared source, which matches the drive letter
+            // case-insensitively even though this surface's scrubber omits the `i` flag.
+            rerunWhen: "Rerun when PRs change at /root/work/repo, /var/log/app.log, C:/Users/alice/repo, and c:\\Users\\bob\\secret.",
           },
         ],
       },
@@ -338,7 +340,7 @@ describe("miner dashboard recommendation metadata", () => {
     const [enriched] = buildMinerDashboardNextActions(current);
     const repoStateReasons = enriched?.rerunReasons.find((group) => group.group === "repo_state")?.reasons.join(" ") ?? "";
     expect(repoStateReasons).toContain("[local path]");
-    expect(JSON.stringify(enriched?.rerunReasons)).not.toMatch(/\/root\/work|\/var\/log|C:\/Users\/alice/);
+    expect(JSON.stringify(enriched?.rerunReasons)).not.toMatch(/\/root\/work|\/var\/log|C:\/Users\/alice|c:\\Users\\bob/);
   });
 
   it("selects the previous ready decision-pack snapshot", () => {

@@ -26,8 +26,11 @@ export const PUBLIC_UNSAFE_TERMS = String.raw`(?:reward|score|wallet|hotkey|cold
 // no flags, no anchors), the path analogue of `PUBLIC_UNSAFE_TERMS`. Public surfaces that detect or scrub
 // absolute local paths compose from this one source instead of re-typing the root list, so a surface cannot
 // drift and miss a root (e.g. `/root/` for container/CI homes, `/var/` for service paths) the canonical
-// boundary blocks. It accepts both the back- and forward-slash Windows form (`C:\Users\`, `C:/Users/`).
-export const PUBLIC_LOCAL_PATH_INLINE = String.raw`/Users/|/home/|/root/|/var/|/tmp/|[A-Z]:[\\/]Users[\\/]`;
+// boundary blocks. It accepts both the back- and forward-slash Windows form (`C:\Users\`, `C:/Users/`). The
+// drive letter is matched case-insensitively at the source (`[A-Za-z]`, not `[A-Z]`) so a consumer that omits
+// the `i` flag (e.g. the case-sensitive `/g` scrubber in miner-dashboard-recommendations.ts) still redacts a
+// lower-case drive like `c:\Users\...`; the unix roots stay literal so case-sensitivity there is the caller's.
+export const PUBLIC_LOCAL_PATH_INLINE = String.raw`/Users/|/home/|/root/|/var/|/tmp/|[A-Za-z]:[\\/]Users[\\/]`;
 
 // Global scrubber for `.replace()` surfaces that swap an absolute local path for a placeholder: matches a
 // root from `PUBLIC_LOCAL_PATH_INLINE` plus the rest of the path segment (stopping at whitespace or a common

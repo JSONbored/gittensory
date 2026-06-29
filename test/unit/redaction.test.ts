@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isPublicSafeText,
+  PUBLIC_LOCAL_PATH_INLINE,
   PUBLIC_LOCAL_PATH_PREFIX_PATTERN,
   PUBLIC_LOCAL_PATH_SCRUB_PATTERN,
   PUBLIC_UNSAFE_PATTERN,
@@ -76,6 +77,25 @@ describe("shared local-path constants (#1418 drift fix)", () => {
     expect("tmp at /tmp/build done".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>")).toBe("tmp at <p> done");
     expect("win at C:\\Users\\me\\repo done".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>")).toBe("win at <p> done");
     expect("win at C:/Users/me/repo done".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>")).toBe("win at <p> done");
+    // Lower-case drive letter: the source matches it case-insensitively, so a consumer that omits the `i`
+    // flag (the `/g`-only scrubber in miner-dashboard-recommendations.ts) still redacts it (#1418 regression).
+    expect("win at c:\\Users\\bob\\repo done".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>")).toBe("win at <p> done");
+    expect("win at c:/Users/bob/repo done".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>")).toBe("win at <p> done");
+  });
+
+  it("the lower-case Windows drive is matched by the raw source even without the `i` flag", () => {
+    // miner-dashboard-recommendations.ts composes a `/g`-only (no `i`) scrubber from PUBLIC_LOCAL_PATH_INLINE,
+    // so the drive-letter class in the source must itself be case-insensitive ([A-Za-z], not [A-Z]).
+    const gOnly = new RegExp(`(?:${PUBLIC_LOCAL_PATH_INLINE})[^\\s]*`, "g");
+    expect("at c:\\Users\\bob\\x".replace(gOnly, "<p>")).toBe("at <p>");
+    expect("at C:\\Users\\bob\\x".replace(gOnly, "<p>")).toBe("at <p>");
+  });
+
+  it("the shared `/g` scrubber resets lastIndex between .replace() calls (safe to share across modules)", () => {
+    const first = "a /tmp/one b".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>");
+    const second = "a /tmp/one b".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>");
+    expect(first).toBe("a <p> b");
+    expect(second).toBe(first);
   });
 
   it("scrub pattern is global (safe for .replace across modules) and prefix pattern is anchored + non-global", () => {
