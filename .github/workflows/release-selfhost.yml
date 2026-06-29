@@ -35,17 +35,23 @@ jobs:
         id: version
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "v=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
           else
-            echo "v=${GITHUB_REF_NAME#selfhost-v}" >> "$GITHUB_OUTPUT"
+            case "$REF_NAME" in
+              selfhost-v*) VERSION="${REF_NAME#selfhost-v}" ;;
+              *) echo "expected a selfhost-v<semver> tag, got $REF_NAME" >&2; exit 1 ;;
+            esac
           fi
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${INPUT_VERSION}"
-          else
-            VERSION="${GITHUB_REF_NAME#selfhost-v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "expected semver version X.Y.Z, got $VERSION" >&2
+            exit 1
           fi
+          echo "v=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "release=gittensory-selfhost@${VERSION}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
@@ -67,16 +73,21 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          SENTRY_URL: ${{ vars.SENTRY_URL }}
           SENTRY_RELEASE: ${{ steps.version.outputs.release }}
+          SENTRY_REPOSITORY: ${{ github.repository }}
+          SENTRY_COMMIT_SHA: ${{ github.sha }}
         run: |
+          set -euo pipefail
           test -n "$SENTRY_AUTH_TOKEN"
           test -n "$SENTRY_ORG"
           test -n "$SENTRY_PROJECT"
-          npx -y @sentry/cli@latest releases new "$SENTRY_RELEASE"
-          npx -y @sentry/cli@latest releases set-commits "$SENTRY_RELEASE" --auto
-          npx -y @sentry/cli@latest sourcemaps inject dist
+          if [ -z "${SENTRY_URL:-}" ]; then unset SENTRY_URL; fi
+          npx -y @sentry/cli@3.6.0 releases new "$SENTRY_RELEASE"
+          npx -y @sentry/cli@3.6.0 releases set-commits "$SENTRY_RELEASE" --commit "$SENTRY_REPOSITORY@$SENTRY_COMMIT_SHA" --ignore-missing
+          npx -y @sentry/cli@3.6.0 sourcemaps inject dist
           node scripts/validate-selfhost-sourcemap.mjs
-          npx -y @sentry/cli@latest sourcemaps upload --release="$SENTRY_RELEASE" dist
+          npx -y @sentry/cli@3.6.0 sourcemaps upload --release="$SENTRY_RELEASE" --validate --wait --strict dist
 
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -121,8 +132,26 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          SENTRY_URL: ${{ vars.SENTRY_URL }}
           SENTRY_RELEASE: ${{ steps.version.outputs.release }}
-        run: npx -y @sentry/cli@latest releases finalize "$SENTRY_RELEASE"
+        run: |
+          set -euo pipefail
+          if [ -z "${SENTRY_URL:-}" ]; then unset SENTRY_URL; fi
+          npx -y @sentry/cli@3.6.0 releases finalize "$SENTRY_RELEASE"
+
+      - name: Validate Sentry release
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          SENTRY_URL: ${{ vars.SENTRY_URL }}
+          SENTRY_RELEASE: ${{ steps.version.outputs.release }}
+          SENTRY_REPOSITORY: ${{ github.repository }}
+          SENTRY_COMMIT_SHA: ${{ github.sha }}
+          SENTRY_REQUIRE_COMMITS: "true"
+          SENTRY_REQUIRE_DEPLOY: "false"
+          SENTRY_REQUIRE_FINALIZED: "true"
+        run: node review-enrichment/scripts/validate-sentry-release.mjs
 
       - name: GitHub Release
         if: github.event_name == 'push'

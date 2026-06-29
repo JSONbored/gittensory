@@ -8,11 +8,14 @@ describe("self-host Sentry release wiring", () => {
     const releaseWorkflow = read(".github/workflows/release-selfhost.yml");
     expect(releaseWorkflow).toContain('sourcemaps inject dist');
     expect(releaseWorkflow).toContain(
-      'sourcemaps upload --release="$SENTRY_RELEASE" dist',
+      'sourcemaps upload --release="$SENTRY_RELEASE" --validate --wait --strict dist',
     );
     expect(releaseWorkflow).toContain(
-      'releases set-commits "$SENTRY_RELEASE" --auto',
+      'releases set-commits "$SENTRY_RELEASE" --commit "$SENTRY_REPOSITORY@$SENTRY_COMMIT_SHA" --ignore-missing',
     );
+    expect(releaseWorkflow).toContain("npx -y @sentry/cli@3.6.0");
+    expect(releaseWorkflow).toContain("Validate Sentry release");
+    expect(releaseWorkflow).toContain("SENTRY_REQUIRE_FINALIZED: \"true\"");
     expect(releaseWorkflow).toContain("target: runtime-prebuilt");
     expect(releaseWorkflow).toContain(
       "GITTENSORY_VERSION=${{ steps.version.outputs.release }}",

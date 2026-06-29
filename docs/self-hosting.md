@@ -279,13 +279,15 @@ The maintainer release workflow expects:
 | Secret `SENTRY_AUTH_TOKEN`  | Sentry auth token allowed to create releases and upload source maps    |
 | Variable `SENTRY_ORG`       | Sentry organization slug                                              |
 | Variable `SENTRY_PROJECT`   | Sentry project slug                                                   |
+| Variable `SENTRY_URL`       | Optional Sentry API URL; defaults to `https://sentry.io`               |
 | Sentry GitHub integration   | Installed for `JSONbored/gittensory`, with the code mapping above      |
 
 The workflow builds `dist/server.mjs` with `dist/server.mjs.map`, validates the `sourceMappingURL` and embedded
 `sourcesContent`, injects Sentry debug ids, creates release `gittensory-selfhost@<version>`, associates commits with
-`set-commits --auto`, uploads the source maps, and then builds the image from that injected `dist/server.mjs`.
-`dist/server.mjs.map` is **not** copied into the runtime image and is not served by the app; it only exists as a
-private Sentry release artifact.
+the tagged commit, uploads the source maps with Sentry validation/waiting enabled, finalizes the release, and then
+validates through the Sentry API that the exact release exists, is finalized, and includes the release commit. It then
+builds the image from that injected `dist/server.mjs`. `dist/server.mjs.map` is **not** copied into the runtime image
+and is not served by the app; it only exists as a private Sentry release artifact.
 
 For a custom image, source maps only work when the deployed JS bundle is the exact post-injection bundle whose map was
 uploaded. If you build locally and do not upload maps, leave `SENTRY_RELEASE` unset. Events still report to Sentry,
@@ -296,9 +298,10 @@ If a new event still shows `/app/dist/server.mjs`:
 1. Confirm the event's `release` exactly matches the release that has the uploaded artifact bundle.
 2. Confirm the image was built from the injected `dist/server.mjs`, not from a later Docker-internal rebuild.
 3. Confirm the Sentry code mapping is `/app` → `.` on branch `main`.
-4. Confirm `dist/server.mjs` had `//# sourceMappingURL=server.mjs.map` before upload and the map includes
+4. Confirm the release workflow's `Validate Sentry release` step passed for that exact `gittensory-selfhost@<version>`.
+5. Confirm `dist/server.mjs` had `//# sourceMappingURL=server.mjs.map` before upload and the map includes
    `sourcesContent`.
-5. Trigger a fresh event after the upload; old events may need reprocessing before they pick up newly uploaded maps.
+6. Trigger a fresh event after the upload; old events may need reprocessing before they pick up newly uploaded maps.
 
 ---
 
