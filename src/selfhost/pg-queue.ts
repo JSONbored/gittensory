@@ -7,6 +7,7 @@ import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import { captureError } from "./sentry";
 import {
+  consumingRetryDelayMs,
   deterministicJitterMs,
   FOREGROUND_QUEUE_PRIORITY_FLOOR,
   githubRateLimitRetryDelayMs,
@@ -427,9 +428,10 @@ export function createPgQueue(
             attempts,
           });
         } else {
+          const retryDelayMs = consumingRetryDelayMs(error, backoff(attempts));
           await pool.query(
             `UPDATE ${TABLE} SET status='pending', attempts=$1, run_after=$2, last_error=$3 WHERE id=$4`,
-            [attempts, Date.now() + backoff(attempts), errMsg, job.id],
+            [attempts, Date.now() + retryDelayMs, errMsg, job.id],
           );
           logAudit({
             event: "job_error",

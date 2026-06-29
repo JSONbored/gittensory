@@ -447,9 +447,35 @@ describe("createPgQueue (durable #977)", () => {
     }
   });
 
-  it("reschedules retryable incomplete review jobs without consuming the dead-letter budget", async () => {
+  it("reschedules retryable incomplete review jobs while consuming attempts", async () => {
     const m = makePool();
-    m.enqueueJob("1", { type: "agent-regate-pr" }, 4);
+    m.enqueueJob("1", { type: "agent-regate-pr" }, 0);
+    const retryable = new RetryableJobError("AI review did not produce a public summary yet", {
+      retryAfterMs: 5_000,
+      retryKind: "ai_review_public_summary_missing",
+    });
+    const q = createPgQueue(
+      m.pool,
+      async () => {
+        throw retryable;
+      },
+      { maxRetries: 2, backoffMs: () => 0 },
+    );
+    await q.init();
+    await q.drain();
+    expect(m.pool.query).toHaveBeenCalledWith(
+      expect.stringContaining("SET status='pending', attempts=$1, run_after=$2"),
+      expect.arrayContaining([1, expect.any(Number), "AI review did not produce a public summary yet", "1"]),
+    );
+    expect(m.pool.query).not.toHaveBeenCalledWith(
+      expect.stringContaining("status='dead'"),
+      expect.anything(),
+    );
+  });
+
+  it("dead-letters retryable incomplete review jobs when bounded attempts are exhausted", async () => {
+    const m = makePool();
+    m.enqueueJob("1", { type: "agent-regate-pr" }, 0);
     const retryable = new RetryableJobError("AI review did not produce a public summary yet", {
       retryAfterMs: 5_000,
       retryKind: "ai_review_public_summary_missing",
@@ -464,12 +490,8 @@ describe("createPgQueue (durable #977)", () => {
     await q.init();
     await q.drain();
     expect(m.pool.query).toHaveBeenCalledWith(
-      expect.stringContaining("SET status='pending', run_after=$1"),
-      expect.arrayContaining([expect.any(Number), "AI review did not produce a public summary yet", "1"]),
-    );
-    expect(m.pool.query).not.toHaveBeenCalledWith(
       expect.stringContaining("status='dead'"),
-      expect.anything(),
+      expect.arrayContaining([1, "AI review did not produce a public summary yet", "1"]),
     );
   });
 

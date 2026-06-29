@@ -409,7 +409,7 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(afterEnqueue.run_after).toBeGreaterThan(before + 100_000);
   });
 
-  it("reschedules retryable incomplete review jobs without consuming the dead-letter budget", async () => {
+  it("consumes retryable incomplete review attempts and dead-letters after maxRetries", async () => {
     const driver = makeDriver();
     let calls = 0;
     const retryable = new RetryableJobError("AI review did not produce a public summary yet", {
@@ -422,9 +422,10 @@ describe("createSqliteQueue (durable #980)", () => {
         calls += 1;
         throw retryable;
       },
-      { maxRetries: 1, backoffMs: () => 0 },
+      { maxRetries: 2, backoffMs: () => 0 },
     );
     await q.binding.send(msg("agent-regate-pr"));
+    const before = Date.now();
     await q.drain();
     const { rows } = driver.query(
       "SELECT status, attempts, run_after, last_error FROM _selfhost_jobs",
@@ -439,12 +440,24 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(calls).toBe(1);
     expect(q.deadCount()).toBe(0);
     expect(row.status).toBe("pending");
-    expect(row.attempts).toBe(0);
-    expect(row.run_after).toBeGreaterThan(Date.now());
+    expect(row.attempts).toBe(1);
+    expect(row.run_after).toBeGreaterThanOrEqual(before + 5_000);
     expect(row.last_error).toContain("AI review did not produce");
+
+    driver.query("UPDATE _selfhost_jobs SET run_after=0", []);
+    await q.drain();
+    const dead = driver.query(
+      "SELECT status, attempts, last_error FROM _selfhost_jobs",
+      [],
+    ).rows[0] as { status: string; attempts: number; last_error: string };
+    expect(calls).toBe(2);
+    expect(q.deadCount()).toBe(1);
+    expect(dead.status).toBe("dead");
+    expect(dead.attempts).toBe(2);
+    expect(dead.last_error).toContain("AI review did not produce");
   });
 
-  it("coalesces a keyed retryable review job into an existing pending duplicate", async () => {
+  it("does not coalesce bounded retryable review failures into an existing pending duplicate", async () => {
     const driver = makeDriver();
     const retryable = new RetryableJobError("AI review did not produce a public summary yet", {
       retryAfterMs: 5_000,
@@ -456,7 +469,7 @@ describe("createSqliteQueue (durable #980)", () => {
       async () => {
         throw retryable;
       },
-      { maxRetries: 1, backoffMs: () => 0 },
+      { maxRetries: 2, backoffMs: () => 0 },
     );
     driver.query(
       "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'pending', 0, 0, 0, 10, ?)",
@@ -470,16 +483,17 @@ describe("createSqliteQueue (durable #980)", () => {
     await q.drain();
 
     const rows = driver.query(
-      "SELECT payload, last_error FROM _selfhost_jobs ORDER BY id",
+      "SELECT payload, attempts, last_error FROM _selfhost_jobs ORDER BY id",
       [],
-    ).rows as Array<{ payload: string; last_error: string | null }>;
-    expect(rows).toHaveLength(1);
-    expect(JSON.parse(rows[0]!.payload).deliveryId).toBe("ci-existing");
+    ).rows as Array<{ payload: string; attempts: number; last_error: string | null }>;
+    expect(rows).toHaveLength(2);
+    expect(JSON.parse(rows[0]!.payload).deliveryId).toBe("ci-active");
+    expect(rows[0]!.attempts).toBe(1);
     expect(rows[0]!.last_error).toContain("AI review did not produce");
-    expect(q.stats()).toMatchObject({
-      gittensory_jobs_coalesced_total: 1,
-      gittensory_jobs_deferred_total: 1,
-    });
+    expect(JSON.parse(rows[1]!.payload).deliveryId).toBe("ci-existing");
+    expect(rows[1]!.attempts).toBe(0);
+    expect(rows[1]!.last_error).toBeNull();
+    expect(q.stats().gittensory_jobs_coalesced_total ?? 0).toBe(0);
   });
 
   it("SURVIVES A RESTART: a fresh queue over the same DB processes a persisted pending job", async () => {

@@ -8,6 +8,7 @@ import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import { captureError } from "./sentry";
 import {
+  consumingRetryDelayMs,
   deterministicJitterMs,
   FOREGROUND_QUEUE_PRIORITY_FLOOR,
   githubRateLimitRetryDelayMs,
@@ -370,9 +371,10 @@ export function createSqliteQueue(
             attempts,
           });
         } else {
+          const retryDelayMs = consumingRetryDelayMs(error, backoff(attempts));
           driver.query(
             `UPDATE ${TABLE} SET status='pending', attempts=?, run_after=?, last_error=? WHERE id=?`,
-            [attempts, Date.now() + backoff(attempts), errMsg, job.id],
+            [attempts, Date.now() + retryDelayMs, errMsg, job.id],
           );
           logAudit({
             event: "job_error",

@@ -129,7 +129,14 @@ export function githubRateLimitRetryDelayMs(
 }
 
 export function nonConsumingRetryDelayMs(error: unknown): number | null {
-  return githubRateLimitRetryDelayMs(error) ?? retryableJobDelayMs(error);
+  return githubRateLimitRetryDelayMs(error);
+}
+
+export function consumingRetryDelayMs(
+  error: unknown,
+  defaultDelayMs: number,
+): number {
+  return retryableJobDelayMs(error) ?? defaultDelayMs;
 }
 
 export function rateLimitRetryDelayWithJitter(

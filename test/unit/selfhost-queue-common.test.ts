@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   FOREGROUND_QUEUE_PRIORITY_FLOOR,
+  consumingRetryDelayMs,
   githubRateLimitRetryDelayMs,
   isForegroundJobPriority,
   jobCoalesceKey,
@@ -134,14 +135,33 @@ describe("self-host queue common helpers", () => {
     ).toBe(8_000);
   });
 
-  it("extracts non-consuming retry delays from retryable job errors", () => {
+  it("keeps only GitHub rate limits on the non-consuming retry path", () => {
     expect(nonConsumingRetryDelayMs(new Error("boom"))).toBeNull();
+    expect(
+      nonConsumingRetryDelayMs({
+        status: 429,
+        response: { headers: new Headers({ "retry-after": "2" }) },
+      }),
+    ).toBe(2_000);
     expect(
       nonConsumingRetryDelayMs(
         new RetryableJobError("AI review pending", {
           retryAfterMs: 1234,
           retryKind: "ai_review_public_summary_missing",
         }),
+      ),
+    ).toBeNull();
+  });
+
+  it("uses RetryableJobError delays on the bounded consuming retry path", () => {
+    expect(consumingRetryDelayMs(new Error("boom"), 77)).toBe(77);
+    expect(
+      consumingRetryDelayMs(
+        new RetryableJobError("AI review pending", {
+          retryAfterMs: 1234,
+          retryKind: "ai_review_public_summary_missing",
+        }),
+        77,
       ),
     ).toBe(1234);
   });
