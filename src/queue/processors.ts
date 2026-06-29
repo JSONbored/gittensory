@@ -1718,8 +1718,9 @@ async function prReadyForReview(
     // (an orphaned / never-completing check — e.g. a fork check that never reports back) would otherwise make us
     // defer FOREVER → the PR is silently stuck and never surfaces (the dominant metagraphed stall). Past
     // STUCK_CI_DEFER_MS we stop deferring and let the gate FINALIZE, so the PR is surfaced (held / needs-human),
-    // or disposed if a verdict is reachable — never silently deferred. first-seen is KV-tracked per PR+headSha (a
-    // new push = new SHA = fresh window); a KV miss degrades to the old defer (safe — never acts early). (#ci-stuck-finalize)
+    // or disposed if a verdict is reachable — never silently deferred. first-seen is tracked in the self-host
+    // Redis transient cache per PR+headSha (a new push = new SHA = fresh window); a cache miss degrades to the
+    // old defer (safe — never acts early). (#ci-stuck-finalize)
     if (
       !(await ciPendingDeferStuck(env, repoFullName, pr.number, pr.headSha))
     ) {

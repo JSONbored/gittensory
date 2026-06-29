@@ -3,6 +3,7 @@ import { getWebhookEvent, recordWebhookEvent } from "../db/repositories";
 import type { GitHubWebhookPayload, JobMessage } from "../types";
 import { sha256Hex, verifyGitHubSignature } from "../utils/crypto";
 import { relayVerify } from "../orb/relay";
+import { isSelfHostedReviewRuntime } from "../selfhost/review-runtime";
 import { isSelfAuthoredWebhookNoise } from "./self-authored";
 
 const DEFAULT_MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
@@ -38,6 +39,8 @@ export async function handleGitHubWebhook(c: Context<{ Bindings: Env }>): Promis
 export async function enqueueVerifiedWebhook(c: Context<{ Bindings: Env }>, deliveryId: string, eventName: string, rawBody: string): Promise<Response> {
   const result = await enqueueWebhookByEnv(c.env, deliveryId, eventName, rawBody);
   switch (result) {
+    case "review_unavailable":
+      return c.json({ error: "selfhost_review_runtime_required" }, 410);
     case "ignored":
       return c.json({ ok: true, deliveryId, eventName, status: "ignored" }, 202);
     case "invalid_json":
@@ -51,12 +54,14 @@ export async function enqueueVerifiedWebhook(c: Context<{ Bindings: Env }>, deli
   }
 }
 
-export type EnqueueWebhookResult = "queued" | "duplicate" | "ignored" | "invalid_json" | "enqueue_failed";
+export type EnqueueWebhookResult = "queued" | "duplicate" | "ignored" | "invalid_json" | "enqueue_failed" | "review_unavailable";
 
 /** Env-based core of the webhook enqueue (parse → dedup → record → WEBHOOKS lane), with NO Hono Context. Shared by
  *  the request-context receiver above AND the pull-mode relay drain loop (server.ts), which has no Context. Returns
  *  a status the caller maps to a response / an ack decision. */
 export async function enqueueWebhookByEnv(env: Env, deliveryId: string, eventName: string, rawBody: string): Promise<EnqueueWebhookResult> {
+  if (!isSelfHostedReviewRuntime(env)) return "review_unavailable";
+
   let payload: GitHubWebhookPayload;
   try {
     payload = JSON.parse(rawBody) as GitHubWebhookPayload;
@@ -90,6 +95,7 @@ export async function enqueueWebhookByEnv(env: Env, deliveryId: string, eventNam
 
   const message: JobMessage = { type: "github-webhook", deliveryId, eventName, payload };
   try {
+    if (!env.WEBHOOKS) return "enqueue_failed";
     // Send to the dedicated WEBHOOKS lane (not the shared JOBS queue) so a maintenance burst on JOBS can never
     // starve real GitHub events into the DLQ. (#audit-webhook-queue)
     await env.WEBHOOKS.send(message);

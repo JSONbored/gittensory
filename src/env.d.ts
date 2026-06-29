@@ -2,6 +2,8 @@ declare global {
   interface Env {
     DB: D1Database;
     JOBS: Queue;
+    /** Self-host webhook queue binding. Cloudflare no longer binds this because hosted reviews are retired. */
+    WEBHOOKS?: Queue;
     RATE_LIMITER?: DurableObjectNamespace;
     AI?: Ai;
     /** Self-host (RAG): a DEDICATED embedding provider, kept SEPARATE from the review chat chain so the reviewer
@@ -20,10 +22,8 @@ declare global {
     /** Convergence (infra): Browser Rendering binding for visual (before/after screenshot) capture. Optional —
      *  absent ⇒ no visual capture. Unused until the per-module wiring chunk; an unbound deploy is inert. */
     BROWSER?: Fetcher;
-    /** Convergence (infra): the shared REVIEW_CONFIG KV (reviewbot's per-repo config, keyed by repo slug).
-     *  The converged auto-maintain path resolves each repo's `hardGuardrailGlobs` from it so guarded paths
-     *  force MANUAL review (no auto-merge / auto-close). Optional — absent ⇒ the conservative
-     *  DEFAULT_CRUCIAL_GUARDRAIL_GLOBS fallback applies (CI workflows + scripts still guarded). */
+    /** Legacy reviewbot KV shape. Cloudflare no longer binds this; self-host review policy should come from
+     *  container-private config. Existing readers are optional and fall back when absent. */
     REVIEW_CONFIG?: KVNamespace;
     /** Self-host transient cache for short-lived coalescing/backpressure keys. */
     SELFHOST_TRANSIENT_CACHE?: {

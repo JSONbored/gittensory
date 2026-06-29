@@ -1,8 +1,8 @@
 // Self-host Node entry (#980). Runs gittensory's SAME Worker handlers on Node. Backends are pluggable:
 //   • DB:    SQLite (node:sqlite, default) OR Postgres (DATABASE_URL=postgres://… → shared, multi-instance).
 //   • Queue: durable SQLite queue OR a Postgres queue (FOR UPDATE SKIP LOCKED).
-//   • Rate limit: a Redis fixed-window limiter when REDIS_URL is set (else no limiting, as today).
-//   • RAG vector store: SQLite-only for now (omitted on Postgres → RAG degrades to no-context).
+//   • Redis: required transient review state + fixed-window rate limiter.
+//   • RAG vector store: SQLite/pgvector by default, or Qdrant when QDRANT_URL is set.
 // Serves the Hono app via @hono/node-server, drives the queue with the same processJob, ticks the same
 // scheduled handler on a timer, exposes /health /ready /metrics, and shuts down gracefully. The Cloudflare
 // Worker (src/index.ts) is untouched — this is a parallel entry the self-host esbuild build bundles.
@@ -384,8 +384,9 @@ async function main(): Promise<void> {
       }),
     );
 
-  // /ready gates on every CONFIGURED optional backend (below) so a load balancer never routes to an instance whose
-  // Redis/Qdrant is down. Each probe owns a short timeout so a hung backend can't hang the readiness check.
+  // /ready gates on required Redis plus every configured optional backend so a load balancer never routes to an
+  // instance whose shared state/vector backend is down. Each probe owns a short timeout so a hung backend can't
+  // hang the readiness check.
   const readinessProbes: ReadinessProbe[] = [];
   const withTimeout = (p: Promise<boolean>, ms = 1500): Promise<boolean> =>
     Promise.race([
@@ -393,46 +394,38 @@ async function main(): Promise<void> {
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms)),
     ]);
 
-  // Redis fixed-window rate limiter + webhook dedup cache (else absent when REDIS_URL is unset).
-  let rateLimiter: DurableObjectNamespace | undefined;
-  let webhookCache: import("./selfhost/redis-cache").RedisCache | undefined;
-  if (process.env.REDIS_URL) {
-    const { Redis } = await import("ioredis");
-    const redisClient = new Redis(process.env.REDIS_URL);
-    const { createRedisRateLimiter } =
-      await import("./selfhost/redis-ratelimit");
-    const { createRedisCache } = await import("./selfhost/redis-cache");
-    rateLimiter = createRedisRateLimiter(redisClient);
-    webhookCache = createRedisCache(redisClient);
-    // Persist the installation-token cache in Redis so warm GitHub App tokens survive restarts/deploys and are
-    // shared across replicas (the in-isolate Map otherwise re-mints — an Orb round-trip — per replica/cold start).
-    const { createRedisTokenCache } =
-      await import("./selfhost/redis-token-cache");
-    const { setInstallationTokenStore, setGitHubResponseCache } =
-      await import("./github/app");
-    setInstallationTokenStore(createRedisTokenCache(redisClient));
-    // Short-TTL cache for safe GitHub GET responses (dedups the ~24 reads per review). Default 20s; 0 disables.
-    const ghCacheTtl = Math.max(
-      0,
-      Number(process.env.GITHUB_CACHE_TTL_SECONDS ?? "20"),
-    );
-    if (ghCacheTtl > 0) {
-      const { createRedisResponseCache } =
-        await import("./selfhost/redis-response-cache");
-      setGitHubResponseCache(createRedisResponseCache(redisClient, ghCacheTtl));
-    }
-    readinessProbes.push({
-      name: "redis",
-      check: () => withTimeout(redisClient.ping().then(() => true)),
-    });
-    console.log(
-      JSON.stringify({
-        event: "selfhost_rate_limiter",
-        backend: "redis",
-        githubResponseCacheTtl: ghCacheTtl,
-      }),
-    );
+  // Redis is required: pending-CI stuck detection, webhook dedup/coalescing, distributed rate limiting, and
+  // warm GitHub token/response caches all rely on this shared transient state.
+  const redisUrl = process.env.REDIS_URL;
+  if (!redisUrl) throw new Error("REDIS_URL is required for the self-host review runtime");
+  const { Redis } = await import("ioredis");
+  const redisClient = new Redis(redisUrl);
+  const { createRedisRateLimiter } = await import("./selfhost/redis-ratelimit");
+  const { createRedisCache } = await import("./selfhost/redis-cache");
+  const rateLimiter = createRedisRateLimiter(redisClient);
+  const webhookCache = createRedisCache(redisClient);
+  // Persist the installation-token cache in Redis so warm GitHub App tokens survive restarts/deploys and are
+  // shared across replicas (the in-isolate Map otherwise re-mints — an Orb round-trip — per replica/cold start).
+  const { createRedisTokenCache } = await import("./selfhost/redis-token-cache");
+  const { setInstallationTokenStore, setGitHubResponseCache } = await import("./github/app");
+  setInstallationTokenStore(createRedisTokenCache(redisClient));
+  // Short-TTL cache for safe GitHub GET responses (dedups the ~24 reads per review). Default 20s; 0 disables.
+  const ghCacheTtl = Math.max(0, Number(process.env.GITHUB_CACHE_TTL_SECONDS ?? "20"));
+  if (ghCacheTtl > 0) {
+    const { createRedisResponseCache } = await import("./selfhost/redis-response-cache");
+    setGitHubResponseCache(createRedisResponseCache(redisClient, ghCacheTtl));
   }
+  readinessProbes.push({
+    name: "redis",
+    check: () => withTimeout(redisClient.ping().then(() => true)),
+  });
+  console.log(
+    JSON.stringify({
+      event: "selfhost_redis_ready",
+      backend: "redis",
+      githubResponseCacheTtl: ghCacheTtl,
+    }),
+  );
 
   // Qdrant vector store — overrides the backend's built-in sqlite-vec / pgvector when QDRANT_URL is set.
   let vectorizeOverride: Vectorize | undefined;
@@ -467,14 +460,14 @@ async function main(): Promise<void> {
     AI: ai,
     ...(embedAi ? { AI_EMBED: embedAi as unknown as Ai } : {}),
     ...(aiReviewPlan ? { AI_REVIEW_PLAN: aiReviewPlan } : {}),
-    ...(webhookCache ? { SELFHOST_TRANSIENT_CACHE: webhookCache } : {}),
+    SELFHOST_TRANSIENT_CACHE: webhookCache,
     // Qdrant takes priority; falls back to the backend's built-in vectorize (pgvector or sqlite-vec)
     ...(vectorizeOverride
       ? { VECTORIZE: vectorizeOverride }
       : backend.vectorize
         ? { VECTORIZE: backend.vectorize }
         : {}),
-    ...(rateLimiter ? { RATE_LIMITER: rateLimiter } : {}),
+    RATE_LIMITER: rateLimiter,
     // Visual review: when BROWSER_WS_ENDPOINT is set, expose a truthy BROWSER binding so shot.ts's
     // `if (!env.BROWSER) return` guard is bypassed; the puppeteer stub then connects via WS.
     ...(process.env.BROWSER_WS_ENDPOINT ? { BROWSER: {} } : {}),
