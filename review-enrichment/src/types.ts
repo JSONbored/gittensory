@@ -43,6 +43,19 @@ export interface DependencyFinding {
   cves: Cve[];
 }
 
+/** A vulnerable lockfile-only dependency resolution. The package was not changed in a top-level manifest diff,
+ *  so it is treated as transitive lockfile drift and reported with the lockfile location that introduced it. */
+export interface LockfileDriftFinding {
+  file: string;
+  line: number;
+  ecosystem: "npm" | "PyPI";
+  package: string;
+  from: string | null;
+  to: string;
+  direction: "add" | "change";
+  cves: Cve[];
+}
+
 /** A potential leaked credential. Value-redacted by construction — only the location + kind are ever reported. */
 export interface SecretFinding {
   file: string;
@@ -136,6 +149,7 @@ export interface AssetWeightFinding {
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
+  lockfileDrift?: LockfileDriftFinding[];
   secret?: SecretFinding[];
   license?: LicenseFinding[];
   actionPin?: ActionPinFinding[];

@@ -58,9 +58,32 @@ export function renderBrief(
           (SEVERITY_RANK[b.cve.severity] ?? 4),
       );
     for (const { dep, cve } of flat) {
-      const fix = cve.fixedIn ? ` — fixed in ${cve.fixedIn}` : "";
+      const fix = cve.fixedIn
+        ? ` — fixed in ${safeCodeSpan(cve.fixedIn)}`
+        : "";
       lines.push(
-        `- \`${dep.package}@${dep.to}\` (${dep.ecosystem}): **${cve.severity}** ${cve.id} — ${cve.summary}${fix}`,
+        `- ${safeCodeSpan(`${dep.package}@${dep.to}`)} (${dep.ecosystem}): **${cve.severity}** ${safeCodeSpan(cve.id)} — ${promptText(cve.summary)}${fix}`,
+      );
+    }
+  }
+
+  const lockfileDrift = findings.lockfileDrift ?? [];
+  if (lockfileDrift.length) {
+    lines.push("### Vulnerable lockfile-only dependency drift (OSV.dev)");
+    const flat = lockfileDrift
+      .flatMap((dep) => dep.cves.map((cve) => ({ dep, cve })))
+      .sort(
+        (a, b) =>
+          (SEVERITY_RANK[a.cve.severity] ?? 4) -
+          (SEVERITY_RANK[b.cve.severity] ?? 4),
+      );
+    for (const { dep, cve } of flat) {
+      const from = dep.from ? ` from ${safeCodeSpan(dep.from)}` : "";
+      const fix = cve.fixedIn
+        ? ` — fixed in ${safeCodeSpan(cve.fixedIn)}`
+        : "";
+      lines.push(
+        `- ${safeCodeSpan(`${dep.file}:${dep.line}`)} resolves transitive ${safeCodeSpan(`${dep.package}@${dep.to}`)} (${dep.ecosystem})${from}: **${cve.severity}** ${safeCodeSpan(cve.id)} — ${promptText(cve.summary)}${fix}`,
       );
     }
   }

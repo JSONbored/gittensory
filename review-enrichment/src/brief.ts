@@ -8,6 +8,7 @@ import type {
   AnalyzerStatus,
 } from "./types.js";
 import { scanDependencies } from "./analyzers/dependency-scan.js";
+import { scanLockfileDrift } from "./analyzers/lockfile-drift.js";
 import { scanSecrets } from "./analyzers/secret-scan.js";
 import { scanLicenses } from "./analyzers/license-check.js";
 import { scanInstallScripts } from "./analyzers/install-scripts.js";
@@ -25,6 +26,7 @@ type AnalyzerFn = (req: EnrichRequest, signal: AbortSignal) => Promise<unknown>;
 // The analyzer registry. More land behind this same shape: license (#1475), secret (#1476), static (#1477), history (#1478).
 const ANALYZERS: Record<keyof BriefFindings, AnalyzerFn> = {
   dependency: (req, signal) => scanDependencies(req, fetch, { signal }),
+  lockfileDrift: (req, signal) => scanLockfileDrift(req, fetch, { signal }),
   secret: (req) => scanSecrets(req),
   license: (req) => scanLicenses(req),
   installScript: (req) => scanInstallScripts(req),
