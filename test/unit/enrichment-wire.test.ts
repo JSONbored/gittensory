@@ -84,6 +84,12 @@ describe("buildReviewEnrichment", () => {
     expect(
       (calls[0]!.init.headers as Record<string, string>).authorization,
     ).toBe("Bearer sek");
+    expect(
+      (calls[0]!.init.headers as Record<string, string>)["user-agent"],
+    ).toBe("gittensory-selfhost/1.0");
+    expect((calls[0]!.init.headers as Record<string, string>).accept).toBe(
+      "application/json",
+    );
     const body = JSON.parse(calls[0]!.init.body as string);
     expect(body.repoFullName).toBe("o/r");
     expect(body.files).toEqual([
@@ -106,17 +112,28 @@ describe("buildReviewEnrichment", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     globalThis.fetch = vi.fn(
       async () =>
-        ({ ok: false, status: 502, json: async () => ({}) }) as Response,
+        ({
+          ok: false,
+          status: 502,
+          statusText: "Bad Gateway",
+          text: async () => "upstream unavailable",
+        }) as Response,
     ) as unknown as typeof fetch;
     expect(
-      await buildReviewEnrichment(env({ REES_URL: "https://r" }), input),
+      await buildReviewEnrichment(
+        env({ REES_URL: "https://r", REES_SHARED_SECRET: "sek" }),
+        input,
+      ),
     ).toBeUndefined();
     // A non-2xx REES response now logs at error level (was a silent skip) so a broken backend is visible in Sentry.
     expect(
       errSpy.mock.calls.some(
         (c) =>
           String(c[0]).includes("review_context_fetch_failed") &&
-          String(c[0]).includes("502"),
+          String(c[0]).includes('"status":502') &&
+          String(c[0]).includes('"statusText":"Bad Gateway"') &&
+          String(c[0]).includes('"hasSharedSecret":true') &&
+          String(c[0]).includes("upstream unavailable"),
       ),
     ).toBe(true);
     errSpy.mockRestore();

@@ -79,11 +79,31 @@ See [ai-providers.md](./ai-providers.md) for the full provider/model/effort/time
 | Var                                          | Purpose                                                                               |
 | -------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `AI_PROVIDER`                                | `claude-code` / `codex` / `anthropic` / `ollama` / … (comma-list = chain/dual-review) |
-| `AI_MODEL`, `AI_EFFORT`                      | Model id + intelligence dial (low…max, default high)                                  |
-| `AI_TIMEOUT_MS`                              | CLI subprocess timeout override (else scales with effort)                             |
+| `CLAUDE_AI_*`, `CODEX_AI_*`                  | Subscription CLI model, effort, and timeout knobs                                     |
+| `OLLAMA_AI_*`, `OPENAI_COMPATIBLE_AI_*`      | OpenAI-compatible base URL, optional key, and model knobs                             |
+| `OPENAI_AI_MODEL`, `OPENAI_API_KEY`          | OpenAI API reviewer model and key                                                     |
+| `ANTHROPIC_AI_MODEL`, `ANTHROPIC_API_KEY`    | Anthropic API reviewer model and key                                                  |
 | `CLAUDE_CODE_OAUTH_TOKEN`                    | Claude Code subscription token (`claude setup-token`)                                 |
 | `AI_EMBED_BASE_URL` / `_MODEL` / `_PROVIDER` | Dedicated RAG embed provider                                                          |
 | `GITTENSORY_REPO_CONFIG_DIR`                 | Container-private per-repo config dir                                                 |
+| `GITTENSORY_REPORTING_SOURCE_DB`             | Optional reporting-exporter source path for non-default SQLite `DATABASE_PATH`        |
+
+## Sentry environment variables
+
+Sentry is off unless `SENTRY_DSN` is set. Official self-host release images bake
+`GITTENSORY_VERSION=gittensory-selfhost@<version>`; `initSentry()` uses that as the release id unless
+`SENTRY_RELEASE` is explicitly set.
+
+| Var                         | Purpose                                                                 |
+| --------------------------- | ----------------------------------------------------------------------- |
+| `SENTRY_DSN`                | Enables Sentry error reporting when set                                 |
+| `SENTRY_DSN_FILE`           | Optional mounted-file form, handled by the existing `*_FILE` loader     |
+| `SENTRY_ENVIRONMENT`        | Runtime environment; use `selfhost` for Docker-stack installs           |
+| `SENTRY_RELEASE`            | Optional override for custom images; leave empty on official images     |
+| `SENTRY_TRACES_SAMPLE_RATE` | Optional tracing sample rate; default `0` keeps tracing off             |
+| `GITTENSORY_VERSION`        | Image-baked release id used as Sentry fallback                          |
+
+For Sentry's GitHub code mapping, use **Stack Trace Root** `/app` and **Source Code Root** `.`.
 
 ## Sentry environment variables
 
