@@ -47,7 +47,7 @@ import { SiteHeader } from "@/components/site/site-header";
 function docsHoverHost(): HTMLElement {
   const docsLink = screen.getByRole("link", { name: /^docs$/i });
   const host = docsLink.closest(".relative");
-  if (!host) throw new Error("docs hover host not found");
+  if (!(host instanceof HTMLElement)) throw new Error("docs hover host not found");
   return host;
 }
 
