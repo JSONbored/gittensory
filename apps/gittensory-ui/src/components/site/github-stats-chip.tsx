@@ -43,12 +43,26 @@ async function fetchRepo(): Promise<RepoStats> {
       silentStatus: true, // GitHub failures shouldn't poison the Gittensory API status pill
     },
   );
-  if (!result.ok) {
-    throw new Error(result.message);
+  if (result.ok) {
+    const stats = {
+      stargazers_count: result.data?.stargazers_count ?? 0,
+      forks_count: result.data?.forks_count ?? 0,
+    };
+    writeCache(stats);
+    return stats;
   }
+  // Fallback: fetch directly from the GitHub API when the Worker proxy is unavailable (rate-limited, 503,
+  // network error). GitHub sends Access-Control-Allow-Origin: * for public repo endpoints, and each browser
+  // gets its own 60/hr unauthenticated budget — enough for this single chip. (#1754)
+  const ghResponse = await fetch(`https://api.github.com/repos/${REPO}`, {
+    headers: { accept: "application/vnd.github+json", "user-agent": "gittensory/0.1" },
+    signal: AbortSignal.timeout(6000),
+  });
+  if (!ghResponse.ok) throw new Error(result.message);
+  const body = (await ghResponse.json()) as { stargazers_count?: number; forks_count?: number };
   const stats = {
-    stargazers_count: result.data?.stargazers_count ?? 0,
-    forks_count: result.data?.forks_count ?? 0,
+    stargazers_count: body.stargazers_count ?? 0,
+    forks_count: body.forks_count ?? 0,
   };
   writeCache(stats);
   return stats;
