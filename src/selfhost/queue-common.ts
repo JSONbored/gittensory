@@ -1,6 +1,11 @@
 import { retryableJobDelayMs } from "../queue/retryable";
 import { extractPayloadType } from "./audit";
 
+const DEFAULT_RATE_LIMIT_JITTER_MS = 5 * 60_000;
+const DEFAULT_STARTUP_JITTER_MS = 3 * 60_000;
+const DEFAULT_RECOVERY_JITTER_MS = 60_000;
+const DEFAULT_STARTUP_JITTER_MIN_JOBS = 8;
+
 // Webhook-driven work (a fresh PR -> its review) jumps ahead of heavy background jobs. Per-PR review refreshes
 // sit just below real webhooks, and sweep fan-out sits below those so stale surfaces are repaired during bursts.
 // Bot-generated comment edits are background noise; keeping them with real webhooks lets panel edits starve repair.
@@ -89,9 +94,153 @@ export function nonConsumingRetryDelayMs(error: unknown): number | null {
   return githubRateLimitRetryDelayMs(error) ?? retryableJobDelayMs(error);
 }
 
+export function rateLimitRetryDelayWithJitter(
+  delayMs: number,
+  seed: string,
+): number {
+  return delayMs + deterministicJitterMs(seed, queueRateLimitJitterMs());
+}
+
+export function queueStartupJitterMs(): number {
+  return envDurationMs("QUEUE_STARTUP_JITTER_MS", DEFAULT_STARTUP_JITTER_MS);
+}
+
+export function queueRecoveryJitterMs(): number {
+  return envDurationMs("QUEUE_RECOVERY_JITTER_MS", DEFAULT_RECOVERY_JITTER_MS);
+}
+
+export function queueStartupJitterMinJobs(): number {
+  const raw = Number(process.env.QUEUE_STARTUP_JITTER_MIN_JOBS ?? DEFAULT_STARTUP_JITTER_MIN_JOBS);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : DEFAULT_STARTUP_JITTER_MIN_JOBS;
+}
+
+export function deterministicJitterMs(seed: string, maxJitterMs: number): number {
+  if (!Number.isFinite(maxJitterMs) || maxJitterMs <= 0) return 0;
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i += 1) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h >>> 0) % (Math.floor(maxJitterMs) + 1);
+}
+
+export function jobCoalesceKey(payload: string): string | null {
+  try {
+    const message = JSON.parse(payload) as {
+      type?: unknown;
+      eventName?: unknown;
+      repoFullName?: unknown;
+      prNumber?: unknown;
+      attempt?: unknown;
+      payload?: {
+        action?: unknown;
+        repository?: { full_name?: unknown } | null;
+        pull_request?: { number?: unknown; head?: { sha?: unknown } | null } | null;
+        check_suite?: {
+          head_sha?: unknown;
+          pull_requests?: Array<{ number?: unknown } | null> | null;
+        } | null;
+        check_run?: {
+          head_sha?: unknown;
+          check_suite?: { head_sha?: unknown } | null;
+          pull_requests?: Array<{ number?: unknown } | null> | null;
+        } | null;
+      } | null;
+    };
+    const type = typeof message.type === "string" ? message.type : "";
+    if (type === "agent-regate-pr") {
+      const repo = normalizedRepo(message.repoFullName);
+      const pr = normalizedNumber(message.prNumber);
+      return repo && pr !== null ? `agent-regate-pr:${repo}#${pr}` : null;
+    }
+    if (type === "recapture-preview") {
+      const repo = normalizedRepo(message.repoFullName);
+      const pr = normalizedNumber(message.prNumber);
+      const attempt = normalizedNumber(message.attempt);
+      return repo && pr !== null && attempt !== null
+        ? `recapture-preview:${repo}#${pr}:${attempt}`
+        : null;
+    }
+    if (type !== "github-webhook") return null;
+    const eventName =
+      typeof message.eventName === "string" ? message.eventName : "";
+    const action =
+      typeof message.payload?.action === "string" ? message.payload.action : "";
+    const repo = normalizedRepo(message.payload?.repository?.full_name);
+    if (!repo) return null;
+    if (
+      (eventName === "check_suite" || eventName === "check_run") &&
+      action === "completed"
+    ) {
+      const node = eventName === "check_suite" ? message.payload?.check_suite : message.payload?.check_run;
+      const headSha = normalizedSha(
+        node?.head_sha ??
+          (eventName === "check_run" ? message.payload?.check_run?.check_suite?.head_sha : undefined),
+      );
+      if (!headSha) return null;
+      const pullNumbers = (node?.pull_requests ?? [])
+        .map((entry) => normalizedNumber(entry?.number))
+        .filter((value): value is number => value !== null)
+        .sort((a, b) => a - b)
+        .join(",");
+      return `github-webhook:ci-completed:${repo}@${headSha}${pullNumbers ? `#${pullNumbers}` : ""}`;
+    }
+    if (eventName === "pull_request" && isCoalescablePullRequestAction(action)) {
+      const pr =
+        normalizedNumber(message.payload?.pull_request?.number) ??
+        normalizedNumber((message.payload as { number?: unknown } | null | undefined)?.number);
+      const headSha = normalizedSha(message.payload?.pull_request?.head?.sha);
+      return pr !== null
+        ? `github-webhook:pr-refresh:${repo}#${pr}${headSha ? `@${headSha}` : ""}`
+        : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function clampRetryDelay(delayMs: number): number {
   if (!Number.isFinite(delayMs) || delayMs <= 0) return DEFAULT_GITHUB_RATE_LIMIT_RETRY_MS;
   return Math.min(Math.ceil(delayMs), MAX_GITHUB_RATE_LIMIT_RETRY_MS);
+}
+
+function queueRateLimitJitterMs(): number {
+  return envDurationMs("QUEUE_RATE_LIMIT_JITTER_MS", DEFAULT_RATE_LIMIT_JITTER_MS);
+}
+
+function envDurationMs(name: string, fallback: number): number {
+  const raw = Number(process.env[name] ?? fallback);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : fallback;
+}
+
+function normalizedRepo(value: unknown): string | null {
+  return typeof value === "string" && value.includes("/")
+    ? value.trim().toLowerCase()
+    : null;
+}
+
+function normalizedNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.floor(value)
+    : null;
+}
+
+function normalizedSha(value: unknown): string | null {
+  return typeof value === "string" && /^[a-f0-9]{7,40}$/i.test(value.trim())
+    ? value.trim().toLowerCase()
+    : null;
+}
+
+function isCoalescablePullRequestAction(action: string): boolean {
+  return (
+    action === "opened" ||
+    action === "synchronize" ||
+    action === "edited" ||
+    action === "ready_for_review" ||
+    action === "labeled" ||
+    action === "unlabeled"
+  );
 }
 
 function numberHeader(

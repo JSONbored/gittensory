@@ -10,8 +10,20 @@ const msg = (t: string): JobMessage => ({ type: t }) as unknown as JobMessage;
 const webhook = (sender: { login: string; type: string }, eventName = "issue_comment", action = "edited"): JobMessage =>
   ({
     type: "github-webhook",
+    deliveryId: "webhook-delivery",
     eventName,
     payload: { action, sender },
+  }) as unknown as JobMessage;
+const ciWebhook = (deliveryId: string, eventName: "check_suite" | "check_run" = "check_suite", sha = "b".repeat(40)): JobMessage =>
+  ({
+    type: "github-webhook",
+    deliveryId,
+    eventName,
+    payload: {
+      action: "completed",
+      repository: { full_name: "JSONbored/gittensory" },
+      [eventName]: { head_sha: sha, pull_requests: [{ number: 1629 }] },
+    },
   }) as unknown as JobMessage;
 const typeOf = (m: JobMessage): string => (m as unknown as { type: string }).type;
 
@@ -62,18 +74,20 @@ describe("createPgQueue (durable #977)", () => {
     m.fn.mockResolvedValueOnce({ rows: [], rowCount: 2 }); // recovery UPDATE
     const q = createPgQueue(m.pool, async () => undefined);
     await q.init();
-    expect(m.pool.query).toHaveBeenCalledTimes(3);
+    expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("CREATE TABLE IF NOT EXISTS _selfhost_jobs"));
+    expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("status='processing'"));
   });
 
   it("init() handles null rowCount from the recovery query (rowCount ?? 0 nullish arm)", async () => {
     const m = makePool();
     m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // DDL
     m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // priority backfill SELECT
-    // pg driver can return null for rowCount on some UPDATE results
+    m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // job-key backfill SELECT
+    // pg driver can return null for some SELECT-ish maintenance results; init must tolerate it.
     m.fn.mockResolvedValueOnce({ rows: [], rowCount: null });
     const q = createPgQueue(m.pool, async () => undefined);
     await q.init(); // rowCount=null → ?? 0 → 0 → no recovery log emitted
-    expect(m.pool.query).toHaveBeenCalledTimes(3);
+    expect(m.pool.query).toHaveBeenCalled();
   });
 
   it("init() backfills event-aware priorities with the shared classifier", async () => {
@@ -96,6 +110,28 @@ describe("createPgQueue (durable #977)", () => {
     expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("UPDATE _selfhost_jobs SET priority=$1"), [9, "a"]);
     expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("UPDATE _selfhost_jobs SET priority=$1"), [0, "b"]);
     expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("UPDATE _selfhost_jobs SET priority=$1"), [8, "c"]);
+  });
+
+  it("coalesces duplicate keyed jobs instead of inserting queue pressure", async () => {
+    const m = makePool();
+    const q = createPgQueue(m.pool, async () => undefined);
+    await q.init();
+    m.fn.mockResolvedValueOnce({ rows: [{ id: "existing" }], rowCount: 1 });
+
+    await q.binding.send(ciWebhook("ci-2", "check_run"), { delaySeconds: 1 });
+
+    expect(m.pool.query).toHaveBeenCalledWith(
+      expect.stringContaining("WHERE status='pending' AND job_key=$1"),
+      [`github-webhook:ci-completed:jsonbored/gittensory@${"b".repeat(40)}#1629`],
+    );
+    expect(m.pool.query).toHaveBeenCalledWith(
+      expect.stringContaining("SET payload=$1, run_after=GREATEST"),
+      expect.arrayContaining([expect.stringContaining('"deliveryId":"ci-2"'), expect.any(Number), expect.any(Number), 10, "existing"]),
+    );
+    expect(m.pool.query).not.toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO _selfhost_jobs (payload"),
+      expect.arrayContaining([expect.stringContaining('"deliveryId":"ci-2"')]),
+    );
   });
 
   it("processes a job successfully (job_complete audit emitted)", async () => {
@@ -296,5 +332,13 @@ describe("createPgQueue (durable #977)", () => {
     await q.init();
     expect(await q.size()).toBe(3);
     expect(await q.deadCount()).toBe(3);
+  });
+
+  it("stats() returns persisted queue metric counts", async () => {
+    const m = makePool();
+    const q = createPgQueue(m.pool, async () => undefined);
+    await q.init();
+    m.fn.mockResolvedValueOnce({ rows: [{ name: "gittensory_jobs_processed_total", value: "42" }], rowCount: 1 });
+    await expect(q.stats()).resolves.toEqual({ gittensory_jobs_processed_total: 42 });
   });
 });

@@ -12,8 +12,31 @@ const msg = (t: string): JobMessage => ({ type: t }) as unknown as JobMessage;
 const webhook = (sender: { login: string; type: string }, eventName = "issue_comment", action = "edited"): JobMessage =>
   ({
     type: "github-webhook",
+    deliveryId: "webhook-delivery",
     eventName,
     payload: { action, sender },
+  }) as unknown as JobMessage;
+const prWebhook = (deliveryId: string, action = "synchronize", sha = "a".repeat(40)): JobMessage =>
+  ({
+    type: "github-webhook",
+    deliveryId,
+    eventName: "pull_request",
+    payload: {
+      action,
+      repository: { full_name: "JSONbored/gittensory" },
+      pull_request: { number: 1629, head: { sha } },
+    },
+  }) as unknown as JobMessage;
+const ciWebhook = (deliveryId: string, eventName: "check_suite" | "check_run" = "check_suite", sha = "b".repeat(40)): JobMessage =>
+  ({
+    type: "github-webhook",
+    deliveryId,
+    eventName,
+    payload: {
+      action: "completed",
+      repository: { full_name: "JSONbored/gittensory" },
+      [eventName]: { head_sha: sha, pull_requests: [{ number: 1629 }] },
+    },
   }) as unknown as JobMessage;
 const typeOf = (m: JobMessage): string => (m as unknown as { type: string }).type;
 
@@ -101,6 +124,98 @@ describe("createSqliteQueue (durable #980)", () => {
       { payload: JSON.stringify(msg("github-webhook")), priority: 10 },
       { payload: JSON.stringify(webhook({ login: "gittensory-orb[bot]", type: "Bot" })), priority: 0 },
     ]);
+  });
+
+  it("backfills semantic job keys for already-pending duplicate-prone work", async () => {
+    const driver = makeDriver();
+    driver.exec(`
+      CREATE TABLE _selfhost_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        payload TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        run_after INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        last_error TEXT,
+        priority INTEGER NOT NULL DEFAULT 0,
+        job_key TEXT
+      );
+    `);
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, ?, 0, 10)",
+      [JSON.stringify(ciWebhook("ci-1")), Date.now() + 60_000],
+    );
+
+    createSqliteQueue(driver, async () => undefined);
+
+    const row = driver.query("SELECT job_key FROM _selfhost_jobs", []).rows[0] as { job_key: string };
+    expect(row.job_key).toBe(`github-webhook:ci-completed:jsonbored/gittensory@${"b".repeat(40)}#1629`);
+  });
+
+  it("coalesces duplicate CI and PR-refresh jobs before they inflate queue pressure", async () => {
+    const driver = makeDriver();
+    const q = createSqliteQueue(driver, async () => undefined);
+    await q.binding.send(ciWebhook("ci-1", "check_suite"), { delaySeconds: 60 });
+    await q.binding.send(ciWebhook("ci-2", "check_run"), { delaySeconds: 1 });
+    await q.binding.send(prWebhook("pr-1"), { delaySeconds: 60 });
+    await q.binding.send(prWebhook("pr-2"), { delaySeconds: 1 });
+
+    const rows = driver.query(
+      "SELECT payload, job_key FROM _selfhost_jobs ORDER BY id",
+      [],
+    ).rows as Array<{ payload: string; job_key: string }>;
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.job_key).sort()).toEqual([
+      `github-webhook:ci-completed:jsonbored/gittensory@${"b".repeat(40)}#1629`,
+      `github-webhook:pr-refresh:jsonbored/gittensory#1629@${"a".repeat(40)}`,
+    ]);
+    expect(rows.map((row) => JSON.parse(row.payload).deliveryId).sort()).toEqual(["ci-2", "pr-2"]);
+    expect(q.stats()).toMatchObject({
+      gittensory_jobs_enqueued_total: 2,
+      gittensory_jobs_coalesced_total: 2,
+    });
+  });
+
+  it("does not coalesce terminal pull_request events that carry distinct lifecycle side effects", async () => {
+    const driver = makeDriver();
+    const q = createSqliteQueue(driver, async () => undefined);
+    await q.binding.send(prWebhook("closed-1", "closed"), { delaySeconds: 60 });
+    await q.binding.send(prWebhook("closed-2", "closed"), { delaySeconds: 60 });
+    expect(driver.query("SELECT COUNT(*) AS c FROM _selfhost_jobs", []).rows[0]).toMatchObject({ c: 2 });
+  });
+
+  it("spreads a due backlog on startup so restarts do not stampede GitHub", async () => {
+    const oldMin = process.env.QUEUE_STARTUP_JITTER_MIN_JOBS;
+    const oldJitter = process.env.QUEUE_STARTUP_JITTER_MS;
+    process.env.QUEUE_STARTUP_JITTER_MIN_JOBS = "2";
+    process.env.QUEUE_STARTUP_JITTER_MS = "60000";
+    try {
+      const driver = makeDriver();
+      createSqliteQueue(driver, async () => undefined);
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'pending', 0, 0, 0, 10, ?)",
+        [JSON.stringify(ciWebhook("ci-1")), "k1"],
+      );
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'pending', 0, 0, 0, 10, ?)",
+        [JSON.stringify(ciWebhook("ci-2", "check_run")), "k2"],
+      );
+
+      const before = Date.now();
+      createSqliteQueue(driver, async () => undefined);
+
+      const rows = driver.query(
+        "SELECT run_after FROM _selfhost_jobs ORDER BY id",
+        [],
+      ).rows as Array<{ run_after: number }>;
+      expect(rows.every((row) => row.run_after >= before)).toBe(true);
+      expect(rows.some((row) => row.run_after > before)).toBe(true);
+    } finally {
+      if (oldMin === undefined) delete process.env.QUEUE_STARTUP_JITTER_MIN_JOBS;
+      else process.env.QUEUE_STARTUP_JITTER_MIN_JOBS = oldMin;
+      if (oldJitter === undefined) delete process.env.QUEUE_STARTUP_JITTER_MS;
+      else process.env.QUEUE_STARTUP_JITTER_MS = oldJitter;
+    }
   });
 
   it("migrates an old queue table without a priority column before creating the claim index", async () => {
@@ -293,13 +408,20 @@ describe("createSqliteQueue (durable #980)", () => {
   });
 
   it("recovers a job left 'processing' by a crash", async () => {
+    const oldRecoveryJitter = process.env.QUEUE_RECOVERY_JITTER_MS;
+    process.env.QUEUE_RECOVERY_JITTER_MS = "0";
     const driver = makeDriver();
-    createSqliteQueue(driver, async () => undefined); // creates the table
-    driver.query("INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'processing', 0, 0, 0)", [JSON.stringify(msg("stuck"))]);
-    const seen: string[] = [];
-    const fresh = createSqliteQueue(driver, async (m) => void seen.push(typeOf(m)));
-    await fresh.drain();
-    expect(seen).toEqual(["stuck"]);
+    try {
+      createSqliteQueue(driver, async () => undefined); // creates the table
+      driver.query("INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'processing', 0, 0, 0)", [JSON.stringify(msg("stuck"))]);
+      const seen: string[] = [];
+      const fresh = createSqliteQueue(driver, async (m) => void seen.push(typeOf(m)));
+      await fresh.drain();
+      expect(seen).toEqual(["stuck"]);
+    } finally {
+      if (oldRecoveryJitter === undefined) delete process.env.QUEUE_RECOVERY_JITTER_MS;
+      else process.env.QUEUE_RECOVERY_JITTER_MS = oldRecoveryJitter;
+    }
   });
 
   it("records 'unknown error' when a consumer throws a non-Error", async () => {

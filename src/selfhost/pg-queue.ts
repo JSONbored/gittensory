@@ -6,10 +6,21 @@ import type { Pool } from "pg";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import { captureError } from "./sentry";
-import { githubRateLimitRetryDelayMs, jobPriority, nonConsumingRetryDelayMs } from "./queue-common";
+import {
+  deterministicJitterMs,
+  githubRateLimitRetryDelayMs,
+  jobCoalesceKey,
+  jobPriority,
+  nonConsumingRetryDelayMs,
+  queueRecoveryJitterMs,
+  queueStartupJitterMinJobs,
+  queueStartupJitterMs,
+  rateLimitRetryDelayWithJitter,
+} from "./queue-common";
 import type { JobMessage } from "../types";
 
 const TABLE = "_selfhost_jobs";
+const STATS_TABLE = "_selfhost_job_stats";
 const DDL = `
 CREATE TABLE IF NOT EXISTS ${TABLE} (
   id BIGSERIAL PRIMARY KEY,
@@ -19,10 +30,17 @@ CREATE TABLE IF NOT EXISTS ${TABLE} (
   run_after BIGINT NOT NULL DEFAULT 0,
   created_at BIGINT NOT NULL,
   last_error TEXT,
-  priority INTEGER NOT NULL DEFAULT 0
+  priority INTEGER NOT NULL DEFAULT 0,
+  job_key TEXT
 );
 ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 0;
-CREATE INDEX IF NOT EXISTS ${TABLE}_claim ON ${TABLE}(status, run_after, priority);`;
+ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS job_key TEXT;
+CREATE INDEX IF NOT EXISTS ${TABLE}_claim ON ${TABLE}(status, run_after, priority);
+CREATE INDEX IF NOT EXISTS ${TABLE}_pending_job_key ON ${TABLE}(job_key, status);
+CREATE TABLE IF NOT EXISTS ${STATS_TABLE} (
+  name TEXT PRIMARY KEY,
+  value BIGINT NOT NULL DEFAULT 0
+);`;
 
 export interface PgDurableQueue {
   binding: Queue;
@@ -32,12 +50,14 @@ export interface PgDurableQueue {
   drain(): Promise<void>;
   size(): Promise<number>;
   deadCount(): Promise<number>;
+  stats(): Promise<Record<string, number>>;
 }
 
 interface JobRow {
   id: string;
   payload: string;
   attempts: number;
+  job_key?: string | null;
 }
 
 export interface PgQueueOptions {
@@ -78,15 +98,27 @@ export function createPgQueue(
           count: priorityBackfilled,
         }),
       );
-    const recovered =
-      (
-        await pool.query(
-          `UPDATE ${TABLE} SET status='pending' WHERE status='processing'`,
-        )
-      ).rowCount ?? 0;
+    const keyBackfilled = await backfillJobKeys();
+    if (keyBackfilled)
+      console.log(
+        JSON.stringify({
+          event: "selfhost_queue_job_keys_backfilled",
+          count: keyBackfilled,
+        }),
+      );
+    const recovered = await recoverProcessingJobs();
     if (recovered)
       console.log(
         JSON.stringify({ event: "selfhost_queue_recovered", count: recovered }),
+      );
+    const spread = await spreadDueJobsOnStartup();
+    if (spread)
+      console.log(
+        JSON.stringify({
+          event: "selfhost_queue_startup_spread",
+          count: spread,
+          jitter_ms: queueStartupJitterMs(),
+        }),
       );
   }
 
@@ -107,17 +139,94 @@ export function createPgQueue(
     return changed;
   }
 
+  async function backfillJobKeys(): Promise<number> {
+    const res = await pool.query(
+      `SELECT id, payload, job_key FROM ${TABLE} WHERE status IN ('pending', 'processing')`,
+    );
+    let changed = 0;
+    for (const row of res.rows as Array<{ id: string; payload: string; job_key?: string | null }>) {
+      const key = jobCoalesceKey(row.payload);
+      if ((row.job_key ?? null) === key) continue;
+      await pool.query(`UPDATE ${TABLE} SET job_key=$1 WHERE id=$2`, [
+        key,
+        row.id,
+      ]);
+      changed += 1;
+    }
+    return changed;
+  }
+
+  async function recoverProcessingJobs(): Promise<number> {
+    const res = await pool.query(
+      `SELECT id, payload, job_key FROM ${TABLE} WHERE status='processing'`,
+    );
+    let changed = 0;
+    const now = Date.now();
+    const maxJitter = queueRecoveryJitterMs();
+    for (const row of res.rows as Array<{ id: string; payload: string; job_key?: string | null }>) {
+      const runAfter = now + deterministicJitterMs(`${row.job_key ?? ""}:${row.id}:${row.payload}`, maxJitter);
+      await pool.query(`UPDATE ${TABLE} SET status='pending', run_after=$1 WHERE id=$2`, [
+        runAfter,
+        row.id,
+      ]);
+      changed += 1;
+    }
+    return changed;
+  }
+
+  async function spreadDueJobsOnStartup(): Promise<number> {
+    const now = Date.now();
+    const res = await pool.query(
+      `SELECT id, payload, job_key FROM ${TABLE} WHERE status='pending' AND run_after<=$1`,
+      [now],
+    );
+    const due = res.rows as Array<{ id: string; payload: string; job_key?: string | null }>;
+    if (due.length < queueStartupJitterMinJobs()) return 0;
+    const maxJitter = queueStartupJitterMs();
+    if (maxJitter <= 0) return 0;
+    for (const row of due) {
+      const runAfter = now + deterministicJitterMs(`${row.job_key ?? ""}:${row.id}:${row.payload}`, maxJitter);
+      await pool.query(`UPDATE ${TABLE} SET run_after=$1 WHERE id=$2`, [
+        runAfter,
+        row.id,
+      ]);
+    }
+    return due.length;
+  }
+
   async function enqueue(
     message: JobMessage,
     delaySeconds: number,
   ): Promise<void> {
     const now = Date.now();
     const payload = JSON.stringify(message);
+    const runAfter = now + delaySeconds * 1000;
+    const priority = jobPriority(payload);
+    const key = jobCoalesceKey(payload);
+    if (key) {
+      const existing = (
+        await pool.query(
+          `SELECT id FROM ${TABLE} WHERE status='pending' AND job_key=$1 ORDER BY priority DESC, run_after DESC, id LIMIT 1`,
+          [key],
+        )
+      ).rows[0] as { id: string } | undefined;
+      if (existing) {
+        await pool.query(
+          `UPDATE ${TABLE}
+             SET payload=$1, run_after=GREATEST(run_after, $2), created_at=$3, priority=GREATEST(priority, $4), last_error=NULL
+           WHERE id=$5`,
+          [payload, runAfter, now, priority, existing.id],
+        );
+        await recordQueueMetric("gittensory_jobs_coalesced_total");
+        void pump();
+        return;
+      }
+    }
     await pool.query(
-      `INSERT INTO ${TABLE} (payload, status, attempts, run_after, created_at, priority) VALUES ($1,'pending',0,$2,$3,$4)`,
-      [payload, now + delaySeconds * 1000, now, jobPriority(payload)],
+      `INSERT INTO ${TABLE} (payload, status, attempts, run_after, created_at, priority, job_key) VALUES ($1,'pending',0,$2,$3,$4,$5)`,
+      [payload, runAfter, now, priority, key],
     );
-    incr("gittensory_jobs_enqueued_total");
+    await recordQueueMetric("gittensory_jobs_enqueued_total");
     void pump();
   }
 
@@ -126,7 +235,7 @@ export function createPgQueue(
     const res = await pool.query(
       `UPDATE ${TABLE} SET status='processing'
        WHERE id = (SELECT id FROM ${TABLE} WHERE status='pending' AND run_after<=$1 ORDER BY priority DESC, id FOR UPDATE SKIP LOCKED LIMIT 1)
-       RETURNING id, payload, attempts`,
+       RETURNING id, payload, attempts, job_key`,
       [Date.now()],
     );
     return (res.rows[0] as JobRow | undefined) ?? null;
@@ -144,7 +253,7 @@ export function createPgQueue(
         `UPDATE ${TABLE} SET status='dead', last_error='unparseable payload' WHERE id=$1`,
         [job.id],
       );
-      incr("gittensory_jobs_dead_total");
+      await recordQueueMetric("gittensory_jobs_dead_total");
       logAudit({
         event: "job_dead",
         ts: Date.now(),
@@ -163,7 +272,7 @@ export function createPgQueue(
     try {
       await consume(message);
       await pool.query(`DELETE FROM ${TABLE} WHERE id=$1`, [job.id]);
-      incr("gittensory_jobs_processed_total");
+      await recordQueueMetric("gittensory_jobs_processed_total");
       logAudit({
         event: "job_complete",
         ts: Date.now(),
@@ -177,11 +286,17 @@ export function createPgQueue(
       const errMsg = error instanceof Error ? error.message : "unknown error";
       const nonConsumingDelayMs = nonConsumingRetryDelayMs(error);
       if (nonConsumingDelayMs !== null) {
-        await pool.query(
-          `UPDATE ${TABLE} SET status='pending', run_after=$1, last_error=$2 WHERE id=$3`,
-          [Date.now() + nonConsumingDelayMs, errMsg, job.id],
-        );
-        incr(githubRateLimitRetryDelayMs(error) !== null ? "gittensory_jobs_rate_limited_total" : "gittensory_jobs_deferred_total");
+        const rateLimited = githubRateLimitRetryDelayMs(error) !== null;
+        const retryAfter = Date.now() + (rateLimited ? rateLimitRetryDelayWithJitter(nonConsumingDelayMs, `${job.job_key ?? ""}:${job.id}:${job.payload}`) : nonConsumingDelayMs);
+        if (job.job_key && (await mergeRescheduledJobIntoPending(job, retryAfter, errMsg))) {
+          await recordQueueMetric("gittensory_jobs_coalesced_total");
+        } else {
+          await pool.query(
+            `UPDATE ${TABLE} SET status='pending', run_after=$1, last_error=$2 WHERE id=$3`,
+            [retryAfter, errMsg, job.id],
+          );
+        }
+        await recordQueueMetric(rateLimited ? "gittensory_jobs_rate_limited_total" : "gittensory_jobs_deferred_total");
         logAudit({
           event: "job_rate_limited",
           ts: Date.now(),
@@ -189,18 +304,18 @@ export function createPgQueue(
           payload_type: extractPayloadType(job.payload),
           latency_ms: Date.now() - claimedAt,
           attempts,
-          retry_after_ms: nonConsumingDelayMs,
+          retry_after_ms: Math.max(0, retryAfter - Date.now()),
           error: errMsg,
         });
         return true;
       }
-      incr("gittensory_jobs_failed_total");
+      await recordQueueMetric("gittensory_jobs_failed_total");
       if (attempts >= maxRetries) {
         await pool.query(
           `UPDATE ${TABLE} SET status='dead', attempts=$1, last_error=$2 WHERE id=$3`,
           [attempts, errMsg, job.id],
         );
-        incr("gittensory_jobs_dead_total");
+        await recordQueueMetric("gittensory_jobs_dead_total");
         console.error(
           JSON.stringify({
             level: "error",
@@ -313,5 +428,48 @@ export function createPgQueue(
         ).rows[0].c,
       );
     },
+    async stats() {
+      return readQueueStats();
+    },
   };
+
+  async function mergeRescheduledJobIntoPending(
+    job: JobRow,
+    runAfter: number,
+    errMsg: string,
+  ): Promise<boolean> {
+    if (!job.job_key) return false;
+    const existing = (
+      await pool.query(
+        `SELECT id FROM ${TABLE} WHERE status='pending' AND job_key=$1 AND id<>$2 ORDER BY priority DESC, run_after DESC, id LIMIT 1`,
+        [job.job_key, job.id],
+      )
+    ).rows[0] as { id: string } | undefined;
+    if (!existing) return false;
+    await pool.query(
+      `UPDATE ${TABLE} SET run_after=GREATEST(run_after, $1), last_error=$2 WHERE id=$3`,
+      [runAfter, errMsg, existing.id],
+    );
+    await pool.query(`DELETE FROM ${TABLE} WHERE id=$1`, [job.id]);
+    return true;
+  }
+
+  async function recordQueueMetric(name: string): Promise<void> {
+    incr(name);
+    await pool.query(
+      `INSERT INTO ${STATS_TABLE} (name, value) VALUES ($1, 1)
+       ON CONFLICT(name) DO UPDATE SET value=${STATS_TABLE}.value+1`,
+      [name],
+    );
+  }
+
+  async function readQueueStats(): Promise<Record<string, number>> {
+    const res = await pool.query(`SELECT name, value FROM ${STATS_TABLE}`);
+    return Object.fromEntries(
+      (res.rows as Array<{ name: string; value: number | string }>).map((row) => [
+        row.name,
+        Number(row.value ?? 0),
+      ]),
+    );
+  }
 }

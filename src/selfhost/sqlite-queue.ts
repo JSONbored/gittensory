@@ -7,10 +7,21 @@ import type { SqliteDriver } from "./d1-adapter";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import { captureError } from "./sentry";
-import { githubRateLimitRetryDelayMs, jobPriority, nonConsumingRetryDelayMs } from "./queue-common";
+import {
+  deterministicJitterMs,
+  githubRateLimitRetryDelayMs,
+  jobCoalesceKey,
+  jobPriority,
+  nonConsumingRetryDelayMs,
+  queueRecoveryJitterMs,
+  queueStartupJitterMinJobs,
+  queueStartupJitterMs,
+  rateLimitRetryDelayWithJitter,
+} from "./queue-common";
 import type { JobMessage } from "../types";
 
 const TABLE = "_selfhost_jobs";
+const STATS_TABLE = "_selfhost_job_stats";
 const DDL = `
 CREATE TABLE IF NOT EXISTS ${TABLE} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,11 +31,19 @@ CREATE TABLE IF NOT EXISTS ${TABLE} (
   run_after INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   last_error TEXT,
-  priority INTEGER NOT NULL DEFAULT 0
+  priority INTEGER NOT NULL DEFAULT 0,
+  job_key TEXT
+);`;
+const STATS_DDL = `
+CREATE TABLE IF NOT EXISTS ${STATS_TABLE} (
+  name TEXT PRIMARY KEY,
+  value INTEGER NOT NULL DEFAULT 0
 );`;
 const CLAIM_INDEX_DDL = `
 DROP INDEX IF EXISTS ${TABLE}_claim;
 CREATE INDEX ${TABLE}_claim ON ${TABLE}(status, run_after, priority);`;
+const JOB_KEY_INDEX_DDL = `
+CREATE INDEX IF NOT EXISTS ${TABLE}_pending_job_key ON ${TABLE}(job_key, status);`;
 
 export interface DurableQueue {
   binding: Queue;
@@ -33,12 +52,14 @@ export interface DurableQueue {
   drain(): Promise<void>;
   size(): number;
   deadCount(): number;
+  stats(): Record<string, number>;
 }
 
 interface JobRow {
   id: number;
   payload: string;
   attempts: number;
+  job_key?: string | null;
 }
 
 export interface SqliteQueueOptions {
@@ -66,6 +87,7 @@ export function createSqliteQueue(
     Math.max(1, Number(process.env.QUEUE_CONCURRENCY ?? "4"));
 
   driver.exec(DDL);
+  driver.exec(STATS_DDL);
   // Idempotent add for queues created before the priority column existed (#review-latency): the CREATE is skipped
   // for a pre-existing table, so ALTER must run before any index references the new column.
   try {
@@ -75,7 +97,13 @@ export function createSqliteQueue(
   } catch {
     /* column already present */
   }
+  try {
+    driver.exec(`ALTER TABLE ${TABLE} ADD COLUMN job_key TEXT`);
+  } catch {
+    /* column already present */
+  }
   driver.exec(CLAIM_INDEX_DDL);
+  driver.exec(JOB_KEY_INDEX_DDL);
   const priorityBackfilled = backfillJobPriorities(driver);
   if (priorityBackfilled)
     console.log(
@@ -84,14 +112,28 @@ export function createSqliteQueue(
         count: priorityBackfilled,
       }),
     );
+  const keyBackfilled = backfillJobKeys(driver);
+  if (keyBackfilled)
+    console.log(
+      JSON.stringify({
+        event: "selfhost_queue_job_keys_backfilled",
+        count: keyBackfilled,
+      }),
+    );
   // Recover jobs a crashed previous run left mid-flight → make them claimable again.
-  const recovered = driver.query(
-    `UPDATE ${TABLE} SET status='pending' WHERE status='processing'`,
-    [],
-  ).changes;
+  const recovered = recoverProcessingJobs(driver);
   if (recovered)
     console.log(
       JSON.stringify({ event: "selfhost_queue_recovered", count: recovered }),
+    );
+  const spread = spreadDueJobsOnStartup(driver);
+  if (spread)
+    console.log(
+      JSON.stringify({
+        event: "selfhost_queue_startup_spread",
+        count: spread,
+        jitter_ms: queueStartupJitterMs(),
+      }),
     );
 
   let running = false;
@@ -101,17 +143,37 @@ export function createSqliteQueue(
   function enqueue(message: JobMessage, delaySeconds: number): void {
     const now = Date.now();
     const payload = JSON.stringify(message);
+    const runAfter = now + delaySeconds * 1000;
+    const priority = jobPriority(payload);
+    const key = jobCoalesceKey(payload);
+    if (key) {
+      const existing = driver.query(
+        `SELECT id FROM ${TABLE} WHERE status='pending' AND job_key=? ORDER BY priority DESC, run_after DESC, id LIMIT 1`,
+        [key],
+      ).rows[0] as { id: number } | undefined;
+      if (existing) {
+        driver.query(
+          `UPDATE ${TABLE}
+             SET payload=?, run_after=max(run_after, ?), created_at=?, priority=max(priority, ?), last_error=NULL
+           WHERE id=?`,
+          [payload, runAfter, now, priority, existing.id],
+        );
+        recordQueueMetric(driver, "gittensory_jobs_coalesced_total");
+        void pump();
+        return;
+      }
+    }
     driver.query(
-      `INSERT INTO ${TABLE} (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, ?, ?, ?)`,
-      [payload, now + delaySeconds * 1000, now, jobPriority(payload)],
+      `INSERT INTO ${TABLE} (payload, status, attempts, run_after, created_at, priority, job_key) VALUES (?, 'pending', 0, ?, ?, ?, ?)`,
+      [payload, runAfter, now, priority, key],
     );
-    incr("gittensory_jobs_enqueued_total");
+    recordQueueMetric(driver, "gittensory_jobs_enqueued_total");
     void pump();
   }
 
   function claimNext(): JobRow | null {
     const { rows } = driver.query(
-      `SELECT id, payload, attempts FROM ${TABLE} WHERE status='pending' AND run_after<=? ORDER BY priority DESC, id LIMIT 1`,
+      `SELECT id, payload, attempts, job_key FROM ${TABLE} WHERE status='pending' AND run_after<=? ORDER BY priority DESC, run_after, id LIMIT 1`,
       [Date.now()],
     );
     const row = rows[0] as JobRow | undefined;
@@ -136,7 +198,7 @@ export function createSqliteQueue(
         `UPDATE ${TABLE} SET status='dead', last_error='unparseable payload' WHERE id=?`,
         [job.id],
       );
-      incr("gittensory_jobs_dead_total");
+      recordQueueMetric(driver, "gittensory_jobs_dead_total");
       logAudit({
         event: "job_dead",
         ts: Date.now(),
@@ -155,7 +217,7 @@ export function createSqliteQueue(
     try {
       await consume(message);
       driver.query(`DELETE FROM ${TABLE} WHERE id=?`, [job.id]);
-      incr("gittensory_jobs_processed_total");
+      recordQueueMetric(driver, "gittensory_jobs_processed_total");
       logAudit({
         event: "job_complete",
         ts: Date.now(),
@@ -169,11 +231,17 @@ export function createSqliteQueue(
       const errMsg = error instanceof Error ? error.message : "unknown error";
       const nonConsumingDelayMs = nonConsumingRetryDelayMs(error);
       if (nonConsumingDelayMs !== null) {
-        driver.query(
-          `UPDATE ${TABLE} SET status='pending', run_after=?, last_error=? WHERE id=?`,
-          [Date.now() + nonConsumingDelayMs, errMsg, job.id],
-        );
-        incr(githubRateLimitRetryDelayMs(error) !== null ? "gittensory_jobs_rate_limited_total" : "gittensory_jobs_deferred_total");
+        const rateLimited = githubRateLimitRetryDelayMs(error) !== null;
+        const retryAfter = Date.now() + (rateLimited ? rateLimitRetryDelayWithJitter(nonConsumingDelayMs, `${job.job_key ?? ""}:${job.id}:${job.payload}`) : nonConsumingDelayMs);
+        if (job.job_key && mergeRescheduledJobIntoPending(driver, job, retryAfter, errMsg)) {
+          recordQueueMetric(driver, "gittensory_jobs_coalesced_total");
+        } else {
+          driver.query(
+            `UPDATE ${TABLE} SET status='pending', run_after=?, last_error=? WHERE id=?`,
+            [retryAfter, errMsg, job.id],
+          );
+        }
+        recordQueueMetric(driver, rateLimited ? "gittensory_jobs_rate_limited_total" : "gittensory_jobs_deferred_total");
         logAudit({
           event: "job_rate_limited",
           ts: Date.now(),
@@ -181,18 +249,18 @@ export function createSqliteQueue(
           payload_type: extractPayloadType(job.payload),
           latency_ms: Date.now() - claimedAt,
           attempts,
-          retry_after_ms: nonConsumingDelayMs,
+          retry_after_ms: Math.max(0, retryAfter - Date.now()),
           error: errMsg,
         });
         return true;
       }
-      incr("gittensory_jobs_failed_total");
+      recordQueueMetric(driver, "gittensory_jobs_failed_total");
       if (attempts >= maxRetries) {
         driver.query(
           `UPDATE ${TABLE} SET status='dead', attempts=?, last_error=? WHERE id=?`,
           [attempts, errMsg, job.id],
         );
-        incr("gittensory_jobs_dead_total");
+        recordQueueMetric(driver, "gittensory_jobs_dead_total");
         console.error(
           JSON.stringify({
             level: "error",
@@ -310,6 +378,9 @@ export function createSqliteQueue(
         ).c,
       );
     },
+    stats() {
+      return readQueueStats(driver);
+    },
   };
 }
 
@@ -329,4 +400,94 @@ function backfillJobPriorities(driver: SqliteDriver): number {
     changed += 1;
   }
   return changed;
+}
+
+function backfillJobKeys(driver: SqliteDriver): number {
+  const { rows } = driver.query(
+    `SELECT id, payload, job_key FROM ${TABLE} WHERE status IN ('pending', 'processing')`,
+    [],
+  );
+  let changed = 0;
+  for (const row of rows as Array<{ id: number; payload: string; job_key?: string | null }>) {
+    const key = jobCoalesceKey(row.payload);
+    if ((row.job_key ?? null) === key) continue;
+    driver.query(`UPDATE ${TABLE} SET job_key=? WHERE id=?`, [key, row.id]);
+    changed += 1;
+  }
+  return changed;
+}
+
+function recoverProcessingJobs(driver: SqliteDriver): number {
+  const { rows } = driver.query(
+    `SELECT id, payload, job_key FROM ${TABLE} WHERE status='processing'`,
+    [],
+  );
+  let changed = 0;
+  const now = Date.now();
+  const maxJitter = queueRecoveryJitterMs();
+  for (const row of rows as Array<{ id: number; payload: string; job_key?: string | null }>) {
+    const runAfter = now + deterministicJitterMs(`${row.job_key ?? ""}:${row.id}:${row.payload}`, maxJitter);
+    driver.query(
+      `UPDATE ${TABLE} SET status='pending', run_after=? WHERE id=?`,
+      [runAfter, row.id],
+    );
+    changed += 1;
+  }
+  return changed;
+}
+
+function spreadDueJobsOnStartup(driver: SqliteDriver): number {
+  const now = Date.now();
+  const { rows } = driver.query(
+    `SELECT id, payload, job_key FROM ${TABLE} WHERE status='pending' AND run_after<=?`,
+    [now],
+  );
+  const due = rows as Array<{ id: number; payload: string; job_key?: string | null }>;
+  if (due.length < queueStartupJitterMinJobs()) return 0;
+  const maxJitter = queueStartupJitterMs();
+  if (maxJitter <= 0) return 0;
+  for (const row of due) {
+    const runAfter = now + deterministicJitterMs(`${row.job_key ?? ""}:${row.id}:${row.payload}`, maxJitter);
+    driver.query(`UPDATE ${TABLE} SET run_after=? WHERE id=?`, [runAfter, row.id]);
+  }
+  return due.length;
+}
+
+function mergeRescheduledJobIntoPending(
+  driver: SqliteDriver,
+  job: JobRow,
+  runAfter: number,
+  errMsg: string,
+): boolean {
+  if (!job.job_key) return false;
+  const existing = driver.query(
+    `SELECT id FROM ${TABLE} WHERE status='pending' AND job_key=? AND id<>? ORDER BY priority DESC, run_after DESC, id LIMIT 1`,
+    [job.job_key, job.id],
+  ).rows[0] as { id: number } | undefined;
+  if (!existing) return false;
+  driver.query(
+    `UPDATE ${TABLE} SET run_after=max(run_after, ?), last_error=? WHERE id=?`,
+    [runAfter, errMsg, existing.id],
+  );
+  driver.query(`DELETE FROM ${TABLE} WHERE id=?`, [job.id]);
+  return true;
+}
+
+function recordQueueMetric(driver: SqliteDriver, name: string): void {
+  incr(name);
+  driver.query(
+    `INSERT INTO ${STATS_TABLE} (name, value) VALUES (?, 1)
+     ON CONFLICT(name) DO UPDATE SET value=value+1`,
+    [name],
+  );
+}
+
+function readQueueStats(driver: SqliteDriver): Record<string, number> {
+  const { rows } = driver.query(`SELECT name, value FROM ${STATS_TABLE}`, []);
+  return Object.fromEntries(
+    (rows as Array<{ name: string; value: number }>).map((row) => [
+      row.name,
+      Number(row.value ?? 0),
+    ]),
+  );
 }

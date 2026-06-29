@@ -94,6 +94,7 @@ interface Backend {
     stop(): Promise<void>;
     size(): number | Promise<number>;
     deadCount(): number | Promise<number>;
+    stats(): Record<string, number> | Promise<Record<string, number>>;
   };
   vectorize?: Vectorize;
   shutdown(): Promise<void>;
@@ -486,6 +487,21 @@ async function main(): Promise<void> {
 
   gauge("gittensory_queue_pending", () => backend.queue.size());
   gauge("gittensory_queue_dead", () => backend.queue.deadCount());
+  const durableJobMetric = async (name: string): Promise<number> =>
+    Number((await backend.queue.stats())[name] ?? 0);
+  for (const name of [
+    "gittensory_jobs_enqueued_total",
+    "gittensory_jobs_processed_total",
+    "gittensory_jobs_failed_total",
+    "gittensory_jobs_dead_total",
+    "gittensory_jobs_rate_limited_total",
+    "gittensory_jobs_deferred_total",
+    "gittensory_jobs_coalesced_total",
+  ]) {
+    gauge(name.replace("_total", "_persisted_total"), () =>
+      durableJobMetric(name),
+    );
+  }
   gauge("gittensory_uptime_seconds", () =>
     Math.floor((Date.now() - startedAt) / 1000),
   );
