@@ -1093,6 +1093,28 @@ test("scanPatchForIacMisconfig: flags TLS verification disabled and handles debu
   );
 });
 
+test("scanPatchForIacMisconfig: flags public bucket settings with quoted JSON keys", () => {
+  const patch = [
+    "@@ -1,0 +1,4 @@",
+    '+  "public_access": true,',
+    '+  "public": true,',
+    '+  "block_public_acls": false,',
+    '+  "bucket_acl": "public-read"',
+  ].join("\n");
+
+  assert.deepEqual(
+    scanPatchForIacMisconfig("infra/bucket.json", patch).map(
+      ({ line, kind }) => ({ line, kind }),
+    ),
+    [
+      { line: 1, kind: "public-bucket" },
+      { line: 2, kind: "public-bucket" },
+      { line: 3, kind: "public-bucket" },
+      { line: 4, kind: "public-bucket" },
+    ],
+  );
+});
+
 test("scanPatchForIacMisconfig: respects the finding budget", () => {
   const findings = scanPatchForIacMisconfig(
     "infra/main.tf",

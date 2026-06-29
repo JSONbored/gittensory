@@ -13,7 +13,7 @@ const CORS_CREDENTIALS_RE =
 const OPEN_INGRESS_RE =
   /\b(?:cidr_blocks|source_ranges|ipv4_cidr_blocks|cidr|ip_range|value)\b[^\n#]*0\.0\.0\.0\/0\b|\b0\.0\.0\.0\/0\b/i;
 const PUBLIC_BUCKET_RE =
-  /(?:\b(?:bucket_)?acl\s*[=:]\s*["']public-(?:read|read-write)["']|\bpublic_access\s*[=:]\s*true\b|\bpublic\s*[=:]\s*true\b|\bblock_public_(?:acls|policy)\s*[=:]\s*false\b)/i;
+  /(?:(?:["'])?(?:bucket_)?acl(?:["'])?\s*[=:]\s*["']public-(?:read|read-write)["']|(?:["'])?public_access(?:["'])?\s*[=:]\s*true\b|(?:["'])?public(?:["'])?\s*[=:]\s*true\b|(?:["'])?block_public_(?:acls|policy)(?:["'])?\s*[=:]\s*false\b)/i;
 const SAME_SITE_NONE_RE = /\bsameSite\b[\s"'=:,-]*["']?none["']?\b/i;
 const SECURE_FALSE_RE = /\bsecure\b[\s"'=:,-]*false\b/i;
 const TLS_DISABLED_RE =
