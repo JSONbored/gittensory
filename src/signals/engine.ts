@@ -2907,8 +2907,9 @@ export function buildIssueQualityReport(
   const lane = buildLaneAdvice(repo, fullName);
   const collisions = prebuiltCollisions ?? buildCollisionReport(fullName, issues, pullRequests, recentMergedPullRequests);
   const bountyByIssue = indexBountiesByIssue(bounties);
-  // Build per-issue indexes ONCE: the loop below runs over up to 100 open issues, and each previously re-scanned
-  // the full PR list (up to 10k) twice plus every collision cluster. O(issues·PRs) → O(issues + PRs).
+  // Build per-issue indexes ONCE: the map below scores every open issue (it is then ranked and capped to 100),
+  // and each previously re-scanned the full PR list (up to 10k) twice plus every collision cluster.
+  // O(issues·PRs) → O(issues + PRs).
   const prsByLinkedIssue = indexPullRequestsByLinkedIssue(pullRequests);
   const prByNumber = new Map(pullRequests.map((pr) => [pr.number, pr] as const));
   const mergedPrsByLinkedIssue = indexPullRequestsByLinkedIssue(recentMergedPullRequests);
@@ -2917,7 +2918,6 @@ export function buildIssueQualityReport(
   const lifecycleByIssue = new Map(buildIssueDiscoveryLifecycleReport(repo, issues, pullRequests, fullName, recentMergedPullRequests).states.map((entry) => [entry.number, entry]));
   const reports = issues
     .filter((issue) => issue.state === "open")
-    .slice(0, 100)
     .map((issue) => {
       const linkedPrs = resolveLinkedPullRequests(issue, pullRequests, prsByLinkedIssue, prByNumber);
       const linkedMergedPrs = resolveLinkedPullRequests(issue, recentMergedPullRequests, mergedPrsByLinkedIssue, mergedPrByNumber);
@@ -2973,7 +2973,11 @@ export function buildIssueQualityReport(
               : "ready";
       return { number: issue.number, title: issue.title, lifecycle, linkage, bounty: bountyContext, status, score, reasons, warnings };
     })
-    .sort((left, right) => right.score - left.score || left.number - right.number);
+    .sort((left, right) => right.score - left.score || left.number - right.number)
+    // #1773: rank all scored open issues by quality (then issue number) BEFORE capping to the top 100, so a
+    // high-quality but less-recently-updated issue is surfaced instead of being dropped by an input-order
+    // (updatedAt DESC) cap applied before scoring.
+    .slice(0, 100);
   return {
     repoFullName: fullName,
     generatedAt: nowIso(),

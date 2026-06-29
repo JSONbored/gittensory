@@ -11,6 +11,19 @@ import {
 import type { BountyRecord, IssueRecord, PullRequestRecord, RecentMergedPullRequestRecord, RegistryRepoConfig, RepositoryRecord } from "../../src/types";
 
 describe("issue quality reports", () => {
+  it("ranks all open issues by score before capping to the top 100 (#1773)", () => {
+    const repo = issueDiscoveryRepo("owner/many-issues");
+    // Callers pass open issues ordered updatedAt DESC. Put 100 thin (low-score) issues first, then one
+    // detailed (high-score) issue last. The old cap-before-score sliced the input to its first 100, dropping
+    // the high-quality trailing issue; ranking before the cap must surface it.
+    const thin = Array.from({ length: 100 }, (_, index) => issue(repo.fullName, index + 1, "thin", { body: "x" }));
+    const detailed = issue(repo.fullName, 999, "Detailed actionable bug", { body: "x".repeat(220), labels: ["bug"] });
+    const report = buildIssueQualityReport(repo, [...thin, detailed], [], repo.fullName);
+    expect(report.issues).toHaveLength(100); // still capped to the top 100
+    expect(report.issues.some((entry) => entry.number === 999)).toBe(true); // surfaced despite being last in input
+    expect(report.issues[0]?.number).toBe(999); // and ranked at the top by score
+  });
+
   it("downgrades issue filing in direct-PR-only repos to needs_proof", () => {
     const repo = directPrRepo("owner/direct");
     const report = buildIssueQualityReport(repo, [issue(repo.fullName, 1, "Concrete fix needed", { body: "x".repeat(220), labels: ["bug"], updatedAt: now() })], [], repo.fullName);
