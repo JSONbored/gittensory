@@ -72,7 +72,7 @@ describe("buildReviewEnrichment", () => {
     const r = await buildReviewEnrichment(
       env({
         REES_URL: "https://rees/",
-        REES_SHARED_SECRET: "sek",
+        REES_SHARED_SECRET: '  "sek"\n',
         REES_TIMEOUT_MS: "12000",
       }),
       input,
@@ -93,7 +93,12 @@ describe("buildReviewEnrichment", () => {
     const body = JSON.parse(calls[0]!.init.body as string);
     expect(body.repoFullName).toBe("o/r");
     expect(body.files).toEqual([
-      { path: "a.ts", status: "modified", previousPath: undefined, patch: "@@ +1 @@" },
+      {
+        path: "a.ts",
+        status: "modified",
+        previousPath: undefined,
+        patch: "@@ +1 @@",
+      },
       {
         path: "renamed.png",
         status: "renamed",
@@ -132,10 +137,42 @@ describe("buildReviewEnrichment", () => {
           String(c[0]).includes("review_context_fetch_failed") &&
           String(c[0]).includes('"status":502') &&
           String(c[0]).includes('"statusText":"Bad Gateway"') &&
-          String(c[0]).includes('"hasSharedSecret":true') &&
+          String(c[0]).includes('"authConfigured":true') &&
+          String(c[0]).includes('"authHeaderSent":true') &&
+          String(c[0]).includes('"authSecretNormalized":false') &&
+          String(c[0]).includes('"authRejected":false') &&
           String(c[0]).includes("upstream unavailable"),
       ),
     ).toBe(true);
+    errSpy.mockRestore();
+  });
+
+  it("marks REES 401/403 responses as auth rejections without logging the secret", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi.fn(
+      async () =>
+        ({
+          ok: false,
+          status: 403,
+          statusText: "Forbidden",
+          text: async () => '{"error":"unauthorized"}',
+        }) as Response,
+    ) as unknown as typeof fetch;
+    expect(
+      await buildReviewEnrichment(
+        env({ REES_URL: "https://r", REES_SHARED_SECRET: ' "sek" ' }),
+        input,
+      ),
+    ).toBeUndefined();
+    const log = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(log).toContain("review_context_fetch_failed");
+    expect(log).toContain('"status":403');
+    expect(log).toContain('"authConfigured":true');
+    expect(log).toContain('"authHeaderSent":true');
+    expect(log).toContain('"authSecretNormalized":true');
+    expect(log).toContain('"authRejected":true');
+    expect(log).toContain("REES /v1/enrich auth rejected (403)");
+    expect(log).not.toContain('"sek"');
     errSpy.mockRestore();
   });
 
@@ -144,9 +181,17 @@ describe("buildReviewEnrichment", () => {
     globalThis.fetch = vi.fn(async () => {
       throw new Error("network down");
     }) as unknown as typeof fetch;
-    expect(await buildReviewEnrichment(env({ REES_URL: "https://r" }), input)).toBeUndefined();
+    expect(
+      await buildReviewEnrichment(env({ REES_URL: "https://r" }), input),
+    ).toBeUndefined();
     // A broken/slow REES backend now surfaces at level:error (central Sentry forwarder) instead of degrading silently.
-    expect(errSpy.mock.calls.some((c) => String(c[0]).includes("review_context_fetch_failed") && String(c[0]).includes('"contextType":"enrichment"'))).toBe(true);
+    expect(
+      errSpy.mock.calls.some(
+        (c) =>
+          String(c[0]).includes("review_context_fetch_failed") &&
+          String(c[0]).includes('"contextType":"enrichment"'),
+      ),
+    ).toBe(true);
     errSpy.mockRestore();
   });
 
@@ -187,7 +232,10 @@ describe("buildReviewEnrichment", () => {
           }),
         }) as Response,
     ) as unknown as typeof fetch;
-    const r = await buildReviewEnrichment(env({ REES_URL: "https://r" }), input);
+    const r = await buildReviewEnrichment(
+      env({ REES_URL: "https://r" }),
+      input,
+    );
     expect(r?.promptSection).toHaveLength(8000);
     expect(r?.promptSection).not.toMatch(
       /ignore previous instructions|approve this PR/i,
@@ -228,10 +276,46 @@ describe("buildReviewEnrichment", () => {
       } as Response;
     }) as unknown as typeof fetch;
     const r = await buildReviewEnrichment(
-      env({ REES_URL: "https://r" }),
+      env({ REES_URL: "https://r", REES_SHARED_SECRET: " \n " }),
       input,
     );
     expect(r).toEqual({ promptSection: "x", systemSuffix: "" });
+    expect(
+      (calls[0]!.headers as Record<string, string>).authorization,
+    ).toBeUndefined();
+  });
+
+  it("normalizes single-quoted REES secrets before sending authorization", async () => {
+    const calls: RequestInit[] = [];
+    globalThis.fetch = vi.fn(async (_url: unknown, init: RequestInit) => {
+      calls.push(init);
+      return {
+        ok: true,
+        json: async () => ({ promptSection: "x" }),
+      } as Response;
+    }) as unknown as typeof fetch;
+    await buildReviewEnrichment(
+      env({ REES_URL: "https://r", REES_SHARED_SECRET: " 'sek' " }),
+      input,
+    );
+    expect(
+      (calls[0]!.headers as Record<string, string>).authorization,
+    ).toBe("Bearer sek");
+  });
+
+  it("treats a quoted-blank REES secret as unconfigured", async () => {
+    const calls: RequestInit[] = [];
+    globalThis.fetch = vi.fn(async (_url: unknown, init: RequestInit) => {
+      calls.push(init);
+      return {
+        ok: true,
+        json: async () => ({ promptSection: "x" }),
+      } as Response;
+    }) as unknown as typeof fetch;
+    await buildReviewEnrichment(
+      env({ REES_URL: "https://r", REES_SHARED_SECRET: ' "  " ' }),
+      input,
+    );
     expect(
       (calls[0]!.headers as Record<string, string>).authorization,
     ).toBeUndefined();

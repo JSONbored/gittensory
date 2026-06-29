@@ -23,6 +23,29 @@ function reesConfig(env: Env): EnrichmentEnv {
   return env as unknown as EnrichmentEnv;
 }
 
+function normalizeSharedSecret(value: string | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  let normalized = value.trim();
+  if (!normalized) return undefined;
+  const first = normalized[0];
+  const last = normalized[normalized.length - 1];
+  if (
+    normalized.length >= 2 &&
+    ((first === '"' && last === '"') || (first === "'" && last === "'"))
+  ) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  return normalized || undefined;
+}
+
+function sharedSecretWasNormalized(
+  raw: string | undefined,
+  normalized: string | undefined,
+): boolean {
+  if (typeof raw !== "string") return false;
+  return (normalized ?? "") !== raw;
+}
+
 /** True when enrichment is enabled: the flag is on AND the REES URL is configured. OFF ⇒ no call, prompt unchanged. */
 export function isEnrichmentEnabled(env: Env): boolean {
   const cfg = reesConfig(env);
@@ -65,6 +88,12 @@ export async function buildReviewEnrichment(
   const cfg = reesConfig(env);
   const base = cfg.REES_URL?.trim();
   if (!base) return undefined;
+  const sharedSecret = normalizeSharedSecret(cfg.REES_SHARED_SECRET);
+  const authConfigured = Boolean(sharedSecret);
+  const authSecretNormalized = sharedSecretWasNormalized(
+    cfg.REES_SHARED_SECRET,
+    sharedSecret,
+  );
   const timeoutMs = Math.max(1000, Number(cfg.REES_TIMEOUT_MS ?? "8000"));
   try {
     const response = await fetch(`${base.replace(/\/+$/, "")}/v1/enrich`, {
@@ -73,9 +102,7 @@ export async function buildReviewEnrichment(
         "user-agent": "gittensory-selfhost/1.0",
         accept: "application/json",
         "content-type": "application/json",
-        ...(cfg.REES_SHARED_SECRET
-          ? { authorization: `Bearer ${cfg.REES_SHARED_SECRET}` }
-          : {}),
+        ...(sharedSecret ? { authorization: `Bearer ${sharedSecret}` } : {}),
       },
       body: JSON.stringify({
         repoFullName: input.repoFullName,
@@ -108,9 +135,15 @@ export async function buildReviewEnrichment(
           contextType: "enrichment",
           status: response.status,
           statusText: response.statusText,
-          hasSharedSecret: Boolean(cfg.REES_SHARED_SECRET),
+          authConfigured,
+          authHeaderSent: authConfigured,
+          authSecretNormalized,
+          authRejected: response.status === 401 || response.status === 403,
           responsePreview: bodyPreview.slice(0, 300),
-          message: `REES /v1/enrich returned ${response.status}`,
+          message:
+            response.status === 401 || response.status === 403
+              ? `REES /v1/enrich auth rejected (${response.status})`
+              : `REES /v1/enrich returned ${response.status}`,
         }),
       );
       return undefined;
@@ -134,7 +167,18 @@ export async function buildReviewEnrichment(
     // Surface the failure (#5 review observability): the REES enrichment call can fail (timeout / network / parse)
     // and the review then silently proceeds without the brief. ERROR level so the central Sentry forwarder captures
     // a broken/slow REES backend instead of it degrading invisibly.
-    console.error(JSON.stringify({ level: "error", event: "review_context_fetch_failed", repository: input.repoFullName, contextType: "enrichment", message: String(error).slice(0, 200) }));
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "review_context_fetch_failed",
+        repository: input.repoFullName,
+        contextType: "enrichment",
+        authConfigured,
+        authHeaderSent: authConfigured,
+        authSecretNormalized,
+        message: String(error).slice(0, 200),
+      }),
+    );
     return undefined; // timeout / network / parse ⇒ fail-safe; review proceeds without the brief
   }
 }

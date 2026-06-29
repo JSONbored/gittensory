@@ -9,10 +9,15 @@
 // then license (#1475), secret (#1476), static+complexity (#1477), history (#1478), each filling one findings key.
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { verifyBearer } from "./auth.js";
+import { normalizeSharedSecret, verifyBearer } from "./auth.js";
 import type { EnrichRequest } from "./types.js";
 import { buildBrief } from "./brief.js";
-import { captureError, flushSentry, initSentry, resolveSentryEnvironment } from "./sentry.js";
+import {
+  captureError,
+  flushSentry,
+  initSentry,
+  resolveSentryEnvironment,
+} from "./sentry.js";
 
 const app = new Hono();
 const sentryEnabled = await initSentry(process.env);
@@ -37,7 +42,7 @@ app.onError((error, c) => {
 });
 
 app.post("/v1/enrich", async (c) => {
-  const secret = process.env.REES_SHARED_SECRET;
+  const secret = normalizeSharedSecret(process.env.REES_SHARED_SECRET);
   // No secret configured ⇒ the service is not ready to authenticate anything; fail closed.
   if (!secret) return c.json({ error: "service_not_configured" }, 503);
   if (!verifyBearer(c.req.header("authorization"), secret))
