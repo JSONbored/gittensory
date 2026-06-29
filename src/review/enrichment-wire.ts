@@ -70,6 +70,8 @@ export async function buildReviewEnrichment(
     const response = await fetch(`${base.replace(/\/+$/, "")}/v1/enrich`, {
       method: "POST",
       headers: {
+        "user-agent": "gittensory-selfhost/1.0",
+        accept: "application/json",
         "content-type": "application/json",
         ...(cfg.REES_SHARED_SECRET
           ? { authorization: `Bearer ${cfg.REES_SHARED_SECRET}` }

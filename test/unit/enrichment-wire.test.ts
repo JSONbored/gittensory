@@ -84,6 +84,12 @@ describe("buildReviewEnrichment", () => {
     expect(
       (calls[0]!.init.headers as Record<string, string>).authorization,
     ).toBe("Bearer sek");
+    expect(
+      (calls[0]!.init.headers as Record<string, string>)["user-agent"],
+    ).toBe("gittensory-selfhost/1.0");
+    expect((calls[0]!.init.headers as Record<string, string>).accept).toBe(
+      "application/json",
+    );
     const body = JSON.parse(calls[0]!.init.body as string);
     expect(body.repoFullName).toBe("o/r");
     expect(body.files).toEqual([
