@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getRepoQueueTrendSnapshot, persistRepoGithubTotalsSnapshot, persistSignalSnapshot, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { generateSignalSnapshots } from "../../src/queue/processors";
-import { buildQueueTrendReport, buildUnavailableQueueTrendReport, type QueueTrendReport } from "../../src/services/queue-trends";
+import { buildQueueTrendReport, buildUnavailableQueueTrendReport, computeReviewVelocityPerDay, type QueueTrendReport } from "../../src/services/queue-trends";
 import type { RepoGithubTotalsSnapshotRecord } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
 
@@ -79,6 +79,11 @@ describe("queue trend windows", () => {
       reviewVelocityPerDay: 1.43,
       summary: expect.stringContaining("review velocity 1.43/day"),
     });
+  });
+
+  it("returns null review velocity when observedDays is zero", () => {
+    expect(computeReviewVelocityPerDay(7, 3, 0)).toBeNull();
+    expect(computeReviewVelocityPerDay(7, 3, 7)).toBe(1.43);
   });
 
   it("returns clear unavailable windows when history is missing", () => {
