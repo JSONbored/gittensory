@@ -2,14 +2,18 @@
 
 The reviewer is configured by `AI_PROVIDER`. Reviews degrade deterministically (no AI) if it's unset.
 
+Deprecated shared knobs (`AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`, `AI_EFFORT`, `AI_TIMEOUT_MS`) fail startup with a
+clear migration error. Use the provider-specific variables below so dual-review setups cannot accidentally reuse the
+wrong model, base URL, key, effort, or timeout.
+
 ## Providers
 
 | `AI_PROVIDER`                             | Backend                                                                 | Needs                                                                                   |
 | ----------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `claude-code`                             | Your **Claude** subscription via the `claude` CLI (read-only, headless) | `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`); CLI baked in (`INSTALL_AI_CLIS=true`) |
-| `codex`                                   | Your **Codex** subscription via the `codex` CLI                         | local `codex` auth (mounted), CLI baked in                                              |
-| `anthropic`                               | Native **Anthropic API** (BYOK, per-token billing — no weekly limit)    | `ANTHROPIC_API_KEY`, `AI_MODEL`                                                         |
-| `ollama` / `openai-compatible` / `openai` | Any OpenAI-compatible `/chat/completions` (+ `/embeddings`)             | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`                                                 |
+| `claude-code`                             | Your **Claude** subscription via the `claude` CLI (read-only, headless) | `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`); CLI is bundled by default             |
+| `codex`                                   | Your **Codex** subscription via the `codex` CLI                         | local `codex` auth mounted at `/data/codex`; CLI is bundled by default; explicit opt-in |
+| `anthropic`                               | Native **Anthropic API** (BYOK, per-token billing — no weekly limit)    | `ANTHROPIC_API_KEY`, `ANTHROPIC_AI_MODEL`                                               |
+| `ollama` / `openai-compatible` / `openai` | Any OpenAI-compatible `/chat/completions` (+ `/embeddings`)             | provider-specific `*_AI_BASE_URL`, `*_AI_API_KEY`, `*_AI_MODEL`                         |
 
 **Chain / fallback:** `AI_PROVIDER` accepts a comma list, tried in order until one succeeds — e.g.
 `AI_PROVIDER=anthropic,ollama`. **Dual review:** two providers (`claude-code,codex`) run as independent reviewers
@@ -21,11 +25,29 @@ combined per `AI_COMBINE` (`single`/`consensus`/`synthesis`).
 
 ## Model & effort (the intelligence dial)
 
-| Var             | Default            | Notes                                                                                                                                                |
-| --------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AI_MODEL`      | provider default   | e.g. `claude-sonnet-4-6`. **Leave unset on a `claude-code,codex` combo** — it's global and a Claude id breaks codex's account default.               |
-| `AI_EFFORT`     | `high`             | `low \| medium \| high \| xhigh \| max` → `claude --effort`. The engine wants substance, not speed.                                                  |
-| `AI_TIMEOUT_MS` | scales with effort | Subprocess timeout. Unset ⇒ low/med 120s, high 240s, xhigh 360s, **max 600s** (so a big max-effort review isn't killed). Override clamped 30s–30min. |
+| Var                          | Default                        | Notes                                                                                 |
+| ---------------------------- | ------------------------------ | ------------------------------------------------------------------------------------- |
+| `CLAUDE_AI_MODEL`            | `claude-sonnet-4-6`            | Any `claude` CLI model id/alias.                                                      |
+| `CLAUDE_AI_EFFORT`           | `high`                         | `low \| medium \| high \| xhigh \| max` -> `claude --effort`.                         |
+| `CLAUDE_AI_TIMEOUT_MS`       | scales with `CLAUDE_AI_EFFORT` | Unset -> low/med 120s, high 240s, xhigh 360s, max 600s. Override clamped 30s-30min.   |
+| `CODEX_AI_MODEL`             | Codex account default          | Set to `gpt-5.5` for repeatable Codex reviews.                                        |
+| `CODEX_AI_EFFORT`            | `high`                         | `low \| medium \| high \| xhigh`; `max` maps to `xhigh`.                              |
+| `CODEX_AI_TIMEOUT_MS`        | scales with `CODEX_AI_EFFORT`  | Unset -> low/med 120s, high 240s, xhigh 360s. Override clamped 30s-30min.             |
+| `OLLAMA_AI_MODEL`            | `llama3.1`                     | Used only by `AI_PROVIDER=ollama`.                                                    |
+| `OPENAI_COMPATIBLE_AI_MODEL` | `llama3.1`                     | Used only by `AI_PROVIDER=openai-compatible`.                                         |
+| `OPENAI_AI_MODEL`            | `gpt-5.5`                      | Used only by `AI_PROVIDER=openai`; override for a different OpenAI model.             |
+| `ANTHROPIC_AI_MODEL`         | `claude-sonnet-4-6`            | Used only by `AI_PROVIDER=anthropic`.                                                 |
+
+## Codex subscription reviewer
+
+Codex is intentionally disabled until the operator opts in with
+`GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER=1`. The risk is specific: `codex exec` needs an OAuth
+`auth.json`, and a prompt-influenced read-only review sandbox can still read files. On an isolated
+maintainer deployment, mount the Codex home at `/data/codex`; the image exposes that as the default
+`~/.codex` path for the `node` user. Do not set `CODEX_HOME` in the app environment. The provider
+rejects `CODEX_HOME` so the credential path is not advertised to the subprocess through env.
+Set `CODEX_AI_MODEL=gpt-5.5` and `CODEX_AI_EFFORT=high` for the current recommended Codex reviewer.
+The stack uses Codex standard speed by default; it does not request the fast/priority service tier.
 
 ## Cost & usage observability
 
@@ -34,11 +56,13 @@ row of the Grafana dashboard (`:3000`):
 
 | Metric                                                      | Labels                          | Meaning                                                          |
 | ----------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------- |
-| `gittensory_ai_requests_total`                              | `provider, model, kind, effort` | Review/embed calls (the intelligence dial is the `effort` label) |
-| `gittensory_ai_input_tokens_total` / `_output_tokens_total` | `provider, model, kind`         | Token volume per provider/model                                  |
-| `gittensory_ai_cost_usd_total`                              | `provider`                      | Cumulative USD (from Claude Code's `total_cost_usd`)             |
+| `gittensory_ai_requests_total`                              | `provider, model, effort`       | Successful subscription-CLI review calls                         |
+| `gittensory_ai_input_tokens_total` / `_output_tokens_total` | `provider, model, kind, effort` | Token volume per provider/model when the CLI reports it          |
+| `gittensory_ai_total_tokens_total`                          | `provider, model, effort`       | Total token count when the CLI reports it                        |
+| `gittensory_ai_cost_usd_total`                              | `provider`                      | Cumulative USD when the CLI reports a cost field                 |
 
-`kind` is `chat` (reviews) or `embed` (RAG). The embed provider's label is `AI_EMBED_PROVIDER` (default `ollama`).
+`kind` is `review` for the subscription-CLI review path. Claude Code also exports its own OTEL metrics when
+`CLAUDE_CODE_ENABLE_TELEMETRY=1`; Codex cost appears only if the CLI emits a cost field.
 
 ## Token-spend protection
 

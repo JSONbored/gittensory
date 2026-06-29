@@ -55,7 +55,8 @@ node --import ./scripts/register-selfhost.mjs dist/server.mjs
 
 Releases are cut by pushing a `selfhost-v<semver>` tag (e.g. `selfhost-v0.1.0`): CI builds the multi-arch
 image, pushes it to GHCR with `:<version>`, `:latest`, and `:sha-…` tags (with provenance + SBOM), and opens a
-GitHub Release.
+GitHub Release. Official release images also bake `GITTENSORY_VERSION=gittensory-selfhost@<version>` so Sentry
+events can be matched to the release/source maps uploaded by the release workflow.
 
 ---
 
@@ -108,15 +109,16 @@ and only the AI **summary** degrades to "unavailable". To enable AI, set `AI_PRO
 
 | `AI_PROVIDER`                             | Backend                                                                                                                                   | Extra config                                                                                                                  |
 | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `ollama` / `openai-compatible` / `openai` | any OpenAI-compatible `/chat/completions` endpoint (Ollama, OpenAI, Groq, Together, OpenRouter, vLLM, Gemini's OpenAI-compat endpoint, …) | `AI_BASE_URL`, `AI_API_KEY` (or `OPENAI_API_KEY`), `AI_MODEL`                                                                 |
-| `anthropic`                               | **native Anthropic Messages API** (BYOK — bills your API key)                                                                             | `ANTHROPIC_API_KEY`, `AI_MODEL` (e.g. `claude-sonnet-4-6`)                                                                    |
-| `claude-code`                             | your **Claude** subscription via the `claude` CLI (read-only, headless)                                                                   | `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), `AI_MODEL` (default `claude-sonnet-4-6`), `AI_EFFORT` (default `high`) |
-| `codex`                                   | your **Codex** subscription via the `codex` CLI                                                                                           | local `codex` auth, `AI_MODEL` (e.g. `gpt-5`)                                                                                 |
+| `ollama`                                  | local Ollama `/v1` endpoint                                                                                                               | `OLLAMA_AI_BASE_URL`, `OLLAMA_AI_MODEL`, optional `OLLAMA_AI_API_KEY`                                                         |
+| `openai-compatible`                       | any OpenAI-compatible `/chat/completions` endpoint (Groq, Together, OpenRouter, vLLM, Gemini's OpenAI-compat endpoint, …)                | `OPENAI_COMPATIBLE_AI_BASE_URL`, `OPENAI_COMPATIBLE_AI_MODEL`, optional `OPENAI_COMPATIBLE_AI_API_KEY`                       |
+| `openai`                                  | OpenAI API `/v1` endpoint                                                                                                                 | `OPENAI_API_KEY`, `OPENAI_AI_MODEL`, optional `OPENAI_AI_BASE_URL`                                                            |
+| `anthropic`                               | **native Anthropic Messages API** (BYOK — bills your API key)                                                                             | `ANTHROPIC_API_KEY`, `ANTHROPIC_AI_MODEL`, optional `ANTHROPIC_AI_BASE_URL`                                                   |
+| `claude-code`                             | your **Claude** subscription via the `claude` CLI (read-only, headless)                                                                   | `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_AI_MODEL`, `CLAUDE_AI_EFFORT`, `CLAUDE_AI_TIMEOUT_MS`                                      |
+| `codex`                                   | your **Codex** subscription via the `codex` CLI                                                                                           | local `codex` auth, `CODEX_AI_MODEL`, `CODEX_AI_EFFORT`, `CODEX_AI_TIMEOUT_MS`                                                |
 
-**Review timeout (`AI_TIMEOUT_MS`).** The `claude` / `codex` subprocess timeout. Left unset it **scales with
-`AI_EFFORT`** (low/medium 120s, high 240s, xhigh 360s, max 600s) so a large `max`-effort review isn't SIGKILLed
-mid-generation — the old fixed 120s cap silently dropped long reviews. Set `AI_TIMEOUT_MS` to override (clamped
-30s–30min).
+**Review timeout.** `CLAUDE_AI_TIMEOUT_MS` and `CODEX_AI_TIMEOUT_MS` override the subscription-CLI subprocess
+timeout. Left unset, the timeout scales with the matching provider effort so large reviews are not SIGKILLed
+mid-generation. Overrides are clamped to 30s-30min.
 
 **Fallback chain.** `AI_PROVIDER` accepts a comma-separated list and tries each in order until one succeeds —
 e.g. `AI_PROVIDER=anthropic,ollama` uses the Anthropic API first and falls back to a local Ollama model if it
@@ -135,22 +137,23 @@ In `block` mode the combined decision drives the gate; in `advisory` mode it's n
 fail-closed — if a reviewer can't return a usable verdict, the PR is **held** for a human, never auto-merged. The
 free Cloudflare Workers-AI pair remains the cloud default (`consensus`) — these knobs are for self-host providers.
 
-**Subscription CLIs in the image.** The `claude-code` / `codex` providers need their CLI present. Build the
-image with `--build-arg INSTALL_AI_CLIS=true` (or `docker compose build --build-arg INSTALL_AI_CLIS=true`) to
-bake them in, then provide `CLAUDE_CODE_OAUTH_TOKEN` / codex auth at run time. No credentials are baked in.
+**Subscription CLIs in the image.** The official/prebuilt image and the default Compose build include the
+`claude-code` / `codex` provider CLIs. Provider choice and credentials stay runtime-only: set
+`AI_PROVIDER=claude-code`, `AI_PROVIDER=codex`, or a dual pair such as `AI_PROVIDER=claude-code,codex`, then provide
+`CLAUDE_CODE_OAUTH_TOKEN` / codex auth at run time. No credentials are baked in. Set `INSTALL_AI_CLIS=false` only for
+a custom minimal local build that will never use the subscription CLI providers.
 
 - **Claude Code:** set `CLAUDE_CODE_OAUTH_TOKEN` (a 1-year token from `claude setup-token`, run once in a real
   terminal — it's browser-interactive and prints the token; it has no headless mode). The provider forces the
   subscription token (it scrubs `ANTHROPIC_API_KEY`), so an API key won't be used here — use `AI_PROVIDER=anthropic`
   for API-key billing. The model defaults to `claude-sonnet-4-6` and the reasoning **effort** to `high` (a
-  substantive review, not a fast shallow one); override with `AI_MODEL` (any `claude`-CLI model id or alias —
-  `sonnet`, `opus`, `claude-opus-4-8`, …) and `AI_EFFORT` (`low`|`medium`|`high`|`xhigh`|`max`; the CLI clamps a
-  level above the model's own ceiling).
-- **Codex (ChatGPT subscription).** The `codex` CLI is pre-baked, but self-hosted Codex reviews are fail-closed by
-  default because the CLI stores its OAuth refresh credential in `auth.json` on the same filesystem that the
-  prompt-influenced review sandbox can read. Do **not** copy `~/.codex/auth.json` into the app container or mount a
-  writable Codex home for PR review. Use `claude-code`, an API-key provider, or a local OpenAI-compatible endpoint for
-  automated reviews until Codex offers a credential-isolated non-interactive mode.
+  substantive review, not a fast shallow one); override with `CLAUDE_AI_MODEL` (any `claude`-CLI model id or alias,
+  e.g. `sonnet`, `opus`, `claude-opus-4-8`) and `CLAUDE_AI_EFFORT` (`low`|`medium`|`high`|`xhigh`|`max`; the CLI
+  clamps a level above the model's own ceiling).
+- **Codex (ChatGPT subscription).** Mount the Codex home at `/data/codex`, leave `CODEX_HOME` unset, and opt in with
+  `GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER=1` only on an isolated maintainer deployment. Set
+  `CODEX_AI_MODEL=gpt-5.5` and `CODEX_AI_EFFORT=high` for repeatable Codex reviews. The stack uses Codex standard
+  speed by default; it does not request the fast/priority service tier.
 
 **Local RAG (retrieval-augmented review).** Self-host ships a SQLite-backed vector store, so RAG works without
 Cloudflare Vectorize. Enable it with `GITTENSORY_REVIEW_RAG=true` + the repo in `GITTENSORY_REVIEW_REPOS`, and
@@ -159,14 +162,8 @@ point at an **embedding-capable** OpenAI-compatible provider (Ollama) with a **1
 SQLite DB (`_selfhost_vectors`) and queried by cosine similarity. Without an embedding model, RAG degrades to
 no-context (the review still runs).
 
-> **Set `AI_MODEL`.** The core would otherwise hand the adapter a Cloudflare Workers-AI model id
-> (`@cf/meta/...`) that Ollama / `claude` / `codex` can't use. The adapter ignores that id in favour of
-> `AI_MODEL` (falling back to a provider default), so always set `AI_MODEL` to a real model for your provider.
-> The `claude`/`codex` CLIs must be installed and authenticated in the runtime (a CLI-bearing image variant
-> is a follow-up); without `AI_MODEL` + a working CLI, the call throws and the review degrades.
-
 The local-AI default is Ollama: uncomment the `ollama` service in `docker-compose.yml`, set
-`AI_PROVIDER=ollama` + `AI_BASE_URL=http://ollama:11434/v1`, then `docker compose exec ollama ollama pull
+`AI_PROVIDER=ollama` + `OLLAMA_AI_BASE_URL=http://ollama:11434/v1`, then `docker compose exec ollama ollama pull
 <model>`.
 
 **Subscription safety.** The CLI providers run as a read-only subprocess with billable API keys
@@ -236,8 +233,9 @@ content-lane are not yet per-repo toggleable and stay on the allowlist.)
   - `GET /health` — binding-free liveness (the container `HEALTHCHECK` uses it).
   - `GET /ready` — readiness: returns `503` until the DB answers **and** migrations are applied
     (`{"ok":true,"checks":{"db":true,"migrations":true}}`). Use it as your orchestrator's readiness probe.
-  - `GET /metrics` — Prometheus text: `gittensory_queue_pending` / `_dead`, `gittensory_jobs_*_total`
-    (enqueued/processed/failed/dead), `gittensory_uptime_seconds`, `gittensory_http_requests_total`.
+  - `GET /metrics` — Prometheus text: `gittensory_queue_pending` / `_dead`, persisted
+    `gittensory_jobs_*_persisted_total` queue counters, in-process `gittensory_jobs_*_total` counters,
+    `gittensory_uptime_seconds`, and `gittensory_http_requests_total`.
 - **Durable queue.** Jobs are persisted in SQLite (`_selfhost_jobs`), not held in memory — a restart or crash
   **re-claims** in-flight work instead of losing it. Failures retry with exponential backoff and dead-letter
   after `maxRetries` (visible via `gittensory_queue_dead`).
@@ -245,13 +243,78 @@ content-lane are not yet per-repo toggleable and stay on the allowlist.)
   in-flight job, checkpoints the WAL, and closes the DB before exiting.
 - **Logs** are structured JSON (`selfhost_listening`, `selfhost_migrations_applied`, `selfhost_ai_provider`,
   `selfhost_queue_recovered`, `selfhost_job_dead`, `selfhost_cron_error`, `selfhost_shutdown`, …).
+- **Sentry error tracking.** Set `SENTRY_DSN` (or mount `SENTRY_DSN_FILE`) to capture self-host runtime errors.
+  Keep `SENTRY_ENVIRONMENT=selfhost`. The SDK release is `SENTRY_RELEASE` when set, otherwise the baked
+  `GITTENSORY_VERSION` value. Official release images bake `GITTENSORY_VERSION=gittensory-selfhost@<version>`;
+  the release workflow builds `dist/server.mjs`, injects/uploads matching Sentry source maps, then builds the
+  runtime image from that injected bundle. Custom images should set `SENTRY_RELEASE` only when you uploaded source
+  maps for that exact bundle under that exact release id.
 - **Data + backup.** Everything is the single SQLite file on the `gittensory-data` volume (WAL mode). Back up
   by snapshotting the volume or copying the `.sqlite` file. Migrations are idempotent and re-checked at boot.
   For **continuous, point-in-time backup**, enable the optional [Litestream](https://litestream.io) sidecar in
   `docker-compose.yml` (copy `litestream.yml.example` → `litestream.yml`, set your bucket + credentials); it
   streams every change to S3/B2/MinIO/R2.
+- **Maintainer Grafana dashboards.** Grafana does **not** mount the live app database. The observability profile
+  starts `reporting-exporter`, which projects the active `pull_requests` + latest `advisories` rows into a
+  dashboard-safe `review_targets` snapshot, preserves older non-overlapping legacy `review_targets`, and copies
+  redacted `ai_usage_events` rows into `/reporting/gittensory-reporting.sqlite` every
+  `GRAFANA_REPORTING_EXPORT_INTERVAL_SECONDS` seconds (default 30). The SQLite datasource points at that redacted
+  reporting DB. If the source DB disappears after a successful export, the exporter preserves the last good
+  reporting DB instead of replacing it with an empty snapshot. If you override the app SQLite `DATABASE_PATH`, set
+  `GITTENSORY_REPORTING_SOURCE_DB` to the matching exporter mount path, for example `/appdb/custom.sqlite` for
+  `DATABASE_PATH=/data/custom.sqlite`.
+  `DATABASE_URL`/Postgres deployments currently export an empty dashboard-safe DB so Grafana can start;
+  Postgres-backed maintainer analytics need a dedicated SQL exporter.
+- **Prometheus history.** The observability profile stores TSDB data in the `prometheus-data` named volume and keeps
+  `PROMETHEUS_RETENTION_TIME` of history (default `180d`). Do not run `docker compose down -v` unless you intend to
+  delete Grafana/Prometheus history.
 - **App-level metrics.** Enable `GITTENSORY_REVIEW_OPS=true` for the read-only gate-block anomaly scan and the
   bearer-gated `GET /v1/internal/ops/stats` aggregate.
+
+### Sentry source maps and release tracking
+
+This repo is not required to publish an official image on every self-host tweak. The source-map upload path is only
+wired into the maintainer release workflow (`selfhost-v*` tags or manual `release-selfhost` runs), so normal PRs and
+local operator builds do not upload anything to Sentry and do not need extra commands.
+
+Set the Sentry GitHub code mapping for the Sentry project to:
+
+| Sentry field      | Value |
+| ----------------- | ----- |
+| Stack Trace Root  | `/app` |
+| Source Code Root  | `.`   |
+| Branch            | `main` |
+
+The maintainer release workflow expects:
+
+| GitHub setting              | Value                                                                 |
+| --------------------------- | --------------------------------------------------------------------- |
+| Secret `SENTRY_AUTH_TOKEN`  | Sentry auth token allowed to create releases and upload source maps    |
+| Variable `SENTRY_ORG`       | Sentry organization slug                                              |
+| Variable `SENTRY_PROJECT`   | Sentry project slug                                                   |
+| Variable `SENTRY_URL`       | Optional Sentry API URL; defaults to `https://sentry.io`               |
+| Sentry GitHub integration   | Installed for `JSONbored/gittensory`, with the code mapping above      |
+
+The workflow builds `dist/server.mjs` with `dist/server.mjs.map`, validates the `sourceMappingURL` and embedded
+`sourcesContent`, injects Sentry debug ids, creates release `gittensory-selfhost@<version>`, associates commits with
+the tagged commit, uploads the source maps with Sentry validation/waiting enabled, finalizes the release, and then
+validates through the Sentry API that the exact release exists, is finalized, and includes the release commit. It then
+builds the image from that injected `dist/server.mjs`. `dist/server.mjs.map` is **not** copied into the runtime image
+and is not served by the app; it only exists as a private Sentry release artifact.
+
+For a custom image, source maps only work when the deployed JS bundle is the exact post-injection bundle whose map was
+uploaded. If you build locally and do not upload maps, leave `SENTRY_RELEASE` unset. Events still report to Sentry,
+but stack frames can remain bundled at `/app/dist/server.mjs`.
+
+If a new event still shows `/app/dist/server.mjs`:
+
+1. Confirm the event's `release` exactly matches the release that has the uploaded artifact bundle.
+2. Confirm the image was built from the injected `dist/server.mjs`, not from a later Docker-internal rebuild.
+3. Confirm the Sentry code mapping is `/app` → `.` on branch `main`.
+4. Confirm the release workflow's `Validate Sentry release` step passed for that exact `gittensory-selfhost@<version>`.
+5. Confirm `dist/server.mjs` had `//# sourceMappingURL=server.mjs.map` before upload and the map includes
+   `sourcesContent`.
+6. Trigger a fresh event after the upload; old events may need reprocessing before they pick up newly uploaded maps.
 
 ---
 
@@ -270,13 +333,16 @@ scale (`docker compose up --scale gittensory=3`). Postgres is **beta**: the migr
 paths are validated against a real Postgres, but report any dialect edge cases. RAG (the SQLite vector store)
 is **not** available on the Postgres backend yet — it degrades to no-context.
 
-## 8. What is not on self-host
+## 8. Cloudflare bindings not used by self-host
 
-These are Cloudflare-platform features; they degrade cleanly and the core reviewer is unaffected:
+The Cloudflare API worker keeps serving the public API + Orb broker. Review execution runs in the Docker stack,
+which uses self-host equivalents instead of Cloudflare review bindings:
 
-- **Visual PR capture** (Browser Rendering binding) — off; reviews run text-only.
+- **Visual PR capture** — use `INSTALL_VISUAL_REVIEW=true` plus `BROWSER_WS_ENDPOINT`; persist captures with
+  `REVIEW_AUDIT_DIR`. Without those, reviews run text-only.
 - **The `/mcp` server** (Durable-Object-backed Agents SDK) — returns `501`. The deterministic API + review
   path is unaffected; a native MCP-on-Node port is a follow-up.
-- **Distributed rate limiting** (RateLimiter Durable Object) — off by default; set `REDIS_URL` for a
-  Redis-backed fixed-window limiter (see §7). Otherwise put a reverse proxy / WAF in front.
-- **Vectorize-backed RAG** and **R2 audit storage** — inert unless you wire equivalent backends.
+- **Distributed rate limiting** — uses Redis through `REDIS_URL` instead of the Cloudflare RateLimiter Durable
+  Object.
+- **RAG and audit storage** — use Qdrant or the built-in sqlite vector store for RAG, and `REVIEW_AUDIT_DIR`
+  for audit/screenshot blobs instead of Cloudflare Vectorize/R2.

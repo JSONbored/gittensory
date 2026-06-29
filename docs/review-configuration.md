@@ -51,7 +51,7 @@ per-PR feature activates only when **(its own flag is ON) AND (the repo is allow
 | `GITTENSORY_REVIEW_REPOS` | **Per-repo cutover allowlist.** Comma-separated `owner/repo` names that may run the per-PR review features (`SAFETY`, `GROUNDING`, `RAG`, `REPUTATION`, `UNIFIED_COMMENT`, `INLINE_COMMENTS`). A per-PR feature runs on a repo only if its global flag is ON **and** the repo is listed here. Empty/unset = **no repos** → every per-PR feature stays dormant for everyone regardless of the global flags. Cron/endpoint flags (`OPS`, `SELFTUNE`, `PARITY_AUDIT`, `CONTENT_LANE`, `DRAFT`) are **not** scoped by this. | `""` (no repos) | Add repos one at a time as you roll forward; remove to roll back. Case-insensitive, trimmed; stray commas are ignored. | `"JSONbored/gittensory,JSONbored/awesome-claude"` |
 | `GITTENSORY_REVIEW_SAFETY` | **Safety scan** in the review path: (1) defangs untrusted PR title/body/diff (prompt-injection neutralization) before the AI reviewer sees it, and (2) scans the PR diff for leaked secrets, surfacing a `secret_leak` blocker. Per-PR — also requires the repo to be in `GITTENSORY_REVIEW_REPOS`. | `false` | Flip to `true`, then add the repo to `GITTENSORY_REVIEW_REPOS`. No per-repo tuning beyond that. | `"true"` |
 | `GITTENSORY_REVIEW_GROUNDING` | **Grounds** the AI-reviewer prompt with the PR's *finished* CI status + the *full post-change content* of the changed files, so a non-frontier model verifies its claims against reality instead of predicting CI or flagging symbols defined just outside the hunk. Per-PR — also gated by `GITTENSORY_REVIEW_REPOS`. | `false` | Flip to `true` + allowlist the repo. Both grounding inputs (CI + full files) are gathered together; there is no partial mode. | `"true"` |
-| `GITTENSORY_REVIEW_RAG` | **Retrieval-augmented context.** At review time, queries the codebase vector index for code/docs semantically related to the changed files (callers, related modules, existing conventions) and appends a "Relevant existing code / docs" section to the reviewer prompt — additive only, like grounding. Per-PR — also gated by `GITTENSORY_REVIEW_REPOS`. **Inert until a vector index exists** for the repo (a cold/missing index degrades to no context). | `false` | Flip to `true` + allowlist the repo **and** bind/populate the `VECTORIZE` index. Without an index it is a safe no-op. | `"true"` |
+| `GITTENSORY_REVIEW_RAG` | **Retrieval-augmented context.** At review time, queries the codebase vector index for code/docs semantically related to the changed files (callers, related modules, existing conventions) and appends a "Relevant existing code / docs" section to the reviewer prompt — additive only, like grounding. Per-PR — also gated by `GITTENSORY_REVIEW_REPOS`. **Inert until a vector index exists** for the repo (a cold/missing index degrades to no context). | `false` | Flip to `true` + allowlist the repo **and** populate the self-host vector backend (`QDRANT_URL` or the built-in sqlite vector store). Without an index it is a safe no-op. | `"true"` |
 | `GITTENSORY_REVIEW_REPUTATION` | **Submitter-reputation spend control (internal-only).** Extends the AI-spend gate: a new / burst / low-reputation submitter is downgraded to a deterministic-only review (the paid AI neurons are skipped); good-reputation submitters proceed normally. The per-(project, submitter) outcome is recorded after the gate decides. **Never surfaced publicly** — no comment, label, or check shows reputation. Per-PR — also gated by `GITTENSORY_REVIEW_REPOS`. | `false` | Flip to `true` + allowlist the repo. Thresholds are generic anti-abuse defaults (they reveal no review direction) and are not per-repo tunable. | `"true"` |
 | `GITTENSORY_REVIEW_UNIFIED_COMMENT` | Renders the public PR comment as **one in-place unified comment** (the converged comment shape) instead of the legacy multi-panel comment. Per-PR — also gated by `GITTENSORY_REVIEW_REPOS`. | `false` | Flip to `true` + allowlist the repo. Flag-OFF keeps the legacy comment byte-identical. | `"true"` |
 | `GITTENSORY_REVIEW_INLINE_COMMENTS` | **Quiet inline review comments** (CodeRabbit-style). On top of the decision summary, the AI reviewer leaves **non-blocking** inline comments on specific changed lines (`event: COMMENT`, never a change-request) — so a contributor sees exactly what to fix on a resubmission without the gate ever changing. Each comment's line is validated against the PR diff (out-of-diff findings are dropped, never a 422). Per-PR — also requires the repo in `GITTENSORY_REVIEW_REPOS` **and** `review.inline_comments: true` in its `.gittensory.yml`. | `false` | Flip to `true`, allowlist the repo, and set `review.inline_comments: true`. Flag-OFF the model is never asked for inline findings (byte-identical). | `"true"` |
@@ -86,7 +86,7 @@ Most gate dimensions are tri-state **gate-rule modes**: `off` / `advisory` / `bl
 
 - `off` — the dimension is not evaluated.
 - `advisory` — the finding is **surfaced** (in the comment/context) but never blocks.
-- `block` — the finding can become a hard `Gittensory Gate` blocker. Blocking is always
+- `block` — the finding can become a hard `Gittensory Orb Review Agent` blocker. Blocking is always
   **confirmed-contributor-gated** — the mode chooses *which* deterministic checks are active, never
   *who* can be blocked.
 
@@ -99,8 +99,8 @@ already-enabled gate.
 | Policy pack | `gate.pack` | `gatePack` | `gittensor` / `oss-anti-slop` | `gittensor` | `gittensor` = confirmed-contributor-gated, registry-aware. `oss-anti-slop` runs the deterministic rules against any author on any repo. |
 | Linked-issue gate | `gate.linkedIssue` | `linkedIssueGateMode` | `off`/`advisory`/`block` | `advisory` | If the dashboard "Require linked issue" toggle (`requireLinkedIssue`) is on but this is `off`, it is auto-promoted to `block`. |
 | Duplicate-PR gate | `gate.duplicates` | `duplicatePrGateMode` | `off`/`advisory`/`block` | `block` | Detects duplicate/superseding PRs. |
-| Quality / merge-readiness score gate | `gate.readiness.mode` | `qualityGateMode` | `off`/`advisory`/`block` | `advisory` | The PR-quality score gate. |
-| Quality min score | `gate.readiness.minScore` | `qualityGateMinScore` | number 0–100 (nullable) | `null` | At/above this score the quality dimension passes; `null` = engine default band. |
+| Quality / merge-readiness score signal | `gate.readiness.mode` | `qualityGateMode` | `off`/`advisory`/`block` | `advisory` | Advisory/informational only. `block` is accepted for older configs but does not fail the review-agent check. |
+| Quality min score | `gate.readiness.minScore` | `qualityGateMinScore` | number 0–100 (nullable) | `null` | Advisory warning threshold for the readiness signal; `null` disables the threshold. |
 | Slop gate | `gate.slop.mode` | `slopGateMode` | `off`/`advisory`/`block` | `off` | Deterministic anti-slop signal. `advisory` surfaces the slop score + warnings; `block` also hard-blocks at/above the min score. Opt-in. |
 | Slop min score | `gate.slop.minScore` | `slopGateMinScore` | number 0–100 (nullable) | `null` (engine uses `60`, the "high" band) | The slop-risk threshold at/above which `slop block` blocks. |
 | Slop AI advisory | `gate.slop.aiAdvisory` | `slopAiAdvisory` | bool | `false` | When `true` **and** slop is not `off`, a free Workers-AI pass adds an **advisory-only** `ai_slop_advisory` finding. Never feeds the slop score or the gate. |
@@ -109,9 +109,10 @@ already-enabled gate.
 | First-time-contributor grace | `gate.firstTimeContributorGrace` | `firstTimeContributorGrace` | bool | `false` | When `true`, softens a would-be block to advisory for a genuine newcomer (0 merged PRs, < 3 closed-unmerged PRs). Repeat offenders and authors with merge history are gated normally. |
 | AI review | `gate.aiReview.mode` | `aiReviewMode` | `off`/`advisory`/`block` | `off` | `advisory` posts AI review notes only; `block` lets a dual-model high-confidence consensus defect become a blocker (confirmed-contributors only). |
 | AI review BYOK | `gate.aiReview.byok` | `aiReviewByok` | bool | `false` | When `true` and a provider key is configured, the *advisory* write-up uses the maintainer's frontier model. The consensus blocker always uses the free Workers-AI pair, so BYOK never changes who can be blocked. |
+| AI review all authors | `gate.aiReview.allAuthors` | `aiReviewAllAuthors` | bool | `false` | When `true`, an enabled AI review runs for every PR author instead of only the engine's default eligible authors. Use this for self-host repos where the selected model must produce the public review summary. |
 | AI review provider | `gate.aiReview.provider` | `aiReviewProvider` | `anthropic` / `openai` / `null` | `null` | `null` = use the stored key's own provider. Must match the stored key's provider or BYOK is skipped (Workers-AI fallback). The key itself is only in the encrypted key store. |
 | AI review model | `gate.aiReview.model` | `aiReviewModel` | string / `null` | `null` | Model override for the BYOK advisory write-up (e.g. `claude-3-5-sonnet-latest`). `null` = the key record's model, else a conservative per-provider default. |
-| AI close confidence | `gate.aiReview.closeConfidence` | `aiReviewCloseConfidence` | number 0–1 (nullable) | `null` (engine uses `0.9`) | Minimum **calibrated** AI-reviewer confidence for a consensus defect / split to **block** under `aiReview.mode: block`. Below-threshold AI defects stay advisory (visible, never close). Each reviewer rates its own confidence; consensus carries the weaker reviewer's. Config-as-code only (no dashboard/DB column). |
+| AI close confidence | `gate.aiReview.closeConfidence` | `aiReviewCloseConfidence` | number 0–1 (nullable) | `null` (engine uses `0.93`) | Minimum **calibrated** AI-reviewer confidence for a consensus defect / split to **block** under `aiReview.mode: block`. Below-threshold AI defects stay advisory (visible, never close). Each reviewer rates its own confidence; consensus carries the weaker reviewer's. Config-as-code only (no dashboard/DB column). |
 
 ### Guardrails and scope (focus manifest)
 
@@ -203,6 +204,7 @@ gate:
   aiReview:
     mode: advisory
     byok: true
+    allAuthors: true
     provider: anthropic
     model: claude-3-5-sonnet-latest
 
@@ -252,13 +254,14 @@ specific capability and degrade safely when absent.
 - `GITHUB_OAUTH_CLIENT_ID` — GitHub OAuth (dashboard sign-in, draft flow).
 - `GITHUB_OAUTH_CLIENT_SECRET` — GitHub OAuth; also required by the draft flow.
 - `GITHUB_PUBLIC_TOKEN` — unauthenticated public-GitHub reads (e.g. fetching a repo's `.gittensory.yml`).
-- `TOKEN_ENCRYPTION_SECRET` — AES-256-GCM master secret for maintainer BYOK provider keys at rest. Absent ⇒ BYOK unavailable; AI review silently falls back to free Workers AI.
+- `TOKEN_ENCRYPTION_SECRET` — AES-256-GCM master secret for maintainer BYOK provider keys at rest. Absent ⇒ BYOK unavailable; AI review uses the self-host instance reviewer when configured.
 - `DRAFT_TOKEN_ENCRYPTION_SECRET` — AES-256-GCM secret for the contributor OAuth token in the draft flow. Absent ⇒ draft create/callback endpoints return 503.
 - `GITTENSORY_REVIEW_STATS_TOKEN` — bearer token guarding the stats data endpoint.
 - `GITTENSORY_DRIFT_ISSUE_TOKEN` — token for auto-filing drift issues.
 - `GITTENSORY_CONTRIBUTOR_ISSUE_TOKEN` — token for contributor-issue automation.
 - `PRODUCT_USAGE_HASH_SALT` — salt for hashing product-usage identifiers.
 
-**Related infrastructure bindings** (not secrets, but gate capabilities when bound): `VECTORIZE`
-(RAG index — `GITTENSORY_REVIEW_RAG` is inert without it), `REVIEW_AUDIT` (R2 audit/screenshot
-blobs), `BROWSER` (visual capture). Absent bindings degrade safely.
+**Related self-host infrastructure** (not secrets, but gate capabilities when configured): `QDRANT_URL`
+or the built-in sqlite vector store for RAG, `REVIEW_AUDIT_DIR` for screenshot blob persistence, and
+`BROWSER_WS_ENDPOINT` for visual capture. The Cloudflare API worker no longer binds Workers AI,
+Vectorize, R2 review audit storage, or Browser Rendering for review execution.
