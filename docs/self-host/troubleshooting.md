@@ -14,11 +14,12 @@ Real failure modes and their fixes, ordered by how often they bite. Each entry i
 
 **Symptom:** zero `ai_review` activity; reviews silently fall back to the deterministic panel.
 **Cause:** the CLI subscription providers shell out to the `claude` / `codex` binaries, but the image was built
-**without** the AI CLIs.
-**Fix:** rebuild with the build arg:
+without the AI CLIs. Official/prebuilt images include them by default; this usually means a custom minimal image was
+built with `INSTALL_AI_CLIS=false`.
+**Fix:** use the official image, or rebuild the custom image with the default AI CLI bundle:
 
 ```bash
-docker compose build --build-arg INSTALL_AI_CLIS=true gittensory
+INSTALL_AI_CLIS=true docker compose build gittensory
 docker compose up -d --force-recreate gittensory
 docker exec gittensory-gittensory-1 sh -c 'which claude && claude --version'
 ```
@@ -37,11 +38,12 @@ docker exec gittensory-gittensory-1 sh -c 'which claude && claude --version'
 **Fix:** set `gate.aiReview.allAuthors: true` (or `settings.aiReviewAllAuthors: true`) in the repo's private
 `.gittensory.yml`. See [configuration.md](./configuration.md).
 
-### A large `AI_EFFORT=max` review produces nothing
+### A large high-effort CLI review produces nothing
 
 **Symptom:** big PRs silently get no review; small ones work.
 **Cause:** the CLI subprocess timed out. (Older builds hard-capped at 120s.)
-**Fix:** the timeout now scales with `AI_EFFORT` (max → 600s); override with `AI_TIMEOUT_MS` (clamped 30s–30min).
+**Fix:** the timeout now scales with `CLAUDE_AI_EFFORT` / `CODEX_AI_EFFORT`; override with
+`CLAUDE_AI_TIMEOUT_MS` or `CODEX_AI_TIMEOUT_MS` (clamped 30s-30min).
 
 ---
 
@@ -87,7 +89,9 @@ curl -X POST localhost:8787/v1/internal/jobs/rag-index \
 **Cause:** CPU embedding (~1 chunk/s on `bge-m3`). It's a **one-time** cost — afterwards only changed files re-index
 on merge. Indexing runs on a **dedicated queue lane**, so a slow index never blocks live reviews / webhooks /
 sweeps (those drain on the main lane in parallel). Tune index parallelism with `QUEUE_INDEX_CONCURRENCY` (default 1)
-and the main lane with `QUEUE_CONCURRENCY`.
+and the main lane with `QUEUE_CONCURRENCY`. The durable queue also caps low-priority/background work with
+`QUEUE_BACKGROUND_CONCURRENCY` (default 1), so slow background jobs cannot occupy every worker slot while required
+PR gate checks are waiting to publish.
 
 ---
 
@@ -107,11 +111,27 @@ AI review entirely in advisory mode. If you still see repeats, check for an auto
 **Symptom:** `db:migrations:check` fails on a duplicate number after a rebase.
 **Fix:** renumber your migration to the next free `NNNN_*.sql` (the check prints `Next free:`).
 
-### `codex` "model not supported when using Codex with a ChatGPT account"
+### Codex model / effort is not what you expected
 
-**Cause:** forcing `--model gpt-5-codex` on a ChatGPT-account login fails.
-**Fix:** leave `AI_MODEL` unset for codex — it picks the account's own default. (Don't set a Claude model id on a
-`claude-code,codex` combo: `AI_MODEL` is global and a Claude id breaks codex.)
+**Cause:** Codex model and reasoning are provider-specific. Shared model settings are intentionally not used.
+**Fix:** set `CODEX_AI_MODEL=gpt-5.5` and `CODEX_AI_EFFORT=high` for the current recommended self-host Codex
+reviewer. Leave `CODEX_HOME` unset in the app environment.
+
+### Sentry issues still point at `dist/server.mjs`
+
+**Cause:** Sentry is enabled, but the running image's release id does not match an uploaded self-host release
+artifact, or the GitHub code mapping is pointed at generated `dist/` output.
+**Fix:** official images set `GITTENSORY_VERSION=gittensory-selfhost@<version>` and the release workflow uploads
+the matching source maps automatically. Leave `SENTRY_RELEASE` empty unless you are running a custom image with a
+custom uploaded release. In Sentry's GitHub integration, set **Stack Trace Root** to `/app` and **Source Code
+Root** to `.`.
+
+### `codex_credential_isolation_required`
+
+**Cause:** the Codex subscription reviewer is fail-closed unless you explicitly opt into mounted
+Codex auth, and it rejects `CODEX_HOME` in the app env.
+**Fix:** mount the Codex home at `/data/codex`, leave `CODEX_HOME` unset, and set
+`GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER=1` only on an isolated maintainer deployment.
 
 ### Reviews post as `gittensory-orb`, not your own bot
 

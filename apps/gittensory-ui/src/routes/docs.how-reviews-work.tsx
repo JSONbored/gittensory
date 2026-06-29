@@ -50,9 +50,10 @@ function HowReviewsWork() {
       </ol>
       <p>
         Everything those layers find is folded into a single <strong>gittensory review</strong>{" "}
-        comment on the PR, plus an optional <strong>Gittensory Gate</strong> check run. The review
-        algorithm is open-source; what changes between repos is the configuration you tune. See{" "}
-        <a href="/docs/review-configuration">Review configuration</a> for every option and default.
+        comment on the PR, plus an optional <strong>Gittensory Orb Review Agent</strong> check run.
+        The review algorithm is open-source; what changes between repos is the configuration you
+        tune. See <a href="/docs/review-configuration">Review configuration</a> for every option and
+        default.
       </p>
       <Callout variant="safety">
         Defaults are quiet. With no settings and no <code>.gittensory.yml</code>, the gate is{" "}
@@ -75,8 +76,8 @@ function HowReviewsWork() {
           never blocks the merge.
         </li>
         <li>
-          <code>block</code> — the finding can become a hard <strong>Gittensory Gate</strong>{" "}
-          blocker.
+          <code>block</code> — the finding can become a hard{" "}
+          <strong>Gittensory Orb Review Agent</strong> blocker.
         </li>
       </ul>
       <p>
@@ -251,9 +252,10 @@ function HowReviewsWork() {
       </ul>
       <p>
         The check run can carry the same signals at adjustable depth: <code>checkRunMode</code> (
-        <code>off</code> / <code>enabled</code>) publishes the <strong>Gittensory Gate</strong>{" "}
-        check, and <code>checkRunDetailLevel</code> (<code>minimal</code> / <code>standard</code> /{" "}
-        <code>deep</code>) sets how much the check summary spells out.
+        <code>off</code> / <code>enabled</code>) publishes the{" "}
+        <strong>Gittensory Orb Review Agent</strong> check, and <code>checkRunDetailLevel</code> (
+        <code>minimal</code> / <code>standard</code> / <code>deep</code>) sets how much the check
+        summary spells out.
       </p>
 
       <h2>Putting it together</h2>

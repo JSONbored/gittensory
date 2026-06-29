@@ -12,13 +12,29 @@ import { Hono } from "hono";
 import { verifyBearer } from "./auth.js";
 import type { EnrichRequest } from "./types.js";
 import { buildBrief } from "./brief.js";
+import { captureError, flushSentry, initSentry, resolveSentryEnvironment } from "./sentry.js";
 
 const app = new Hono();
+const sentryEnabled = await initSentry(process.env);
+
+if (sentryEnabled) {
+  console.log(
+    JSON.stringify({
+      event: "rees_sentry",
+      environment: resolveSentryEnvironment(process.env),
+    }),
+  );
+}
 
 app.get("/health", (c) =>
   c.json({ status: "ok", service: "review-enrichment" }),
 );
 app.get("/ready", (c) => c.json({ ready: true }));
+
+app.onError((error, c) => {
+  captureError(error, { method: c.req.method, path: c.req.path });
+  return c.json({ error: "internal_error" }, 500);
+});
 
 app.post("/v1/enrich", async (c) => {
   const secret = process.env.REES_SHARED_SECRET;
@@ -45,6 +61,19 @@ app.post("/v1/enrich", async (c) => {
 const port = Number(process.env.PORT ?? "8080");
 serve({ fetch: app.fetch, port }, (info) => {
   console.log(JSON.stringify({ event: "rees_listening", port: info.port }));
+});
+
+process.on("unhandledRejection", (reason) => {
+  captureError(reason, { event: "unhandled_rejection" });
+});
+
+process.on("uncaughtException", (error) => {
+  captureError(error, { event: "uncaught_exception" });
+  void flushSentry().finally(() => process.exit(1));
+});
+
+process.on("SIGTERM", () => {
+  void flushSentry().finally(() => process.exit(0));
 });
 
 export { app };
