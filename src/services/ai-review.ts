@@ -677,7 +677,24 @@ async function runProviderReview(
   };
 }
 
-/** Compose a public-safe markdown advisory blurb from one or two model reviews. Null if nothing safe. */
+function extractPublicAssessment(notes: string | null | undefined): string {
+  const raw = notes?.trim();
+  if (!raw) return "";
+  const sectionIndex = raw.search(
+    /(?:^|\n)\s*\*\*(?:Blockers|Nits \(\d+\))\*\*/u,
+  );
+  const assessment =
+    sectionIndex === -1 ? raw : raw.slice(0, sectionIndex).trim();
+  return toPublicSafe(assessment) ?? "";
+}
+
+export function hasPublicReviewAssessment(
+  notes: string | null | undefined,
+): boolean {
+  return extractPublicAssessment(notes).length > 0;
+}
+
+/** Compose a public-safe markdown advisory blurb from one or two model reviews. Null if no assessment is safe. */
 export function composeAdvisoryNotes(reviews: ModelReview[]): string | null {
   const assessments = reviews.map((r) => r.assessment).filter(Boolean);
   // High-signal caps: a focused review shows only the few findings that matter (the prompt also asks the
@@ -694,10 +711,9 @@ export function composeAdvisoryNotes(reviews: ModelReview[]): string | null {
   const safeNits = nits
     .map((s) => toPublicSafe(s))
     .filter((s): s is string => Boolean(s));
-  if (!assessment && safeBlockers.length === 0 && safeNits.length === 0)
-    return null;
+  if (!assessment) return null;
   const lines: string[] = [];
-  if (assessment) lines.push(assessment, "");
+  lines.push(assessment, "");
   if (safeBlockers.length > 0) {
     lines.push("**Blockers**");
     lines.push(...safeBlockers.map((s) => `- ${s}`));

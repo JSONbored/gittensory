@@ -161,6 +161,10 @@ export function jobCoalesceKey(payload: string): string | null {
       const pr = normalizedNumber(message.prNumber);
       return repo && pr !== null ? `agent-regate-pr:${repo}#${pr}` : null;
     }
+    if (type === "agent-regate-sweep") {
+      const repo = normalizedRepo(message.repoFullName);
+      return `agent-regate-sweep:${repo ?? "all"}`;
+    }
     if (type === "recapture-preview") {
       const repo = normalizedRepo(message.repoFullName);
       const pr = normalizedNumber(message.prNumber);

@@ -1236,7 +1236,7 @@ describe("pure helpers", () => {
     expect(result.status).toBe("ok");
   });
 
-  it("composeAdvisoryNotes returns null when nothing is public-safe", () => {
+  it("composeAdvisoryNotes returns null when no assessment is public-safe", () => {
     expect(
       composeAdvisoryNotes([
         {
@@ -1244,6 +1244,18 @@ describe("pure helpers", () => {
           suggestions: ["payout"],
           nits: ["reward"],
           blockers: [],
+          inlineFindings: [],
+          confidence: 1,
+        },
+      ]),
+    ).toBeNull();
+    expect(
+      composeAdvisoryNotes([
+        {
+          assessment: "",
+          suggestions: ["Add a test."],
+          nits: ["Rename the helper."],
+          blockers: ["Null deref in src/a.ts."],
           inlineFindings: [],
           confidence: 1,
         },
@@ -1450,15 +1462,11 @@ describe("pure helpers", () => {
       review({ assessment: "Looks good." }),
     ]);
     expect(assessmentOnly).toBe("Looks good.");
-    const nitsOnly = composeAdvisoryNotes([review({ nits: ["Add a test."] })]);
-    expect(nitsOnly).toContain("**Nits (1)**");
-    expect(nitsOnly).not.toContain("<details>");
-    expect(nitsOnly).not.toContain("**Blockers**");
+    expect(composeAdvisoryNotes([review({ nits: ["Add a test."] })])).toBeNull();
     const blockersOnly = composeAdvisoryNotes([
       review({ blockers: ["Null deref in src/a.ts."] }),
     ]);
-    expect(blockersOnly).toContain("**Blockers**");
-    expect(blockersOnly).not.toContain("**Nits");
+    expect(blockersOnly).toBeNull();
   });
 
   it("composeAdvisoryNotes merges + dedupes blockers/nits across two reviewers and renders both sections", () => {

@@ -152,27 +152,30 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(row.job_key).toBe(`github-webhook:ci-completed:jsonbored/gittensory@${"b".repeat(40)}#1629`);
   });
 
-  it("coalesces duplicate CI and PR-refresh jobs before they inflate queue pressure", async () => {
+  it("coalesces duplicate CI, PR-refresh, and sweep jobs before they inflate queue pressure", async () => {
     const driver = makeDriver();
     const q = createSqliteQueue(driver, async () => undefined);
     await q.binding.send(ciWebhook("ci-1", "check_suite"), { delaySeconds: 60 });
     await q.binding.send(ciWebhook("ci-2", "check_run"), { delaySeconds: 1 });
     await q.binding.send(prWebhook("pr-1"), { delaySeconds: 60 });
     await q.binding.send(prWebhook("pr-2"), { delaySeconds: 1 });
+    await q.binding.send({ type: "agent-regate-sweep", requestedBy: "schedule" } as JobMessage, { delaySeconds: 60 });
+    await q.binding.send({ type: "agent-regate-sweep", requestedBy: "schedule" } as JobMessage, { delaySeconds: 1 });
 
     const rows = driver.query(
       "SELECT payload, job_key FROM _selfhost_jobs ORDER BY id",
       [],
     ).rows as Array<{ payload: string; job_key: string }>;
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     expect(rows.map((row) => row.job_key).sort()).toEqual([
+      "agent-regate-sweep:all",
       `github-webhook:ci-completed:jsonbored/gittensory@${"b".repeat(40)}#1629`,
       `github-webhook:pr-refresh:jsonbored/gittensory#1629@${"a".repeat(40)}`,
     ]);
-    expect(rows.map((row) => JSON.parse(row.payload).deliveryId).sort()).toEqual(["ci-2", "pr-2"]);
+    expect(rows.map((row) => JSON.parse(row.payload).deliveryId).filter(Boolean).sort()).toEqual(["ci-2", "pr-2"]);
     expect(q.stats()).toMatchObject({
-      gittensory_jobs_enqueued_total: 2,
-      gittensory_jobs_coalesced_total: 2,
+      gittensory_jobs_enqueued_total: 3,
+      gittensory_jobs_coalesced_total: 3,
     });
   });
 

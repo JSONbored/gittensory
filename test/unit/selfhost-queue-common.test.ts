@@ -61,6 +61,8 @@ describe("self-host queue common helpers", () => {
   });
 
   it("coalesces CI-completion webhooks with sorted pull numbers", () => {
+    expect(jobCoalesceKey(payload({ type: "agent-regate-sweep", requestedBy: "schedule" }))).toBe("agent-regate-sweep:all");
+    expect(jobCoalesceKey(payload({ type: "agent-regate-sweep", repoFullName: "JSONbored/Gittensory" }))).toBe("agent-regate-sweep:jsonbored/gittensory");
     expect(
       jobCoalesceKey(
         payload({

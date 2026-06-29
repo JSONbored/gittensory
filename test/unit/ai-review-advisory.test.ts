@@ -59,6 +59,9 @@ function defectJson() {
 function notesOnlyJson() {
   return JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: ["Add a test."], suggestions: ["Add a test."] });
 }
+function nitsWithoutAssessmentJson() {
+  return JSON.stringify({ assessment: "", blockers: [], nits: ["Add a test."], suggestions: ["Add a test."] });
+}
 
 function aiEnv(run: () => Promise<unknown>, flags = true) {
   return createTestEnv({
@@ -440,6 +443,18 @@ describe("runAiReviewForAdvisory", () => {
 
   it("returns undefined when the model produces no parseable notes", async () => {
     const result = await runAiReviewForAdvisory(aiEnv(async () => ({ response: "not json" })), {
+      settings: { aiReviewMode: "advisory" } as RepositorySettings,
+      advisory: advisory(),
+      repoFullName: "acme/widgets",
+      pr,
+      author: "alice",
+      confirmedContributor: true,
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when the model produces nits but no assessment summary", async () => {
+    const result = await runAiReviewForAdvisory(aiEnv(async () => ({ response: nitsWithoutAssessmentJson() })), {
       settings: { aiReviewMode: "advisory" } as RepositorySettings,
       advisory: advisory(),
       repoFullName: "acme/widgets",

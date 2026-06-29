@@ -301,6 +301,7 @@ import {
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import {
+  hasPublicReviewAssessment,
   isEnabled,
   runGittensoryAiReview,
   type InlineFinding,
@@ -3857,9 +3858,9 @@ export async function runAiReviewForAdvisory(
       });
     }
     args.advisory.findings.push(...findings);
-    return result.advisoryNotes
+    return hasPublicReviewAssessment(result.advisoryNotes)
       ? {
-          notes: result.advisoryNotes,
+          notes: result.advisoryNotes ?? "",
           reviewerCount: result.reviewerCount,
           inlineFindings: result.inlineFindings,
           findings,
@@ -4612,7 +4613,7 @@ async function maybePublishPrPublicSurface(
         advisory.headSha,
         settings.aiReviewMode,
       ).catch(() => null);
-      if (cachedReview) {
+      if (cachedReview && hasPublicReviewAssessment(cachedReview.notes)) {
         advisory.findings.push(...cachedReview.findings);
         aiReview = cachedReview;
       } else {
@@ -4676,7 +4677,7 @@ async function maybePublishPrPublicSurface(
           ).catch(() => undefined);
       }
     }
-    if (aiReviewExpected && !aiReview?.notes?.trim()) {
+    if (aiReviewExpected && !hasPublicReviewAssessment(aiReview?.notes)) {
       const retryError = new RetryableJobError(
         "AI review did not produce a public summary yet; keeping PR surface in reviewing state",
         {

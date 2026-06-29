@@ -1350,11 +1350,22 @@ describe("queue processors", () => {
     expect(postedBodies[0]).toContain("🟪");
   });
 
-  it("keeps the PR comment and Gate in 🟪 reviewing state when AI review produces no public summary", async () => {
+  it("keeps the PR comment and Gate in 🟪 reviewing state when AI review produces nits but no public summary", async () => {
+    let aiCalls = 0;
     const env = createTestEnv({
       GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
       AI: {
-        run: async () => ({ response: "not-json" }),
+        run: async () => {
+          aiCalls += 1;
+          return {
+            response: JSON.stringify({
+              assessment: "",
+              blockers: [],
+              nits: ["Add coverage for the new branch."],
+              suggestions: ["Add coverage for the new branch."],
+            }),
+          };
+        },
       } as unknown as Ai,
       AI_SUMMARIES_ENABLED: "true",
       AI_PUBLIC_COMMENTS_ENABLED: "true",
@@ -1378,6 +1389,10 @@ describe("queue processors", () => {
       gateCheckMode: "enabled",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
+    });
+    await putCachedAiReview(env, "JSONbored/gittensory", 10, "a10", "block", {
+      notes: "**Nits (1)**\n- stale cached nit",
+      reviewerCount: 1,
     });
     const commentBodies: string[] = [];
     const checkPatches: Array<{ status?: string; conclusion?: string }> = [];
@@ -1423,6 +1438,7 @@ describe("queue processors", () => {
     expect(commentBodies[0]).toContain("🟪");
     expect(commentBodies[0]).not.toContain("held for maintainer review");
     expect(commentBodies[0]).not.toContain("Review summary");
+    expect(aiCalls).toBeGreaterThan(0);
     expect(checkPatches).toHaveLength(0);
     const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?")
       .bind("github_app.ai_review_public_summary_missing")
