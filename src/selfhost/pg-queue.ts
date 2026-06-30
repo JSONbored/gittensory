@@ -624,7 +624,7 @@ export function createPgQueue(
                 ($1::text IS NOT NULL AND admission_key=$1)
                 OR ($2::text IS NOT NULL AND repo_full_name=$2 AND admission_key IS NULL)
               )
-              ORDER BY observed_at DESC, CASE WHEN admission_key=$1 THEN 1 ELSE 0 END DESC
+              ORDER BY CASE WHEN admission_key=$1 THEN 1 ELSE 0 END DESC, observed_at DESC
               LIMIT 1`,
             [admissionKey, repoFullName],
           )

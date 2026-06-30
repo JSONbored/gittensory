@@ -625,7 +625,7 @@ function rateLimitAdmissionDelayMs(
                 (? IS NOT NULL AND admission_key=?)
                 OR (? IS NOT NULL AND repo_full_name=? AND admission_key IS NULL)
               )
-              ORDER BY observed_at DESC, CASE WHEN admission_key=? THEN 1 ELSE 0 END DESC
+              ORDER BY CASE WHEN admission_key=? THEN 1 ELSE 0 END DESC, observed_at DESC
               LIMIT 1`,
             [admissionKey, admissionKey, repoFullName, repoFullName, admissionKey],
           ).rows[0] as { remaining?: number | null; reset_at?: string | null; observed_at?: string | null } | undefined)
