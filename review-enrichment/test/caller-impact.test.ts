@@ -111,6 +111,15 @@ test("extractExports joins a multiline export { } block", () => {
   );
 });
 
+test("extractExports captures a multiline function signature for change comparison", () => {
+  const before = extractExports(["export function foo(", "  a: string,", "): void;"]);
+  const after = extractExports(["export function foo(", "  a: number,", "): void;"]);
+  assert.deepEqual(before.flatMap((e) => e.names), ["foo"]);
+  assert.deepEqual(after.flatMap((e) => e.names), ["foo"]);
+  // Same name, but the FULL declaration text differs ⇒ a real signature change, not an identical move/reformat.
+  assert.notEqual(before[0].declText, after[0].declText);
+});
+
 // ── scanCallerImpact ──────────────────────────────────────────────────────────
 
 test("scanCallerImpact: a removed export with external callers is flagged; changed files are excluded", async () => {
@@ -283,6 +292,48 @@ test("scanCallerImpact: pages past a noisy first page to find a real caller on p
   assert.equal(out.length, 1);
   assert.equal(out[0].kind, "removed-with-callers");
   assert.deepEqual(out[0].callerFiles, ["src/real-caller.ts"]);
+});
+
+test("scanCallerImpact: a multiline signature change is detected as changed-with-callers", async () => {
+  const fetchImpl = router([
+    ["%22foo%22", res({ items: [{ path: "src/caller.ts", text_matches: [{ fragment: "foo(1);" }] }] })],
+  ]);
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [
+        {
+          path: "src/lib.ts",
+          // Whole declaration block removed + re-added; only a parameter line (not the first line) changes.
+          patch:
+            "@@ -1,3 +1,3 @@\n-export function foo(\n-  a: string,\n-): void;\n+export function foo(\n+  a: number,\n+): void;",
+        },
+      ],
+    },
+    fetchImpl,
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].symbol, "foo");
+  assert.equal(out[0].kind, "changed-with-callers");
+});
+
+test("scanCallerImpact: a re-export does not suppress dead-on-arrival", async () => {
+  // fileA adds the export; a barrel only re-exports it (API forwarding) — that is not real implementation use.
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [
+        { path: "src/a.ts", patch: "@@ -0,0 +1,1 @@\n+export const orphan = 1;" },
+        { path: "src/barrel.ts", patch: "@@ -0,0 +1,1 @@\n+export { orphan } from './a';" },
+      ],
+    },
+    throwingFetch, // dead-on-arrival is diff-only
+  );
+  assert.ok(out.some((f) => f.symbol === "orphan" && f.kind === "dead-on-arrival"));
 });
 
 test("scanCallerImpact: an unsafe repoFullName is rejected before any fetch", async () => {

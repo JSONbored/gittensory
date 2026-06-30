@@ -23,6 +23,7 @@ const MAX_CALLER_FILES = 10; // cap caller files listed per symbol
 const CODE_SEARCH_PER_PAGE = 20;
 const MAX_SEARCH_PAGES = 5; // pages one symbol may walk (≤100 hits) to see past filtered noise on page 1
 const MAX_TOTAL_SEARCH_REQUESTS = 10; // global Code Search request budget per review (respects the ~10/min secondary limit)
+const MAX_DECL_LINES = 40; // bound the contiguous multiline export declaration accumulated for signature comparison
 
 const REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
 const ENTRYPOINT_RE = /(^|\/)index\.[cm]?[jt]sx?$|\.d\.ts$/; // public-API files: skip dead-on-arrival here
@@ -150,32 +151,37 @@ interface DiffExports {
 
 const norm = (line: string): string => line.trim().replace(/\s+/g, " ");
 
-/** Parse exported symbol names from a sequence of source lines (diff markers already stripped), joining a multiline
- *  `export { … }` block that spans several lines into one statement. Returns one entry per export statement. */
+/** Inclusive index where the export declaration starting at `start` ends: walk lines until the bracket depth
+ *  (parens/braces/brackets) returns to 0 and the line is not a continuation. This captures the FULL contiguous
+ *  multiline declaration — function parameter lists, interface/object/type bodies, and `export { … }` blocks — so a
+ *  signature change on a LATER line is not mistaken for an identical move/reformat. Bounded by MAX_DECL_LINES. */
+function declarationEnd(lines: string[], start: number): number {
+  let depth = 0;
+  for (let i = start; i < lines.length && i - start < MAX_DECL_LINES; i++) {
+    for (const ch of lines[i]!) {
+      if (ch === "(" || ch === "{" || ch === "[") depth++;
+      else if (ch === ")" || ch === "}" || ch === "]") depth = Math.max(0, depth - 1);
+    }
+    // Complete when nothing is left open and the line does not end on a continuation operator (`=`, `|`, `&`, `,`, `(`, `<`).
+    if (depth === 0 && !/[=|&,(<]\s*$/.test(lines[i]!)) return i;
+  }
+  return Math.min(start + MAX_DECL_LINES - 1, lines.length - 1);
+}
+
+/** Parse exported symbol names from a sequence of source lines (diff markers already stripped). Each multiline export
+ *  declaration is joined into one statement so the FULL declaration text (not just its first line) is compared for
+ *  signature changes. Returns one entry per export statement. */
 export function extractExports(
   lines: string[],
 ): Array<{ names: string[]; declText: string }> {
   const out: Array<{ names: string[]; declText: string }> = [];
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    const trimmed = line.trim();
-    // A `export {` / `export type {` that does not close its brace on the same line — accumulate until `}` (bounded).
-    if (/^export\s+(?:type\s+)?\{/.test(trimmed) && !trimmed.includes("}")) {
-      const parts = [line];
-      let j = i + 1;
-      while (j < lines.length && j - i <= 50) {
-        parts.push(lines[j]!);
-        if (lines[j]!.includes("}")) break;
-        j++;
-      }
-      const joined = norm(parts.join(" "));
-      const names = parseExportedNames(joined);
-      if (names.length) out.push({ names, declText: joined });
-      i = j;
-      continue;
-    }
-    const names = parseExportedNames(line);
-    if (names.length) out.push({ names, declText: norm(line) });
+    if (!lines[i]!.trim().startsWith("export")) continue;
+    const end = declarationEnd(lines, i);
+    const joined = norm(lines.slice(i, end + 1).join(" "));
+    const names = parseExportedNames(joined);
+    if (names.length) out.push({ names, declText: joined });
+    i = end;
   }
   return out;
 }
@@ -330,5 +336,6 @@ export async function scanCallerImpact(
     findings.push({ symbol, kind: "dead-on-arrival", callerFiles: [] });
   }
 
-  return findings;
+  // Stable order (by kind, then symbol) so the rendered brief is deterministic regardless of Code Search result order.
+  return findings.sort((a, b) => a.kind.localeCompare(b.kind) || a.symbol.localeCompare(b.symbol));
 }
