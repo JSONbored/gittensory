@@ -2223,25 +2223,33 @@ export async function fetchLivePullRequestReviewDecision(env: Env, repoFullName:
   return result?.data?.repository?.pullRequest?.reviewDecision ?? undefined;
 }
 
+type GitHubReviewThreadNode = {
+  isResolved?: boolean | null;
+  isOutdated?: boolean | null;
+  path?: string | null;
+  line?: number | null;
+  comments?: {
+    nodes?: Array<{
+      body?: string | null;
+      url?: string | null;
+      author?: { login?: string | null } | null;
+    } | null> | null;
+  } | null;
+};
+
+type GitHubReviewThreadConnection = {
+  nodes?: Array<GitHubReviewThreadNode | null> | null;
+  pageInfo?: {
+    hasNextPage?: boolean | null;
+    endCursor?: string | null;
+  } | null;
+};
+
 type GitHubReviewThreadResponse = {
   data?: {
     repository?: {
       pullRequest?: {
-        reviewThreads?: {
-          nodes?: Array<{
-            isResolved?: boolean | null;
-            isOutdated?: boolean | null;
-            path?: string | null;
-            line?: number | null;
-            comments?: {
-              nodes?: Array<{
-                body?: string | null;
-                url?: string | null;
-                author?: { login?: string | null } | null;
-              } | null> | null;
-            } | null;
-          } | null> | null;
-        } | null;
+        reviewThreads?: GitHubReviewThreadConnection | null;
       } | null;
     } | null;
   };
@@ -2254,30 +2262,49 @@ export async function fetchLiveReviewThreadBlockers(env: Env, repoFullName: stri
   if (!token) return [];
   const [owner, name] = repoFullName.split("/");
   if (!owner || !name) return [];
-  const query = `query GittensoryPullRequestReviewThreads {
-    repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {
-      pullRequest(number: ${prNumber}) {
-        reviewThreads(first: 50) {
-          nodes {
-            isResolved
-            isOutdated
-            path
-            line
-            comments(first: 20) {
-              nodes {
-                body
-                url
-                author { login }
+  const threads: Array<GitHubReviewThreadNode | null> = [];
+  let cursor: string | null = null;
+  const seenCursors = new Set<string>();
+  for (;;) {
+    const after: string = cursor ? `, after: ${JSON.stringify(cursor)}` : "";
+    const query: string = `query GittensoryPullRequestReviewThreads {
+      repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {
+        pullRequest(number: ${prNumber}) {
+          reviewThreads(first: 50${after}) {
+            nodes {
+              isResolved
+              isOutdated
+              path
+              line
+              comments(first: 20) {
+                nodes {
+                  body
+                  url
+                  author { login }
+                }
               }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
             }
           }
         }
       }
+    }`;
+    const result: GitHubReviewThreadResponse | undefined = await githubGraphQl<GitHubReviewThreadResponse>(env, query, token).catch(() => undefined);
+    const connection: GitHubReviewThreadConnection | null | undefined = result?.data?.repository?.pullRequest?.reviewThreads;
+    if (!connection?.nodes) {
+      if (threads.length === 0) return [];
+      break;
     }
-  }`;
-  const result = await githubGraphQl<GitHubReviewThreadResponse>(env, query, token).catch(() => undefined);
-  const threads = result?.data?.repository?.pullRequest?.reviewThreads?.nodes;
-  if (!threads) return [];
+    threads.push(...connection.nodes);
+    if (connection.pageInfo?.hasNextPage !== true) break;
+    const nextCursor: string | null | undefined = connection.pageInfo.endCursor;
+    if (!nextCursor || seenCursors.has(nextCursor)) break;
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
   const blockers: ReviewThreadBlocker[] = [];
   for (const thread of threads) {
     if (!thread || thread.isResolved !== false || thread.isOutdated === true) continue;

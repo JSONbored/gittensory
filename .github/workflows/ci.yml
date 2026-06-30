@@ -22,7 +22,7 @@ jobs:
   # On push to main everything runs regardless (keeps the coverage baseline solid).
   changes:
     name: changes
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: ${{ fromJSON((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && '["ubuntu-latest"]' || '["self-hosted","gittensory"]') }}
     timeout-minutes: 5
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
@@ -75,7 +75,7 @@ jobs:
     name: lint
     needs: changes
     if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: ${{ fromJSON((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && '["ubuntu-latest"]' || '["self-hosted","gittensory"]') }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -117,7 +117,7 @@ jobs:
     name: test
     needs: changes
     if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: ${{ fromJSON((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && '["ubuntu-latest"]' || '["self-hosted","gittensory"]') }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -200,7 +200,7 @@ jobs:
     name: coverage-upload
     needs: [changes, test]
     if: ${{ (github.event_name == 'push' || needs.changes.outputs.backend == 'true') && needs.test.result == 'success' }}
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: ${{ fromJSON((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && '["ubuntu-latest"]' || '["self-hosted","gittensory"]') }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -258,7 +258,7 @@ jobs:
     name: workers
     needs: changes
     if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: ${{ fromJSON((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && '["ubuntu-latest"]' || '["self-hosted","gittensory"]') }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -289,7 +289,7 @@ jobs:
     name: mcp
     needs: changes
     if: ${{ github.event_name == 'push' || needs.changes.outputs.mcp == 'true' }}
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: ${{ fromJSON((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && '["ubuntu-latest"]' || '["self-hosted","gittensory"]') }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -322,7 +322,7 @@ jobs:
     name: rees
     needs: changes
     if: ${{ github.event_name == 'push' || needs.changes.outputs.rees == 'true' }}
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: ${{ fromJSON((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && '["ubuntu-latest"]' || '["self-hosted","gittensory"]') }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -343,7 +343,7 @@ jobs:
     name: ui
     needs: changes
     if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: ${{ fromJSON((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && '["ubuntu-latest"]' || '["self-hosted","gittensory"]') }}
     timeout-minutes: 15
     env:
       VITE_GITTENSORY_API_ORIGIN: https://gittensory-api.aethereal.dev
@@ -387,7 +387,7 @@ jobs:
   security:
     name: security
     if: ${{ github.event_name == 'pull_request' }}
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: ${{ fromJSON((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && '["ubuntu-latest"]' || '["self-hosted","gittensory"]') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -408,7 +408,7 @@ jobs:
     name: validate
     needs: [changes, lint, test, coverage-upload, workers, mcp, rees, ui, security]
     if: ${{ always() }}
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'ubuntu-latest' || 'self-hosted' }}
+    runs-on: ${{ fromJSON((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && '["ubuntu-latest"]' || '["self-hosted","gittensory"]') }}
     timeout-minutes: 2
     steps:
       - name: All required jobs passed
