@@ -57,11 +57,11 @@ export function isEnrichmentEnabled(env: Env): boolean {
   );
 }
 
-/** True unless explicitly disabled. REES already receives PR content when enabled; token forwarding lets
- *  token-aware analyzers read CODEOWNERS and blob sizes through the GitHub API. */
+/** True only when explicitly enabled. REES already receives PR content when enabled, but GitHub
+ *  token forwarding crosses a credential boundary and must remain opt-in. */
 export function isReesGithubTokenForwardingEnabled(env: Env): boolean {
-  return !/^(0|false|no|off)$/i.test(
-    (reesConfig(env).REES_FORWARD_GITHUB_TOKEN ?? "true").trim(),
+  return /^(1|true|yes|on)$/i.test(
+    (reesConfig(env).REES_FORWARD_GITHUB_TOKEN ?? "").trim(),
   );
 }
 

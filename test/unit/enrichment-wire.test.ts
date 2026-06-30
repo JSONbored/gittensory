@@ -375,11 +375,16 @@ describe("buildReviewEnrichment", () => {
 });
 
 describe("isReesGithubTokenForwardingEnabled", () => {
-  it("defaults on and only turns off for explicit false-like values", () => {
-    expect(isReesGithubTokenForwardingEnabled(env({}))).toBe(true);
+  it("defaults off and only turns on for explicit truthy values", () => {
+    expect(isReesGithubTokenForwardingEnabled(env({}))).toBe(false);
     expect(
       isReesGithubTokenForwardingEnabled(
         env({ REES_FORWARD_GITHUB_TOKEN: "true" }),
+      ),
+    ).toBe(true);
+    expect(
+      isReesGithubTokenForwardingEnabled(
+        env({ REES_FORWARD_GITHUB_TOKEN: " YES " }),
       ),
     ).toBe(true);
     expect(

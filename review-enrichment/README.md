@@ -17,8 +17,9 @@ treats any timeout/error as "no brief" and proceeds.
 | `POST /v1/enrich` | `Authorization: Bearer <REES_SHARED_SECRET>` → `EnrichRequest` → `ReviewBrief`. |
 
 See `src/types.ts` for the `EnrichRequest` / `ReviewBrief` contract. When the engine is configured with
-`REES_FORWARD_GITHUB_TOKEN=true` (the default), requests can include a GitHub read token so token-aware analyzers can
-read CODEOWNERS and blob sizes. The engine prefers a short-lived installation token and falls back to
+`REES_FORWARD_GITHUB_TOKEN=true`, requests can include a GitHub read token so token-aware analyzers can read
+CODEOWNERS and blob sizes. Token forwarding is off by default and should be enabled only when the REES endpoint is
+inside the operator's trust boundary. The engine prefers a short-lived installation token and falls back to
 `GITHUB_PUBLIC_TOKEN`. The service must never log request bodies, diffs, or tokens.
 
 ## Analyzers
