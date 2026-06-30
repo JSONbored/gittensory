@@ -27,13 +27,11 @@ export interface ScanLimits {
   maxDependencyQueries?: number;
 }
 
-type ExternalCallCache = Pick<AnalysisContext, "cachedExternalCall">;
 type ExternalFetchContext = Pick<AnalysisContext, "fetchJson">;
 
 interface ScanOptions {
   signal?: AbortSignal;
   limits?: ScanLimits;
-  cache?: ExternalCallCache;
   analysis?: ExternalFetchContext;
   diagnostics?: AnalyzerDiagnostics;
 }
@@ -178,36 +176,6 @@ function mapOsvVulns(vulns: OsvVuln[] | undefined): Cve[] {
   }));
 }
 
-async function queryOsvWithAnalysis(
-  change: DepChange,
-  fetchImpl: typeof fetch,
-  options: ScanOptions,
-): Promise<Cve[]> {
-  if (options.signal?.aborted) return [];
-  const body = JSON.stringify({
-    package: { name: change.package, ecosystem: change.ecosystem },
-    version: change.to,
-  });
-  const response = await options.analysis!.fetchJson<{ vulns?: OsvVuln[] }>(
-    "https://api.osv.dev/v1/query",
-    {
-      endpointCategory: "osv-query",
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body,
-      signal: options.signal,
-      fetchImpl,
-      diagnostics: options.diagnostics,
-      phase: "dependency",
-      subcall: "osv-query",
-      maxBytes: 512 * 1024,
-      maxCallsPerCategory: options.limits?.maxDependencyQueries,
-    },
-  );
-  if (!response.ok) return [];
-  return mapOsvVulns(response.data.vulns);
-}
-
 /* Legacy direct path kept for tests and injected callers that do not have request context. */
 async function queryOsvDirect(
   ecosystem: string,
@@ -237,23 +205,6 @@ async function queryOsvDirect(
   return mapOsvVulns(response.data.vulns);
 }
 
-/** Query OSV.dev through a request-scoped context when available. */
-async function queryOsvBounded(
-  change: DepChange,
-  fetchImpl: typeof fetch,
-  options: ScanOptions,
-): Promise<Cve[]> {
-  if (options.analysis) return queryOsvWithAnalysis(change, fetchImpl, options);
-  return queryOsvDirect(
-    change.ecosystem,
-    change.package,
-    change.to,
-    fetchImpl,
-    options.signal,
-    options.diagnostics,
-  );
-}
-
 /*
  * queryOsv remains exported for existing direct unit tests. It intentionally delegates to the bounded direct path
  * so even injected callers get timeout, byte-cap, and safe diagnostic behavior without request-cache context.
@@ -273,15 +224,59 @@ function osvCacheKey(change: DepChange): string {
   return `${change.ecosystem}:${change.package}:${change.to}`;
 }
 
-async function queryOsvForChange(
-  change: DepChange,
-  fetchImpl: typeof fetch,
-  options: ScanOptions,
-): Promise<Cve[]> {
-  const load = () => queryOsvBounded(change, fetchImpl, options);
-  return options.cache
-    ? options.cache.cachedExternalCall("osv", osvCacheKey(change), load)
-    : load();
+/** Batch-query OSV.dev for direct dependency changes. Best-effort: returns empty CVE arrays on any failure. */
+export async function queryOsvBatch(
+  changes: readonly DepChange[],
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+  options: Pick<ScanOptions, "analysis" | "diagnostics" | "limits"> = {},
+): Promise<Map<string, Cve[]>> {
+  const results = new Map<string, Cve[]>();
+  if (!changes.length || signal?.aborted) return results;
+
+  const uniqueChanges: DepChange[] = [];
+  const seen = new Set<string>();
+  for (const change of changes) {
+    const key = osvCacheKey(change);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueChanges.push(change);
+  }
+
+  const fetchOptions = {
+    endpointCategory: "osv-direct-querybatch",
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      queries: uniqueChanges.map((change) => ({
+        package: { name: change.package, ecosystem: change.ecosystem },
+        version: change.to,
+      })),
+    }),
+    signal,
+    fetchImpl,
+    diagnostics: options.diagnostics,
+    phase: "dependency",
+    subcall: "osv-direct-querybatch",
+    maxBytes: 1024 * 1024,
+    maxCallsPerCategory: 1,
+  };
+  const response = options.analysis
+    ? await options.analysis.fetchJson<{
+        results?: Array<{ vulns?: OsvVuln[] }>;
+      }>("https://api.osv.dev/v1/querybatch", fetchOptions)
+    : await boundedFetchJson<{
+        results?: Array<{ vulns?: OsvVuln[] }>;
+      }>("https://api.osv.dev/v1/querybatch", fetchOptions);
+  if (!response.ok) return results;
+
+  uniqueChanges.forEach((change, index) => {
+    results.set(
+      osvCacheKey(change),
+      mapOsvVulns(response.data.results?.[index]?.vulns),
+    );
+  });
+  return results;
 }
 
 /** Scan already-extracted dependency changes → OSV → only the deps that carry vulnerabilities. */
@@ -294,10 +289,16 @@ export async function scanDependencyChanges(
     0,
     options.limits?.maxDependencyQueries ?? MAX_DEPENDENCY_QUERIES,
   );
+  const cvesByKey = await queryOsvBatch(
+    boundedChanges,
+    fetchImpl,
+    options.signal,
+    options,
+  );
   const findings: DependencyFinding[] = [];
   for (const change of boundedChanges) {
     if (options.signal?.aborted) break;
-    const cves = await queryOsvForChange(change, fetchImpl, options);
+    const cves = cvesByKey.get(osvCacheKey(change)) ?? [];
     if (cves.length) {
       findings.push({
         ...change,

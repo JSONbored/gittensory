@@ -151,20 +151,27 @@ test("request cache preserves category and key boundaries", async () => {
   assert.equal(context.snapshotMetrics().cacheHits, 2);
 });
 
-test("scanDependencyChanges reuses cached OSV package lookups inside one request", async () => {
+test("scanDependencyChanges batches and de-dupes OSV package lookups inside one request", async () => {
   const context = createAnalysisContext({
     repoFullName: "JSONbored/gittensory",
     prNumber: 1810,
   });
   let fetchCalls = 0;
-  const fetchImpl = async () => {
+  let queryCount = 0;
+  const fetchImpl = async (_url, init = {}) => {
     fetchCalls += 1;
+    const body = JSON.parse(String(init.body));
+    queryCount = body.queries.length;
     return jsonResponse({
-      vulns: [
+      results: [
         {
-          id: "GHSA-test",
-          summary: "test advisory",
-          database_specific: { severity: "HIGH" },
+          vulns: [
+            {
+              id: "GHSA-test",
+              summary: "test advisory",
+              database_specific: { severity: "HIGH" },
+            },
+          ],
         },
       ],
     });
@@ -175,14 +182,15 @@ test("scanDependencyChanges reuses cached OSV package lookups inside one request
   ];
 
   const findings = await scanDependencyChanges(duplicateChanges, fetchImpl, {
-    cache: context,
+    analysis: context,
     limits: { maxDependencyQueries: 25 },
   });
 
   assert.equal(fetchCalls, 1);
+  assert.equal(queryCount, 1);
   assert.equal(findings.length, 2);
   assert.equal(findings[0].cves[0].id, "GHSA-test");
-  assert.deepEqual(context.snapshotMetrics().externalCallsByCategory, { osv: 1 });
+  assert.deepEqual(context.snapshotMetrics().externalCallsByCategory, { "osv-direct-querybatch": 1 });
   assert.equal(context.snapshotMetrics().cacheMisses, 1);
-  assert.equal(context.snapshotMetrics().cacheHits, 1);
+  assert.equal(context.snapshotMetrics().cacheHits, 0);
 });
