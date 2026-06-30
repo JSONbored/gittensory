@@ -4953,7 +4953,11 @@ export function buildPrTextLint(input: PrTextLintInput): PrTextLintReport {
 // Exported so the deterministic no-linked-issue slop signal (#562) and the public PR-panel traceability check
 // share ONE definition of a "clear no-issue rationale" (maintenance / docs-only / "no issue: …" in the PR text).
 export function hasClearNoIssueRationale(pr: Pick<PullRequestRecord, "title" | "body">): boolean {
-  return /\b(?:no issue\s*(?:because\b|:)|no linked issue\s*(?:because\b|:)|no ticket\s*(?:because\b|:)|(?:maintenance|docs? only|typo|chore|cleanup)\b)/i.test([pr.title, pr.body ?? ""].join(" "));
+  // `docs?[\s-]+only` matches the space form ("docs only") AND the hyphenated "docs-only" / "doc-only"
+  // spelling this function's own docstring uses — the dominant GitHub/Conventional-Commits form. A bare
+  // `docs? only` missed the hyphen, so a docs-only PR with no linked issue was wrongly denied a clear
+  // no-issue rationale and hard-blocked under `linkedIssueGateMode === "block"`.
+  return /\b(?:no issue\s*(?:because\b|:)|no linked issue\s*(?:because\b|:)|no ticket\s*(?:because\b|:)|(?:maintenance|docs?[\s-]+only|typo|chore|cleanup)\b)/i.test([pr.title, pr.body ?? ""].join(" "));
 }
 
 function hasValidationNote(value: string): boolean {
