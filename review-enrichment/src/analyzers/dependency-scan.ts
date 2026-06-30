@@ -45,7 +45,10 @@ const NPM_RE = /^"([^"]+)"\s*:\s*"([^"]+)"/;
 const NPM_ALIAS_RE = /^npm:(@[^/]+\/[^@]+|[^@]+)@(.+)$/;
 const NPM_VERSION_PREFIX_RE = /^[\^~>=<\s]+/;
 const PYPI_RE = /^([A-Za-z0-9._-]+)\s*==\s*([0-9][^\s;]*)/;
-const GO_RE = /^([a-z0-9.\/-]+)\s+v([0-9][^\s]*)/;
+// Go module paths are case-sensitive and legitimately contain uppercase segments (github.com/BurntSushi/toml,
+// github.com/Masterminds/semver, any capitalized GitHub owner). The path class must accept A-Z or those deps
+// silently escape every dependency-fed scanner (CVE, license, provenance, native-build).
+const GO_RE = /^([A-Za-z0-9.\/-]+)\s+v([0-9][^\s]*)/;
 
 function parseLine(
   manifest: string,

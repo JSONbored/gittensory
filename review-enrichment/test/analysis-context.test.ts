@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAnalysisContext } from "../dist/analysis-context.js";
 import {
+  extractDependencyChanges,
   queryOsvBatch,
   scanDependencyChanges,
 } from "../dist/analyzers/dependency-scan.js";
@@ -94,6 +95,22 @@ test("createAnalysisContext parses common PR state once", () => {
     cappedWorkByCategory: {},
     analysisElapsedMs: 75,
   });
+});
+
+test("extractDependencyChanges parses Go module paths with uppercase segments", () => {
+  // Go module paths are case-sensitive and commonly carry uppercase (github.com/BurntSushi/toml, capitalized
+  // owners); the lowercase-only path class used to drop them, hiding those deps from the CVE/license/etc. scanners.
+  const changes = extractDependencyChanges([
+    {
+      path: "go.mod",
+      patch:
+        "@@ -1,2 +1,2 @@\n-\tgithub.com/BurntSushi/toml v1.3.2\n+\tgithub.com/BurntSushi/toml v1.4.0\n+\tgithub.com/spf13/cobra v1.8.0",
+    },
+  ]);
+  assert.deepEqual(changes, [
+    { ecosystem: "Go", package: "github.com/BurntSushi/toml", from: "1.3.2", to: "1.4.0" },
+    { ecosystem: "Go", package: "github.com/spf13/cobra", from: null, to: "1.8.0" },
+  ]);
 });
 
 test("request cache de-dupes in-flight external lookups and records safe metrics", async () => {
