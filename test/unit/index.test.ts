@@ -169,6 +169,12 @@ describe("worker entrypoint", () => {
     await recordGitHubRateLimitObservation(env, { repoFullName: "owner/repo", resource: "rest", path: "/x", statusCode: 200, limitValue: 5000, remaining: 120, resetAt: "2026-06-24T12:10:00.000Z", observedAt: "2026-06-24T12:00:00.000Z" });
     const acked: string[] = [];
     const retries: Array<{ delaySeconds?: number } | undefined> = [];
+    const requeued: Array<{ message: import("../../src/types").JobMessage; delaySeconds?: number }> = [];
+    env.JOBS = {
+      async send(message: import("../../src/types").JobMessage, options?: { delaySeconds?: number }) {
+        requeued.push({ message, ...(options?.delaySeconds === undefined ? {} : { delaySeconds: options.delaySeconds }) });
+      },
+    } as unknown as Queue;
     const batch = {
       messages: [
         {
@@ -182,8 +188,20 @@ describe("worker entrypoint", () => {
 
     await worker.queue(batch, env);
 
-    expect(acked).toEqual([]);
-    expect(retries).toEqual([{ delaySeconds: 615 }]);
+    expect(acked).toEqual(["background-regate"]);
+    expect(retries).toEqual([]);
+    expect(requeued).toEqual([
+      {
+        message: {
+          type: "agent-regate-pr",
+          deliveryId: "sweep:owner/repo#7",
+          repoFullName: "owner/repo",
+          prNumber: 7,
+          installationId: 123,
+        },
+        delaySeconds: 615,
+      },
+    ]);
     vi.useRealTimers();
   });
 

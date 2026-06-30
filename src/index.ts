@@ -52,7 +52,8 @@ export default {
                 resetAt,
               }),
             );
-            message.retry({ delaySeconds: delayUntil(resetAt) });
+            await env.JOBS.send(message.body, { delaySeconds: delayUntil(resetAt) });
+            message.ack();
             continue;
           }
         }
