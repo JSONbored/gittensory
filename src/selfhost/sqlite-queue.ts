@@ -14,10 +14,8 @@ import {
   deterministicJitterMs,
   FOREGROUND_QUEUE_PRIORITY_FLOOR,
   githubRateLimitAdmissionDelayMs,
-  githubRateLimitAdmissionKeyForJob,
-  githubRateLimitAdmissionRemainingFloor,
+  githubRateLimitAdmissionTargetForJob,
   githubRateLimitRetryDelayMs,
-  isGitHubBudgetBackgroundJob,
   jobCoalesceKey,
   jobPriority,
   queueBackgroundConcurrency,
@@ -26,6 +24,8 @@ import {
   queueStartupJitterMinJobs,
   queueStartupJitterMs,
   rateLimitRetryDelayWithJitter,
+  matchesGitHubRateLimitAdmissionTarget,
+  type GitHubRateLimitAdmissionTarget,
 } from "./queue-common";
 import type { JobMessage } from "../types";
 
@@ -161,14 +161,13 @@ export function createSqliteQueue(
   let activeBackground = 0;
   const activeJobIds = new Set<number>();
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let githubRateLimitCooldownUntil = 0;
 
   function enqueue(message: JobMessage, delaySeconds: number): void {
     const now = Date.now();
     const payload = JSON.stringify(message);
     const priority = jobPriority(payload);
     const key = jobCoalesceKey(payload);
-    const runAfter = nextRunAfter(now, delaySeconds * 1000, `${key ?? ""}:${payload}`);
+    const runAfter = now + delaySeconds * 1000;
     if (key) {
       const existing = driver.query(
         `SELECT id FROM ${TABLE} WHERE status='pending' AND job_key=? ORDER BY priority DESC, run_after DESC, id LIMIT 1`,
@@ -195,7 +194,6 @@ export function createSqliteQueue(
   }
 
   function claimNext(): JobRow | null {
-    if (Date.now() < githubRateLimitCooldownUntil) return null;
     const now = Date.now();
     const foreground = claimNextWhere(now, "priority>=?");
     if (foreground) return foreground;
@@ -226,13 +224,6 @@ export function createSqliteQueue(
     );
     /* v8 ignore next */ // the no-rows branch is a multi-writer guard; unreachable in the single-process model
     return changes ? row : null;
-  }
-
-  function nextRunAfter(now: number, delayMs: number, seed: string): number {
-    const requested = now + delayMs;
-    if (now >= githubRateLimitCooldownUntil) return requested;
-    const cooldownDelay = githubRateLimitCooldownUntil - now;
-    return Math.max(requested, now + rateLimitRetryDelayWithJitter(cooldownDelay, seed));
   }
 
   async function processOne(): Promise<boolean> {
@@ -362,16 +353,16 @@ export function createSqliteQueue(
         if (rateLimitDelayMs !== null) {
           const now = Date.now();
           const retryAfter = now + rateLimitRetryDelayWithJitter(rateLimitDelayMs, `${job.job_key ?? ""}:${job.id}:${job.payload}`);
-          githubRateLimitCooldownUntil = Math.max(githubRateLimitCooldownUntil, now + rateLimitDelayMs);
-          const deferred = deferPendingJobsForRateLimit(driver, rateLimitDelayMs, now);
-          if (deferred) {
+          const target = githubRateLimitAdmissionTargetForJob(message);
+          const deferred = target ? deferPendingJobsForRateLimit(driver, rateLimitDelayMs, now, target) : 0;
+          if (target !== null && deferred > 0) {
             recordQueueMetric(driver, "gittensory_jobs_rate_limit_deferred_total", deferred);
             console.warn(
               JSON.stringify({
                 level: "warn",
-                event: "selfhost_queue_rate_limit_cooldown",
+                event: "selfhost_queue_rate_limit_budget_deferred",
+                admission_key: target.admissionKey,
                 deferred,
-                cooldown_until: githubRateLimitCooldownUntil,
               }),
             );
           }
@@ -612,6 +603,7 @@ function deferPendingJobsForRateLimit(
   driver: SqliteDriver,
   delayMs: number,
   now: number,
+  blocked: GitHubRateLimitAdmissionTarget,
 ): number {
   const { rows } = driver.query(
     `SELECT id, payload, job_key FROM ${TABLE} WHERE status='pending' AND run_after<=?`,
@@ -619,10 +611,17 @@ function deferPendingJobsForRateLimit(
   );
   let changed = 0;
   for (const row of rows as Array<{ id: number; payload: string; job_key?: string | null }>) {
+    let candidate: GitHubRateLimitAdmissionTarget | null = null;
+    try {
+      candidate = githubRateLimitAdmissionTargetForJob(JSON.parse(row.payload) as JobMessage);
+    } catch {
+      candidate = null;
+    }
+    if (!matchesGitHubRateLimitAdmissionTarget(candidate, blocked)) continue;
     const runAfter = now + rateLimitRetryDelayWithJitter(delayMs, `${row.job_key ?? ""}:${row.id}:${row.payload}`);
     const { changes } = driver.query(
       `UPDATE ${TABLE} SET run_after=max(run_after, ?), last_error=coalesce(last_error, ?) WHERE id=? AND status='pending'`,
-      [runAfter, "github rate-limit cooldown", row.id],
+      [runAfter, "github rate-limit budget deferred", row.id],
     );
     changed += changes;
   }
@@ -632,29 +631,29 @@ function deferPendingJobsForRateLimit(
 function rateLimitAdmissionDelayMs(
   driver: SqliteDriver,
   message: JobMessage,
-): { kind: "background" | "webhook"; delayMs: number } | null {
-  const kind =
-    message.type === "github-webhook"
-      ? "webhook"
-      : isGitHubBudgetBackgroundJob(message)
-        ? "background"
-        : null;
-  if (kind === null) return null;
+): (GitHubRateLimitAdmissionTarget & { delayMs: number }) | null {
+  const target = githubRateLimitAdmissionTargetForJob(message);
+  if (target === null) return null;
   try {
-    const admissionKey = githubRateLimitAdmissionKeyForJob(message);
-    const remainingFloor = githubRateLimitAdmissionRemainingFloor(kind);
     const rows = driver.query(
-      `SELECT remaining, reset_at, observed_at FROM github_rate_limit_observations
-        WHERE resource='rest' AND remaining IS NOT NULL AND (
-          (? IS NOT NULL AND admission_key=?)
-          OR admission_key IS NULL
-        )
-        ORDER BY CASE WHEN remaining <= ? THEN 1 ELSE 0 END DESC, observed_at DESC
-        LIMIT 16`,
-      [admissionKey, admissionKey, remainingFloor],
-    ).rows as Array<{ remaining?: number | null; reset_at?: string | null; observed_at?: string | null }>;
-    const delayMs = githubRateLimitAdmissionDelayMs(kind, admissionKey, rows);
-    return delayMs === null ? null : { kind, delayMs };
+      `WITH exact_observation AS (
+        SELECT admission_key, remaining, reset_at, observed_at FROM github_rate_limit_observations
+          WHERE resource='rest' AND remaining IS NOT NULL AND ? IS NOT NULL AND admission_key=?
+          ORDER BY observed_at DESC
+          LIMIT 1
+      ), fallback_observation AS (
+        SELECT admission_key, remaining, reset_at, observed_at FROM github_rate_limit_observations
+          WHERE resource='rest' AND remaining IS NOT NULL AND admission_key IS NULL
+          ORDER BY observed_at DESC
+          LIMIT 1
+      )
+      SELECT admission_key, remaining, reset_at, observed_at FROM exact_observation
+      UNION ALL
+      SELECT admission_key, remaining, reset_at, observed_at FROM fallback_observation`,
+      [target.admissionKey, target.admissionKey],
+    ).rows as Array<{ admission_key?: string | null; remaining?: number | null; reset_at?: string | null; observed_at?: string | null }>;
+    const delayMs = githubRateLimitAdmissionDelayMs(target.kind, target.admissionKey, rows);
+    return delayMs === null ? null : { ...target, delayMs };
   } catch {
     return null;
   }
