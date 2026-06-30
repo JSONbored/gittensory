@@ -190,6 +190,26 @@ function reviewPenaltyBreakdown(preview: ScorePreviewResult): ScoreMultiplierBre
   };
 }
 
+// Sibling of reviewPenaltyBreakdown: upstream models review churn twice — reviewPenaltyMultiplier shrinks the
+// current preview while reviewCollateralMultiplier raises the open-PR collateral fraction
+// (OPEN_PR_COLLATERAL_PERCENT × multiplier) reserved on concurrent PRs after CHANGES_REQUESTED reviews.
+function reviewCollateralBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
+  const { reviewCollateralMultiplier, collateralFraction } = preview.gates;
+  const elevated = reviewCollateralMultiplier > 1.01;
+  const band: ScoreMultiplierBand = elevated ? "reduced" : "neutral";
+  return {
+    component: "reviewCollateralMultiplier",
+    band,
+    summary: elevated
+      ? `Open-PR review collateral is elevated (effective fraction ${roundBand(collateralFraction)}) because prior CHANGES_REQUESTED reviews on open PRs raised the collateral multiplier above baseline.`
+      : `Open-PR review collateral is at the baseline fraction (${roundBand(collateralFraction)}); no CHANGES_REQUESTED review churn is inflating concurrent-PR collateral.`,
+    lever: elevated
+      ? "Resolve outstanding change requests on open PRs before opening more concurrent work, or expect tighter collateral on the open-PR allowance."
+      : "Keep open PRs review-clean to avoid collateral inflation on concurrent work.",
+    leverageScore: elevated ? Math.min(55, Math.round((reviewCollateralMultiplier - 1) * 40 + 20)) : 6,
+  };
+}
+
 function labelMultiplierBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
   const { labelMultiplier } = preview.scoreEstimate;
   const band: ScoreMultiplierBand = labelMultiplier > 1 ? "full" : labelMultiplier < 1 ? "reduced" : "neutral";
@@ -269,6 +289,7 @@ export function explainScoreBreakdown(preview: ScorePreviewResult): ScoreBreakdo
     issueMultiplierBreakdown(preview),
     credibilityBreakdown(preview),
     reviewPenaltyBreakdown(preview),
+    reviewCollateralBreakdown(preview),
     openPrBreakdown(preview),
     openIssueBreakdown(preview),
     mergedHistoryBreakdown(preview),

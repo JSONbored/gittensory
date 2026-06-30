@@ -81,6 +81,7 @@ describe("explainScoreBreakdown", () => {
         "issueMultiplier",
         "credibilityMultiplier",
         "reviewPenaltyMultiplier",
+        "reviewCollateralMultiplier",
         "openPrMultiplier",
         "openIssueMultiplier",
         "mergedHistoryMultiplier",
@@ -212,6 +213,101 @@ describe("explainScoreBreakdown", () => {
     expect(breakdown.components.find((entry) => entry.component === "openPrMultiplier")).toMatchObject({ band: "full" });
     expect(breakdown.components.find((entry) => entry.component === "credibilityMultiplier")).toMatchObject({ band: "full" });
     expect(breakdown.components.find((entry) => entry.component === "reviewPenaltyMultiplier")).toMatchObject({ band: "full" });
+    expect(breakdown.components.find((entry) => entry.component === "reviewCollateralMultiplier")).toMatchObject({ band: "neutral" });
+  });
+
+  it("explains elevated open-PR review collateral as reduced strength and baseline as neutral", () => {
+    const baseline = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 80,
+          totalTokenScore: 100,
+          sourceLines: 50,
+          openPrCount: 1,
+          credibility: 1,
+          changesRequestedCount: 0,
+        },
+      }),
+    );
+    expect(baseline.components.find((entry) => entry.component === "reviewCollateralMultiplier")).toMatchObject({
+      band: "neutral",
+      summary: expect.stringMatching(/baseline fraction/i),
+    });
+
+    const elevated = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot: {
+          ...snapshot,
+          constants: { ...snapshot.constants, MAX_OPEN_PR_REVIEW_COLLATERAL_MULTIPLIER: 2.0 },
+        },
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 80,
+          totalTokenScore: 100,
+          sourceLines: 50,
+          openPrCount: 1,
+          credibility: 1,
+          changesRequestedCount: 4,
+        },
+      }),
+    );
+    const collateral = elevated.components.find((entry) => entry.component === "reviewCollateralMultiplier");
+    expect(collateral).toMatchObject({ band: "reduced" });
+    expect(collateral?.summary).toMatch(/elevated|CHANGES_REQUESTED/i);
+    expect(collateral?.summary).toMatch(/0\.32/);
+    expect(collateral?.lever).toMatch(/change requests/i);
+    expect(JSON.stringify(elevated)).not.toMatch(FORBIDDEN);
+
+    const capped = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot: {
+          ...snapshot,
+          constants: { ...snapshot.constants, MAX_OPEN_PR_REVIEW_COLLATERAL_MULTIPLIER: 2.0 },
+        },
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 80,
+          totalTokenScore: 100,
+          sourceLines: 50,
+          openPrCount: 1,
+          credibility: 1,
+          changesRequestedCount: 10,
+        },
+      }),
+    );
+    expect(capped.components.find((entry) => entry.component === "reviewCollateralMultiplier")).toMatchObject({
+      band: "reduced",
+      summary: expect.stringMatching(/0\.4/),
+    });
+  });
+
+  it("prioritizes open PR blocking above elevated review collateral", () => {
+    const preview = buildScorePreview({
+      repo,
+      snapshot: {
+        ...snapshot,
+        constants: { ...snapshot.constants, MAX_OPEN_PR_REVIEW_COLLATERAL_MULTIPLIER: 2.0 },
+      },
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 80,
+        totalTokenScore: 100,
+        sourceLines: 50,
+        openPrCount: 8,
+        existingContributorTokenScore: 50,
+        credibility: 1,
+        changesRequestedCount: 4,
+      },
+    });
+
+    const breakdown = explainScoreBreakdown(preview);
+    expect(breakdown.components.find((entry) => entry.component === "reviewCollateralMultiplier")).toMatchObject({ band: "reduced" });
+    expect(breakdown.highestLeverageLever.component).toBe("openPrMultiplier");
   });
 
   it("marks penalty label multipliers as reduced strength (#994)", () => {
