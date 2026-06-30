@@ -115,6 +115,11 @@ type BackfillLimits = {
 
 type BackfillMode = "light" | "full" | "resume";
 type BackfillSegmentName = "labels" | "open_issues" | "open_pull_requests" | "recent_merged_pull_requests";
+type GitHubConditionalValidators = { etag?: string | null | undefined; lastModified?: string | null | undefined };
+type GitHubJsonResponse<T> = { data: T; link: string | null; etag: string | null; lastModified: string | null };
+type GitHubJsonNotModifiedResponse = { notModified: true; link: string | null; etag: string | null; lastModified: string | null };
+type GitHubJsonConditionalResponse<T> = GitHubJsonResponse<T> | GitHubJsonNotModifiedResponse;
+type GitHubSegmentConditionalRequest = { previous: RepoSyncSegmentRecord; validators: GitHubConditionalValidators };
 
 export type BackfillRegisteredReposResult = {
   ok: true;
@@ -479,7 +484,7 @@ export async function backfillRepositorySegment(
       { delaySeconds },
     );
   }
-  if (options.segment === "open_pull_requests" && result.status === "complete") {
+  if (options.segment === "open_pull_requests" && (result.status === "complete" || result.status === "not_modified")) {
     await env.JOBS.send({ type: "backfill-pr-details", requestedBy: "api", repoFullName: repo.fullName, mode: "resume", cursor: 0 }, { delaySeconds: 10 });
   }
   await refreshRepoSyncStateFromSegments(env, repo, sourceKind);
@@ -1243,6 +1248,25 @@ async function backfillRecentMergedSegment(
   );
 }
 
+function isNotModifiedResponse<T>(result: GitHubJsonConditionalResponse<T>): result is GitHubJsonNotModifiedResponse {
+  return "notModified" in result && result.notModified;
+}
+
+function conditionalRequestForSegment(
+  previous: RepoSyncSegmentRecord | null,
+  expectedCount: number | undefined,
+  options: { allowEtag: boolean },
+): GitHubSegmentConditionalRequest | undefined {
+  if (!previous) return undefined;
+  if (!isFreshSegmentStatus(previous.status)) return undefined;
+  if (previous.lastCursor !== "1") return undefined;
+  if (previous.nextCursor) return undefined;
+  if (expectedCount !== undefined && previous.expectedCount !== expectedCount) return undefined;
+  const etag = options.allowEtag && previous.etag !== CURRENT_OPEN_SCAN_MARKER ? previous.etag : undefined;
+  const lastModified = previous.lastModified;
+  return etag || lastModified ? { previous, validators: { etag, lastModified } } : undefined;
+}
+
 async function fetchPagedSegment<T>(
   env: Env,
   repo: RepositoryRecord,
@@ -1286,13 +1310,38 @@ async function fetchPagedSegment<T>(
   let pageCount = 0;
   let hasMore = false;
   let rateLimitResetAt: string | undefined;
+  let etag: string | null | undefined;
+  let lastModified: string | null | undefined;
   const warnings: string[] = [];
   let status: RepoSyncSegmentRecord["status"] = "complete";
+  const conditionalRequest =
+    startPage === 1
+      ? conditionalRequestForSegment(previous, expectedCount, { allowEtag: !requiresCurrentOpenScan })
+      : undefined;
   try {
     for (let page = startPage; page < startPage + SEGMENT_PAGE_BUDGET[mode]; page += 1) {
       const separator = path.includes("?") ? "&" : "?";
       const pagePath = `${path}${separator}per_page=100&page=${page}`;
-      const result = await githubJsonWithHeaders<T[]>(env, repo.fullName, pagePath, token);
+      let result: GitHubJsonResponse<T[]>;
+      if (conditionalRequest && page === 1) {
+        const conditionalResult = await githubJsonWithHeaders<T[]>(env, repo.fullName, pagePath, token, { validators: conditionalRequest.validators, allowNotModified: true });
+        if (isNotModifiedResponse(conditionalResult)) {
+          const previousSegment = conditionalRequest.previous;
+          status = "not_modified";
+          lastCursor = "1";
+          pageCount = previousSegment.pageCount;
+          etag = requiresCurrentOpenScan ? CURRENT_OPEN_SCAN_MARKER : conditionalResult.etag ?? previousSegment.etag;
+          lastModified = conditionalResult.lastModified ?? previousSegment.lastModified;
+          hasMore = false;
+          nextCursor = undefined;
+          break;
+        }
+        result = conditionalResult;
+      } else {
+        result = await githubJsonWithHeaders<T[]>(env, repo.fullName, pagePath, token);
+      }
+      etag = result.etag ?? etag;
+      lastModified = result.lastModified ?? lastModified;
       lastCursor = String(page);
       pageCount += 1;
       fetchedThisRun += await persistPage(result.data, startedAt);
@@ -1350,7 +1399,8 @@ async function fetchPagedSegment<T>(
     pageCount,
     lastCursor,
     nextCursor,
-    etag: requiresCurrentOpenScan ? CURRENT_OPEN_SCAN_MARKER : undefined,
+    etag: requiresCurrentOpenScan ? CURRENT_OPEN_SCAN_MARKER : etag,
+    lastModified,
     warnings,
     errorSummary: status === "error" || status === "waiting_rate_limit" || status === "partial" ? warnings.at(-1) : undefined,
     rateLimitResetAt,
@@ -1508,6 +1558,10 @@ function isTerminalSegmentStatus(status: RepoSyncSegmentRecord["status"]): boole
   return status === "complete" || status === "not_modified" || status === "sampled";
 }
 
+function isFreshSegmentStatus(status: RepoSyncSegmentRecord["status"]): boolean {
+  return status === "complete" || status === "not_modified";
+}
+
 async function refreshRepoSyncStateFromSegments(env: Env, repo: RepositoryRecord, sourceKind: RepoSyncSegmentRecord["sourceKind"]): Promise<void> {
   const [previous, totalsSnapshot, metadata, labels, openIssues, openPullRequests, recentMerged, files, reviews, checks] = await Promise.all([
     getRepoSyncState(env, repo.fullName),
@@ -1543,10 +1597,10 @@ async function refreshRepoSyncStateFromSegments(env: Env, repo: RepositoryRecord
     openIssuesCount: openIssues?.fetchedCount ?? previous?.openIssuesCount ?? totals?.openIssuesTotal ?? 0,
     openPullRequestsCount: openPullRequests?.fetchedCount ?? previous?.openPullRequestsCount ?? totals?.openPullRequestsTotal ?? 0,
     recentMergedPullRequestsCount: recentMerged?.fetchedCount ?? previous?.recentMergedPullRequestsCount ?? 0,
-    labelsSyncedAt: labels?.status === "complete" ? labels.completedAt : previous?.labelsSyncedAt,
-    issuesSyncedAt: openIssues?.status === "complete" ? openIssues.completedAt : previous?.issuesSyncedAt,
-    pullRequestsSyncedAt: openPullRequests?.status === "complete" ? openPullRequests.completedAt : previous?.pullRequestsSyncedAt,
-    mergedPullRequestsSyncedAt: recentMerged?.status === "complete" || recentMerged?.status === "sampled" ? recentMerged.completedAt : previous?.mergedPullRequestsSyncedAt,
+    labelsSyncedAt: labels && isFreshSegmentStatus(labels.status) ? labels.completedAt : previous?.labelsSyncedAt,
+    issuesSyncedAt: openIssues && isFreshSegmentStatus(openIssues.status) ? openIssues.completedAt : previous?.issuesSyncedAt,
+    pullRequestsSyncedAt: openPullRequests && isFreshSegmentStatus(openPullRequests.status) ? openPullRequests.completedAt : previous?.pullRequestsSyncedAt,
+    mergedPullRequestsSyncedAt: recentMerged && (isFreshSegmentStatus(recentMerged.status) || recentMerged.status === "sampled") ? recentMerged.completedAt : previous?.mergedPullRequestsSyncedAt,
     lastStartedAt: previous?.lastStartedAt,
     lastCompletedAt: completedAt,
     errorSummary: warnings.at(-1),
@@ -2737,19 +2791,35 @@ async function githubJsonWithHeaders<T>(
   repoFullName: string,
   path: string,
   token?: string,
-): Promise<{ data: T; link: string | null; etag: string | null; lastModified: string | null }> {
+): Promise<GitHubJsonResponse<T>>;
+async function githubJsonWithHeaders<T>(
+  env: Env,
+  repoFullName: string,
+  path: string,
+  token: string | undefined,
+  options: { validators?: GitHubConditionalValidators; allowNotModified: true },
+): Promise<GitHubJsonConditionalResponse<T>>;
+async function githubJsonWithHeaders<T>(
+  env: Env,
+  repoFullName: string,
+  path: string,
+  token?: string,
+  options?: { validators?: GitHubConditionalValidators; allowNotModified?: boolean },
+): Promise<GitHubJsonConditionalResponse<T>> {
   const { owner, name } = repoParts(repoFullName);
   const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}${path}`;
-  let response = await timeoutFetch(url, { headers: githubRestHeaders(token) });
+  let response = await timeoutFetch(url, { headers: githubRestHeaders(token, options?.validators) });
   if (!isGitHubResponseCacheReplay(response)) {
     await recordGitHubResponse(env, repoFullName, path, response, "rest");
   }
+  if (response.status === 304 && options?.allowNotModified) return notModifiedResponse(response);
   if (response.status === 404 && token && token === env.GITHUB_PUBLIC_TOKEN) {
-    response = await timeoutFetch(url, { headers: githubRestHeaders() });
+    response = await timeoutFetch(url, { headers: githubRestHeaders(undefined, options?.validators) });
     // Do not persist unauthenticated fallback rate-limit headers into the shared REST backoff state.
     // GitHub's unauthenticated REST bucket is capped below LOW_REST_RATE_LIMIT_REMAINING, so recording
     // successful fallback responses can incorrectly stall later token-backed segment jobs.
   }
+  if (response.status === 304 && options?.allowNotModified) return notModifiedResponse(response);
   if (!response.ok) {
     const body = await response.text();
     throw new GitHubApiError(
@@ -2769,11 +2839,22 @@ async function githubJsonWithHeaders<T>(
   };
 }
 
-function githubRestHeaders(token?: string): HeadersInit {
+function notModifiedResponse(response: Response): GitHubJsonNotModifiedResponse {
+  return {
+    notModified: true,
+    link: response.headers.get("link"),
+    etag: response.headers.get("etag"),
+    lastModified: response.headers.get("last-modified"),
+  };
+}
+
+function githubRestHeaders(token?: string, validators?: GitHubConditionalValidators): HeadersInit {
   return {
     accept: "application/vnd.github+json",
     "user-agent": "gittensory/0.1",
     "x-github-api-version": "2022-11-28",
+    ...(validators?.etag ? { "if-none-match": validators.etag } : {}),
+    ...(validators?.lastModified ? { "if-modified-since": validators.lastModified } : {}),
     ...(token ? { authorization: `Bearer ${token}` } : {}),
   };
 }
