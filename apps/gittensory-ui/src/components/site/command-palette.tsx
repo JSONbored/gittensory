@@ -36,6 +36,7 @@ const DEFAULT_ITEMS: PaletteItem[] = [
   { label: "Self-host reviews", to: "/docs/maintainer-self-hosting", group: "Docs" },
   { label: "Self-host quickstart", to: "/docs/self-hosting-quickstart", group: "Docs" },
   { label: "Self-host configuration", to: "/docs/self-hosting-configuration", group: "Docs" },
+  { label: "Self-host capacity", to: "/docs/self-hosting-capacity", group: "Docs" },
   { label: "Self-host GitHub App and Orb", to: "/docs/self-hosting-github-app", group: "Docs" },
   { label: "Self-host AI providers", to: "/docs/self-hosting-ai-providers", group: "Docs" },
   { label: "Self-host REES", to: "/docs/self-hosting-rees", group: "Docs" },

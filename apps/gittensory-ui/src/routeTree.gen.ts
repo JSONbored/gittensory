@@ -35,6 +35,7 @@ import { Route as DocsSelfHostingQuickstartRouteImport } from './routes/docs.sel
 import { Route as DocsSelfHostingOperationsRouteImport } from './routes/docs.self-hosting-operations'
 import { Route as DocsSelfHostingGithubAppRouteImport } from './routes/docs.self-hosting-github-app'
 import { Route as DocsSelfHostingConfigurationRouteImport } from './routes/docs.self-hosting-configuration'
+import { Route as DocsSelfHostingCapacityRouteImport } from './routes/docs.self-hosting-capacity'
 import { Route as DocsSelfHostingBackupScalingRouteImport } from './routes/docs.self-hosting-backup-scaling'
 import { Route as DocsSelfHostingAiProvidersRouteImport } from './routes/docs.self-hosting-ai-providers'
 import { Route as DocsScoreabilityRouteImport } from './routes/docs.scoreability'
@@ -202,6 +203,11 @@ const DocsSelfHostingConfigurationRoute =
     path: '/self-hosting-configuration',
     getParentRoute: () => DocsRoute,
   } as any)
+const DocsSelfHostingCapacityRoute = DocsSelfHostingCapacityRouteImport.update({
+  id: '/self-hosting-capacity',
+  path: '/self-hosting-capacity',
+  getParentRoute: () => DocsRoute,
+} as any)
 const DocsSelfHostingBackupScalingRoute =
   DocsSelfHostingBackupScalingRouteImport.update({
     id: '/self-hosting-backup-scaling',
@@ -398,6 +404,7 @@ export interface FileRoutesByFullPath {
   '/docs/scoreability': typeof DocsScoreabilityRoute
   '/docs/self-hosting-ai-providers': typeof DocsSelfHostingAiProvidersRoute
   '/docs/self-hosting-backup-scaling': typeof DocsSelfHostingBackupScalingRoute
+  '/docs/self-hosting-capacity': typeof DocsSelfHostingCapacityRoute
   '/docs/self-hosting-configuration': typeof DocsSelfHostingConfigurationRoute
   '/docs/self-hosting-github-app': typeof DocsSelfHostingGithubAppRoute
   '/docs/self-hosting-operations': typeof DocsSelfHostingOperationsRoute
@@ -453,6 +460,7 @@ export interface FileRoutesByTo {
   '/docs/scoreability': typeof DocsScoreabilityRoute
   '/docs/self-hosting-ai-providers': typeof DocsSelfHostingAiProvidersRoute
   '/docs/self-hosting-backup-scaling': typeof DocsSelfHostingBackupScalingRoute
+  '/docs/self-hosting-capacity': typeof DocsSelfHostingCapacityRoute
   '/docs/self-hosting-configuration': typeof DocsSelfHostingConfigurationRoute
   '/docs/self-hosting-github-app': typeof DocsSelfHostingGithubAppRoute
   '/docs/self-hosting-operations': typeof DocsSelfHostingOperationsRoute
@@ -512,6 +520,7 @@ export interface FileRoutesById {
   '/docs/scoreability': typeof DocsScoreabilityRoute
   '/docs/self-hosting-ai-providers': typeof DocsSelfHostingAiProvidersRoute
   '/docs/self-hosting-backup-scaling': typeof DocsSelfHostingBackupScalingRoute
+  '/docs/self-hosting-capacity': typeof DocsSelfHostingCapacityRoute
   '/docs/self-hosting-configuration': typeof DocsSelfHostingConfigurationRoute
   '/docs/self-hosting-github-app': typeof DocsSelfHostingGithubAppRoute
   '/docs/self-hosting-operations': typeof DocsSelfHostingOperationsRoute
@@ -572,6 +581,7 @@ export interface FileRouteTypes {
     | '/docs/scoreability'
     | '/docs/self-hosting-ai-providers'
     | '/docs/self-hosting-backup-scaling'
+    | '/docs/self-hosting-capacity'
     | '/docs/self-hosting-configuration'
     | '/docs/self-hosting-github-app'
     | '/docs/self-hosting-operations'
@@ -627,6 +637,7 @@ export interface FileRouteTypes {
     | '/docs/scoreability'
     | '/docs/self-hosting-ai-providers'
     | '/docs/self-hosting-backup-scaling'
+    | '/docs/self-hosting-capacity'
     | '/docs/self-hosting-configuration'
     | '/docs/self-hosting-github-app'
     | '/docs/self-hosting-operations'
@@ -685,6 +696,7 @@ export interface FileRouteTypes {
     | '/docs/scoreability'
     | '/docs/self-hosting-ai-providers'
     | '/docs/self-hosting-backup-scaling'
+    | '/docs/self-hosting-capacity'
     | '/docs/self-hosting-configuration'
     | '/docs/self-hosting-github-app'
     | '/docs/self-hosting-operations'
@@ -898,6 +910,13 @@ declare module '@tanstack/react-router' {
       path: '/self-hosting-configuration'
       fullPath: '/docs/self-hosting-configuration'
       preLoaderRoute: typeof DocsSelfHostingConfigurationRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/docs/self-hosting-capacity': {
+      id: '/docs/self-hosting-capacity'
+      path: '/self-hosting-capacity'
+      fullPath: '/docs/self-hosting-capacity'
+      preLoaderRoute: typeof DocsSelfHostingCapacityRouteImport
       parentRoute: typeof DocsRoute
     }
     '/docs/self-hosting-backup-scaling': {
@@ -1177,6 +1196,7 @@ interface DocsRouteChildren {
   DocsScoreabilityRoute: typeof DocsScoreabilityRoute
   DocsSelfHostingAiProvidersRoute: typeof DocsSelfHostingAiProvidersRoute
   DocsSelfHostingBackupScalingRoute: typeof DocsSelfHostingBackupScalingRoute
+  DocsSelfHostingCapacityRoute: typeof DocsSelfHostingCapacityRoute
   DocsSelfHostingConfigurationRoute: typeof DocsSelfHostingConfigurationRoute
   DocsSelfHostingGithubAppRoute: typeof DocsSelfHostingGithubAppRoute
   DocsSelfHostingOperationsRoute: typeof DocsSelfHostingOperationsRoute
@@ -1211,6 +1231,7 @@ const DocsRouteChildren: DocsRouteChildren = {
   DocsScoreabilityRoute: DocsScoreabilityRoute,
   DocsSelfHostingAiProvidersRoute: DocsSelfHostingAiProvidersRoute,
   DocsSelfHostingBackupScalingRoute: DocsSelfHostingBackupScalingRoute,
+  DocsSelfHostingCapacityRoute: DocsSelfHostingCapacityRoute,
   DocsSelfHostingConfigurationRoute: DocsSelfHostingConfigurationRoute,
   DocsSelfHostingGithubAppRoute: DocsSelfHostingGithubAppRoute,
   DocsSelfHostingOperationsRoute: DocsSelfHostingOperationsRoute,

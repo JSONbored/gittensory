@@ -117,6 +117,17 @@ AI_ON_MERGE=either`}
         API provider or local OpenAI-compatible endpoint when isolation is not clear.
       </Callout>
 
+      <h2>Local compose builds</h2>
+      <p>
+        Published GHCR self-host images include the Claude Code and Codex CLIs. Local{" "}
+        <code>docker compose up --build</code> now keeps the base image lean unless you opt in.
+      </p>
+      <CodeBlock filename=".env" code={`INSTALL_AI_CLIS=true`} />
+      <p>
+        Set that only when you plan to use <code>AI_PROVIDER=claude-code</code> or{" "}
+        <code>AI_PROVIDER=codex</code>. API-backed providers do not need the extra binaries.
+      </p>
+
       <h2>Related context</h2>
       <p>
         AI providers produce the review. <Link to="/docs/self-hosting-rees">REES</Link> and{" "}

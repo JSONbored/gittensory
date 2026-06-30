@@ -87,6 +87,12 @@ curl http://localhost:8787/ready`}
           },
         ]}
       />
+      <p>
+        This default boot path keeps observability, Qdrant, Ollama, runners, and backup helpers out
+        of the first startup. Read{" "}
+        <Link to="/docs/self-hosting-capacity">Capacity and resources</Link> before enabling heavier
+        profiles on the same host.
+      </p>
 
       <h2>4. Install or connect the GitHub App</h2>
       <p>

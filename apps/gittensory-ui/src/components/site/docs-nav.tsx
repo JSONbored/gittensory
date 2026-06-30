@@ -33,6 +33,7 @@ export const docsNav: DocsGroup[] = [
       { to: "/docs/maintainer-self-hosting", label: "Overview" },
       { to: "/docs/self-hosting-quickstart", label: "Quickstart" },
       { to: "/docs/self-hosting-configuration", label: "Configuration" },
+      { to: "/docs/self-hosting-capacity", label: "Capacity & resources" },
       { to: "/docs/self-hosting-github-app", label: "GitHub App & Orb" },
       { to: "/docs/self-hosting-ai-providers", label: "AI providers" },
       { to: "/docs/self-hosting-rees", label: "REES enrichment" },

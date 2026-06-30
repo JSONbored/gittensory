@@ -39,6 +39,12 @@ const SECTION_LINKS = [
     to: "/docs/self-hosting-configuration",
   },
   {
+    title: "Capacity and resources",
+    description:
+      "Choose profiles with realistic startup, memory, disk, image-size, and retention tradeoffs.",
+    to: "/docs/self-hosting-capacity",
+  },
+  {
     title: "GitHub App and Orb",
     description:
       "Choose a direct GitHub App or brokered Orb enrollment and set the right permissions.",
@@ -149,6 +155,10 @@ function MaintainerSelfHosting() {
         <li>
           Read <Link to="/docs/self-hosting-configuration">Configuration</Link> before enabling repo
           review features.
+        </li>
+        <li>
+          Check <Link to="/docs/self-hosting-capacity">Capacity and resources</Link> before enabling
+          observability, local models, or runners on a small host.
         </li>
         <li>
           Set up <Link to="/docs/self-hosting-github-app">GitHub App and Orb</Link> so webhooks and
