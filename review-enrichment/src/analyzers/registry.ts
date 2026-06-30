@@ -2,6 +2,7 @@ import { scanActionPins } from "./actions-pin.js";
 import { scanAssetWeight } from "./asset-weight.js";
 import { scanCodeowners } from "./codeowners.js";
 import { scanCommitSignature } from "./commit-signature.js";
+import { scanCallerImpact } from "./caller-impact.js";
 import { dependencyAnalyzer } from "./dependency/descriptor.js";
 import { scanDocCommentDrift } from "./doc-comment-drift.js";
 import { scanEol } from "./eol-check.js";
@@ -215,6 +216,51 @@ export const ANALYZER_DESCRIPTORS = [
     },
     run: (req, { signal, analysis, diagnostics }) =>
       scanCodeowners(req, fetch, { signal, analysis, diagnostics }),
+  }),
+  descriptor({
+    name: "callerImpact",
+    title: "Cross-file caller impact + dead exports",
+    category: "quality",
+    cost: "github-light",
+    defaultEnabled: true,
+    requires: ["files", "github-token", "head-sha"],
+    limits: { maxFindings: 18, maxSearchResults: 30 },
+    docs: {
+      summary:
+        "Detects export-surface changes with live callsites and new exports with no callsites.",
+      looksAt:
+        "Top-level exported symbols in the PR diff plus a bounded symbol search in unchanged files at headSha.",
+      reports:
+        "Changed/removed/renamed exports with unchanged file callsites, and dead exports with zero external callsites.",
+      network:
+        "Calls GitHub code search and per-file contents APIs. Requires headSha plus GitHub token forwarding for private repos.",
+      notes:
+        "The analyzer is additive and fail-safe: network failures yield fewer findings, never errors in brief assembly.",
+    },
+    render: (findings, { safeCodeSpan }) => {
+      if (!findings.length) return [];
+      const lines: string[] = [];
+      lines.push("### Export caller-impact and dead-symbol candidates");
+      for (const item of findings) {
+        const fileLine = safeCodeSpan(`${item.file}:${item.line}`);
+        if (item.kind === "dead") {
+          lines.push(
+            `- ${fileLine} — added export \`${safeCodeSpan(item.symbol)}\` currently has no callsites outside changed files`,
+          );
+          continue;
+        }
+
+        const title =
+          item.kind === "renamed"
+            ? `renamed ${safeCodeSpan(item.previousSymbol ?? item.symbol)} -> ${safeCodeSpan(item.symbol)}`
+            : `${item.kind} export \`${safeCodeSpan(item.symbol)}\``;
+        const callers = item.callers.map((path) => safeCodeSpan(path)).join(", ");
+        lines.push(`- ${fileLine} — ${title} still called in: ${callers}`);
+      }
+      return lines;
+    },
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanCallerImpact(req, fetch, { signal, analysis, diagnostics }),
   }),
   descriptor({
     name: "secretLog",

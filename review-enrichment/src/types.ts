@@ -176,6 +176,17 @@ export interface AssetWeightFinding {
   status: "added" | "grown";
 }
 
+/** A changed/removed/renamed exported symbol with live callers in unchanged files, and newly-added dead exports. */
+export interface CallerImpactFinding {
+  symbol: string;
+  file: string;
+  line: number;
+  kind: "changed" | "removed" | "renamed" | "dead";
+  previousSymbol?: string;
+  /** Paths to outside-PR caller files (best-effort, bounded). */
+  callers: string[];
+}
+
 /** A newly-added dependency whose name is a near-miss of a popular package (typosquat) or an unscoped name that
  *  is not published on the public registry and is therefore publicly claimable (dependency-confusion). Reports
  *  the package name + the reason only — never the manifest contents. (#1501) */
@@ -285,6 +296,7 @@ export interface BriefFindings {
   codeowners?: CodeownersFinding[];
   secretLog?: SecretLogFinding[];
   assetWeight?: AssetWeightFinding[];
+  callerImpact?: CallerImpactFinding[];
   typosquat?: TyposquatFinding[];
   commitSignature?: CommitSignatureFinding[];
   iacMisconfig?: IacMisconfigFinding[];

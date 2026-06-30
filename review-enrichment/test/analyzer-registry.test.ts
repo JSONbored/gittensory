@@ -21,6 +21,7 @@ const EXPECTED_ANALYZERS = [
   "redos",
   "provenance",
   "codeowners",
+  "callerImpact",
   "secretLog",
   "assetWeight",
   "typosquat",

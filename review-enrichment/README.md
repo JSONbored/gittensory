@@ -36,6 +36,7 @@ inside the operator's trust boundary. The engine prefers a short-lived installat
 | `redos`         | Regex literals with catastrophic-backtracking structure.                     | Pure local.                                                  |
 | `provenance`    | Missing package attestations plus binary/vendored/minified additions.        | Calls npm/PyPI for attestations; path checks are local.      |
 | `codeowners`    | Changed files owned by CODEOWNERS entries that do not include the PR author. | Calls GitHub API; needs author and token for private repos.  |
+| `callerImpact`  | Export-surface changes with live cross-file callsites or dead new exports.   | Calls GitHub code search and contents APIs; needs token/private-read access. |
 | `secretLog`     | Secrets, PII, or request/session objects written to logs/stdout.             | Pure local.                                                  |
 | `assetWeight`   | Heavy binary assets added or grown.                                          | Calls GitHub API; needs headSha, baseSha for growth, and token for private repos. |
 | `typosquat`     | New dependency names that look squatted or publicly claimable.               | Uses bundled popular-package lists plus npm/PyPI lookups.    |

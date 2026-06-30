@@ -370,6 +370,33 @@
       }
     },
     {
+      "name": "callerImpact",
+      "title": "Cross-file caller impact + dead exports",
+      "category": "quality",
+      "cost": "github-light",
+      "defaultEnabled": true,
+      "profiles": [
+        "balanced",
+        "deep"
+      ],
+      "requires": [
+        "files",
+        "github-token",
+        "head-sha"
+      ],
+      "limits": {
+        "maxFindings": 18,
+        "maxSearchResults": 30
+      },
+      "docs": {
+        "summary": "Detects export-surface changes with live callsites and new exports with no callsites.",
+        "looksAt": "Top-level exported symbols in the PR diff plus a bounded symbol search in unchanged files at headSha.",
+        "reports": "Changed/removed/renamed exports with unchanged file callsites, and dead exports with zero external callsites.",
+        "network": "Calls GitHub code search and per-file contents APIs. Requires headSha plus GitHub token forwarding for private repos.",
+        "notes": "The analyzer is additive and fail-safe: network failures yield fewer findings, never errors in brief assembly."
+      }
+    },
+    {
       "name": "secretLog",
       "title": "Secrets or PII in logs",
       "category": "security",

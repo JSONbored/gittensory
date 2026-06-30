@@ -178,6 +178,8 @@ export function renderBrief(
     }
   }
 
+  lines.push(...renderDescriptorSection("callerImpact", findings.callerImpact));
+
   const secretLogs = findings.secretLog ?? [];
   if (secretLogs.length) {
     lines.push(
