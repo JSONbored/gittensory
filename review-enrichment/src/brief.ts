@@ -107,6 +107,9 @@ function captureDegradation(
     partialReason: input.diagnostics.partialReason,
     phase: input.diagnostics.phase,
     subcall: input.diagnostics.subcall,
+    endpointCategory: input.diagnostics.endpointCategory,
+    externalFailureReason: input.diagnostics.externalFailureReason,
+    externalElapsedMs: input.diagnostics.externalElapsedMs,
     fileLookupCount: input.diagnostics.fileLookupCount,
     commitLookupCount: input.diagnostics.commitLookupCount,
     prLookupCount: input.diagnostics.prLookupCount,
@@ -173,7 +176,7 @@ export async function buildBrief(
           analysis,
         );
         findings[name] = result as never;
-        if (resultIsPartial(result)) {
+        if (resultIsPartial(result) || diagnostics.partialStatus === "partial") {
           analyzerStatus[name] = "degraded";
           partial = true;
           diagnostics.partialStatus = "partial";

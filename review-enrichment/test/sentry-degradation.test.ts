@@ -134,6 +134,9 @@ test("captureAnalyzerDegradation attaches safe attribution context for history f
     partialReason: "history_budget_exhausted",
     phase: "similar_past_prs",
     subcall: "commit_pulls",
+    endpointCategory: "github-commit-pulls",
+    externalFailureReason: "timeout",
+    externalElapsedMs: 1200,
     fileLookupCount: 5,
     commitLookupCount: 13,
     prLookupCount: 12,
@@ -160,6 +163,8 @@ test("captureAnalyzerDegradation attaches safe attribution context for history f
   assert.equal(sentry.tags.analyzerStatus, "degraded");
   assert.equal(sentry.tags.partialStatus, "partial");
   assert.equal(sentry.tags.phase, "similar_past_prs");
+  assert.equal(sentry.tags.endpointCategory, "github-commit-pulls");
+  assert.equal(sentry.tags.externalFailureReason, "timeout");
   assert.equal(sentry.tags.githubEndpointCategory, "commit_pulls");
   assert.equal(sentry.tags.cacheHits, "4");
   assert.equal(sentry.tags.cacheMisses, "9");
@@ -179,6 +184,9 @@ test("captureAnalyzerDegradation attaches safe attribution context for history f
     partialReason: "history_budget_exhausted",
     phase: "similar_past_prs",
     subcall: "commit_pulls",
+    endpointCategory: "github-commit-pulls",
+    externalFailureReason: "timeout",
+    externalElapsedMs: 1200,
     fileLookupCount: 5,
     commitLookupCount: 13,
     prLookupCount: 12,

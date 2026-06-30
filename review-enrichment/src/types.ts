@@ -311,6 +311,9 @@ export interface AnalyzerDiagnostics {
   partialStatus?: "complete" | "partial";
   partialReason?: string;
   githubEndpointCategory?: string;
+  endpointCategory?: string;
+  externalFailureReason?: string;
+  externalElapsedMs?: number;
   fileLookupCount?: number;
   commitLookupCount?: number;
   prLookupCount?: number;

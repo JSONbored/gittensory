@@ -115,6 +115,9 @@ export interface AnalyzerDegradationContext {
   partialReason?: string;
   phase?: string;
   subcall?: string;
+  endpointCategory?: string;
+  externalFailureReason?: string;
+  externalElapsedMs?: number;
   fileLookupCount?: number;
   commitLookupCount?: number;
   prLookupCount?: number;
@@ -148,6 +151,9 @@ export function captureAnalyzerDegradation(error: unknown, context: AnalyzerDegr
     partialReason: context.partialReason,
     phase: context.phase,
     subcall: context.subcall,
+    endpointCategory: context.endpointCategory,
+    externalFailureReason: context.externalFailureReason,
+    externalElapsedMs: context.externalElapsedMs,
     fileLookupCount: context.fileLookupCount,
     commitLookupCount: context.commitLookupCount,
     prLookupCount: context.prLookupCount,
@@ -183,6 +189,8 @@ export function captureAnalyzerDegradation(error: unknown, context: AnalyzerDegr
     const analyzerStatusTag = sentryTagValue(context.analyzerStatus);
     const partialStatusTag = sentryTagValue(context.partialStatus);
     const phaseTag = sentryTagValue(context.phase);
+    const endpointCategoryTag = sentryTagValue(context.endpointCategory);
+    const externalFailureReasonTag = sentryTagValue(context.externalFailureReason);
     const endpointTag = sentryTagValue(context.githubEndpointCategory);
     const requestIdTag = sentryTagValue(context.requestId);
     const traceIdTag = sentryTagValue(context.traceId);
@@ -191,6 +199,8 @@ export function captureAnalyzerDegradation(error: unknown, context: AnalyzerDegr
     if (analyzerStatusTag) scope.setTag("analyzerStatus", analyzerStatusTag);
     if (partialStatusTag) scope.setTag("partialStatus", partialStatusTag);
     if (phaseTag) scope.setTag("phase", phaseTag);
+    if (endpointCategoryTag) scope.setTag("endpointCategory", endpointCategoryTag);
+    if (externalFailureReasonTag) scope.setTag("externalFailureReason", externalFailureReasonTag);
     if (endpointTag) scope.setTag("githubEndpointCategory", endpointTag);
     if (requestIdTag) scope.setTag("requestId", requestIdTag);
     if (traceIdTag) scope.setTag("traceId", traceIdTag);

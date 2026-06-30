@@ -56,7 +56,8 @@ export const ANALYZER_DESCRIPTORS = [
       notes:
         "Useful when a PR does not touch a top-level manifest but changes resolved dependency pins.",
     },
-    run: (req, { signal }) => scanLockfileDrift(req, fetch, { signal }),
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanLockfileDrift(req, fetch, { signal, analysis, diagnostics }),
   }),
   secretAnalyzer,
   descriptor({
@@ -75,7 +76,8 @@ export const ANALYZER_DESCRIPTORS = [
       network: "Calls deps.dev. No GitHub token required.",
       notes: "Permissive and otherwise-known licenses are intentionally silent.",
     },
-    run: (req) => scanLicenses(req),
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanLicenses(req, fetch, { signal, analysis, diagnostics }),
   }),
   descriptor({
     name: "installScript",
@@ -92,7 +94,8 @@ export const ANALYZER_DESCRIPTORS = [
       notes:
         "The script body is not returned, which keeps the brief compact and non-executable.",
     },
-    run: (req) => scanInstallScripts(req),
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanInstallScripts(req, fetch, { signal, analysis, diagnostics }),
   }),
   descriptor({
     name: "heavyDependency",
@@ -112,7 +115,8 @@ export const ANALYZER_DESCRIPTORS = [
       notes:
         "Only reports packages with trivial direct usage so the finding stays actionable.",
     },
-    run: (req, { signal }) => scanHeavyDependencies(req, fetch, { signal }),
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanHeavyDependencies(req, fetch, { signal, analysis, diagnostics }),
   }),
   descriptor({
     name: "actionPin",
@@ -146,7 +150,8 @@ export const ANALYZER_DESCRIPTORS = [
       network: "Calls endoflife.date. No GitHub token required.",
       notes: "Only changed pins are checked; existing old runtimes outside the PR are not reported.",
     },
-    run: (req) => scanEol(req),
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanEol(req, fetch, Date.now(), { signal, analysis, diagnostics }),
   }),
   descriptor({
     name: "redos",
@@ -183,7 +188,8 @@ export const ANALYZER_DESCRIPTORS = [
         "Calls npm and PyPI attestation/provenance endpoints for package checks. Path checks are local.",
       notes: "Network failures fail safe; it flags only confident no-attestation responses.",
     },
-    run: (req, { signal }) => scanProvenance(req, fetch, { signal }),
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanProvenance(req, fetch, { signal, analysis, diagnostics }),
   }),
   descriptor({
     name: "codeowners",
@@ -207,7 +213,8 @@ export const ANALYZER_DESCRIPTORS = [
       notes:
         "Leave REES_FORWARD_GITHUB_TOKEN unset/false to disable token forwarding; this analyzer will then skip when it cannot read CODEOWNERS.",
     },
-    run: (req, { signal }) => scanCodeowners(req, fetch, { signal }),
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanCodeowners(req, fetch, { signal, analysis, diagnostics }),
   }),
   descriptor({
     name: "secretLog",
@@ -246,7 +253,8 @@ export const ANALYZER_DESCRIPTORS = [
       notes:
         "Added asset detection works from headSha. Growth comparison needs baseSha in the enrichment request.",
     },
-    run: (req, { signal }) => scanAssetWeight(req, fetch, { signal }),
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanAssetWeight(req, fetch, { signal, analysis, diagnostics }),
   }),
   descriptor({
     name: "typosquat",
@@ -267,7 +275,8 @@ export const ANALYZER_DESCRIPTORS = [
       notes:
         "Scoped npm packages are treated as namespace-protected and are not flagged as typosquats.",
     },
-    run: (req, { signal }) => scanTyposquat(req, fetch, { signal }),
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanTyposquat(req, fetch, { signal, analysis, diagnostics }),
   }),
   descriptor({
     name: "commitSignature",
@@ -286,7 +295,8 @@ export const ANALYZER_DESCRIPTORS = [
       notes:
         "Does not expose emails or private identity data; only public GitHub commit facts are surfaced.",
     },
-    run: (req, { signal }) => scanCommitSignature(req, fetch, { signal }),
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanCommitSignature(req, fetch, { signal, analysis, diagnostics }),
   }),
   descriptor({
     name: "iacMisconfig",
@@ -322,7 +332,8 @@ export const ANALYZER_DESCRIPTORS = [
       notes:
         "Registry JSON is capped so large package metadata cannot monopolize REES memory.",
     },
-    run: (req, { signal }) => scanNativeBuild(req, fetch, { signal }),
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanNativeBuild(req, fetch, { signal, analysis, diagnostics }),
   }),
   descriptor({
     name: "history",
@@ -354,6 +365,7 @@ export const ANALYZER_DESCRIPTORS = [
         deadlineMs: context.deadlineMs,
         timeoutMs: context.timeoutMs,
         diagnostics: context.diagnostics,
+        analysis: context.analysis,
       }),
   }),
   descriptor({

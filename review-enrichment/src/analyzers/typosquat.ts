@@ -3,8 +3,14 @@
 // (edit-distance / homoglyph / separator / scope-swap) — a likely typosquat; (2) an unscoped name that is NOT
 // published on the public registry and is therefore publicly claimable — a dependency-confusion vector. Pure
 // name analysis runs offline against a bundled popular-package list; the confusion check uses an injected fetch.
-import type { EnrichRequest, TyposquatFinding } from "../types.js";
+import type {
+  AnalyzerDiagnostics,
+  EnrichRequest,
+  TyposquatFinding,
+} from "../types.js";
+import type { AnalysisContext } from "../analysis-context.js";
 import { extractDependencyChanges } from "./dependency-scan.js";
+import { boundedFetchText } from "../external-fetch.js";
 
 const MAX_DEPS = 50;
 const MAX_CONFUSION_QUERIES = 15;
@@ -19,6 +25,8 @@ interface ScanLimits {
 interface ScanOptions {
   signal?: AbortSignal;
   limits?: ScanLimits;
+  analysis?: Pick<AnalysisContext, "fetchText">;
+  diagnostics?: AnalyzerDiagnostics;
 }
 
 // Bundled top popular packages per ecosystem — the high-traffic names typosquatters impersonate. Not exhaustive;
@@ -136,17 +144,26 @@ export async function isPublished(
   name: string,
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
+  options: Pick<ScanOptions, "analysis" | "diagnostics" | "limits"> = {},
 ): Promise<boolean | null> {
   const toUrl = REGISTRY_URL[ecosystem];
   if (!toUrl || signal?.aborted) return null;
-  try {
-    const response = await fetchImpl(toUrl(name), { signal });
-    if (response.status === 404) return false;
-    if (response.ok) return true;
-    return null;
-  } catch {
-    return null;
-  }
+  const endpointCategory = ecosystem === "npm" ? "npm-packument" : "pypi-json";
+  const fetchOptions = {
+    endpointCategory,
+    signal,
+    fetchImpl,
+    diagnostics: options.diagnostics,
+    phase: "typosquat",
+    subcall: endpointCategory,
+    maxBytes: 16 * 1024,
+    maxCallsPerCategory: options.limits?.maxConfusionQueries ?? MAX_CONFUSION_QUERIES,
+  };
+  const response = options.analysis
+    ? await options.analysis.fetchText(toUrl(name), fetchOptions)
+    : await boundedFetchText(toUrl(name), fetchOptions);
+  if (!response.ok) return response.status === 404 ? false : null;
+  return true;
 }
 
 /** Analyzer entrypoint: newly-added deps → typosquat near-miss (pure) + dependency-confusion (registry 404). */
@@ -184,7 +201,7 @@ export async function scanTyposquat(
     const isScoped = dep.package.startsWith("@");
     if (!isScoped && confusionQueries < maxConfusion && REGISTRY_URL[dep.ecosystem]) {
       confusionQueries += 1;
-      const published = await isPublished(dep.ecosystem, dep.package, fetchImpl, options.signal);
+      const published = await isPublished(dep.ecosystem, dep.package, fetchImpl, options.signal, options);
       if (published === false) {
         findings.push({
           ecosystem: dep.ecosystem,

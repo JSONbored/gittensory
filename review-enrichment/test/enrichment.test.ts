@@ -618,6 +618,7 @@ test("buildBrief: runs dependency analyzer, marks others skipped, partial=false 
       repoFullName: "o/r",
       prNumber: 7,
       headSha: "abc",
+      analyzers: ["dependency"],
       files: [{ path: "package.json", patch: '+    "lodash": "4.17.20",' }],
     });
     assert.equal(brief.schemaVersion, 1);
@@ -3015,8 +3016,8 @@ test("buildBrief: provenance analyzer fetch failure fails safe", async () => {
       analyzers: ["provenance"],
       files: [{ path: "package.json", patch: '+    "pkg": "1.0.0",' }],
     });
-    assert.equal(brief.analyzerStatus.provenance, "ok");
-    assert.equal(brief.partial, false);
+    assert.equal(brief.analyzerStatus.provenance, "degraded");
+    assert.equal(brief.partial, true);
     assert.deepEqual(brief.findings.provenance, []);
   } finally {
     globalThis.fetch = realFetch;

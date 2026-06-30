@@ -26,14 +26,15 @@ export const dependencyAnalyzer: AnalyzerDescriptor<"dependency"> = {
     notes:
       "Manifest-only by design; use lockfileDrift for transitive lockfile changes.",
   },
-  run: (_req, { signal, analysis }) =>
+  run: (_req, { signal, analysis, diagnostics }) =>
     scanDependencyChanges(
       analysis.dependencyChanges(DEPENDENCY_LIMITS),
       fetch,
       {
         signal,
         limits: DEPENDENCY_LIMITS,
-        cache: analysis,
+        analysis,
+        diagnostics,
       },
     ),
   render: (deps, { safeCodeSpan, promptText }) => {

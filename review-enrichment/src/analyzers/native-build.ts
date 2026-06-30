@@ -3,8 +3,14 @@
 // (node-gyp / gypfile) on install, or a PyPI release that ships no prebuilt wheel (sdist-only) so pip compiles from
 // source. Both are a hidden CI cold-start cost and a frequent cross-platform breakage source. Factual signals from
 // the registry metadata only — the no-checkout reviewer can fetch neither. Reports package@version + the property.
-import type { EnrichRequest, NativeBuildFinding } from "../types.js";
+import type {
+  AnalyzerDiagnostics,
+  EnrichRequest,
+  NativeBuildFinding,
+} from "../types.js";
+import type { AnalysisContext } from "../analysis-context.js";
 import { extractDependencyChanges } from "./dependency-scan.js";
+import { boundedFetchJson } from "../external-fetch.js";
 
 const MAX_QUERIES = 25;
 const MAX_REGISTRY_JSON_BYTES = 2 * 1024 * 1024;
@@ -35,6 +41,8 @@ interface ScanLimits {
 interface ScanOptions {
   signal?: AbortSignal;
   limits?: ScanLimits;
+  analysis?: Pick<AnalysisContext, "fetchJson">;
+  diagnostics?: AnalyzerDiagnostics;
 }
 
 /** npm packument version metadata, the subset that signals a native build. */
@@ -73,52 +81,24 @@ export function pypiSdistOnly(urls: PypiUrl[]): boolean {
 async function fetchJson(
   fetchImpl: typeof fetch,
   url: string,
-  signal?: AbortSignal,
+  options: ScanOptions,
+  endpointCategory: "npm-packument" | "pypi-json",
 ): Promise<unknown | null> {
-  if (signal?.aborted) return null;
-  try {
-    const response = await fetchImpl(url, { signal });
-    if (!response.ok) return null;
-    const text = await readJsonText(response);
-    return text === null ? null : JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-async function readJsonText(response: Response): Promise<string | null> {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength !== null) {
-    const parsedLength = Number.parseInt(contentLength, 10);
-    if (Number.isFinite(parsedLength) && parsedLength > MAX_REGISTRY_JSON_BYTES) return null;
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) {
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength > MAX_REGISTRY_JSON_BYTES) return null;
-    return new TextDecoder().decode(buffer);
-  }
-
-  const decoder = new TextDecoder();
-  let totalBytes = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > MAX_REGISTRY_JSON_BYTES) {
-        await reader.cancel();
-        return null;
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-    text += decoder.decode();
-    return text;
-  } finally {
-    reader.releaseLock();
-  }
+  if (options.signal?.aborted) return null;
+  const boundedOptions = {
+    endpointCategory,
+    signal: options.signal,
+    fetchImpl,
+    diagnostics: options.diagnostics,
+    phase: "native-build",
+    subcall: endpointCategory,
+    maxBytes: MAX_REGISTRY_JSON_BYTES,
+    maxCallsPerCategory: options.limits?.maxQueries ?? MAX_QUERIES,
+  };
+  const response = options.analysis
+    ? await options.analysis.fetchJson<unknown>(url, boundedOptions)
+    : await boundedFetchJson<unknown>(url, boundedOptions);
+  return response.ok ? response.data : null;
 }
 
 /** Analyzer entrypoint: added/changed deps → registry metadata → only the versions with a native-build install cost. */
@@ -140,7 +120,8 @@ export async function scanNativeBuild(
       const data = (await fetchJson(
         fetchImpl,
         `https://registry.npmjs.org/${encodeURIComponent(change.package)}`,
-        options.signal,
+        options,
+        "npm-packument",
       )) as { versions?: Record<string, NpmVersionMeta> } | null;
       const meta = data?.versions?.[change.to];
       const native = meta && npmNativeBuild(meta);
@@ -159,7 +140,8 @@ export async function scanNativeBuild(
       const data = (await fetchJson(
         fetchImpl,
         `https://pypi.org/pypi/${encodeURIComponent(change.package)}/${encodeURIComponent(change.to)}/json`,
-        options.signal,
+        options,
+        "pypi-json",
       )) as { urls?: PypiUrl[] } | null;
       if (data && pypiSdistOnly(data.urls ?? [])) {
         findings.push({

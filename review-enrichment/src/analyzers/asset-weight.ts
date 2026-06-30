@@ -5,9 +5,16 @@
 // which also sidesteps the Contents API's 1 MB cap. Pure size arithmetic after that; no external service.
 // Fail-safe: returns [] without a token/headSha or when the head tree fetch is not OK; growth findings require a
 // matching base size.
-import type { EnrichRequest, AssetWeightFinding } from "../types.js";
+import type {
+  AnalyzerDiagnostics,
+  EnrichRequest,
+  AssetWeightFinding,
+} from "../types.js";
+import type { AnalysisContext } from "../analysis-context.js";
+import { boundedFetchJson } from "../external-fetch.js";
 
 const MAX_FINDINGS = 50; // keep the brief bounded after evaluating every changed binary candidate
+const MAX_PATH_SIZE_LOOKUPS = 50; // fallback Contents API calls when a recursive tree is truncated
 const THRESHOLD_BYTES = 100 * 1024; // flag a newly-added blob >= 100 KB, or growth >= 100 KB
 const GITHUB_API = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
@@ -66,6 +73,8 @@ const BINARY_EXTS = new Set([
 
 interface ScanOptions {
   signal?: AbortSignal;
+  analysis?: Pick<AnalysisContext, "fetchJson">;
+  diagnostics?: AnalyzerDiagnostics;
 }
 
 // A single repo path segment (owner or name): word chars, dot, dash only. Whole-segment `.`/`..` are rejected
@@ -103,6 +112,31 @@ function encodeRepoPath(path: string): string | null {
   return segments.map(encodeURIComponent).join("/");
 }
 
+async function fetchGithubJson<T>(
+  url: string,
+  token: string,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal | undefined,
+  options: ScanOptions,
+  endpointCategory: "github-trees" | "github-contents",
+): Promise<T | null> {
+  const fetchOptions = {
+    endpointCategory,
+    headers: githubHeaders(token),
+    signal,
+    fetchImpl,
+    diagnostics: options.diagnostics,
+    phase: "asset-weight",
+    subcall: endpointCategory,
+    maxBytes: endpointCategory === "github-trees" ? 4 * 1024 * 1024 : 256 * 1024,
+    maxCallsPerCategory: endpointCategory === "github-contents" ? MAX_PATH_SIZE_LOOKUPS : 2,
+  };
+  const response = options.analysis
+    ? await options.analysis.fetchJson<T>(url, fetchOptions)
+    : await boundedFetchJson<T>(url, fetchOptions);
+  return response.ok ? response.data : null;
+}
+
 /** Parse `owner/repo`, rejecting anything that isn't exactly two safe segments — no extra `/`, no `.`/`..`
  *  traversal, no query/fragment characters. This stops a hostile `repoFullName` from redirecting the
  *  token-bearing request to another repository. Returns null when unsafe. */
@@ -129,20 +163,17 @@ async function fetchTreeSizes(
   sha: string,
   token: string,
   fetchImpl: typeof fetch,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  options: ScanOptions,
 ): Promise<{ sizes: Map<string, number>; truncated: boolean }> {
   const sizes = new Map<string, number>();
   if (!SHA_RE.test(sha)) return { sizes, truncated: false };
   const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(sha)}?recursive=1`;
-  const res = await fetchImpl(url, {
-    headers: githubHeaders(token),
-    signal,
-  });
-  if (!res.ok) return { sizes, truncated: false };
-  const json = (await res.json()) as {
+  const json = await fetchGithubJson<{
     tree?: Array<{ path?: string; type?: string; size?: number }>;
     truncated?: boolean;
-  };
+  }>(url, token, fetchImpl, signal, options, "github-trees");
+  if (!json) return { sizes, truncated: false };
   for (const entry of json.tree ?? []) {
     if (entry.type === "blob" && typeof entry.size === "number" && entry.path) {
       sizes.set(entry.path, entry.size);
@@ -158,17 +189,24 @@ async function fetchPathSizes(
   token: string,
   paths: Iterable<string>,
   fetchImpl: typeof fetch,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  options: ScanOptions,
 ): Promise<Map<string, number>> {
   const sizes = new Map<string, number>();
   if (!SHA_RE.test(sha)) return sizes;
-  for (const path of new Set(paths)) {
+  for (const path of [...new Set(paths)].slice(0, MAX_PATH_SIZE_LOOKUPS)) {
     const encodedPath = encodeRepoPath(path);
     if (!encodedPath) continue;
     const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodedPath}?ref=${encodeURIComponent(sha)}`;
-    const res = await fetchImpl(url, { headers: githubHeaders(token), signal });
-    if (!res.ok) continue;
-    const json = (await res.json()) as { type?: string; size?: number } | unknown[];
+    const json = await fetchGithubJson<{ type?: string; size?: number } | unknown[]>(
+      url,
+      token,
+      fetchImpl,
+      signal,
+      options,
+      "github-contents",
+    );
+    if (!json) continue;
     if (!Array.isArray(json) && typeof json.size === "number") {
       sizes.set(path, json.size);
     }
@@ -183,11 +221,12 @@ async function fetchRelevantSizes(
   token: string,
   paths: Iterable<string>,
   fetchImpl: typeof fetch,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  options: ScanOptions,
 ): Promise<Map<string, number>> {
-  const tree = await fetchTreeSizes(owner, repo, sha, token, fetchImpl, signal);
+  const tree = await fetchTreeSizes(owner, repo, sha, token, fetchImpl, signal, options);
   if (!tree.truncated) return tree.sizes;
-  return fetchPathSizes(owner, repo, sha, token, paths, fetchImpl, signal);
+  return fetchPathSizes(owner, repo, sha, token, paths, fetchImpl, signal, options);
 }
 
 /** Analyzer entrypoint: flag heavy binary assets the PR adds or grows past the threshold. Pure size arithmetic over
@@ -215,6 +254,7 @@ export async function scanAssetWeight(
     binaries.map((file) => file.path),
     fetchImpl,
     options.signal,
+    options,
   );
   const basePaths = binaries.flatMap((file) => basePathForGrowth(file) ?? []);
   const needBase = binaries.some((f) => basePathForGrowth(f) !== null);
@@ -225,10 +265,11 @@ export async function scanAssetWeight(
           repo.repo,
           req.baseSha,
           token,
-          basePaths,
-          fetchImpl,
-          options.signal,
-        )
+      basePaths,
+      fetchImpl,
+      options.signal,
+      options,
+    )
       : new Map<string, number>();
 
   const findings: AssetWeightFinding[] = [];

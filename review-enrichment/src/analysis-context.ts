@@ -1,9 +1,21 @@
-import type { AnalyzerMetricsDiagnostics, EnrichRequest } from "./types.js";
+import type {
+  AnalyzerDiagnostics,
+  AnalyzerMetricsDiagnostics,
+  EnrichRequest,
+} from "./types.js";
 import {
   extractDependencyChanges,
   type DepChange,
   type ScanLimits,
 } from "./analyzers/dependency-scan.js";
+import {
+  boundedFetchJson,
+  boundedFetchText,
+  externalFetchCacheKey,
+  safeEndpointCategory,
+  type BoundedFetchOptions,
+  type BoundedFetchResult,
+} from "./external-fetch.js";
 
 type ChangedFile = NonNullable<EnrichRequest["files"]>[number];
 
@@ -64,10 +76,27 @@ export interface AnalysisContext {
     key: string,
     load: () => Promise<T>,
   ): Promise<T>;
+  fetchJson<T>(
+    url: string,
+    options: AnalysisFetchJsonOptions,
+  ): Promise<BoundedFetchResult<T>>;
+  fetchText(
+    url: string,
+    options: AnalysisFetchJsonOptions,
+  ): Promise<BoundedFetchResult<string>>;
   dependencyChanges(limits?: ScanLimits): readonly DepChange[];
   packageChanges(limits?: ScanLimits): readonly DepChange[];
   remainingMs(deadlineMs?: number): number;
   snapshotMetrics(): AnalysisContextMetrics;
+}
+
+export interface AnalysisFetchJsonOptions
+  extends Omit<BoundedFetchOptions, "endpointCategory"> {
+  endpointCategory: string;
+  cache?: boolean;
+  cacheKey?: string;
+  maxCallsPerCategory?: number;
+  diagnostics?: AnalyzerDiagnostics;
 }
 
 export class AnalysisMetrics {
@@ -92,6 +121,10 @@ export class AnalysisMetrics {
 
   recordExternalCall(category: string, count = 1): void {
     incrementByCategory(this.externalCallsByCategory, category, count);
+  }
+
+  externalCallCount(category: string): number {
+    return this.externalCallsByCategory[safeMetricCategory(category)] ?? 0;
   }
 
   recordSkippedWork(category: string, count = 1): void {
@@ -180,6 +213,12 @@ export function createAnalysisContext(
         metrics.recordExternalCall(category);
         return load();
       });
+    },
+    fetchJson<T>(url: string, options: AnalysisFetchJsonOptions) {
+      return cachedBoundedFetch<T>(cache, metrics, url, options, boundedFetchJson);
+    },
+    fetchText(url: string, options: AnalysisFetchJsonOptions) {
+      return cachedBoundedFetch(cache, metrics, url, options, boundedFetchText);
     },
     dependencyChanges(limits: ScanLimits = {}) {
       const key = dependencyLimitKey(limits);
@@ -350,4 +389,54 @@ function incrementByCategory(
 function safeMetricCategory(category: string): string {
   const safe = category.replace(/[^A-Za-z0-9_.:-]+/g, "_").slice(0, 80);
   return safe || "unknown";
+}
+
+function markExternalCap(
+  diagnostics: AnalyzerDiagnostics,
+  endpointCategory: string,
+): void {
+  diagnostics.partialStatus = "partial";
+  diagnostics.partialReason ??= `${endpointCategory}_call_cap`;
+  diagnostics.captureDegradation = true;
+  diagnostics.endpointCategory = endpointCategory;
+  diagnostics.externalFailureReason = "call_cap";
+  diagnostics.subcall = endpointCategory;
+  diagnostics.capped = true;
+  if (endpointCategory.startsWith("github-")) {
+    diagnostics.githubEndpointCategory = endpointCategory;
+  }
+}
+
+function cachedBoundedFetch<T>(
+  cache: RequestScopedCache,
+  metrics: AnalysisMetrics,
+  url: string,
+  options: AnalysisFetchJsonOptions,
+  loadBounded: (
+    url: string,
+    options: BoundedFetchOptions,
+  ) => Promise<BoundedFetchResult<T>>,
+): Promise<BoundedFetchResult<T>> {
+  const category = safeEndpointCategory(options.endpointCategory);
+  const cacheKey = options.cacheKey ?? externalFetchCacheKey(url, options);
+  const load = () => {
+    if (
+      typeof options.maxCallsPerCategory === "number" &&
+      metrics.externalCallCount(category) >= options.maxCallsPerCategory
+    ) {
+      metrics.recordCappedWork(`${category}_calls`);
+      options.diagnostics && markExternalCap(options.diagnostics, category);
+      return Promise.resolve({
+        ok: false as const,
+        reason: "call_cap" as const,
+        bytes: null,
+        elapsedMs: 0,
+        endpointCategory: category,
+        capped: true,
+      });
+    }
+    metrics.recordExternalCall(category);
+    return loadBounded(url, { ...options, endpointCategory: category });
+  };
+  return options.cache === false ? load() : cache.getOrSet(category, cacheKey, load);
 }

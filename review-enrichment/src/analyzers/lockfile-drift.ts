@@ -2,11 +2,14 @@
 // lockfile changes, where the top-level manifest diff does not name the package. This catches transitive pins and
 // downgraded resolved versions that the manifest-only dependency analyzer cannot see.
 import type {
+  AnalyzerDiagnostics,
   Cve,
   EnrichRequest,
   LockfileDriftFinding,
 } from "../types.js";
+import type { AnalysisContext } from "../analysis-context.js";
 import { extractDependencyChanges } from "./dependency-scan.js";
+import { boundedFetchJson } from "../external-fetch.js";
 
 interface LockfileChange {
   file: string;
@@ -26,6 +29,8 @@ interface ScanLimits {
 interface ScanOptions {
   signal?: AbortSignal;
   limits?: ScanLimits;
+  analysis?: Pick<AnalysisContext, "fetchJson">;
+  diagnostics?: AnalyzerDiagnostics;
 }
 
 interface PatchLine {
@@ -363,31 +368,42 @@ export async function queryOsvBatch(
   changes: LockfileChange[],
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
+  options: Pick<ScanOptions, "analysis" | "diagnostics" | "limits"> = {},
 ): Promise<Map<string, Cve[]>> {
   const results = new Map<string, Cve[]>();
   if (!changes.length || signal?.aborted) return results;
-  try {
-    const response = await fetchImpl("https://api.osv.dev/v1/querybatch", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        queries: changes.map((change) => ({
-          package: { name: change.package, ecosystem: change.ecosystem },
-          version: change.to,
-        })),
-      }),
-      signal,
-    });
-    if (!response.ok) return results;
-    const data = (await response.json()) as {
+  const fetchOptions = {
+    endpointCategory: "osv-querybatch",
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      queries: changes.map((change) => ({
+        package: { name: change.package, ecosystem: change.ecosystem },
+        version: change.to,
+      })),
+    }),
+    signal,
+    fetchImpl,
+    diagnostics: options.diagnostics,
+    phase: "lockfile-drift",
+    subcall: "osv-querybatch",
+    maxBytes: 1024 * 1024,
+    maxCallsPerCategory: 1,
+  };
+  const response = options.analysis
+    ? await options.analysis.fetchJson<{
+        results?: Array<{ vulns?: OsvVuln[] }>;
+      }>("https://api.osv.dev/v1/querybatch", fetchOptions)
+    : await boundedFetchJson<{
       results?: Array<{ vulns?: OsvVuln[] }>;
-    };
-    changes.forEach((change, index) => {
-      results.set(`${change.ecosystem}::${change.package}@${change.to}`, toCves(data.results?.[index]?.vulns));
-    });
-  } catch {
-    return results;
-  }
+    }>("https://api.osv.dev/v1/querybatch", fetchOptions);
+  if (!response.ok) return results;
+  changes.forEach((change, index) => {
+    results.set(
+      `${change.ecosystem}::${change.package}@${change.to}`,
+      toCves(response.data.results?.[index]?.vulns),
+    );
+  });
   return results;
 }
 
@@ -401,7 +417,7 @@ export async function scanLockfileDrift(
     0,
     options.limits?.maxOsvQueries ?? MAX_OSV_QUERIES,
   );
-  const cvesByKey = await queryOsvBatch(changes, fetchImpl, options.signal);
+  const cvesByKey = await queryOsvBatch(changes, fetchImpl, options.signal, options);
   const findings: LockfileDriftFinding[] = [];
   for (const change of changes) {
     const cves = cvesByKey.get(`${change.ecosystem}::${change.package}@${change.to}`) ?? [];

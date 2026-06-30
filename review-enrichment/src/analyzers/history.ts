@@ -10,6 +10,8 @@
 // a rate-limit/error degrades THIS analyzer only (the block is returned with `partial: true`) — the rest of the
 // brief still ships. Fail-safe: returns [] when there is nothing to report.
 import type { AnalyzerDiagnostics, EnrichRequest, HistoryFinding } from "../types.js";
+import type { AnalysisContext } from "../analysis-context.js";
+import { boundedFetchJson } from "../external-fetch.js";
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
@@ -46,9 +48,14 @@ interface ScanOptions {
   timeoutMs?: number;
   githubSubcallTimeoutMs?: number;
   diagnostics?: AnalyzerDiagnostics;
+  analysis?: Pick<AnalysisContext, "fetchJson">;
 }
 
-type GithubEndpointCategory = "search_issues" | "user" | "commits_by_path" | "commit_pulls";
+type GithubEndpointCategory =
+  | "github-search"
+  | "github-users"
+  | "github-commits"
+  | "github-commit-pulls";
 
 function markPartial(options: ScanOptions, reason: string, captureDegradation = false): void {
   const diagnostics = options.diagnostics;
@@ -84,43 +91,36 @@ function hasResponseBudget(options: ScanOptions): boolean {
   return remainingMs(options) > HISTORY_RESPONSE_RESERVE_MS;
 }
 
-function startGithubSubcall(
-  options: ScanOptions,
-  category: GithubEndpointCategory,
-): { signal: AbortSignal; cleanup: () => void } | null {
-  const diagnostics = options.diagnostics;
-  if (diagnostics) {
-    diagnostics.githubEndpointCategory = category;
-    diagnostics.subcall = category;
-  }
-  if (category === "commits_by_path") addCount(diagnostics, "fileLookupCount");
-  if (category === "commit_pulls") addCount(diagnostics, "prLookupCount");
+function githubSubcallTimeoutMs(options: ScanOptions): number | null {
   if (!hasResponseBudget(options)) {
     markPartial(options, options.signal?.aborted ? "history_aborted" : "history_budget_exhausted", true);
     return null;
   }
-
-  const controller = new AbortController();
-  const parent = options.signal;
-  const abortFromParent = () => controller.abort();
-  if (parent) parent.addEventListener("abort", abortFromParent, { once: true });
-
   const remaining = remainingMs(options);
-  const timeoutMs = Math.max(
+  return Math.max(
     1,
     Math.min(
       options.githubSubcallTimeoutMs ?? GITHUB_SUBCALL_TIMEOUT_MS,
       Number.isFinite(remaining) ? Math.max(1, remaining - HISTORY_RESPONSE_RESERVE_MS) : GITHUB_SUBCALL_TIMEOUT_MS,
     ),
   );
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      clearTimeout(timer);
-      if (parent) parent.removeEventListener("abort", abortFromParent);
-    },
-  };
+}
+
+function prepareGithubSubcall(
+  options: ScanOptions,
+  category: GithubEndpointCategory,
+): number | null {
+  const diagnostics = options.diagnostics;
+  if (diagnostics) {
+    diagnostics.githubEndpointCategory = category;
+    diagnostics.endpointCategory = category;
+    diagnostics.subcall = category;
+  }
+  const timeoutMs = githubSubcallTimeoutMs(options);
+  if (timeoutMs === null) return null;
+  if (category === "github-commits") addCount(diagnostics, "fileLookupCount");
+  if (category === "github-commit-pulls") addCount(diagnostics, "prLookupCount");
+  return timeoutMs;
 }
 
 async function fetchGithubJson<T>(
@@ -130,21 +130,36 @@ async function fetchGithubJson<T>(
   options: ScanOptions,
   category: GithubEndpointCategory,
 ): Promise<T | null> {
-  const subcall = startGithubSubcall(options, category);
-  if (!subcall) return null;
-  try {
-    const res = await fetchImpl(url, { headers: githubHeaders(token), signal: subcall.signal });
-    if (!res.ok) {
-      markPartial(options, `github_${category}_http_${res.status}`, res.status === 403 || res.status === 429);
-      return null;
+  const timeoutMs = prepareGithubSubcall(options, category);
+  if (timeoutMs === null) return null;
+  const fetchOptions = {
+    endpointCategory: category,
+    headers: githubHeaders(token),
+    signal: options.signal,
+    timeoutMs,
+    fetchImpl,
+    diagnostics: options.diagnostics,
+    phase: options.diagnostics?.phase,
+    subcall: category,
+    maxBytes: 512 * 1024,
+    maxCallsPerCategory: category === "github-commit-pulls" ? MAX_PR_LOOKUPS : undefined,
+  };
+  const response = options.analysis
+    ? await options.analysis.fetchJson<T>(url, fetchOptions)
+    : await boundedFetchJson<T>(url, fetchOptions);
+  if (!response.ok) {
+    if (response.reason === "http_error") {
+      markPartial(
+        options,
+        `${category}_http_${response.status ?? "unknown"}`,
+        response.status === 403 || response.status === 429,
+      );
+    } else {
+      markPartial(options, `${category}_${response.reason}`, true);
     }
-    return (await res.json()) as T;
-  } catch {
-    markPartial(options, subcall.signal.aborted ? "github_subcall_aborted" : "github_subcall_failed", true);
     return null;
-  } finally {
-    subcall.cleanup();
   }
+  return response.data;
 }
 
 /** Parse `owner/repo`, rejecting anything that isn't exactly two safe segments (no traversal, no extra slashes) so a
@@ -248,7 +263,7 @@ async function fetchSearchCount(
 ): Promise<number | null> {
   try {
     const url = `${GITHUB_API}/search/issues?q=${encodeURIComponent(query)}&per_page=1`;
-    const json = await fetchGithubJson<{ total_count?: number }>(url, token, fetchImpl, options, "search_issues");
+    const json = await fetchGithubJson<{ total_count?: number }>(url, token, fetchImpl, options, "github-search");
     if (!json) return null;
     return typeof json.total_count === "number" ? json.total_count : null;
   } catch {
@@ -266,7 +281,7 @@ async function fetchAccountAgeDays(
 ): Promise<number | null> {
   try {
     const url = `${GITHUB_API}/users/${encodeURIComponent(login)}`;
-    const json = await fetchGithubJson<{ created_at?: string }>(url, token, fetchImpl, options, "user");
+    const json = await fetchGithubJson<{ created_at?: string }>(url, token, fetchImpl, options, "github-users");
     if (!json) return null;
     if (!json.created_at) return null;
     const created = Date.parse(json.created_at);
@@ -323,7 +338,7 @@ async function fetchCommitsForPath(
     const json = await fetchGithubJson<Array<{
       sha?: string;
       commit?: { message?: string };
-    }>>(url, token, fetchImpl, options, "commits_by_path");
+    }>>(url, token, fetchImpl, options, "github-commits");
     if (!json) return null;
     if (!Array.isArray(json)) return null;
     const out: Array<{ sha: string; message: string }> = [];
@@ -351,7 +366,7 @@ async function fetchPullsForCommit(
   if (!SHA_RE.test(sha)) return [];
   try {
     const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}/pulls`;
-    const json = await fetchGithubJson<Array<{ number?: number; title?: string }>>(url, token, fetchImpl, options, "commit_pulls");
+    const json = await fetchGithubJson<Array<{ number?: number; title?: string }>>(url, token, fetchImpl, options, "github-commit-pulls");
     if (!json) return null;
     if (!Array.isArray(json)) return null;
     const out: Array<{ number: number; title: string }> = [];
