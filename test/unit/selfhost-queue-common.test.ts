@@ -98,6 +98,15 @@ describe("self-host queue common helpers", () => {
     expect(githubWebhookRateLimitDelayMs({ remaining: 50, reset_at: "2026-06-24T11:59:00.000Z" }, now)).toBeNull();
   });
 
+  it("defers webhook and background admission when resetAt is unparseable but REST budget is exhausted", () => {
+    const now = Date.parse("2026-06-24T12:00:00.000Z");
+    const observation = { remaining: 50, reset_at: "not-a-date", observed_at: "2026-06-24T12:00:00.000Z" };
+    expect(githubWebhookRateLimitDelayMs(observation, now)).toBe(60_000);
+    expect(githubBackgroundRateLimitDelayMs({ remaining: 120, reset_at: "not-a-date", observed_at: "2026-06-24T12:00:00.000Z" }, now)).toBe(60_000);
+    expect(githubWebhookRateLimitDelayMs({ remaining: 200, reset_at: "not-a-date", observed_at: "2026-06-24T12:00:00.000Z" }, now)).toBeNull();
+    expect(githubWebhookRateLimitDelayMs(observation, now + 60_000)).toBeNull();
+  });
+
   it("computes admission delays from the newest unkeyed persisted candidate", () => {
     const now = Date.parse("2026-06-24T12:00:00.000Z");
     expect(

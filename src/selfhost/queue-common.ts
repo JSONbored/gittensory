@@ -97,7 +97,14 @@ export function isGitHubBudgetBackgroundJob(message: JobMessage): boolean {
 
 function githubObservedRateLimitDelayMs(
   observation:
-    | { remaining?: unknown; reset_at?: unknown; resetAt?: unknown }
+    | {
+        remaining?: unknown;
+        reset_at?: unknown;
+        resetAt?: unknown;
+        observed_at?: unknown;
+        observedAt?: unknown;
+        observedAtMs?: unknown;
+      }
     | null
     | undefined,
   floor: number,
@@ -119,7 +126,13 @@ function githubObservedRateLimitDelayMs(
   if (remaining === null || !resetAt) return null;
   if (remaining > floor) return null;
   const ms = Date.parse(resetAt) - nowMs;
-  if (!Number.isFinite(ms) || ms <= 0) return null;
+  if (!Number.isFinite(ms)) {
+    const observedMs = observationMs(observation);
+    const deferUntilMs = observedMs !== null ? observedMs + 60_000 : nowMs + 60_000;
+    if (nowMs >= deferUntilMs) return null;
+    return Math.max(30_000, deferUntilMs - nowMs);
+  }
+  if (ms <= 0) return null;
   return Math.max(30_000, Math.min(900_000, (Math.ceil(ms / 1000) + 15) * 1000));
 }
 
