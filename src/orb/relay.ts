@@ -5,7 +5,9 @@
 // Per-enrollment isolation (one container's secret can never forge to another), and a DB-only leak can't forge
 // (the encryption key is a separate secret).
 import { hashToken } from "../auth/security";
+import { githubWebhookCoalesceKey } from "../github/webhook-coalesce";
 import { isSafeHttpUrl } from "../review/content-lane/safe-url";
+import type { GitHubWebhookPayload } from "../types";
 import { decryptSecret, encryptSecret } from "../utils/crypto";
 
 // The events a brokered container needs to review/act on. Installation-lifecycle + other Orb-internal events are
@@ -171,12 +173,24 @@ export async function enqueueRelayPending(
   args: { deliveryId: string; installationId: number; eventName: string; rawBody: string },
 ): Promise<void> {
   await pruneRelayPending(env);
-  await env.DB
+  const coalesceKey = relayPendingCoalesceKey(args.eventName, args.rawBody);
+  const inserted = await env.DB
     .prepare(
-      "INSERT INTO orb_relay_pending (delivery_id, installation_id, event_name, raw_body) VALUES (?, ?, ?, ?) ON CONFLICT(delivery_id) DO NOTHING",
+      "INSERT INTO orb_relay_pending (delivery_id, installation_id, event_name, raw_body, coalesce_key) VALUES (?, ?, ?, ?, ?) ON CONFLICT(delivery_id) DO NOTHING",
     )
-    .bind(args.deliveryId, args.installationId, args.eventName, args.rawBody)
+    .bind(args.deliveryId, args.installationId, args.eventName, args.rawBody, coalesceKey)
     .run();
+  if (coalesceKey && inserted.meta.changes > 0) {
+    await env.DB
+      .prepare(
+        `DELETE FROM orb_relay_pending
+         WHERE installation_id = ?
+           AND coalesce_key = ?
+           AND rowid < (SELECT rowid FROM orb_relay_pending WHERE delivery_id = ?)`,
+      )
+      .bind(args.installationId, coalesceKey, args.deliveryId)
+      .run();
+  }
   await env.DB
     .prepare(
       `DELETE FROM orb_relay_pending
@@ -190,6 +204,17 @@ export async function enqueueRelayPending(
     )
     .bind(args.installationId, args.installationId, RELAY_PENDING_MAX_PER_INSTALLATION)
     .run();
+}
+
+function relayPendingCoalesceKey(eventName: string, rawBody: string): string | null {
+  try {
+    return githubWebhookCoalesceKey(
+      eventName,
+      JSON.parse(rawBody) as GitHubWebhookPayload,
+    );
+  } catch {
+    return null;
+  }
 }
 
 /** Drain pending pull-mode events for an installation. The engine calls this outbound (it can't be pushed to):

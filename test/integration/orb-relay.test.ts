@@ -445,6 +445,157 @@ describe("enqueueRelayPending", () => {
     expect(after?.n).toBe(1);
     expect(after?.body).toBe('{"n":1}'); // original retained
   });
+
+  it("coalesces duplicate pending CI completions per installation while retaining the newest delivery", async () => {
+    const e = brokeredEnv();
+    const body = (marker: string) =>
+      JSON.stringify({
+        action: "completed",
+        repository: { full_name: "JSONbored/Gittensory" },
+        check_suite: {
+          head_sha: "b".repeat(40),
+          pull_requests: [{ number: 1629 }],
+        },
+        marker,
+      });
+
+    await enqueueRelayPending(e, { deliveryId: "ci-old", installationId: 9603, eventName: "check_suite", rawBody: body("old") });
+    await enqueueRelayPending(e, { deliveryId: "ci-new", installationId: 9603, eventName: "check_suite", rawBody: body("new") });
+    await enqueueRelayPending(e, { deliveryId: "ci-other-install", installationId: 9604, eventName: "check_suite", rawBody: body("other") });
+
+    const rows = await db(e)
+      .prepare("SELECT delivery_id, raw_body, coalesce_key FROM orb_relay_pending WHERE installation_id=9603 ORDER BY delivery_id")
+      .all<{ delivery_id: string; raw_body: string; coalesce_key: string | null }>();
+    expect(rows.results).toHaveLength(1);
+    expect(rows.results[0]).toMatchObject({
+      delivery_id: "ci-new",
+      coalesce_key: `github-webhook:ci-completed:jsonbored/gittensory@${"b".repeat(40)}#1629`,
+    });
+    expect(JSON.parse(rows.results[0]?.raw_body ?? "{}")).toMatchObject({ marker: "new" });
+    const other = await db(e).prepare("SELECT delivery_id FROM orb_relay_pending WHERE delivery_id='ci-other-install'").first();
+    expect(other ?? null).not.toBeNull();
+  });
+
+  it("keeps the newer coalesced delivery when an older enqueue prunes after a newer insert", async () => {
+    const e = brokeredEnv();
+    const realDb = db(e);
+    type TestStatement = ReturnType<TestD1Database["prepare"]>;
+    let releaseOldPrune!: () => void;
+    let oldInserted!: () => void;
+    const oldMayPrune = new Promise<void>((resolve) => {
+      releaseOldPrune = resolve;
+    });
+    const oldInsertedPromise = new Promise<void>((resolve) => {
+      oldInserted = resolve;
+    });
+    e.DB = {
+      prepare(sql: string) {
+        const statement = realDb.prepare(sql);
+        let bound: unknown[] = [];
+        let wrapped: TestStatement;
+        wrapped = {
+          bind(...values: Parameters<TestStatement["bind"]>) {
+            bound = values;
+            statement.bind(...values);
+            return wrapped;
+          },
+          first<T = unknown>() {
+            return statement.first<T>();
+          },
+          all<T = unknown>() {
+            return statement.all<T>();
+          },
+          raw<T = unknown[]>() {
+            return statement.raw<T>();
+          },
+          async run() {
+            const result = await statement.run();
+            if (
+              sql.includes("INSERT INTO orb_relay_pending") &&
+              bound[0] === "ci-race-old"
+            ) {
+              oldInserted();
+              await oldMayPrune;
+            }
+            return result;
+          },
+        };
+        return wrapped;
+      },
+      batch(statements: TestStatement[]) {
+        return realDb.batch(statements);
+      },
+    } as unknown as D1Database;
+    const body = (marker: string) =>
+      JSON.stringify({
+        action: "completed",
+        repository: { full_name: "JSONbored/Gittensory" },
+        check_suite: {
+          head_sha: "d".repeat(40),
+          pull_requests: [{ number: 1838 }],
+        },
+        marker,
+      });
+
+    const older = enqueueRelayPending(e, { deliveryId: "ci-race-old", installationId: 9607, eventName: "check_suite", rawBody: body("old") });
+    await oldInsertedPromise;
+    await enqueueRelayPending(e, { deliveryId: "ci-race-new", installationId: 9607, eventName: "check_suite", rawBody: body("new") });
+    releaseOldPrune();
+    await older;
+
+    const rows = await db(e)
+      .prepare("SELECT delivery_id, raw_body FROM orb_relay_pending WHERE installation_id=9607 ORDER BY delivery_id")
+      .all<{ delivery_id: string; raw_body: string }>();
+    expect(rows.results).toHaveLength(1);
+    expect(rows.results[0]?.delivery_id).toBe("ci-race-new");
+    expect(JSON.parse(rows.results[0]?.raw_body ?? "{}")).toMatchObject({ marker: "new" });
+  });
+
+  it("keeps exact duplicate coalescible delivery IDs idempotent", async () => {
+    const e = brokeredEnv();
+    const body = (marker: string) =>
+      JSON.stringify({
+        action: "completed",
+        repository: { full_name: "JSONbored/Gittensory" },
+        check_suite: {
+          head_sha: "c".repeat(40),
+          pull_requests: [{ number: 1807 }],
+        },
+        marker,
+      });
+
+    await enqueueRelayPending(e, { deliveryId: "ci-same", installationId: 9606, eventName: "check_suite", rawBody: body("first") });
+    await enqueueRelayPending(e, { deliveryId: "ci-same", installationId: 9606, eventName: "check_suite", rawBody: body("second") });
+
+    const row = await db(e)
+      .prepare("SELECT raw_body, coalesce_key FROM orb_relay_pending WHERE delivery_id='ci-same'")
+      .first<{ raw_body: string; coalesce_key: string | null }>();
+    expect(row?.coalesce_key).toBe(`github-webhook:ci-completed:jsonbored/gittensory@${"c".repeat(40)}#1807`);
+    expect(JSON.parse(row?.raw_body ?? "{}")).toMatchObject({ marker: "first" });
+  });
+
+  it("does not coalesce terminal events or malformed payloads", async () => {
+    const e = brokeredEnv();
+    await enqueueRelayPending(e, {
+      deliveryId: "closed-1",
+      installationId: 9605,
+      eventName: "pull_request",
+      rawBody: JSON.stringify({ action: "closed", repository: { full_name: "JSONbored/gittensory" }, pull_request: { number: 1 } }),
+    });
+    await enqueueRelayPending(e, {
+      deliveryId: "closed-2",
+      installationId: 9605,
+      eventName: "pull_request",
+      rawBody: JSON.stringify({ action: "closed", repository: { full_name: "JSONbored/gittensory" }, pull_request: { number: 1 } }),
+    });
+    await enqueueRelayPending(e, { deliveryId: "bad-json", installationId: 9605, eventName: "pull_request", rawBody: "{bad" });
+
+    const rows = await db(e)
+      .prepare("SELECT delivery_id, coalesce_key FROM orb_relay_pending WHERE installation_id=9605 ORDER BY delivery_id")
+      .all<{ delivery_id: string; coalesce_key: string | null }>();
+    expect(rows.results.map((row) => row.delivery_id)).toEqual(["bad-json", "closed-1", "closed-2"]);
+    expect(rows.results.every((row) => row.coalesce_key === null)).toBe(true);
+  });
 });
 
 describe("pullRelayPending", () => {
