@@ -9,7 +9,8 @@ import {
   collectDiffExports,
   isReferencedInDiff,
   referencesSymbol,
-  moduleBasename,
+  normalizeModulePath,
+  resolveImport,
   importsSymbolFromModule,
   scanCallerImpact,
 } from "../dist/analyzers/caller-impact.js";
@@ -86,30 +87,41 @@ test("parseExportedNames returns [] for re-export-all, anonymous default, and no
   assert.deepEqual(parseExportedNames("import { foo } from './a';"), []);
 });
 
-test("moduleBasename strips directories and extensions", () => {
-  assert.equal(moduleBasename("src/lib.ts"), "lib");
-  assert.equal(moduleBasename("./lib"), "lib");
-  assert.equal(moduleBasename("../utils/lib.js"), "lib");
-  assert.equal(moduleBasename("@scope/pkg/feature.d.ts"), "feature");
+test("normalizeModulePath strips extension and trailing index", () => {
+  assert.equal(normalizeModulePath("src/lib.ts"), "src/lib");
+  assert.equal(normalizeModulePath("src/lib/index.ts"), "src/lib");
+  assert.equal(normalizeModulePath("a/b/c.d.ts"), "a/b/c");
 });
 
-test("importsSymbolFromModule binds to a named import from the matching module only", () => {
-  assert.equal(importsSymbolFromModule("import { foo } from './lib';", "foo", "lib"), true);
-  assert.equal(importsSymbolFromModule("import { foo as bar } from '../lib.js';", "foo", "lib"), true);
-  assert.equal(importsSymbolFromModule("import { other } from './lib';", "foo", "lib"), false); // different symbol
-  assert.equal(importsSymbolFromModule("import { foo } from './other';", "foo", "lib"), false); // different module
-  assert.equal(importsSymbolFromModule("function foo() {}\nfoo();", "foo", "lib"), false); // own symbol, no import
+test("resolveImport resolves relative specifiers and rejects bare ones", () => {
+  assert.equal(resolveImport("src/a/c.ts", "../lib"), "src/lib");
+  assert.equal(resolveImport("src/c.ts", "./lib"), "src/lib");
+  assert.equal(resolveImport("src/c.ts", "./lib/index"), "src/lib");
+  assert.equal(resolveImport("src/c.ts", "lodash"), null); // bare package — not resolvable here
 });
 
-test("collectDiffExports reconstructs pre/post export images and added lines", () => {
+test("importsSymbolFromModule resolves relative imports and covers named/namespace/re-export shapes", () => {
+  const lib = "src/lib.ts";
+  assert.equal(importsSymbolFromModule("import { foo } from './lib';", "foo", "src/c.ts", lib), true);
+  assert.equal(importsSymbolFromModule("import { foo as bar } from '../lib';", "foo", "src/a/c.ts", lib), true);
+  assert.equal(importsSymbolFromModule("import { other } from './lib';", "foo", "src/c.ts", lib), false); // different symbol
+  assert.equal(importsSymbolFromModule("import { foo } from './lib';", "foo", "src/a/c.ts", lib), false); // ./lib here = src/a/lib
+  assert.equal(importsSymbolFromModule("import * as lib from './lib';\nlib.foo();", "foo", "src/c.ts", lib), true); // namespace use
+  assert.equal(importsSymbolFromModule("import * as lib from './lib';\nlib.bar();", "foo", "src/c.ts", lib), false); // namespace, not foo
+  assert.equal(importsSymbolFromModule("export { foo } from './lib';", "foo", "src/c.ts", lib), true); // re-export barrel
+  assert.equal(importsSymbolFromModule("export * from './lib';", "foo", "src/c.ts", lib), true); // star re-export
+  assert.equal(importsSymbolFromModule("function foo() {}", "foo", "src/c.ts", lib), false); // own def, no import
+});
+
+test("collectDiffExports reconstructs pre/post export images per file", () => {
   const out = collectDiffExports([
     {
       path: "f.ts",
       patch: "@@ -1,1 +1,2 @@\n-export const removed = 1;\n+export const added = 1;\n+useSomething();",
     },
   ]);
-  assert.ok(out.oldExports.has("removed"));
-  assert.ok(out.newExports.has("added"));
+  assert.ok(out.oldEntries.some((e) => e.name === "removed" && e.file === "f.ts"));
+  assert.ok(out.newEntries.some((e) => e.name === "added" && e.file === "f.ts"));
   assert.equal(out.newExportFile.get("added"), "f.ts");
   assert.ok(out.addedLines.includes("useSomething();"));
 });
@@ -208,6 +220,92 @@ test("scanCallerImpact: an unrelated file defining its OWN same-named symbol is 
   );
   assert.equal(out.length, 1);
   assert.deepEqual(out[0].callerFiles, ["src/real.ts"]); // unrelated.ts excluded by import binding
+});
+
+test("scanCallerImpact: an import of the same name from a DIFFERENT ./lib is not a caller", async () => {
+  const fetchImpl = ghStub({
+    search: { "%22foo%22": [{ path: "src/feature/x.ts", text_matches: [{ fragment: "foo();" }] }] },
+    contents: { "src/feature/x.ts": "import { foo } from './lib';\nfoo();" }, // ./lib here = src/feature/lib
+  });
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [{ path: "src/lib.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" }],
+    },
+    fetchImpl,
+  );
+  assert.deepEqual(out, []); // imports a different ./lib (src/feature/lib), not the changed src/lib
+});
+
+test("scanCallerImpact: a namespace import that uses ns.symbol is a caller", async () => {
+  const fetchImpl = ghStub({
+    search: { "%22foo%22": [{ path: "src/ns.ts", text_matches: [{ fragment: "lib.foo();" }] }] },
+    contents: { "src/ns.ts": "import * as lib from './lib';\nlib.foo();" },
+  });
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [{ path: "src/lib.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" }],
+    },
+    fetchImpl,
+  );
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0].callerFiles, ["src/ns.ts"]);
+});
+
+test("scanCallerImpact: a re-export barrel forwarding the symbol is a caller", async () => {
+  const fetchImpl = ghStub({
+    search: { "%22foo%22": [{ path: "src/barrel.ts", text_matches: [{ fragment: "export { foo } from './lib';" }] }] },
+    contents: { "src/barrel.ts": "export { foo } from './lib';" },
+  });
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [{ path: "src/lib.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" }],
+    },
+    fetchImpl,
+  );
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0].callerFiles, ["src/barrel.ts"]);
+});
+
+test("scanCallerImpact: same-named exports in two changed files are classified per file", async () => {
+  const fetchImpl = ghStub({
+    search: {
+      "%22foo%22": [
+        { path: "src/ca.ts", text_matches: [{ fragment: "foo();" }] },
+        { path: "src/cb.ts", text_matches: [{ fragment: "foo(1);" }] },
+      ],
+    },
+    contents: {
+      "src/ca.ts": "import { foo } from './a';\nfoo();", // depends on a's foo
+      "src/cb.ts": "import { foo } from './b';\nfoo(1);", // depends on b's foo
+    },
+  });
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [
+        { path: "src/a.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" }, // removed from a
+        {
+          path: "src/b.ts",
+          patch: "@@ -1,1 +1,1 @@\n-export function foo(x: string): void;\n+export function foo(x: number): void;", // changed in b
+        },
+      ],
+    },
+    fetchImpl,
+  );
+  const byKind = Object.fromEntries(out.map((f) => [f.kind, f.callerFiles]));
+  assert.deepEqual(byKind["removed-with-callers"], ["src/ca.ts"]); // a's foo → caller ca (imports ./a)
+  assert.deepEqual(byKind["changed-with-callers"], ["src/cb.ts"]); // b's foo → caller cb (imports ./b)
 });
 
 test("scanCallerImpact: a signature change with an importing caller is changed-with-callers", async () => {
