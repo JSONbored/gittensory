@@ -12,7 +12,9 @@ import {
   consumingRetryDelayMs,
   deterministicJitterMs,
   FOREGROUND_QUEUE_PRIORITY_FLOOR,
+  githubBackgroundRateLimitDelayMs,
   githubRateLimitRetryDelayMs,
+  isGitHubBudgetBackgroundJob,
   jobCoalesceKey,
   jobPriority,
   queueBackgroundConcurrency,
@@ -283,6 +285,32 @@ export function createSqliteQueue(
         return true;
       }
       const jobTraceParent = message.type === "github-webhook" ? message.traceParent : undefined;
+      const backgroundRateLimitDelay = isGitHubBudgetBackgroundJob(message)
+        ? backgroundRateLimitDelayMs(driver)
+        : null;
+      if (backgroundRateLimitDelay !== null) {
+        const now = Date.now();
+        const retryAfter = now + rateLimitRetryDelayWithJitter(
+          backgroundRateLimitDelay,
+          `${job.job_key ?? ""}:${job.id}:${job.payload}`,
+        );
+        const { changes } = driver.query(
+          `UPDATE ${TABLE} SET status='pending', run_after=max(run_after, ?), last_error=coalesce(last_error, ?) WHERE id=?`,
+          [retryAfter, "github rate-limit background admission", job.id],
+        );
+        if (changes) {
+          recordQueueMetric(driver, "gittensory_jobs_rate_limit_deferred_total");
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              event: "selfhost_queue_background_admission_deferred",
+              jobType: message.type,
+              retry_after_ms: Math.max(0, retryAfter - now),
+            }),
+          );
+        }
+        return true;
+      }
       try {
         await withOtelSpan(
           "selfhost.queue.job",
@@ -572,6 +600,21 @@ function deferPendingJobsForRateLimit(
     changed += changes;
   }
   return changed;
+}
+
+function backgroundRateLimitDelayMs(driver: SqliteDriver): number | null {
+  try {
+    const row = driver.query(
+      `SELECT remaining, reset_at FROM github_rate_limit_observations
+        WHERE resource='rest' AND remaining IS NOT NULL
+        ORDER BY observed_at DESC
+        LIMIT 1`,
+      [],
+    ).rows[0] as { remaining?: number | null; reset_at?: string | null } | undefined;
+    return githubBackgroundRateLimitDelayMs(row);
+  } catch {
+    return null;
+  }
 }
 
 function reclaimExpiredProcessingJobs(

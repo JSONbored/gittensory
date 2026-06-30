@@ -35,12 +35,22 @@ interface MockPool {
   enqueueResult(r: Partial<QueryResult>): void;
   /** Pre-load a job to be returned by the next RETURNING claim query. */
   enqueueJob(id: string, payload: object, attempts?: number, jobKey?: string | null): void;
+  setDeferUpdateRowCount(rowCount: number): void;
+  setRateLimitRows(rows: Array<{ remaining: number | string | null; reset_at: string | null }>): void;
 }
 
 function makePool(): MockPool {
   const results: Partial<QueryResult>[] = [];
+  let deferUpdateRowCount = 1;
+  let rateLimitRows: Array<{ remaining: number | string | null; reset_at: string | null }> = [];
   const fn = vi.fn().mockImplementation(async (sql: unknown) => {
     const q = String(sql);
+    if (q.includes("FROM github_rate_limit_observations")) {
+      return { rows: rateLimitRows, rowCount: rateLimitRows.length };
+    }
+    if (q.includes("SET status='pending', run_after=GREATEST")) {
+      return { rows: [], rowCount: deferUpdateRowCount };
+    }
     // Claim queries use RETURNING — pop from queue; fall through to empty default otherwise.
     if (q.includes("RETURNING")) {
       const next = results.shift();
@@ -59,13 +69,22 @@ function makePool(): MockPool {
     enqueueJob(id, payload, attempts = 0, jobKey = null) {
       results.push({ rows: [{ id, payload: JSON.stringify(payload), attempts, job_key: jobKey }], rowCount: 1 });
     },
+    setDeferUpdateRowCount(rowCount) {
+      deferUpdateRowCount = rowCount;
+    },
+    setRateLimitRows(rows) {
+      rateLimitRows = rows;
+    },
   };
 }
 
 describe("createPgQueue (durable #977)", () => {
   // Suppress audit log stdout noise in tests.
   beforeEach(() => { vi.spyOn(process.stdout, "write").mockImplementation(() => true); });
-  afterEach(() => { vi.restoreAllMocks(); });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it("init() creates the table and recovers stuck-processing jobs", async () => {
     const m = makePool();
@@ -371,6 +390,73 @@ describe("createPgQueue (durable #977)", () => {
       expect.stringContaining("DELETE FROM _selfhost_jobs WHERE id=$1"),
       ["background"],
     );
+  });
+
+  it("pre-yields GitHub-budget background jobs when the persisted REST budget is reserved", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
+    const oldJitter = process.env.QUEUE_RATE_LIMIT_JITTER_MS;
+    process.env.QUEUE_RATE_LIMIT_JITTER_MS = "0";
+    try {
+      const m = makePool();
+      m.setRateLimitRows([{ remaining: "120", reset_at: "2026-06-24T12:10:00.000Z" }]);
+      m.enqueueJob("background", {
+        type: "agent-regate-pr",
+        deliveryId: "sweep:owner/repo#7",
+        repoFullName: "owner/repo",
+        prNumber: 7,
+        installationId: 123,
+      });
+      const seen: string[] = [];
+      const q = createPgQueue(m.pool, async (j) => void seen.push(typeOf(j)));
+
+      await q.drain();
+
+      expect(seen).toEqual([]);
+      expect(m.pool.query).toHaveBeenCalledWith(
+        expect.stringContaining("SET status='pending', run_after=GREATEST"),
+        [Date.parse("2026-06-24T12:10:15.000Z"), "github rate-limit background admission", "background"],
+      );
+      expect(m.pool.query).toHaveBeenCalledWith(
+        expect.stringContaining("INSERT INTO _selfhost_job_stats"),
+        ["gittensory_jobs_rate_limit_deferred_total", 1],
+      );
+    } finally {
+      if (oldJitter === undefined) delete process.env.QUEUE_RATE_LIMIT_JITTER_MS;
+      else process.env.QUEUE_RATE_LIMIT_JITTER_MS = oldJitter;
+    }
+  });
+
+  it("skips the background-admission metric when the defer update changes no rows", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
+    const oldJitter = process.env.QUEUE_RATE_LIMIT_JITTER_MS;
+    process.env.QUEUE_RATE_LIMIT_JITTER_MS = "0";
+    try {
+      const m = makePool();
+      m.setDeferUpdateRowCount(0);
+      m.setRateLimitRows([{ remaining: 120, reset_at: "2026-06-24T12:10:00.000Z" }]);
+      m.enqueueJob("background", {
+        type: "rag-index-repo",
+        requestedBy: "schedule",
+      });
+      const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const seen: string[] = [];
+      const q = createPgQueue(m.pool, async (j) => void seen.push(typeOf(j)));
+
+      await q.drain();
+
+      expect(seen).toEqual([]);
+      expect(warned).not.toHaveBeenCalled();
+      expect(m.pool.query).not.toHaveBeenCalledWith(
+        expect.stringContaining("INSERT INTO _selfhost_job_stats"),
+        ["gittensory_jobs_rate_limit_deferred_total", 1],
+      );
+    } finally {
+      if (oldJitter === undefined) delete process.env.QUEUE_RATE_LIMIT_JITTER_MS;
+      else process.env.QUEUE_RATE_LIMIT_JITTER_MS = oldJitter;
+      vi.useRealTimers();
+    }
   });
 
   it("dead-letters an unparseable payload (job_dead audit emitted)", async () => {

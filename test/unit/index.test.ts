@@ -162,6 +162,58 @@ describe("worker entrypoint", () => {
     vi.useRealTimers();
   });
 
+  it("pre-yields GitHub-budget background queue jobs while preserving retry budget", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
+    const env = createTestEnv();
+    await recordGitHubRateLimitObservation(env, { repoFullName: "owner/repo", resource: "rest", path: "/x", statusCode: 200, limitValue: 5000, remaining: 120, resetAt: "2026-06-24T12:10:00.000Z", observedAt: "2026-06-24T12:00:00.000Z" });
+    const acked: string[] = [];
+    const retries: Array<{ delaySeconds?: number } | undefined> = [];
+    const batch = {
+      messages: [
+        {
+          id: "background-regate",
+          body: { type: "agent-regate-pr", deliveryId: "sweep:owner/repo#7", repoFullName: "owner/repo", prNumber: 7, installationId: 123 },
+          ack: () => acked.push("background-regate"),
+          retry: (options?: { delaySeconds?: number }) => retries.push(options),
+        },
+      ],
+    } as unknown as MessageBatch<import("../../src/types").JobMessage>;
+
+    await worker.queue(batch, env);
+
+    expect(acked).toEqual([]);
+    expect(retries).toEqual([{ delaySeconds: 615 }]);
+    vi.useRealTimers();
+  });
+
+  it("continues GitHub-budget background queue jobs when the observation read fails", async () => {
+    const env = createTestEnv();
+    env.DB = {
+      ...env.DB,
+      prepare() {
+        throw new Error("rate-limit observation read failed");
+      },
+    } as unknown as D1Database;
+    const acked: string[] = [];
+    const retries: Array<{ delaySeconds?: number } | undefined> = [];
+    const batch = {
+      messages: [
+        {
+          id: "background-rag",
+          body: { type: "rag-index-repo", requestedBy: "schedule" },
+          ack: () => acked.push("background-rag"),
+          retry: (options?: { delaySeconds?: number }) => retries.push(options),
+        },
+      ],
+    } as unknown as MessageBatch<import("../../src/types").JobMessage>;
+
+    await worker.queue(batch, env);
+
+    expect(acked).toEqual(["background-rag"]);
+    expect(retries).toEqual([]);
+  });
+
   it("runs scheduled jobs through waitUntil", async () => {
     const env = createTestEnv();
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {

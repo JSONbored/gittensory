@@ -1,4 +1,6 @@
 import { retryableJobDelayMs } from "../queue/retryable";
+import type { JobMessage } from "../types";
+import { MAINTENANCE_RESERVED_HEADROOM } from "../github/rate-limit";
 import { extractPayloadType } from "./audit";
 
 const DEFAULT_RATE_LIMIT_JITTER_MS = 5 * 60_000;
@@ -13,6 +15,22 @@ export const FOREGROUND_QUEUE_PRIORITY_FLOOR = 8;
 // sit just below real webhooks, and sweep fan-out sits below those so stale surfaces are repaired during bursts.
 // Bot-generated comment edits are background noise; keeping them with real webhooks lets panel edits starve repair.
 const AGENT_REGATE_PRIORITY = 9;
+const GITHUB_BUDGET_BACKGROUND_TYPES = new Set<string>([
+  "agent-regate-sweep",
+  "backfill-registered-repos",
+  "backfill-repo-segment",
+  "backfill-pr-details",
+  "refresh-upstream-sources",
+  "build-upstream-ruleset",
+  "detect-upstream-drift",
+  "refresh-upstream-drift",
+  "file-upstream-drift-issues",
+  "build-contributor-evidence",
+  "build-contributor-decision-packs",
+  "refresh-contributor-activity",
+  "build-burden-forecasts",
+  "rag-index-repo",
+]);
 const PRIORITY_BY_TYPE = new Map([
   ["agent-regate-pr", AGENT_REGATE_PRIORITY],
   ["recapture-preview", 9],
@@ -58,6 +76,41 @@ export function queueBackgroundConcurrency(
       ? Math.floor(raw)
       : DEFAULT_BACKGROUND_CONCURRENCY;
   return Math.min(parsed, total);
+}
+
+export function isGitHubBudgetBackgroundJob(message: JobMessage): boolean {
+  if (message.type === "agent-regate-pr") {
+    if (typeof message.deliveryId !== "string") return false;
+    return !message.deliveryId.startsWith("manual-regate:");
+  }
+  return GITHUB_BUDGET_BACKGROUND_TYPES.has(message.type);
+}
+
+export function githubBackgroundRateLimitDelayMs(
+  observation:
+    | { remaining?: unknown; reset_at?: unknown; resetAt?: unknown }
+    | null
+    | undefined,
+  nowMs = Date.now(),
+): number | null {
+  const rawRemaining = observation?.remaining;
+  const remaining =
+    typeof rawRemaining === "number"
+      ? normalizedNumber(rawRemaining)
+      : typeof rawRemaining === "string"
+        ? normalizedNumber(Number(rawRemaining))
+        : null;
+  const resetAt =
+    typeof observation?.reset_at === "string"
+      ? observation.reset_at
+      : typeof observation?.resetAt === "string"
+        ? observation.resetAt
+        : null;
+  if (remaining === null || !resetAt) return null;
+  if (remaining > MAINTENANCE_RESERVED_HEADROOM) return null;
+  const ms = Date.parse(resetAt) - nowMs;
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return Math.max(30_000, Math.min(900_000, (Math.ceil(ms / 1000) + 15) * 1000));
 }
 
 function githubWebhookPriority(payload: string): number {

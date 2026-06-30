@@ -7,6 +7,7 @@ import { isOrbBrokerEnabled } from "./orb/broker";
 import { isOpsEnabled } from "./review/ops-wire";
 import { isRagEnabled } from "./review/rag-wire";
 import { isSelfTuneEnabled } from "./review/selftune-wire";
+import { isGitHubBudgetBackgroundJob } from "./selfhost/queue-common";
 import { isReviewExecutionJob, isSelfHostedReviewRuntime } from "./selfhost/review-runtime";
 import type { JobMessage } from "./types";
 
@@ -39,6 +40,21 @@ export default {
           );
           message.ack();
           continue;
+        }
+        if (isGitHubBudgetBackgroundJob(message.body)) {
+          const resetAt = await shouldWaitForGitHubRateLimit(env, MAINTENANCE_RESERVED_HEADROOM).catch(() => undefined);
+          if (resetAt) {
+            console.log(
+              JSON.stringify({
+                event: "github_background_job_throttled",
+                messageId: message.id,
+                jobType: message.body.type,
+                resetAt,
+              }),
+            );
+            message.retry({ delaySeconds: delayUntil(resetAt) });
+            continue;
+          }
         }
         await processJob(env, message.body);
         message.ack();
