@@ -289,6 +289,7 @@ export async function timeoutFetch(input: RequestInfo | URL, init?: RequestInit)
   if (existing) {
     recordGitHubCacheMetric("coalesced", cls);
     const replay = await existing;
+    if (!replay.ok) throw replay.error;
     if (replay.ok && replay.cached)
       return responseFromCached(replay.cached, "coalesced");
   }

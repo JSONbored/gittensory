@@ -220,16 +220,16 @@ async function mintInstallationToken(
         );
         return cached.token;
       }
-        console.error(
-          JSON.stringify({
-            level: "error",
-            event: "orb_broker_unavailable",
-            subsystem: "github",
-            operation: "broker_installation_token",
-            reasonCode: "orb_broker_unavailable",
-            installationId,
-            error: errorMessage(error),
-          }),
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "orb_broker_unavailable",
+          subsystem: "github",
+          operation: "broker_installation_token",
+          reasonCode: "orb_broker_unavailable",
+          installationId,
+          error: errorMessage(error),
+        }),
       );
       throw error;
     }

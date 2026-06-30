@@ -511,7 +511,7 @@ describe("timeoutFetch", () => {
     expect(getFetches).toBe(2);
   });
 
-  it("also falls back when the shared in-flight GET leader throws before a response exists", async () => {
+  it("coalesces the same thrown failure when the shared in-flight GET leader errors before a response exists", async () => {
     let cacheReads = 0;
     let resolveBothCacheReads!: () => void;
     const bothCacheReads = new Promise<void>((resolve) => {
@@ -533,26 +533,21 @@ describe("timeoutFetch", () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       if (String(input).includes("/repos/o/r/branches/main/protection/required_status_checks")) {
         getFetches += 1;
-        if (getFetches === 1) {
-          await fetchGate;
-          throw new Error("network down");
-        }
-        return Response.json({ contexts: ["after-throw"] });
+        await fetchGate;
+        throw new Error("network down");
       }
       return new Response("not found", { status: 404 });
     });
 
     const url = "https://api.github.com/repos/o/r/branches/main/protection/required_status_checks";
-    const firstRequest = timeoutFetch(url);
-    void firstRequest.catch(() => undefined);
-    const first = firstRequest.catch((error: Error) => error.message);
-    const second = timeoutFetch(url);
+    const first = timeoutFetch(url).catch((error: Error) => error.message);
+    const second = timeoutFetch(url).catch((error: Error) => error.message);
     await bothCacheReads;
     releaseFetch();
 
     await expect(first).resolves.toContain("network down");
-    await expect(second.then((response) => response.json())).resolves.toEqual({ contexts: ["after-throw"] });
-    expect(getFetches).toBe(2);
+    await expect(second).resolves.toContain("network down");
+    expect(getFetches).toBe(1);
   });
 
   it("fails open when the shared response cache throws on read or write", async () => {
