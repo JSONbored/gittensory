@@ -68,12 +68,28 @@ export interface RagInfra {
   storage: StorageAdapter;
   vector?: VectorAdapter;
   inference?: InferenceAdapter;
+  embeddingDimensions?: number;
 }
+
+export type RagRetrievalMetrics = {
+  candidates: number;
+  kept: number;
+  topScore: number;
+  minScore: number;
+  reranked: boolean;
+  injectedChars: number;
+  paths: string[];
+};
+
+export type RagRetrievalResult = {
+  context: string;
+  metrics: RagRetrievalMetrics;
+};
 
 /** bge-m3: large context window → a whole file/function embeds as one coherent chunk (fewer vectors
  *  than 512-token models, which helps both quality and the free-tier vector budget). */
 export const EMBED_MODEL = "@cf/baai/bge-m3";
-/** bge-m3 output dimension — the vector index MUST be created with `--dimensions=1024`. */
+/** Default bge-m3 output dimension. Self-host can override this when QDRANT_DIM selects another model width. */
 export const RAG_DIMENSIONS = 1024;
 
 const CHUNK_CHARS = 16000; // per-file chunk budget; only files larger than this are split
@@ -91,6 +107,11 @@ export type RagChunk = { id: string; path: string; chunkIndex: number; kind: Rag
 
 export function ragNamespace(project: string, repo: string): string {
   return `${project}:${repo}`.toLowerCase().slice(0, 64);
+}
+
+export function ragDimensionsFromEnv(value: string | undefined): number {
+  const dim = Number(value);
+  return Number.isFinite(dim) && dim > 0 ? Math.floor(dim) : RAG_DIMENSIONS;
 }
 
 // ── Filtering: index CODE, not content/data corpora (the primary free-tier cost guard) ───────────
@@ -251,7 +272,7 @@ export async function countRepoChunks(storage: StorageAdapter, project: string, 
 }
 
 // ── Embedding (fail-safe: null on any failure) ────────────────────────────────────────────────────
-export async function embedTexts(inference: InferenceAdapter | undefined, texts: string[]): Promise<number[][] | null> {
+export async function embedTexts(inference: InferenceAdapter | undefined, texts: string[], expectedDimensions = RAG_DIMENSIONS): Promise<number[][] | null> {
   if (!inference || texts.length === 0) return null;
   try {
     const out: number[][] = [];
@@ -260,9 +281,9 @@ export async function embedTexts(inference: InferenceAdapter | undefined, texts:
       const res = (await inference.run(EMBED_MODEL, { text: batch })) as { data?: number[][] } | null;
       const data = res?.data;
       // Validate COUNT and DIMENSION: a self-host embedding endpoint can return a structurally-valid response
-      // with a missing/empty/wrong-width vector (e.g. a non-1024-d model) — without the dim check a bad vector
+      // with a missing/empty/wrong-width vector — without the dim check a bad vector
       // slips through and later fails Vectorize.upsert, dropping the whole batch. Fail the batch early. (#abc-verify)
-      if (!Array.isArray(data) || data.length !== batch.length || data.some((v) => !Array.isArray(v) || v.length !== RAG_DIMENSIONS)) return null;
+      if (!Array.isArray(data) || data.length !== batch.length || data.some((v) => !Array.isArray(v) || v.length !== expectedDimensions)) return null;
       out.push(...data.map((v) => Array.from(v)));
     }
     return out;
@@ -279,7 +300,7 @@ export async function upsertChunks(infra: RagInfra, project: string, repo: strin
   const { storage: db, vector: vec, inference } = infra;
   if (!vec || !inference || chunks.length === 0) return 0;
   const namespace = ragNamespace(project, repo);
-  const vectors = await embedTexts(inference, chunks.map((c) => c.text));
+  const vectors = await embedTexts(inference, chunks.map((c) => c.text), infra.embeddingDimensions ?? RAG_DIMENSIONS);
   if (!vectors) return 0;
   try {
     await vec.upsert(
@@ -337,6 +358,15 @@ export async function deleteChunksForPaths(infra: RagInfra, project: string, rep
 const MIN_QUERY_CHARS = 40;
 /** Hard cap on neighbours per query — bounds vector-index cost even if a caller passes a large topK. (#cloud-opt) */
 const RAG_MAX_TOPK = 20;
+const EMPTY_RAG_RETRIEVAL_METRICS: RagRetrievalMetrics = {
+  candidates: 0,
+  kept: 0,
+  topScore: 0,
+  minScore: 0,
+  reranked: false,
+  injectedChars: 0,
+  paths: [],
+};
 // Memoize the cold-index check briefly per isolate: a repo's "has any chunks" flips false→true ONCE (then
 // stays true until prune), so a short TTL safely skips the per-review storage COUNT on a hot repo. (#cloud-opt)
 const CHUNK_COUNT_TTL_MS = 60_000;
@@ -350,30 +380,41 @@ async function hasIndexedChunks(storage: StorageAdapter, project: string, repo: 
   return n > 0;
 }
 
-export async function retrieveContext(
+function emptyRagRetrievalResult(minScore = 0): RagRetrievalResult {
+  return {
+    context: "",
+    metrics: { ...EMPTY_RAG_RETRIEVAL_METRICS, minScore, paths: [] },
+  };
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return [...new Set(paths.filter(Boolean))];
+}
+
+export async function retrieveContextWithMetrics(
   infra: RagInfra,
   opts: { project: string; repo: string; queryText: string; topK?: number; minScore?: number; excludePaths?: string[]; reranker?: "off" | "bm25" },
-): Promise<string> {
+): Promise<RagRetrievalResult> {
   const { storage, vector: vectorAdapter, inference } = infra;
-  if (!vectorAdapter || !inference || opts.queryText.trim().length < MIN_QUERY_CHARS) return "";
+  const configuredMinScore = opts.minScore ?? 0;
+  if (!vectorAdapter || !inference || opts.queryText.trim().length < MIN_QUERY_CHARS) return emptyRagRetrievalResult(configuredMinScore);
   // Cold-index guard (memoized): when nothing is indexed yet for this repo, skip the embed + vector query
   // entirely — no point spending an inference call (and vector query budget) on an empty namespace. (#audit cost)
-  if (!(await hasIndexedChunks(storage, opts.project, opts.repo, Date.now()))) return "";
+  if (!(await hasIndexedChunks(storage, opts.project, opts.repo, Date.now()))) return emptyRagRetrievalResult(configuredMinScore);
   try {
-    const embedded = await embedTexts(inference, [opts.queryText.slice(0, 16000)]);
+    const embedded = await embedTexts(inference, [opts.queryText.slice(0, 16000)], infra.embeddingDimensions ?? RAG_DIMENSIONS);
     const vec = embedded?.[0];
-    if (!vec) return "";
+    if (!vec) return emptyRagRetrievalResult(configuredMinScore);
     const res = await vectorAdapter.query(vec, {
       topK: Math.min(opts.topK ?? 12, RAG_MAX_TOPK),
       namespace: ragNamespace(opts.project, opts.repo),
       returnMetadata: "all",
     });
     const exclude = new Set(opts.excludePaths ?? []);
-    const minScore = opts.minScore ?? 0;
     const all = res?.matches ?? [];
     const matches = all.filter((m) => {
       const p = (m.metadata?.path as string) ?? "";
-      return p && !exclude.has(p) && (typeof m.score !== "number" || m.score >= minScore);
+      return p && !exclude.has(p) && (typeof m.score !== "number" || m.score >= configuredMinScore);
     });
     const texts = matches.length > 0 ? await readChunkTexts(storage, matches.map((m) => m.id)) : new Map<string, string>();
     let chunks = matches
@@ -390,6 +431,16 @@ export async function retrieveContext(
     const reranked = opts.reranker === "bm25" && chunks.length > 1;
     if (reranked) chunks = bm25Rerank(opts.queryText, chunks);
     const out = chunks.length > 0 ? formatRetrievedContext(chunks) : "";
+    const paths = uniquePaths(chunks.map((chunk) => chunk.path));
+    const metrics: RagRetrievalMetrics = {
+      candidates: all.length,
+      kept: chunks.length,
+      topScore: Number((all[0]?.score ?? 0).toFixed(4)),
+      minScore: configuredMinScore,
+      reranked,
+      injectedChars: out.length,
+      paths,
+    };
     // Observability (#rag-observability): so we can SEE retrieval quality (score distribution, how much
     // context was injected) instead of flying blind — feeds tuning of minScore/topK + the /stats readout.
     console.log(
@@ -397,22 +448,30 @@ export async function retrieveContext(
         ev: "rag_retrieve",
         project: opts.project,
         repo: opts.repo,
-        candidates: all.length,
-        kept: chunks.length,
-        topScore: Number((all[0]?.score ?? 0).toFixed(4)),
-        minScore,
-        reranked, // #283: whether BM25 reordered the candidates
-        injectedChars: out.length,
+        candidates: metrics.candidates,
+        kept: metrics.kept,
+        topScore: metrics.topScore,
+        minScore: metrics.minScore,
+        reranked: metrics.reranked, // #283: whether BM25 reordered the candidates
+        injectedChars: metrics.injectedChars,
+        retrievedPathCount: paths.length,
       }),
     );
-    return out;
+    return { context: out, metrics };
   } catch (error) {
     // ERROR level (#5 review observability): emit so the central Sentry forwarder captures a broken RAG backend
     // (qdrant/embedder down) — retrieval degrades the review to diff-only, and this was previously a no-`level`
     // console.log invisible to Sentry. Keeps the `ev` tag for log continuity.
     console.error(JSON.stringify({ level: "error", event: "review_context_fetch_failed", contextType: "rag", ev: "rag_retrieve_error", message: String(error).slice(0, 200) }));
-    return "";
+    return emptyRagRetrievalResult(configuredMinScore);
   }
+}
+
+export async function retrieveContext(
+  infra: RagInfra,
+  opts: { project: string; repo: string; queryText: string; topK?: number; minScore?: number; excludePaths?: string[]; reranker?: "off" | "bm25" },
+): Promise<string> {
+  return (await retrieveContextWithMetrics(infra, opts)).context;
 }
 
 // ── BM25 reranking (#283): rescore the cosine top-K by exact-term overlap to demote vector-accident matches ──
