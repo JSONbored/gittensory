@@ -338,3 +338,69 @@ test("scanDependencyChanges falls back to direct OSV queries after an oversized 
   assert.equal(context.snapshotMetrics().cacheMisses, 4);
   assert.equal(context.snapshotMetrics().cacheHits, 0);
 });
+
+test("createAnalysisContext leaves expensive diff surfaces lazy for skipped analyzers", () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 1817,
+    files: [
+      {
+        path: "src/huge.ts",
+        patch: ["@@ -1,0 +1,2 @@", "+const first = true;"].join("\n"),
+      },
+    ],
+  });
+
+  assert.deepEqual(context.snapshotMetrics().cappedWorkByCategory, {});
+  assert.equal(context.changedFilePaths.length, 1);
+  assert.deepEqual(context.snapshotMetrics().cappedWorkByCategory, {});
+  assert.equal(context.hasAddedLines, true);
+  assert.deepEqual(context.snapshotMetrics().cappedWorkByCategory, {});
+});
+
+test("createAnalysisContext caps materialized diff surfaces", () => {
+  const oversizedPatch = [
+    "@@ -1,0 +1,6000 @@",
+    ...Array.from({ length: 6000 }, (_, index) => `+const value${index} = ${index};`),
+  ].join("\n");
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 1817,
+    files: [
+      {
+        path: "src/huge.ts",
+        patch: oversizedPatch,
+      },
+    ],
+  });
+
+  assert.equal(context.addedLines.length, 5000);
+  assert.equal(context.addedLines.at(-1).line, 5000);
+  assert.deepEqual(context.snapshotMetrics().cappedWorkByCategory, {
+    added_lines: 1,
+  });
+});
+
+test("createAnalysisContext caps oversized patch scans without splitting the full patch", () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 1817,
+    files: [
+      {
+        path: "src/huge.ts",
+        patch: `${" context\n".repeat(130000)}+const beyondCap = true;`,
+      },
+    ],
+  });
+
+  assert.equal(context.hasAddedLines, false);
+  assert.equal(context.addedLines.length, 0);
+  assert.equal(
+    context.snapshotMetrics().cappedWorkByCategory.has_added_lines_patch_bytes > 0,
+    true,
+  );
+  assert.equal(
+    context.snapshotMetrics().cappedWorkByCategory.added_lines_patch_bytes > 0,
+    true,
+  );
+});
