@@ -48,6 +48,7 @@ interface ScanOptions {
 
 /** npm packument version metadata, the subset that signals a native build. */
 export interface NpmVersionMeta {
+  version?: string;
   gypfile?: boolean;
   binary?: unknown;
   scripts?: Record<string, string>;
@@ -63,6 +64,13 @@ function hasNpmVersionMeta(
   data: NpmVersionMeta | NpmPackumentMeta,
 ): data is NpmVersionMeta {
   return "gypfile" in data || "binary" in data || "scripts" in data;
+}
+
+function hasExactNpmVersionIdentity(
+  data: NpmVersionMeta | NpmPackumentMeta,
+  version: string,
+): data is NpmVersionMeta {
+  return (data as { version?: unknown }).version === version;
 }
 
 function isNpmPackumentMeta(
@@ -92,6 +100,7 @@ function npmVersionMeta(
   version: string,
 ): NpmVersionMeta | undefined {
   if (!data) return undefined;
+  if (hasExactNpmVersionIdentity(data, version)) return data;
   if (hasNpmVersionMeta(data)) return data;
   return isNpmPackumentMeta(data) ? data.versions?.[version] : data;
 }

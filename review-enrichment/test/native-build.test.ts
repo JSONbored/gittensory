@@ -106,6 +106,19 @@ test("scanNativeBuild ignores custom versions field on exact metadata without pa
   assert.deepEqual(findings, []);
 });
 
+test("scanNativeBuild treats version-identifying exact metadata as top-level despite packument-looking fields", async () => {
+  const findings = await scanNativeBuild(npmAdd("pure-js"), async () =>
+    jsonResponse({
+      version: "1.0.0",
+      versions: { "1.0.0": { gypfile: true } },
+      time: { "1.0.0": "2026-06-30T00:00:00.000Z" },
+      "dist-tags": { latest: "1.0.0" },
+    }),
+  );
+
+  assert.deepEqual(findings, []);
+});
+
 test("scanNativeBuild: a pure-JS npm dependency is not flagged", async () => {
   assert.deepEqual(await scanNativeBuild(npmAdd("lodash"), npmFetch({ scripts: { build: "tsc" } })), []);
 });
