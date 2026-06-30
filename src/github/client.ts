@@ -19,8 +19,8 @@ import type { RepositorySettings } from "../types";
 const GITHUB_FETCH_TIMEOUT_MS = 12_000;
 const GITHUB_API_PREFIX = "https://api.github.com";
 const GITHUB_RESPONSE_CACHE_METRIC = "gittensory_github_response_cache_total";
-const BRANCH_PROTECTION_TTL_SECONDS = 20 * 60;
-const METADATA_TTL_SECONDS = 10 * 60;
+const DEFAULT_BRANCH_PROTECTION_TTL_SECONDS = 20 * 60;
+const DEFAULT_METADATA_TTL_SECONDS = 10 * 60;
 export const GITHUB_RESPONSE_CACHE_REPLAY_HEADER = "x-gittensory-cache";
 
 /** A shared cache for safe GitHub GET responses (e.g. Redis on the self-host). Stores only status/body/
@@ -43,7 +43,8 @@ export function setGitHubResponseCache(cache: GitHubResponseCache | null): void 
   responseCache = cache;
 }
 
-type GitHubCacheClass = "branch_protection" | "metadata";
+export type GitHubCacheClass = "branch_protection" | "metadata";
+type EnvLookup = Record<string, string | undefined>;
 
 /** Only cache explicitly stable GitHub REST reads. PR/issue/comment/label/event/check/status reads are mutable
  * review inputs and must always reflect the current GitHub state. Exported for tests. */
@@ -69,9 +70,20 @@ function githubCacheClassForUrl(url: string): GitHubCacheClass | null {
   return null;
 }
 
-function githubCacheTtlSeconds(cls: GitHubCacheClass): number {
-  if (cls === "branch_protection") return BRANCH_PROTECTION_TTL_SECONDS;
-  return METADATA_TTL_SECONDS;
+function positiveEnvSeconds(env: EnvLookup, name: string, fallback: number): number {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return fallback;
+  const seconds = Math.floor(value);
+  return seconds >= 1 ? seconds : fallback;
+}
+
+export function githubResponseCacheTtlSeconds(cls: GitHubCacheClass, env: EnvLookup = process.env): number {
+  if (cls === "branch_protection") {
+    return positiveEnvSeconds(env, "GITHUB_BRANCH_PROTECTION_CACHE_TTL_SECONDS", DEFAULT_BRANCH_PROTECTION_TTL_SECONDS);
+  }
+  return positiveEnvSeconds(env, "GITHUB_METADATA_CACHE_TTL_SECONDS", DEFAULT_METADATA_TTL_SECONDS);
 }
 
 function hasConditionalRequestHeader(headers: Headers): boolean {
@@ -201,7 +213,7 @@ async function fetchAndMaybeCacheGitHubGet(
       ...(response.headers.get("etag") ? { etag: response.headers.get("etag")! } : {}),
       ...(response.headers.get("last-modified") ? { lastModified: response.headers.get("last-modified")! } : {}),
     };
-    await responseCache!.set(cacheKey, cached, githubCacheTtlSeconds(cls));
+    await responseCache!.set(cacheKey, cached, githubResponseCacheTtlSeconds(cls));
     recordGitHubCacheMetric("set", cls);
     return { response, cached };
   } catch {

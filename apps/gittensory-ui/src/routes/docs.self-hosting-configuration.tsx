@@ -84,14 +84,20 @@ INTERNAL_JOB_TOKEN=<random-32-byte-token>`}
         identity and response-shaping headers, and cold misses are single-flighted so concurrent
         jobs do not stampede GitHub.
       </p>
-      <CodeBlock filename=".env" code={`GITHUB_CACHE_TTL_SECONDS=20`} />
+      <CodeBlock
+        filename=".env"
+        code={`GITHUB_CACHE_TTL_SECONDS=20
+GITHUB_BRANCH_PROTECTION_CACHE_TTL_SECONDS=1200
+GITHUB_METADATA_CACHE_TTL_SECONDS=600`}
+      />
       <Callout variant="note">
         <code>GITHUB_CACHE_TTL_SECONDS</code> is the short default for repeated safe GitHub GETs.
-        Stable repo/user metadata and branch-protection required-status reads use longer internal
-        TTLs. Live CI status, check-run, check-suite, pull/issue subresources, pull mergeability,
-        token minting, rate-limit, and collaborator-permission endpoints are never served from this
-        cache. Prometheus exports <code>gittensory_github_response_cache_total</code>, and the
-        bundled self-host Grafana dashboard includes the hit/miss/coalesced/error breakdown.
+        Stable repo/user metadata and branch-protection required-status reads use the per-class TTLs
+        above so operators can keep repeated policy reads hot without broadening stale cache risk.
+        Live CI status, check-run, check-suite, pull/issue subresources, pull mergeability, token
+        minting, rate-limit, and collaborator-permission endpoints are never served from this cache.
+        Prometheus exports <code>gittensory_github_response_cache_total</code>, and the bundled
+        self-host Grafana dashboard includes the hit/miss/coalesced/error breakdown.
       </Callout>
 
       <h2>Per-PR feature flags</h2>

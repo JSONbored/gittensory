@@ -3,6 +3,7 @@ import {
   clearGitHubResponseCacheForTest,
   forcedSelfhostMode,
   GITHUB_RESPONSE_CACHE_REPLAY_HEADER,
+  githubResponseCacheTtlSeconds,
   isCacheableGithubUrl,
   isRateLimitedResponse,
   makeInstallationOctokit,
@@ -36,6 +37,7 @@ function installMemoryResponseCache(): Map<string, CachedGitHubResponse> {
 afterEach(() => {
   clearGitHubResponseCacheForTest();
   resetMetrics();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 
@@ -301,7 +303,21 @@ describe("timeoutFetch", () => {
     expect(await replay.json()).toEqual({ ok: true });
   });
 
-  it("uses longer TTL overrides for stable GitHub metadata and branch-protection reads", async () => {
+  it("resolves per-class cache TTL env overrides with safe fallbacks", () => {
+    expect(githubResponseCacheTtlSeconds("branch_protection", {})).toBe(20 * 60);
+    expect(githubResponseCacheTtlSeconds("metadata", {})).toBe(10 * 60);
+    expect(githubResponseCacheTtlSeconds("branch_protection", { GITHUB_BRANCH_PROTECTION_CACHE_TTL_SECONDS: "3600" })).toBe(3600);
+    expect(githubResponseCacheTtlSeconds("metadata", { GITHUB_METADATA_CACHE_TTL_SECONDS: "90.8" })).toBe(90);
+    expect(githubResponseCacheTtlSeconds("branch_protection", { GITHUB_BRANCH_PROTECTION_CACHE_TTL_SECONDS: "" })).toBe(20 * 60);
+    expect(githubResponseCacheTtlSeconds("metadata", { GITHUB_METADATA_CACHE_TTL_SECONDS: "0" })).toBe(10 * 60);
+    expect(githubResponseCacheTtlSeconds("metadata", { GITHUB_METADATA_CACHE_TTL_SECONDS: "0.5" })).toBe(10 * 60);
+    expect(githubResponseCacheTtlSeconds("metadata", { GITHUB_METADATA_CACHE_TTL_SECONDS: "not-a-number" })).toBe(10 * 60);
+    expect(githubResponseCacheTtlSeconds("metadata", { GITHUB_METADATA_CACHE_TTL_SECONDS: "Infinity" })).toBe(10 * 60);
+  });
+
+  it("uses configured TTL overrides for stable GitHub metadata and branch-protection reads", async () => {
+    vi.stubEnv("GITHUB_BRANCH_PROTECTION_CACHE_TTL_SECONDS", "3600");
+    vi.stubEnv("GITHUB_METADATA_CACHE_TTL_SECONDS", "900");
     const ttlByUrl = new Map<string, number | undefined>();
     setGitHubResponseCache({
       get: async () => null,
@@ -320,10 +336,10 @@ describe("timeoutFetch", () => {
     const userTtl = [...ttlByUrl].find(([key]) => key.endsWith("/users/alice"))?.[1];
     const installationTtl = [...ttlByUrl].find(([key]) => key.endsWith("/app/installations/123"))?.[1];
     const statusTtl = [...ttlByUrl].find(([key]) => key.includes("/commits/abc/status"))?.[1];
-    expect(branchTtl).toBe(20 * 60);
-    expect(repoTtl).toBe(10 * 60);
-    expect(userTtl).toBe(10 * 60);
-    expect(installationTtl).toBe(10 * 60);
+    expect(branchTtl).toBe(3600);
+    expect(repoTtl).toBe(900);
+    expect(userTtl).toBe(900);
+    expect(installationTtl).toBe(900);
     expect(statusTtl).toBeUndefined();
     expect([...ttlByUrl.keys()].some((key) => key.includes("/commits/abc/status"))).toBe(false);
   });
@@ -527,7 +543,9 @@ describe("timeoutFetch", () => {
     });
 
     const url = "https://api.github.com/repos/o/r/branches/main/protection/required_status_checks";
-    const first = timeoutFetch(url).catch((error: Error) => error.message);
+    const firstRequest = timeoutFetch(url);
+    void firstRequest.catch(() => undefined);
+    const first = firstRequest.catch((error: Error) => error.message);
     const second = timeoutFetch(url);
     await bothCacheReads;
     releaseFetch();
