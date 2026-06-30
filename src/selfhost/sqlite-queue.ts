@@ -14,6 +14,7 @@ import {
   FOREGROUND_QUEUE_PRIORITY_FLOOR,
   githubRateLimitAdmissionDelayMs,
   githubRateLimitAdmissionKeyForJob,
+  githubRateLimitAdmissionRemainingFloor,
   githubRateLimitAdmissionRepoForJob,
   githubRateLimitRetryDelayMs,
   isGitHubBudgetBackgroundJob,
@@ -617,20 +618,19 @@ function rateLimitAdmissionDelayMs(
   try {
     const admissionKey = githubRateLimitAdmissionKeyForJob(message);
     const repoFullName = githubRateLimitAdmissionRepoForJob(message);
-    const row =
-      admissionKey || repoFullName
-        ? (driver.query(
-            `SELECT remaining, reset_at, observed_at FROM github_rate_limit_observations
-              WHERE resource='rest' AND remaining IS NOT NULL AND (
-                (? IS NOT NULL AND admission_key=?)
-                OR (? IS NOT NULL AND repo_full_name=? AND admission_key IS NULL)
-              )
-              ORDER BY CASE WHEN admission_key=? THEN 1 ELSE 0 END DESC, observed_at DESC
-              LIMIT 1`,
-            [admissionKey, admissionKey, repoFullName, repoFullName, admissionKey],
-          ).rows[0] as { remaining?: number | null; reset_at?: string | null; observed_at?: string | null } | undefined)
-        : undefined;
-    const delayMs = githubRateLimitAdmissionDelayMs(kind, admissionKey, row);
+    const remainingFloor = githubRateLimitAdmissionRemainingFloor(kind);
+    const rows = driver.query(
+      `SELECT remaining, reset_at, observed_at FROM github_rate_limit_observations
+        WHERE resource='rest' AND remaining IS NOT NULL AND (
+          (? IS NOT NULL AND admission_key=?)
+          OR (? IS NOT NULL AND repo_full_name=? AND admission_key IS NULL)
+          OR (? IS NULL AND ? IS NULL)
+        )
+        ORDER BY CASE WHEN remaining <= ? THEN 1 ELSE 0 END DESC, observed_at DESC
+        LIMIT 16`,
+      [admissionKey, admissionKey, repoFullName, repoFullName, admissionKey, repoFullName, remainingFloor],
+    ).rows as Array<{ remaining?: number | null; reset_at?: string | null; observed_at?: string | null }>;
+    const delayMs = githubRateLimitAdmissionDelayMs(kind, admissionKey, rows);
     return delayMs === null ? null : { kind, delayMs };
   } catch {
     return null;

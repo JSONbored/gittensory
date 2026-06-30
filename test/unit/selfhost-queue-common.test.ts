@@ -98,6 +98,22 @@ describe("self-host queue common helpers", () => {
     expect(githubWebhookRateLimitDelayMs({ remaining: 50, reset_at: "2026-06-24T11:59:00.000Z" }, now)).toBeNull();
   });
 
+  it("computes admission delays from any unsafe persisted candidate", () => {
+    const now = Date.parse("2026-06-24T12:00:00.000Z");
+    expect(
+      githubRateLimitAdmissionDelayMs(
+        "webhook",
+        null,
+        [
+          { remaining: 4000, reset_at: "2026-06-24T12:20:00.000Z", observed_at: "2026-06-24T12:00:00.000Z" },
+          { remaining: 0, reset_at: "2026-06-24T12:10:00.000Z", observed_at: "2026-06-24T11:59:00.000Z" },
+        ],
+        now,
+      ),
+    ).toBe(615_000);
+    expect(githubRateLimitAdmissionDelayMs("background", null, [], now)).toBeNull();
+  });
+
   it("uses the newest local REST rate-limit observation for admission control", async () => {
     const now = Date.parse("2026-06-24T12:00:00.000Z");
     const key = githubRateLimitAdmissionKeyForInstallation(123);

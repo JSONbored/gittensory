@@ -143,14 +143,20 @@ function observationMs(
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+type AdmissionObservation = {
+  remaining?: unknown;
+  reset_at?: unknown;
+  resetAt?: unknown;
+  observed_at?: unknown;
+  observedAt?: unknown;
+  observedAtMs?: unknown;
+};
+
 function newestRateLimitObservation(
   admissionKey: GitHubRateLimitAdmissionKey | null | undefined,
-  persisted:
-    | { remaining?: unknown; reset_at?: unknown; resetAt?: unknown; observed_at?: unknown; observedAt?: unknown }
-    | null
-    | undefined,
+  persisted: AdmissionObservation | null | undefined,
 ):
-  | { remaining?: unknown; reset_at?: unknown; resetAt?: unknown; observed_at?: unknown; observedAt?: unknown; observedAtMs?: unknown }
+  | AdmissionObservation
   | null
   | undefined {
   const local = admissionKey ? latestGitHubRestRateLimitObservation(admissionKey) : null;
@@ -186,16 +192,20 @@ export function githubRateLimitAdmissionRepoForJob(message: JobMessage): string 
 export function githubRateLimitAdmissionDelayMs(
   kind: "background" | "webhook",
   admissionKey: GitHubRateLimitAdmissionKey | null | undefined,
-  persisted:
-    | { remaining?: unknown; reset_at?: unknown; resetAt?: unknown; observed_at?: unknown; observedAt?: unknown }
-    | null
-    | undefined,
+  persisted: AdmissionObservation | readonly AdmissionObservation[] | null | undefined,
   nowMs = Date.now(),
 ): number | null {
-  const observation = newestRateLimitObservation(admissionKey, persisted);
-  return kind === "webhook"
-    ? githubWebhookRateLimitDelayMs(observation, nowMs)
-    : githubBackgroundRateLimitDelayMs(observation, nowMs);
+  const candidates = Array.isArray(persisted) ? persisted : [persisted];
+  let maxDelay: number | null = null;
+  for (const candidate of candidates.length > 0 ? candidates : [undefined]) {
+    const observation = newestRateLimitObservation(admissionKey, candidate);
+    const delay =
+      kind === "webhook"
+        ? githubWebhookRateLimitDelayMs(observation, nowMs)
+        : githubBackgroundRateLimitDelayMs(observation, nowMs);
+    if (delay !== null) maxDelay = Math.max(maxDelay ?? 0, delay);
+  }
+  return maxDelay;
 }
 
 export function githubBackgroundRateLimitDelayMs(
@@ -216,6 +226,10 @@ export function githubWebhookRateLimitDelayMs(
   nowMs = Date.now(),
 ): number | null {
   return githubObservedRateLimitDelayMs(observation, LOW_REST_RATE_LIMIT_REMAINING, nowMs);
+}
+
+export function githubRateLimitAdmissionRemainingFloor(kind: "background" | "webhook"): number {
+  return kind === "webhook" ? LOW_REST_RATE_LIMIT_REMAINING : MAINTENANCE_RESERVED_HEADROOM;
 }
 
 function githubWebhookPriority(payload: string): number {
