@@ -489,10 +489,8 @@ export async function scanCallerImpact(
         ? new Map([[candidate.file, new Set([candidate.line])]])
         : new Map<string, Set<number>>();
     const isDead = candidate.kind === "dead";
-    const skipPaths = changedPaths;
-    const additionalPaths = isDead
-      ? []
-      : [];
+    const skipPaths = isDead ? null : changedPaths;
+    const additionalPaths = isDead ? Array.from(changedPaths) : [];
     const callers = await resolveCallers(
       repo.owner,
       repo.repo,

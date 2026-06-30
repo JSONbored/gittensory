@@ -232,7 +232,7 @@ test("scanCallerImpact: import-only references are still live callers", async ()
   assert.deepEqual(findings[0].callers, ["src/consumer.ts"]);
 });
 
-test("scanCallerImpact: dead detection ignores changed-file callsites", async () => {
+test("scanCallerImpact: dead detection includes same-file callsites", async () => {
   const findings = await scanCallerImpact(
     req([
       {
@@ -249,10 +249,39 @@ test("scanCallerImpact: dead detection ignores changed-file callsites", async ()
     ),
   );
 
-  assert.equal(findings.length, 1);
-  assert.equal(findings[0].kind, "dead");
-  assert.equal(findings[0].symbol, "localEntry");
-  assert.deepEqual(findings[0].callers, []);
+  assert.equal(findings.length, 0);
+});
+
+test("scanCallerImpact: dead detection ignores declaration file but not other changed files", async () => {
+  const findings = await scanCallerImpact(
+    req([
+      {
+        path: "src/api.ts",
+        patch:
+          "@@ -1,0 +1,2 @@\n+export function localEntry() { return 1; }\n+localEntry();",
+      },
+      {
+        path: "src/consumer.ts",
+        patch:
+          "@@ -1,0 +1,2 @@\n+import { localEntry } from './api';\n+localEntry();",
+      },
+    ]),
+    fetchFor(
+      expectSearch([{ path: "src/api.ts" }, { path: "src/consumer.ts" }]),
+      fileContentsRouter([
+        [
+          "/contents/src/api.ts?ref=abc123",
+          "export function localEntry() { return 1; }\nlocalEntry();",
+        ],
+        [
+          "/contents/src/consumer.ts?ref=abc123",
+          "import { localEntry } from './api';\nlocalEntry();",
+        ],
+      ]),
+    ),
+  );
+
+  assert.equal(findings.length, 0);
 });
 
 test("scanCallerImpact: missing token/head-sha skips analysis", async () => {
