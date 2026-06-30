@@ -73,7 +73,6 @@ function symbolBoundaryRegex(symbol: string): RegExp {
   const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(
     `(?:^|[^A-Za-z0-9_$])(${escaped})(?:$|[^A-Za-z0-9_$])`,
-    "g",
   );
 }
 
@@ -265,6 +264,7 @@ async function readFileContainsSymbol(
   headSha: string,
   token: string,
   fetchImpl: typeof fetch,
+  skipLineNumbers: ReadonlySet<number> = new Set(),
   options: ScanOptions = {},
 ): Promise<boolean> {
   const encodedPath = encodePath(path);
@@ -297,7 +297,15 @@ async function readFileContainsSymbol(
         });
     if (!response.ok) return false;
     const text = response.data;
-    return symbolBoundaryRegex(symbol).test(text);
+    const lineRegex = symbolBoundaryRegex(symbol);
+    for (const [index, line] of text.split("\n").entries()) {
+      const lineNumber = index + 1;
+      if (skipLineNumbers.has(lineNumber)) continue;
+      if (lineRegex.test(line)) {
+        return true;
+      }
+    }
+    return false;
   } catch {
     return false;
   }
@@ -310,6 +318,8 @@ async function resolveCallers(
   headSha: string,
   token: string,
   skipPaths: Set<string> | null,
+  additionalPaths: Iterable<string> = [],
+  skipLineNumbersByPath: ReadonlyMap<string, ReadonlySet<number>> = new Map(),
   fetchImpl: typeof fetch,
   options: ScanOptions = {},
 ): Promise<string[]> {
@@ -321,8 +331,10 @@ async function resolveCallers(
     fetchImpl,
     options,
   );
+  const candidatePaths = new Set(hitPaths);
+  for (const path of additionalPaths) candidatePaths.add(path);
   const callers: string[] = [];
-  for (const path of hitPaths) {
+  for (const path of candidatePaths) {
     if (skipPaths?.has(path)) continue;
     if (callers.length >= MAX_CALLERS_PER_SYMBOL) break;
     if (
@@ -334,6 +346,7 @@ async function resolveCallers(
         headSha,
         token,
         fetchImpl,
+        skipLineNumbersByPath.get(path) ?? new Set(),
         options,
       )
     ) {
@@ -471,13 +484,24 @@ export async function scanCallerImpact(
   const findings: CallerImpactFinding[] = [];
   for (const candidate of candidates) {
     if (options.signal?.aborted) throw new Error("analyzer_aborted");
+    const skipLineNumbersByPath =
+      candidate.kind === "dead"
+        ? new Map([[candidate.file, new Set([candidate.line])]])
+        : new Map<string, Set<number>>();
+    const isDead = candidate.kind === "dead";
+    const skipPaths = changedPaths;
+    const additionalPaths = isDead
+      ? []
+      : [];
     const callers = await resolveCallers(
       repo.owner,
       repo.repo,
       candidate.searchSymbol,
       req.headSha,
       req.githubToken,
-      candidate.kind === "dead" ? null : changedPaths,
+      skipPaths,
+      additionalPaths,
+      skipLineNumbersByPath,
       fetchImpl,
       options,
     );

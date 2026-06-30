@@ -205,7 +205,34 @@ test("scanCallerImpact: dead new export is reported without unchanged callers", 
   assert.deepEqual(findings[0].callers, []);
 });
 
-test("scanCallerImpact: does not flag dead when only changed files call new export", async () => {
+test("scanCallerImpact: import-only references are still live callers", async () => {
+  const findings = await scanCallerImpact(
+    req([
+      {
+        path: "src/api.ts",
+        patch:
+          "@@ -1,1 +1,1 @@\n-export function doThing(a: number) {}\n+export function doThing(a: string) {}",
+      },
+    ]),
+    fetchFor(
+      expectSearch([{ path: "src/consumer.ts" }]),
+      fileContentsRouter([
+        ["/contents/src/api.ts?ref=abc123", "export function doThing(a: string) {}"],
+        [
+          "/contents/src/consumer.ts?ref=abc123",
+          "import { doThing } from './api';",
+        ],
+      ]),
+    ),
+  );
+
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "changed");
+  assert.equal(findings[0].symbol, "doThing");
+  assert.deepEqual(findings[0].callers, ["src/consumer.ts"]);
+});
+
+test("scanCallerImpact: dead detection ignores changed-file callsites", async () => {
   const findings = await scanCallerImpact(
     req([
       {
@@ -222,7 +249,10 @@ test("scanCallerImpact: does not flag dead when only changed files call new expo
     ),
   );
 
-  assert.equal(findings.length, 0);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "dead");
+  assert.equal(findings[0].symbol, "localEntry");
+  assert.deepEqual(findings[0].callers, []);
 });
 
 test("scanCallerImpact: missing token/head-sha skips analysis", async () => {
