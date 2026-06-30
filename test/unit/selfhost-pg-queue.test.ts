@@ -25,6 +25,26 @@ const ciWebhook = (deliveryId: string, eventName: "check_suite" | "check_run" = 
       [eventName]: { head_sha: sha, pull_requests: [{ number: 1629 }] },
     },
   }) as unknown as JobMessage;
+const installedWebhook = (deliveryId: string, installationId: number): JobMessage =>
+  ({
+    type: "github-webhook",
+    deliveryId,
+    eventName: "pull_request",
+    payload: {
+      action: "synchronize",
+      installation: { id: installationId },
+      repository: { full_name: "JSONbored/gittensory" },
+      pull_request: { number: 1629, head: { sha: "c".repeat(40) } },
+    },
+  }) as unknown as JobMessage;
+const regateJob = (installationId: number | null, prNumber = 1629): JobMessage =>
+  ({
+    type: "agent-regate-pr",
+    deliveryId: `sweep:jsonbored/gittensory#${prNumber}`,
+    repoFullName: "jsonbored/gittensory",
+    prNumber,
+    ...(installationId === null ? {} : { installationId }),
+  }) as unknown as JobMessage;
 const typeOf = (m: JobMessage): string => (m as unknown as { type: string }).type;
 
 type MockFn = { mockResolvedValueOnce(v: unknown): void };
@@ -47,23 +67,16 @@ function makePool(): MockPool {
     const q = String(sql);
     if (q.includes("FROM github_rate_limit_observations")) {
       const admissionKey = typeof params?.[0] === "string" ? params[0] : null;
-      const remainingFloor = typeof params?.[1] === "number" ? params[1] : Number.POSITIVE_INFINITY;
-      const rows = rateLimitRows
-        .filter(
-          (row) =>
-            (admissionKey !== null && row.admission_key === admissionKey) ||
-            row.admission_key === undefined ||
-            row.admission_key === null,
-        )
-        .sort((a, b) => {
-          const unsafe =
-            (Number(b.remaining) <= remainingFloor ? 1 : 0) - (Number(a.remaining) <= remainingFloor ? 1 : 0);
-          if (unsafe !== 0) return unsafe;
+      const newest = (rows: typeof rateLimitRows) =>
+        [...rows].sort((a, b) => {
           const observed = Date.parse(b.observed_at ?? "") - Date.parse(a.observed_at ?? "");
           if (Number.isFinite(observed) && observed !== 0) return observed;
           return 0;
-        })
-        .slice(0, 16);
+        })[0];
+      const rows = [
+        ...(admissionKey !== null ? [newest(rateLimitRows.filter((row) => row.admission_key === admissionKey))].filter(Boolean) : []),
+        newest(rateLimitRows.filter((row) => row.admission_key === undefined || row.admission_key === null)),
+      ].filter(Boolean);
       return { rows, rowCount: rows.length };
     }
     if (q.includes("SET status='pending', run_after=GREATEST")) {
@@ -152,7 +165,7 @@ describe("createPgQueue (durable #977)", () => {
   it("init() skips already-normalized priority and job-key rows", async () => {
     const priorityUpdateSql = "UPDATE _selfhost_jobs SET priority=$1";
     const jobKeyUpdateSql = "UPDATE _selfhost_jobs SET job_key=$1";
-    const fn = vi.fn().mockImplementation(async (sql: unknown) => {
+    const fn = vi.fn().mockImplementation(async (sql: unknown, params?: unknown[]) => {
       const q = String(sql);
       if (q.includes("SELECT id, payload, priority")) {
         return {
@@ -681,7 +694,7 @@ describe("createPgQueue (durable #977)", () => {
     }
   });
 
-  it("pre-yields from exact admission exhaustion before newer legacy repo observations", async () => {
+  it("does not keep webhook admission closed from stale exact rows after a newer healthy legacy observation", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
     const oldJitter = process.env.QUEUE_RATE_LIMIT_JITTER_MS;
@@ -698,15 +711,57 @@ describe("createPgQueue (durable #977)", () => {
 
       await q.drain();
 
-      expect(seen).toEqual([]);
-      expect(m.pool.query).toHaveBeenCalledWith(
+      expect(seen).toEqual(["github-webhook"]);
+      expect(m.pool.query).not.toHaveBeenCalledWith(
         expect.stringContaining("SET status='pending', run_after=GREATEST"),
-        [Date.parse("2026-06-24T12:10:15.000Z"), "github rate-limit webhook admission", "webhook"],
+        expect.anything(),
       );
     } finally {
       if (oldJitter === undefined) delete process.env.QUEUE_RATE_LIMIT_JITTER_MS;
       else process.env.QUEUE_RATE_LIMIT_JITTER_MS = oldJitter;
     }
+  });
+
+  it("does not keep webhook admission closed from stale legacy low rows after a newer healthy legacy observation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
+    const m = makePool();
+    m.setRateLimitRows([
+      { admission_key: null, repo_full_name: "owner/repo", remaining: "0", reset_at: "2026-06-24T12:10:00.000Z", observed_at: "2026-06-24T11:59:00.000Z" },
+      { admission_key: null, repo_full_name: "owner/repo", remaining: "4000", reset_at: "2026-06-24T12:20:00.000Z", observed_at: "2026-06-24T12:00:00.000Z" },
+    ]);
+    m.enqueueJob("webhook", { type: "github-webhook", deliveryId: "fresh", eventName: "pull_request", payload: { installation: { id: 123 }, repository: { full_name: "owner/repo" } } });
+    const seen: string[] = [];
+    const q = createPgQueue(m.pool, async (j) => void seen.push(typeOf(j)));
+
+    await q.drain();
+
+    expect(seen).toEqual(["github-webhook"]);
+    expect(m.pool.query).not.toHaveBeenCalledWith(
+      expect.stringContaining("SET status='pending', run_after=GREATEST"),
+      expect.anything(),
+    );
+  });
+
+  it("does not keep webhook admission closed from stale legacy rows after a newer healthy exact observation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
+    const m = makePool();
+    m.setRateLimitRows([
+      { admission_key: null, repo_full_name: "owner/repo", remaining: "0", reset_at: "2026-06-24T12:10:00.000Z", observed_at: "2026-06-24T11:59:00.000Z" },
+      { admission_key: "installation:123", repo_full_name: "owner/repo", remaining: "4000", reset_at: "2026-06-24T12:20:00.000Z", observed_at: "2026-06-24T12:00:00.000Z" },
+    ]);
+    m.enqueueJob("webhook", { type: "github-webhook", deliveryId: "fresh", eventName: "pull_request", payload: { installation: { id: 123 }, repository: { full_name: "owner/repo" } } });
+    const seen: string[] = [];
+    const q = createPgQueue(m.pool, async (j) => void seen.push(typeOf(j)));
+
+    await q.drain();
+
+    expect(seen).toEqual(["github-webhook"]);
+    expect(m.pool.query).not.toHaveBeenCalledWith(
+      expect.stringContaining("SET status='pending', run_after=GREATEST"),
+      expect.anything(),
+    );
   });
 
   it("does not pre-yield webhook jobs for another installation's persisted REST exhaustion", async () => {
@@ -844,7 +899,39 @@ describe("createPgQueue (durable #977)", () => {
     );
   });
 
-  it("defers due jobs and coalesces a keyed rate-limit retry into the pending duplicate", async () => {
+  it("does not defer GitHub work when a non-GitHub job throws a GitHub-looking rate limit", async () => {
+    const m = makePool();
+    m.enqueueJob("1", msg("refresh-registry"), 0);
+    m.enqueueJob("2", installedWebhook("github-still-runs", 123), 0);
+    const seen: string[] = [];
+    const rateLimit = new Error("API rate limit exceeded for installation ID 123");
+    Object.assign(rateLimit, {
+      status: 403,
+      response: { headers: { "retry-after": "120" } },
+    });
+    const q = createPgQueue(
+      m.pool,
+      async (message) => {
+        seen.push(message.type === "github-webhook" ? message.deliveryId ?? "" : message.type);
+        if (message.type === "refresh-registry") throw rateLimit;
+      },
+      { maxRetries: 1, backoffMs: () => 0 },
+    );
+    await q.init();
+    await q.drain();
+
+    expect(seen).toEqual(["refresh-registry", "github-still-runs"]);
+    expect(m.pool.query).not.toHaveBeenCalledWith(
+      expect.stringContaining("SET run_after=GREATEST(run_after, $1), last_error=COALESCE"),
+      expect.arrayContaining([expect.any(Number), "github rate-limit budget deferred", expect.any(String)]),
+    );
+    expect(m.pool.query).toHaveBeenCalledWith(
+      expect.stringContaining("DELETE FROM _selfhost_jobs WHERE id=$1"),
+      ["2"],
+    );
+  });
+
+  it("defers matching GitHub-budget jobs and coalesces a keyed rate-limit retry into the pending duplicate", async () => {
     const oldJitter = process.env.QUEUE_STARTUP_JITTER_MS;
     process.env.QUEUE_STARTUP_JITTER_MS = "0";
     const rateLimit = new Error("API rate limit exceeded for installation ID 123");
@@ -852,16 +939,19 @@ describe("createPgQueue (durable #977)", () => {
       status: 403,
       response: { headers: { "retry-after": "120" } },
     });
-    const fn = vi.fn().mockImplementation(async (sql: unknown) => {
+    let claimed = false;
+    const fn = vi.fn().mockImplementation(async (sql: unknown, params?: unknown[]) => {
       const q = String(sql);
       if (q.includes("SELECT id, payload, priority")) return { rows: [], rowCount: 0 };
       if (q.includes("SELECT id, payload, job_key") && q.includes("status IN")) return { rows: [], rowCount: 0 };
       if (q.includes("WHERE status='processing'")) return { rows: [], rowCount: 0 };
       if (q.includes("UPDATE _selfhost_jobs SET status='processing'")) {
+        if (claimed) return { rows: [], rowCount: 0 };
+        claimed = true;
         return {
           rows: [{
             id: "active",
-            payload: JSON.stringify({ type: "github-webhook" }),
+            payload: JSON.stringify(installedWebhook("ci-active", 123)),
             attempts: 0,
             job_key: "github-webhook:ci-completed:jsonbored/gittensory@abc1234#7",
           }],
@@ -870,7 +960,13 @@ describe("createPgQueue (durable #977)", () => {
       }
       if (q.includes("SELECT id, payload, job_key FROM _selfhost_jobs WHERE status='pending' AND run_after<=$1")) {
         return {
-          rows: [{ id: "pending-due", payload: JSON.stringify(msg("agent-regate-pr")), job_key: "agent-regate-pr:jsonbored/gittensory#9" }],
+          rows: [
+            { id: "pending-same", payload: JSON.stringify(regateJob(123, 9)), job_key: "agent-regate-pr:jsonbored/gittensory#9" },
+            { id: "pending-legacy", payload: JSON.stringify(regateJob(null, 10)), job_key: "agent-regate-pr:jsonbored/gittensory#10" },
+            { id: "pending-other", payload: JSON.stringify(regateJob(456, 11)), job_key: "agent-regate-pr:jsonbored/gittensory#11" },
+            { id: "pending-local", payload: JSON.stringify(msg("local-cleanup")), job_key: null },
+            { id: "pending-malformed", payload: "{not json", job_key: null },
+          ],
           rowCount: 1,
         };
       }
@@ -879,6 +975,12 @@ describe("createPgQueue (durable #977)", () => {
       }
       if (q.includes("SELECT id FROM _selfhost_jobs WHERE status='pending' AND job_key=$1 ORDER BY")) {
         return { rows: [], rowCount: 0 };
+      }
+      if (
+        q.includes("SET run_after=GREATEST(run_after, $1), last_error=COALESCE") &&
+        params?.[2] === "pending-legacy"
+      ) {
+        return { rows: [], rowCount: null };
       }
       return { rows: [], rowCount: 1 };
     });
@@ -892,11 +994,27 @@ describe("createPgQueue (durable #977)", () => {
       );
       await q.init();
       await q.drain();
-      await q.binding.send(ciWebhook("after-cooldown"), { delaySeconds: 0 });
+      await q.binding.send(ciWebhook("after-rate-limit"), { delaySeconds: 0 });
 
       expect(fn).toHaveBeenCalledWith(
         expect.stringContaining("SET run_after=GREATEST(run_after, $1), last_error=COALESCE"),
-        expect.arrayContaining([expect.any(Number), "github rate-limit cooldown", "pending-due"]),
+        expect.arrayContaining([expect.any(Number), "github rate-limit budget deferred", "pending-same"]),
+      );
+      expect(fn).toHaveBeenCalledWith(
+        expect.stringContaining("SET run_after=GREATEST(run_after, $1), last_error=COALESCE"),
+        expect.arrayContaining([expect.any(Number), "github rate-limit budget deferred", "pending-legacy"]),
+      );
+      expect(fn).not.toHaveBeenCalledWith(
+        expect.stringContaining("SET run_after=GREATEST(run_after, $1), last_error=COALESCE"),
+        expect.arrayContaining([expect.any(Number), "github rate-limit budget deferred", "pending-other"]),
+      );
+      expect(fn).not.toHaveBeenCalledWith(
+        expect.stringContaining("SET run_after=GREATEST(run_after, $1), last_error=COALESCE"),
+        expect.arrayContaining([expect.any(Number), "github rate-limit budget deferred", "pending-local"]),
+      );
+      expect(fn).not.toHaveBeenCalledWith(
+        expect.stringContaining("SET run_after=GREATEST(run_after, $1), last_error=COALESCE"),
+        expect.arrayContaining([expect.any(Number), "github rate-limit budget deferred", "pending-malformed"]),
       );
       expect(fn).toHaveBeenCalledWith(
         expect.stringContaining("SET run_after=GREATEST(run_after, $1), last_error=$2"),
@@ -908,7 +1026,7 @@ describe("createPgQueue (durable #977)", () => {
       );
       expect(fn).toHaveBeenCalledWith(
         expect.stringContaining("INSERT INTO _selfhost_jobs (payload"),
-        expect.arrayContaining([expect.stringContaining('"deliveryId":"after-cooldown"'), expect.any(Number)]),
+        expect.arrayContaining([expect.stringContaining('"deliveryId":"after-rate-limit"'), expect.any(Number)]),
       );
     } finally {
       if (oldJitter === undefined) delete process.env.QUEUE_STARTUP_JITTER_MS;
@@ -916,11 +1034,12 @@ describe("createPgQueue (durable #977)", () => {
     }
   });
 
-  it("opens a shared cooldown after GitHub rate limits so the pump does not claim the next due job", async () => {
+  it("keeps claiming unrelated work after a keyed GitHub rate limit", async () => {
     const m = makePool();
-    m.enqueueJob("1", { type: "github-webhook" }, 0);
-    m.enqueueJob("2", { type: "agent-regate-pr" }, 0);
-    let calls = 0;
+    m.enqueueJob("1", installedWebhook("blocked-installation", 123), 0);
+    m.enqueueJob("2", installedWebhook("other-installation", 456), 0);
+    m.enqueueJob("3", msg("local-cleanup"), 0);
+    const seen: string[] = [];
     const rateLimit = new Error("API rate limit exceeded for installation ID 123");
     Object.assign(rateLimit, {
       status: 403,
@@ -928,18 +1047,28 @@ describe("createPgQueue (durable #977)", () => {
     });
     const q = createPgQueue(
       m.pool,
-      async () => {
-        calls += 1;
-        throw rateLimit;
+      async (message) => {
+        seen.push(message.type === "github-webhook" ? message.deliveryId ?? "" : message.type);
+        if (message.type === "github-webhook" && message.deliveryId === "blocked-installation") {
+          throw rateLimit;
+        }
       },
       { maxRetries: 1, backoffMs: () => 0 },
     );
     await q.init();
     await q.drain();
-    expect(calls).toBe(1);
+    expect(seen).toEqual(["blocked-installation", "other-installation", "local-cleanup"]);
     expect(m.pool.query).toHaveBeenCalledWith(
       expect.stringContaining("SELECT id, payload, job_key FROM _selfhost_jobs WHERE status='pending' AND run_after<=$1"),
       expect.arrayContaining([expect.any(Number)]),
+    );
+    expect(m.pool.query).toHaveBeenCalledWith(
+      expect.stringContaining("DELETE FROM _selfhost_jobs WHERE id=$1"),
+      ["2"],
+    );
+    expect(m.pool.query).toHaveBeenCalledWith(
+      expect.stringContaining("DELETE FROM _selfhost_jobs WHERE id=$1"),
+      ["3"],
     );
   });
 

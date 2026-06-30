@@ -38,6 +38,26 @@ const ciWebhook = (deliveryId: string, eventName: "check_suite" | "check_run" = 
       [eventName]: { head_sha: sha, pull_requests: [{ number: 1629 }] },
     },
   }) as unknown as JobMessage;
+const installedWebhook = (deliveryId: string, installationId: number): JobMessage =>
+  ({
+    type: "github-webhook",
+    deliveryId,
+    eventName: "pull_request",
+    payload: {
+      action: "synchronize",
+      installation: { id: installationId },
+      repository: { full_name: "JSONbored/gittensory" },
+      pull_request: { number: 1629, head: { sha: "c".repeat(40) } },
+    },
+  }) as unknown as JobMessage;
+const regateJob = (installationId: number | null, prNumber = 1629): JobMessage =>
+  ({
+    type: "agent-regate-pr",
+    deliveryId: `sweep:jsonbored/gittensory#${prNumber}`,
+    repoFullName: "jsonbored/gittensory",
+    prNumber,
+    ...(installationId === null ? {} : { installationId }),
+  }) as unknown as JobMessage;
 const typeOf = (m: JobMessage): string => (m as unknown as { type: string }).type;
 
 describe("createSqliteQueue (durable #980)", () => {
@@ -434,7 +454,7 @@ describe("createSqliteQueue (durable #980)", () => {
     }
   });
 
-  it("pre-yields from exact admission exhaustion before newer legacy repo observations", async () => {
+  it("does not keep webhook admission closed from stale exact rows after a newer healthy legacy observation", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
     const oldJitter = process.env.QUEUE_RATE_LIMIT_JITTER_MS;
@@ -472,22 +492,91 @@ describe("createSqliteQueue (durable #980)", () => {
       await q.binding.send({ type: "github-webhook", deliveryId: "fresh", eventName: "pull_request", payload: { installation: { id: 123 }, repository: { full_name: "owner/repo" } } });
       await q.drain();
 
-      expect(seen).toEqual([]);
-      const row = driver.query(
-        "SELECT status, attempts, run_after, last_error FROM _selfhost_jobs",
-        [],
-      ).rows[0] as { status: string; attempts: number; run_after: number; last_error: string };
-      expect(row).toMatchObject({
-        status: "pending",
-        attempts: 0,
-        run_after: Date.parse("2026-06-24T12:10:15.000Z"),
-        last_error: "github rate-limit webhook admission",
-      });
+      expect(seen).toEqual(["github-webhook"]);
+      expect(q.stats()).not.toHaveProperty("gittensory_jobs_rate_limit_deferred_total");
     } finally {
       if (oldJitter === undefined) delete process.env.QUEUE_RATE_LIMIT_JITTER_MS;
       else process.env.QUEUE_RATE_LIMIT_JITTER_MS = oldJitter;
       vi.useRealTimers();
     }
+  });
+
+  it("does not keep webhook admission closed from stale legacy low rows after a newer healthy legacy observation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
+    const driver = makeDriver();
+    driver.query(
+      `CREATE TABLE github_rate_limit_observations (
+        id TEXT PRIMARY KEY,
+        repo_full_name TEXT NOT NULL,
+        admission_key TEXT,
+        resource TEXT NOT NULL,
+        path TEXT NOT NULL,
+        status_code INTEGER NOT NULL,
+        limit_value INTEGER,
+        remaining INTEGER,
+        reset_at TEXT,
+        observed_at TEXT NOT NULL
+      )`,
+      [],
+    );
+    driver.query(
+      `INSERT INTO github_rate_limit_observations (id, repo_full_name, admission_key, resource, path, status_code, limit_value, remaining, reset_at, observed_at)
+       VALUES (?, ?, NULL, 'rest', ?, 403, 5000, 0, ?, ?)`,
+      ["rl-webhook-legacy-old-low", "owner/repo", "/x", "2026-06-24T12:10:00.000Z", "2026-06-24T11:59:00.000Z"],
+    );
+    driver.query(
+      `INSERT INTO github_rate_limit_observations (id, repo_full_name, admission_key, resource, path, status_code, limit_value, remaining, reset_at, observed_at)
+       VALUES (?, ?, NULL, 'rest', ?, 200, 5000, 4000, ?, ?)`,
+      ["rl-webhook-legacy-new-healthy", "owner/repo", "/x", "2026-06-24T12:20:00.000Z", "2026-06-24T12:00:00.000Z"],
+    );
+    const seen: string[] = [];
+    const q = createSqliteQueue(driver, async (m) => void seen.push(typeOf(m)));
+
+    await q.binding.send({ type: "github-webhook", deliveryId: "fresh", eventName: "pull_request", payload: { installation: { id: 123 }, repository: { full_name: "owner/repo" } } });
+    await q.drain();
+
+    expect(seen).toEqual(["github-webhook"]);
+    expect(q.stats()).not.toHaveProperty("gittensory_jobs_rate_limit_deferred_total");
+  });
+
+  it("does not keep webhook admission closed from stale legacy rows after a newer healthy exact observation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
+    const driver = makeDriver();
+    driver.query(
+      `CREATE TABLE github_rate_limit_observations (
+        id TEXT PRIMARY KEY,
+        repo_full_name TEXT NOT NULL,
+        admission_key TEXT,
+        resource TEXT NOT NULL,
+        path TEXT NOT NULL,
+        status_code INTEGER NOT NULL,
+        limit_value INTEGER,
+        remaining INTEGER,
+        reset_at TEXT,
+        observed_at TEXT NOT NULL
+      )`,
+      [],
+    );
+    driver.query(
+      `INSERT INTO github_rate_limit_observations (id, repo_full_name, admission_key, resource, path, status_code, limit_value, remaining, reset_at, observed_at)
+       VALUES (?, ?, NULL, 'rest', ?, 403, 5000, 0, ?, ?)`,
+      ["rl-webhook-legacy-old-low", "owner/repo", "/x", "2026-06-24T12:10:00.000Z", "2026-06-24T11:59:00.000Z"],
+    );
+    driver.query(
+      `INSERT INTO github_rate_limit_observations (id, repo_full_name, admission_key, resource, path, status_code, limit_value, remaining, reset_at, observed_at)
+       VALUES (?, ?, ?, 'rest', ?, 200, 5000, 4000, ?, ?)`,
+      ["rl-webhook-exact-new-healthy", "owner/repo", "installation:123", "/x", "2026-06-24T12:20:00.000Z", "2026-06-24T12:00:00.000Z"],
+    );
+    const seen: string[] = [];
+    const q = createSqliteQueue(driver, async (m) => void seen.push(typeOf(m)));
+
+    await q.binding.send({ type: "github-webhook", deliveryId: "fresh", eventName: "pull_request", payload: { installation: { id: 123 }, repository: { full_name: "owner/repo" } } });
+    await q.drain();
+
+    expect(seen).toEqual(["github-webhook"]);
+    expect(q.stats()).not.toHaveProperty("gittensory_jobs_rate_limit_deferred_total");
   });
 
   it("does not pre-yield webhook jobs for another installation's persisted REST exhaustion", async () => {
@@ -996,9 +1085,9 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(q.stats()).not.toHaveProperty("gittensory_jobs_rate_limited_total");
   });
 
-  it("defers the due backlog and stops claiming when GitHub is rate-limited", async () => {
+  it("does not defer GitHub work when a non-GitHub job throws a GitHub-looking rate limit", async () => {
     const driver = makeDriver();
-    let calls = 0;
+    const seen: string[] = [];
     const rateLimit = new Error("API rate limit exceeded for installation ID 123");
     Object.assign(rateLimit, {
       status: 403,
@@ -1006,49 +1095,113 @@ describe("createSqliteQueue (durable #980)", () => {
     });
     const q = createSqliteQueue(
       driver,
-      async () => {
-        calls += 1;
-        throw rateLimit;
+      async (message) => {
+        seen.push(message.type === "github-webhook" ? message.deliveryId ?? "" : message.type);
+        if (message.type === "refresh-registry") throw rateLimit;
+      },
+      { maxRetries: 1, backoffMs: () => 0 },
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 10)",
+      [JSON.stringify(msg("refresh-registry"))],
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 9)",
+      [JSON.stringify(installedWebhook("github-still-runs", 123))],
+    );
+
+    await q.drain();
+
+    const pending = driver.query(
+      "SELECT payload, last_error FROM _selfhost_jobs WHERE status='pending'",
+      [],
+    ).rows as Array<{ payload: string; last_error: string }>;
+    expect(seen).toEqual(["refresh-registry", "github-still-runs"]);
+    expect(pending).toHaveLength(1);
+    expect(JSON.parse(pending[0]!.payload)).toMatchObject({ type: "refresh-registry" });
+    expect(pending[0]!.last_error).toBe("API rate limit exceeded for installation ID 123");
+    expect(q.stats()).toMatchObject({ gittensory_jobs_rate_limited_total: 1 });
+    expect(q.stats()).not.toHaveProperty("gittensory_jobs_rate_limit_deferred_total");
+  });
+
+  it("defers only the depleted keyed GitHub budget while unrelated work keeps draining", async () => {
+    const driver = makeDriver();
+    const seen: string[] = [];
+    const rateLimit = new Error("API rate limit exceeded for installation ID 123");
+    Object.assign(rateLimit, {
+      status: 403,
+      response: { headers: { "retry-after": "120" } },
+    });
+    const q = createSqliteQueue(
+      driver,
+      async (message) => {
+        seen.push(
+          message.type === "github-webhook" ? message.deliveryId ?? "" : message.type,
+        );
+        if (message.type === "github-webhook" && message.deliveryId === "blocked-installation") {
+          throw rateLimit;
+        }
       },
       { maxRetries: 1, backoffMs: () => 0 },
     );
     const before = Date.now();
     driver.query(
-      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'pending', 0, 0, 0)",
-      [JSON.stringify(msg("github-webhook"))],
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 10)",
+      [JSON.stringify(installedWebhook("blocked-installation", 123))],
     );
     driver.query(
-      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'pending', 0, 0, 0)",
-      [JSON.stringify(msg("agent-regate-pr"))],
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 9)",
+      [JSON.stringify(regateJob(123, 9))],
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 9)",
+      [JSON.stringify(regateJob(null, 10))],
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 10)",
+      [JSON.stringify(installedWebhook("other-installation", 456))],
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 0)",
+      [JSON.stringify(msg("local-cleanup"))],
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 8)",
+      ["{not json"],
     );
 
     await q.drain();
 
     const rows = driver.query(
-      "SELECT status, attempts, run_after, last_error FROM _selfhost_jobs ORDER BY id",
+      "SELECT payload, status, attempts, run_after, last_error FROM _selfhost_jobs WHERE status='pending' ORDER BY id",
       [],
-    ).rows as Array<{ status: string; attempts: number; run_after: number; last_error: string }>;
-    expect(calls).toBe(1);
-    expect(rows).toHaveLength(2);
+    ).rows as Array<{ payload: string; status: string; attempts: number; run_after: number; last_error: string | null }>;
+    const deadMalformed = driver.query(
+      "SELECT status, last_error FROM _selfhost_jobs WHERE payload=?",
+      ["{not json"],
+    ).rows[0] as { status: string; last_error: string };
+    expect(seen).toEqual(["blocked-installation", "other-installation", "local-cleanup"]);
+    expect(rows).toHaveLength(3);
+    expect(deadMalformed).toEqual({ status: "dead", last_error: "unparseable payload" });
     expect(rows.every((row) => row.status === "pending")).toBe(true);
     expect(rows.every((row) => row.attempts === 0)).toBe(true);
     expect(rows.every((row) => row.run_after > before)).toBe(true);
-    expect(rows.map((row) => row.last_error)).toEqual([
-      "API rate limit exceeded for installation ID 123",
-      "github rate-limit cooldown",
-    ]);
+    const byType = new Map(rows.map((row) => {
+      const payload = JSON.parse(row.payload) as { type: string; deliveryId?: string; prNumber?: number };
+      const key =
+        payload.type === "agent-regate-pr"
+          ? `${payload.type}:${payload.prNumber}`
+          : payload.deliveryId ?? payload.type;
+      return [key, row];
+    }));
+    expect(byType.get("blocked-installation")?.last_error).toBe("API rate limit exceeded for installation ID 123");
+    expect(byType.get("agent-regate-pr:9")?.last_error).toBe("github rate-limit budget deferred");
+    expect(byType.get("agent-regate-pr:10")?.last_error).toBe("github rate-limit budget deferred");
     expect(q.stats()).toMatchObject({
+      gittensory_jobs_processed_total: 2,
       gittensory_jobs_rate_limited_total: 1,
-      gittensory_jobs_rate_limit_deferred_total: 1,
+      gittensory_jobs_rate_limit_deferred_total: 2,
     });
-
-    await q.binding.send(msg("github-webhook"));
-    const afterEnqueue = driver.query(
-      "SELECT run_after FROM _selfhost_jobs ORDER BY id DESC LIMIT 1",
-      [],
-    ).rows[0] as { run_after: number };
-    expect(calls).toBe(1);
-    expect(afterEnqueue.run_after).toBeGreaterThan(before + 100_000);
   });
 
   it("coalesces a rate-limited active job into an existing pending duplicate without consuming attempts", async () => {
