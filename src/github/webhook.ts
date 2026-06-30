@@ -2,7 +2,11 @@ import type { Context } from "hono";
 import { getWebhookEvent, recordWebhookEvent } from "../db/repositories";
 import type { GitHubWebhookPayload, JobMessage } from "../types";
 import { sha256Hex, verifyGitHubSignature } from "../utils/crypto";
+import { parsePositiveInt } from "../utils/json";
 import { relayVerify } from "../orb/relay";
+import { isSelfHostedReviewRuntime } from "../selfhost/review-runtime";
+import { getSelfHostRequestTraceParent } from "../selfhost/trace-context";
+import { isNonActionableWebhookNoise } from "./self-authored";
 
 const DEFAULT_MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
@@ -35,8 +39,12 @@ export async function handleGitHubWebhook(c: Context<{ Bindings: Env }>): Promis
  *  webhook receiver above AND the Orb relay receiver below (they verify the body differently — GitHub's HMAC vs the
  *  Orb relay HMAC — then share everything after). */
 export async function enqueueVerifiedWebhook(c: Context<{ Bindings: Env }>, deliveryId: string, eventName: string, rawBody: string): Promise<Response> {
-  const result = await enqueueWebhookByEnv(c.env, deliveryId, eventName, rawBody);
+  const result = await enqueueWebhookByEnv(c.env, deliveryId, eventName, rawBody, getSelfHostRequestTraceParent(c.req.raw));
   switch (result) {
+    case "review_unavailable":
+      return c.json({ error: "selfhost_review_runtime_required" }, 410);
+    case "ignored":
+      return c.json({ ok: true, deliveryId, eventName, status: "ignored" }, 202);
     case "invalid_json":
       return c.json({ error: "invalid_json" }, 400);
     case "duplicate":
@@ -48,12 +56,19 @@ export async function enqueueVerifiedWebhook(c: Context<{ Bindings: Env }>, deli
   }
 }
 
-export type EnqueueWebhookResult = "queued" | "duplicate" | "invalid_json" | "enqueue_failed";
+export type EnqueueWebhookResult = "queued" | "duplicate" | "ignored" | "invalid_json" | "enqueue_failed" | "review_unavailable";
 
 /** Env-based core of the webhook enqueue (parse → dedup → record → WEBHOOKS lane), with NO Hono Context. Shared by
  *  the request-context receiver above AND the pull-mode relay drain loop (server.ts), which has no Context. Returns
- *  a status the caller maps to a response / an ack decision. */
-export async function enqueueWebhookByEnv(env: Env, deliveryId: string, eventName: string, rawBody: string): Promise<EnqueueWebhookResult> {
+ *  a status the caller maps to a response / an ack decision.
+ *
+ *  This is the retired direct review-app receiver, not the central Orb ingress. The Orb App still receives GitHub
+ *  webhooks at /v1/orb/webhook and forwards/pends them for registered self-host engines. Direct review execution
+ *  now requires the self-host runtime cache so stale Cloudflare review-webhook traffic fails loudly instead of being
+ *  accepted into a Worker path that no longer performs reviews. */
+export async function enqueueWebhookByEnv(env: Env, deliveryId: string, eventName: string, rawBody: string, traceParent?: string): Promise<EnqueueWebhookResult> {
+  if (!isSelfHostedReviewRuntime(env)) return "review_unavailable";
+
   let payload: GitHubWebhookPayload;
   try {
     payload = JSON.parse(rawBody) as GitHubWebhookPayload;
@@ -79,9 +94,18 @@ export async function enqueueWebhookByEnv(env: Env, deliveryId: string, eventNam
     repositoryFullName: payload.repository?.full_name,
     payloadHash,
   };
+  if (isNonActionableWebhookNoise(env, eventName, payload)) {
+    await recordWebhookEvent(env, { ...eventRow, status: "processed" });
+    return "ignored";
+  }
+  if (!env.WEBHOOKS) {
+    await recordWebhookEvent(env, { ...eventRow, status: "error" });
+    return "enqueue_failed";
+  }
+
   await recordWebhookEvent(env, { ...eventRow, status: "queued" });
 
-  const message: JobMessage = { type: "github-webhook", deliveryId, eventName, payload };
+  const message: JobMessage = { type: "github-webhook", deliveryId, eventName, payload, ...(traceParent ? { traceParent } : {}) };
   try {
     // Send to the dedicated WEBHOOKS lane (not the shared JOBS queue) so a maintenance burst on JOBS can never
     // starve real GitHub events into the DLQ. (#audit-webhook-queue)
@@ -113,13 +137,6 @@ export async function handleOrbRelay(c: Context<{ Bindings: Env }>): Promise<Res
     return c.json({ error: "invalid_signature" }, 401);
   }
   return enqueueVerifiedWebhook(c, deliveryId, eventName, rawBody);
-}
-
-function parsePositiveInt(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  return parsed;
 }
 
 async function readBodyWithLimit(request: Request, maxBytes: number): Promise<string | null> {

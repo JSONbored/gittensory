@@ -2,12 +2,38 @@
 // env-gated, dynamically-imported selfhost-integration pattern (Redis/Qdrant/embed-provider in server.ts).
 // @sentry/node is NEVER imported at module top level — it loads lazily inside initSentry(), so it never enters
 // the Worker bundle (src/index.ts) and cloudflare:* stubbing stays clean. All helpers are safe to call when off.
+import { currentOtelTraceIds } from "./otel";
+
 type SentryNs = typeof import("@sentry/node");
+type SentryScope = {
+  setContext(name: string, context: Record<string, unknown>): void;
+  setTag(key: string, value: string): void;
+};
 let Sentry: SentryNs | undefined;
 let active = false;
 
 const SECRET_KEY =
   /(token|secret|key|password|passwd|authorization|auth|dsn|cookie|bearer|credential|private)/i;
+
+function nonBlank(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function setOtelTraceScope(scope: SentryScope): void {
+  const trace = currentOtelTraceIds();
+  if (!trace) return;
+  scope.setTag("trace_id", trace.trace_id);
+  scope.setTag("span_id", trace.span_id);
+  scope.setContext("otel", { ...trace });
+}
+
+/** Resolve the Sentry release id from explicit override first, then the image-baked self-host version. */
+export function resolveSentryRelease(
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  return nonBlank(env.SENTRY_RELEASE) ?? nonBlank(env.GITTENSORY_VERSION);
+}
 
 /** beforeSend scrubber — redact anything token/secret-like before an event leaves the box (privacy boundary). */
 export function scrubEvent<T>(event: T): T {
@@ -38,10 +64,11 @@ export function scrubEvent<T>(event: T): T {
 export async function initSentry(env: NodeJS.ProcessEnv): Promise<boolean> {
   if (!env.SENTRY_DSN) return false;
   Sentry = await import("@sentry/node");
+  const release = resolveSentryRelease(env);
   Sentry.init({
     dsn: env.SENTRY_DSN,
     environment: env.SENTRY_ENVIRONMENT ?? "production",
-    release: env.SENTRY_RELEASE ?? env.GITTENSORY_VERSION,
+    ...(release ? { release } : {}),
     tracesSampleRate: Number(env.SENTRY_TRACES_SAMPLE_RATE ?? "0"),
     serverName: env.PUBLIC_API_ORIGIN,
     beforeSend: (e) => scrubEvent(e),
@@ -57,6 +84,7 @@ export function captureError(
 ): void {
   if (!active || !Sentry) return;
   Sentry.withScope((scope) => {
+    setOtelTraceScope(scope);
     if (context) scope.setContext("gittensory", context);
     Sentry!.captureException(
       error instanceof Error ? error : new Error(String(error)),
@@ -73,6 +101,7 @@ export function captureReviewFailure(
   if (!active || !Sentry) return;
   Sentry.withScope((scope) => {
     scope.setLevel("error");
+    setOtelTraceScope(scope);
     if (context) {
       scope.setContext("review", context);
       for (const tag of ["owner", "repo", "pr", "head_sha"]) {
@@ -89,7 +118,7 @@ export function captureReviewFailure(
 
 // The structured-log fields worth indexing as Sentry tags — the dimensions operators filter + group by. Only
 // string|number values are tagged; everything else stays in the full "log" context.
-const SENTRY_LOG_TAG_KEYS = ["repo", "repository", "installationId", "installation_id", "pull", "pullNumber", "pr", "project", "kind", "deliveryId"] as const;
+const SENTRY_LOG_TAG_KEYS = ["repo", "repository", "installationId", "installation_id", "pull", "pullNumber", "pr", "project", "kind", "deliveryId", "provider", "model", "effort", "timeoutMs", "trace_id", "span_id"] as const;
 
 /** A SHORT location suffix — " (repo#pr)" — for a no-message error title, so the issue list shows WHERE without
  *  dumping every scalar field (which made titles unreadably long, e.g. trailing a full deliveryId). The complete
@@ -127,10 +156,30 @@ const SUMMARY_SKIP_KEYS = new Set([
   "pullNumber",
   "deliveryId",
 ]);
+function redactSummaryValue(value: unknown, depth = 0): unknown {
+  if (!value || typeof value !== "object") return value;
+  if (depth >= 6) return "[redacted]";
+  if (Array.isArray(value))
+    return value.map((item) => redactSummaryValue(item, depth + 1));
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+      key,
+      SECRET_KEY.test(key)
+        ? "[redacted]"
+        : redactSummaryValue(nested, depth + 1),
+    ]),
+  );
+}
+
 function summarizeLogFields(obj: Record<string, unknown>): string {
   return Object.entries(obj)
-    .filter(([k, v]) => !SUMMARY_SKIP_KEYS.has(k) && v !== null)
-    .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : String(v)}`)
+    .filter(
+      ([k, v]) => !SUMMARY_SKIP_KEYS.has(k) && !SECRET_KEY.test(k) && v !== null,
+    )
+    .map(
+      ([k, v]) =>
+        `${k}=${typeof v === "object" ? JSON.stringify(redactSummaryValue(v)) : String(v)}`,
+    )
     .filter((part) => part.length <= 90) // a long blob (id/body) belongs in the context, not the title
     .slice(0, 5) // a few salient fields, not a dump
     .join(", ");
@@ -178,6 +227,7 @@ export function forwardStructuredLogToSentry(line: unknown, fromErrorSink = fals
   errorEvent.name = event ?? "GittensoryLog";
   Sentry.withScope((scope) => {
     scope.setLevel(severity);
+    setOtelTraceScope(scope);
     scope.setContext("log", obj);
     if (event) scope.setTag("event", event);
     // Index the dimensions operators filter + group by, so issues are findable without digging into the context.

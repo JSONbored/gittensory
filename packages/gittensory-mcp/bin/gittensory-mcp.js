@@ -1483,6 +1483,13 @@ function runCacheCli(args) {
     else process.stdout.write(`Decision-pack cache: ${payload.entries} entr${payload.entries === 1 ? "y" : "ies"}.\n`);
     return;
   }
+  if (subcommand === "list" || subcommand === "ls") {
+    const payload = listDecisionPackCache();
+    if (options.json) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else if (payload.count === 0) process.stdout.write("Decision-pack cache is empty.\n");
+    else for (const entry of payload.entries) process.stdout.write(`- ${entry.login ?? "unknown"} (cached ${entry.cachedAt ?? "unknown"}, ${entry.bytes} bytes)\n`);
+    return;
+  }
   throw new Error(`Unknown cache command: ${subcommand}`);
 }
 
@@ -1778,8 +1785,8 @@ function printHelp() {
   gittensory-mcp profile list|create|switch|remove [name] [--json]
   gittensory-mcp changelog [--json]
   gittensory-mcp doctor [--profile name] [--cwd path] [--exit-code] [--json]
-  gittensory-mcp cache status|clear [--json]
-  gittensory-mcp init-client --print codex|claude|cursor|mcp [--agent-profile miner-planner|maintainer-triage|repo-owner-intake] [--json]
+  gittensory-mcp cache status|list|clear [--json]
+  gittensory-mcp init-client --print codex|claude|cursor|mcp|vscode [--agent-profile miner-planner|maintainer-triage|repo-owner-intake] [--json]
   gittensory-mcp decision-pack --login <github-login> [--json]
   gittensory-mcp repo-decision --login <github-login> --repo owner/repo [--json]
   gittensory-mcp analyze-branch --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--scenario-note "..."] [--validation "passed|npm test|summary"] [--json]
@@ -1805,6 +1812,7 @@ function printHelp() {
 function printCacheHelp() {
   process.stdout.write(`Usage:
   gittensory-mcp cache status [--json]
+  gittensory-mcp cache list [--json]
   gittensory-mcp cache clear [--json]
 
 Decision-pack cache entries are local-only stale fallbacks for temporary API/network outages.
@@ -2319,7 +2327,7 @@ function shellArg(value) {
 
 function initClient(options) {
   const client = String(options.print ?? options.client ?? "").toLowerCase();
-  if (!client) throw new Error("Pass --print codex, --print claude, --print cursor, or --print mcp.");
+  if (!client) throw new Error("Pass --print codex, --print claude, --print cursor, --print mcp, or --print vscode.");
   const command = options.command ?? "gittensory-mcp";
   const snippet = clientSnippet(client, command);
   const agentProfile = resolveAgentProfile(options.agentProfile);
@@ -2725,7 +2733,24 @@ function clientSnippet(client, command) {
       2,
     );
   }
-  throw new Error(`Unsupported client: ${client}. Use codex, claude, cursor, or mcp.`);
+  // VS Code's native MCP support uses a `servers` map with an explicit transport type, not the
+  // `mcpServers` shape the other JSON hosts use, so it needs its own snippet (see .vscode/mcp.json).
+  if (client === "vscode") {
+    return JSON.stringify(
+      {
+        servers: {
+          gittensory: {
+            type: "stdio",
+            command,
+            args: ["--stdio"],
+          },
+        },
+      },
+      null,
+      2,
+    );
+  }
+  throw new Error(`Unsupported client: ${client}. Use codex, claude, cursor, mcp, or vscode.`);
 }
 
 async function getDecisionPackWithCache(login) {
@@ -2959,6 +2984,34 @@ function inspectDecisionPackCache() {
     schemaVersion: decisionPackCacheSchemaVersion,
     apiVersion: currentApiVersion,
     clearCommand: "gittensory-mcp cache clear",
+  };
+}
+
+// Per-entry view of the offline decision-pack cache, newest first. Surfaces only safe metadata
+// (login, when it was cached, the API/package version, size) — never the auth-cache key (a token
+// hash) or the cached payload — so it stays consistent with the cache's local-only redaction.
+function listDecisionPackCache() {
+  const files = decisionPackCacheFiles().sort((left, right) => right.mtimeMs - left.mtimeMs);
+  const entries = files.map((file) => {
+    try {
+      const entry = JSON.parse(readFileSync(file.path, "utf8"));
+      return {
+        login: typeof entry.login === "string" ? entry.login : null,
+        cachedAt: typeof entry.cachedAt === "string" ? entry.cachedAt : null,
+        apiVersion: typeof entry.apiVersion === "string" ? entry.apiVersion : null,
+        packageVersion: typeof entry.packageVersion === "string" ? entry.packageVersion : null,
+        bytes: file.size,
+      };
+    } catch {
+      return { login: null, cachedAt: null, apiVersion: null, packageVersion: null, bytes: file.size, corrupt: true };
+    }
+  });
+  return {
+    status: "ok",
+    count: entries.length,
+    maxEntries: decisionPackCacheMaxEntries,
+    clearCommand: "gittensory-mcp cache clear",
+    entries,
   };
 }
 

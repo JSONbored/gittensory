@@ -254,6 +254,9 @@ const NON_SCORING_UPSTREAM_CONSTANT_NAMES = new Set([
   // this entry the parser (which reads exponent literals like `1e-9`, #992) flagged it as a permanent
   // false-positive unmodeled-scoring-drift warning (#809).
   "EMISSION_SHARE_TOLERANCE",
+  // Fallback weight applied by the validator's load_programming_language_weights() for extensions absent from
+  // the JSON file; gittensory reads the JSON directly and does not track this loader default (#1692).
+  "DEFAULT_PROGRAMMING_LANGUAGE_WEIGHT",
 ]);
 
 /**

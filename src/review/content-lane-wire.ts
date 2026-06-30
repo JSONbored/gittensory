@@ -24,9 +24,8 @@ import { METAGRAPHED_LANE_SPEC } from "./content-lane/registry-logic";
 import { isConvergenceRepoAllowed } from "./cutover-gate";
 import { makeGithubFileFetcher } from "./grounding-wire";
 
-// Deterministic surface-lane finding codes. DELIBERATELY NOT in AI_JUDGMENT_BLOCKER_CODES — a deterministic
-// surface close is a FACT, so the green-CI refutation (reconcileGateEvaluationForGreenCi) must never flip it to
-// a merge. Regression-asserted in the test suite.
+// Deterministic surface-lane finding codes. DELIBERATELY NOT in AI_JUDGMENT_BLOCKER_CODES; surface closes are
+// facts, and blocker findings must never be flipped to merge by green CI.
 const SURFACE_REJECT_CODE = "surface_lane_reject";
 const SURFACE_MANUAL_CODE = "surface_lane_manual";
 const SURFACE_TITLE = "Registry surface review";
@@ -44,8 +43,8 @@ function surfaceFinding(code: string, severity: AdvisorySeverity, summary: strin
   return { code, title: SURFACE_TITLE, severity, detail: summary, publicText: summary };
 }
 
-/** Convert the deterministic surface verdict into a gate evaluation. merge→success, manual→action_required
- *  (a warning, not auto-closed), and any decisive non-merge/non-manual verdict (close) → failure with a single
+/** Convert the deterministic surface verdict into a gate evaluation. merge→success, manual→neutral
+ *  (a warning, not auto-closed and not a failing required check), and any decisive non-merge/non-manual verdict (close) → failure with a single
  *  critical blocker. Returns the finding to splice into the advisory so the public comment renders the reason. */
 export function surfaceVerdictToGate(result: SurfaceReviewResult): {
   evaluation: GateCheckEvaluation;
@@ -57,7 +56,7 @@ export function surfaceVerdictToGate(result: SurfaceReviewResult): {
   }
   if (result.verdict === "manual") {
     const finding = surfaceFinding(SURFACE_MANUAL_CODE, "warning", summary);
-    return { evaluation: { enabled: true, conclusion: "action_required", title: SURFACE_TITLE, summary, blockers: [], warnings: [finding] }, finding };
+    return { evaluation: { enabled: true, conclusion: "neutral", title: SURFACE_TITLE, summary, blockers: [], warnings: [finding] }, finding };
   }
   const finding = surfaceFinding(SURFACE_REJECT_CODE, "critical", summary);
   return { evaluation: { enabled: true, conclusion: "failure", title: SURFACE_TITLE, summary, blockers: [finding], warnings: [] }, finding };

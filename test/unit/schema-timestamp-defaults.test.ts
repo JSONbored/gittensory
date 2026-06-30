@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { getDb } from "../../src/db/client";
-import { repositorySettings, webhookEvents } from "../../src/db/schema";
+import { orbRelayPending, repositorySettings, webhookEvents } from "../../src/db/schema";
 import { createTestEnv } from "../helpers/d1";
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
@@ -25,6 +25,34 @@ describe("timestamp column defaults", () => {
     const [row] = await db.select().from(repositorySettings).where(eq(repositorySettings.repoFullName, "acme/widgets")).limit(1);
     expect(row?.createdAt).toMatch(ISO);
     expect(row?.updatedAt).toMatch(ISO);
+    expect(row?.createdAt).not.toBe("CURRENT_TIMESTAMP");
+  });
+
+  it("keeps orb relay pending coalesce keys wired through the drizzle schema", async () => {
+    const env = createTestEnv();
+    const db = getDb(env.DB);
+    const coalesceKey = `github-webhook:ci-completed:jsonbored/gittensory@${"a".repeat(40)}#1838`;
+    await db.insert(orbRelayPending).values({
+      deliveryId: "relay-schema-1",
+      installationId: 1838,
+      eventName: "check_suite",
+      rawBody: "{}",
+      coalesceKey,
+    });
+
+    const [row] = await db
+      .select()
+      .from(orbRelayPending)
+      .where(eq(orbRelayPending.deliveryId, "relay-schema-1"))
+      .limit(1);
+    expect(row).toMatchObject({
+      deliveryId: "relay-schema-1",
+      installationId: 1838,
+      eventName: "check_suite",
+      rawBody: "{}",
+      coalesceKey,
+    });
+    expect(row?.createdAt).toMatch(ISO);
     expect(row?.createdAt).not.toBe("CURRENT_TIMESTAMP");
   });
 });

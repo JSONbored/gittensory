@@ -10,6 +10,8 @@ export type JobMessage =
       // Set when the DLQ consumer re-drives a dead-lettered webhook back onto the lane (#1276). Bounds the
       // self-heal to a single re-drive so a genuinely-poison payload cannot loop the webhook DLQ forever.
       redriven?: boolean;
+      /** Self-host OTEL trace context for connecting ingress → queued review work. */
+      traceParent?: string;
     }
   | {
       // Delayed self-poll to re-capture a PR's before/after preview once its preview deploy is live — the first
@@ -276,6 +278,7 @@ export type GitHubPullRequestPayload = {
   };
   base?: {
     ref?: string;
+    sha?: string;
   };
   labels?: Array<{ name?: string }>;
   body?: string | null;
@@ -432,6 +435,9 @@ export type PullRequestRecord = {
   createdAt?: string | null | undefined;
   updatedAt?: string | null | undefined;
   closedAt?: string | null | undefined;
+  /** First time Gittensory observed this PR claiming one or more linked issues. Used to elect same-issue
+   * duplicate winners by claim order instead of PR number. */
+  linkedIssueClaimedAt?: string | null | undefined;
   labels: string[];
   linkedIssues: number[];
   /** Latest deterministic slop assessment (0-100) and band, persisted by the public-surface processor when
@@ -453,9 +459,9 @@ export type PullRequestRecord = {
    *  review write that would bump updatedAt is suppressed (dry-run / paused). Sweep-written; read straight from
    *  the row (never the GitHub payload). */
   lastRegatedAt?: string | null | undefined;
-  /** Over-publish dedup: the head SHA at which the public surface was last published. The re-gate sweep skips
-   *  re-reviewing + re-publishing while lastPublishedSurfaceSha === headSha; a new commit (push/rebase/force-push)
-   *  clears the match so the surface re-publishes the new code. Publish-written; read straight from the row. */
+  /** Public-surface marker: the head SHA at which the public surface was last published. Used for reporting and
+   *  stale-surface diagnostics, not as a hard re-review skip: GitHub comments/checks can still be stale or partial
+   *  while this marker matches headSha. Publish-written; read straight from the row. */
   lastPublishedSurfaceSha?: string | null | undefined;
 };
 
@@ -516,7 +522,7 @@ export type RepositorySettings = {
    *  only, applies to every author like every blocker). Default `off` — opt-in via .gittensory.yml. */
   slopGateMode: GateRuleMode;
   /** PR-size manual-review HOLD (#gate-size). `off` (default/absent) = no size hold; `advisory`/`block` = a PR with
-   *  >= 10 changed files OR >= 500 changed (added+deleted) lines that would otherwise pass is HELD for manual review
+   *  >= 10 changed files OR >= 1000 changed (added+deleted) lines that would otherwise pass is HELD for manual review
    *  (neutral gate → "manual" verdict), never auto-merged and never a hard failure. Opt-in via `gate.size.mode`. */
   sizeGateMode?: GateRuleMode | undefined;
   /** Dry-run disposition (#gate-dryrun). When true, the gate renders the would-be merge/close/manual verdict (every
@@ -526,7 +532,7 @@ export type RepositorySettings = {
   /** Merge-readiness gate (#merge-readiness). `off`/`advisory`/`block`. No min-score. Default `off`. */
   mergeReadinessGateMode: GateRuleMode;
   /** Focus-manifest policy gate (#555). When `block`, the focus manifest's declared policy (blocked paths,
-   *  required-linked-issue, test expectations) becomes an enforceable `Gittensory Gate` blocker. An
+   *  required-linked-issue, test expectations) becomes an enforceable review-agent blocker. An
    *  INDEPENDENT dimension, deliberately not folded into the merge-readiness composite. Default `off` — opt-in. */
   manifestPolicyGateMode: GateRuleMode;
   /** Self-authored linked-issue gate. When `block`, the gate closes a PR where the contributor also
@@ -566,11 +572,11 @@ export type RepositorySettings = {
    *  AI themselves. Default false — opt-in via `.gittensory.yml gate.aiReview.allAuthors`. Independent of
    *  `aiReviewMode`: `off` still means no AI; this only widens WHO an enabled review covers. */
   aiReviewAllAuthors: boolean;
-  /** Minimum calibrated AI-reviewer confidence (0-1) for an AI defect to BLOCK under `aiReviewMode: block` (#7).
-   *  A dual-model consensus defect / split blocks only when its finding `confidence >= aiReviewCloseConfidence`;
-   *  below-threshold AI defects hold for human review rather than passing. Config-as-code only — set via
-   *  `.gittensory.yml gate.aiReview.closeConfidence` (no dashboard/DB column); unset ⇒ the gate uses the 0.9
-   *  default. Clamped to [0,1] at parse time. */
+  /** Configured AI-reviewer confidence floor (0-1) for close calibration (#7). Under `aiReviewMode: block`, AI
+   *  defect findings remain blockers even when their confidence is below this floor; the floor is retained as
+   *  configurable context, not a manual-review downgrade. Config-as-code only — set via `.gittensory.yml
+   *  gate.aiReview.closeConfidence` (no dashboard/DB column); unset ⇒ the gate uses the 0.93 default. Clamped to
+   *  [0,1] at parse time. */
   aiReviewCloseConfidence?: number | null | undefined;
   /** When TRUE, the repo OWNER's (and maintainer's) own PRs are eligible for auto-CLOSE like a contributor's
    *  (still subject to the `close` autonomy class + the same adverse-signal conditions). Default FALSE — owner

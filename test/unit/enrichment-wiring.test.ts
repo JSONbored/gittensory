@@ -1,16 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { runAiReviewForAdvisory } from "../../src/queue/processors";
 import { upsertRepositoryFromGitHub } from "../../src/db/repositories";
-import { createInstallationToken } from "../../src/github/app";
 import type { Advisory, RepositorySettings } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
-
-vi.mock("../../src/github/app", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/github/app")>();
-  return { ...actual, createInstallationToken: vi.fn() };
-});
-
-const mockedToken = vi.mocked(createInstallationToken);
 
 const notesJson = JSON.stringify({
   assessment: "Looks fine.",
@@ -34,11 +26,7 @@ const adv = (repo: string): Advisory => ({
   generatedAt: "2026-06-20T00:00:00.000Z",
 });
 
-async function seedRepoFile(
-  env: Env,
-  repo: string,
-  installationId: number | undefined = 4242,
-) {
+async function seedRepoFile(env: Env, repo: string) {
   await upsertRepositoryFromGitHub(
     env,
     {
@@ -47,7 +35,7 @@ async function seedRepoFile(
       private: true,
       owner: { login: repo.split("/")[0]! },
     },
-    installationId,
+    4242,
   );
   await env.DB.prepare(
     "INSERT INTO pull_request_files (repo_full_name, pull_number, path, status, additions, deletions, changes, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -66,7 +54,7 @@ async function seedRepoFile(
 }
 
 describe("review-enrichment wired into the processors review (flag GITTENSORY_REVIEW_ENRICHMENT + REES_URL)", () => {
-  it("FLAG-ON via runAiReviewForAdvisory: POSTs prefetch (not githubToken) to REES and splices the brief", async () => {
+  it("FLAG-ON via runAiReviewForAdvisory: POSTs the PR to the REES (with bearer) and splices the brief into the prompts", async () => {
     const seenUser: string[] = [];
     const seenSystem: string[] = [];
     const run = vi.fn(
@@ -86,27 +74,41 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
       AI_SUMMARIES_ENABLED: "true",
       AI_PUBLIC_COMMENTS_ENABLED: "true",
       AI_DAILY_NEURON_BUDGET: "100000",
+      GITHUB_PUBLIC_TOKEN: "public-read-token",
     });
+    // The REES vars are self-host runtime env (not declared on the Worker Env type) — set them as the self-host does.
     Object.assign(env, {
       GITTENSORY_REVIEW_ENRICHMENT: "true",
       REES_URL: "https://rees.example",
       REES_SHARED_SECRET: "sek",
+      REES_FORWARD_GITHUB_TOKEN: "true",
+      REES_ANALYZERS: "secret,actionPin,redos",
     });
     await seedRepoFile(env, "acme/widgets");
-    mockedToken.mockResolvedValueOnce("install-token-local-only");
-    let reesUrl = "";
-    let reesAuth: string | null = null;
-    let reesBody: Record<string, unknown> | null = null;
+    const reesRequest: {
+      url?: string;
+      auth?: string | null;
+      body?: {
+        analyzers?: string[];
+        baseSha?: string | null;
+        author?: string;
+        body?: string;
+        githubToken?: string;
+      };
+    } = {};
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(async (url, init) => {
         if (String(url).includes("/v1/enrich")) {
-          reesUrl = String(url);
-          reesAuth = new Headers(init?.headers).get("authorization");
-          reesBody = JSON.parse(String(init?.body ?? "{}")) as Record<
-            string,
-            unknown
-          >;
+          reesRequest.url = String(url);
+          reesRequest.auth = new Headers(init?.headers).get("authorization");
+          reesRequest.body = JSON.parse(String(init?.body ?? "{}")) as {
+            analyzers?: string[];
+            baseSha?: string | null;
+            author?: string;
+            body?: string;
+            githubToken?: string;
+          };
           return new Response(
             JSON.stringify({
               promptSection: "## EXTERNAL REVIEW BRIEF\n- CVE-1 in lodash",
@@ -114,11 +116,6 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
             }),
             { status: 200 },
           );
-        }
-        if (String(url).includes("/search/issues")) {
-          return new Response(JSON.stringify({ total_count: 4 }), {
-            status: 200,
-          });
         }
         return new Response("nope", { status: 404 });
       });
@@ -130,119 +127,29 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
           number: 7,
           title: "Add a feature",
           body: "Implements the thing.",
+          baseSha: "base7",
         },
         author: "alice",
         confirmedContributor: true,
         advisory: adv("acme/widgets"),
       });
-      expect(reesUrl).toBe("https://rees.example/v1/enrich");
-      expect(reesAuth).toBe("Bearer sek");
-      expect(reesBody).toMatchObject({
-        author: "alice",
-        body: "Implements the thing.",
-        repoFullName: "acme/widgets",
-        prNumber: 7,
-      });
-      expect(reesBody!.githubToken).toBeUndefined();
-      expect(reesBody!.prefetch).toMatchObject({
-        history: {
-          authorLogin: "alice",
-          mergedPrCount: 4,
-          authorTier: "established",
-        },
-      });
-      expect(mockedToken).toHaveBeenCalledWith(env, 4242);
+      // The enrichment build branch executed: the REES was POSTed at /v1/enrich with the shared-secret bearer.
+      expect(reesRequest.url).toBe("https://rees.example/v1/enrich");
+      expect(reesRequest.auth).toBe("Bearer sek");
+      expect(reesRequest.body?.analyzers).toEqual([
+        "secret",
+        "actionPin",
+        "redos",
+      ]);
+      expect(reesRequest.body?.baseSha).toBe("base7");
+      expect(reesRequest.body?.author).toBe("alice");
+      expect(reesRequest.body?.body).toBe("Implements the thing.");
+      expect(reesRequest.body?.githubToken).toBe("public-read-token");
+      // The brief's content flows into the user prompt, but the system prompt carries our FIXED
+      // enrichment suffix — the REES-supplied systemSuffix is untrusted and is never spliced in.
       expect(seenUser[0] ?? "").toContain("## EXTERNAL REVIEW BRIEF");
       expect(seenSystem[0] ?? "").toContain("untrusted advisory context");
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
-  it("FLAG-ON but repo not allowlisted: skips prefetch and the REES POST", async () => {
-    mockedToken.mockResolvedValueOnce("unused-install-token");
-    const run = vi.fn(async () => ({ response: notesJson }));
-    const env = createTestEnv({
-      AI: { run } as unknown as Ai,
-      AI_SUMMARIES_ENABLED: "true",
-      AI_PUBLIC_COMMENTS_ENABLED: "true",
-      AI_DAILY_NEURON_BUDGET: "100000",
-      GITTENSORY_REVIEW_REPOS: "JSONbored/gittensory",
-    });
-    Object.assign(env, {
-      GITTENSORY_REVIEW_ENRICHMENT: "true",
-      REES_URL: "https://rees.example",
-    });
-    await seedRepoFile(env, "acme/not-allowlisted", 5151);
-    let reesCalled = false;
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async (url) => {
-        if (String(url).includes("/v1/enrich")) reesCalled = true;
-        return new Response("nope", { status: 404 });
-      });
-    try {
-      await runAiReviewForAdvisory(env, {
-        settings: { aiReviewMode: "advisory" } as RepositorySettings,
-        repoFullName: "acme/not-allowlisted",
-        pr: { number: 7, title: "t", body: null },
-        author: null,
-        confirmedContributor: true,
-        advisory: adv("acme/not-allowlisted"),
-      });
-      expect(reesCalled).toBe(false);
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
-  it("FLAG-ON with missing author/body/installation: POSTs prefetch without githubToken", async () => {
-    const run = vi.fn(async () => ({ response: notesJson }));
-    const env = createTestEnv({
-      AI: { run } as unknown as Ai,
-      AI_SUMMARIES_ENABLED: "true",
-      AI_PUBLIC_COMMENTS_ENABLED: "true",
-      AI_DAILY_NEURON_BUDGET: "100000",
-      GITHUB_PUBLIC_TOKEN: "public-fallback-token",
-    });
-    Object.assign(env, {
-      GITTENSORY_REVIEW_ENRICHMENT: "true",
-      REES_URL: "https://rees.example",
-    });
-    await seedRepoFile(env, "acme/widgets", undefined);
-    let reesBody: Record<string, unknown> | null = null;
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async (url, init) => {
-        if (String(url).includes("/v1/enrich")) {
-          reesBody = JSON.parse(String(init?.body ?? "{}")) as Record<
-            string,
-            unknown
-          >;
-          return new Response(
-            JSON.stringify({ promptSection: "## EXTERNAL REVIEW BRIEF\n- note" }),
-            { status: 200 },
-          );
-        }
-        return new Response("nope", { status: 404 });
-      });
-    try {
-      await runAiReviewForAdvisory(env, {
-        settings: { aiReviewMode: "advisory" } as RepositorySettings,
-        repoFullName: "acme/widgets",
-        pr: { number: 7, title: "t", body: null },
-        author: null,
-        confirmedContributor: true,
-        advisory: adv("acme/widgets"),
-      });
-      expect(reesBody).toMatchObject({
-        repoFullName: "acme/widgets",
-        prNumber: 7,
-        prefetch: { history: null },
-      });
-      expect(reesBody!.githubToken).toBeUndefined();
-      expect(reesBody).not.toHaveProperty("author");
-      expect(reesBody).not.toHaveProperty("body");
+      expect(seenSystem[0] ?? "").not.toContain("verified ground truth");
     } finally {
       fetchSpy.mockRestore();
     }
@@ -274,6 +181,53 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
         advisory: adv("acme/off"),
       });
       expect(reesCalled).toBe(false);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("does not forward a GitHub token unless REES_FORWARD_GITHUB_TOKEN is true", async () => {
+    const run = vi.fn(async () => ({ response: notesJson }));
+    const env = createTestEnv({
+      AI: { run } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+      GITHUB_PUBLIC_TOKEN: "public-read-token",
+    });
+    Object.assign(env, {
+      GITTENSORY_REVIEW_ENRICHMENT: "true",
+      REES_URL: "https://rees.example",
+      REES_SHARED_SECRET: "sek",
+      REES_ANALYZERS: "codeowners,assetWeight",
+    });
+    await seedRepoFile(env, "acme/widgets");
+    let reesBody: { author?: string; githubToken?: string } | undefined;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (url, init) => {
+        if (String(url).includes("/v1/enrich")) {
+          reesBody = JSON.parse(String(init?.body ?? "{}")) as {
+            author?: string;
+            githubToken?: string;
+          };
+          return new Response(JSON.stringify({ promptSection: "brief" }), {
+            status: 200,
+          });
+        }
+        return new Response("nope", { status: 404 });
+      });
+    try {
+      await runAiReviewForAdvisory(env, {
+        settings: { aiReviewMode: "advisory" } as RepositorySettings,
+        repoFullName: "acme/widgets",
+        pr: { number: 7, title: "t", body: "b" },
+        author: "alice",
+        confirmedContributor: true,
+        advisory: adv("acme/widgets"),
+      });
+      expect(reesBody?.author).toBe("alice");
+      expect(reesBody?.githubToken).toBeUndefined();
     } finally {
       fetchSpy.mockRestore();
     }

@@ -647,6 +647,24 @@ describe("upstream ruleset drift tracking", () => {
     });
     expect(membership!.payload.repoChanges).toEqual(["owner/added: added", "owner/removed: removed"]);
 
+    // (#1792) A casing-only registry rename with identical hyperparameters must NOT surface as add + remove.
+    const casingPrevious = rulesetWithRegistry("casing-previous", [registryRepo("Owner/Repo")]);
+    const casingCurrent = rulesetWithRegistry("casing-current", [registryRepo("owner/repo")]);
+    const casingOnly = await buildUpstreamDriftReport(casingCurrent, casingPrevious);
+    // No registry drift events at all → the report degrades to the source-only signal, not a registry membership change.
+    expect(registryDriftPayload(casingOnly!).events).toEqual([]);
+    expect(casingOnly!.payload.repoChanges).toEqual([]);
+    expect(casingOnly!.affectedAreas).not.toContain("registry");
+
+    // (#1792) A casing change that ALSO changes a hyperparameter still reports the field change (under the new
+    // casing) and never a spurious repo add/remove.
+    const fieldChangePrevious = rulesetWithRegistry("casing-field-previous", [registryRepo("Owner/Repo", { maintainerCut: 0.3 })]);
+    const fieldChangeCurrent = rulesetWithRegistry("casing-field-current", [registryRepo("owner/repo", { maintainerCut: 0.5 })]);
+    const casingWithFieldChange = await buildUpstreamDriftReport(fieldChangeCurrent, fieldChangePrevious);
+    const fieldDrift = registryDriftPayload(casingWithFieldChange!);
+    expect(fieldDrift.affectedFields).toEqual(["maintainerCut"]);
+    expect(fieldDrift.events.map((event) => ({ repoFullName: event.repoFullName, field: event.field }))).toEqual([{ repoFullName: "owner/repo", field: "maintainerCut" }]);
+
     const env = createTestEnv();
     await persistUpstreamRulesetSnapshot(env, ruleset("current", "current-hash", "pending_saturation_model", 1, 0.01, new Date().toISOString()));
     await upsertUpstreamDriftReport(env, driftReport("bad-registry-payload", { affectedAreas: ["registry"], payload: { registryHyperparameterDrift: "bad" } }));
@@ -794,6 +812,20 @@ describe("upstream ruleset drift tracking", () => {
     const staleEnv = createTestEnv();
     await persistUpstreamRulesetSnapshot(staleEnv, ruleset("stale", "stale-hash", "pending_saturation_model", 1, 0.01, "2026-05-30T00:00:00.000Z"));
     await expect(loadUpstreamStatus(staleEnv)).resolves.toMatchObject({ status: "stale", latestRulesetId: "stale" });
+  });
+
+  it("treats an unparseable ruleset generatedAt as stale (fail-safe), not current", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-30T04:00:00.000Z"));
+    // A malformed generatedAt would make Date.parse return NaN; pre-fix the staleness check silently
+    // evaluated false and the status was reported as "current". Fail-safe direction is stale.
+    const corruptEnv = createTestEnv();
+    await persistUpstreamRulesetSnapshot(corruptEnv, ruleset("corrupt", "corrupt-hash", "pending_saturation_model", 1, 0.01, "not-a-date"));
+    await expect(loadUpstreamStatus(corruptEnv)).resolves.toMatchObject({
+      status: "stale",
+      latestRulesetId: "corrupt",
+      latestRulesetGeneratedAt: "not-a-date",
+    });
   });
 
   it("deduplicates unchanged semantic drift fingerprints and leaves issue filing disabled by default", async () => {

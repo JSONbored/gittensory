@@ -2,8 +2,14 @@
 // deps.dev (free, no key, covers npm/PyPI/Go) and flags the ones a maintainer should eyeball: copyleft (may be
 // incompatible with a permissive project) or unresolved/unknown. Permissive licenses (MIT/BSD/Apache/…) are not
 // flagged. The no-checkout reviewer can't resolve a dependency's published license — this can.
-import type { EnrichRequest, LicenseFinding } from "../types.js";
+import type {
+  AnalyzerDiagnostics,
+  EnrichRequest,
+  LicenseFinding,
+} from "../types.js";
+import type { AnalysisContext } from "../analysis-context.js";
 import { extractDependencyChanges } from "./dependency-scan.js";
+import { boundedFetchJson } from "../external-fetch.js";
 
 // REES ecosystem label → deps.dev system path segment.
 const SYSTEM: Record<string, string> = { npm: "npm", PyPI: "pypi", Go: "go" };
@@ -12,6 +18,12 @@ const SYSTEM: Record<string, string> = { npm: "npm", PyPI: "pypi", Go: "go" };
 const COPYLEFT = /^(A?GPL|LGPL|MPL|EPL|CDDL|EUPL|OSL|SSPL|CPAL|CECILL)/i;
 const MAX_LICENSE_LOOKUPS = 25;
 const LICENSE_LOOKUP_TIMEOUT_MS = 1500;
+
+interface ScanOptions {
+  signal?: AbortSignal;
+  analysis?: Pick<AnalysisContext, "fetchJson">;
+  diagnostics?: AnalyzerDiagnostics;
+}
 
 function classify(licenses: string[]): LicenseFinding["classification"] | null {
   const resolved = licenses.filter(
@@ -28,26 +40,32 @@ async function fetchLicenses(
   name: string,
   version: string,
   fetchImpl: typeof fetch,
+  options: ScanOptions,
 ): Promise<string[] | null> {
   const url = `https://api.deps.dev/v3/systems/${system}/packages/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LICENSE_LOOKUP_TIMEOUT_MS);
-  try {
-    const response = await fetchImpl(url, { signal: controller.signal });
-    if (!response.ok) return null;
-    const data = (await response.json()) as { licenses?: string[] };
-    return Array.isArray(data.licenses) ? data.licenses : [];
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  const fetchOptions = {
+    endpointCategory: "deps-dev",
+    signal: options.signal,
+    timeoutMs: LICENSE_LOOKUP_TIMEOUT_MS,
+    fetchImpl,
+    diagnostics: options.diagnostics,
+    phase: "license",
+    subcall: "deps-dev",
+    maxBytes: 256 * 1024,
+    maxCallsPerCategory: MAX_LICENSE_LOOKUPS,
+  };
+  const response = options.analysis
+    ? await options.analysis.fetchJson<{ licenses?: string[] }>(url, fetchOptions)
+    : await boundedFetchJson<{ licenses?: string[] }>(url, fetchOptions);
+  if (!response.ok) return null;
+  return Array.isArray(response.data.licenses) ? response.data.licenses : [];
 }
 
 /** Analyzer entrypoint: changed deps → deps.dev license → only the copyleft/unknown ones. */
 export async function scanLicenses(
   req: EnrichRequest,
   fetchImpl: typeof fetch = fetch,
+  options: ScanOptions = {},
 ): Promise<LicenseFinding[]> {
   const findings: LicenseFinding[] = [];
   const changes = extractDependencyChanges(req.files ?? []).slice(
@@ -62,6 +80,7 @@ export async function scanLicenses(
       change.package,
       change.to,
       fetchImpl,
+      options,
     );
     if (licenses === null) continue; // resolution failed — don't false-flag
     const classification = classify(licenses);

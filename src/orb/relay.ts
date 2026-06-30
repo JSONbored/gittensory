@@ -5,7 +5,9 @@
 // Per-enrollment isolation (one container's secret can never forge to another), and a DB-only leak can't forge
 // (the encryption key is a separate secret).
 import { hashToken } from "../auth/security";
+import { githubWebhookCoalesceKey } from "../github/webhook-coalesce";
 import { isSafeHttpUrl } from "../review/content-lane/safe-url";
+import type { GitHubWebhookPayload } from "../types";
 import { decryptSecret, encryptSecret } from "../utils/crypto";
 
 // The events a brokered container needs to review/act on. Installation-lifecycle + other Orb-internal events are
@@ -171,12 +173,24 @@ export async function enqueueRelayPending(
   args: { deliveryId: string; installationId: number; eventName: string; rawBody: string },
 ): Promise<void> {
   await pruneRelayPending(env);
-  await env.DB
+  const coalesceKey = relayPendingCoalesceKey(args.eventName, args.rawBody);
+  const inserted = await env.DB
     .prepare(
-      "INSERT INTO orb_relay_pending (delivery_id, installation_id, event_name, raw_body) VALUES (?, ?, ?, ?) ON CONFLICT(delivery_id) DO NOTHING",
+      "INSERT INTO orb_relay_pending (delivery_id, installation_id, event_name, raw_body, coalesce_key) VALUES (?, ?, ?, ?, ?) ON CONFLICT(delivery_id) DO NOTHING",
     )
-    .bind(args.deliveryId, args.installationId, args.eventName, args.rawBody)
+    .bind(args.deliveryId, args.installationId, args.eventName, args.rawBody, coalesceKey)
     .run();
+  if (coalesceKey && inserted.meta.changes > 0) {
+    await env.DB
+      .prepare(
+        `DELETE FROM orb_relay_pending
+         WHERE installation_id = ?
+           AND coalesce_key = ?
+           AND rowid < (SELECT rowid FROM orb_relay_pending WHERE delivery_id = ?)`,
+      )
+      .bind(args.installationId, coalesceKey, args.deliveryId)
+      .run();
+  }
   await env.DB
     .prepare(
       `DELETE FROM orb_relay_pending
@@ -190,6 +204,17 @@ export async function enqueueRelayPending(
     )
     .bind(args.installationId, args.installationId, RELAY_PENDING_MAX_PER_INSTALLATION)
     .run();
+}
+
+function relayPendingCoalesceKey(eventName: string, rawBody: string): string | null {
+  try {
+    return githubWebhookCoalesceKey(
+      eventName,
+      JSON.parse(rawBody) as GitHubWebhookPayload,
+    );
+  } catch {
+    return null;
+  }
 }
 
 /** Drain pending pull-mode events for an installation. The engine calls this outbound (it can't be pushed to):
@@ -291,8 +316,16 @@ export async function forwardOrbEvent(
   fetchImpl: typeof fetch = fetch,
 ): Promise<"forwarded" | "queued" | "skipped" | "failed"> {
   if (!args.installationId || !RELAY_FORWARD_EVENTS.has(args.eventName)) return "skipped";
+  // issueOrbEnrollment INSERTs a new row per enrollment without revoking prior enrolled rows for the same
+  // installation_id. Without ORDER BY, .first() is nondeterministic — a stale row (no relay / old URL) can win
+  // after re-enrollment (#1783). Prefer enrollments with a registered relay (SQLite sorts NULL first on DESC),
+  // then the newest relay registration, then the newest enrollment. The final tie-break is the implicit rowid
+  // (monotonic insertion order) — enroll_id is a random opaque token, and CURRENT_TIMESTAMP ties at second
+  // resolution, so rowid is the only stable "most recently inserted" key when those collide (#1783).
   const row = await env.DB
-    .prepare("SELECT relay_mode, relay_url, relay_secret_enc, relay_secret_iv, relay_secret_salt FROM orb_enrollments WHERE installation_id = ? AND state = 'enrolled' AND revoked_at IS NULL")
+    .prepare(
+      "SELECT relay_mode, relay_url, relay_secret_enc, relay_secret_iv, relay_secret_salt FROM orb_enrollments WHERE installation_id = ? AND state = 'enrolled' AND revoked_at IS NULL ORDER BY (relay_registered_at IS NOT NULL) DESC, relay_registered_at DESC, enrolled_at DESC, rowid DESC",
+    )
     .bind(args.installationId)
     .first<{ relay_mode: string; relay_url: string | null; relay_secret_enc: string | null; relay_secret_iv: string | null; relay_secret_salt: string | null }>();
   if (!row) return "skipped"; // not a brokered self-host (or revoked) — nothing to relay to

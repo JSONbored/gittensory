@@ -1,8 +1,8 @@
 // Self-host Node entry (#980). Runs gittensory's SAME Worker handlers on Node. Backends are pluggable:
 //   • DB:    SQLite (node:sqlite, default) OR Postgres (DATABASE_URL=postgres://… → shared, multi-instance).
 //   • Queue: durable SQLite queue OR a Postgres queue (FOR UPDATE SKIP LOCKED).
-//   • Rate limit: a Redis fixed-window limiter when REDIS_URL is set (else no limiting, as today).
-//   • RAG vector store: SQLite-only for now (omitted on Postgres → RAG degrades to no-context).
+//   • Redis: required transient review state + fixed-window rate limiter.
+//   • RAG vector store: SQLite/pgvector by default, or Qdrant when QDRANT_URL is set.
 // Serves the Hono app via @hono/node-server, drives the queue with the same processJob, ticks the same
 // scheduled handler on a timer, exposes /health /ready /metrics, and shuts down gracefully. The Cloudflare
 // Worker (src/index.ts) is untouched — this is a parallel entry the self-host esbuild build bundles.
@@ -18,6 +18,7 @@ import {
   createSelfHostAi,
   resolveAiReviewerPlan,
   resolveRequiredCliProviders,
+  resolveSubscriptionCliPath,
 } from "./selfhost/ai";
 import {
   cookieValue,
@@ -58,6 +59,19 @@ import {
   installStructuredLogForwarding,
 } from "./selfhost/sentry";
 import {
+  currentOtelTraceParent,
+  initOpenTelemetry,
+  selfHostHttpRequestAttributes,
+  selfHostHttpResponseAttributes,
+  setCurrentOtelSpanAttributes,
+  shutdownOpenTelemetry,
+  withOtelSpan,
+} from "./selfhost/otel";
+import {
+  clearSelfHostRequestTraceParent,
+  setSelfHostRequestTraceParent,
+} from "./selfhost/trace-context";
+import {
   setLocalManifestReader,
   setLocalReviewContextReader,
 } from "./signals/focus-manifest-loader";
@@ -94,6 +108,7 @@ interface Backend {
     stop(): Promise<void>;
     size(): number | Promise<number>;
     deadCount(): number | Promise<number>;
+    stats(): Record<string, number> | Promise<Record<string, number>>;
   };
   vectorize?: Vectorize;
   shutdown(): Promise<void>;
@@ -231,14 +246,19 @@ function buildSqliteBackend(
 
 async function main(): Promise<void> {
   loadFileSecrets();
+  /* v8 ignore start -- importing this entrypoint starts the Node server; init behavior is covered in selfhost/otel tests. */
+  if (await initOpenTelemetry(process.env))
+    console.log(JSON.stringify({ event: "selfhost_otel", traces: "otlp" }));
+  /* v8 ignore stop */
   // Container-private per-repo config (self-host): register the GITTENSORY_REPO_CONFIG_DIR reader so the focus-
   // manifest loader prefers a mounted `{owner}__{repo}.yml` over the public `.gittensory.yml` (review policy stays
   // private). Unset dir ⇒ null reader ⇒ unchanged public-fetch behavior.
   setLocalManifestReader(
     makeLocalManifestReader(process.env.GITTENSORY_REPO_CONFIG_DIR),
   );
-  // Per-repo review CONTEXT (#review-skills): the same config dir also holds `<repo>/review/CLAUDE.md` + skills/*.md,
-  // injected into the reviewer prompt so reviews follow each repo's conventions. Unset dir ⇒ null reader ⇒ no change.
+  // Per-repo review CONTEXT (#review-skills): the same config dir also holds `<repo>/review/AGENTS.md`
+  // (or legacy `<repo>/review/CLAUDE.md`) + skills/*.md, injected into the reviewer prompt so reviews follow each
+  // repo's conventions. Unset dir ⇒ null reader ⇒ no change.
   setLocalReviewContextReader(
     makeLocalReviewContextReader(process.env.GITTENSORY_REPO_CONFIG_DIR),
   );
@@ -337,7 +357,7 @@ async function main(): Promise<void> {
   // Fail-LOUD preflight (#1566): a CLI-subscription provider (claude-code/codex) reviews by spawning the CLI as a
   // subprocess; if the binary is absent (image built without INSTALL_AI_CLIS=true) the spawn ENOENTs and EVERY AI
   // review silently degrades to "no usable output". Shout at boot so the misconfig is obvious, never invisible.
-  const pathDirs = (process.env.PATH ?? "").split(delimiter);
+  const pathDirs = resolveSubscriptionCliPath(process.env).split(delimiter);
   for (const { provider, cli } of resolveRequiredCliProviders(process.env)) {
     if (pathDirs.some((d) => d && existsSync(join(d, cli)))) continue;
     console.error(
@@ -381,8 +401,9 @@ async function main(): Promise<void> {
       }),
     );
 
-  // /ready gates on every CONFIGURED optional backend (below) so a load balancer never routes to an instance whose
-  // Redis/Qdrant is down. Each probe owns a short timeout so a hung backend can't hang the readiness check.
+  // /ready gates on required Redis plus every configured optional backend so a load balancer never routes to an
+  // instance whose shared state/vector backend is down. Each probe owns a short timeout so a hung backend can't
+  // hang the readiness check.
   const readinessProbes: ReadinessProbe[] = [];
   const withTimeout = (p: Promise<boolean>, ms = 1500): Promise<boolean> =>
     Promise.race([
@@ -390,46 +411,38 @@ async function main(): Promise<void> {
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms)),
     ]);
 
-  // Redis fixed-window rate limiter + webhook dedup cache (else absent when REDIS_URL is unset).
-  let rateLimiter: DurableObjectNamespace | undefined;
-  let webhookCache: import("./selfhost/redis-cache").RedisCache | undefined;
-  if (process.env.REDIS_URL) {
-    const { Redis } = await import("ioredis");
-    const redisClient = new Redis(process.env.REDIS_URL);
-    const { createRedisRateLimiter } =
-      await import("./selfhost/redis-ratelimit");
-    const { createRedisCache } = await import("./selfhost/redis-cache");
-    rateLimiter = createRedisRateLimiter(redisClient);
-    webhookCache = createRedisCache(redisClient);
-    // Persist the installation-token cache in Redis so warm GitHub App tokens survive restarts/deploys and are
-    // shared across replicas (the in-isolate Map otherwise re-mints — an Orb round-trip — per replica/cold start).
-    const { createRedisTokenCache } =
-      await import("./selfhost/redis-token-cache");
-    const { setInstallationTokenStore, setGitHubResponseCache } =
-      await import("./github/app");
-    setInstallationTokenStore(createRedisTokenCache(redisClient));
-    // Short-TTL cache for safe GitHub GET responses (dedups the ~24 reads per review). Default 20s; 0 disables.
-    const ghCacheTtl = Math.max(
-      0,
-      Number(process.env.GITHUB_CACHE_TTL_SECONDS ?? "20"),
-    );
-    if (ghCacheTtl > 0) {
-      const { createRedisResponseCache } =
-        await import("./selfhost/redis-response-cache");
-      setGitHubResponseCache(createRedisResponseCache(redisClient, ghCacheTtl));
-    }
-    readinessProbes.push({
-      name: "redis",
-      check: () => withTimeout(redisClient.ping().then(() => true)),
-    });
-    console.log(
-      JSON.stringify({
-        event: "selfhost_rate_limiter",
-        backend: "redis",
-        githubResponseCacheTtl: ghCacheTtl,
-      }),
-    );
+  // Redis is required: pending-CI stuck detection, webhook dedup/coalescing, distributed rate limiting, and
+  // warm GitHub token/response caches all rely on this shared transient state.
+  const redisUrl = process.env.REDIS_URL;
+  if (!redisUrl) throw new Error("REDIS_URL is required for the self-host review runtime");
+  const { Redis } = await import("ioredis");
+  const redisClient = new Redis(redisUrl);
+  const { createRedisRateLimiter } = await import("./selfhost/redis-ratelimit");
+  const { createRedisCache } = await import("./selfhost/redis-cache");
+  const rateLimiter = createRedisRateLimiter(redisClient);
+  const webhookCache = createRedisCache(redisClient);
+  // Persist the installation-token cache in Redis so warm GitHub App tokens survive restarts/deploys and are
+  // shared across replicas (the in-isolate Map otherwise re-mints — an Orb round-trip — per replica/cold start).
+  const { createRedisTokenCache } = await import("./selfhost/redis-token-cache");
+  const { setInstallationTokenStore, setGitHubResponseCache } = await import("./github/app");
+  setInstallationTokenStore(createRedisTokenCache(redisClient));
+  // Short-TTL cache for safe GitHub GET responses (dedups the ~24 reads per review). Default 20s; 0 disables.
+  const ghCacheTtl = Math.max(0, Number(process.env.GITHUB_CACHE_TTL_SECONDS ?? "20"));
+  if (ghCacheTtl > 0) {
+    const { createRedisResponseCache } = await import("./selfhost/redis-response-cache");
+    setGitHubResponseCache(createRedisResponseCache(redisClient, ghCacheTtl));
   }
+  readinessProbes.push({
+    name: "redis",
+    check: () => withTimeout(redisClient.ping().then(() => true)),
+  });
+  console.log(
+    JSON.stringify({
+      event: "selfhost_redis_ready",
+      backend: "redis",
+      githubResponseCacheTtl: ghCacheTtl,
+    }),
+  );
 
   // Qdrant vector store — overrides the backend's built-in sqlite-vec / pgvector when QDRANT_URL is set.
   let vectorizeOverride: Vectorize | undefined;
@@ -464,13 +477,14 @@ async function main(): Promise<void> {
     AI: ai,
     ...(embedAi ? { AI_EMBED: embedAi as unknown as Ai } : {}),
     ...(aiReviewPlan ? { AI_REVIEW_PLAN: aiReviewPlan } : {}),
+    SELFHOST_TRANSIENT_CACHE: webhookCache,
     // Qdrant takes priority; falls back to the backend's built-in vectorize (pgvector or sqlite-vec)
     ...(vectorizeOverride
       ? { VECTORIZE: vectorizeOverride }
       : backend.vectorize
         ? { VECTORIZE: backend.vectorize }
         : {}),
-    ...(rateLimiter ? { RATE_LIMITER: rateLimiter } : {}),
+    RATE_LIMITER: rateLimiter,
     // Visual review: when BROWSER_WS_ENDPOINT is set, expose a truthy BROWSER binding so shot.ts's
     // `if (!env.BROWSER) return` guard is bypassed; the puppeteer stub then connects via WS.
     ...(process.env.BROWSER_WS_ENDPOINT ? { BROWSER: {} } : {}),
@@ -484,6 +498,23 @@ async function main(): Promise<void> {
 
   gauge("gittensory_queue_pending", () => backend.queue.size());
   gauge("gittensory_queue_dead", () => backend.queue.deadCount());
+  const durableJobMetric = async (name: string): Promise<number> =>
+    Number((await backend.queue.stats())[name] ?? 0);
+  for (const name of [
+    "gittensory_jobs_enqueued_total",
+    "gittensory_jobs_processed_total",
+    "gittensory_jobs_failed_total",
+    "gittensory_jobs_dead_total",
+    "gittensory_jobs_rate_limited_total",
+    "gittensory_jobs_rate_limit_deferred_total",
+    "gittensory_jobs_deferred_total",
+    "gittensory_jobs_coalesced_total",
+    "gittensory_jobs_recovered_total",
+  ]) {
+    gauge(name.replace("_total", "_persisted_total"), () =>
+      durableJobMetric(name),
+    );
+  }
   gauge("gittensory_uptime_seconds", () =>
     Math.floor((Date.now() - startedAt) / 1000),
   );
@@ -494,6 +525,8 @@ async function main(): Promise<void> {
     "gittensory_jobs_processed_total",
     "gittensory_jobs_failed_total",
     "gittensory_jobs_dead_total",
+    "gittensory_jobs_rate_limit_deferred_total",
+    "gittensory_jobs_recovered_total",
     "gittensory_webhook_dedup_total",
     "gittensory_qdrant_queries_total",
     "gittensory_qdrant_upserts_total",
@@ -648,44 +681,56 @@ async function main(): Promise<void> {
             );
           }
         }
-        // Instrument real app traffic — status-class counter + latency histogram. (Infra endpoints
-        // /health /ready /metrics and the setup wizard already returned above and are not counted.)
-        const startedReq = Date.now();
-        const record = (status: number): void => {
-          incr("gittensory_http_requests_total", {
-            status: `${Math.floor(status / 100)}xx`,
-          });
-          observe(
-            "gittensory_http_request_duration_seconds",
-            (Date.now() - startedReq) / 1000,
-          );
-        };
-        // Webhook delivery dedup: return 204 immediately for already-processed delivery IDs.
-        // We mark only AFTER a successful response — failed/rejected webhooks must be retryable.
-        const isWebhook =
-          webhookCache &&
-          path === "/v1/github/webhook" &&
-          request.method === "POST";
-        const deliveryId = isWebhook
-          ? request.headers.get("x-github-delivery")
-          : null;
-        if (deliveryId) {
-          const seen = await webhookCache!.get(`delivery:${deliveryId}`);
-          if (seen) {
-            incr("gittensory_webhook_dedup_total");
-            record(204);
-            return new Response(null, { status: 204 });
-          }
-        }
-        const response = await worker.fetch(request, env, ctx);
-        if (deliveryId && response.ok) {
-          // Best-effort — never block the response on a cache write failure
-          void webhookCache!
-            .set(`delivery:${deliveryId}`, "1", 300)
-            .catch(() => undefined);
-        }
-        record(response.status);
-        return response;
+        return await withOtelSpan(
+          "selfhost.http.request",
+          selfHostHttpRequestAttributes(request, path),
+          async () => {
+            const traceParent = currentOtelTraceParent();
+            if (traceParent) setSelfHostRequestTraceParent(request, traceParent);
+            try {
+              // Instrument real app traffic — status-class counter + latency histogram. (Infra endpoints
+              // /health /ready /metrics and the setup wizard already returned above and are not counted.)
+              const startedReq = Date.now();
+              const finish = (response: Response): Response => {
+                incr("gittensory_http_requests_total", {
+                  status: `${Math.floor(response.status / 100)}xx`,
+                });
+                observe(
+                  "gittensory_http_request_duration_seconds",
+                  (Date.now() - startedReq) / 1000,
+                );
+                setCurrentOtelSpanAttributes(selfHostHttpResponseAttributes(response.status));
+                return response;
+              };
+              // Webhook delivery dedup: return 204 immediately for already-processed delivery IDs.
+              // We mark only AFTER a successful response — failed/rejected webhooks must be retryable.
+              const isWebhook =
+                webhookCache &&
+                path === "/v1/github/webhook" &&
+                request.method === "POST";
+              const deliveryId = isWebhook
+                ? request.headers.get("x-github-delivery")
+                : null;
+              if (deliveryId) {
+                const seen = await webhookCache!.get(`delivery:${deliveryId}`);
+                if (seen) {
+                  incr("gittensory_webhook_dedup_total");
+                  return finish(new Response(null, { status: 204 }));
+                }
+              }
+              const response = await worker.fetch(request, env, ctx);
+              if (deliveryId && response.ok) {
+                // Best-effort — never block the response on a cache write failure
+                void webhookCache!
+                  .set(`delivery:${deliveryId}`, "1", 300)
+                  .catch(() => undefined);
+              }
+              return finish(response);
+            } finally {
+              clearSelfHostRequestTraceParent(request);
+            }
+          },
+        );
       },
       port,
     },
@@ -800,6 +845,8 @@ async function main(): Promise<void> {
     clearInterval(cron);
     server.close();
     await backend.shutdown();
+    /* v8 ignore next -- graceful process signal path is not imported in unit tests; shutdown helper is covered. */
+    await shutdownOpenTelemetry();
     await flushSentry();
     process.exit(0);
   };
@@ -810,5 +857,6 @@ async function main(): Promise<void> {
 main().catch((error) => {
   captureError(error, { kind: "boot" });
   console.error(error);
-  void flushSentry().finally(() => process.exit(1));
+  /* v8 ignore next -- boot failure exits the process; shutdown helper is covered independently. */
+  void Promise.all([shutdownOpenTelemetry(), flushSentry()]).finally(() => process.exit(1));
 });

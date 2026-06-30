@@ -12,12 +12,18 @@ const mocks = vi.hoisted(() => {
     flush: vi.fn().mockResolvedValue(true),
   };
 });
+const otelMocks = vi.hoisted(() => ({
+  currentOtelTraceIds: vi.fn(),
+}));
 vi.mock("@sentry/node", () => ({
   init: mocks.init,
   withScope: mocks.withScope,
   captureException: mocks.captureException,
   captureMessage: mocks.captureMessage,
   flush: mocks.flush,
+}));
+vi.mock("../../src/selfhost/otel", () => ({
+  currentOtelTraceIds: otelMocks.currentOtelTraceIds,
 }));
 
 import {
@@ -27,6 +33,7 @@ import {
   flushSentry,
   forwardStructuredLogToSentry,
   installStructuredLogForwarding,
+  resolveSentryRelease,
   scrubEvent,
   resetSentryForTest,
 } from "../../src/selfhost/sentry";
@@ -34,6 +41,7 @@ import {
 beforeEach(() => {
   resetSentryForTest();
   vi.clearAllMocks();
+  otelMocks.currentOtelTraceIds.mockReturnValue(undefined);
 });
 
 // The structured-log forwarder captures a synthetic Error via captureException (name = event slug, message = the
@@ -87,6 +95,22 @@ describe("disabled when SENTRY_DSN is unset (modular opt-out → complete no-op)
 });
 
 describe("enabled when SENTRY_DSN is set", () => {
+  it("resolves the Sentry release from explicit env, then the baked image version, ignoring blanks", () => {
+    expect(
+      resolveSentryRelease({
+        SENTRY_RELEASE: " custom-release ",
+        GITTENSORY_VERSION: "gittensory-selfhost@0.1.0",
+      } as unknown as NodeJS.ProcessEnv),
+    ).toBe("custom-release");
+    expect(
+      resolveSentryRelease({
+        SENTRY_RELEASE: "  ",
+        GITTENSORY_VERSION: " gittensory-selfhost@0.1.0 ",
+      } as unknown as NodeJS.ProcessEnv),
+    ).toBe("gittensory-selfhost@0.1.0");
+    expect(resolveSentryRelease({} as unknown as NodeJS.ProcessEnv)).toBeUndefined();
+  });
+
   it("returns true and wires init with defaults (?? right-hand branches) + the scrubber as beforeSend", async () => {
     expect(
       await initSentry({
@@ -96,6 +120,7 @@ describe("enabled when SENTRY_DSN is set", () => {
     expect(mocks.init).toHaveBeenCalledTimes(1);
     const opts = mocks.init.mock.calls[0]![0];
     expect(opts.environment).toBe("production");
+    expect(opts.release).toBeUndefined();
     expect(opts.tracesSampleRate).toBe(0);
     expect(
       opts.beforeSend({ extra: { sessionToken: "s" } }).extra.sessionToken,
@@ -115,6 +140,33 @@ describe("enabled when SENTRY_DSN is set", () => {
     expect(opts.release).toBe("v9");
     expect(opts.tracesSampleRate).toBe(0.5);
     expect(opts.serverName).toBe("https://self.host");
+  });
+
+  it("uses the image-baked version as the release fallback and ignores blank overrides", async () => {
+    expect(
+      resolveSentryRelease({
+        SENTRY_RELEASE: "  ",
+        GITTENSORY_VERSION: " gittensory-selfhost@0.1.0 ",
+      } as unknown as NodeJS.ProcessEnv),
+    ).toBe("gittensory-selfhost@0.1.0");
+
+    await initSentry({
+      SENTRY_DSN: "d",
+      SENTRY_RELEASE: "",
+      GITTENSORY_VERSION: "gittensory-selfhost@0.1.0",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(mocks.init.mock.calls[0]![0].release).toBe(
+      "gittensory-selfhost@0.1.0",
+    );
+  });
+
+  it("prefers an explicit nonblank SENTRY_RELEASE over GITTENSORY_VERSION", () => {
+    expect(
+      resolveSentryRelease({
+        SENTRY_RELEASE: "custom@sha",
+        GITTENSORY_VERSION: "gittensory-selfhost@0.1.0",
+      } as unknown as NodeJS.ProcessEnv),
+    ).toBe("custom@sha");
   });
 
   it("captureError sends with context, and without context skips setContext", async () => {
@@ -148,6 +200,32 @@ describe("enabled when SENTRY_DSN is set", () => {
     );
     captureReviewFailure("string failure, no context");
     expect(mocks.captureException).toHaveBeenCalledTimes(2);
+  });
+
+  it("adds active OTEL trace ids to captured Sentry events", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    otelMocks.currentOtelTraceIds.mockReturnValue({
+      trace_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      span_id: "bbbbbbbbbbbbbbbb",
+    });
+
+    captureError(new Error("boom"), { kind: "job_dead" });
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("trace_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("span_id", "bbbbbbbbbbbbbbbb");
+    expect(mocks.scope.setContext).toHaveBeenCalledWith("otel", {
+      trace_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      span_id: "bbbbbbbbbbbbbbbb",
+    });
+
+    mocks.scope.setTag.mockClear();
+    mocks.scope.setContext.mockClear();
+    captureReviewFailure(new Error("review"), { repo: "o/r", pr: 9 });
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("trace_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("span_id", "bbbbbbbbbbbbbbbb");
+    expect(mocks.scope.setContext).toHaveBeenCalledWith("otel", {
+      trace_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      span_id: "bbbbbbbbbbbbbbbb",
+    });
   });
 
   it("flushSentry delegates to Sentry.flush with the timeout", async () => {
@@ -235,6 +313,41 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
     expect(mocks.scope.setFingerprint).toHaveBeenCalledWith(["gittensory-log", "orb_broker_unavailable"]);
   });
 
+  it("indexes self-host AI provider dimensions as Sentry tags", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    forwardStructuredLogToSentry(
+      JSON.stringify({
+        level: "error",
+        event: "selfhost_ai_provider_failed",
+        provider: "codex",
+        model: "gpt-5.5",
+        effort: "high",
+        timeoutMs: 240000,
+        error: "subscription_cli_timeout",
+      }),
+    );
+    expect(lastCapturedError().name).toBe("selfhost_ai_provider_failed");
+    expect(lastCapturedError().message).toBe("subscription_cli_timeout");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("provider", "codex");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("model", "gpt-5.5");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("effort", "high");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("timeoutMs", "240000");
+  });
+
+  it("indexes trace ids already present on structured error logs", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    forwardStructuredLogToSentry(
+      JSON.stringify({
+        level: "error",
+        event: "selfhost_job_dead",
+        trace_id: "cccccccccccccccccccccccccccccccc",
+        span_id: "dddddddddddddddd",
+      }),
+    );
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("trace_id", "cccccccccccccccccccccccccccccccc");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("span_id", "dddddddddddddddd");
+  });
+
   it("forwards a level:fatal log titled by message (no event ⇒ no tag)", async () => {
     await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
     forwardStructuredLogToSentry(
@@ -298,6 +411,69 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
     expect(lastCapturedError().message).toBe(
       "project=JSONbored/gittensory, closePrecision=0.6, floor=0.8",
     );
+  });
+
+  it("does not promote secret-keyed scalar fields into no-message titles (regression)", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    forwardStructuredLogToSentry(
+      JSON.stringify({
+        level: "error",
+        event: "attacker_controlled_error",
+        token: "gts_SUPER_SECRET_TOKEN_12345",
+        apiKey: "shh",
+        repository: "owner/repo",
+        pullNumber: 7,
+        project: "safe-project",
+      }),
+    );
+
+    expect(lastCapturedError().name).toBe("attacker_controlled_error");
+    expect(lastCapturedError().message).toBe(
+      "(owner/repo#7) project=safe-project",
+    );
+    expect(lastCapturedError().message).not.toContain(
+      "gts_SUPER_SECRET_TOKEN_12345",
+    );
+    expect(lastCapturedError().message).not.toContain("shh");
+  });
+
+  it("redacts nested secret-keyed values before summarizing object fields", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    forwardStructuredLogToSentry(
+      JSON.stringify({
+        level: "error",
+        event: "provider_metadata_failed",
+        provider: { name: "github", token: "nested-secret" },
+        attempts: [
+          { name: "first", privateKey: "nested-key" },
+          "retry",
+        ],
+      }),
+    );
+
+    expect(lastCapturedError().name).toBe("provider_metadata_failed");
+    expect(lastCapturedError().message).toBe(
+      'provider={"name":"github","token":"[redacted]"}, attempts=[{"name":"first","privateKey":"[redacted]"},"retry"]',
+    );
+    expect(lastCapturedError().message).not.toContain("nested-secret");
+    expect(lastCapturedError().message).not.toContain("nested-key");
+  });
+
+  it("redacts deeply nested summary objects instead of serializing past the depth cap", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    forwardStructuredLogToSentry(
+      JSON.stringify({
+        level: "error",
+        event: "deep_provider_metadata_failed",
+        meta: { a: { b: { c: { d: { e: { f: { token: "deep-secret" } } } } } } },
+      }),
+    );
+
+    expect(lastCapturedError().name).toBe("deep_provider_metadata_failed");
+    expect(lastCapturedError().message).toBe(
+      'meta={"a":{"b":{"c":{"d":{"e":{"f":"[redacted]"}}}}}}',
+    );
+    expect(lastCapturedError().message).not.toContain("deep-secret");
   });
 });
 

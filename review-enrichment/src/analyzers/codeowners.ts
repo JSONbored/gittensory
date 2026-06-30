@@ -4,7 +4,21 @@
 // time from the unique set of ownership domains (users/teams) crossed by the PR.
 // CODEOWNERS matching uses a bounded, linear glob matcher instead of repository-controlled regular expressions.
 // Fail-safe: returns [] on any network error, non-ok response, or missing/unreadable CODEOWNERS file.
-import type { EnrichRequest, CodeownersFinding } from "../types.js";
+import type {
+  AnalyzerDiagnostics,
+  EnrichRequest,
+  CodeownersFinding,
+} from "../types.js";
+import type { AnalysisContext } from "../analysis-context.js";
+import { boundedFetchText } from "../external-fetch.js";
+
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
+const CODEOWNERS_PATHS = [
+  ".github/CODEOWNERS",
+  "CODEOWNERS",
+  "docs/CODEOWNERS",
+] as const;
+const MAX_FILES_REPORTED = 20;
 
 type GlobToken =
   | { kind: "literal"; value: string }
@@ -16,6 +30,12 @@ interface ParsedRule {
   tokens: GlobToken[];
   anchored: boolean;
   owners: string[];
+}
+
+interface ScanOptions {
+  signal?: AbortSignal;
+  analysis?: Pick<AnalysisContext, "fetchText">;
+  diagnostics?: AnalyzerDiagnostics;
 }
 
 const MAX_CODEOWNERS_BYTES = 64 * 1024;
@@ -174,12 +194,85 @@ export function authorMatchesOwner(author: string, owners: string[]): boolean {
   return owners.some((o) => o.toLowerCase() === norm);
 }
 
+// ── Network ───────────────────────────────────────────────────────────────────
+
+/** Try each CODEOWNERS location in priority order; return raw content of the first found, or null. */
+async function fetchCodeowners(
+  owner: string,
+  repo: string,
+  headers: Record<string, string>,
+  fetchFn: typeof fetch,
+  options: ScanOptions = {},
+): Promise<string | null> {
+  for (const path of CODEOWNERS_PATHS) {
+    const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${path}`;
+    const fetchOptions = {
+      endpointCategory: "github-contents",
+      headers,
+      signal: options.signal,
+      fetchImpl: fetchFn,
+      diagnostics: options.diagnostics,
+      phase: "codeowners",
+      subcall: "github-contents",
+      maxBytes: MAX_CODEOWNERS_BYTES,
+      maxCallsPerCategory: CODEOWNERS_PATHS.length,
+    };
+    const response = options.analysis
+      ? await options.analysis.fetchText(url, fetchOptions)
+      : await boundedFetchText(url, fetchOptions);
+    if (response.ok) return response.data;
+  }
+  return null;
+}
+
+// ── Analyzer entrypoint ───────────────────────────────────────────────────────
+
 /** Report changed files whose CODEOWNERS rule does not include the PR author, and surface blast-radius context. */
 export async function scanCodeowners(
   req: EnrichRequest,
-  _fetchFn: typeof fetch,
-  _opts?: { signal?: AbortSignal },
+  fetchFn: typeof fetch,
+  opts: ScanOptions = {},
 ): Promise<CodeownersFinding[]> {
-  if (req.prefetch?.codeowners) return req.prefetch.codeowners;
-  return [];
+  const { repoFullName, githubToken, author, files = [] } = req;
+  if (!githubToken || !author) return [];
+
+  const parts = repoFullName.split("/");
+  const repoOwner = parts[0];
+  const repoName = parts[1];
+  if (
+    !repoOwner ||
+    !repoName ||
+    !SLUG_RE.test(repoOwner) ||
+    !SLUG_RE.test(repoName)
+  )
+    return [];
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${githubToken}`,
+    Accept: "application/vnd.github.raw",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+
+  const content = await fetchCodeowners(
+    repoOwner,
+    repoName,
+    headers,
+    fetchFn,
+    opts,
+  );
+  if (!content) return [];
+
+  const rules = parseCodeowners(content);
+  if (rules.length === 0) return [];
+
+  const findings: CodeownersFinding[] = [];
+  for (const file of files) {
+    if (findings.length >= MAX_FILES_REPORTED) break;
+    const owners = findOwners(rules, file.path);
+    if (owners.length === 0) continue; // unowned file — not a violation
+    if (authorMatchesOwner(author, owners)) continue; // author is listed — no violation
+    findings.push({ file: file.path, owners });
+  }
+
+  return findings;
 }
