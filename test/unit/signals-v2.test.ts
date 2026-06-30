@@ -26,6 +26,7 @@ import {
   buildRegistryChangeReport,
   buildRepoFitRecommendation,
   buildRoleContext,
+  hasClearNoIssueRationale,
   type ContributorFit,
   type ContributorOutcomeHistory,
   type ContributorScoringProfile,
@@ -1707,6 +1708,23 @@ describe("v2 signal builders", () => {
     expect(comment).toContain("Author: `unknown`");
     expect(comment).toContain("Public profile only");
     expect(comment).not.toMatch(/wallet|raw trust score|ranking/i);
+  });
+});
+
+describe("hasClearNoIssueRationale docs-only spelling", () => {
+  it("recognizes the hyphenated docs-only rationale, not only the space form", () => {
+    // The space form already worked; these hyphenated forms (the dominant GitHub / Conventional-Commits
+    // spelling, and the one this function's own docstring uses) were wrongly missed, hard-blocking a
+    // docs-only PR with no linked issue under linkedIssueGateMode === "block".
+    expect(hasClearNoIssueRationale({ title: "docs only: clarify README", body: "" })).toBe(true);
+    expect(hasClearNoIssueRationale({ title: "docs-only: clarify README", body: "" })).toBe(true);
+    expect(hasClearNoIssueRationale({ title: "doc-only update", body: "" })).toBe(true);
+    expect(hasClearNoIssueRationale({ title: "Improve install steps", body: "This is a docs-only change." })).toBe(true);
+  });
+
+  it("still rejects PR text with no clear no-issue rationale", () => {
+    expect(hasClearNoIssueRationale({ title: "Improve install steps", body: "Adds a new option." })).toBe(false);
+    expect(hasClearNoIssueRationale({ title: "Add documentation site", body: "" })).toBe(false);
   });
 });
 
