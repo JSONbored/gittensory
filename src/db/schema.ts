@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 // Timestamp columns use a drizzle $defaultFn so an insert that omits the column gets a real ISO-8601
 // timestamp. A static `.default("CURRENT_TIMESTAMP")` would make drizzle inject the literal STRING
@@ -692,6 +693,24 @@ export const webhookEvents = sqliteTable("webhook_events", {
   receivedAt: text("received_at").notNull().$defaultFn(() => nowIso()),
   processedAt: text("processed_at"),
 });
+
+export const orbRelayPending = sqliteTable(
+  "orb_relay_pending",
+  {
+    deliveryId: text("delivery_id").primaryKey(),
+    installationId: integer("installation_id").notNull(),
+    eventName: text("event_name").notNull(),
+    rawBody: text("raw_body").notNull(),
+    createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
+    coalesceKey: text("coalesce_key"),
+  },
+  (table) => ({
+    installation: index("idx_orb_relay_pending_install").on(table.installationId, table.createdAt),
+    coalesce: index("idx_orb_relay_pending_coalesce")
+      .on(table.installationId, table.coalesceKey)
+      .where(sql`coalesce_key IS NOT NULL`),
+  }),
+);
 
 export const syncRuns = sqliteTable("sync_runs", {
   id: text("id").primaryKey(),
