@@ -236,6 +236,19 @@ export interface NativeBuildFinding {
   reason: string;
 }
 
+/** A newly-added/upgraded direct dependency (npm/PyPI) that is DEPRECATED/yanked by its maintainer, or STALE
+ *  (no release in roughly N years) — maintenance-health risks the no-checkout reviewer cannot derive from the
+ *  registry. Reports package@version + a short factual reason from the metadata only. (#1511) */
+export interface DepMaintenanceHealthFinding {
+  ecosystem: "npm" | "PyPI";
+  package: string;
+  version: string;
+  /** `deprecated` (npm), `yanked` (PyPI), or `stale` (no recent release in either ecosystem). */
+  kind: "deprecated" | "yanked" | "stale";
+  /** Short, public-safe explanation of the maintenance signal. */
+  reason: string;
+}
+
 /** Public-safe historical context the no-checkout reviewer is blind to and the engine deliberately does NOT compute:
  *  the author's track record IN THIS repo, past PRs that already changed the same files (with their outcome), and
  *  whether the diff covers the linked issue's stated requirement. Surfaced as a single block (0-or-1 element array).
@@ -286,6 +299,7 @@ export interface BriefFindings {
   commitSignature?: CommitSignatureFinding[];
   iacMisconfig?: IacMisconfigFinding[];
   nativeBuild?: NativeBuildFinding[];
+  depMaintenanceHealth?: DepMaintenanceHealthFinding[];
   history?: HistoryFinding[];
 }
 

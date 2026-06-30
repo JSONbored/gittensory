@@ -350,6 +350,20 @@ export function renderBrief(
     }
   }
 
+  const depHealth = findings.depMaintenanceHealth ?? [];
+  if (depHealth.length) {
+    lines.push(
+      "### Deprecated / stale dependencies (maintenance-health — prefer a maintained alternative)",
+    );
+    for (const item of depHealth) {
+      // `reason` can embed registry-supplied text (npm `deprecated` / PyPI `yanked_reason`), so it is escaped
+      // through promptText before splicing — never spliced raw into the prompt block.
+      lines.push(
+        `- ${safeCodeSpan(`${item.package}@${item.version}`)} (${item.ecosystem}): ${promptText(item.reason)}`,
+      );
+    }
+  }
+
   const history = findings.history ?? [];
   for (const item of history) {
     const entries: string[] = [];
