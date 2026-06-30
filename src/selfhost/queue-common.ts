@@ -200,7 +200,8 @@ function fallbackObservationCanOverrideExact(
   if (!exact) return true;
   const fallbackMs = observationMs(fallback);
   const exactMs = observationMs(exact);
-  return fallbackMs === null || exactMs === null || fallbackMs > exactMs;
+  if (fallbackMs === null) return false;
+  return exactMs === null || fallbackMs > exactMs;
 }
 
 export function githubRateLimitAdmissionKeyForJob(message: JobMessage): GitHubRateLimitAdmissionKey | null {
@@ -269,12 +270,10 @@ export function githubRateLimitAdmissionDelayMs(
       fallback = newerRateLimitObservation(fallback, candidate);
     }
   }
-  const exactDelay = rateLimitAdmissionDelayForObservation(kind, exact, nowMs);
-  if (exactDelay !== null) return exactDelay;
-  const fallbackDelay = rateLimitAdmissionDelayForObservation(kind, fallback, nowMs);
-  return fallbackDelay !== null && fallbackObservationCanOverrideExact(fallback, exact)
-    ? fallbackDelay
-    : null;
+  const observation = fallbackObservationCanOverrideExact(fallback, exact)
+    ? fallback
+    : exact;
+  return rateLimitAdmissionDelayForObservation(kind, observation, nowMs);
 }
 
 export function githubBackgroundRateLimitDelayMs(

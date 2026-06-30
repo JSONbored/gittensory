@@ -125,7 +125,7 @@ describe("self-host queue common helpers", () => {
     expect(githubRateLimitAdmissionDelayMs("background", null, [], now)).toBeNull();
   });
 
-  it("prefers exact admission observations over stale legacy fallback rows", () => {
+  it("uses the newest comparable exact or legacy admission observation", () => {
     const now = Date.parse("2026-06-24T12:00:00.000Z");
     const key = githubRateLimitAdmissionKeyForInstallation(123);
     expect(
@@ -160,7 +160,7 @@ describe("self-host queue common helpers", () => {
         ],
         now,
       ),
-    ).toBe(615_000);
+    ).toBeNull();
   });
 
   it("uses the newest local REST rate-limit observation for admission control", async () => {
