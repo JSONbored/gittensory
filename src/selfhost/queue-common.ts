@@ -1,6 +1,7 @@
 import { retryableJobDelayMs } from "../queue/retryable";
-import type { JobMessage } from "../types";
 import { MAINTENANCE_RESERVED_HEADROOM } from "../github/rate-limit";
+import { githubWebhookCoalesceKey } from "../github/webhook-coalesce";
+import type { GitHubWebhookPayload, JobMessage } from "../types";
 import { extractPayloadType } from "./audit";
 
 const DEFAULT_RATE_LIMIT_JITTER_MS = 5 * 60_000;
@@ -238,20 +239,7 @@ export function jobCoalesceKey(payload: string): string | null {
       repoFullName?: unknown;
       prNumber?: unknown;
       attempt?: unknown;
-      payload?: {
-        action?: unknown;
-        repository?: { full_name?: unknown } | null;
-        pull_request?: { number?: unknown; head?: { sha?: unknown } | null } | null;
-        check_suite?: {
-          head_sha?: unknown;
-          pull_requests?: Array<{ number?: unknown } | null> | null;
-        } | null;
-        check_run?: {
-          head_sha?: unknown;
-          check_suite?: { head_sha?: unknown } | null;
-          pull_requests?: Array<{ number?: unknown } | null> | null;
-        } | null;
-      } | null;
+      payload?: GitHubWebhookPayload | null;
     };
     const type = typeof message.type === "string" ? message.type : "";
     if (type === "agent-regate-pr") {
@@ -274,37 +262,9 @@ export function jobCoalesceKey(payload: string): string | null {
     if (type !== "github-webhook") return null;
     const eventName =
       typeof message.eventName === "string" ? message.eventName : "";
-    const action =
-      typeof message.payload?.action === "string" ? message.payload.action : "";
-    const repo = normalizedRepo(message.payload?.repository?.full_name);
-    if (!repo) return null;
-    if (
-      (eventName === "check_suite" || eventName === "check_run") &&
-      action === "completed"
-    ) {
-      const node = eventName === "check_suite" ? message.payload?.check_suite : message.payload?.check_run;
-      const headSha = normalizedSha(
-        node?.head_sha ??
-          (eventName === "check_run" ? message.payload?.check_run?.check_suite?.head_sha : undefined),
-      );
-      if (!headSha) return null;
-      const pullNumbers = (node?.pull_requests ?? [])
-        .map((entry) => normalizedNumber(entry?.number))
-        .filter((value): value is number => value !== null)
-        .sort((a, b) => a - b)
-        .join(",");
-      return `github-webhook:ci-completed:${repo}@${headSha}${pullNumbers ? `#${pullNumbers}` : ""}`;
-    }
-    if (eventName === "pull_request" && isCoalescablePullRequestAction(action)) {
-      const pr =
-        normalizedNumber(message.payload?.pull_request?.number) ??
-        normalizedNumber((message.payload as { number?: unknown } | null | undefined)?.number);
-      const headSha = normalizedSha(message.payload?.pull_request?.head?.sha);
-      return pr !== null
-        ? `github-webhook:pr-refresh:${repo}#${pr}${headSha ? `@${headSha}` : ""}`
-        : null;
-    }
-    return null;
+    return message.payload
+      ? githubWebhookCoalesceKey(eventName, message.payload)
+      : null;
   } catch {
     return null;
   }
@@ -334,23 +294,6 @@ function normalizedNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.floor(value)
     : null;
-}
-
-function normalizedSha(value: unknown): string | null {
-  return typeof value === "string" && /^[a-f0-9]{7,40}$/i.test(value.trim())
-    ? value.trim().toLowerCase()
-    : null;
-}
-
-function isCoalescablePullRequestAction(action: string): boolean {
-  return (
-    action === "opened" ||
-    action === "synchronize" ||
-    action === "edited" ||
-    action === "ready_for_review" ||
-    action === "labeled" ||
-    action === "unlabeled"
-  );
 }
 
 function numberHeader(
