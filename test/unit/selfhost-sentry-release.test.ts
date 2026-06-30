@@ -16,6 +16,16 @@ describe("self-host Sentry release wiring", () => {
     expect(releaseWorkflow).toContain('SENTRY_CLI_PACKAGE: "@sentry/cli@3.6.0"');
     expect(releaseWorkflow).toContain('npx -y "$SENTRY_CLI_PACKAGE"');
     expect(releaseWorkflow).not.toContain("@sentry/cli@latest");
+    expect(releaseWorkflow).toContain('"orb-v*"');
+    expect(releaseWorkflow).toContain('orb-v*) VERSION="${REF_NAME#orb-v}"');
+    expect(releaseWorkflow).toContain("tag=orb-v${VERSION}");
+    expect(releaseWorkflow).toContain("type=raw,value=${{ steps.version.outputs.tag }}");
+    expect(releaseWorkflow).toContain(
+      "docker pull ghcr.io/${REPOSITORY_OWNER}/gittensory-selfhost:${RELEASE_TAG}",
+    );
+    expect(releaseWorkflow).not.toContain('"selfhost-v*"');
+    expect(releaseWorkflow).not.toContain('VERSION="${REF_NAME#selfhost-v}"');
+    expect(releaseWorkflow).not.toContain("type=raw,value=${{ steps.version.outputs.v }}");
     expect(releaseWorkflow).toContain("Validate Sentry release");
     expect(releaseWorkflow).toContain('SENTRY_REQUIRE_FINALIZED: "true"');
 
