@@ -336,6 +336,131 @@ describe("github webhook queue isolation (#audit-webhook-queue)", () => {
     const event = await getWebhookEvent(env, "self-check-suite-ignore-1");
     expect(event?.status).toBe("processed");
   });
+
+  it("drops non-completed CI lifecycle webhooks before they add queue pressure", async () => {
+    const env = createTestEnv({ GITHUB_APP_SLUG: "gittensory-orb" });
+    let webhookSends = 0;
+    env.WEBHOOKS = { send: async () => void (webhookSends += 1) } as unknown as Queue;
+    const rawBody = JSON.stringify({
+      action: "requested",
+      repository: { full_name: "JSONbored/gittensory" },
+      installation: { id: 1 },
+      check_suite: {
+        head_sha: "abc123",
+        pull_requests: [{ number: 1832 }],
+        app: { slug: "github-actions" },
+      },
+    });
+    const signature = await signWebhook(rawBody, env.GITHUB_WEBHOOK_SECRET);
+    const request = new Request("https://example.com/webhook", { method: "POST", body: rawBody });
+    const headers: Record<string, string> = {
+      "x-github-delivery": "requested-check-suite-ignore-1",
+      "x-github-event": "check_suite",
+      "x-hub-signature-256": signature,
+    };
+    const context = {
+      req: {
+        raw: request,
+        header(name: string) {
+          return headers[name.toLowerCase()] ?? null;
+        },
+      },
+      env,
+      json(payload: unknown, status?: number) {
+        return Response.json(payload, status === undefined ? undefined : { status });
+      },
+    } as unknown as Context<{ Bindings: Env }>;
+
+    const response = await handleGitHubWebhook(context);
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ status: "ignored" });
+    expect(webhookSends).toBe(0);
+    const event = await getWebhookEvent(env, "requested-check-suite-ignore-1");
+    expect(event?.status).toBe("processed");
+  });
+
+  it("keeps third-party CI completion webhooks queued for review finalization", async () => {
+    const env = createTestEnv({ GITHUB_APP_SLUG: "gittensory-orb" });
+    const sent: unknown[] = [];
+    env.WEBHOOKS = { send: async (message: unknown) => void sent.push(message) } as unknown as Queue;
+    const rawBody = JSON.stringify({
+      action: "completed",
+      repository: { full_name: "JSONbored/gittensory" },
+      installation: { id: 1 },
+      check_suite: {
+        head_sha: "abc123",
+        pull_requests: [{ number: 1832 }],
+        app: { slug: "github-actions" },
+      },
+    });
+    const signature = await signWebhook(rawBody, env.GITHUB_WEBHOOK_SECRET);
+    const request = new Request("https://example.com/webhook", { method: "POST", body: rawBody });
+    const headers: Record<string, string> = {
+      "x-github-delivery": "third-party-check-suite-queue-1",
+      "x-github-event": "check_suite",
+      "x-hub-signature-256": signature,
+    };
+    const context = {
+      req: {
+        raw: request,
+        header(name: string) {
+          return headers[name.toLowerCase()] ?? null;
+        },
+      },
+      env,
+      json(payload: unknown, status?: number) {
+        return Response.json(payload, status === undefined ? undefined : { status });
+      },
+    } as unknown as Context<{ Bindings: Env }>;
+
+    const response = await handleGitHubWebhook(context);
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ status: "queued" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ type: "github-webhook", eventName: "check_suite" });
+    const event = await getWebhookEvent(env, "third-party-check-suite-queue-1");
+    expect(event?.status).toBe("queued");
+  });
+
+  it("drops bot-authored issue comment edits but keeps them auditable", async () => {
+    const env = createTestEnv();
+    let webhookSends = 0;
+    env.WEBHOOKS = { send: async () => void (webhookSends += 1) } as unknown as Queue;
+    const rawBody = JSON.stringify({
+      action: "edited",
+      repository: { full_name: "JSONbored/gittensory" },
+      installation: { id: 1 },
+      issue: { number: 1701, pull_request: {} },
+      comment: { id: 123, body: "coverage updated", user: { login: "codecov[bot]", type: "User" } },
+      sender: { login: "codecov[bot]", type: "User" },
+    });
+    const signature = await signWebhook(rawBody, env.GITHUB_WEBHOOK_SECRET);
+    const request = new Request("https://example.com/webhook", { method: "POST", body: rawBody });
+    const headers: Record<string, string> = {
+      "x-github-delivery": "bot-comment-edit-ignore-1",
+      "x-github-event": "issue_comment",
+      "x-hub-signature-256": signature,
+    };
+    const context = {
+      req: {
+        raw: request,
+        header(name: string) {
+          return headers[name.toLowerCase()] ?? null;
+        },
+      },
+      env,
+      json(payload: unknown, status?: number) {
+        return Response.json(payload, status === undefined ? undefined : { status });
+      },
+    } as unknown as Context<{ Bindings: Env }>;
+
+    const response = await handleGitHubWebhook(context);
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ status: "ignored" });
+    expect(webhookSends).toBe(0);
+    const event = await getWebhookEvent(env, "bot-comment-edit-ignore-1");
+    expect(event?.status).toBe("processed");
+  });
 });
 
 describe("handleOrbRelay (brokered self-host relay receiver)", () => {

@@ -6,7 +6,7 @@ import { parsePositiveInt } from "../utils/json";
 import { relayVerify } from "../orb/relay";
 import { isSelfHostedReviewRuntime } from "../selfhost/review-runtime";
 import { getSelfHostRequestTraceParent } from "../selfhost/trace-context";
-import { isSelfAuthoredWebhookNoise } from "./self-authored";
+import { isNonActionableWebhookNoise } from "./self-authored";
 
 const DEFAULT_MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
@@ -94,7 +94,7 @@ export async function enqueueWebhookByEnv(env: Env, deliveryId: string, eventNam
     repositoryFullName: payload.repository?.full_name,
     payloadHash,
   };
-  if (isSelfAuthoredWebhookNoise(env, eventName, payload)) {
+  if (isNonActionableWebhookNoise(env, eventName, payload)) {
     await recordWebhookEvent(env, { ...eventRow, status: "processed" });
     return "ignored";
   }
