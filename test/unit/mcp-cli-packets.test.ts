@@ -98,6 +98,39 @@ describe("gittensory-mcp CLI — packets", () => {
     expect(cacheStatus.entries).toBe(0);
   });
 
+  it("lists cached decision packs with safe metadata only", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    const url = await startFixtureServer();
+    const env = {
+      GITTENSORY_API_URL: url,
+      GITTENSORY_TOKEN: "session-token",
+      GITTENSORY_CONFIG_DIR: tempDir,
+      GITTENSORY_API_TIMEOUT_MS: "1000",
+    };
+
+    const empty = JSON.parse(run(["cache", "list", "--json"], env)) as { count: number; entries: unknown[] };
+    expect(empty).toMatchObject({ count: 0, entries: [] });
+
+    await runAsync(["decision-pack", "--login", "JSONbored", "--json"], env);
+    const listed = JSON.parse(run(["cache", "list", "--json"], env)) as {
+      count: number;
+      entries: Array<{ login: string; cachedAt: string; apiVersion: string; packageVersion: string; bytes: number }>;
+    };
+    expect(listed.count).toBe(1);
+    const [first] = listed.entries;
+    expect(first).toMatchObject({ login: "jsonbored", apiVersion: "0.1.0" });
+    expect(first?.cachedAt).toEqual(expect.any(String));
+    expect(first?.bytes).toBeGreaterThan(0);
+
+    // Never leaks the token or the auth-cache key (a token hash).
+    const serialized = JSON.stringify(listed);
+    expect(serialized).not.toContain("session-token");
+    expect(serialized).not.toMatch(/authCacheKey/);
+
+    const human = run(["cache", "list"], env);
+    expect(human).toContain("jsonbored");
+  });
+
   it("does not use stale decision-pack cache created by a different local token", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
     const fixtureOptions: { decisionPackStatus?: number } = {};
