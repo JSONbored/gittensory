@@ -737,6 +737,10 @@ test("buildBrief: dependency + secret analyzers both run", async () => {
       prNumber: 9,
       files: [
         {
+          path: "package.json",
+          patch: '+    "lodash": "4.17.20",',
+        },
+        {
           path: "app.ts",
           patch:
             '@@ -1,0 +1,1 @@\n+const t = "ghp_0123456789012345678901234567890123456"',
@@ -1678,7 +1682,7 @@ test("buildBrief: timeout aborts dependency scan so OSV work stops", async () =>
     });
 
     assert.equal(brief.partial, true);
-    assert.equal(brief.analyzerStatus.dependency, "degraded");
+    assert.equal(brief.analyzerStatus.dependency, "timeout");
     assert.equal(fetchCount, 1);
     assert.equal(signals.length, 1);
     assert.equal(signals[0].aborted, true);
