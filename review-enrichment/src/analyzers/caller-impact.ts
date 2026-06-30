@@ -1,13 +1,16 @@
 // Cross-file caller-impact / dead-symbol analyzer (#1509). Surfaces two cross-file hazards the no-checkout
 // `claude --print` reviewer (which only sees the diff) is blind to:
-//   1. An exported top-level symbol the PR removes / renames / changes the signature of that STILL has dependents in
-//      files the PR did NOT touch — a hidden compile/runtime break. Candidate dependents come from the GitHub Code
-//      Search API (text-match) on the default branch; each candidate's CONTENT is then fetched and a finding is only
-//      reported when that file actually DEPENDS ON the symbol FROM the changed module — a named import, a namespace
-//      import used as `ns.symbol`, an `export { symbol } from`, or an `export * from` barrel — where the import
-//      specifier RESOLVES (relative to the candidate file) to the changed file's path. So a same-named export in an
-//      unrelated module, or an import of a different `./lib`, is never falsely flagged. Export churn is keyed per
-//      (file, name), so two changed files exporting the same name never overwrite each other.
+//   1. An exported top-level symbol the PR REMOVES or RENAMES AWAY from a module while it still has importing
+//      dependents in files the PR did NOT touch — a hidden compile/runtime break. Candidate dependents come from the
+//      GitHub Code Search API (text-match) on the default branch; each candidate's CONTENT is then fetched and a
+//      finding is only reported when that file actually DEPENDS ON the symbol FROM the changed module — a named
+//      import, a namespace import used as `ns.symbol`, an `export { symbol } from`, or an `export * from` barrel —
+//      where the import specifier RESOLVES (relative to the candidate file) to the changed file's path. So a
+//      same-named export in an unrelated module, or an import of a different `./lib`, is never falsely flagged.
+//      Churn is keyed per (file, name) using each file's OLD path (so a rename is seen), and only the PRESENCE of an
+//      export is considered — an in-place signature/body edit is deliberately NOT flagged (a body change doesn't
+//      break importers and signature-vs-body can't be told apart reliably from a diff). Default exports are not
+//      modeled (a consumer imports a default with any local name, which name-based Code Search can't resolve).
 //   2. A newly-exported symbol referenced nowhere in the PR — dead-on-arrival. Code Search indexes the DEFAULT branch
 //      only, so a brand-new symbol is invisible to it; this is judged from the diff, and entrypoint files
 //      (index.*, *.d.ts) are skipped because public API is intentionally unused internally.
@@ -27,7 +30,7 @@ const CODE_SEARCH_PER_PAGE = 20;
 const MAX_SEARCH_PAGES = 5; // pages one symbol may walk (≤100 hits) to see past filtered noise on page 1
 const MAX_TOTAL_SEARCH_REQUESTS = 10; // global Code Search request budget (respects the ~10/min secondary limit)
 const MAX_TOTAL_CONTENT_FETCHES = 30; // global Contents-API budget for import verification across all symbols
-const MAX_DECL_LINES = 40; // bound the contiguous multiline export declaration accumulated for signature comparison
+const MAX_DECL_LINES = 40; // bound the contiguous multiline export declaration accumulated for name extraction
 
 const REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
 const ENTRYPOINT_RE = /(^|\/)index\.[cm]?[jt]sx?$|\.d\.ts$/; // public-API files: skip dead-on-arrival here
@@ -81,7 +84,7 @@ export function normalizeModulePath(path: string): string {
     .replace(/\/index$/, "");
 }
 
-/** Resolve a relative import specifier against the importing file's path → a normalized module path. Returns null for
+/** Resolve a relative import specifier against the importing file's path -> a normalized module path. Returns null for
  *  a non-relative (bare package / tsconfig-alias) specifier that can't be resolved without build config. */
 export function resolveImport(fromFile: string, specifier: string): string | null {
   if (!specifier.startsWith(".")) return null;
@@ -115,7 +118,7 @@ function splitTopLevelCommas(value: string): string[] {
 
 /** Strip line/block comments and string/template-literal CONTENT from a single line, so a symbol that appears only in
  *  a comment or string is not mistaken for a real code reference. Best-effort single-line scrub (advisory): a
- *  comment-only line (`//…`, JSDoc `*…`, `/*…`) is dropped entirely. */
+ *  comment-only line (`//...`, JSDoc `*...`, `/*...`) is dropped entirely. */
 export function stripCommentsAndStrings(line: string): string {
   const trimmed = line.trim();
   if (
@@ -145,10 +148,10 @@ export function referencesSymbol(code: string, symbol: string): boolean {
 }
 
 /** True when the candidate file `content` (at `candidatePath`) depends on `symbol` from the changed module at
- *  `changedPath`. A dependent is: a named import / re-export `{ … symbol … } from`, a namespace import
+ *  `changedPath`. A dependent is: a named import / re-export `{ ... symbol ... } from`, a namespace import
  *  `* as ns from` used as `ns.symbol`, or an `export * from` barrel — in every case the specifier must RESOLVE
- *  (relative to the candidate file) to the changed file's path, so a same-named export in an unrelated module is not
- *  matched. */
+ *  (relative to the candidate file) to the changed file's path, so a same-named export in an unrelated module, or an
+ *  import of a different `./lib`, is not matched. */
 export function importsSymbolFromModule(
   content: string,
   symbol: string,
@@ -181,8 +184,8 @@ export function importsSymbolFromModule(
 
 /** Exported top-level identifier(s) declared by a single (possibly multiline-joined) export statement. Handles
  *  `export function|class|interface|type|enum|namespace NAME`, `export const enum NAME`, multi-declarator
- *  `export const a = 1, b = 2`, `export default function|class NAME`, and `export { a, b as c }` (the public name is
- *  the alias after `as`). Returns [] for `export * from …`, anonymous default exports, and non-export lines. */
+ *  `export const a = 1, b = 2`, and `export { a, b as c }` (the public name is the alias after `as`). Returns [] for
+ *  `export default ...` (defaults aren't modeled), `export * from ...`, and non-export lines. */
 export function parseExportedNames(line: string): string[] {
   const s = line.trim();
   if (!s.startsWith("export")) return [];
@@ -201,10 +204,10 @@ export function parseExportedNames(line: string): string[] {
       .filter((name): name is string => name.length > 0 && name !== "default");
   }
 
-  const def = s.match(
-    /^export\s+default\s+(?:async\s+)?(?:function\*?|class)\s+([A-Za-z_$][\w$]*)/,
-  );
-  if (def) return [def[1]!];
+  // Default exports are intentionally NOT modeled: an unchanged consumer imports a default with any local name
+  // (`import anything from './lib'`), which name-based Code Search can't resolve, so treating the declared name
+  // (`export default function main`) as the public symbol would be wrong. (#1509)
+  if (/^export\s+default\b/.test(s)) return [];
 
   const constEnum = s.match(
     /^export\s+(?:declare\s+)?const\s+enum\s+([A-Za-z_$][\w$]*)/,
@@ -236,7 +239,7 @@ const norm = (line: string): string => line.trim().replace(/\s+/g, " ");
 
 /** Inclusive index where the export declaration starting at `start` ends: walk lines until the bracket depth
  *  (parens/braces/brackets) returns to 0 and the line is not a continuation. Captures the FULL contiguous multiline
- *  declaration so a signature change on a LATER line is not mistaken for an identical move. Bounded by MAX_DECL_LINES. */
+ *  declaration so a name on a later line is still parsed. Bounded by MAX_DECL_LINES. */
 function declarationEnd(lines: string[], start: number): number {
   let depth = 0;
   for (let i = start; i < lines.length && i - start < MAX_DECL_LINES; i++) {
@@ -250,25 +253,22 @@ function declarationEnd(lines: string[], start: number): number {
 }
 
 /** Parse exported symbol names from a sequence of source lines. Each multiline export declaration is joined into one
- *  statement so the FULL declaration text (not just its first line) is compared for signature changes. */
-export function extractExports(
-  lines: string[],
-): Array<{ names: string[]; declText: string }> {
-  const out: Array<{ names: string[]; declText: string }> = [];
+ *  statement so a name spread across several lines is still found. */
+export function extractExports(lines: string[]): string[] {
+  const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (!lines[i]!.trim().startsWith("export")) continue;
     const end = declarationEnd(lines, i);
     const joined = norm(lines.slice(i, end + 1).join(" "));
-    const names = parseExportedNames(joined);
-    if (names.length) out.push({ names, declText: joined });
+    out.push(...parseExportedNames(joined));
     i = end;
   }
   return out;
 }
 
 /** A unified-diff patch split into its pre-image (context + removed) and post-image (context + added), plus the
- *  purely-added lines. Comparing exports parsed from the pre- vs post-image catches a change confined to an inner line
- *  of a multiline declaration whose `export …` line is unchanged context. */
+ *  purely-added lines. Reconstructing each image catches a churn confined to an inner line of a declaration whose
+ *  `export ...` line is unchanged context. */
 function splitPatchImages(patch: string): {
   pre: string[];
   post: string[];
@@ -296,22 +296,19 @@ function splitPatchImages(patch: string): {
   return { pre, post, added };
 }
 
-/** One exported symbol declared in one file's pre- or post-image. */
-interface ExportEntry {
-  file: string;
-  name: string;
-  declText: string;
-}
-
 interface DiffExports {
-  /** every export in the pre-image, keyed per (file, name) */
-  oldEntries: ExportEntry[];
-  /** every export in the post-image, keyed per (file, name) */
-  newEntries: ExportEntry[];
+  /** set of `${file} ${name}` exported in some file's pre-image (file = the file's OLD path, so a rename is seen) */
+  oldExports: Set<string>;
+  /** set of `${file} ${name}` exported in some file's post-image */
+  newExports: Set<string>;
+  /** old export `${file} ${name}` -> { file (old path), name }, for caller resolution against the old module */
+  oldExportInfo: Map<string, { file: string; name: string }>;
   /** the set of names exported anywhere before the PR (so a genuinely-new name can be told from a move) */
   oldNames: Set<string>;
-  /** newly-exported name → the file it was first declared in (for the dead-on-arrival entrypoint check) */
+  /** newly-exported name -> the file it was first declared in (for the dead-on-arrival entrypoint check) */
   newExportFile: Map<string, string>;
+  /** the set of names exported anywhere in the post-image (dead-on-arrival iterates these) */
+  newNames: Set<string>;
   /** purely-added source lines across the PR (for the dead-on-arrival reference scan) */
   addedLines: string[];
 }
@@ -320,30 +317,34 @@ interface DiffExports {
 export function collectDiffExports(
   files: NonNullable<EnrichRequest["files"]>,
 ): DiffExports {
-  const oldEntries: ExportEntry[] = [];
-  const newEntries: ExportEntry[] = [];
+  const oldExports = new Set<string>();
+  const newExports = new Set<string>();
+  const oldExportInfo = new Map<string, { file: string; name: string }>();
   const oldNames = new Set<string>();
   const newExportFile = new Map<string, string>();
+  const newNames = new Set<string>();
   const addedLines: string[] = [];
 
   for (const file of files) {
     if (!file.patch) continue;
     const { pre, post, added } = splitPatchImages(file.patch);
     for (const src of added) addedLines.push(src);
-    for (const { names, declText } of extractExports(pre)) {
-      for (const name of names) {
-        oldEntries.push({ file: file.path, name, declText });
-        oldNames.add(name);
-      }
+    // Pre-image exports belong to the file's OLD path, so a pure rename (src/old.ts -> src/new.ts) makes the export
+    // "removed" from src/old.ts and importers of `./old` are correctly flagged. (#1509)
+    const oldPath = file.previousPath ?? file.path;
+    for (const name of extractExports(pre)) {
+      const key = `${oldPath} ${name}`;
+      oldExports.add(key);
+      oldExportInfo.set(key, { file: oldPath, name });
+      oldNames.add(name);
     }
-    for (const { names, declText } of extractExports(post)) {
-      for (const name of names) {
-        newEntries.push({ file: file.path, name, declText });
-        if (!newExportFile.has(name)) newExportFile.set(name, file.path);
-      }
+    for (const name of extractExports(post)) {
+      newExports.add(`${file.path} ${name}`);
+      newNames.add(name);
+      if (!newExportFile.has(name)) newExportFile.set(name, file.path);
     }
   }
-  return { oldEntries, newEntries, oldNames, newExportFile, addedLines };
+  return { oldExports, newExports, oldExportInfo, oldNames, newExportFile, newNames, addedLines };
 }
 
 /** True when the symbol is used in an added line OTHER than its own export declaration (so it is NOT dead). A mention
@@ -455,15 +456,16 @@ async function findExternalCallers(
     if (callers.length >= MAX_CALLER_FILES || contentBudget.remaining <= 0) break;
     contentBudget.remaining--;
     const content = await fetchFileContent(owner, repo, path, token, fetchImpl, signal);
-    if (content === null) continue; // can't verify the import → drop (conservative)
+    if (content === null) continue; // can't verify the import -> drop (conservative)
     if (importsSymbolFromModule(content, symbol, path, changedPath)) callers.push(path);
   }
   return callers.sort();
 }
 
-/** Analyzer entrypoint. Flags removed/renamed/changed exports that still have importing dependents in unchanged files,
- *  plus dead-on-arrival new exports. The caller path needs a token (skipped without one); the diff-only dead-on-arrival
- *  path runs regardless. Fail-safe: returns [] without a repo or export churn; a failed lookup drops that symbol only. */
+/** Analyzer entrypoint. Flags exports the PR removes / renames away that still have importing dependents in unchanged
+ *  files, plus dead-on-arrival new exports. The caller path needs a token (skipped without one); the diff-only
+ *  dead-on-arrival path runs regardless. Fail-safe: returns [] without a repo or export churn; a failed lookup drops
+ *  that symbol only. */
 export async function scanCallerImpact(
   req: EnrichRequest,
   fetchImpl: typeof fetch = fetch,
@@ -474,8 +476,9 @@ export async function scanCallerImpact(
   const files = req.files ?? [];
   if (!repo || files.length === 0) return [];
 
-  const { oldEntries, newEntries, oldNames, newExportFile, addedLines } = collectDiffExports(files);
-  if (oldEntries.length === 0 && newEntries.length === 0) return [];
+  const { oldExports, newExports, oldExportInfo, oldNames, newExportFile, newNames, addedLines } =
+    collectDiffExports(files);
+  if (oldExports.size === 0 && newExports.size === 0) return [];
 
   const changed = new Set<string>();
   for (const file of files) {
@@ -483,46 +486,38 @@ export async function scanCallerImpact(
     if (file.previousPath) changed.add(file.previousPath);
   }
 
-  // Per-(file, name) post-image declaration text, so a same-named export in another file can't be conflated.
-  const newByKey = new Map<string, string>();
-  for (const entry of newEntries) newByKey.set(`${entry.file} ${entry.name}`, entry.declText);
-
   const findings: CallerImpactFinding[] = [];
 
-  // Removed / renamed / signature-changed exports → importing dependents in unchanged files. Needs the token; skipped
-  // without one. Bounded by the shared Code Search + Contents budgets.
+  // Removed / renamed-away exports -> importing dependents in unchanged files. An export is "removed from its module"
+  // when its `${oldPath} ${name}` key is absent from the post-image set; an in-place signature/body change keeps the
+  // key present and is intentionally NOT flagged. Needs the token; bounded by the shared Code Search + Contents budgets.
   if (token) {
     const searchBudget = { remaining: MAX_TOTAL_SEARCH_REQUESTS };
     const contentBudget = { remaining: MAX_TOTAL_CONTENT_FETCHES };
     let searched = 0;
-    for (const entry of oldEntries) {
+    for (const key of oldExports) {
       if (searched >= MAX_SYMBOLS_SEARCHED || searchBudget.remaining <= 0) break;
-      const newText = newByKey.get(`${entry.file} ${entry.name}`);
-      if (newText !== undefined && newText === entry.declText) continue; // unchanged in this file ⇒ skip
+      if (newExports.has(key)) continue; // still exported from this module
+      const info = oldExportInfo.get(key);
+      if (!info) continue;
       searched++;
-      const callerFiles = await findExternalCallers(entry.name, repo.owner, repo.repo, changed, entry.file, token, fetchImpl, searchBudget, contentBudget, options.signal);
+      const callerFiles = await findExternalCallers(info.name, repo.owner, repo.repo, changed, info.file, token, fetchImpl, searchBudget, contentBudget, options.signal);
       if (!callerFiles || callerFiles.length === 0) continue;
-      findings.push({
-        symbol: entry.name,
-        kind: newText === undefined ? "removed-with-callers" : "changed-with-callers",
-        callerFiles,
-      });
+      findings.push({ symbol: info.name, kind: "removed-with-callers", callerFiles });
     }
   }
 
   // Dead-on-arrival: genuinely-new exported symbols (not exported anywhere before) referenced nowhere in the diff.
   // Diff-only — Code Search can't see a brand-new symbol. Skip public-entrypoint files (exports meant for external use).
   let deadReported = 0;
-  const deadSeen = new Set<string>();
-  for (const entry of newEntries) {
+  for (const name of newNames) {
     if (deadReported >= MAX_DEAD_REPORTED) break;
-    if (oldNames.has(entry.name) || deadSeen.has(entry.name)) continue; // existed before, or already reported
-    const file = newExportFile.get(entry.name) ?? entry.file;
+    if (oldNames.has(name)) continue; // existed before — a move, not a new export
+    const file = newExportFile.get(name) ?? "";
     if (ENTRYPOINT_RE.test(file)) continue; // likely public API
-    if (isReferencedInDiff(entry.name, addedLines)) continue;
-    deadSeen.add(entry.name);
+    if (isReferencedInDiff(name, addedLines)) continue;
     deadReported++;
-    findings.push({ symbol: entry.name, kind: "dead-on-arrival", callerFiles: [] });
+    findings.push({ symbol: name, kind: "dead-on-arrival", callerFiles: [] });
   }
 
   // Stable order (by kind, then symbol) so the rendered brief is deterministic regardless of Code Search result order.

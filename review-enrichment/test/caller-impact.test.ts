@@ -32,7 +32,7 @@ const throwingFetch = async () => {
   throw new Error("network down");
 };
 
-// A fetch stub routing /search/code (by encoded-symbol substring → items) and /contents/<path> (→ raw file content).
+// A fetch stub routing /search/code (by encoded-symbol substring -> items) and /contents/<path> (-> raw file content).
 function ghStub({ search = {}, contents = {} }) {
   return async (url) => {
     if (url.includes("/search/code")) {
@@ -63,8 +63,6 @@ test("parseExportedNames covers the common export forms", () => {
   assert.deepEqual(parseExportedNames("export enum E {}"), ["E"]);
   assert.deepEqual(parseExportedNames("export namespace NS {}"), ["NS"]);
   assert.deepEqual(parseExportedNames("export declare function dfn(): void;"), ["dfn"]);
-  assert.deepEqual(parseExportedNames("export default function main() {}"), ["main"]);
-  assert.deepEqual(parseExportedNames("export default class App {}"), ["App"]);
   assert.deepEqual(parseExportedNames("  export function indented() {}"), ["indented"]);
 });
 
@@ -80,9 +78,11 @@ test("parseExportedNames handles named export lists with aliases", () => {
   assert.deepEqual(parseExportedNames('export { x } from "./x";'), ["x"]);
 });
 
-test("parseExportedNames returns [] for re-export-all, anonymous default, and non-exports", () => {
-  assert.deepEqual(parseExportedNames('export * from "./x";'), []);
+test("parseExportedNames returns [] for default exports, re-export-all, and non-exports", () => {
+  assert.deepEqual(parseExportedNames("export default function main() {}"), []); // defaults are not modeled
+  assert.deepEqual(parseExportedNames("export default class App {}"), []);
   assert.deepEqual(parseExportedNames("export default 42;"), []);
+  assert.deepEqual(parseExportedNames('export * from "./x";'), []);
   assert.deepEqual(parseExportedNames("const x = 1;"), []);
   assert.deepEqual(parseExportedNames("import { foo } from './a';"), []);
 });
@@ -113,15 +113,15 @@ test("importsSymbolFromModule resolves relative imports and covers named/namespa
   assert.equal(importsSymbolFromModule("function foo() {}", "foo", "src/c.ts", lib), false); // own def, no import
 });
 
-test("collectDiffExports reconstructs pre/post export images per file", () => {
+test("collectDiffExports reconstructs pre/post export sets per file", () => {
   const out = collectDiffExports([
     {
       path: "f.ts",
       patch: "@@ -1,1 +1,2 @@\n-export const removed = 1;\n+export const added = 1;\n+useSomething();",
     },
   ]);
-  assert.ok(out.oldEntries.some((e) => e.name === "removed" && e.file === "f.ts"));
-  assert.ok(out.newEntries.some((e) => e.name === "added" && e.file === "f.ts"));
+  assert.ok(out.oldExports.has("f.ts removed"));
+  assert.ok(out.newExports.has("f.ts added"));
   assert.equal(out.newExportFile.get("added"), "f.ts");
   assert.ok(out.addedLines.includes("useSomething();"));
 });
@@ -149,24 +149,10 @@ test("referencesSymbol counts real code references, not comments or strings", ()
   assert.equal(referencesSymbol("notfoo + foobar", "foo"), false); // substring only
 });
 
-test("extractExports joins a multiline export { } block", () => {
-  assert.deepEqual(
-    extractExports(["export {", "  alpha,", "  beta,", "};"]).flatMap((e) => e.names),
-    ["alpha", "beta"],
-  );
-  assert.deepEqual(
-    extractExports(["export const single = 1;"]).flatMap((e) => e.names),
-    ["single"],
-  );
-});
-
-test("extractExports captures a multiline function signature for change comparison", () => {
-  const before = extractExports(["export function foo(", "  a: string,", "): void;"]);
-  const after = extractExports(["export function foo(", "  a: number,", "): void;"]);
-  assert.deepEqual(before.flatMap((e) => e.names), ["foo"]);
-  assert.deepEqual(after.flatMap((e) => e.names), ["foo"]);
-  // Same name, but the FULL declaration text differs ⇒ a real signature change, not an identical move/reformat.
-  assert.notEqual(before[0].declText, after[0].declText);
+test("extractExports joins a multiline export { } block and a multiline declaration", () => {
+  assert.deepEqual(extractExports(["export {", "  alpha,", "  beta,", "};"]), ["alpha", "beta"]);
+  assert.deepEqual(extractExports(["export const single = 1;"]), ["single"]);
+  assert.deepEqual(extractExports(["export function foo(", "  a: string,", "): void;"]), ["foo"]);
 });
 
 // ── scanCallerImpact ──────────────────────────────────────────────────────────
@@ -275,114 +261,9 @@ test("scanCallerImpact: a re-export barrel forwarding the symbol is a caller", a
   assert.deepEqual(out[0].callerFiles, ["src/barrel.ts"]);
 });
 
-test("scanCallerImpact: same-named exports in two changed files are classified per file", async () => {
-  const fetchImpl = ghStub({
-    search: {
-      "%22foo%22": [
-        { path: "src/ca.ts", text_matches: [{ fragment: "foo();" }] },
-        { path: "src/cb.ts", text_matches: [{ fragment: "foo(1);" }] },
-      ],
-    },
-    contents: {
-      "src/ca.ts": "import { foo } from './a';\nfoo();", // depends on a's foo
-      "src/cb.ts": "import { foo } from './b';\nfoo(1);", // depends on b's foo
-    },
-  });
-  const out = await scanCallerImpact(
-    {
-      repoFullName: "o/r",
-      prNumber: 1,
-      githubToken: "t",
-      files: [
-        { path: "src/a.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" }, // removed from a
-        {
-          path: "src/b.ts",
-          patch: "@@ -1,1 +1,1 @@\n-export function foo(x: string): void;\n+export function foo(x: number): void;", // changed in b
-        },
-      ],
-    },
-    fetchImpl,
-  );
-  const byKind = Object.fromEntries(out.map((f) => [f.kind, f.callerFiles]));
-  assert.deepEqual(byKind["removed-with-callers"], ["src/ca.ts"]); // a's foo → caller ca (imports ./a)
-  assert.deepEqual(byKind["changed-with-callers"], ["src/cb.ts"]); // b's foo → caller cb (imports ./b)
-});
-
-test("scanCallerImpact: a signature change with an importing caller is changed-with-callers", async () => {
-  const fetchImpl = ghStub({
-    search: { "%22bar%22": [{ path: "src/caller.ts", text_matches: [{ fragment: "bar(1);" }] }] },
-    contents: { "src/caller.ts": "import { bar } from './lib';\nbar(1);" },
-  });
-  const out = await scanCallerImpact(
-    {
-      repoFullName: "o/r",
-      prNumber: 1,
-      githubToken: "t",
-      files: [
-        {
-          path: "src/lib.ts",
-          patch: "@@ -1,1 +1,1 @@\n-export function bar(a: string): void;\n+export function bar(a: number): void;",
-        },
-      ],
-    },
-    fetchImpl,
-  );
-  assert.equal(out.length, 1);
-  assert.equal(out[0].kind, "changed-with-callers");
-});
-
-test("scanCallerImpact: a change confined to a parameter line (export line is context) is detected", async () => {
-  const fetchImpl = ghStub({
-    search: { "%22foo%22": [{ path: "src/caller.ts", text_matches: [{ fragment: "foo(1);" }] }] },
-    contents: { "src/caller.ts": "import { foo } from './lib';\nfoo(1);" },
-  });
-  const out = await scanCallerImpact(
-    {
-      repoFullName: "o/r",
-      prNumber: 1,
-      githubToken: "t",
-      files: [
-        {
-          path: "src/lib.ts",
-          // `export function foo(` and `): void;` are unchanged CONTEXT; only the parameter line is -/+.
-          patch: "@@ -1,3 +1,3 @@\n export function foo(\n-  a: string,\n+  a: number,\n ): void;",
-        },
-      ],
-    },
-    fetchImpl,
-  );
-  assert.equal(out.length, 1);
-  assert.equal(out[0].symbol, "foo");
-  assert.equal(out[0].kind, "changed-with-callers");
-});
-
-test("scanCallerImpact: a multiline signature change (whole block re-added) is changed-with-callers", async () => {
-  const fetchImpl = ghStub({
-    search: { "%22foo%22": [{ path: "src/caller.ts", text_matches: [{ fragment: "foo(1);" }] }] },
-    contents: { "src/caller.ts": "import { foo } from './lib';\nfoo(1);" },
-  });
-  const out = await scanCallerImpact(
-    {
-      repoFullName: "o/r",
-      prNumber: 1,
-      githubToken: "t",
-      files: [
-        {
-          path: "src/lib.ts",
-          patch:
-            "@@ -1,3 +1,3 @@\n-export function foo(\n-  a: string,\n-): void;\n+export function foo(\n+  a: number,\n+): void;",
-        },
-      ],
-    },
-    fetchImpl,
-  );
-  assert.equal(out.length, 1);
-  assert.equal(out[0].kind, "changed-with-callers");
-});
-
-test("scanCallerImpact: an identical export on both sides (moved) is not searched or flagged", async () => {
+test("scanCallerImpact: a body-only change to an exported function is NOT flagged", async () => {
   let searched = false;
-  const tracking = async (url) => {
+  const fetchImpl = async (url) => {
     if (url.includes("/search/code")) searched = true;
     return res({ items: [] });
   };
@@ -391,12 +272,74 @@ test("scanCallerImpact: an identical export on both sides (moved) is not searche
       repoFullName: "o/r",
       prNumber: 1,
       githubToken: "t",
-      files: [{ path: "src/lib.ts", patch: "@@ -1,1 +1,1 @@\n-export function baz(): void;\n+export function baz(): void;" }],
+      files: [
+        {
+          path: "src/lib.ts",
+          // `export function foo(): void {` and `}` are unchanged context; only the body line changes.
+          patch: "@@ -1,3 +1,3 @@\n export function foo(): void {\n-  return doOld();\n+  return doNew();\n }",
+        },
+      ],
     },
-    tracking,
+    fetchImpl,
   );
-  assert.deepEqual(out, []);
+  assert.deepEqual(out, []); // foo is still exported from src/lib (present in pre and post) → not a removal
   assert.equal(searched, false);
+});
+
+test("scanCallerImpact: a renamed file's importers of the OLD path are flagged", async () => {
+  const fetchImpl = ghStub({
+    search: { "%22foo%22": [{ path: "src/caller.ts", text_matches: [{ fragment: "foo();" }] }] },
+    contents: { "src/caller.ts": "import { foo } from './old';\nfoo();" },
+  });
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [
+        {
+          path: "src/new.ts",
+          previousPath: "src/old.ts",
+          status: "renamed",
+          patch: "@@ -1,1 +1,1 @@\n-export function foo(): void;\n+export function foo(): void;",
+        },
+      ],
+    },
+    fetchImpl,
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].kind, "removed-with-callers");
+  assert.deepEqual(out[0].callerFiles, ["src/caller.ts"]); // importer of ./old breaks after the rename
+});
+
+test("scanCallerImpact: same-named exports removed from two changed files are classified per file", async () => {
+  const fetchImpl = ghStub({
+    search: {
+      "%22foo%22": [
+        { path: "src/ca.ts", text_matches: [{ fragment: "foo();" }] },
+        { path: "src/cb.ts", text_matches: [{ fragment: "foo();" }] },
+      ],
+    },
+    contents: {
+      "src/ca.ts": "import { foo } from './a';\nfoo();", // depends on a's foo
+      "src/cb.ts": "import { foo } from './b';\nfoo();", // depends on b's foo
+    },
+  });
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [
+        { path: "src/a.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" },
+        { path: "src/b.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" },
+      ],
+    },
+    fetchImpl,
+  );
+  // foo removed from BOTH modules → two findings, each bound to its own importer.
+  const callerSets = out.map((f) => f.callerFiles).sort();
+  assert.deepEqual(callerSets, [["src/ca.ts"], ["src/cb.ts"]]);
 });
 
 test("scanCallerImpact: pages past a noisy first page to find an importing caller on page 2", async () => {
@@ -552,7 +495,7 @@ test("scanCallerImpact: dead-on-arrival runs without a token (diff-only, no netw
   assert.equal(out[0].symbol, "orphan");
 });
 
-test("scanCallerImpact: no token returns [] without any fetch", async () => {
+test("scanCallerImpact: no token returns [] without any caller fetch", async () => {
   const out = await scanCallerImpact(
     { repoFullName: "o/r", prNumber: 1, files: [{ path: "src/lib.ts", patch: "@@ @@\n-export function foo(): void;" }] },
     throwingFetch,
@@ -595,13 +538,11 @@ test("renderBrief emits a public-safe caller-impact block", () => {
   const { promptSection } = renderBrief({
     callerImpact: [
       { symbol: "foo", kind: "removed-with-callers", callerFiles: ["src/a.ts", "src/b.ts"] },
-      { symbol: "bar", kind: "changed-with-callers", callerFiles: ["src/c.ts"] },
       { symbol: "baz", kind: "dead-on-arrival", callerFiles: [] },
     ],
   });
   assert.match(promptSection, /Cross-file API impact/);
-  assert.match(promptSection, /`foo` removed\/renamed but still referenced in 2 unchanged files/);
-  assert.match(promptSection, /`bar` signature-changed but still referenced in 1 unchanged file\b/);
+  assert.match(promptSection, /`foo` removed\/renamed but still imported by 2 unchanged files/);
   assert.match(promptSection, /`baz` is exported but referenced nowhere in this PR \(dead-on-arrival\)/);
   assert.match(promptSection, /`src\/a\.ts`, `src\/b\.ts`/);
 });

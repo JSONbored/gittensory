@@ -362,14 +362,10 @@ export function renderBrief(
         );
         continue;
       }
-      const verb =
-        item.kind === "removed-with-callers"
-          ? "removed/renamed but still referenced in"
-          : "signature-changed but still referenced in";
       const files = item.callerFiles.map((f) => safeCodeSpan(f)).join(", ");
       const count = item.callerFiles.length;
       lines.push(
-        `- ${safeCodeSpan(item.symbol)} ${verb} ${count} unchanged file${count === 1 ? "" : "s"}: ${files} — update the callers or keep a compatibility shim`,
+        `- ${safeCodeSpan(item.symbol)} removed/renamed but still imported by ${count} unchanged file${count === 1 ? "" : "s"}: ${files} — update the importers or keep a compatibility shim`,
       );
     }
   }

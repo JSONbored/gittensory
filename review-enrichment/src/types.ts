@@ -236,13 +236,13 @@ export interface NativeBuildFinding {
   reason: string;
 }
 
-/** An exported top-level symbol the PR removes / renames / changes the signature of while it still has live callers
+/** An exported top-level symbol the PR removes / renames away from a module while it still has importing dependents
  *  in files the PR did NOT touch (a hidden cross-file compile/runtime break), or a newly-exported symbol referenced
  *  nowhere in the PR (dead-on-arrival). Reports the symbol name + the unchanged caller files only — never source. (#1509) */
 export interface CallerImpactFinding {
   symbol: string;
-  kind: "removed-with-callers" | "changed-with-callers" | "dead-on-arrival";
-  /** Unchanged files (outside the PR's diff) that still reference the symbol. Empty for `dead-on-arrival`. */
+  kind: "removed-with-callers" | "dead-on-arrival";
+  /** Unchanged files that still import the symbol from the changed module. Empty for `dead-on-arrival`. */
   callerFiles: string[];
 }
 
