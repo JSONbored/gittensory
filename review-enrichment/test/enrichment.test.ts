@@ -1674,7 +1674,7 @@ test("buildBrief: timeout aborts dependency scan so OSV work stops", async () =>
       repoFullName: "o/r",
       prNumber: 10,
       analyzers: ["dependency"],
-      budget: { timeoutMs: 1 },
+      budget: { timeoutMs: 200 },
       files: Array.from({ length: 5 }, (_, index) => ({
         path: "package.json",
         patch: `+    "pkg-${index}": "1.0.0",`,
