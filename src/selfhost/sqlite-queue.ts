@@ -15,7 +15,6 @@ import {
   githubRateLimitAdmissionDelayMs,
   githubRateLimitAdmissionKeyForJob,
   githubRateLimitAdmissionRemainingFloor,
-  githubRateLimitAdmissionRepoForJob,
   githubRateLimitRetryDelayMs,
   isGitHubBudgetBackgroundJob,
   jobCoalesceKey,
@@ -617,18 +616,16 @@ function rateLimitAdmissionDelayMs(
   if (kind === null) return null;
   try {
     const admissionKey = githubRateLimitAdmissionKeyForJob(message);
-    const repoFullName = githubRateLimitAdmissionRepoForJob(message);
     const remainingFloor = githubRateLimitAdmissionRemainingFloor(kind);
     const rows = driver.query(
       `SELECT remaining, reset_at, observed_at FROM github_rate_limit_observations
         WHERE resource='rest' AND remaining IS NOT NULL AND (
           (? IS NOT NULL AND admission_key=?)
-          OR (? IS NOT NULL AND repo_full_name=? AND admission_key IS NULL)
-          OR (? IS NULL AND ? IS NULL)
+          OR admission_key IS NULL
         )
         ORDER BY CASE WHEN remaining <= ? THEN 1 ELSE 0 END DESC, observed_at DESC
         LIMIT 16`,
-      [admissionKey, admissionKey, repoFullName, repoFullName, admissionKey, repoFullName, remainingFloor],
+      [admissionKey, admissionKey, remainingFloor],
     ).rows as Array<{ remaining?: number | null; reset_at?: string | null; observed_at?: string | null }>;
     const delayMs = githubRateLimitAdmissionDelayMs(kind, admissionKey, rows);
     return delayMs === null ? null : { kind, delayMs };

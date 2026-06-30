@@ -178,17 +178,6 @@ export function githubRateLimitAdmissionKeyForJob(message: JobMessage): GitHubRa
     : null;
 }
 
-export function githubRateLimitAdmissionRepoForJob(message: JobMessage): string | null {
-  if ("repoFullName" in message && typeof message.repoFullName === "string" && message.repoFullName.length > 0) {
-    return message.repoFullName;
-  }
-  if (message.type !== "github-webhook") return null;
-  const repo = message.payload?.repository;
-  return typeof repo === "object" && repo !== null && typeof (repo as { full_name?: unknown }).full_name === "string"
-    ? (repo as { full_name: string }).full_name
-    : null;
-}
-
 export function githubRateLimitAdmissionDelayMs(
   kind: "background" | "webhook",
   admissionKey: GitHubRateLimitAdmissionKey | null | undefined,

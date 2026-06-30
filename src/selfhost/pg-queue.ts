@@ -14,7 +14,6 @@ import {
   githubRateLimitAdmissionDelayMs,
   githubRateLimitAdmissionKeyForJob,
   githubRateLimitAdmissionRemainingFloor,
-  githubRateLimitAdmissionRepoForJob,
   githubRateLimitRetryDelayMs,
   isGitHubBudgetBackgroundJob,
   jobCoalesceKey,
@@ -616,18 +615,16 @@ export function createPgQueue(
           : null;
     if (kind === null) return null;
     const admissionKey = githubRateLimitAdmissionKeyForJob(message);
-    const repoFullName = githubRateLimitAdmissionRepoForJob(message);
     const remainingFloor = githubRateLimitAdmissionRemainingFloor(kind);
     const res = await pool.query(
       `SELECT remaining, reset_at, observed_at FROM github_rate_limit_observations
         WHERE resource='rest' AND remaining IS NOT NULL AND (
           ($1::text IS NOT NULL AND admission_key=$1)
-          OR ($2::text IS NOT NULL AND repo_full_name=$2 AND admission_key IS NULL)
-          OR ($1::text IS NULL AND $2::text IS NULL)
+          OR admission_key IS NULL
         )
-        ORDER BY CASE WHEN remaining <= $3 THEN 1 ELSE 0 END DESC, observed_at DESC
+        ORDER BY CASE WHEN remaining <= $2 THEN 1 ELSE 0 END DESC, observed_at DESC
         LIMIT 16`,
-      [admissionKey, repoFullName, remainingFloor],
+      [admissionKey, remainingFloor],
     );
     const rows = res.rows as Array<{ remaining?: number | string | null; reset_at?: string | null; observed_at?: string | null }>;
     const delayMs = githubRateLimitAdmissionDelayMs(kind, admissionKey, rows);
