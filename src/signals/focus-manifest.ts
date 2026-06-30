@@ -2,6 +2,7 @@ import { parse as parseYaml } from "yaml";
 import type { GatePolicyPack, GateRuleMode, JsonValue, RepositorySettings } from "../types";
 import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy } from "../settings/autonomy";
 import { mergeContributorBlacklists, normalizeContributorBlacklist } from "../settings/contributor-blacklist";
+import { PUBLIC_LOCAL_PATH_INLINE } from "./redaction";
 
 export type FocusManifestSource = "repo_file" | "api_record" | "none";
 export type FocusManifestLinkedIssuePolicy = "required" | "preferred" | "optional";
@@ -34,7 +35,7 @@ export type FocusManifestGateConfig = {
   aiReviewModel: string | null;
   aiReviewAllAuthors: boolean | null;
   /** `gate.aiReview.closeConfidence` (#7): minimum calibrated AI-reviewer confidence (0-1) for an AI defect to BLOCK
-   *  under `aiReview.mode: block`. null (unset) ⇒ the gate's 0.9 default. Clamped to [0,1] at parse time. */
+   *  under `aiReview.mode: block`. null (unset) ⇒ the gate's 0.93 default. Clamped to [0,1] at parse time. */
   aiReviewCloseConfidence: number | null;
   mergeReadiness: GateRuleMode | null;
   manifestPolicy: GateRuleMode | null;
@@ -284,12 +285,20 @@ const EMPTY_MANIFEST: FocusManifest = {
   warnings: [],
 };
 
+// This surface's economic/identity term vocabulary is intentionally richer than the canonical
+// PUBLIC_UNSAFE_TERMS (extra phrases like "public score estimate"), so it stays a local literal. The local
+// filesystem paths, however, compose from the canonical PUBLIC_LOCAL_PATH_INLINE in redaction.ts (which also
+// covers `/var/`, previously missed here, plus `/root/` and the forward-slash Windows form `C:/Users/`) so this
+// guard cannot drift from the canonical boundary on a leaking root.
+const FOCUS_MANIFEST_TERMS = /\b(reward\w*|score\w*|wallets?|hotkeys?|coldkeys?|seed[-\s]?phrases?|mnemonics?|private[-\s]?keys?|farming|payouts?|rankings?|raw[-\s]?trust(?:[-\s]?scores?)?|trust[-\s]?scores?|private[-\s]?reviewability|reviewability(?:[-\s]?internals?)?|private[-\s]?scoreability|scoreability|public[-\s]?score[-\s]?(?:estimate|prediction|claim)s?|estimated[-\s]?scores?|score[-\s]?(?:estimate|prediction|preview)s?)\b/i;
+const FOCUS_MANIFEST_LOCAL_PATH_PATTERN = new RegExp(PUBLIC_LOCAL_PATH_INLINE, "i");
+
 /**
  * Public-safe redaction guard shared with the local-branch packet renderer. Public manifest
  * text must not leak reward, wallet/key, ranking, or local filesystem path material.
  */
 export function isFocusManifestPublicSafe(text: string): boolean {
-  return !/\b(reward\w*|score\w*|wallets?|hotkeys?|coldkeys?|seed[-\s]?phrases?|mnemonics?|private[-\s]?keys?|farming|payouts?|rankings?|raw[-\s]?trust(?:[-\s]?scores?)?|trust[-\s]?scores?|private[-\s]?reviewability|reviewability(?:[-\s]?internals?)?|private[-\s]?scoreability|scoreability|public[-\s]?score[-\s]?(?:estimate|prediction|claim)s?|estimated[-\s]?scores?|score[-\s]?(?:estimate|prediction|preview)s?)\b|\/Users\/|\/home\/|\/tmp\/|[A-Z]:\\Users\\/i.test(text);
+  return !FOCUS_MANIFEST_TERMS.test(text) && !FOCUS_MANIFEST_LOCAL_PATH_PATTERN.test(text);
 }
 
 function emptyManifest(source: FocusManifestSource, warnings: string[] = []): FocusManifest {
@@ -365,7 +374,7 @@ function normalizeOptionalScore(value: JsonValue | undefined, field: string, war
 }
 
 /** Normalize an optional confidence threshold in [0,1] (#7) — a fractional value (NOT a 0-100 score), so it is
- *  clamped into range WITHOUT rounding. Absent/null ⇒ null (the resolver leaves the gate's 0.9 default in place);
+ *  clamped into range WITHOUT rounding. Absent/null ⇒ null (the resolver leaves the gate's 0.93 default in place);
  *  a non-finite/non-number value is ignored with a warning. */
 function normalizeOptionalConfidence(value: JsonValue | undefined, field: string, warnings: string[]): number | null {
   if (value === undefined || value === null) return null;
@@ -883,7 +892,7 @@ export function resolveReviewPreMergeChecks(manifest: FocusManifest | null): Pre
  *  config dir (`<repo>/review/skills/*.md`). `when` is "always" (repo-wide) or a path glob / brace-list that gates it to
  *  matching changed files (cost: only relevant skills are injected). */
 export type RepoReviewSkill = { name: string; when: string; body: string };
-/** The per-repo review CONTEXT (#review-skills): an always-on `review/CLAUDE.md` guide + the skill rubric modules. */
+/** The per-repo review CONTEXT (#review-skills): an always-on `review/AGENTS.md` / `review/CLAUDE.md` guide + skills. */
 export type RepoReviewContext = { guide: string | null; skills: RepoReviewSkill[] };
 
 /** Hard cap on the injected per-repo review context — a cost guard so a runaway guide/skills set can't bloat every

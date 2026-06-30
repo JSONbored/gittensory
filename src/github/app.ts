@@ -3,7 +3,11 @@ import {
   fetchBrokeredInstallationToken,
   isOrbBrokerMode,
 } from "../orb/broker-client";
-import { makeInstallationOctokit } from "./client";
+import {
+  clearGitHubResponseCacheForTest,
+  makeInstallationOctokit,
+  timeoutFetch,
+} from "./client";
 import { maintainerControlPanelUrl } from "./footer";
 import type { AgentActionMode } from "../settings/agent-execution";
 import { signRs256Jwt } from "../utils/crypto";
@@ -18,6 +22,24 @@ import {
   type GateCheckEvaluation,
   type GateCheckPolicy,
 } from "../rules/advisory";
+import {
+  GITTENSORY_CONTEXT_CHECK_NAME,
+  GITTENSORY_GATE_CHECK_NAME,
+  GITTENSORY_LEGACY_GATE_CHECK_NAME,
+} from "../review/check-names";
+
+export {
+  GITTENSORY_CONTEXT_CHECK_NAME,
+  GITTENSORY_GATE_CHECK_NAME,
+  GITTENSORY_LEGACY_GATE_CHECK_NAME,
+} from "../review/check-names";
+export type { CachedGitHubResponse, GitHubResponseCache } from "./client";
+export {
+  isCacheableGithubUrl,
+  isRateLimitedResponse,
+  rateLimitRetryMs,
+  setGitHubResponseCache,
+} from "./client";
 
 type CheckRunResponse = {
   id: number;
@@ -29,6 +51,8 @@ type CheckRunListResponse = {
     id: number;
     html_url?: string;
     name?: string;
+    status?: GitHubCheckStatus | string | null;
+    conclusion?: string | null;
   }>;
 };
 
@@ -36,138 +60,11 @@ export type CheckRunOutcome =
   | { kind: "published"; id: number; html_url?: string }
   | { kind: "permission_missing"; warning: string };
 
-export const GITTENSORY_CONTEXT_CHECK_NAME = "Gittensory Context";
-export const GITTENSORY_GATE_CHECK_NAME = "Gittensory Gate";
-
 type GitHubCheckConclusion =
   | Advisory["conclusion"]
   | GateCheckConclusion
   | "skipped";
 type GitHubCheckStatus = "queued" | "in_progress" | "completed";
-
-/** Hard cap on a single GitHub API request. Without it a slow/half-open GitHub connection can hang the
- *  Worker — e.g. the Gate's own completing PATCH stalling after the pending check was posted, which leaves
- *  the check in_progress forever. A bounded timeout turns a hang into a catchable error the caller can
- *  finalize. Applied to every raw fetch here and to the Octokit instances (via a timeout-injecting fetch). */
-const GITHUB_FETCH_TIMEOUT_MS = 12_000;
-
-/** A short-TTL cache for safe GitHub GET responses (e.g. Redis on the self-host). Stores only status/body/
- *  content-type — never rate-limit or encoding headers. Set on the self-host; the Worker leaves it null. */
-export interface CachedGitHubResponse {
-  status: number;
-  body: string;
-  contentType: string;
-}
-export interface GitHubResponseCache {
-  get(url: string): Promise<CachedGitHubResponse | null>;
-  set(url: string, value: CachedGitHubResponse): Promise<void>;
-}
-let responseCache: GitHubResponseCache | null = null;
-export function setGitHubResponseCache(
-  cache: GitHubResponseCache | null,
-): void {
-  responseCache = cache;
-}
-
-/** Only cache safe GETs to the GitHub REST API. Never cache token-minting, rate-limit, or
- * authorization/permission endpoints whose response must reflect the live caller context. Exported for tests. */
-export function isCacheableGithubUrl(url: string): boolean {
-  if (!url.startsWith("https://api.github.com/")) return false;
-  if (url.includes("/access_tokens") || url.includes("/rate_limit"))
-    return false;
-  return !/\/repos\/[^/]+\/[^/]+\/collaborators\/[^/]+\/permission(?:$|[?#])/.test(
-    url,
-  );
-}
-
-// Transient GitHub rate-limit handling (#ratelimit-resilience). A primary (x-ratelimit-remaining:0) or secondary
-// (Retry-After / "secondary rate limit" body) limit returns 403/429. Instead of surfacing it as a failure — or
-// MISCLASSIFYING a 403 as a permission gap — back off a few times and retry. A sustained limit exhausts the
-// retries and the response is returned so the caller (and the queue) handles it. Bounded so a review never stalls.
-const GITHUB_RATE_LIMIT_MAX_RETRIES = 3;
-const GITHUB_RATE_LIMIT_MAX_DELAY_MS = 8_000;
-
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
-
-/** Does this GitHub response signal a rate limit (primary or secondary)? 403/429 with a Retry-After header, an
- *  exhausted x-ratelimit-remaining, or a secondary-limit/abuse body. A 403 with NONE of these is a real
- *  permission/other error and must surface — not retry, not be mistaken for a rate limit. Exported for tests. */
-export async function isRateLimitedResponse(
-  response: Response,
-): Promise<boolean> {
-  if (response.status !== 403 && response.status !== 429) return false;
-  if (response.headers.get("retry-after") != null) return true;
-  if (response.headers.get("x-ratelimit-remaining") === "0") return true;
-  try {
-    return /secondary rate limit|\babuse\b|api rate limit exceeded/i.test(
-      await response.clone().text(),
-    );
-    /* v8 ignore next 3 -- defensive: a cloned Response body that fails to read isn't reachable in practice */
-  } catch {
-    return false;
-  }
-}
-
-/** How long to wait before the next rate-limit retry: honor a valid Retry-After (seconds), else exponential
- *  backoff — each capped so a review can never stall on one call. A sustained PRIMARY limit (reset up to an hour
- *  out) simply exhausts the few inline retries and the queue retries the job later. Exported for tests. */
-export function rateLimitRetryMs(response: Response, attempt: number): number {
-  const retryAfterHeader = response.headers.get("retry-after");
-  if (retryAfterHeader != null) {
-    const retryAfter = Number(retryAfterHeader);
-    if (Number.isFinite(retryAfter) && retryAfter >= 0)
-      return Math.min(retryAfter * 1000, GITHUB_RATE_LIMIT_MAX_DELAY_MS);
-  }
-  return Math.min(500 * 2 ** attempt, GITHUB_RATE_LIMIT_MAX_DELAY_MS);
-}
-
-async function timeoutFetch(
-  input: RequestInfo | URL,
-  init?: RequestInit,
-): Promise<Response> {
-  const method = (init?.method ?? "GET").toUpperCase();
-  const url = String(input); // timeoutFetch is only ever called with string URLs (app template strings + octokit)
-  const useCache =
-    responseCache !== null && method === "GET" && isCacheableGithubUrl(url);
-  if (useCache) {
-    const hit = await responseCache!.get(url).catch(() => null); // a cache read must never break the fetch
-    if (hit)
-      return new Response(hit.body, {
-        status: hit.status,
-        headers: { "content-type": hit.contentType },
-      });
-  }
-  let response: Response;
-  for (let attempt = 0; ; attempt += 1) {
-    response = init?.signal
-      ? await fetch(input, init)
-      : await fetch(input, {
-          ...(init ?? {}),
-          signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
-        });
-    // Retry a transient rate-limit (with backoff) instead of surfacing it; stop once exhausted or it's not a limit.
-    if (
-      attempt >= GITHUB_RATE_LIMIT_MAX_RETRIES ||
-      !(await isRateLimitedResponse(response))
-    )
-      break;
-    await sleep(rateLimitRetryMs(response, attempt));
-  }
-  if (useCache && response.status === 200) {
-    try {
-      const body = await response.clone().text(); // clone leaves the returned response readable
-      await responseCache!.set(url, {
-        status: 200,
-        body,
-        contentType: response.headers.get("content-type") ?? "application/json",
-      });
-    } catch {
-      /* caching is best-effort */
-    }
-  }
-  return response;
-}
 
 // In-isolate installation-token cache. GitHub installation tokens are valid ~1h; minting a fresh one on EVERY
 // call (the previous behavior) multiplied GitHub API usage enormously — each review path mints several tokens,
@@ -234,6 +131,55 @@ export async function createInstallationToken(
   });
   inFlightMints.set(installationId, mint);
   return mint;
+}
+
+function githubErrorStatus(error: unknown): number | null {
+  const err = error as {
+    status?: number;
+    response?: { status?: number } | null;
+  };
+  return err.status ?? err.response?.status ?? null;
+}
+
+export function isGitHubBadCredentialsError(error: unknown): boolean {
+  const status = githubErrorStatus(error);
+  return status === 401 || /bad credentials/i.test(errorMessage(error));
+}
+
+async function expireCachedInstallationToken(
+  installationId: number,
+  rejectedToken: string,
+): Promise<void> {
+  const cached = await readCachedToken(installationId).catch(() => null);
+  if (cached && cached.token !== rejectedToken) return;
+  await writeCachedToken(installationId, { token: "", expiresAtMs: 0 });
+}
+
+export async function withInstallationTokenRetry<T>(
+  env: Env,
+  installationId: number,
+  operation: (token: string) => Promise<T>,
+): Promise<T> {
+  const token = await createInstallationToken(env, installationId);
+  try {
+    return await operation(token);
+  } catch (error) {
+    if (!isGitHubBadCredentialsError(error)) throw error;
+    await expireCachedInstallationToken(installationId, token).catch(
+      () => undefined,
+    );
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        event: "github_installation_token_rejected",
+        installationId,
+        status: githubErrorStatus(error),
+        message: errorMessage(error).slice(0, 200),
+      }),
+    );
+    const freshToken = await createInstallationToken(env, installationId);
+    return await operation(freshToken);
+  }
 }
 
 /** Mint a fresh installation token (broker or local App-JWT) and cache it. `cached` is the expired/absent prior
@@ -343,7 +289,7 @@ export function isForeignAppInstallation(
 export function clearInstallationTokenCacheForTest(): void {
   installationTokenCache.clear();
   externalTokenStore = null;
-  responseCache = null;
+  clearGitHubResponseCacheForTest();
 }
 
 export async function getAppInstallation(
@@ -457,7 +403,7 @@ export async function createOrUpdateGateCheckRun(
   mode: AgentActionMode = "live",
 ): Promise<CheckRunOutcome | null> {
   // Prefer the AUTHORITATIVE pre-computed evaluation when the caller has one (#5 / audit): the surface/content
-  // lane can OVERRIDE the generic verdict (surface_lane_reject → failure, surface_lane_manual → action_required),
+  // lane can OVERRIDE the generic verdict (surface_lane_reject → failure, surface_lane_manual → neutral),
   // and re-deriving here via evaluateGateCheck would discard that override — publishing a GREEN check while the
   // PR is actually auto-closed/held. Callers without a surface lane omit `gate` and re-derive as before (identical).
   const gate = options.gate ?? evaluateGateCheck(advisory, policy);
@@ -472,6 +418,7 @@ export async function createOrUpdateGateCheckRun(
       conclusion: gate.conclusion,
       output: formatGateCheckOutput(gate),
       checkRunId: options.checkRunId,
+      supersedeLegacyNames: [GITTENSORY_LEGACY_GATE_CHECK_NAME],
       mode,
     },
   );
@@ -493,11 +440,13 @@ export async function createOrUpdatePendingGateCheckRun(
       name: GITTENSORY_GATE_CHECK_NAME,
       status: "in_progress",
       output: {
-        title: "Gittensory Gate is evaluating",
+        title: "Gittensory Orb Review Agent is evaluating",
         summary:
           "Gittensory is running deterministic public PR hygiene checks.",
-        text: "The Gate blocks every author on the repo's configured hard blockers (duplicate PRs by default); on everything else, and while state is still syncing, it stays advisory.",
+        text: "The review agent blocks every author on the repo's configured hard blockers (duplicate PRs by default); on everything else, and while state is still syncing, it stays advisory.",
       },
+      updateExisting: "in_progress_only",
+      supersedeLegacyNames: [GITTENSORY_LEGACY_GATE_CHECK_NAME],
       mode,
     },
   );
@@ -521,10 +470,11 @@ export async function createOrUpdateSkippedGateCheckRun(
       status: "completed",
       conclusion: "skipped",
       output: {
-        title: "Gittensory Gate skipped",
+        title: "Gittensory Orb Review Agent skipped",
         summary: reason,
         text: "Gittensory does not post late first comments on closed or merged pull requests.",
       },
+      supersedeLegacyNames: [GITTENSORY_LEGACY_GATE_CHECK_NAME],
       mode,
     },
   );
@@ -533,7 +483,7 @@ export async function createOrUpdateSkippedGateCheckRun(
 /**
  * Finalize a previously-posted pending Gate check to a NEUTRAL (non-blocking) terminal state when the
  * evaluation could not finish (a transient error/timeout in the work between posting the pending check and
- * completing it). This guarantees the "Gittensory Gate is evaluating" run never hangs in_progress forever;
+ * completing it). This guarantees the "Gittensory Orb Review Agent is evaluating" run never hangs in_progress forever;
  * it does not block the PR and re-runs on the next push. Targets the known pending check_run id so it
  * updates the SAME run rather than creating a second one.
  */
@@ -555,12 +505,13 @@ export async function createOrUpdateErroredGateCheckRun(
       status: "completed",
       conclusion: "neutral",
       output: {
-        title: "Gittensory Gate — could not finish evaluating",
+        title: "Gittensory Orb Review Agent — could not finish evaluating",
         summary:
           "A transient error interrupted gate evaluation. This does NOT block the PR and re-runs automatically on the next push.",
-        text: "Gittensory finalizes the Gate to a neutral, non-blocking state when evaluation is interrupted, so the check never hangs in_progress. Push a new commit or use the 'Re-run Gittensory review' checkbox to re-evaluate.",
+        text: "Gittensory finalizes the review-agent check to a neutral, non-blocking state when evaluation is interrupted, so the check never hangs in_progress. Push a new commit or use the 'Re-run Gittensory review' checkbox to re-evaluate.",
       },
       checkRunId: options.checkRunId,
+      supersedeLegacyNames: [GITTENSORY_LEGACY_GATE_CHECK_NAME],
       mode,
     },
   );
@@ -590,12 +541,13 @@ export async function createOrUpdateOverriddenGateCheckRun(
       status: "completed",
       conclusion: "neutral",
       output: {
-        title: `Gittensory Gate — overridden by @${options.actor}`,
+        title: `Gittensory Orb Review Agent — overridden by @${options.actor}`,
         summary:
-          "A maintainer set the Gate to neutral for THIS commit only. This does NOT permanently bypass the Gate; a new push re-evaluates it.",
+          "A maintainer set the review-agent check to neutral for THIS commit only. This does NOT permanently bypass the review agent; a new push re-evaluates it.",
         text: `Overridden by @${options.actor}: ${options.reason}`,
       },
       checkRunId: options.checkRunId,
+      supersedeLegacyNames: [GITTENSORY_LEGACY_GATE_CHECK_NAME],
       mode,
     },
   );
@@ -612,6 +564,8 @@ async function createOrUpdateNamedCheckRun(
     conclusion?: GitHubCheckConclusion | undefined;
     output: CheckRunOutput;
     checkRunId?: number | undefined;
+    updateExisting?: "any" | "in_progress_only" | "never" | undefined;
+    supersedeLegacyNames?: readonly string[] | undefined;
     mode?: AgentActionMode | undefined;
   },
 ): Promise<CheckRunOutcome | null> {
@@ -622,116 +576,180 @@ async function createOrUpdateNamedCheckRun(
   if (!owner || !repo)
     throw new Error(`Invalid repository full name: ${repoFullName}`);
 
-  const token = await createInstallationToken(env, installationId);
-  // makeInstallationOctokit injects the shared per-request timeout (a stalled PATCH can never orphan the
-  // in_progress check) AND suppresses the check-run writes under a non-live mode (dry-run / pause / freeze).
-  const octokit = makeInstallationOctokit(env, token, check.mode);
-  // Point the merge-box "Details" link at the repo's Gittensory maintainer panel instead of GitHub's generic
-  // check page. Spread conditionally so a URL-construction failure (null) just omits it. (#audit-details-url)
-  const detailsUrl = maintainerControlPanelUrl(env, repoFullName);
-  const detailsUrlBody = detailsUrl ? { details_url: detailsUrl } : {};
+  return await withInstallationTokenRetry(env, installationId, async (token) => {
+    // makeInstallationOctokit injects the shared per-request timeout (a stalled PATCH can never orphan the
+    // in_progress check) AND suppresses the check-run writes under a non-live mode (dry-run / pause / freeze).
+    const octokit = makeInstallationOctokit(env, token, check.mode);
+    // Point the merge-box "Details" link at the repo's Gittensory maintainer panel instead of GitHub's generic
+    // check page. Spread conditionally so a URL-construction failure (null) just omits it. (#audit-details-url)
+    const detailsUrl = maintainerControlPanelUrl(env, repoFullName);
+    const detailsUrlBody = detailsUrl ? { details_url: detailsUrl } : {};
 
-  // POST a fresh check-run THIS App owns. Used for a brand-new run AND as the cross-app fallback below.
-  const postNewCheckRun = async (): Promise<CheckRunOutcome> => {
-    const response = await octokit.request(
-      "POST /repos/{owner}/{repo}/check-runs",
-      {
-        owner,
-        repo,
-        name: check.name,
-        head_sha: headSha,
-        status: check.status ?? "completed",
-        ...(check.conclusion ? { conclusion: check.conclusion } : {}),
-        output: check.output,
-        ...detailsUrlBody,
-      },
-    );
-    return publishedOutcome(response.data as CheckRunResponse);
-  };
-  // PATCH an existing run by id. If that run was created by a PRIOR GitHub App (install migrated / reinstalled under a
-  // new app_id), GitHub 403s "can only be modified by the GitHub App that created it" — that stale run is unreachable,
-  // so fall through (null) to POST a fresh one this App owns instead of failing the gate forever. (#cross-app-checkrun)
-  const patchCheckRun = async (id: number): Promise<CheckRunOutcome | null> => {
-    try {
+    // POST a fresh check-run THIS App owns. Used for a brand-new run AND as the cross-app fallback below.
+    const postNewCheckRun = async (): Promise<CheckRunOutcome> => {
       const response = await octokit.request(
-        "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}",
+        "POST /repos/{owner}/{repo}/check-runs",
         {
           owner,
           repo,
-          check_run_id: id,
           name: check.name,
+          head_sha: headSha,
           status: check.status ?? "completed",
           ...(check.conclusion ? { conclusion: check.conclusion } : {}),
-          output: outputForCheckRunUpdate(check.output),
+          output: check.output,
           ...detailsUrlBody,
         },
       );
       return publishedOutcome(response.data as CheckRunResponse);
-    } catch (error) {
-      if (!isCrossAppCheckRunError(error)) throw error;
-      console.log(
-        JSON.stringify({
-          level: "info",
-          event: "check_run_cross_app_repost",
-          repository: `${owner}/${repo}`,
-          staleCheckRunId: id,
-        }),
-      );
-      return null;
-    }
-  };
-
-  try {
-    if (check.checkRunId) {
-      const out = await patchCheckRun(check.checkRunId);
-      if (out) return out;
-    } else {
-      const existing = await octokit.request(
-        "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
-        {
-          owner,
-          repo,
-          ref: advisory.headSha,
-          check_name: check.name,
-          filter: "latest",
-          per_page: 1,
-        },
-      );
-      const existingCheckRun = (existing.data as CheckRunListResponse)
-        .check_runs?.[0];
-      if (existingCheckRun) {
-        const out = await patchCheckRun(existingCheckRun.id);
-        if (out) return out;
+    };
+    // PATCH an existing run by id. If that run was created by a PRIOR GitHub App (install migrated / reinstalled under a
+    // new app_id), GitHub 403s "can only be modified by the GitHub App that created it" — that stale run is unreachable,
+    // so fall through (null) to POST a fresh one this App owns instead of failing the gate forever. (#cross-app-checkrun)
+    const patchCheckRun = async (id: number): Promise<CheckRunOutcome | null> => {
+      try {
+        const response = await octokit.request(
+          "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}",
+          {
+            owner,
+            repo,
+            check_run_id: id,
+            name: check.name,
+            status: check.status ?? "completed",
+            ...(check.conclusion ? { conclusion: check.conclusion } : {}),
+            output: outputForCheckRunUpdate(check.output),
+            ...detailsUrlBody,
+          },
+        );
+        return publishedOutcome(response.data as CheckRunResponse);
+      } catch (error) {
+        if (!isCrossAppCheckRunError(error)) throw error;
+        console.log(
+          JSON.stringify({
+            level: "info",
+            event: "check_run_cross_app_repost",
+            repository: `${owner}/${repo}`,
+            staleCheckRunId: id,
+          }),
+        );
+        return null;
       }
+    };
+    const finalizeLegacyPendingCheckRuns = async (): Promise<void> => {
+      const legacyNames = check.supersedeLegacyNames ?? [];
+      if (legacyNames.length === 0 || check.checkRunId) return;
+      for (const legacyName of legacyNames) {
+        try {
+          const existing = await octokit.request(
+            "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
+            {
+              owner,
+              repo,
+              ref: headSha,
+              check_name: legacyName,
+              filter: "latest",
+              per_page: 1,
+            },
+          );
+          const legacyRun = (existing.data as CheckRunListResponse)
+            .check_runs?.[0];
+          if (
+            !legacyRun ||
+            (legacyRun.name && legacyRun.name !== legacyName) ||
+            (legacyRun.status ?? "").toLowerCase() === "completed"
+          )
+            continue;
+          await octokit.request(
+            "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}",
+            {
+              owner,
+              repo,
+              check_run_id: legacyRun.id,
+              name: legacyName,
+              status: "completed",
+              conclusion: "neutral",
+              output: outputForCheckRunUpdate({
+                title: `${GITTENSORY_GATE_CHECK_NAME} superseded this legacy check`,
+                summary:
+                  "This legacy check name was completed after the review-agent check was renamed.",
+                text: `Use ${GITTENSORY_GATE_CHECK_NAME} for current Gittensory review results.`,
+              }),
+              ...detailsUrlBody,
+            },
+          );
+        } catch (error) {
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              event: "legacy_gate_check_finalize_failed",
+              repository: `${owner}/${repo}`,
+              legacyName,
+              error: errorMessage(error),
+            }),
+          );
+        }
+      }
+    };
+    const finish = async (outcome: CheckRunOutcome): Promise<CheckRunOutcome> => {
+      await finalizeLegacyPendingCheckRuns();
+      return outcome;
+    };
+
+    try {
+      if (check.checkRunId) {
+        const out = await patchCheckRun(check.checkRunId);
+        if (out) return await finish(out);
+      } else if (check.updateExisting !== "never") {
+        const existing = await octokit.request(
+          "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
+          {
+            owner,
+            repo,
+            ref: headSha,
+            check_name: check.name,
+            filter: "latest",
+            per_page: 1,
+          },
+        );
+        const existingCheckRun = (existing.data as CheckRunListResponse)
+          .check_runs?.[0];
+        if (
+          existingCheckRun &&
+          (check.updateExisting !== "in_progress_only" ||
+            (existingCheckRun.status ?? "").toLowerCase() !== "completed")
+        ) {
+          const out = await patchCheckRun(existingCheckRun.id);
+          if (out) return await finish(out);
+        }
+      }
+      return await finish(await postNewCheckRun());
+    } catch (error) {
+      if (isCheckRunPermissionError(error)) {
+        // Capture the ACTUAL response (status + body). A 403 here is often NOT a real permission gap (the App has
+        // Checks:write) — it can be a per-PR access quirk (e.g. a fork-head commit the App can't write to) — and this
+        // log is the only way to tell why, instead of an opaque "permission missing". Surfaces to Sentry with a real
+        // message via console.error (#review-403-context).
+        const e = error as { status?: number; message?: string };
+        console.error(
+          JSON.stringify({
+            level: "error",
+            event: "check_run_post_denied",
+            repository: `${owner}/${repo}`,
+            status: e.status ?? null,
+            message: (e.message ?? "Resource not accessible by integration").slice(
+              0,
+              300,
+            ),
+          }),
+        );
+        return {
+          kind: "permission_missing",
+          warning:
+            "GitHub App Checks: write permission is missing. Enable it in the GitHub App settings and re-approve the installation.",
+        };
+      }
+      throw error;
     }
-    return await postNewCheckRun();
-  } catch (error) {
-    if (isCheckRunPermissionError(error)) {
-      // Capture the ACTUAL response (status + body). A 403 here is often NOT a real permission gap (the App has
-      // Checks:write) — it can be a per-PR access quirk (e.g. a fork-head commit the App can't write to) — and this
-      // log is the only way to tell why, instead of an opaque "permission missing". Surfaces to Sentry with a real
-      // message via console.error (#review-403-context).
-      const e = error as { status?: number; message?: string };
-      console.error(
-        JSON.stringify({
-          level: "error",
-          event: "check_run_post_denied",
-          repository: `${owner}/${repo}`,
-          status: e.status ?? null,
-          message: (e.message ?? "Resource not accessible by integration").slice(
-            0,
-            300,
-          ),
-        }),
-      );
-      return {
-        kind: "permission_missing",
-        warning:
-          "GitHub App Checks: write permission is missing. Enable it in the GitHub App settings and re-approve the installation.",
-      };
-    }
-    throw error;
-  }
+  });
 }
 
 function outputForCheckRunUpdate(output: CheckRunOutput): CheckRunOutput {
@@ -778,6 +796,23 @@ function isRateLimitedError(error: {
   return (
     typeof error.message === "string" &&
     /secondary rate limit|\babuse\b|api rate limit exceeded/i.test(error.message)
+  );
+}
+
+export function isGitHubRateLimitedError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const e = error as {
+    status?: number;
+    message?: string;
+    response?: { headers?: Record<string, unknown> };
+  };
+  if (isRateLimitedError(e)) return true;
+  return (
+    e.status === undefined &&
+    typeof e.message === "string" &&
+    /secondary rate limit|\babuse\b|api rate limit exceeded|rate limit/i.test(
+      e.message,
+    )
   );
 }
 

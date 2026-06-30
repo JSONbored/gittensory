@@ -3,7 +3,13 @@
 // setup. Written to process.stdout so it is captured by Docker's default json-file log driver and is
 // accessible via `docker compose logs gittensory`.
 
-export type AuditEventType = "job_complete" | "job_dead" | "job_error";
+import { otelTraceLogFields } from "./otel";
+
+export type AuditEventType =
+  | "job_complete"
+  | "job_dead"
+  | "job_error"
+  | "job_rate_limited";
 
 export interface AuditEvent {
   event: AuditEventType;
@@ -13,11 +19,12 @@ export interface AuditEvent {
   latency_ms: number;     // wall time from claim to completion/failure
   attempts: number;       // total attempts consumed (1 = first-try success)
   error?: string;         // last error message, present for job_dead / job_error
+  retry_after_ms?: number; // next retry delay for job_rate_limited
 }
 
 /** Emit a single audit event as a JSON line on stdout. */
-export function logAudit(ev: AuditEvent): void {
-  process.stdout.write(JSON.stringify({ level: "audit", ...ev }) + "\n");
+export function logAudit(ev: AuditEvent, traceParent?: string): void {
+  process.stdout.write(JSON.stringify({ level: "audit", ...ev, ...otelTraceLogFields(traceParent) }) + "\n");
 }
 
 /** Extract a `type` label from a raw job payload string without fully parsing it. Returns undefined

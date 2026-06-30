@@ -1,4 +1,5 @@
-import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 // Timestamp columns use a drizzle $defaultFn so an insert that omits the column gets a real ISO-8601
 // timestamp. A static `.default("CURRENT_TIMESTAMP")` would make drizzle inject the literal STRING
 // "CURRENT_TIMESTAMP" (it applies static defaults client-side, never reaching SQLite's CURRENT_TIMESTAMP),
@@ -283,6 +284,7 @@ export const pullRequests = sqliteTable(
     htmlUrl: text("html_url"),
     labelsJson: text("labels_json").notNull().default("[]"),
     linkedIssuesJson: text("linked_issues_json").notNull().default("[]"),
+    linkedIssueClaimedAt: text("linked_issue_claimed_at"),
     lastSeenOpenAt: text("last_seen_open_at"),
     payloadJson: text("payload_json").notNull().default("{}"),
     // Latest deterministic slop assessment (gittensory-computed; written separately from the GitHub sync).
@@ -304,11 +306,10 @@ export const pullRequests = sqliteTable(
     // review WRITE that would bump updated_at is suppressed (dry-run / paused). gittensory-computed (sweep-written),
     // omitted from the GitHub-sync SET clause so a later sync cannot clobber it. (Mirrors approved_head_sha.)
     lastRegatedAt: text("last_regated_at"),
-    // Over-publish dedup: the head SHA at which the public surface (comment/label/check-run) was LAST published.
-    // The sweep skips re-reviewing + re-publishing a PR while last_published_surface_sha === headSha (already
-    // current). Keyed to head SHA → a push/rebase/force-push (new head) clears the match and the next sweep
-    // re-reviews + re-publishes. gittensory-computed (publish-written), omitted from the GitHub-sync SET clause so
-    // a later sync cannot clobber it. (Mirrors approved_head_sha.)
+    // Public-surface marker: the head SHA at which the public surface (comment/label/check-run) was LAST published.
+    // Used for reporting and stale-surface diagnostics, not as a hard sweep skip; GitHub comments/checks can still
+    // be stale or partial while this marker matches headSha. gittensory-computed (publish-written), omitted from
+    // the GitHub-sync SET clause so a later sync cannot clobber it. (Mirrors approved_head_sha.)
     lastPublishedSurfaceSha: text("last_published_surface_sha"),
     createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
     updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
@@ -692,6 +693,24 @@ export const webhookEvents = sqliteTable("webhook_events", {
   receivedAt: text("received_at").notNull().$defaultFn(() => nowIso()),
   processedAt: text("processed_at"),
 });
+
+export const orbRelayPending = sqliteTable(
+  "orb_relay_pending",
+  {
+    deliveryId: text("delivery_id").primaryKey(),
+    installationId: integer("installation_id").notNull(),
+    eventName: text("event_name").notNull(),
+    rawBody: text("raw_body").notNull(),
+    createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
+    coalesceKey: text("coalesce_key"),
+  },
+  (table) => ({
+    installation: index("idx_orb_relay_pending_install").on(table.installationId, table.createdAt),
+    coalesce: index("idx_orb_relay_pending_coalesce")
+      .on(table.installationId, table.coalesceKey)
+      .where(sql`coalesce_key IS NOT NULL`),
+  }),
+);
 
 export const syncRuns = sqliteTable("sync_runs", {
   id: text("id").primaryKey(),
@@ -1117,5 +1136,23 @@ export const aiUsageEvents = sqliteTable(
     // Covers the daily-budget query (sumAiEstimatedNeuronsSince): WHERE status='ok' AND created_at >= ?.
     // Without it that aggregate full-scans ai_usage_events, which runs on every AI review/summary.
     statusCreated: index("ai_usage_events_status_created_idx").on(table.status, table.createdAt),
+  }),
+);
+
+export const aiReviewCache = sqliteTable(
+  "ai_review_cache",
+  {
+    repoFullName: text("repo_full_name").notNull(),
+    pullNumber: integer("pull_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    aiReviewMode: text("ai_review_mode").notNull(),
+    notes: text("notes").notNull(),
+    reviewerCount: integer("reviewer_count").notNull(),
+    findingsJson: text("findings_json").notNull().default("[]"),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+    createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
+  },
+  (table) => ({
+    primary: primaryKey({ columns: [table.repoFullName, table.pullNumber, table.headSha] }),
   }),
 );

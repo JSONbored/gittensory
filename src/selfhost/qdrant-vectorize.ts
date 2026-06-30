@@ -34,6 +34,9 @@ interface Match {
 interface QdrantSearchResult {
   result: Array<{ id: string; score: number; payload: Record<string, unknown> }>;
 }
+interface QdrantCollectionInfo {
+  result: { config: { params: { vectors: { size: number } } } };
+}
 
 /** Maps an arbitrary string ID to a UUID that Qdrant accepts as a point ID. Deterministic. */
 function idToUuid(id: string): string {
@@ -53,11 +56,20 @@ export function qdrantReadyzUrl(url: string): string {
   return `${url.replace(/\/+$/, "")}/readyz`;
 }
 
+export function qdrantDimensionFromEnv(value: string | undefined): number {
+  const dim = Number(value);
+  return Number.isFinite(dim) && dim > 0 ? Math.floor(dim) : DEFAULT_DIM;
+}
+
 /**
  * Ensures the Qdrant collection exists. Safe to call on every startup — a 409 (already exists)
- * is silently ignored. Call this before createQdrantVectorize() when QDRANT_URL is set.
+ * verifies the existing collection width. Call this before createQdrantVectorize() when QDRANT_URL is set.
  */
-export async function initQdrantCollection(url: string, collection = DEFAULT_COLLECTION, dim = DEFAULT_DIM): Promise<void> {
+export async function initQdrantCollection(
+  url: string,
+  collection = DEFAULT_COLLECTION,
+  dim = qdrantDimensionFromEnv(process.env.QDRANT_DIM),
+): Promise<void> {
   const base = url.replace(/\/+$/, "");
   const res = await fetch(`${base}/collections/${collection}`, {
     method: "PUT",
@@ -66,6 +78,15 @@ export async function initQdrantCollection(url: string, collection = DEFAULT_COL
   });
   if (!res.ok && res.status !== 409) {
     throw new Error(`Qdrant collection init failed: HTTP ${res.status}`);
+  }
+  if (res.status === 409) {
+    const existing = await fetch(`${base}/collections/${collection}`, { headers: qdrantHeaders() });
+    if (!existing.ok) throw new Error(`Qdrant collection lookup failed: HTTP ${existing.status}`);
+    const info = (await existing.json()) as QdrantCollectionInfo;
+    const existingDim = info.result.config.params.vectors.size;
+    if (existingDim !== dim) {
+      throw new Error(`Qdrant collection dimension mismatch: existing ${existingDim}, configured ${dim}`);
+    }
   }
 }
 

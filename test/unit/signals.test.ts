@@ -153,6 +153,31 @@ describe("world-class backend signals", () => {
     }
   });
 
+  it("matches contributor prior-activity and repo issues case-insensitively (regression for #1787)", () => {
+    const mixedRepo: RepositoryRecord = {
+      ...repo,
+      fullName: "Entrius/Allways-UI",
+      registryConfig: { ...repo.registryConfig!, repo: "Entrius/Allways-UI" },
+    };
+    const mixedIssue: IssueRecord = {
+      ...issues[0]!,
+      repoFullName: "entrius/allways-ui",
+      number: 99,
+      title: "Case-variant repo issue",
+      linkedPrs: [],
+    };
+    const profile = buildContributorProfile(
+      "oktofeesh1",
+      { login: "oktofeesh1", topLanguages: ["TypeScript"], source: "github" },
+      [{ ...pullRequests[0]!, repoFullName: "entrius/allways-ui", linkedIssues: [] }],
+      [],
+    );
+    const opportunities = buildContributorOpportunities(profile, [mixedRepo], [mixedIssue], []);
+    expect(opportunities).toHaveLength(1);
+    expect(opportunities[0]?.reasons).toContain("Contributor has prior activity in this registered repo.");
+    expect(opportunities[0]?.score).toBeGreaterThanOrEqual(70);
+  });
+
   it("ranks grabbable maintainer-created issues above community issues and downgrades maintainer WIP (#699/#186)", () => {
     const profile = buildContributorProfile("scout", { login: "scout", topLanguages: ["TypeScript"], source: "github" }, [], []);
     const maintainerOpen: IssueRecord = {
@@ -595,6 +620,39 @@ describe("world-class backend signals", () => {
     expect(unknownQuality.level).toBe("needs_attention");
     expect(inactiveQuality.findings.map((finding) => finding.code)).toContain("inactive_allocation");
     expect(noMultiplierQuality.findings.map((finding) => finding.code)).toContain("trusted_labels_without_multipliers");
+  });
+
+  it("flags non-positive, non-finite, or non-numeric label multipliers as a config error", () => {
+    const badRepo = {
+      ...repo,
+      registryConfig: {
+        ...repo.registryConfig!,
+        labelMultipliers: { bug: -1, stale: 0, broken: Number.NaN, weird: "x" as unknown as number, good: 1.2, penalty: 0.5 },
+      },
+    };
+    // Observe every configured label so the unrelated "not observed" penalty does not also fire.
+    const observed = [{ ...issues[0]!, labels: ["bug", "stale", "broken", "weird", "good", "penalty"] }];
+    const quality = buildConfigQuality(badRepo, observed, [], repo.fullName);
+    const invalid = quality.findings.find((finding) => finding.code === "invalid_label_multipliers");
+    expect(invalid).toBeDefined();
+    // Each bad multiplier is named with its value (sorted); valid ones are not listed.
+    expect(invalid?.detail).toMatch(/broken=NaN, bug=-1, stale=0, weird=x/);
+    expect(invalid?.detail).not.toMatch(/good|penalty/);
+    // Four invalid entries deduct the capped 30 points; valid ones do not contribute.
+    const baseline = buildConfigQuality({ ...badRepo, registryConfig: { ...badRepo.registryConfig!, labelMultipliers: { good: 1.2, penalty: 0.5 } } }, observed, [], repo.fullName).score;
+    expect(quality.score).toBe(baseline - 30);
+  });
+
+  it("does not flag valid positive label multipliers, including penalty (<1) multipliers", () => {
+    const okRepo = { ...repo, registryConfig: { ...repo.registryConfig!, labelMultipliers: { feature: 1.25, refactor: 0.5 } } };
+    const quality = buildConfigQuality(okRepo, [{ ...issues[0]!, labels: ["feature", "refactor"] }], [], repo.fullName);
+    expect(quality.findings.map((finding) => finding.code)).not.toContain("invalid_label_multipliers");
+  });
+
+  it("treats a repo with no labelMultipliers key as having no invalid multipliers", () => {
+    const noLabelsRepo = { ...repo, registryConfig: { ...repo.registryConfig!, labelMultipliers: undefined as unknown as Record<string, number> } };
+    const quality = buildConfigQuality(noLabelsRepo, [], [], repo.fullName);
+    expect(quality.findings.map((finding) => finding.code)).not.toContain("invalid_label_multipliers");
   });
 
   it("keeps contributor detection and comment modes conservative", () => {

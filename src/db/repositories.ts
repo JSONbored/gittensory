@@ -164,6 +164,7 @@ import { normalizeContributorBlacklist } from "../settings/contributor-blacklist
 import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy, DEFAULT_AUTO_MAINTAIN_POLICY } from "../settings/autonomy";
 import { decryptSecret, encryptSecret, sha256Hex } from "../utils/crypto";
 import { jsonString, nowIso, parseJson, repoParts } from "../utils/json";
+import { PUBLIC_LOCAL_PATH_SCRUB_PATTERN } from "../signals/redaction";
 
 const MAX_STORED_BODY_CHARS = 4000;
 const SIGNAL_FRESHNESS_LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
@@ -303,7 +304,21 @@ export async function upsertPullRequestFromGitHub(
 ): Promise<PullRequestRecord> {
   const record = toPullRequestRecord(repoFullName, pr);
   const db = getDb(env.DB);
-  const lastSeenOpenAt = pr.state === "open" ? (options.seenOpenAt ?? nowIso()) : null;
+  const syncedAt = nowIso();
+  const lastSeenOpenAt = pr.state === "open" ? (options.seenOpenAt ?? syncedAt) : null;
+  const linkedIssuesJson = jsonString(record.linkedIssues);
+  const observedLinkedIssueClaimedAt = record.linkedIssues.length > 0 ? syncedAt : null;
+  const existingClaimRows = await db
+    .select({ linkedIssuesJson: pullRequests.linkedIssuesJson, linkedIssueClaimedAt: pullRequests.linkedIssueClaimedAt })
+    .from(pullRequests)
+    .where(and(eq(pullRequests.repoFullName, repoFullName), eq(pullRequests.number, pr.number)))
+    .limit(1);
+  const linkedIssueClaimedAt = resolveLinkedIssueClaimedAt(
+    record.linkedIssues,
+    linkedIssuesJson,
+    existingClaimRows[0],
+    observedLinkedIssueClaimedAt,
+  );
   await db
     .insert(pullRequests)
     .values({
@@ -320,10 +335,11 @@ export async function upsertPullRequestFromGitHub(
       mergedAt: pr.merged_at ?? undefined,
       htmlUrl: pr.html_url,
       labelsJson: jsonString(record.labels),
-      linkedIssuesJson: jsonString(record.linkedIssues),
+      linkedIssuesJson,
+      linkedIssueClaimedAt,
       lastSeenOpenAt,
       payloadJson: jsonString(compactGitHubPayload(pr)),
-      updatedAt: nowIso(),
+      updatedAt: syncedAt,
     })
     .onConflictDoUpdate({
       target: [pullRequests.repoFullName, pullRequests.number],
@@ -338,13 +354,48 @@ export async function upsertPullRequestFromGitHub(
         mergedAt: pr.merged_at ?? undefined,
         htmlUrl: pr.html_url,
         labelsJson: jsonString(record.labels),
-        linkedIssuesJson: jsonString(record.linkedIssues),
+        linkedIssuesJson,
+        linkedIssueClaimedAt,
         lastSeenOpenAt,
         payloadJson: jsonString(compactGitHubPayload(pr)),
-        updatedAt: nowIso(),
+        updatedAt: syncedAt,
       },
     });
-  return record;
+  return { ...record, linkedIssueClaimedAt };
+}
+
+function resolveLinkedIssueClaimedAt(
+  linkedIssues: number[],
+  linkedIssuesJson: string,
+  existing:
+    | {
+        linkedIssuesJson: string;
+        linkedIssueClaimedAt: string | null;
+      }
+    | undefined,
+  observedLinkedIssueClaimedAt: string | null,
+): string | null {
+  if (linkedIssues.length === 0) return null;
+  if (!existing) return observedLinkedIssueClaimedAt;
+  if (
+    existing.linkedIssuesJson === linkedIssuesJson ||
+    sameLinkedIssueSet(parseLinkedIssuesJson(existing.linkedIssuesJson), linkedIssues)
+  )
+    return existing.linkedIssueClaimedAt ?? observedLinkedIssueClaimedAt;
+  return observedLinkedIssueClaimedAt;
+}
+
+function parseLinkedIssuesJson(value: string): number[] {
+  const parsed = parseJson<unknown>(value, []);
+  return Array.isArray(parsed) ? (parsed as number[]) : [];
+}
+
+function sameLinkedIssueSet(left: number[], right: number[]): boolean {
+  return normalizedLinkedIssueSet(left) === normalizedLinkedIssueSet(right);
+}
+
+function normalizedLinkedIssueSet(numbers: number[]): string {
+  return jsonString([...new Set(numbers)].sort((left, right) => left - right));
 }
 
 export async function upsertIssueFromGitHub(env: Env, repoFullName: string, issue: GitHubIssuePayload, options: { seenOpenAt?: string } = {}): Promise<IssueRecord> {
@@ -1361,7 +1412,12 @@ export async function upsertDigestSubscription(
 
 export async function listDigestSubscriptionsForLogin(env: Env, login: string): Promise<DigestSubscriptionRecord[]> {
   const db = getDb(env.DB);
-  const rows = await db.select().from(digestSubscriptions).where(eq(digestSubscriptions.login, login.toLowerCase())).orderBy(desc(digestSubscriptions.updatedAt)).limit(20);
+  const rows = await db
+    .select()
+    .from(digestSubscriptions)
+    .where(sql`lower(${digestSubscriptions.login}) = ${login.toLowerCase()}`)
+    .orderBy(desc(digestSubscriptions.updatedAt))
+    .limit(20);
   return rows.map(toDigestSubscriptionRecord);
 }
 
@@ -2658,11 +2714,10 @@ export async function markPullRequestApproved(env: Env, fullName: string, number
     .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.number, number), eq(pullRequests.headSha, headSha)));
 }
 
-/** Over-publish dedup (#4): record the head SHA at which the PR's public surface was just published. The scheduled
- *  re-gate sweep skips re-reviewing while last_published_surface_sha == headSha. Scoped to headSha so a later commit
- *  (push/rebase/force-push — the live head no longer matches) re-publishes the new code without any manual reset.
- *  The eq(headSha) in the WHERE is load-bearing: if the live head advanced between review and this write, the UPDATE
- *  no-ops (never stamps a stale head) → the next sweep correctly re-reviews. Mirrors markPullRequestApproved. */
+/** Public-surface marker: record the head SHA at which the PR's public surface was just published. This is
+ *  reporting/diagnostic state, not a hard scheduled-sweep skip; GitHub comments/checks can be stale or partial even
+ *  when the marker matches the current head. The eq(headSha) in the WHERE is load-bearing: if the live head advanced
+ *  between review and this write, the UPDATE no-ops (never stamps a stale head). Mirrors markPullRequestApproved. */
 export async function markPullRequestSurfacePublished(env: Env, fullName: string, number: number, headSha: string | null | undefined): Promise<void> {
   if (!headSha) return; // no head to key the marker on → nothing to stamp (the caller's advisory had no head SHA)
   const db = getDb(env.DB);
@@ -3263,14 +3318,20 @@ export async function getCachedAiReview(
   pullNumber: number,
   headSha: string | null | undefined,
   mode: string,
-): Promise<{ notes: string; reviewerCount: number; findings: AdvisoryFinding[] } | null> {
+): Promise<{ notes: string; reviewerCount: number; findings: AdvisoryFinding[]; metadata?: Record<string, unknown> | undefined } | null> {
   if (!headSha) return null;
   const row = await env.DB
-    .prepare("SELECT notes, reviewer_count AS reviewerCount, ai_review_mode AS mode, findings_json AS findingsJson FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?")
+    .prepare("SELECT notes, reviewer_count AS reviewerCount, ai_review_mode AS mode, findings_json AS findingsJson, metadata_json AS metadataJson FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?")
     .bind(repoFullName, pullNumber, headSha)
-    .first<{ notes: string; reviewerCount: number; mode: string; findingsJson: string | null }>();
+    .first<{ notes: string; reviewerCount: number; mode: string; findingsJson: string | null; metadataJson: string | null }>();
   if (!row || row.mode !== mode) return null;
-  return { notes: row.notes, reviewerCount: row.reviewerCount, findings: parseJson<AdvisoryFinding[]>(row.findingsJson, []) };
+  const metadata = parseJson<Record<string, unknown>>(row.metadataJson, {});
+  return {
+    notes: row.notes,
+    reviewerCount: row.reviewerCount,
+    findings: parseJson<AdvisoryFinding[]>(row.findingsJson, []),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
 }
 
 /** Upsert the AI review for (repo, pull, head SHA). A nullish head SHA is a no-op. */
@@ -3280,17 +3341,18 @@ export async function putCachedAiReview(
   pullNumber: number,
   headSha: string | null | undefined,
   mode: string,
-  review: { notes: string; reviewerCount: number; findings?: AdvisoryFinding[] },
+  review: { notes: string; reviewerCount: number; findings?: AdvisoryFinding[]; metadata?: Record<string, unknown> | undefined },
 ): Promise<void> {
   if (!headSha) return;
+  const createdAt = nowIso();
   await env.DB
     .prepare(
-      `INSERT INTO ai_review_cache (repo_full_name, pull_number, head_sha, ai_review_mode, notes, reviewer_count, findings_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO ai_review_cache (repo_full_name, pull_number, head_sha, ai_review_mode, notes, reviewer_count, findings_json, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(repo_full_name, pull_number, head_sha) DO UPDATE SET
-         ai_review_mode = excluded.ai_review_mode, notes = excluded.notes, reviewer_count = excluded.reviewer_count, findings_json = excluded.findings_json, created_at = CURRENT_TIMESTAMP`,
+         ai_review_mode = excluded.ai_review_mode, notes = excluded.notes, reviewer_count = excluded.reviewer_count, findings_json = excluded.findings_json, metadata_json = excluded.metadata_json, created_at = excluded.created_at`,
     )
-    .bind(repoFullName, pullNumber, headSha, mode, review.notes, review.reviewerCount, jsonString(review.findings ?? []))
+    .bind(repoFullName, pullNumber, headSha, mode, review.notes, review.reviewerCount, jsonString(review.findings ?? []), jsonString(review.metadata ?? {}), createdAt)
     .run();
 }
 
@@ -4196,6 +4258,7 @@ function toPullRequestRecordFromRow(row: typeof pullRequests.$inferSelect): Pull
     createdAt: payload.created_at,
     updatedAt: payload.updated_at ?? row.updatedAt,
     closedAt: payload.closed_at,
+    linkedIssueClaimedAt: row.linkedIssueClaimedAt,
     labels: parseJson<string[]>(row.labelsJson, []),
     linkedIssues: parseJson<number[]>(row.linkedIssuesJson, []),
     slopRisk: row.slopRisk,
@@ -5308,7 +5371,9 @@ const PRODUCT_USAGE_SENSITIVE_KEY =
   /authorization|cookie|token|secret|password|private[_-]?key|source|body|diff|patch|prompt|raw[_-]?trust|trust[_-]?score|wallet|hotkey|coldkey|seed|mnemonic|local[_-]?path|repo[_-]?root|cwd|scoreability|reviewability|farming/i;
 const PRODUCT_USAGE_SENSITIVE_VALUE =
   /\b(seed phrase|mnemonic|private key|raw trust|trust score|wallet|hotkey|coldkey|scoreability|reviewability|farming|reward estimate|payout)\b/i;
-const PRODUCT_USAGE_LOCAL_PATH = /(?:\/Users|\/home|\/root|\/var|\/tmp)\/[^\s"',;)]*|[A-Za-z]:\\Users\\[^\s"',;)]*/g;
+// Compose from the canonical scrubber in redaction.ts so this surface cannot drift from the boundary;
+// it already covered /root/ and /var/, and now unifies the Windows form (also accepts `C:/Users/`).
+const PRODUCT_USAGE_LOCAL_PATH = PUBLIC_LOCAL_PATH_SCRUB_PATTERN;
 const PRODUCT_USAGE_TOKEN_VALUE = /\b(?:ghp_|github_pat_|gts_|glpat-|sk-)[A-Za-z0-9_=-]{8,}/g;
 const PRODUCT_USAGE_BEARER_VALUE = /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi;
 

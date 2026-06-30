@@ -25,11 +25,13 @@ import type { FocusManifestReviewConfig, ReviewFieldKey } from "./focus-manifest
 import type { GittensorContributorSnapshot } from "../gittensor/api";
 import { nowIso } from "../utils/json";
 import { sanitizePublicComment } from "../queue-intelligence";
-import { projectLinkedIssueMultiplierForPlannedSolve, type LinkedIssueMultiplierStatus } from "../scoring/preview";
+import { labelMatchesPattern, projectLinkedIssueMultiplierForPlannedSolve, type LinkedIssueMultiplierStatus } from "../scoring/preview";
 import { hasLocalTestEvidence } from "./test-evidence";
-import { isDuplicateClusterWinner } from "./duplicate-winner";
+import { isDuplicateClusterWinnerByClaim } from "./duplicate-winner";
 import { PREFLIGHT_LIMITS } from "./preflight-limits";
 import type { UnifiedCollapsible } from "../review/unified-comment";
+import { splitAiReviewNits } from "../review/ai-notes";
+import { GITTENSORY_GATE_CHECK_NAME } from "../review/check-names";
 
 export type ParticipationLane = "direct_pr" | "issue_discovery" | "split" | "inactive" | "unknown";
 export type SignalFinding = AdvisoryFinding;
@@ -52,6 +54,7 @@ export type CollisionItem = {
   htmlUrl?: string | null | undefined;
   labels?: string[] | undefined;
   linkedIssues?: number[] | undefined;
+  linkedIssueClaimedAt?: string | null | undefined;
   changedFiles?: string[] | undefined;
   body?: string | null | undefined;
 };
@@ -898,6 +901,18 @@ export function isPullRequestInDuplicateCluster(collisions: CollisionReport, pul
   );
 }
 
+/**
+ * True when a collision item targets one of the planned contribution's linked issues. An issue item carries its
+ * own number in `linkedIssues` (`[issue.number]`); a PR / recent-merge item carries the issues that PR closes. The
+ * preflight duplicate-work check previously tested `plannedLinkedIssues.includes(item.number)`, which conflated a
+ * PR's NUMBER with an issue number — an unrelated open PR #42 then matched a plan linking issue #42, a routine
+ * GitHub numbering collision that minted a spurious `possible_duplicate_work` finding. Compare linked-issue SETS
+ * instead, mirroring the pairwise `sharedIssue` test `buildCollisionReport` already uses between items. (#1775)
+ */
+export function itemSharesPlannedLinkedIssue(item: CollisionItem, plannedLinkedIssues: number[]): boolean {
+  return (item.linkedIssues ?? []).some((issueNumber) => plannedLinkedIssues.includes(issueNumber));
+}
+
 export function buildQueueHealth(
   repo: RepositoryRecord | null,
   issues: IssueRecord[],
@@ -1007,7 +1022,11 @@ export function buildConfigQuality(
   const lane = buildLaneAdvice(repo, fullName);
   const configuredLabels = Object.keys(repo?.registryConfig?.labelMultipliers ?? {}).sort();
   const observedLabels = [...new Set([...issues, ...pullRequests].flatMap((record) => record.labels))].sort();
-  const notObservedConfiguredLabels = configuredLabels.filter((label) => !observedLabels.includes(label));
+  // Configured keys are fnmatch GLOBS (scoring resolves them via labelMatchesPattern), so a key is "observed"
+  // when it matches any cached label — not only when the literal pattern string appears verbatim. The old
+  // exact `.includes` reported every wildcard key (e.g. `type:*`) as not-observed even when `type:bug-fix` is in
+  // active use, spuriously docking the config-quality score for glob-configured repos. (#1769)
+  const notObservedConfiguredLabels = configuredLabels.filter((pattern) => !observedLabels.some((label) => labelMatchesPattern(label, pattern)));
   const findings: SignalFinding[] = [];
   let score = 100;
 
@@ -1048,6 +1067,25 @@ export function buildConfigQuality(
       action: "Verify those labels exist and are actually used by maintainers or trusted automation.",
     });
   }
+  // A label multiplier must be a positive, finite number — a penalty multiplier is below 1 but still
+  // positive, so it is valid; 0, negative, NaN, or Infinity are config errors that would silently
+  // misweight scoring. Distinct from notObservedConfiguredLabels (which checks whether a label is *used*,
+  // not whether its multiplier is *valid*).
+  // Surface each bad multiplier as `label=value` so a maintainer sees the offending value inline.
+  const invalidLabelMultipliers = Object.entries(repo?.registryConfig?.labelMultipliers ?? {})
+    .filter(([, multiplier]) => !(typeof multiplier === "number" && Number.isFinite(multiplier) && multiplier > 0))
+    .map(([label, multiplier]) => `${label}=${String(multiplier)}`)
+    .sort();
+  if (invalidLabelMultipliers.length > 0) {
+    score -= Math.min(30, invalidLabelMultipliers.length * 10);
+    findings.push({
+      code: "invalid_label_multipliers",
+      severity: "warning",
+      title: "Configured label multipliers are out of range",
+      detail: `Label multipliers must be positive, finite numbers; these are not: ${invalidLabelMultipliers.join(", ")}.`,
+      action: "Set each flagged label multiplier to a positive, finite number (a penalty multiplier below 1 is allowed) in the registry config.",
+    });
+  }
 
   const finalScore = clamp(score, 0, 100);
   return {
@@ -1076,10 +1114,14 @@ export function buildLabelAudit(repo: RepositoryRecord | null, repoLabels: RepoL
     .map(([name, count]) => ({
       name,
       count,
-      configured: configuredLabels.includes(name),
+      // Match each observed label against the configured GLOB keys (fnmatch), the same way scoring resolves a
+      // label's multiplier — so a label covered by a `type:*` key is reported as configured, not unconfigured. (#1769)
+      configured: configuredLabels.some((pattern) => labelMatchesPattern(name, pattern)),
       existsOnGitHub: liveLabels.includes(name),
     }));
-  const missingConfiguredLabels = configuredLabels.filter((label) => !liveLabels.includes(label));
+  // A configured key is "missing" only when NO live GitHub label matches it as a glob; a `type:*` key backed by a
+  // real `type:bug` label is present, not missing (the old exact `.includes` flagged every wildcard key missing). (#1769)
+  const missingConfiguredLabels = configuredLabels.filter((pattern) => !liveLabels.some((live) => labelMatchesPattern(live, pattern)));
   // Require a real separator (`:`/`/`/`-`) OR end-of-string after the keyword so this flags prefix-style labels
   // (`status:ready`, `reward/x`) and bare keywords (`bot`) — but NOT mid-word matches like `bottleneck` (`bot`),
   // `scoreboard` (`score`), or `riskier` (`risk`). The old optional+unanchored `[:/-]?` over-matched those.
@@ -1332,7 +1374,7 @@ export function buildContributorOpportunities(
   issueQualityByRepo?: Map<string, IssueQualityReport>,
 ): ContributorOpportunity[] {
   const opportunities: ContributorOpportunity[] = [];
-  const touchedRepos = new Set(profile.registeredRepoActivity.reposTouched);
+  const touchedRepos = new Set(profile.registeredRepoActivity.reposTouched.map((repoFullName) => repoFullName.toLowerCase()));
   const labelHistory = new Set(profile.registeredRepoActivity.dominantLabels);
   const bountyByIssue = indexBountiesByIssue(bounties);
   const qualityByKey = issueQualityByRepo
@@ -1341,8 +1383,8 @@ export function buildContributorOpportunities(
 
   for (const repo of repositories.filter((candidate) => candidate.isRegistered)) {
     const lane = buildLaneAdvice(repo, repo.fullName);
-    const repoIssues = issues.filter((issue) => issue.repoFullName === repo.fullName && issue.state === "open");
-    const repoPullRequests = pullRequests.filter((pr) => pr.repoFullName === repo.fullName && pr.state === "open");
+    const repoIssues = issues.filter((issue) => sameRepo(issue.repoFullName, repo.fullName) && issue.state === "open");
+    const repoPullRequests = pullRequests.filter((pr) => sameRepo(pr.repoFullName, repo.fullName) && pr.state === "open");
     const linkedIssueNumbers = new Set(repoPullRequests.flatMap((pr) => pr.linkedIssues));
     const availableIssues = repoIssues.filter((issue) => issue.linkedPrs.length === 0 && !linkedIssueNumbers.has(issue.number));
     const queuePenalty = Math.min(20, repoPullRequests.length * 2);
@@ -1383,7 +1425,7 @@ export function buildContributorOpportunities(
       const maintainerWipPenalty = maintainerWip ? 45 : 0;
       const score = clamp(
         50 +
-          (touchedRepos.has(repo.fullName) ? 20 : 0) +
+          (touchedRepos.has(repo.fullName.toLowerCase()) ? 20 : 0) +
           labelFit * 5 +
           (lane.lane === "split" ? 8 : 0) +
           (lane.lane === "direct_pr" ? 5 : 0) -
@@ -1410,7 +1452,7 @@ export function buildContributorOpportunities(
         reasons: [
           lane.summary,
           ...(maintainerAuthored && !maintainerWip ? ["Maintainer-created issue — typically the highest contribution multiplier on Gittensor."] : []),
-          ...(touchedRepos.has(repo.fullName) ? ["Contributor has prior activity in this registered repo."] : []),
+          ...(touchedRepos.has(repo.fullName.toLowerCase()) ? ["Contributor has prior activity in this registered repo."] : []),
           ...(labelFit > 0 ? [`Issue labels overlap contributor history: ${issue.labels.filter((label) => labelHistory.has(label)).join(", ")}.`] : []),
           ...(bountyLifecycle === "active" ? ["An active bounty is attached as contribution context (not guaranteed payout)."] : []),
           ...(quality?.status === "ready" ? ["Issue quality report rates this issue as ready."] : []),
@@ -2457,7 +2499,7 @@ export function buildPreflightResult(
   const itemTerms = collisionReportTermCache.get(collisionReport) ?? new Map<string, CollisionTerms>();
   const collisions = collisionReport.clusters.filter((cluster) =>
     cluster.items.some((item) => {
-      if (linkedIssues.includes(item.number)) {
+      if (itemSharesPlannedLinkedIssue(item, linkedIssues)) {
         return true;
       }
       const overlap = termOverlap(plannedTerms, itemTerms.get(itemKey(item)) ?? collisionTerms(item));
@@ -2465,13 +2507,15 @@ export function buildPreflightResult(
     }),
   );
   const findings: SignalFinding[] = [];
-  if (lane.lane === "unknown" || lane.lane === "inactive") {
+  const laneUnavailable = lane.lane === "unknown" || lane.lane === "inactive";
+  const maintainerAuthored = isMaintainerAssociation(input.authorAssociation);
+  if (laneUnavailable) {
     findings.push({
       code: "lane_not_recommended",
-      severity: "warning",
-      title: "Repo lane is not ready for a confident recommendation",
-      detail: lane.summary,
-      action: "Refresh registry data or choose a registered active repo.",
+      severity: maintainerAuthored ? "info" : "warning",
+      title: maintainerAuthored ? "Repo lane unavailable for contributor scoring" : "Repo lane is not ready for a confident recommendation",
+      detail: maintainerAuthored ? `${lane.summary} Maintainer-authored work is treated as repo stewardship, not contributor-lane eligibility.` : lane.summary,
+      action: maintainerAuthored ? "No action." : "Refresh registry data or choose a registered active repo.",
     });
   }
   if (linkedIssues.length === 0 && lane.lane !== "issue_discovery") {
@@ -2534,7 +2578,7 @@ export function buildPreflightResult(
   return {
     repoFullName: input.repoFullName,
     generatedAt: nowIso(),
-    status: lane.lane === "unknown" || lane.lane === "inactive" ? "hold" : hasWarning ? "needs_work" : "ready",
+    status: laneUnavailable && !maintainerAuthored ? "hold" : hasWarning ? "needs_work" : "ready",
     lane,
     reviewBurden,
     linkedIssues,
@@ -3970,12 +4014,12 @@ export function buildPublicReadinessScore(args: {
       label: "Change scope",
       score: reviewLoadScore,
       max: 20,
-      evidence: `Readiness component derived from cached public PR metadata and labels${formatSizeLabelEvidence(args.pr.labels)}.`,
-      action: reviewLoadScore >= 18 ? "No action." : "Add scope summary.",
+      evidence: changeScopeEvidence(args.pr, args.preflight.reviewBurden),
+      action: reviewLoadScore >= 18 ? "No action." : "Add a concise scope and risk note.",
     },
     {
       key: "validation",
-      label: "Validation evidence",
+      label: "Validation posture",
       score: validation.score,
       max: 25,
       evidence: validation.evidence,
@@ -3991,7 +4035,7 @@ export function buildPublicReadinessScore(args: {
     },
     {
       key: "queue_pressure",
-      label: "Open PR queue",
+      label: "Review queue context",
       score: queuePressure.score,
       max: queuePressure.max,
       evidence: queuePressure.evidence,
@@ -4043,15 +4087,16 @@ type PublicSafeCollapsibleArgs = {
   preflight: PreflightResult;
   queueHealth: QueueHealth;
   review?: FocusManifestReviewConfig | undefined;
-  aiReview?: { notes: string } | undefined;
+  duplicateWinnerEnabled?: boolean | undefined;
 };
 
 /** "Signal definitions" body — a static legend for the readiness signals. No inputs. */
 function signalDefinitionsBody(): string[] {
   return [
     "- Related work = same linked issue, overlapping active PRs, or title/path similarity.",
-    "- Review load = cached public PR metadata such as size labels, changed paths, and preflight status.",
-    "- Open PR queue = repo-wide review pressure; it is not a PR quality failure.",
+    "- Change scope = cached public metadata such as size labels, draft state, and review-burden hints.",
+    "- Validation posture = whether the PR provides enough public validation/test evidence for maintainer review.",
+    "- Contributor workload = public contributor activity and cleanup pressure, not a repo-wide quality failure.",
     "- Contributor context = public GitHub/Gittensor identity context; non-Gittensor status is not a blocker.",
   ];
 }
@@ -4067,8 +4112,12 @@ function reviewContextBody(args: PublicSafeCollapsibleArgs): string[] {
     profile: args.profile,
   });
   const confirmedMiner = isOfficialContributorDetection(args.detection);
-  const prCollisionClusters = pullRequestSpecificCollisionClusters(args.collisions, args.pr);
-  const scopedOverlapClusters = unionScopedOverlapClusters(args.collisions, args.pr, args.preflight.collisions);
+  const relatedWork = buildDuplicateWinnerRelatedWorkView({
+    pr: args.pr,
+    collisions: args.collisions,
+    preflightCollisions: args.preflight.collisions,
+    duplicateWinnerEnabled: args.duplicateWinnerEnabled,
+  });
   return [
     `- Author: \`${sanitizePanelText(args.pr.authorLogin ?? "unknown")}\``,
     `- Role context: ${sanitizePanelText(roleContext.role)}${roleContext.maintainerLane ? " (maintainer lane)" : ""}`,
@@ -4076,10 +4125,7 @@ function reviewContextBody(args: PublicSafeCollapsibleArgs): string[] {
     `- Lane context: ${sanitizePanelText(buildLaneAdvice(args.repo, args.pr.repoFullName).summary)}`,
     `- Public profile languages: ${args.profile.github.topLanguages.length > 0 ? sanitizePanelText(args.profile.github.topLanguages.join(", ")) : "not available"}`,
     ...(confirmedMiner ? [`- Official Gittensor activity: ${args.detection.priorPullRequests} PR(s), ${args.detection.priorIssues} issue(s).`] : ["- Contributor context: Public profile only; not a blocker."]),
-    ...relatedWorkDetails(args.pr, scopedOverlapClusters),
-    // `prCollisionClusters` is referenced only to keep this body's derivation identical to the panel's
-    // (the panel computes both cluster sets); the overlap detail uses the scoped set.
-    ...(prCollisionClusters.length === 0 ? [] : []),
+    ...relatedWorkDetails(args.pr, relatedWork.scopedOverlapClusters),
   ];
 }
 
@@ -4088,33 +4134,17 @@ function contributorNextStepsBody(nextSteps: string[]): string[] {
   return nextSteps.length > 0 ? [...new Set(nextSteps)].map((step) => `- ${step}`) : ["- Keep the PR focused and include validation evidence before maintainer review."];
 }
 
-/** "Review details" body — the optional AI maintainer-review notes (already public-safe upstream). Returns
- *  `[]` when there is no AI review, so the section is omitted entirely. Angle brackets are escaped as a final
- *  guard (a stray tag cannot break the panel) and the notes are length-capped, matching the legacy panel. */
-function reviewDetailsBody(aiReview: { notes: string } | undefined): string[] {
-  if (!aiReview) return [];
-  return [
-    "_Generated from public PR metadata and the diff. Advisory only; deterministic signals remain authoritative._",
-    "",
-    aiReview.notes.replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;")).slice(0, 4000),
-  ];
-}
-
 /**
  * The public-safe collapsibles for the CONVERGED comment, as `UnifiedCollapsible[]`. Built from the SAME
- * bodies the legacy panel renders (above) so the two never diverge. Order mirrors the legacy panel's
- * (Review context · Contributor next steps · Signal definitions · Review details). Excludes "Maintainer
- * notes" (PRIVATE). "Review details" is omitted when there is no AI review (empty body → the renderer skips it).
+ * bodies the legacy panel renders (above) so the two never diverge. Excludes "Maintainer notes" (PRIVATE) and
+ * AI review notes, which the unified renderer owns as the prominent Review summary + Nits section.
  */
 export function buildPublicSafeCollapsibles(args: PublicSafeCollapsibleArgs): UnifiedCollapsible[] {
-  const collapsibles: UnifiedCollapsible[] = [
+  return [
     { title: "Review context", body: reviewContextBody(args).join("\n") },
     { title: "Contributor next steps", body: contributorNextStepsBody(publicSafeNextSteps(args)).join("\n") },
     { title: "Signal definitions", body: signalDefinitionsBody().join("\n") },
   ];
-  const reviewDetails = reviewDetailsBody(args.aiReview);
-  if (reviewDetails.length > 0) collapsibles.push({ title: "Review details", body: reviewDetails.join("\n") });
-  return collapsibles;
 }
 
 /** The deduped, public-safe "next steps" list — extracted so both the legacy panel and the converged
@@ -4128,12 +4158,18 @@ function publicSafeNextSteps(args: PublicSafeCollapsibleArgs): string[] {
     issues: [],
     profile: args.profile,
   });
+  const relatedWork = buildDuplicateWinnerRelatedWorkView({
+    pr: args.pr,
+    collisions: args.collisions,
+    preflightCollisions: args.preflight.collisions,
+    duplicateWinnerEnabled: args.duplicateWinnerEnabled,
+  });
   const readiness = buildPublicReadinessScore({
     pr: args.pr,
     preflight: args.preflight,
     queueHealth: args.queueHealth,
-    linkedDuplicatePrs: linkedIssueDuplicatePullRequests(args.pr, pullRequestSpecificCollisionClusters(args.collisions, args.pr)),
-    scopedOverlapCount: unionScopedOverlapClusters(args.collisions, args.pr, args.preflight.collisions).length,
+    linkedDuplicatePrs: relatedWork.visibleLinkedDuplicatePrs,
+    scopedOverlapCount: relatedWork.scopedOverlapClusters.length,
   });
   const publicFindings = publicSafePreflightFindings(args.preflight, args.settings);
   return [
@@ -4171,20 +4207,26 @@ export function buildPublicPrIntelligenceComment(args: {
   review?: FocusManifestReviewConfig | undefined;
   /** Optional AI maintainer-review notes (already public-safe). Rendered as an advisory section. */
   aiReview?: { notes: string } | undefined;
-  /** Duplicate-winner adjudication (#dup-winner). When true AND this PR is the cluster winner (the lowest open
-   *  sibling number among `linkedDuplicatePrs`), the hard-duplicate panel block is suppressed so the winner's
-   *  panel does not show a blocking duplicate. Default/false ⇒ byte-identical to today. */
+  /** Duplicate-winner adjudication (#dup-winner). When true AND this PR is the earliest observed linked-issue
+   *  claimant among `linkedDuplicatePrs`, the hard-duplicate panel block is suppressed so the winner's panel
+   *  does not show a blocking duplicate. Default/false ⇒ byte-identical to today. */
   duplicateWinnerEnabled?: boolean | undefined;
 }): string {
   const publicFindings = publicSafePreflightFindings(args.preflight, args.settings);
-  const prCollisionClusters = pullRequestSpecificCollisionClusters(args.collisions, args.pr);
-  const linkedDuplicatePrs = linkedIssueDuplicatePullRequests(args.pr, prCollisionClusters);
-  const scopedOverlapClusters = unionScopedOverlapClusters(args.collisions, args.pr, args.preflight.collisions);
+  const relatedWork = buildDuplicateWinnerRelatedWorkView({
+    pr: args.pr,
+    collisions: args.collisions,
+    preflightCollisions: args.preflight.collisions,
+    duplicateWinnerEnabled: args.duplicateWinnerEnabled,
+  });
+  const linkedDuplicatePrs = relatedWork.linkedDuplicatePrItems.map((item) => item.number);
+  const visibleLinkedDuplicatePrs = relatedWork.visibleLinkedDuplicatePrs;
+  const scopedOverlapClusters = relatedWork.scopedOverlapClusters;
   const scopedOverlapCount = scopedOverlapClusters.length;
-  const hasRelatedWork = linkedDuplicatePrs.length > 0 || scopedOverlapCount > 0;
-  const readiness = buildPublicReadinessScore({ pr: args.pr, preflight: args.preflight, queueHealth: args.queueHealth, linkedDuplicatePrs, scopedOverlapCount });
+  const hasRelatedWork = visibleLinkedDuplicatePrs.length > 0 || scopedOverlapCount > 0;
+  const readiness = buildPublicReadinessScore({ pr: args.pr, preflight: args.preflight, queueHealth: args.queueHealth, linkedDuplicatePrs: visibleLinkedDuplicatePrs, scopedOverlapCount });
   const linkedIssueResult = linkedIssuePanelResult(args.pr);
-  const relatedWorkResult = relatedWorkPanelResult(linkedDuplicatePrs, scopedOverlapCount);
+  const relatedWorkResult = relatedWorkPanelResult(visibleLinkedDuplicatePrs, scopedOverlapCount);
   const roleContext = buildRoleContext({
     login: args.pr.authorLogin ?? args.profile.login,
     repo: args.repo,
@@ -4202,13 +4244,13 @@ export function buildPublicPrIntelligenceComment(args: {
   const gateEnabled = args.settings.gateCheckMode === "enabled";
   const hardLinkedIssueBlock =
     args.settings.linkedIssueGateMode === "block" && args.pr.linkedIssues.length === 0 && !hasClearNoIssueRationale(args.pr);
-  // Duplicate-winner adjudication (#dup-winner): when the flag is ON and this PR is the cluster winner (the
-  // lowest open sibling number), do NOT hard-block it as a duplicate — only the losers block. `linkedDuplicatePrs`
-  // is open-only (collision clusters exclude closed PRs). Flag-OFF (default) short-circuits ⇒ byte-identical.
+  // Duplicate-winner adjudication (#dup-winner): when the flag is ON and this PR is the earliest observed
+  // linked-issue claimant, do NOT hard-block it as a duplicate — only the losers block. Sparse legacy rows fail
+  // closed so unknown ordering cannot suppress duplicate evidence.
   const hardDuplicateBlock =
     args.settings.duplicatePrGateMode === "block" &&
     linkedDuplicatePrs.length > 0 &&
-    !(args.duplicateWinnerEnabled && isDuplicateClusterWinner(args.pr.number, linkedDuplicatePrs));
+    visibleLinkedDuplicatePrs.length > 0;
   const fallbackGateConclusion = !gateEnabled
     ? "success"
     : !args.repo
@@ -4218,6 +4260,7 @@ export function buildPublicPrIntelligenceComment(args: {
         : "success";
   const gateConclusion = args.gate?.conclusion ?? fallbackGateConclusion;
   const gateBlocking = gateEnabled && (gateConclusion === "failure" || gateConclusion === "action_required");
+  const gateHeld = gateEnabled && (gateConclusion === "neutral" || gateConclusion === "action_required");
   const missingLinkedIssue = args.pr.linkedIssues.length === 0 && !hasClearNoIssueRationale(args.pr);
   const confirmedMiner = isOfficialContributorDetection(args.detection);
   // Author with no Gittensor footprint at all (not detected via official API or cache): gittensory's
@@ -4227,33 +4270,47 @@ export function buildPublicPrIntelligenceComment(args: {
   if (!args.detection.detected) return buildMinimalInviteComment(args);
   const genericOssMode = args.settings.publicAudienceMode === "oss_maintainer";
   const hasPublicWarnings = publicFindings.some((finding) => finding.severity === "warning");
-  const alert = gateBlocking
-    ? gateConclusion === "action_required"
-      ? "IMPORTANT"
-      : missingLinkedIssue && args.settings.linkedIssueGateMode === "block"
+  const aiReview = args.aiReview ? splitAiReviewNits(args.aiReview.notes) : null;
+  const aiReviewHasBlockers = Boolean(aiReview?.main) && aiReviewMainHasBlockers(aiReview?.main ?? "");
+  const alert = aiReviewHasBlockers
+      ? "CAUTION"
+      : gateBlocking
+        ? gateConclusion === "action_required"
+          ? "WARNING"
+          : missingLinkedIssue && args.settings.linkedIssueGateMode === "block"
+            ? "WARNING"
+            : "CAUTION"
+      : gateHeld
         ? "WARNING"
-        : "CAUTION"
-    : hasPublicWarnings || hasRelatedWork
-      ? "IMPORTANT"
-      : "TIP";
-  const panelTitle = gateBlocking
-    ? "Gittensory Gate is blocking merge"
-    : hasPublicWarnings || hasRelatedWork
-      ? "Gittensory found maintainer review notes"
-      : "Gittensory PR readiness looks good";
+      : hasPublicWarnings || hasRelatedWork
+        ? "WARNING"
+        : "TIP";
+  const panelTitle = aiReviewHasBlockers
+    ? "Gittensory review found blockers"
+    : args.aiReview && !gateBlocking && !gateHeld
+      ? "Gittensory review approved this PR"
+      : gateHeld
+        ? "Gittensory review needs maintainer review"
+      : gateBlocking
+        ? `${GITTENSORY_GATE_CHECK_NAME} is blocking merge`
+        : hasPublicWarnings || hasRelatedWork
+          ? "Gittensory found maintainer review notes"
+          : "Gittensory PR readiness looks good";
   const panelSummary = gateBlocking
     ? args.gate?.summary ?? (gateConclusion === "action_required" ? "Gittensory cannot evaluate the repo state closely enough for the enabled gate." : "A repo-configured hard blocker was found.")
-    : linkedDuplicatePrs.length > 0
-      ? `Same-issue duplicate risk found against ${formatPrRefs(linkedDuplicatePrs)}. Maintainers should resolve the overlap before review continues.`
+    : gateHeld
+      ? args.gate?.summary ?? "Gittensory is holding this PR for maintainer review."
+    : visibleLinkedDuplicatePrs.length > 0
+      ? `Same-issue duplicate risk found against ${formatPrRefs(visibleLinkedDuplicatePrs)}. Maintainers should resolve the overlap before review continues.`
       : hasRelatedWork
         ? "Scoped related-work signals were found for this PR. They are advisory unless the gate reports a blocker."
     : genericOssMode
       ? "Public GitHub metadata was checked for review readiness. Gittensor-specific context appears only when confirmed."
       : "Confirmed Gittensor contributor context was checked from public metadata and Gittensory cache.";
   const readinessByKey = new Map(readiness.components.map((component) => [component.key, component]));
-  const validationComponent = readinessByKey.get("validation");
-  const changeScopeComponent = readinessByKey.get("change_scope");
-  const queueComponent = readinessByKey.get("queue_pressure");
+  const validationComponent = readinessByKey.get("validation")!;
+  const changeScopeComponent = readinessByKey.get("change_scope")!;
+  const contributorWorkload = contributorWorkloadPanelResult(args.profile);
   const contributorContext = contributorContextPanelResult(args.pr, args.profile, args.detection, confirmedMiner);
   // Each row carries a stable key so a maintainer can show/hide it from `.gittensory.yml review.fields`
   // (default: shown). Hiding a row is cosmetic — the underlying signal/gate still functions.
@@ -4261,9 +4318,9 @@ export function buildPublicPrIntelligenceComment(args: {
     { key: "linkedIssue", cells: ["Linked issue", linkedIssueResult.result, linkedIssueResult.evidence, linkedIssueResult.action] },
     { key: "relatedWork", cells: ["Related work", relatedWorkResult.result, relatedWorkResult.evidence, relatedWorkResult.action] },
     /* v8 ignore start -- Readiness components are built as a fixed key set; fallbacks guard future partial score shapes. */
-    { key: "reviewLoad", cells: ["Review load", scoreResultIcon(changeScopeComponent), changeScopeComponent?.evidence ?? "No public scope metadata found.", changeScopeComponent?.action ?? "No action."] },
-    { key: "validationEvidence", cells: ["Validation evidence", scoreResultIcon(validationComponent), validationComponent?.evidence ?? "No validation signal found.", validationComponent?.action ?? "Add validation note."] },
-    { key: "openPrQueue", cells: ["Open PR queue", scoreResultIcon(queueComponent), queueComponent?.evidence ?? "Open PR queue unavailable.", queueComponent?.action ?? "No action."] },
+    { key: "reviewLoad", cells: ["Change scope", scoreResultIcon(changeScopeComponent), changeScopeComponent.evidence, changeScopeComponent.action] },
+    { key: "validationEvidence", cells: ["Validation posture", scoreResultIcon(validationComponent), validationComponent.evidence, validationComponent.action] },
+    { key: "openPrQueue", cells: ["Contributor workload", contributorWorkload.result, contributorWorkload.evidence, contributorWorkload.action] },
     /* v8 ignore stop */
     { key: "contributorContext", cells: ["Contributor context", contributorContext.result, contributorContext.evidence, contributorContext.action] },
     { key: "gateResult", cells: ["Gate result", gateStatus(gateEnabled, gateConclusion), gateEnabled ? gateAction(gateConclusion) : "Advisory only.", gateEnabled ? gateNextAction(gateConclusion) : "No action."] },
@@ -4287,7 +4344,25 @@ export function buildPublicPrIntelligenceComment(args: {
     ...formatAlertBlock([
       `[!${alert}]`,
       `## ${panelTitle}`,
-      panelSummary,
+      ...(aiReview?.main
+        ? [
+            "**Review summary**",
+            escapeAiReviewMarkdown(aiReview.main),
+            ...(aiReview.nits.length > 0
+              ? [
+                  "",
+                  "<details>",
+                  `<summary>Nits (${aiReview.nits.length})</summary>`,
+                  "",
+                  ...aiReview.nits.map((nit) => `- [ ] ${escapeAiReviewMarkdown(nit)}`),
+                  "",
+                  "</details>",
+                ]
+              : []),
+            "",
+            panelSummary,
+          ]
+        : [panelSummary]),
       // Optional maintainer intro note (public-safe-validated at parse time; re-sanitized here).
       ...(args.review?.note ? ["", sanitizePanelText(args.review.note)] : []),
       "",
@@ -4302,8 +4377,9 @@ export function buildPublicPrIntelligenceComment(args: {
     "<summary>Signal definitions</summary>",
     "",
     "- Related work = same linked issue, overlapping active PRs, or title/path similarity.",
-    "- Review load = cached public PR metadata such as size labels, changed paths, and preflight status.",
-    "- Open PR queue = repo-wide review pressure; it is not a PR quality failure.",
+    "- Change scope = cached public metadata such as size labels, draft state, and review-burden hints.",
+    "- Validation posture = whether the PR provides enough public validation/test evidence for maintainer review.",
+    "- Contributor workload = public contributor activity and cleanup pressure, not a repo-wide quality failure.",
     "- Contributor context = public GitHub/Gittensor identity context; non-Gittensor status is not a blocker.",
     "",
     "</details>",
@@ -4334,24 +4410,6 @@ export function buildPublicPrIntelligenceComment(args: {
     ...(nextSteps.length > 0 ? [...new Set(nextSteps)].map((step) => `- ${step}`) : ["- Keep the PR focused and include validation evidence before maintainer review."]),
     "",
     "</details>",
-    // Optional AI maintainer review (advisory; public-safe text built upstream). The deterministic
-    // signals above remain authoritative — this is a second opinion, not an endorsement.
-    ...(args.aiReview
-      ? [
-          "",
-          "<details>",
-          "<summary>Gittensory AI review (advisory)</summary>",
-          "",
-          "_Generated from public PR metadata and the diff. Advisory only; deterministic signals remain authoritative._",
-          "",
-          // Notes are already public-safe and markdown-neutralized (built via toPublicSafe upstream). Escape
-          // angle brackets as a final guard so a stray tag (e.g. </details> or an HTML comment marker) cannot
-          // break the panel structure while preserving the section/bullet layout we add ourselves.
-          args.aiReview.notes.replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;")).slice(0, 4000),
-          "",
-          "</details>",
-        ]
-      : []),
     "",
     `- [ ] ${PR_PANEL_RETRIGGER_MARKER} Re-run Gittensory review`,
     "",
@@ -4406,40 +4464,46 @@ export function buildPublicPrPanelSignalRows(args: {
   preflight: PreflightResult;
   settings: RepositorySettings;
   gate?: PublicPrPanelGateEvaluation | undefined;
-  /** Duplicate-winner adjudication (#dup-winner). When true AND this PR is the cluster winner (the lowest open
-   *  sibling number among `linkedDuplicatePrs`), the hard-duplicate block is suppressed. Default/false ⇒
-   *  byte-identical to today. Matches `buildPublicPrIntelligenceComment` so both panels agree. */
+  /** Duplicate-winner adjudication (#dup-winner). When true AND this PR is the earliest observed linked-issue
+   *  claimant among `linkedDuplicatePrs`, the hard-duplicate block is suppressed. Default/false ⇒ byte-identical
+   *  to today. Matches `buildPublicPrIntelligenceComment` so both panels agree. */
   duplicateWinnerEnabled?: boolean | undefined;
 }): { rows: PublicPrPanelSignalRow[]; readinessTotal: number } {
-  const prCollisionClusters = pullRequestSpecificCollisionClusters(args.collisions, args.pr);
-  const linkedDuplicatePrs = linkedIssueDuplicatePullRequests(args.pr, prCollisionClusters);
-  const scopedOverlapClusters = unionScopedOverlapClusters(args.collisions, args.pr, args.preflight.collisions);
+  const relatedWork = buildDuplicateWinnerRelatedWorkView({
+    pr: args.pr,
+    collisions: args.collisions,
+    preflightCollisions: args.preflight.collisions,
+    duplicateWinnerEnabled: args.duplicateWinnerEnabled,
+  });
+  const linkedDuplicatePrs = relatedWork.linkedDuplicatePrItems.map((item) => item.number);
+  const visibleLinkedDuplicatePrs = relatedWork.visibleLinkedDuplicatePrs;
+  const scopedOverlapClusters = relatedWork.scopedOverlapClusters;
   const scopedOverlapCount = scopedOverlapClusters.length;
-  const readiness = buildPublicReadinessScore({ pr: args.pr, preflight: args.preflight, queueHealth: args.queueHealth, linkedDuplicatePrs, scopedOverlapCount });
+  const readiness = buildPublicReadinessScore({ pr: args.pr, preflight: args.preflight, queueHealth: args.queueHealth, linkedDuplicatePrs: visibleLinkedDuplicatePrs, scopedOverlapCount });
   const linkedIssueResult = linkedIssuePanelResult(args.pr);
-  const relatedWorkResult = relatedWorkPanelResult(linkedDuplicatePrs, scopedOverlapCount);
+  const relatedWorkResult = relatedWorkPanelResult(visibleLinkedDuplicatePrs, scopedOverlapCount);
   const gateEnabled = args.settings.gateCheckMode === "enabled";
   const hardLinkedIssueBlock = args.settings.linkedIssueGateMode === "block" && args.pr.linkedIssues.length === 0 && !hasClearNoIssueRationale(args.pr);
-  // Duplicate-winner adjudication (#dup-winner): suppress the winner's hard-duplicate block (see the comment
-  // builder). `linkedDuplicatePrs` is open-only; flag-OFF (default) short-circuits ⇒ byte-identical to today.
+  // Duplicate-winner adjudication (#dup-winner): suppress the earliest known claimant's hard-duplicate block
+  // (see the comment builder). Sparse legacy rows fail closed; flag-OFF keeps legacy behavior.
   const hardDuplicateBlock =
     args.settings.duplicatePrGateMode === "block" &&
     linkedDuplicatePrs.length > 0 &&
-    !(args.duplicateWinnerEnabled && isDuplicateClusterWinner(args.pr.number, linkedDuplicatePrs));
+    visibleLinkedDuplicatePrs.length > 0;
   const fallbackGateConclusion = !gateEnabled ? "success" : !args.repo ? "neutral" : hardLinkedIssueBlock || hardDuplicateBlock ? "failure" : "success";
   const gateConclusion = args.gate?.conclusion ?? fallbackGateConclusion;
   const confirmedMiner = isOfficialContributorDetection(args.detection);
   const readinessByKey = new Map(readiness.components.map((component) => [component.key, component]));
-  const validationComponent = readinessByKey.get("validation");
-  const changeScopeComponent = readinessByKey.get("change_scope");
-  const queueComponent = readinessByKey.get("queue_pressure");
+  const validationComponent = readinessByKey.get("validation")!;
+  const changeScopeComponent = readinessByKey.get("change_scope")!;
+  const contributorWorkload = contributorWorkloadPanelResult(args.profile);
   const contributorContext = contributorContextPanelResult(args.pr, args.profile, args.detection, confirmedMiner);
   const rows: PublicPrPanelSignalRow[] = [
     { key: "linkedIssue", cells: ["Linked issue", linkedIssueResult.result, linkedIssueResult.evidence, linkedIssueResult.action] },
     { key: "relatedWork", cells: ["Related work", relatedWorkResult.result, relatedWorkResult.evidence, relatedWorkResult.action] },
-    { key: "reviewLoad", cells: ["Review load", scoreResultIcon(changeScopeComponent), changeScopeComponent?.evidence ?? "No public scope metadata found.", changeScopeComponent?.action ?? "No action."] },
-    { key: "validationEvidence", cells: ["Validation evidence", scoreResultIcon(validationComponent), validationComponent?.evidence ?? "No validation signal found.", validationComponent?.action ?? "Add validation note."] },
-    { key: "openPrQueue", cells: ["Open PR queue", scoreResultIcon(queueComponent), queueComponent?.evidence ?? "Open PR queue unavailable.", queueComponent?.action ?? "No action."] },
+    { key: "reviewLoad", cells: ["Change scope", scoreResultIcon(changeScopeComponent), changeScopeComponent.evidence, changeScopeComponent.action] },
+    { key: "validationEvidence", cells: ["Validation posture", scoreResultIcon(validationComponent), validationComponent.evidence, validationComponent.action] },
+    { key: "openPrQueue", cells: ["Contributor workload", contributorWorkload.result, contributorWorkload.evidence, contributorWorkload.action] },
     { key: "contributorContext", cells: ["Contributor context", contributorContext.result, contributorContext.evidence, contributorContext.action] },
     { key: "gateResult", cells: ["Gate result", gateStatus(gateEnabled, gateConclusion), gateEnabled ? gateAction(gateConclusion) : "Advisory only.", gateEnabled ? gateNextAction(gateConclusion) : "No action."] },
   ];
@@ -4464,16 +4528,76 @@ export function unionScopedOverlapClusters(
   return [...new Map([...prCollisionClusters, ...preflightCollisions].map((cluster) => [cluster.id, cluster])).values()];
 }
 
-function linkedIssueDuplicatePullRequests(pr: PullRequestRecord, clusters: CollisionCluster[]): number[] {
+export function buildDuplicateWinnerRelatedWorkView(args: {
+  pr: PullRequestRecord;
+  collisions: CollisionReport;
+  preflightCollisions: CollisionCluster[];
+  duplicateWinnerEnabled?: boolean | undefined;
+}): {
+  linkedDuplicatePrItems: CollisionItem[];
+  visibleLinkedDuplicatePrs: number[];
+  scopedOverlapClusters: CollisionCluster[];
+  isDuplicateWinner: boolean;
+} {
+  const prCollisionClusters = pullRequestSpecificCollisionClusters(args.collisions, args.pr);
+  const linkedDuplicatePrItems = linkedIssueDuplicatePullRequestItems(args.pr, prCollisionClusters);
+  const linkedDuplicatePrs = linkedDuplicatePrItems.map((item) => item.number);
+  const isDuplicateWinner =
+    Boolean(args.duplicateWinnerEnabled) &&
+    isDuplicateClusterWinnerByClaim(args.pr, linkedDuplicatePrItems);
+  const scopedOverlapClusters = visibleScopedOverlapClustersForDuplicateWinner(
+    args.pr,
+    unionScopedOverlapClusters(args.collisions, args.pr, args.preflightCollisions),
+    isDuplicateWinner,
+  );
+  return {
+    linkedDuplicatePrItems,
+    visibleLinkedDuplicatePrs: isDuplicateWinner ? [] : linkedDuplicatePrs,
+    scopedOverlapClusters,
+    isDuplicateWinner,
+  };
+}
+
+function visibleScopedOverlapClustersForDuplicateWinner(
+  pr: PullRequestRecord,
+  clusters: CollisionCluster[],
+  suppressSameIssueDuplicates: boolean,
+): CollisionCluster[] {
+  if (!suppressSameIssueDuplicates) return clusters;
+  return clusters.flatMap((cluster) => {
+    if (!isSameLinkedIssueOnlyCluster(cluster)) return [cluster];
+    const items = cluster.items.filter((item) => !isSameLinkedIssueDuplicateItem(pr, item));
+    return hasVisibleRelatedWorkItem(pr, items) ? [{ ...cluster, items }] : [];
+  });
+}
+
+function isSameLinkedIssueOnlyCluster(cluster: CollisionCluster): boolean {
+  return /^Open PR work references issue #\d+\.$/.test(cluster.reason) || /^Items reference the same linked issue #\d+\.$/.test(cluster.reason);
+}
+
+function isSameLinkedIssueDuplicateItem(pr: PullRequestRecord, item: CollisionItem): boolean {
+  if (item.type !== "pull_request" || item.number === pr.number) return false;
+  const linkedIssues = new Set(pr.linkedIssues);
+  return (item.linkedIssues ?? []).some((issue) => linkedIssues.has(issue));
+}
+
+function hasVisibleRelatedWorkItem(pr: PullRequestRecord, items: CollisionItem[]): boolean {
+  return items.some((item) => {
+    if (item.type === "issue") return false;
+    return !(item.type === "pull_request" && item.number === pr.number);
+  });
+}
+
+function linkedIssueDuplicatePullRequestItems(pr: PullRequestRecord, clusters: CollisionCluster[]): CollisionItem[] {
   const linkedIssues = new Set(pr.linkedIssues);
   if (linkedIssues.size === 0) return [];
   const duplicates = clusters.flatMap((cluster) =>
     cluster.items.flatMap((item) => {
       if (item.type !== "pull_request" || item.number === pr.number) return [];
-      return (item.linkedIssues ?? []).some((issue) => linkedIssues.has(issue)) ? [item.number] : [];
+      return (item.linkedIssues ?? []).some((issue) => linkedIssues.has(issue)) ? [item] : [];
     }),
   );
-  return [...new Set(duplicates)].sort((left, right) => left - right);
+  return [...new Map(duplicates.map((item) => [item.number, item])).values()].sort((left, right) => left.number - right.number);
 }
 
 function linkedIssuePanelResult(pr: PullRequestRecord): { result: string; evidence: string; action: string } {
@@ -4546,9 +4670,46 @@ function contributorContextPanelResult(
   };
 }
 
-function scoreResultIcon(component: PublicReadinessScore["components"][number] | undefined): string {
-  /* v8 ignore next -- Component lookup is fixed today; undefined is a defensive fallback for future score shape drift. */
-  if (!component) return "⚠️ No score";
+function changeScopeEvidence(pr: PullRequestRecord, reviewBurden: PreflightResult["reviewBurden"]): string {
+  const burden = reviewBurden === "low" ? "Low" : reviewBurden === "medium" ? "Medium" : "High";
+  const sizeLabel = pr.labels.find((label) => /^size[:/-]/i.test(label));
+  const detailParts = [
+    sizeLabel ? `size label ${sanitizePanelText(sizeLabel)}` : undefined,
+    pr.isDraft ? "draft PR" : undefined,
+    pr.linkedIssues.length > 0 ? `${pr.linkedIssues.length} linked issue${pr.linkedIssues.length === 1 ? "" : "s"}` : "no linked issue context",
+  ].filter(Boolean);
+  return `${burden} review scope from cached public metadata (${detailParts.join("; ")}).`;
+}
+
+function contributorWorkloadPanelResult(profile: ContributorProfile): { result: string; evidence: string; action: string } {
+  const unlinkedOpenPullRequests = Math.max(0, profile.trustSignals.unlinkedOpenPullRequests);
+  const maintainerAssociatedPullRequests = Math.max(0, profile.trustSignals.maintainerAssociatedPullRequests);
+  const pullRequests = Math.max(0, profile.registeredRepoActivity.pullRequests);
+  const mergedPullRequests = Math.max(0, profile.registeredRepoActivity.mergedPullRequests);
+  const issues = Math.max(0, profile.registeredRepoActivity.issues);
+  const score = contributorWorkloadScore(unlinkedOpenPullRequests);
+  const detailParts = [
+    `${pullRequests} registered-repo PR(s)`,
+    `${mergedPullRequests} merged`,
+    `${issues} issue(s)`,
+    unlinkedOpenPullRequests > 0 ? `${unlinkedOpenPullRequests} unlinked open PR(s)` : undefined,
+    maintainerAssociatedPullRequests > 0 ? `${maintainerAssociatedPullRequests} maintainer-associated PR(s)` : undefined,
+  ].filter(Boolean);
+  return {
+    result: scoreResultIcon({ score, max: 10 }),
+    evidence: `Author activity: ${detailParts.join(", ")}.`,
+    action: unlinkedOpenPullRequests > 0 ? "Link or explain open contributor PRs." : "No action.",
+  };
+}
+
+function contributorWorkloadScore(unlinkedOpenPullRequests: number): number {
+  if (unlinkedOpenPullRequests === 0) return 10;
+  if (unlinkedOpenPullRequests <= 2) return 8;
+  if (unlinkedOpenPullRequests <= 5) return 5;
+  return 3;
+}
+
+function scoreResultIcon(component: Pick<PublicReadinessScore["components"][number], "score" | "max">): string {
   const ratio = component.score / component.max;
   if (ratio >= 0.85) return `✅ ${component.score}/${component.max}`;
   if (ratio >= 0.45) return `⚠️ ${component.score}/${component.max}`;
@@ -4566,7 +4727,7 @@ function validationComponent(pr: PullRequestRecord, preflight: PreflightResult):
   const missingTests = findingCodes.some((code) => /missing.*test|test.*missing|no_test/i.test(code));
   const explicitValidation = hasValidationNote(pr.body ?? "");
   if (preflight.status === "hold") {
-    return { score: 5, evidence: "Cached preflight status is hold.", action: "Fix blocker." };
+    return { score: 5, evidence: "Preflight is holding this PR; address the blocker before review.", action: "Fix the blocker." };
   }
   if (missingTests) {
     // A body validation note is an UNBACKED claim when no test files accompany the change. Cap it just above the
@@ -4574,15 +4735,15 @@ function validationComponent(pr: PullRequestRecord, preflight: PreflightResult):
     // zero-test PR — full credit is reserved for actual test evidence in the branch below. (#audit-2.3)
     return explicitValidation
       ? { score: 12, evidence: "PR body claims validation but no test files accompany the change.", action: "Add tests covering the change." }
-      : { score: 10, evidence: "No cached test files or validation note found.", action: "Add validation note." };
+      : { score: 10, evidence: "No cached test files or validation note found.", action: "Add tests or validation evidence." };
   }
   if (explicitValidation) {
     return { score: 25, evidence: "PR body includes validation/test evidence.", action: "No action." };
   }
   if (preflight.status === "ready") {
-    return { score: 20, evidence: "Cached preflight status is ready; explicit validation note not found.", action: "Add validation note." };
+    return { score: 20, evidence: "Preflight is ready, but the PR body does not name the validation run.", action: "Add validation command/output." };
   }
-  return { score: 12, evidence: "Cached preflight status needs author follow-up.", action: "Add validation note." };
+  return { score: 12, evidence: "Preflight needs author follow-up before maintainer review.", action: "Address findings or add validation evidence." };
 }
 
 function queuePressureComponent(queueHealth: QueueHealth): { score: number; max: 10; evidence: string; action: string } {
@@ -4609,8 +4770,8 @@ function queuePressureComponent(queueHealth: QueueHealth): { score: number; max:
   return {
     score,
     max: 10,
-    evidence: `${detailParts.join(", ")}.`,
-    action: score >= 8 ? "No action." : "Expect slower review.",
+    evidence: `Repo queue: ${detailParts.join(", ")}.`,
+    action: score >= 8 ? "No action." : "Triage stale or unlinked PRs.",
   };
 }
 
@@ -4799,11 +4960,6 @@ function hasValidationNote(value: string): boolean {
   return /\b(test(?:ed|s|ing)?|validation|validated|verified|manual check|smoke|pytest|vitest|npm test|pnpm test|cargo test|go test)\b/i.test(value);
 }
 
-function formatSizeLabelEvidence(labels: string[]): string {
-  const sizeLabel = labels.find((label) => /^size[:/-]/i.test(label));
-  return sizeLabel ? `; size label ${sizeLabel}` : "";
-}
-
 function gateStatus(gateEnabled: boolean, conclusion: PublicPrPanelGateEvaluation["conclusion"]): string {
   if (!gateEnabled) return "⚠️ Advisory only";
   if (conclusion === "success") return "✅ Passing";
@@ -4863,6 +5019,23 @@ function formatCollisionItemRef(item: CollisionItem): string {
 
 function formatAlertBlock(lines: string[]): string[] {
   return lines.map((line) => (line.length > 0 ? `> ${line}` : ">"));
+}
+
+function aiReviewMainHasBlockers(main: string): boolean {
+  const marker = main.search(/\*\*Blockers\*\*/i);
+  if (marker === -1) return false;
+  const after = main.slice(marker).split(/\n(?=\*\*[^*]+\*\*)/)[0]!;
+  return after
+    .split("\n")
+    .slice(1)
+    .map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
+    .some((line) => line.length > 0 && !/^none\.?$/i.test(line));
+}
+
+function escapeAiReviewMarkdown(value: string): string {
+  return value
+    .replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;"))
+    .slice(0, 4000);
 }
 
 function isPrivateBountyLifecycleFinding(code: string): boolean {
@@ -4954,6 +5127,7 @@ function prItem(pr: PullRequestRecord): CollisionItem {
     htmlUrl: pr.htmlUrl,
     labels: pr.labels,
     linkedIssues: pr.linkedIssues,
+    linkedIssueClaimedAt: pr.linkedIssueClaimedAt,
     body: pr.body,
   };
 }

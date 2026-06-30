@@ -4,7 +4,13 @@
 // time from the unique set of ownership domains (users/teams) crossed by the PR.
 // CODEOWNERS matching uses a bounded, linear glob matcher instead of repository-controlled regular expressions.
 // Fail-safe: returns [] on any network error, non-ok response, or missing/unreadable CODEOWNERS file.
-import type { EnrichRequest, CodeownersFinding } from "../types.js";
+import type {
+  AnalyzerDiagnostics,
+  EnrichRequest,
+  CodeownersFinding,
+} from "../types.js";
+import type { AnalysisContext } from "../analysis-context.js";
+import { boundedFetchText } from "../external-fetch.js";
 
 const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 const CODEOWNERS_PATHS = [
@@ -24,6 +30,12 @@ interface ParsedRule {
   tokens: GlobToken[];
   anchored: boolean;
   owners: string[];
+}
+
+interface ScanOptions {
+  signal?: AbortSignal;
+  analysis?: Pick<AnalysisContext, "fetchText">;
+  diagnostics?: AnalyzerDiagnostics;
 }
 
 const MAX_CODEOWNERS_BYTES = 64 * 1024;
@@ -190,19 +202,25 @@ async function fetchCodeowners(
   repo: string,
   headers: Record<string, string>,
   fetchFn: typeof fetch,
-  signal?: AbortSignal,
+  options: ScanOptions = {},
 ): Promise<string | null> {
   for (const path of CODEOWNERS_PATHS) {
-    try {
-      const resp = await fetchFn(
-        `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${path}`,
-        { headers, signal },
-      );
-      if (!resp.ok) continue;
-      return await resp.text();
-    } catch {
-      // network error or already-aborted signal → try next location
-    }
+    const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${path}`;
+    const fetchOptions = {
+      endpointCategory: "github-contents",
+      headers,
+      signal: options.signal,
+      fetchImpl: fetchFn,
+      diagnostics: options.diagnostics,
+      phase: "codeowners",
+      subcall: "github-contents",
+      maxBytes: MAX_CODEOWNERS_BYTES,
+      maxCallsPerCategory: CODEOWNERS_PATHS.length,
+    };
+    const response = options.analysis
+      ? await options.analysis.fetchText(url, fetchOptions)
+      : await boundedFetchText(url, fetchOptions);
+    if (response.ok) return response.data;
   }
   return null;
 }
@@ -213,7 +231,7 @@ async function fetchCodeowners(
 export async function scanCodeowners(
   req: EnrichRequest,
   fetchFn: typeof fetch,
-  opts?: { signal?: AbortSignal },
+  opts: ScanOptions = {},
 ): Promise<CodeownersFinding[]> {
   const { repoFullName, githubToken, author, files = [] } = req;
   if (!githubToken || !author) return [];
@@ -240,7 +258,7 @@ export async function scanCodeowners(
     repoName,
     headers,
     fetchFn,
-    opts?.signal,
+    opts,
   );
   if (!content) return [];
 

@@ -1,0 +1,340 @@
+// Units for the shared REES analysis context (#1810). Kept separate so future analyzer PRs can add their own
+// migrations without fighting over the broad enrichment test file.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createAnalysisContext } from "../dist/analysis-context.js";
+import {
+  queryOsvBatch,
+  scanDependencyChanges,
+} from "../dist/analyzers/dependency-scan.js";
+
+const jsonResponse = (body, init = {}) =>
+  new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    ...init,
+  });
+
+test("createAnalysisContext parses common PR state once", () => {
+  let now = 130;
+  const syntheticGithubToken = ["ghp", "abcdefghijklmnopqrstuvwxyz1234567890"].join("_");
+  const context = createAnalysisContext(
+    {
+      repoFullName: "JSONbored/gittensory",
+      prNumber: 1810,
+      headSha: "abcdef1234567890",
+      files: [
+        {
+          path: "src/config.ts",
+          patch: [
+            "@@ -2,2 +2,3 @@",
+            " const safe = true;",
+            "-const oldToken = null;",
+            `+const token = "${syntheticGithubToken}";`,
+          ].join("\n"),
+        },
+        {
+          path: "package.json",
+          patch: [
+            "@@ -5,2 +5,2 @@",
+            '-    "lodash": "^4.17.20",',
+            '+    "lodash": "^4.17.21",',
+          ].join("\n"),
+        },
+      ],
+    },
+    { startedAtMs: 100, deadlineMs: 250, now: () => now },
+  );
+
+  assert.deepEqual(context.repo, {
+    owner: "JSONbored",
+    repo: "gittensory",
+    fullName: "JSONbored/gittensory",
+    prNumber: 1810,
+    headSha: "abcdef1234567890",
+  });
+  assert.deepEqual(context.changedFilePaths, ["src/config.ts", "package.json"]);
+  assert.deepEqual(context.dependencyManifestPaths, ["package.json"]);
+  assert.deepEqual(context.patchHunks.map((hunk) => [hunk.file, hunk.newStart]), [
+    ["src/config.ts", 2],
+    ["package.json", 5],
+  ]);
+  assert.deepEqual(
+    context.addedLines.map((line) => [line.file, line.line, line.text]),
+    [
+      ["src/config.ts", 3, `const token = "${syntheticGithubToken}";`],
+      ["package.json", 5, '    "lodash": "^4.17.21",'],
+    ],
+  );
+
+  const limits = {
+    maxManifestFiles: 20,
+    maxPatchLinesPerFile: 500,
+    maxDependencyQueries: 25,
+  };
+  const firstChanges = context.dependencyChanges(limits);
+  const secondChanges = context.dependencyChanges(limits);
+  assert.strictEqual(secondChanges, firstChanges);
+  assert.deepEqual(firstChanges, [
+    {
+      ecosystem: "npm",
+      package: "lodash",
+      from: "4.17.20",
+      to: "4.17.21",
+    },
+  ]);
+
+  now = 175;
+  assert.equal(context.remainingMs(250), 75);
+  assert.deepEqual(context.snapshotMetrics(), {
+    cacheHits: 1,
+    cacheMisses: 1,
+    externalCallsByCategory: {},
+    skippedWorkByCategory: {},
+    cappedWorkByCategory: {},
+    analysisElapsedMs: 75,
+  });
+});
+
+test("request cache de-dupes in-flight external lookups and records safe metrics", async () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 1810,
+  });
+  let loads = 0;
+  const load = async () => {
+    loads += 1;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return { ok: true };
+  };
+
+  const [first, second] = await Promise.all([
+    context.cachedExternalCall("github commit/pulls", "commit:abc123", load),
+    context.cachedExternalCall("github commit/pulls", "commit:abc123", load),
+  ]);
+
+  assert.equal(loads, 1);
+  assert.strictEqual(first, second);
+  assert.deepEqual(context.snapshotMetrics().externalCallsByCategory, {
+    github_commit_pulls: 1,
+  });
+  assert.equal(context.snapshotMetrics().cacheMisses, 1);
+  assert.equal(context.snapshotMetrics().cacheHits, 1);
+});
+
+test("request cache preserves category and key boundaries", async () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 1810,
+  });
+  let loads = 0;
+
+  const first = await context.cachedExternalCall("a:b", "c", async () => {
+    loads += 1;
+    return "category-with-colon";
+  });
+  const second = await context.cachedExternalCall("a", "b:c", async () => {
+    loads += 1;
+    return "key-with-colon";
+  });
+  const repeatedFirst = await context.cachedExternalCall("a:b", "c", async () => {
+    throw new Error("cache miss");
+  });
+  const repeatedSecond = await context.cachedExternalCall("a", "b:c", async () => {
+    throw new Error("cache miss");
+  });
+
+  assert.equal(first, "category-with-colon");
+  assert.equal(second, "key-with-colon");
+  assert.equal(repeatedFirst, first);
+  assert.equal(repeatedSecond, second);
+  assert.equal(loads, 2);
+  assert.equal(context.cache.size, 2);
+  assert.equal(context.snapshotMetrics().cacheMisses, 2);
+  assert.equal(context.snapshotMetrics().cacheHits, 2);
+});
+
+test("scanDependencyChanges batches and de-dupes OSV package lookups inside one request", async () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 1810,
+  });
+  let fetchCalls = 0;
+  let queryCount = 0;
+  const fetchImpl = async (_url, init = {}) => {
+    fetchCalls += 1;
+    const body = JSON.parse(String(init.body));
+    queryCount = body.queries.length;
+    return jsonResponse({
+      results: [
+        {
+          vulns: [
+            {
+              id: "GHSA-test",
+              summary: "test advisory",
+              database_specific: { severity: "HIGH" },
+            },
+          ],
+        },
+      ],
+    });
+  };
+  const duplicateChanges = [
+    { ecosystem: "npm", package: "lodash", from: null, to: "4.17.20" },
+    { ecosystem: "npm", package: "lodash", from: null, to: "4.17.20" },
+  ];
+
+  const findings = await scanDependencyChanges(duplicateChanges, fetchImpl, {
+    analysis: context,
+    limits: { maxDependencyQueries: 25 },
+  });
+
+  assert.equal(fetchCalls, 1);
+  assert.equal(queryCount, 1);
+  assert.equal(findings.length, 2);
+  assert.equal(findings[0].cves[0].id, "GHSA-test");
+  assert.deepEqual(context.snapshotMetrics().externalCallsByCategory, { "osv-direct-querybatch": 1 });
+  assert.equal(context.snapshotMetrics().cacheMisses, 1);
+  assert.equal(context.snapshotMetrics().cacheHits, 0);
+});
+
+test("scanDependencyChanges chunks OSV batch lookups before fallback is needed", async () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 1810,
+  });
+  const batchSizes = [];
+  const fetchImpl = async (url, init = {}) => {
+    assert.equal(String(url), "https://api.osv.dev/v1/querybatch");
+    const body = JSON.parse(String(init.body));
+    batchSizes.push(body.queries.length);
+    return jsonResponse({
+      results: body.queries.map((query, index) => ({
+        vulns:
+          query.package.name === "pkg-10" && index === 0
+            ? [
+                {
+                  id: "GHSA-chunked",
+                  summary: "chunked advisory",
+                  database_specific: { severity: "HIGH" },
+                },
+              ]
+            : [],
+      })),
+    });
+  };
+  const changes = Array.from({ length: 12 }, (_, index) => ({
+    ecosystem: "npm",
+    package: `pkg-${index}`,
+    from: null,
+    to: "1.0.0",
+  }));
+
+  const findings = await scanDependencyChanges(changes, fetchImpl, {
+    analysis: context,
+    limits: { maxDependencyQueries: 25 },
+  });
+
+  assert.deepEqual(batchSizes, [10, 2]);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].package, "pkg-10");
+  assert.equal(findings[0].cves[0].id, "GHSA-chunked");
+  assert.deepEqual(context.snapshotMetrics().externalCallsByCategory, {
+    "osv-direct-querybatch": 2,
+  });
+});
+
+test("queryOsvBatch honors maxDependencyQueries for direct callers", async () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 1810,
+  });
+  const batchSizes = [];
+  const fetchImpl = async (url, init = {}) => {
+    assert.equal(String(url), "https://api.osv.dev/v1/querybatch");
+    const body = JSON.parse(String(init.body));
+    batchSizes.push(body.queries.length);
+    return jsonResponse({
+      results: body.queries.map(() => ({ vulns: [] })),
+    });
+  };
+  const changes = Array.from({ length: 25 }, (_, index) => ({
+    ecosystem: "npm",
+    package: `pkg-${index}`,
+    from: null,
+    to: "1.0.0",
+  }));
+
+  const cvesByKey = await queryOsvBatch(changes, fetchImpl, undefined, {
+    analysis: context,
+    limits: { maxDependencyQueries: 2 },
+  });
+
+  assert.deepEqual(batchSizes, [2]);
+  assert.equal(cvesByKey.size, 2);
+  assert.equal(cvesByKey.has("npm:pkg-0:1.0.0"), true);
+  assert.equal(cvesByKey.has("npm:pkg-1:1.0.0"), true);
+  assert.equal(cvesByKey.has("npm:pkg-2:1.0.0"), false);
+  assert.deepEqual(context.snapshotMetrics().externalCallsByCategory, {
+    "osv-direct-querybatch": 1,
+  });
+});
+
+test("scanDependencyChanges falls back to direct OSV queries after an oversized batch response", async () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 1810,
+  });
+  let batchCalls = 0;
+  const directPackages = [];
+  const fetchImpl = async (url, init = {}) => {
+    if (String(url) === "https://api.osv.dev/v1/querybatch") {
+      batchCalls += 1;
+      return new Response("{}", {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(1024 * 1024 + 1),
+        },
+      });
+    }
+
+    assert.equal(String(url), "https://api.osv.dev/v1/query");
+    const body = JSON.parse(String(init.body));
+    directPackages.push(body.package.name);
+    return jsonResponse({
+      vulns:
+        body.package.name === "left-pad"
+          ? [
+              {
+                id: "GHSA-fallback",
+                summary: "direct fallback advisory",
+                database_specific: { severity: "HIGH" },
+              },
+            ]
+          : [],
+    });
+  };
+  const changes = [
+    { ecosystem: "npm", package: "left-pad", from: null, to: "1.3.0" },
+    { ecosystem: "npm", package: "lodash", from: null, to: "4.17.20" },
+    { ecosystem: "npm", package: "express", from: null, to: "4.18.0" },
+  ];
+
+  const findings = await scanDependencyChanges(changes, fetchImpl, {
+    analysis: context,
+    limits: { maxDependencyQueries: 25 },
+  });
+
+  assert.equal(batchCalls, 1);
+  assert.deepEqual(directPackages, ["left-pad", "lodash", "express"]);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].package, "left-pad");
+  assert.equal(findings[0].cves[0].id, "GHSA-fallback");
+  assert.deepEqual(context.snapshotMetrics().externalCallsByCategory, {
+    "osv-direct-querybatch": 1,
+    "osv-query": 3,
+  });
+  assert.equal(context.snapshotMetrics().cacheMisses, 4);
+  assert.equal(context.snapshotMetrics().cacheHits, 0);
+});

@@ -5,6 +5,7 @@ import { buildAuthorizedPrActionAdvisory, gateCheckPolicy, resolveLinkedIssueAut
 import { createTestEnv } from "../helpers/d1";
 import { upsertIssueFromGitHub, upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { evaluateGateCheck } from "../../src/rules/advisory";
+import { REVIEW_THREAD_BLOCKER_CODE } from "../../src/review/review-thread-findings";
 import { parseFocusManifest, resolveEffectiveSettings } from "../../src/signals/focus-manifest";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import type { Advisory, PullRequestRecord, RepositorySettings } from "../../src/types";
@@ -87,11 +88,11 @@ describe(".gittensory.yml settings override (resolveEffectiveSettings)", () => {
     expect(evaluateGateCheck(missingIssueAdvisory(), gateCheckPolicy(eff, null, true)).conclusion).toBe("failure");
   });
 
-  it("end-to-end: manifest gate.firstTimeContributorGrace:true softens a newcomer's block to advisory (#822/#552)", () => {
+  it("end-to-end: manifest gate.firstTimeContributorGrace:true no longer softens a newcomer's blocker (#822/#552)", () => {
     const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "block", firstTimeContributorGrace: false }), parseFocusManifest({ gate: { firstTimeContributorGrace: true } }));
     expect(eff.firstTimeContributorGrace).toBe(true);
     const newcomerPolicy = gateCheckPolicy(eff, null, true, null, { mergedPrCount: 0, closedUnmergedPrCount: 0 });
-    expect(evaluateGateCheck(missingIssueAdvisory(), newcomerPolicy).conclusion).toBe("neutral");
+    expect(evaluateGateCheck(missingIssueAdvisory(), newcomerPolicy).conclusion).toBe("failure");
   });
 
   it("blocks a non-confirmed contributor identically to a confirmed one (#gate-nonconfirmed)", () => {
@@ -223,39 +224,36 @@ describe("AI close-confidence threshold gate (#7)", () => {
     findings: [{ code: "ai_review_split", title: "An AI reviewer flagged a likely blocking defect", severity: "critical", detail: "One reviewer flagged it.", action: "Resolve it.", confidence }],
   });
 
-  it("blocks when mode=block AND confidence >= the default 0.9 floor", () => {
+  it("blocks when mode=block AND confidence >= the default 0.93 floor", () => {
     const out = evaluateGateCheck(aiDefectWith(0.95), gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true));
     expect(out.conclusion).toBe("failure");
     expect(out.blockers.map((f) => f.code)).toEqual(["ai_consensus_defect"]);
   });
 
-  it("holds for human review when mode=block but confidence < the floor (#7 regression)", () => {
-    const out = evaluateGateCheck(aiDefectWith(0.5), gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true));
-    expect(out.conclusion).toBe("neutral"); // below 0.9 → manual hold, not an auto-mergeable pass
-    expect(out.title).toBe("Gittensory Gate — held for human review");
-    expect(out.blockers).toEqual([]);
-    expect(out.warnings.map((f) => f.code)).toContain("ai_consensus_defect");
+  it("blocks when mode=block even when confidence is below the configured floor (#7 regression)", () => {
+    const out = evaluateGateCheck(aiDefectWith(0.92), gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true));
+    expect(out.conclusion).toBe("failure");
+    expect(out.blockers.map((f) => f.code)).toEqual(["ai_consensus_defect"]);
   });
 
-  it("blocks exactly AT the floor (>= boundary) and not just below it", () => {
+  it("threads a custom floor but does not use it to downgrade below-floor defects", () => {
     // policy.aiReviewCloseConfidence is threaded onto the policy from settings.
     const policy = gateCheckPolicy(settings({ aiReviewMode: "block", aiReviewCloseConfidence: 0.7 }), null, true);
-    expect(evaluateGateCheck(aiDefectWith(0.7), policy).conclusion).toBe("failure"); // == threshold → blocks
-    expect(evaluateGateCheck(aiDefectWith(0.69), policy).conclusion).toBe("neutral"); // just below → manual hold
+    expect(policy.aiReviewCloseConfidence).toBe(0.7);
+    expect(evaluateGateCheck(aiDefectWith(0.7), policy).conclusion).toBe("failure");
+    expect(evaluateGateCheck(aiDefectWith(0.69), policy).conclusion).toBe("failure");
   });
 
-  it("honors a custom aiReviewCloseConfidence (the `?? 0.9` default is NOT used when set) (#7)", () => {
-    // A high custom floor of 0.99 holds a 0.95 defect for human review (the 0.9 default would have blocked it).
+  it("keeps custom aiReviewCloseConfidence as calibration context without softening blockers (#7)", () => {
     const strict = gateCheckPolicy(settings({ aiReviewMode: "block", aiReviewCloseConfidence: 0.99 }), null, true);
-    expect(evaluateGateCheck(aiDefectWith(0.95), strict).conclusion).toBe("neutral");
-    // A low custom floor of 0.3 blocks a 0.5 defect that the 0.9 default would have left advisory.
+    expect(evaluateGateCheck(aiDefectWith(0.95), strict).conclusion).toBe("failure");
     const lenient = gateCheckPolicy(settings({ aiReviewMode: "block", aiReviewCloseConfidence: 0.3 }), null, true);
     expect(evaluateGateCheck(aiDefectWith(0.5), lenient).conclusion).toBe("failure");
   });
 
-  it("a finding WITHOUT a confidence degrades to 1.0 and blocks under the default floor (graceful fallback) (#7)", () => {
+  it("a finding WITHOUT a confidence still blocks under aiReview:block (#7)", () => {
     const out = evaluateGateCheck(aiDefectWith(undefined), gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true));
-    expect(out.conclusion).toBe("failure"); // no confidence → treated as 1.0 → always clears 0.9
+    expect(out.conclusion).toBe("failure");
   });
 
   it("never blocks when mode=advisory, regardless of a high confidence (#7)", () => {
@@ -264,15 +262,14 @@ describe("AI close-confidence threshold gate (#7)", () => {
 
   it("applies the same confidence floor to an ai_review_split finding (#7)", () => {
     const policy = gateCheckPolicy(settings({ aiReviewMode: "block" }), null, true);
-    expect(evaluateGateCheck(splitDefectWith(0.95), policy).conclusion).toBe("failure"); // clears 0.9 → blocks
-    expect(evaluateGateCheck(splitDefectWith(0.5), policy).conclusion).toBe("neutral"); // below 0.9 → manual hold
+    expect(evaluateGateCheck(splitDefectWith(0.95), policy).conclusion).toBe("failure");
+    expect(evaluateGateCheck(splitDefectWith(0.92), policy).conclusion).toBe("failure");
   });
 
   it("resolveEffectiveSettings maps gate.aiReview.closeConfidence (clamped) into the policy floor (#7)", () => {
     const eff = resolveEffectiveSettings(settings({ aiReviewMode: "off" }), parseFocusManifest({ gate: { aiReview: { mode: "block", closeConfidence: 0.4 } } }));
     expect(eff.aiReviewCloseConfidence).toBe(0.4);
     expect(eff.aiReviewMode).toBe("block");
-    // a 0.5 defect clears the configured 0.4 floor → blocks (it would NOT under the 0.9 default).
     expect(evaluateGateCheck(aiDefectWith(0.5), gateCheckPolicy(eff, null, true)).conclusion).toBe("failure");
   });
 });
@@ -395,22 +392,29 @@ describe("merge-readiness composite gate (#551)", () => {
     expect(result.summary).toContain("No linked issue detected");
     expect(result.summary).toContain("Possible duplicate PR");
   });
+
+  it("does not escalate readiness score into a blocker", () => {
+    const eff = resolveEffectiveSettings(settings({ mergeReadinessGateMode: "block", qualityGateMinScore: 90 }), parseFocusManifest(null));
+    const result = evaluateGateCheck({ ...missingIssueAdvisory(), findings: [] }, gateCheckPolicy(eff, 42, true));
+    expect(result.conclusion).toBe("success");
+    expect(result.blockers).toEqual([]);
+    expect(result.warnings.map((finding) => finding.code)).toEqual(["readiness_score_below_threshold"]);
+  });
 });
 
-describe("first-time-contributor grace (#552)", () => {
+describe("first-time-contributor grace compatibility (#552)", () => {
   // A would-be hard blocker for a confirmed contributor (linked-issue: block trips on the missing-issue PR).
   const blockingPolicy = { linkedIssueGateMode: "block" as const, confirmedContributor: true };
 
-  it("(a) softens the block to a neutral/advisory gate for a genuine newcomer (0 merged, 0 closed-unmerged)", () => {
+  it("(a) does not soften blockers for a genuine newcomer (0 merged, 0 closed-unmerged)", () => {
     const result = evaluateGateCheck(missingIssueAdvisory(), {
       ...blockingPolicy,
       firstTimeContributorGrace: true,
       authorMergedPrCount: 0,
       authorClosedUnmergedPrCount: 0,
     });
-    expect(result.conclusion).toBe("neutral");
-    expect(result.blockers).toEqual([]);
-    expect(result.title).toContain("first-contribution grace");
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((finding) => finding.code)).toEqual(["missing_linked_issue"]);
   });
 
   it("(b) still blocks a repeat offender (0 merged, >= 3 closed-unmerged) — grace does not apply", () => {
@@ -451,7 +455,19 @@ describe("first-time-contributor grace (#552)", () => {
     expect(policy.firstTimeContributorGrace).toBe(true);
     expect(policy.authorMergedPrCount).toBe(0);
     expect(policy.authorClosedUnmergedPrCount).toBe(1);
-    expect(evaluateGateCheck(missingIssueAdvisory(), { ...policy, linkedIssueGateMode: "block" }).conclusion).toBe("neutral");
+    expect(evaluateGateCheck(missingIssueAdvisory(), { ...policy, linkedIssueGateMode: "block" }).conclusion).toBe("failure");
+  });
+});
+
+describe("review-thread blocker gate", () => {
+  it("always blocks unresolved review-thread findings", () => {
+    const advisory: Advisory = {
+      ...missingIssueAdvisory(),
+      findings: [{ code: REVIEW_THREAD_BLOCKER_CODE, severity: "critical", title: "review thread unresolved", detail: "Resolve it." }],
+    };
+    const result = evaluateGateCheck(advisory);
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((finding) => finding.code)).toEqual([REVIEW_THREAD_BLOCKER_CODE]);
   });
 });
 
@@ -467,7 +483,7 @@ describe("focus-manifest policy gate (#555)", () => {
     return { ...missingIssueAdvisory(), findings: [POLICY_FINDINGS[code]] };
   }
 
-  for (const code of Object.keys(POLICY_FINDINGS) as (keyof typeof POLICY_FINDINGS)[]) {
+  for (const code of ["manifest_linked_issue_required", "manifest_missing_tests"] as const) {
     describe(code, () => {
       it("blocks a confirmed contributor when manifestPolicy: block", () => {
         const result = evaluateGateCheck(manifestAdvisory(code), { manifestPolicyGateMode: "block", confirmedContributor: true });
@@ -491,6 +507,44 @@ describe("focus-manifest policy gate (#555)", () => {
     });
   }
 
+  describe("manifest_blocked_path", () => {
+    it("holds for manual review when manifestPolicy: block", () => {
+      const result = evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), { manifestPolicyGateMode: "block", confirmedContributor: true });
+      expect(result.conclusion).toBe("neutral");
+      expect(result.blockers).toEqual([]);
+      expect(result.warnings.map((finding) => finding.code)).toContain("manifest_blocked_path");
+      expect(result.summary).toMatch(/held for manual review/i);
+    });
+
+    it("preserves public blocked-path context on the manual-review hold warning", () => {
+      const advisory = manifestAdvisory("manifest_blocked_path");
+      advisory.findings[0] = {
+        ...advisory.findings[0]!,
+        publicText: "Matched guarded paths: .github/workflows/**.",
+      };
+      const result = evaluateGateCheck(advisory, {
+        manifestPolicyGateMode: "block",
+        confirmedContributor: true,
+      });
+      const hold = result.warnings.find(
+        (finding) => finding.code === "manifest_blocked_path",
+      );
+      expect(result.conclusion).toBe("neutral");
+      expect(hold?.publicText).toBe("Matched guarded paths: .github/workflows/**.");
+    });
+
+    it("also holds non-confirmed contributors for manual review instead of closing", () => {
+      const result = evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), { manifestPolicyGateMode: "block", confirmedContributor: false });
+      expect(result.conclusion).toBe("neutral");
+      expect(result.blockers).toEqual([]);
+    });
+
+    it("does not block when manifestPolicy: off/advisory", () => {
+      expect(evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), { manifestPolicyGateMode: "off", confirmedContributor: true }).conclusion).toBe("success");
+      expect(evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), { manifestPolicyGateMode: "advisory", confirmedContributor: true }).conclusion).toBe("success");
+    });
+  });
+
   it("is an INDEPENDENT dimension: mergeReadiness: block does NOT promote a manifest-policy finding (kept out of the composite)", () => {
     const eff = resolveEffectiveSettings(settings({ manifestPolicyGateMode: "off", mergeReadinessGateMode: "block" }), parseFocusManifest(null));
     expect(evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), gateCheckPolicy(eff, null, true)).conclusion).toBe("success");
@@ -500,12 +554,13 @@ describe("focus-manifest policy gate (#555)", () => {
     expect(gateCheckPolicy(settings({ manifestPolicyGateMode: "block" }), null, true).manifestPolicyGateMode).toBe("block");
   });
 
-  it("end-to-end: a manifest gate.manifestPolicy: block sets effective.manifestPolicyGateMode and blocks a blockedPath PR", () => {
+  it("end-to-end: a manifest gate.manifestPolicy: block sets effective.manifestPolicyGateMode and holds a blockedPath PR", () => {
     const eff = resolveEffectiveSettings(settings({ manifestPolicyGateMode: "off" }), parseFocusManifest({ gate: { manifestPolicy: "block" } }));
     expect(eff.manifestPolicyGateMode).toBe("block");
     const result = evaluateGateCheck(manifestAdvisory("manifest_blocked_path"), gateCheckPolicy(eff, null, true));
-    expect(result.conclusion).toBe("failure");
-    expect(result.blockers.map((finding) => finding.code)).toContain("manifest_blocked_path");
+    expect(result.conclusion).toBe("neutral");
+    expect(result.blockers).toEqual([]);
+    expect(result.warnings.map((finding) => finding.code)).toContain("manifest_blocked_path");
   });
 });
 
@@ -646,8 +701,8 @@ describe("size + guardrail manual-review HOLD (#gate-size / #gate-guardrail)", (
   const clean = (): Advisory => ({ ...missingIssueAdvisory(), findings: [] });
   it("holds (neutral) an oversized PR; passes under thresholds; off/unset = no hold", () => {
     expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 12, changedLineCount: 10 }).conclusion).toBe("neutral"); // > 10 files
-    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 2, changedLineCount: 600 }).conclusion).toBe("neutral"); // > 500 lines
-    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 9, changedLineCount: 499 }).conclusion).toBe("success"); // under both thresholds
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 2, changedLineCount: 1000 }).conclusion).toBe("neutral"); // >= 1000 lines
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", changedFileCount: 9, changedLineCount: 999 }).conclusion).toBe("success"); // under both thresholds
     expect(evaluateGateCheck(clean(), { sizeGateMode: "off", changedFileCount: 50, changedLineCount: 9000 }).conclusion).toBe("success"); // gate off ⇒ no hold
     expect(evaluateGateCheck(clean(), { changedFileCount: 50, changedLineCount: 9000 }).conclusion).toBe("success"); // mode unset ⇒ no hold
     expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory" }).conclusion).toBe("success"); // no counts ⇒ 0 ⇒ no hold

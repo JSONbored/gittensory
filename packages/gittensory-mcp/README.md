@@ -42,10 +42,12 @@ gittensory-mcp profile list
 gittensory-mcp profile create work
 gittensory-mcp profile switch work
 gittensory-mcp cache status
+gittensory-mcp cache list
 gittensory-mcp cache clear
 gittensory-mcp init-client --print codex
 gittensory-mcp init-client --print claude
 gittensory-mcp init-client --print cursor
+gittensory-mcp init-client --print vscode
 gittensory-mcp init-client --print codex --agent-profile miner-planner
 gittensory-mcp completion bash
 gittensory-mcp completion zsh
@@ -154,6 +156,10 @@ The same capabilities are exposed to MCP clients as:
 - `gittensory_agent_explain_next_action`
 - `gittensory_agent_prepare_pr_packet`
 
+### Client config
+
+`init-client --print <host>` prints the stdio MCP config for a host: `codex` (TOML), `claude`, `cursor`, and `mcp` (the shared `mcpServers` JSON shape), and `vscode` (VS Code's native `servers` map with `"type": "stdio"`, for `.vscode/mcp.json`). It prints config only; it never edits client files.
+
 ### Agent profiles
 
 `init-client` can print optional agent-profile instructions next to the MCP client config:
@@ -240,3 +246,5 @@ The cache excludes source contents and local paths, is bounded, and can be remov
 ```sh
 gittensory-mcp cache clear
 ```
+
+`gittensory-mcp cache list` shows the cached entries (newest first) with the login, when each was cached, and its API/package version and size — never the cached payload or the auth-cache key. `gittensory-mcp cache status` reports the aggregate entry count.

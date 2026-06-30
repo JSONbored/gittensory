@@ -2,12 +2,107 @@
 // env-gated, dynamically-imported selfhost-integration pattern (Redis/Qdrant/embed-provider in server.ts).
 // @sentry/node is NEVER imported at module top level — it loads lazily inside initSentry(), so it never enters
 // the Worker bundle (src/index.ts) and cloudflare:* stubbing stays clean. All helpers are safe to call when off.
+import { currentOtelTraceIds } from "./otel";
+
 type SentryNs = typeof import("@sentry/node");
+type SentryMonitorConfig = NonNullable<Parameters<SentryNs["captureCheckIn"]>[1]>;
+export type SentryMonitorName = "scheduled-loop" | "orb-export" | "orb-relay-drain";
+type SentryScope = {
+  setContext(name: string, context: Record<string, unknown>): void;
+  setTag(key: string, value: string): void;
+};
 let Sentry: SentryNs | undefined;
 let active = false;
+let sentryEnvironment = "production";
 
 const SECRET_KEY =
   /(token|secret|key|password|passwd|authorization|auth|dsn|cookie|bearer|credential|private)/i;
+
+function nonBlank(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+const SENTRY_MONITORS: Record<SentryMonitorName, { slug: string; config: SentryMonitorConfig }> = {
+  "scheduled-loop": {
+    slug: "scheduled-loop",
+    config: {
+      schedule: { type: "interval", value: 2, unit: "minute" },
+      checkinMargin: 3,
+      maxRuntime: 2,
+      failureIssueThreshold: 2,
+      recoveryThreshold: 1,
+    },
+  },
+  "orb-export": {
+    slug: "orb-export",
+    config: {
+      schedule: { type: "interval", value: 1, unit: "hour" },
+      checkinMargin: 10,
+      maxRuntime: 10,
+      failureIssueThreshold: 2,
+      recoveryThreshold: 1,
+    },
+  },
+  "orb-relay-drain": {
+    slug: "orb-relay-drain",
+    config: {
+      schedule: { type: "interval", value: 1, unit: "minute" },
+      checkinMargin: 2,
+      maxRuntime: 1,
+      failureIssueThreshold: 3,
+      recoveryThreshold: 1,
+    },
+  },
+};
+
+function slugPart(value: string | undefined): string {
+  const slug = nonBlank(value)
+    ?.toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return slug || "production";
+}
+
+export function resolveSentryMonitorSlug(
+  name: SentryMonitorName,
+  environment = sentryEnvironment,
+): string {
+  return `gittensory-selfhost-${slugPart(environment)}-${SENTRY_MONITORS[name].slug}`;
+}
+
+function safeMonitorContext(
+  name: SentryMonitorName,
+  monitorSlug: string,
+  context: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const safe: Record<string, unknown> = { monitor: name, monitorSlug };
+  if (!context) return safe;
+  for (const [key, value] of Object.entries(context)) {
+    if (SECRET_KEY.test(key) || value === null || value === undefined) continue;
+    if (typeof value === "string")
+      safe[key] = value.length > 160 ? `${value.slice(0, 157)}...` : value;
+    else if (typeof value === "number" && Number.isFinite(value)) safe[key] = value;
+    else if (typeof value === "boolean") safe[key] = value;
+  }
+  return safe;
+}
+
+function setOtelTraceScope(scope: SentryScope): void {
+  const trace = currentOtelTraceIds();
+  if (!trace) return;
+  scope.setTag("trace_id", trace.trace_id);
+  scope.setTag("span_id", trace.span_id);
+  scope.setContext("otel", { ...trace });
+}
+
+/** Resolve the Sentry release id from explicit override first, then the image-baked self-host version. */
+export function resolveSentryRelease(
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  return nonBlank(env.SENTRY_RELEASE) ?? nonBlank(env.GITTENSORY_VERSION);
+}
 
 /** beforeSend scrubber — redact anything token/secret-like before an event leaves the box (privacy boundary). */
 export function scrubEvent<T>(event: T): T {
@@ -38,10 +133,12 @@ export function scrubEvent<T>(event: T): T {
 export async function initSentry(env: NodeJS.ProcessEnv): Promise<boolean> {
   if (!env.SENTRY_DSN) return false;
   Sentry = await import("@sentry/node");
+  const release = resolveSentryRelease(env);
+  sentryEnvironment = nonBlank(env.SENTRY_ENVIRONMENT) ?? "production";
   Sentry.init({
     dsn: env.SENTRY_DSN,
-    environment: env.SENTRY_ENVIRONMENT ?? "production",
-    release: env.SENTRY_RELEASE ?? env.GITTENSORY_VERSION,
+    environment: sentryEnvironment,
+    ...(release ? { release } : {}),
     tracesSampleRate: Number(env.SENTRY_TRACES_SAMPLE_RATE ?? "0"),
     serverName: env.PUBLIC_API_ORIGIN,
     beforeSend: (e) => scrubEvent(e),
@@ -57,6 +154,7 @@ export function captureError(
 ): void {
   if (!active || !Sentry) return;
   Sentry.withScope((scope) => {
+    setOtelTraceScope(scope);
     if (context) scope.setContext("gittensory", context);
     Sentry!.captureException(
       error instanceof Error ? error : new Error(String(error)),
@@ -73,6 +171,7 @@ export function captureReviewFailure(
   if (!active || !Sentry) return;
   Sentry.withScope((scope) => {
     scope.setLevel("error");
+    setOtelTraceScope(scope);
     if (context) {
       scope.setContext("review", context);
       for (const tag of ["owner", "repo", "pr", "head_sha"]) {
@@ -89,7 +188,7 @@ export function captureReviewFailure(
 
 // The structured-log fields worth indexing as Sentry tags — the dimensions operators filter + group by. Only
 // string|number values are tagged; everything else stays in the full "log" context.
-const SENTRY_LOG_TAG_KEYS = ["repo", "repository", "installationId", "installation_id", "pull", "pullNumber", "pr", "project", "kind", "deliveryId"] as const;
+const SENTRY_LOG_TAG_KEYS = ["repo", "repository", "installationId", "installation_id", "pull", "pullNumber", "pr", "project", "kind", "deliveryId", "provider", "model", "effort", "timeoutMs", "trace_id", "span_id"] as const;
 
 /** A SHORT location suffix — " (repo#pr)" — for a no-message error title, so the issue list shows WHERE without
  *  dumping every scalar field (which made titles unreadably long, e.g. trailing a full deliveryId). The complete
@@ -127,10 +226,30 @@ const SUMMARY_SKIP_KEYS = new Set([
   "pullNumber",
   "deliveryId",
 ]);
+function redactSummaryValue(value: unknown, depth = 0): unknown {
+  if (!value || typeof value !== "object") return value;
+  if (depth >= 6) return "[redacted]";
+  if (Array.isArray(value))
+    return value.map((item) => redactSummaryValue(item, depth + 1));
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+      key,
+      SECRET_KEY.test(key)
+        ? "[redacted]"
+        : redactSummaryValue(nested, depth + 1),
+    ]),
+  );
+}
+
 function summarizeLogFields(obj: Record<string, unknown>): string {
   return Object.entries(obj)
-    .filter(([k, v]) => !SUMMARY_SKIP_KEYS.has(k) && v !== null)
-    .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : String(v)}`)
+    .filter(
+      ([k, v]) => !SUMMARY_SKIP_KEYS.has(k) && !SECRET_KEY.test(k) && v !== null,
+    )
+    .map(
+      ([k, v]) =>
+        `${k}=${typeof v === "object" ? JSON.stringify(redactSummaryValue(v)) : String(v)}`,
+    )
     .filter((part) => part.length <= 90) // a long blob (id/body) belongs in the context, not the title
     .slice(0, 5) // a few salient fields, not a dump
     .join(", ");
@@ -178,6 +297,7 @@ export function forwardStructuredLogToSentry(line: unknown, fromErrorSink = fals
   errorEvent.name = event ?? "GittensoryLog";
   Sentry.withScope((scope) => {
     scope.setLevel(severity);
+    setOtelTraceScope(scope);
     scope.setContext("log", obj);
     if (event) scope.setTag("event", event);
     // Index the dimensions operators filter + group by, so issues are findable without digging into the context.
@@ -192,6 +312,47 @@ export function forwardStructuredLogToSentry(line: unknown, fromErrorSink = fals
   });
 }
 
+/** Wrap recurring self-host work with Sentry cron check-ins. No-op when Sentry is disabled. */
+export async function withSentryMonitor<T>(
+  name: SentryMonitorName,
+  context: Record<string, unknown> | undefined,
+  callback: () => Promise<T>,
+): Promise<T> {
+  if (!active || !Sentry) return callback();
+  const monitorSlug = resolveSentryMonitorSlug(name);
+  const checkInId = Sentry.captureCheckIn(
+    { monitorSlug, status: "in_progress" },
+    SENTRY_MONITORS[name].config,
+  );
+  const startedAt = Date.now();
+  try {
+    const result = await callback();
+    Sentry.captureCheckIn({
+      monitorSlug,
+      status: "ok",
+      checkInId,
+      duration: (Date.now() - startedAt) / 1000,
+    });
+    return result;
+  } catch (error) {
+    Sentry.captureCheckIn({
+      monitorSlug,
+      status: "error",
+      checkInId,
+      duration: (Date.now() - startedAt) / 1000,
+    });
+    Sentry.withScope((scope) => {
+      scope.setLevel("error");
+      setOtelTraceScope(scope);
+      scope.setContext("sentry_monitor", safeMonitorContext(name, monitorSlug, context));
+      scope.setTag("monitor", monitorSlug);
+      scope.setFingerprint(["gittensory-sentry-monitor", name]);
+      Sentry!.captureException(error instanceof Error ? error : new Error(String(error)));
+    });
+    throw error;
+  }
+}
+
 /** Flush buffered events before exit. No-op when off. */
 export async function flushSentry(timeoutMs = 2000): Promise<void> {
   if (!active || !Sentry) return;
@@ -202,6 +363,7 @@ export async function flushSentry(timeoutMs = 2000): Promise<void> {
 export function resetSentryForTest(): void {
   Sentry = undefined;
   active = false;
+  sentryEnvironment = "production";
 }
 
 interface StructuredLogConsole {
