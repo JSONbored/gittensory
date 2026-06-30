@@ -5,12 +5,15 @@
 import { currentOtelTraceIds } from "./otel";
 
 type SentryNs = typeof import("@sentry/node");
+type SentryMonitorConfig = NonNullable<Parameters<SentryNs["captureCheckIn"]>[1]>;
+export type SentryMonitorName = "scheduled-loop" | "orb-export" | "orb-relay-drain";
 type SentryScope = {
   setContext(name: string, context: Record<string, unknown>): void;
   setTag(key: string, value: string): void;
 };
 let Sentry: SentryNs | undefined;
 let active = false;
+let sentryEnvironment = "production";
 
 const SECRET_KEY =
   /(token|secret|key|password|passwd|authorization|auth|dsn|cookie|bearer|credential|private)/i;
@@ -18,6 +21,72 @@ const SECRET_KEY =
 function nonBlank(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+const SENTRY_MONITORS: Record<SentryMonitorName, { slug: string; config: SentryMonitorConfig }> = {
+  "scheduled-loop": {
+    slug: "scheduled-loop",
+    config: {
+      schedule: { type: "interval", value: 2, unit: "minute" },
+      checkinMargin: 3,
+      maxRuntime: 2,
+      failureIssueThreshold: 2,
+      recoveryThreshold: 1,
+    },
+  },
+  "orb-export": {
+    slug: "orb-export",
+    config: {
+      schedule: { type: "interval", value: 1, unit: "hour" },
+      checkinMargin: 10,
+      maxRuntime: 10,
+      failureIssueThreshold: 2,
+      recoveryThreshold: 1,
+    },
+  },
+  "orb-relay-drain": {
+    slug: "orb-relay-drain",
+    config: {
+      schedule: { type: "interval", value: 1, unit: "minute" },
+      checkinMargin: 2,
+      maxRuntime: 1,
+      failureIssueThreshold: 3,
+      recoveryThreshold: 1,
+    },
+  },
+};
+
+function slugPart(value: string | undefined): string {
+  const slug = nonBlank(value)
+    ?.toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return slug || "production";
+}
+
+export function resolveSentryMonitorSlug(
+  name: SentryMonitorName,
+  environment = sentryEnvironment,
+): string {
+  return `gittensory-selfhost-${slugPart(environment)}-${SENTRY_MONITORS[name].slug}`;
+}
+
+function safeMonitorContext(
+  name: SentryMonitorName,
+  monitorSlug: string,
+  context: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const safe: Record<string, unknown> = { monitor: name, monitorSlug };
+  if (!context) return safe;
+  for (const [key, value] of Object.entries(context)) {
+    if (SECRET_KEY.test(key) || value === null || value === undefined) continue;
+    if (typeof value === "string")
+      safe[key] = value.length > 160 ? `${value.slice(0, 157)}...` : value;
+    else if (typeof value === "number" && Number.isFinite(value)) safe[key] = value;
+    else if (typeof value === "boolean") safe[key] = value;
+  }
+  return safe;
 }
 
 function setOtelTraceScope(scope: SentryScope): void {
@@ -65,9 +134,10 @@ export async function initSentry(env: NodeJS.ProcessEnv): Promise<boolean> {
   if (!env.SENTRY_DSN) return false;
   Sentry = await import("@sentry/node");
   const release = resolveSentryRelease(env);
+  sentryEnvironment = nonBlank(env.SENTRY_ENVIRONMENT) ?? "production";
   Sentry.init({
     dsn: env.SENTRY_DSN,
-    environment: env.SENTRY_ENVIRONMENT ?? "production",
+    environment: sentryEnvironment,
     ...(release ? { release } : {}),
     tracesSampleRate: Number(env.SENTRY_TRACES_SAMPLE_RATE ?? "0"),
     serverName: env.PUBLIC_API_ORIGIN,
@@ -242,6 +312,47 @@ export function forwardStructuredLogToSentry(line: unknown, fromErrorSink = fals
   });
 }
 
+/** Wrap recurring self-host work with Sentry cron check-ins. No-op when Sentry is disabled. */
+export async function withSentryMonitor<T>(
+  name: SentryMonitorName,
+  context: Record<string, unknown> | undefined,
+  callback: () => Promise<T>,
+): Promise<T> {
+  if (!active || !Sentry) return callback();
+  const monitorSlug = resolveSentryMonitorSlug(name);
+  const checkInId = Sentry.captureCheckIn(
+    { monitorSlug, status: "in_progress" },
+    SENTRY_MONITORS[name].config,
+  );
+  const startedAt = Date.now();
+  try {
+    const result = await callback();
+    Sentry.captureCheckIn({
+      monitorSlug,
+      status: "ok",
+      checkInId,
+      duration: (Date.now() - startedAt) / 1000,
+    });
+    return result;
+  } catch (error) {
+    Sentry.captureCheckIn({
+      monitorSlug,
+      status: "error",
+      checkInId,
+      duration: (Date.now() - startedAt) / 1000,
+    });
+    Sentry.withScope((scope) => {
+      scope.setLevel("error");
+      setOtelTraceScope(scope);
+      scope.setContext("sentry_monitor", safeMonitorContext(name, monitorSlug, context));
+      scope.setTag("monitor", monitorSlug);
+      scope.setFingerprint(["gittensory-sentry-monitor", name]);
+      Sentry!.captureException(error instanceof Error ? error : new Error(String(error)));
+    });
+    throw error;
+  }
+}
+
 /** Flush buffered events before exit. No-op when off. */
 export async function flushSentry(timeoutMs = 2000): Promise<void> {
   if (!active || !Sentry) return;
@@ -252,6 +363,7 @@ export async function flushSentry(timeoutMs = 2000): Promise<void> {
 export function resetSentryForTest(): void {
   Sentry = undefined;
   active = false;
+  sentryEnvironment = "production";
 }
 
 interface StructuredLogConsole {

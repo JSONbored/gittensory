@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => {
     withScope: vi.fn((cb: (s: typeof scope) => void) => cb(scope)),
     captureException: vi.fn(),
     captureMessage: vi.fn(),
+    captureCheckIn: vi.fn((checkIn: { checkInId?: string }) => checkIn.checkInId ?? "check-in-id"),
     flush: vi.fn().mockResolvedValue(true),
   };
 });
@@ -20,6 +21,7 @@ vi.mock("@sentry/node", () => ({
   withScope: mocks.withScope,
   captureException: mocks.captureException,
   captureMessage: mocks.captureMessage,
+  captureCheckIn: mocks.captureCheckIn,
   flush: mocks.flush,
 }));
 vi.mock("../../src/selfhost/otel", () => ({
@@ -34,8 +36,10 @@ import {
   forwardStructuredLogToSentry,
   installStructuredLogForwarding,
   resolveSentryRelease,
+  resolveSentryMonitorSlug,
   scrubEvent,
   resetSentryForTest,
+  withSentryMonitor,
 } from "../../src/selfhost/sentry";
 
 beforeEach(() => {
@@ -87,9 +91,17 @@ describe("disabled when SENTRY_DSN is unset (modular opt-out → complete no-op)
     expect(await initSentry({} as unknown as NodeJS.ProcessEnv)).toBe(false);
     captureError(new Error("x"), { a: 1 });
     captureReviewFailure(new Error("y"), { repo: "o/r" });
+    await expect(
+      withSentryMonitor(
+        "scheduled-loop",
+        { jobType: "scheduled-loop" },
+        async () => "ok",
+      ),
+    ).resolves.toBe("ok");
     await flushSentry();
     expect(mocks.init).not.toHaveBeenCalled();
     expect(mocks.captureException).not.toHaveBeenCalled();
+    expect(mocks.captureCheckIn).not.toHaveBeenCalled();
     expect(mocks.flush).not.toHaveBeenCalled();
   });
 });
@@ -238,6 +250,134 @@ describe("enabled when SENTRY_DSN is set", () => {
     await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
     mocks.flush.mockRejectedValueOnce(new Error("network"));
     await expect(flushSentry()).resolves.toBeUndefined();
+  });
+
+  it("builds stable environment-aware monitor slugs", () => {
+    expect(resolveSentryMonitorSlug("scheduled-loop", "Prod East/1")).toBe(
+      "gittensory-selfhost-prod-east-1-scheduled-loop",
+    );
+    expect(resolveSentryMonitorSlug("orb-export", " !!! ")).toBe(
+      "gittensory-selfhost-production-orb-export",
+    );
+    expect(resolveSentryMonitorSlug("orb-relay-drain", "x".repeat(60))).toBe(
+      `gittensory-selfhost-${"x".repeat(48)}-orb-relay-drain`,
+    );
+  });
+
+  it("records successful Sentry cron monitor check-ins with the configured schedule", async () => {
+    await initSentry({
+      SENTRY_DSN: "d",
+      SENTRY_ENVIRONMENT: "Self Host",
+    } as unknown as NodeJS.ProcessEnv);
+
+    await expect(
+      withSentryMonitor(
+        "scheduled-loop",
+        { jobType: "scheduled-loop" },
+        async () => "ok",
+      ),
+    ).resolves.toBe("ok");
+
+    expect(mocks.captureCheckIn).toHaveBeenNthCalledWith(
+      1,
+      { monitorSlug: "gittensory-selfhost-self-host-scheduled-loop", status: "in_progress" },
+      expect.objectContaining({
+        schedule: { type: "interval", value: 2, unit: "minute" },
+        checkinMargin: 3,
+        maxRuntime: 2,
+        failureIssueThreshold: 2,
+        recoveryThreshold: 1,
+      }),
+    );
+    expect(mocks.captureCheckIn).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        monitorSlug: "gittensory-selfhost-self-host-scheduled-loop",
+        status: "ok",
+        checkInId: "check-in-id",
+        duration: expect.any(Number),
+      }),
+    );
+    expect(mocks.captureException).not.toHaveBeenCalled();
+  });
+
+  it("records failed Sentry cron monitor check-ins with sanitized context", async () => {
+    await initSentry({
+      SENTRY_DSN: "d",
+      SENTRY_ENVIRONMENT: "prod",
+    } as unknown as NodeJS.ProcessEnv);
+    const longText = "x".repeat(200);
+
+    await expect(
+      withSentryMonitor(
+        "orb-export",
+        {
+          jobType: "orb-export",
+          repo: "JSONbored/gittensory",
+          exported: 7,
+          dryRun: false,
+          token: "secret",
+          privateKey: "key",
+          badNumber: Number.NaN,
+          nested: { ignored: true },
+          empty: null,
+          missing: undefined,
+          longText,
+        },
+        async () => {
+          throw new Error("export failed");
+        },
+      ),
+    ).rejects.toThrow("export failed");
+
+    expect(mocks.captureCheckIn).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        monitorSlug: "gittensory-selfhost-prod-orb-export",
+        status: "error",
+        checkInId: "check-in-id",
+        duration: expect.any(Number),
+      }),
+    );
+    expect(mocks.scope.setLevel).toHaveBeenCalledWith("error");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith(
+      "monitor",
+      "gittensory-selfhost-prod-orb-export",
+    );
+    expect(mocks.scope.setFingerprint).toHaveBeenCalledWith([
+      "gittensory-sentry-monitor",
+      "orb-export",
+    ]);
+    expect(mocks.scope.setContext).toHaveBeenCalledWith("sentry_monitor", {
+      monitor: "orb-export",
+      monitorSlug: "gittensory-selfhost-prod-orb-export",
+      jobType: "orb-export",
+      repo: "JSONbored/gittensory",
+      exported: 7,
+      dryRun: false,
+      longText: `${"x".repeat(157)}...`,
+    });
+    expect(JSON.stringify(mocks.scope.setContext.mock.calls)).not.toContain("secret");
+    expect(JSON.stringify(mocks.scope.setContext.mock.calls)).not.toContain("key");
+    expect(mocks.captureException).toHaveBeenCalledWith(expect.any(Error));
+  });
+
+  it("records monitor failures without context and normalizes non-Error throws", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+
+    await expect(
+      withSentryMonitor("orb-relay-drain", undefined, async () => {
+        throw "relay failed";
+      }),
+    ).rejects.toBe("relay failed");
+
+    expect(mocks.scope.setContext).toHaveBeenCalledWith("sentry_monitor", {
+      monitor: "orb-relay-drain",
+      monitorSlug: "gittensory-selfhost-production-orb-relay-drain",
+    });
+    expect((mocks.captureException.mock.calls.at(-1)?.[0] as Error).message).toBe(
+      "relay failed",
+    );
   });
 });
 

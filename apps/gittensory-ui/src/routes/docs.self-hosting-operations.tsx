@@ -85,6 +85,36 @@ review_context_fetch_failed`}
       </p>
       <CodeBlock lang="bash" code={`docker compose --profile observability up -d`} />
 
+      <h2>Sentry cron monitors</h2>
+      <p>
+        When <code>SENTRY_DSN</code> is set, the self-host runtime emits Sentry monitor check-ins
+        for the recurring loops where silent stoppage matters most. Leaving <code>SENTRY_DSN</code>{" "}
+        unset keeps monitor reporting off.
+      </p>
+      <FeatureRow
+        items={[
+          {
+            title: "scheduled loop",
+            description:
+              "The two-minute maintenance tick that fans out sweeps, backfills, and refresh jobs.",
+          },
+          {
+            title: "Orb export",
+            description: "The hourly outcome export loop used by brokered self-host deployments.",
+          },
+          {
+            title: "Orb relay drain",
+            description:
+              "The pull-mode relay loop for installations that receive events outbound from Orb.",
+          },
+        ]}
+      />
+      <p>
+        A missed monitor means the process may still be alive but the recurring work is not checking
+        in on schedule. Pair the monitor with queue depth, dead-job counts, and the structured error
+        log for the same subsystem.
+      </p>
+
       <h2>Routine checks</h2>
       <ul>
         <li>Queue pending count is not growing without processing.</li>

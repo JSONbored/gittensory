@@ -59,6 +59,11 @@ import {
   installStructuredLogForwarding,
 } from "./selfhost/sentry";
 import {
+  drainOrbRelayWithMonitor,
+  runOrbExportWithMonitor,
+  runScheduledLoopWithMonitor,
+} from "./selfhost/monitored-work";
+import {
   currentOtelTraceParent,
   initOpenTelemetry,
   selfHostHttpRequestAttributes,
@@ -741,13 +746,16 @@ async function main(): Promise<void> {
 
   // Cron — gittensory ticks ~every 2 minutes; drive the SAME scheduled handler.
   const intervalMs = Number(process.env.CRON_INTERVAL_MS ?? 120_000);
+  /* v8 ignore start -- self-host entrypoint timers start a live server; monitor semantics are covered in selfhost tests. */
   const cron = setInterval(() => {
     const controller = {
       scheduledTime: Date.now(),
       cron: "*/2 * * * *",
       noRetry: () => undefined,
     } as unknown as ScheduledController;
-    Promise.resolve(worker.scheduled(controller, env, ctx)).catch((error) =>
+    runScheduledLoopWithMonitor(controller.cron, () =>
+      worker.scheduled(controller, env, ctx),
+    ).catch((error) =>
       console.error(
         JSON.stringify({
           level: "error",
@@ -757,28 +765,24 @@ async function main(): Promise<void> {
       ),
     );
   }, intervalMs);
+  /* v8 ignore stop */
 
   // Orb fleet-telemetry export — ALWAYS ON (the fleet-calibration contract of self-hosting). Self-gates
   // inside exportOrbBatch: a no-op until the GitHub App is configured, or when ORB_AIR_GAP=true.
+  /* v8 ignore start -- self-host entrypoint timers start a live server; monitor semantics are covered in selfhost tests. */
   const runOrbExport = () =>
-    exportOrbBatch(backend.db)
-      .then((n) => {
-        if (n > 0)
-          console.log(
-            JSON.stringify({ event: "selfhost_orb_export", exported: n }),
-          );
-      })
-      .catch((error) =>
-        console.error(
-          JSON.stringify({
-            level: "error",
-            event: "selfhost_orb_export_error",
-            error: error instanceof Error ? error.message : "unknown error",
-          }),
-        ),
-      );
+    runOrbExportWithMonitor(() => exportOrbBatch(backend.db)).catch((error) =>
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "selfhost_orb_export_error",
+          error: error instanceof Error ? error.message : "unknown error",
+        }),
+      ),
+    );
   void runOrbExport(); // flush any pending events at startup
   setInterval(runOrbExport, 3_600_000); // then hourly
+  /* v8 ignore stop */
 
   // Brokered self-host: register our relay target with the central Orb (best-effort, fire-and-forget). PUSH mode
   // (default) registers a public relay URL the Orb POSTs to; PULL mode (ORB_RELAY_MODE=pull) registers no URL and
@@ -817,23 +821,29 @@ async function main(): Promise<void> {
   if (process.env.ORB_RELAY_MODE === "pull" && process.env.ORB_ENROLLMENT_SECRET) {
     const { drainOrbRelay } = await import("./orb/broker-client");
     const { enqueueWebhookByEnv } = await import("./github/webhook");
-    let pendingAck: string[] = [];
+    const relayDrainState = { pendingAck: [] as string[] };
+    /* v8 ignore start -- pull-mode relay loop is a live self-host timer; monitor semantics are covered in selfhost tests. */
     const drainRelay = async (): Promise<void> => {
-      const events = await drainOrbRelay(
-        { ORB_ENROLLMENT_SECRET: process.env.ORB_ENROLLMENT_SECRET, ORB_BROKER_URL: process.env.ORB_BROKER_URL },
-        pendingAck,
-      );
-      pendingAck = [];
-      for (const ev of events) {
-        const result = await enqueueWebhookByEnv(env, ev.deliveryId, ev.eventName, ev.rawBody);
-        // Ack everything durably handled (queued / duplicate / invalid_json) so the Orb deletes it; retry only a
-        // real enqueue failure on the next pull (don't ack → the Orb keeps it).
-        if (result !== "enqueue_failed") pendingAck.push(ev.deliveryId);
-      }
-      if (events.length > 0) console.log(JSON.stringify({ event: "orb_relay_drained", count: events.length }));
+      await drainOrbRelayWithMonitor({
+        state: relayDrainState,
+        relayEnv: {
+          ORB_ENROLLMENT_SECRET: process.env.ORB_ENROLLMENT_SECRET,
+          ORB_BROKER_URL: process.env.ORB_BROKER_URL,
+        },
+        env,
+        drain: drainOrbRelay,
+        enqueue: enqueueWebhookByEnv,
+      });
     };
     void drainRelay();
-    setInterval(() => void drainRelay().catch((error) => captureError(error, { kind: "orb_relay_drain" })), 15_000);
+    setInterval(
+      () =>
+        void drainRelay().catch((error) =>
+          captureError(error, { kind: "orb_relay_drain" }),
+        ),
+      15_000,
+    );
+    /* v8 ignore stop */
   }
 
   // Graceful shutdown: stop accepting HTTP, let the queue finish, close the backend.
