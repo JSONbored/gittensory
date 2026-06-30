@@ -873,8 +873,8 @@ describe("queue processors", () => {
 
     await processJob(env, { type: "agent-regate-pr", deliveryId: "dedup-pulls-get", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
 
-    // Readiness reuses the resync payload, but auto-maintain refreshes merge-state and CI after gate publication.
-    expect(barePullGets).toBe(2);
+    // Readiness reuses the resync payload; the freshness guard adds one live PR read before auto-maintain refreshes merge-state and CI.
+    expect(barePullGets).toBe(3);
     expect(branchProtectionGets).toBe(1);
     expect(liveCheckRunsGets).toBe(2);
     expect(statusGets).toBe(2);
@@ -2324,6 +2324,158 @@ describe("queue processors", () => {
     });
 
     expect(calls).toEqual({ minerList: 1, gateChecks: 2 });
+  });
+
+  it("suppresses public review output when the live PR head changed before publish", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "off",
+      aiReviewMode: "off",
+    });
+    let commentPosts = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/stale.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const stale = true;" }]);
+      if (/\/pulls\/55(?:\?|$)/.test(url)) return Response.json({ number: 55, title: "Stale before publish", state: "open", user: { login: "contributor" }, head: { sha: "newsha" }, labels: [], body: "Fixes #1" });
+      if (url.includes("/issues/55/comments") && method === "POST") {
+        commentPosts += 1;
+        return Response.json({ id: 1 }, { status: 201 });
+      }
+      if (url.includes("/issues/55/comments") && method === "GET") return Response.json([]);
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "stale-before-public-output",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 55, title: "Stale before publish", state: "open", user: { login: "contributor" }, head: { sha: "oldsha" }, labels: [], body: "Fixes #1" },
+      },
+    });
+
+    expect(commentPosts).toBe(0);
+    const stale = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = ?")
+      .bind("github_app.pr_review_stale")
+      .first<{ detail: string; metadata_json: string }>();
+    expect(stale?.detail).toContain("PR head changed from oldsha to newsha");
+    expect(JSON.parse(stale?.metadata_json ?? "{}")).toMatchObject({
+      phase: "pre_public_output",
+      reason: "head_changed",
+      expectedHeadSha: "oldsha",
+      liveHeadSha: "newsha",
+    });
+    const published = await env.DB.prepare("select event_type from audit_events where event_type = ?")
+      .bind("github_app.pr_public_surface_published")
+      .all();
+    expect(published.results).toEqual([]);
+  });
+
+  it("finalizes the pending gate as skipped when the PR head changes after review work", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "off",
+      aiReviewMode: "off",
+    });
+    let livePullReads = 0;
+    const checkBodies: Array<{ status?: string; conclusion?: string; output?: { title?: string; summary?: string } }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url === "https://api.github.com/graphql") {
+        return Response.json({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } });
+      }
+      if (url.includes("/pulls/56/files")) return Response.json([{ filename: "src/final.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const final = true;" }]);
+      if (/\/pulls\/56(?:\?|$)/.test(url)) {
+        livePullReads += 1;
+        return Response.json({
+          number: 56,
+          title: "Stale after review",
+          state: "open",
+          user: { login: "contributor" },
+          head: { sha: "newsha" },
+          labels: [],
+          body: "No issue link.",
+        });
+      }
+      if (url.includes("/commits/oldsha/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/oldsha/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      if (url.includes("/check-runs") && method === "POST") {
+        checkBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return Response.json({ id: 906 }, { status: 201 });
+      }
+      if (url.includes("/check-runs/906") && method === "PATCH") {
+        checkBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return Response.json({ id: 906 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "stale-after-review",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 56, title: "Stale after review", state: "open", user: { login: "contributor" }, head: { sha: "oldsha" }, labels: [], body: "No issue link." },
+      },
+    });
+
+    expect(livePullReads).toBe(1);
+    expect(checkBodies).toHaveLength(2);
+    expect(checkBodies[0]).toMatchObject({ status: "in_progress", output: { title: "Gittensory Orb Review Agent is evaluating" } });
+    expect(checkBodies[1]).toMatchObject({
+      status: "completed",
+      conclusion: "skipped",
+      output: {
+        title: "Gittensory Orb Review Agent skipped",
+        summary: "PR head changed from oldsha to newsha",
+      },
+    });
+    const stale = await env.DB.prepare("select metadata_json from audit_events where event_type = ?")
+      .bind("github_app.pr_review_stale")
+      .first<{ metadata_json: string }>();
+    expect(JSON.parse(stale?.metadata_json ?? "{}")).toMatchObject({ phase: "final_publish", reason: "head_changed" });
   });
 
   it("auto-maintain (#778): a blocking gate on an agent-configured repo records the changes-requested label, never a formal request_changes (dry-run)", async () => {

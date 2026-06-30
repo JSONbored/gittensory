@@ -136,6 +136,12 @@ import {
   removePullRequestLabel,
 } from "../github/labels";
 import { githubRateLimitAdmissionKeyForInstallation, resolveRepoActionMode } from "../github/client";
+import {
+  fetchPullRequestFreshness,
+  pullRequestFreshnessDetail,
+  reviewedPullRequestHeadSha,
+  type PullRequestFreshness,
+} from "../github/pr-freshness";
 import { ALL_TYPE_LABELS, resolvePrTypeLabel } from "../settings/pr-type-label";
 import { fetchPublicContributorProfile } from "../github/public";
 import { refreshRegistry } from "../registry/sync";
@@ -1401,6 +1407,55 @@ export function hasVerifiedRequiredContexts(
 
 export function agentMaintenanceHeadMatchesGate(reviewedHeadSha: string | null | undefined, currentHeadSha: string | null | undefined): boolean {
   return reviewedHeadSha == null || currentHeadSha == null || currentHeadSha === reviewedHeadSha;
+}
+
+type BlockingPullRequestFreshness = Extract<
+  PullRequestFreshness,
+  { status: "stale" }
+> & { reason: "closed" | "head_changed" };
+
+function freshnessBlocksReviewOutput(
+  freshness: PullRequestFreshness,
+): freshness is BlockingPullRequestFreshness {
+  return freshness.status === "stale" && (freshness.reason === "closed" || freshness.reason === "head_changed");
+}
+
+async function reviewTargetFreshness(
+  env: Env,
+  args: {
+    installationId: number;
+    repoFullName: string;
+    pullNumber: number;
+    expectedHeadSha?: string | null | undefined;
+    deliveryId: string;
+    phase: string;
+    actor: string | null;
+  },
+): Promise<PullRequestFreshness> {
+  const freshness = await fetchPullRequestFreshness(env, {
+    installationId: args.installationId,
+    repoFullName: args.repoFullName,
+    pullNumber: args.pullNumber,
+    expectedHeadSha: args.expectedHeadSha,
+  });
+  if (!freshnessBlocksReviewOutput(freshness)) return freshness;
+  await recordAuditEvent(env, {
+    eventType: "github_app.pr_review_stale",
+    actor: args.actor,
+    targetKey: `${args.repoFullName}#${args.pullNumber}`,
+    outcome: "denied",
+    detail: `${pullRequestFreshnessDetail(freshness)} — stale review output suppressed`,
+    metadata: {
+      deliveryId: args.deliveryId,
+      repoFullName: args.repoFullName,
+      phase: args.phase,
+      reason: freshness.reason,
+      expectedHeadSha: freshness.expectedHeadSha,
+      liveHeadSha: freshness.liveHeadSha,
+      liveState: freshness.liveState,
+    },
+  }).catch(() => undefined);
+  return freshness;
 }
 
 /**
@@ -4666,6 +4721,39 @@ async function maybePublishPrPublicSurface(
   let inlineCommentsEnabledForReview = false;
   let aiReviewExpected = false;
   let gateFinalized = false;
+  const reviewedHeadSha = reviewedPullRequestHeadSha(pr.headSha, advisory.headSha);
+  const currentFreshness: PullRequestFreshness = {
+    status: "current",
+    liveHeadSha: null,
+    liveState: null,
+  };
+  const freshnessForReviewOutput = (phase: string): Promise<PullRequestFreshness> =>
+    reviewedHeadSha && (gateEnabled || prelimHasPublicOutput)
+      ? reviewTargetFreshness(env, {
+          installationId,
+          repoFullName,
+          pullNumber: pr.number,
+          expectedHeadSha: reviewedHeadSha,
+          deliveryId: webhook.deliveryId,
+          phase,
+          actor: author,
+        })
+      : Promise.resolve(currentFreshness);
+  const skipStaleReviewOutput = async (freshness: PullRequestFreshness): Promise<boolean> => {
+    if (!freshnessBlocksReviewOutput(freshness)) return false;
+    if (gateEnabled && pendingGateCheckRunId !== undefined && !gateFinalized) {
+      await createOrUpdateSkippedGateCheckRun(
+        env,
+        installationId,
+        repoFullName,
+        advisory,
+        pullRequestFreshnessDetail(freshness),
+        mode,
+        { checkRunId: pendingGateCheckRunId },
+      ).catch(() => undefined);
+    }
+    return true;
+  };
   // The PR's changed files are needed by the slop/manifest gates, the AI review + grounding + RAG, the secret
   // scan, the check-run, and the unified comment. Resolve them AT MOST ONCE per review and share across the
   // gate phase (inside the try) AND the publish phase (check-run + comment, after the try): memoize the first
@@ -4896,13 +4984,18 @@ async function maybePublishPrPublicSurface(
     // stale green/yellow/red verdict while the current head is being recomputed. In-place upsert: once the final
     // verdict is ready it overwrites this comment. GitHub rate-limits still abort so the queue can retry instead
     // of leaving a stale public surface visible.
-    if (
-      shouldPostReviewingPlaceholder({
-        reviewWillRun: true,
-        mode,
-        willComment: decision.willComment,
-      })
-    ) {
+    const shouldPostPlaceholder = shouldPostReviewingPlaceholder({
+      reviewWillRun: true,
+      mode,
+      willComment: decision.willComment,
+    });
+    if (shouldPostPlaceholder) {
+      if (
+        await skipStaleReviewOutput(
+          await freshnessForReviewOutput("pre_public_output"),
+        )
+      )
+        return undefined;
       const placeholderBody = `${PR_PANEL_COMMENT_MARKER}\n\n${renderReviewingPlaceholder()}`;
       try {
         await createOrUpdatePrIntelligenceComment(
@@ -5148,6 +5241,10 @@ async function maybePublishPrPublicSurface(
         conclusion: gateEvaluation.conclusion,
         reasonCode,
       });
+    }
+    const finalFreshness = await freshnessForReviewOutput("final_publish");
+    if (await skipStaleReviewOutput(finalFreshness)) {
+      return undefined;
     }
     if (gateEnabled) {
       try {

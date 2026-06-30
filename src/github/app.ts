@@ -464,6 +464,7 @@ export async function createOrUpdateSkippedGateCheckRun(
   advisory: Advisory,
   reason = "PR closed before full evaluation.",
   mode: AgentActionMode = "live",
+  options: { checkRunId?: number | undefined } = {},
 ): Promise<CheckRunOutcome | null> {
   return createOrUpdateNamedCheckRun(
     env,
@@ -474,6 +475,7 @@ export async function createOrUpdateSkippedGateCheckRun(
       name: GITTENSORY_GATE_CHECK_NAME,
       status: "completed",
       conclusion: "skipped",
+      checkRunId: options.checkRunId,
       output: {
         title: "Gittensory Orb Review Agent skipped",
         summary: reason,
