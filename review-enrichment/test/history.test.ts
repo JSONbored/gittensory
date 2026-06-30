@@ -258,9 +258,10 @@ test("scanHistory: aborts slow GitHub subcalls and degrades instead of waiting f
   assert.equal(out.length, 1);
   assert.equal(out[0].partial, true);
   assert.ok(calls >= 1);
-  assert.equal(diagnostics.partialReason, "github_subcall_aborted");
+  assert.equal(diagnostics.partialReason, "github-users_timeout");
   assert.equal(diagnostics.captureDegradation, true);
-  assert.equal(diagnostics.githubEndpointCategory, "user");
+  assert.equal(diagnostics.githubEndpointCategory, "github-users");
+  assert.equal(diagnostics.endpointCategory, "github-users");
 });
 
 test("scanHistory: caps file and commit-to-PR fanout and records lookup counts", async () => {

@@ -52,7 +52,7 @@ function SelfHostingReleases() {
       />
       <CodeBlock
         lang="bash"
-        code={`docker pull ghcr.io/jsonbored/gittensory-selfhost:0.1.0
+        code={`docker pull ghcr.io/jsonbored/gittensory-selfhost:orb-v0.1.0
 docker pull ghcr.io/jsonbored/gittensory-selfhost:latest`}
       />
 

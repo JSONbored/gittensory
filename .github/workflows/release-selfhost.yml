@@ -1,15 +1,15 @@
-# Self-host image releases (#980). Cutting a `selfhost-v<semver>` tag builds the multi-arch image, pushes it
+# Orb image releases (#980). Cutting an `orb-v<semver>` tag builds the multi-arch image, pushes it
 # to GHCR with version + latest + sha tags (with provenance + SBOM), and opens a GitHub Release.
 #
-#   git tag selfhost-v0.1.0 && git push origin selfhost-v0.1.0
+#   git tag orb-v0.1.0 && git push origin orb-v0.1.0
 #
-# Pull:  docker pull ghcr.io/<owner>/gittensory-selfhost:0.1.0
-name: release-selfhost
+# Pull:  docker pull ghcr.io/<owner>/gittensory-selfhost:orb-v0.1.0
+name: release-orb
 
 on:
   push:
     tags:
-      - "selfhost-v*"
+      - "orb-v*"
   workflow_dispatch:
     inputs:
       version:
@@ -21,7 +21,7 @@ permissions:
   packages: write # push to GHCR
 
 concurrency:
-  group: release-selfhost-${{ github.ref_name }}
+  group: release-orb-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -62,16 +62,19 @@ jobs:
             VERSION="$INPUT_VERSION"
           else
             case "$REF_NAME" in
-              selfhost-v*) VERSION="${REF_NAME#selfhost-v}" ;;
-              *) echo "expected a selfhost-v<semver> tag, got $REF_NAME" >&2; exit 1 ;;
+              orb-v*) VERSION="${REF_NAME#orb-v}" ;;
+              *) echo "expected an orb-v<semver> tag, got $REF_NAME" >&2; exit 1 ;;
             esac
           fi
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "expected semver version X.Y.Z, got $VERSION" >&2
             exit 1
           fi
-          echo "v=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "release=gittensory-selfhost@${VERSION}" >> "$GITHUB_OUTPUT"
+          {
+            echo "v=${VERSION}"
+            echo "tag=orb-v${VERSION}"
+            echo "release=gittensory-orb@${VERSION}"
+          } >> "$GITHUB_OUTPUT"
 
       # Release jobs receive publishing/Sentry credentials, so avoid shared dependency caches here.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
@@ -101,7 +104,7 @@ jobs:
       - name: Require Sentry token for official release
         if: github.repository == 'JSONbored/gittensory' && steps.sentry.outputs.enabled != 'true'
         run: |
-          echo "::error::Configure SENTRY_AUTH_TOKEN in the release environment before publishing official self-host images."
+          echo "::error::Configure SENTRY_AUTH_TOKEN in the release environment before publishing official Orb images."
           exit 1
 
       - name: Upload Sentry source maps
@@ -142,13 +145,13 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/gittensory-selfhost
           tags: |
-            type=raw,value=${{ steps.version.outputs.v }}
+            type=raw,value=${{ steps.version.outputs.tag }}
             type=raw,value=latest
             type=sha,format=short
           labels: |
-            org.opencontainers.image.title=gittensory-selfhost
+            org.opencontainers.image.title=gittensory-orb
             org.opencontainers.image.description=Self-hostable Gittensory review engine
-            org.opencontainers.image.version=${{ steps.version.outputs.v }}
+            org.opencontainers.image.version=${{ steps.version.outputs.tag }}
             org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Build + push (linux/amd64 + linux/arm64)
@@ -194,16 +197,35 @@ jobs:
 
       - name: GitHub Release
         if: github.event_name == 'push'
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          generate_release_notes: true
-          body: |
-            Self-host container image:
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ steps.version.outputs.v }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_ID: ${{ steps.version.outputs.release }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          NOTES="$(cat <<EOF
+          Gittensory Orb container image:
 
-            ```bash
-            docker pull ghcr.io/${{ github.repository_owner }}/gittensory-selfhost:${{ steps.version.outputs.v }}
-            ```
+          \`\`\`bash
+          docker pull ghcr.io/${REPOSITORY_OWNER}/gittensory-selfhost:${RELEASE_TAG}
+          \`\`\`
 
-            Multi-arch (linux/amd64 + linux/arm64). See https://gittensory.aethereal.dev/docs/maintainer-self-hosting for setup.
-            Includes the Claude Code / Codex subscription CLIs by default; credentials stay runtime-only.
-            Sentry release id baked into the image: `${{ steps.version.outputs.release }}`.
+          Multi-arch (linux/amd64 + linux/arm64). See https://gittensory.aethereal.dev/docs/maintainer-self-hosting for setup.
+          Includes the Claude Code / Codex subscription CLIs by default; credentials stay runtime-only.
+          Sentry release id baked into the image: \`${RELEASE_ID}\`.
+          EOF
+          )"
+          if gh release view "$REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --title "gittensory-orb ${RELEASE_TAG}" \
+              --notes "$NOTES"
+          else
+            gh release create "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "gittensory-orb ${RELEASE_TAG}" \
+              --notes "$NOTES" \
+              --generate-notes
+          fi

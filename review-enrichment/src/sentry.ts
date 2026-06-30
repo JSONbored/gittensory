@@ -111,16 +111,28 @@ export interface AnalyzerDegradationContext {
   timeoutMs?: number;
   elapsedMs?: number;
   analyzerStatus?: string;
+  profile?: string;
+  costClass?: string;
+  responseReserveMs?: number;
   partialStatus?: string;
   partialReason?: string;
   phase?: string;
   subcall?: string;
+  endpointCategory?: string;
+  externalFailureReason?: string;
+  externalElapsedMs?: number;
   fileLookupCount?: number;
   commitLookupCount?: number;
   prLookupCount?: number;
   skippedFileCount?: number;
   githubEndpointCategory?: string;
   capped?: boolean;
+  cacheHits?: number;
+  cacheMisses?: number;
+  externalCallsByCategory?: Record<string, number>;
+  skippedWorkByCategory?: Record<string, number>;
+  cappedWorkByCategory?: Record<string, number>;
+  analysisElapsedMs?: number;
   requestId?: string;
   traceId?: string;
 }
@@ -138,16 +150,28 @@ export function captureAnalyzerDegradation(error: unknown, context: AnalyzerDegr
     timeoutMs: context.timeoutMs,
     elapsedMs: context.elapsedMs,
     analyzerStatus: context.analyzerStatus,
+    profile: context.profile,
+    costClass: context.costClass,
+    responseReserveMs: context.responseReserveMs,
     partialStatus: context.partialStatus,
     partialReason: context.partialReason,
     phase: context.phase,
     subcall: context.subcall,
+    endpointCategory: context.endpointCategory,
+    externalFailureReason: context.externalFailureReason,
+    externalElapsedMs: context.externalElapsedMs,
     fileLookupCount: context.fileLookupCount,
     commitLookupCount: context.commitLookupCount,
     prLookupCount: context.prLookupCount,
     skippedFileCount: context.skippedFileCount,
     githubEndpointCategory: context.githubEndpointCategory,
     capped: context.capped,
+    cacheHits: context.cacheHits,
+    cacheMisses: context.cacheMisses,
+    externalCallsByCategory: context.externalCallsByCategory,
+    skippedWorkByCategory: context.skippedWorkByCategory,
+    cappedWorkByCategory: context.cappedWorkByCategory,
+    analysisElapsedMs: context.analysisElapsedMs,
     requestId: context.requestId,
     traceId: context.traceId,
     release: activeRelease,
@@ -169,17 +193,31 @@ export function captureAnalyzerDegradation(error: unknown, context: AnalyzerDegr
     if (timeoutTag) scope.setTag("timeoutMs", timeoutTag);
     if (releaseTag) scope.setTag("release", releaseTag);
     const analyzerStatusTag = sentryTagValue(context.analyzerStatus);
+    const profileTag = sentryTagValue(context.profile);
+    const costClassTag = sentryTagValue(context.costClass);
+    const responseReserveTag = sentryTagValue(context.responseReserveMs);
     const partialStatusTag = sentryTagValue(context.partialStatus);
     const phaseTag = sentryTagValue(context.phase);
+    const endpointCategoryTag = sentryTagValue(context.endpointCategory);
+    const externalFailureReasonTag = sentryTagValue(context.externalFailureReason);
     const endpointTag = sentryTagValue(context.githubEndpointCategory);
     const requestIdTag = sentryTagValue(context.requestId);
     const traceIdTag = sentryTagValue(context.traceId);
+    const cacheHitsTag = sentryTagValue(context.cacheHits);
+    const cacheMissesTag = sentryTagValue(context.cacheMisses);
     if (analyzerStatusTag) scope.setTag("analyzerStatus", analyzerStatusTag);
+    if (profileTag) scope.setTag("profile", profileTag);
+    if (costClassTag) scope.setTag("costClass", costClassTag);
+    if (responseReserveTag) scope.setTag("responseReserveMs", responseReserveTag);
     if (partialStatusTag) scope.setTag("partialStatus", partialStatusTag);
     if (phaseTag) scope.setTag("phase", phaseTag);
+    if (endpointCategoryTag) scope.setTag("endpointCategory", endpointCategoryTag);
+    if (externalFailureReasonTag) scope.setTag("externalFailureReason", externalFailureReasonTag);
     if (endpointTag) scope.setTag("githubEndpointCategory", endpointTag);
     if (requestIdTag) scope.setTag("requestId", requestIdTag);
     if (traceIdTag) scope.setTag("traceId", traceIdTag);
+    if (cacheHitsTag) scope.setTag("cacheHits", cacheHitsTag);
+    if (cacheMissesTag) scope.setTag("cacheMisses", cacheMissesTag);
     scope.setTag("environment", sentryTagValue(activeEnvironment) ?? "production");
     Sentry!.captureException(error instanceof Error ? error : new Error(String(error)));
   });

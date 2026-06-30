@@ -11,7 +11,9 @@ import {
   consumingRetryDelayMs,
   deterministicJitterMs,
   FOREGROUND_QUEUE_PRIORITY_FLOOR,
+  githubBackgroundRateLimitDelayMs,
   githubRateLimitRetryDelayMs,
+  isGitHubBudgetBackgroundJob,
   jobCoalesceKey,
   jobPriority,
   queueBackgroundConcurrency,
@@ -339,6 +341,33 @@ export function createPgQueue(
         });
         return true;
       }
+      const jobTraceParent = message.type === "github-webhook" ? message.traceParent : undefined;
+      const backgroundRateLimitDelay = isGitHubBudgetBackgroundJob(message)
+        ? await backgroundRateLimitDelayMs()
+        : null;
+      if (backgroundRateLimitDelay !== null) {
+        const now = Date.now();
+        const retryAfter = now + rateLimitRetryDelayWithJitter(
+          backgroundRateLimitDelay,
+          `${job.job_key ?? ""}:${job.id}:${job.payload}`,
+        );
+        const update = await pool.query(
+          `UPDATE ${TABLE} SET status='pending', run_after=GREATEST(run_after, $1), last_error=COALESCE(last_error, $2) WHERE id=$3`,
+          [retryAfter, "github rate-limit background admission", job.id],
+        );
+        if (update.rowCount) {
+          await recordQueueMetric("gittensory_jobs_rate_limit_deferred_total");
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              event: "selfhost_queue_background_admission_deferred",
+              jobType: message.type,
+              retry_after_ms: Math.max(0, retryAfter - now),
+            }),
+          );
+        }
+        return true;
+      }
       try {
         await withOtelSpan(
           "selfhost.queue.job",
@@ -355,7 +384,7 @@ export function createPgQueue(
           payload_type: extractPayloadType(job.payload),
           latency_ms: Date.now() - claimedAt,
           attempts: Number(job.attempts) + 1,
-        });
+        }, jobTraceParent);
       } catch (error) {
         const attempts = Number(job.attempts) + 1;
         const errMsg = error instanceof Error ? error.message : "unknown error";
@@ -394,7 +423,7 @@ export function createPgQueue(
             attempts,
             retry_after_ms: Math.max(0, retryAfter - Date.now()),
             error: errMsg,
-          });
+          }, jobTraceParent);
           return true;
         }
         await recordQueueMetric("gittensory_jobs_failed_total");
@@ -421,7 +450,7 @@ export function createPgQueue(
             latency_ms: Date.now() - claimedAt,
             attempts,
             error: errMsg,
-          });
+          }, jobTraceParent);
           captureError(error, {
             kind: "job_dead",
             reason: "max_retries_exhausted",
@@ -443,7 +472,7 @@ export function createPgQueue(
             latency_ms: Date.now() - claimedAt,
             attempts,
             error: errMsg,
-          });
+          }, jobTraceParent);
         }
       }
       return true;
@@ -574,6 +603,17 @@ export function createPgQueue(
       changed += update.rowCount ?? 0;
     }
     return changed;
+  }
+
+  async function backgroundRateLimitDelayMs(): Promise<number | null> {
+    const res = await pool.query(
+      `SELECT remaining, reset_at FROM github_rate_limit_observations
+        WHERE resource='rest' AND remaining IS NOT NULL
+        ORDER BY observed_at DESC
+        LIMIT 1`,
+    );
+    const row = res.rows[0] as { remaining?: number | string | null; reset_at?: string | null } | undefined;
+    return githubBackgroundRateLimitDelayMs(row);
   }
 
   async function mergeRescheduledJobIntoPending(

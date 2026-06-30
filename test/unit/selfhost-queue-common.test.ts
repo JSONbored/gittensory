@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   FOREGROUND_QUEUE_PRIORITY_FLOOR,
   consumingRetryDelayMs,
+  githubBackgroundRateLimitDelayMs,
   githubRateLimitRetryDelayMs,
+  isGitHubBudgetBackgroundJob,
   isForegroundJobPriority,
   jobCoalesceKey,
   jobPriority,
@@ -14,6 +16,7 @@ import {
   queueStartupJitterMs,
 } from "../../src/selfhost/queue-common";
 import { RetryableJobError } from "../../src/queue/retryable";
+import type { JobMessage } from "../../src/types";
 
 const payload = (value: unknown): string => JSON.stringify(value);
 
@@ -43,6 +46,30 @@ describe("self-host queue common helpers", () => {
     expect(queueBackgroundConcurrency(Number.NaN, "3")).toBe(0);
     expect(queueBackgroundConcurrency(4, null)).toBe(1);
     expect(queueBackgroundConcurrency(4, "")).toBe(1);
+  });
+
+  it("identifies GitHub-budget background jobs without pre-yielding fresh webhooks or manual re-gates", () => {
+    expect(isGitHubBudgetBackgroundJob({ type: "github-webhook", deliveryId: "d1", eventName: "pull_request", payload: {} })).toBe(false);
+    expect(isGitHubBudgetBackgroundJob({ type: "recapture-preview", deliveryId: "r1", repoFullName: "owner/repo", prNumber: 1, installationId: 2, attempt: 1 })).toBe(false);
+    expect(isGitHubBudgetBackgroundJob({ type: "agent-regate-pr" } as unknown as JobMessage)).toBe(false);
+    expect(isGitHubBudgetBackgroundJob({ type: "agent-regate-pr", deliveryId: "manual-regate:owner/repo#1:1", repoFullName: "owner/repo", prNumber: 1, installationId: 2 })).toBe(false);
+    expect(isGitHubBudgetBackgroundJob({ type: "agent-regate-pr", deliveryId: "sweep:owner/repo#1", repoFullName: "owner/repo", prNumber: 1, installationId: 2 })).toBe(true);
+    expect(isGitHubBudgetBackgroundJob({ type: "agent-regate-sweep", requestedBy: "schedule" })).toBe(true);
+    expect(isGitHubBudgetBackgroundJob({ type: "backfill-repo-segment", requestedBy: "schedule", repoFullName: "owner/repo", segment: "open_pull_requests" })).toBe(true);
+    expect(isGitHubBudgetBackgroundJob({ type: "rag-index-repo", requestedBy: "schedule" })).toBe(true);
+    expect(isGitHubBudgetBackgroundJob({ type: "refresh-installation-health", requestedBy: "schedule" })).toBe(false);
+  });
+
+  it("computes background admission delays from persisted GitHub REST observations", () => {
+    const now = Date.parse("2026-06-24T12:00:00.000Z");
+    expect(githubBackgroundRateLimitDelayMs(null, now)).toBeNull();
+    expect(githubBackgroundRateLimitDelayMs({ remaining: 500, reset_at: "2026-06-24T12:10:00.000Z" }, now)).toBeNull();
+    expect(githubBackgroundRateLimitDelayMs({ remaining: 120, reset_at: "2026-06-24T11:59:00.000Z" }, now)).toBeNull();
+    expect(githubBackgroundRateLimitDelayMs({ remaining: null, reset_at: "2026-06-24T12:10:00.000Z" }, now)).toBeNull();
+    expect(githubBackgroundRateLimitDelayMs({ remaining: "soon", reset_at: "2026-06-24T12:10:00.000Z" }, now)).toBeNull();
+    expect(githubBackgroundRateLimitDelayMs({ remaining: "120", reset_at: "2026-06-24T12:10:00.000Z" }, now)).toBe(615_000);
+    expect(githubBackgroundRateLimitDelayMs({ remaining: 120, resetAt: "2026-06-24T12:00:05.000Z" }, now)).toBe(30_000);
+    expect(githubBackgroundRateLimitDelayMs({ remaining: 120, reset_at: "2026-06-24T14:00:00.000Z" }, now)).toBe(900_000);
   });
 
   it("demotes bot-authored issue-comment edit webhooks without demoting human reruns", () => {

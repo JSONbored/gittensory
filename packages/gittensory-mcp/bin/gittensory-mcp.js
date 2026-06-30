@@ -1483,6 +1483,13 @@ function runCacheCli(args) {
     else process.stdout.write(`Decision-pack cache: ${payload.entries} entr${payload.entries === 1 ? "y" : "ies"}.\n`);
     return;
   }
+  if (subcommand === "list" || subcommand === "ls") {
+    const payload = listDecisionPackCache();
+    if (options.json) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else if (payload.count === 0) process.stdout.write("Decision-pack cache is empty.\n");
+    else for (const entry of payload.entries) process.stdout.write(`- ${entry.login ?? "unknown"} (cached ${entry.cachedAt ?? "unknown"}, ${entry.bytes} bytes)\n`);
+    return;
+  }
   throw new Error(`Unknown cache command: ${subcommand}`);
 }
 
@@ -1778,7 +1785,7 @@ function printHelp() {
   gittensory-mcp profile list|create|switch|remove [name] [--json]
   gittensory-mcp changelog [--json]
   gittensory-mcp doctor [--profile name] [--cwd path] [--exit-code] [--json]
-  gittensory-mcp cache status|clear [--json]
+  gittensory-mcp cache status|list|clear [--json]
   gittensory-mcp init-client --print codex|claude|cursor|mcp|vscode [--agent-profile miner-planner|maintainer-triage|repo-owner-intake] [--json]
   gittensory-mcp decision-pack --login <github-login> [--json]
   gittensory-mcp repo-decision --login <github-login> --repo owner/repo [--json]
@@ -1805,6 +1812,7 @@ function printHelp() {
 function printCacheHelp() {
   process.stdout.write(`Usage:
   gittensory-mcp cache status [--json]
+  gittensory-mcp cache list [--json]
   gittensory-mcp cache clear [--json]
 
 Decision-pack cache entries are local-only stale fallbacks for temporary API/network outages.
@@ -2976,6 +2984,34 @@ function inspectDecisionPackCache() {
     schemaVersion: decisionPackCacheSchemaVersion,
     apiVersion: currentApiVersion,
     clearCommand: "gittensory-mcp cache clear",
+  };
+}
+
+// Per-entry view of the offline decision-pack cache, newest first. Surfaces only safe metadata
+// (login, when it was cached, the API/package version, size) — never the auth-cache key (a token
+// hash) or the cached payload — so it stays consistent with the cache's local-only redaction.
+function listDecisionPackCache() {
+  const files = decisionPackCacheFiles().sort((left, right) => right.mtimeMs - left.mtimeMs);
+  const entries = files.map((file) => {
+    try {
+      const entry = JSON.parse(readFileSync(file.path, "utf8"));
+      return {
+        login: typeof entry.login === "string" ? entry.login : null,
+        cachedAt: typeof entry.cachedAt === "string" ? entry.cachedAt : null,
+        apiVersion: typeof entry.apiVersion === "string" ? entry.apiVersion : null,
+        packageVersion: typeof entry.packageVersion === "string" ? entry.packageVersion : null,
+        bytes: file.size,
+      };
+    } catch {
+      return { login: null, cachedAt: null, apiVersion: null, packageVersion: null, bytes: file.size, corrupt: true };
+    }
+  });
+  return {
+    status: "ok",
+    count: entries.length,
+    maxEntries: decisionPackCacheMaxEntries,
+    clearCommand: "gittensory-mcp cache clear",
+    entries,
   };
 }
 

@@ -697,14 +697,20 @@ const REGISTRY_DRIFT_FIELD_METADATA: Record<RegistryHyperparameterDriftField, { 
 };
 
 function buildRegistryHyperparameterDrift(previous: RulesetRegistryRepo[], current: RulesetRegistryRepo[]): RegistryHyperparameterDriftPayload {
-  const previousByRepo = new Map(previous.map((repo) => [repo.repo, repo]));
-  const currentByRepo = new Map(current.map((repo) => [repo.repo, repo]));
+  // Repo identity is case-insensitive upstream: registryHyperparameterDriftWarningsForRepo compares names with
+  // toLowerCase and the registry normalizer dedupes by lowercased name. Keying these maps by the raw,
+  // case-sensitive `repo` string made a casing-only rename (e.g. `Owner/Repo` -> `owner/repo`) surface as a
+  // spurious high-severity `added` + `removed` pair even when every hyperparameter was unchanged. Match by the
+  // lowercased name so a casing-only change resolves to the same repo (its comparable fields then diff to zero
+  // events), while genuine additions, removals, and field changes are still detected. (#1792)
+  const previousByRepo = new Map(previous.map((repo) => [registryRepoKey(repo), repo]));
+  const currentByRepo = new Map(current.map((repo) => [registryRepoKey(repo), repo]));
   const events = [
     ...current.flatMap((repo) => {
-      const old = previousByRepo.get(repo.repo);
+      const old = previousByRepo.get(registryRepoKey(repo));
       return old ? changedRegistryRepoEvents(old, repo) : [registryHyperparameterDriftEvent(repo.repo, "repo", null, "added", "added")];
     }),
-    ...previous.flatMap((repo) => (currentByRepo.has(repo.repo) ? [] : [registryHyperparameterDriftEvent(repo.repo, "repo", "present", null, "removed")])),
+    ...previous.flatMap((repo) => (currentByRepo.has(registryRepoKey(repo)) ? [] : [registryHyperparameterDriftEvent(repo.repo, "repo", "present", null, "removed")])),
   ].sort(compareRegistryHyperparameterDriftEvents);
   const capped = events.slice(0, REGISTRY_HYPERPARAMETER_DRIFT_LIMIT);
   return {
@@ -714,6 +720,12 @@ function buildRegistryHyperparameterDrift(previous: RulesetRegistryRepo[], curre
     unidentifiedAffectedRepoCount: 0,
     omittedEvents: Math.max(events.length - capped.length, 0),
   };
+}
+
+// Case-insensitive identity key for matching the same registry repo across two ruleset snapshots, mirroring the
+// lowercasing in registryHyperparameterDriftWarningsForRepo and the registry normalizer. (#1792)
+function registryRepoKey(repo: RulesetRegistryRepo): string {
+  return repo.repo.toLowerCase();
 }
 
 function changedRegistryRepoEvents(previous: RulesetRegistryRepo, current: RulesetRegistryRepo): RegistryHyperparameterDriftEvent[] {

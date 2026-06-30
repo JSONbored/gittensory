@@ -618,6 +618,7 @@ test("buildBrief: runs dependency analyzer, marks others skipped, partial=false 
       repoFullName: "o/r",
       prNumber: 7,
       headSha: "abc",
+      analyzers: ["dependency"],
       files: [{ path: "package.json", patch: '+    "lodash": "4.17.20",' }],
     });
     assert.equal(brief.schemaVersion, 1);
@@ -735,6 +736,10 @@ test("buildBrief: dependency + secret analyzers both run", async () => {
       repoFullName: "o/r",
       prNumber: 9,
       files: [
+        {
+          path: "package.json",
+          patch: '+    "lodash": "4.17.20",',
+        },
         {
           path: "app.ts",
           patch:
@@ -1669,7 +1674,7 @@ test("buildBrief: timeout aborts dependency scan so OSV work stops", async () =>
       repoFullName: "o/r",
       prNumber: 10,
       analyzers: ["dependency"],
-      budget: { timeoutMs: 1 },
+      budget: { timeoutMs: 200 },
       files: Array.from({ length: 5 }, (_, index) => ({
         path: "package.json",
         patch: `+    "pkg-${index}": "1.0.0",`,
@@ -1677,7 +1682,7 @@ test("buildBrief: timeout aborts dependency scan so OSV work stops", async () =>
     });
 
     assert.equal(brief.partial, true);
-    assert.equal(brief.analyzerStatus.dependency, "degraded");
+    assert.equal(brief.analyzerStatus.dependency, "timeout");
     assert.equal(fetchCount, 1);
     assert.equal(signals.length, 1);
     assert.equal(signals[0].aborted, true);
@@ -3015,8 +3020,8 @@ test("buildBrief: provenance analyzer fetch failure fails safe", async () => {
       analyzers: ["provenance"],
       files: [{ path: "package.json", patch: '+    "pkg": "1.0.0",' }],
     });
-    assert.equal(brief.analyzerStatus.provenance, "ok");
-    assert.equal(brief.partial, false);
+    assert.equal(brief.analyzerStatus.provenance, "degraded");
+    assert.equal(brief.partial, true);
     assert.deepEqual(brief.findings.provenance, []);
   } finally {
     globalThis.fetch = realFetch;

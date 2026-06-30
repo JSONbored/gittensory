@@ -4,6 +4,11 @@ type GitHubAppRef = {
   slug?: string | null;
 };
 
+type GitHubActorRef = {
+  login?: string | null;
+  type?: string | null;
+};
+
 type CheckRunWebhookNode = {
   app?: GitHubAppRef | null;
   check_suite?: {
@@ -26,6 +31,12 @@ function ownAppSlug(env: Env): string {
 function appSlugMatches(env: Env, app: GitHubAppRef | null | undefined): boolean {
   const expected = ownAppSlug(env);
   return expected !== "" && normalizeGitHubSlug(app?.slug) === expected;
+}
+
+function isBotActor(actor: GitHubActorRef | null | undefined): boolean {
+  const login = actor?.login?.toLowerCase() ?? "";
+  const type = actor?.type?.toLowerCase() ?? "";
+  return type === "bot" || login.endsWith("[bot]");
 }
 
 function ciCompletionApp(
@@ -68,6 +79,22 @@ export function isSelfAuthoredCiCompletionWebhook(
   return appSlugMatches(env, ciCompletionApp(eventName, payload));
 }
 
+export function isNonCompletedCiWebhook(
+  eventName: string,
+  payload: GitHubWebhookPayload,
+): boolean {
+  if (eventName !== "check_run" && eventName !== "check_suite") return false;
+  return payload.action !== "completed";
+}
+
+export function isBotAuthoredIssueCommentEditWebhook(
+  eventName: string,
+  payload: GitHubWebhookPayload,
+): boolean {
+  if (eventName !== "issue_comment" || payload.action !== "edited") return false;
+  return isBotActor(payload.sender);
+}
+
 export function isSelfAuthoredWebhookNoise(
   env: Env,
   eventName: string,
@@ -76,5 +103,17 @@ export function isSelfAuthoredWebhookNoise(
   return (
     isSelfAuthoredAppCommentWebhook(env, eventName, payload) ||
     isSelfAuthoredCiCompletionWebhook(env, eventName, payload)
+  );
+}
+
+export function isNonActionableWebhookNoise(
+  env: Env,
+  eventName: string,
+  payload: GitHubWebhookPayload,
+): boolean {
+  return (
+    isSelfAuthoredWebhookNoise(env, eventName, payload) ||
+    isNonCompletedCiWebhook(eventName, payload) ||
+    isBotAuthoredIssueCommentEditWebhook(eventName, payload)
   );
 }

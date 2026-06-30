@@ -1,7 +1,13 @@
 // End-of-life runtime regression analyzer (#1504). Parses runtime/base-image/engine version pins a PR changes
 // (Dockerfile FROM, .nvmrc, go.mod) and checks endoflife.date (free, no key) — flagging a pin onto a release that
 // is already past end-of-support or goes EOL within 90 days. The no-checkout reviewer has no EOL calendar; this does.
-import type { EnrichRequest, EolFinding } from "../types.js";
+import type {
+  AnalyzerDiagnostics,
+  EnrichRequest,
+  EolFinding,
+} from "../types.js";
+import type { AnalysisContext } from "../analysis-context.js";
+import { boundedFetchJson } from "../external-fetch.js";
 
 // Docker image / source → endoflife.date product slug.
 const DOCKER_PRODUCT: Record<string, string> = {
@@ -19,6 +25,12 @@ interface VersionPin {
   file: string;
   product: string;
   version: string;
+}
+
+interface ScanOptions {
+  signal?: AbortSignal;
+  analysis?: Pick<AnalysisContext, "fetchJson">;
+  diagnostics?: AnalyzerDiagnostics;
 }
 
 const MAX_EOL_FILES = 40;
@@ -109,13 +121,23 @@ function eolStatus(
 async function fetchCycles(
   product: string,
   fetchImpl: typeof fetch,
+  options: ScanOptions = {},
 ): Promise<Cycle[] | null> {
-  const response = await fetchImpl(
-    `https://endoflife.date/api/${product}.json`,
-  );
-  if (!response.ok) return null;
-  const data = (await response.json()) as Cycle[];
-  return Array.isArray(data) ? data : null;
+  const url = `https://endoflife.date/api/${product}.json`;
+  const fetchOptions = {
+    endpointCategory: "endoflife",
+    signal: options.signal,
+    fetchImpl,
+    diagnostics: options.diagnostics,
+    phase: "eol",
+    subcall: "endoflife",
+    maxBytes: 256 * 1024,
+    maxCallsPerCategory: MAX_EOL_PINS,
+  };
+  const response = options.analysis
+    ? await options.analysis.fetchJson<Cycle[]>(url, fetchOptions)
+    : await boundedFetchJson<Cycle[]>(url, fetchOptions);
+  return response.ok && Array.isArray(response.data) ? response.data : null;
 }
 
 /** Analyzer entrypoint: changed runtime pins → endoflife.date → only the EOL / EOL-soon ones. `now` injectable. */
@@ -123,6 +145,7 @@ export async function scanEol(
   req: EnrichRequest,
   fetchImpl: typeof fetch = fetch,
   now: number = Date.now(),
+  options: ScanOptions = {},
 ): Promise<EolFinding[]> {
   const findings: EolFinding[] = [];
   const seen = new Set<string>();
@@ -132,7 +155,7 @@ export async function scanEol(
     if (seen.has(key)) continue;
     seen.add(key);
     if (!cyclesByProduct.has(pin.product))
-      cyclesByProduct.set(pin.product, await fetchCycles(pin.product, fetchImpl));
+      cyclesByProduct.set(pin.product, await fetchCycles(pin.product, fetchImpl, options));
     const cycles = cyclesByProduct.get(pin.product);
     if (!cycles) continue;
     const cycle = matchCycle(cycles, pin.version);

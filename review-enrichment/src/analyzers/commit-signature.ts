@@ -4,7 +4,13 @@
 // These are supply-chain / impersonation signals the no-checkout `claude --print` reviewer cannot derive
 // (no GitHub commit-verification API access, no repo history). Surfaces ONLY GitHub's public verification
 // verdict (`verified` + `reason`) and boolean provenance flags — never tokens, emails, or private identities.
-import type { EnrichRequest, CommitSignatureFinding } from "../types.js";
+import type {
+  AnalyzerDiagnostics,
+  EnrichRequest,
+  CommitSignatureFinding,
+} from "../types.js";
+import type { AnalysisContext } from "../analysis-context.js";
+import { boundedFetchJson } from "../external-fetch.js";
 
 const GITHUB_API = "https://api.github.com";
 // Pull a bounded slice of recent commits — enough to decide "has any verified history" without paging the whole
@@ -16,6 +22,8 @@ const SLUG_RE = /^[A-Za-z0-9._-]+$/;
 
 interface ScanOptions {
   signal?: AbortSignal;
+  analysis?: Pick<AnalysisContext, "fetchJson">;
+  diagnostics?: AnalyzerDiagnostics;
 }
 
 // The slice of the GitHub commit payload this analyzer reads. Everything else on the response is ignored.
@@ -41,6 +49,30 @@ function githubHeaders(token: string): Record<string, string> {
   };
 }
 
+async function fetchGithubJson<T>(
+  url: string,
+  headers: Record<string, string>,
+  fetchFn: typeof fetch,
+  signal?: AbortSignal,
+  options: Pick<ScanOptions, "analysis" | "diagnostics"> = {},
+): Promise<T | null> {
+  const fetchOptions = {
+    endpointCategory: "github-commits",
+    headers,
+    signal,
+    fetchImpl: fetchFn,
+    diagnostics: options.diagnostics,
+    phase: "commit-signature",
+    subcall: "github-commits",
+    maxBytes: 256 * 1024,
+    maxCallsPerCategory: 3,
+  };
+  const response = options.analysis
+    ? await options.analysis.fetchJson<T>(url, fetchOptions)
+    : await boundedFetchJson<T>(url, fetchOptions);
+  return response.ok ? response.data : null;
+}
+
 /** Fetch the head commit's verification + identity payload. Returns null on any error / non-200 (fail-safe). */
 export async function fetchHeadCommit(
   owner: string,
@@ -49,18 +81,16 @@ export async function fetchHeadCommit(
   headers: Record<string, string>,
   fetchFn: typeof fetch,
   signal?: AbortSignal,
+  options: Pick<ScanOptions, "analysis" | "diagnostics"> = {},
 ): Promise<CommitResponse | null> {
   if (signal?.aborted) return null;
-  try {
-    const resp = await fetchFn(
-      `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(headSha)}`,
-      { headers, signal },
-    );
-    if (!resp.ok) return null;
-    return (await resp.json()) as CommitResponse;
-  } catch {
-    return null;
-  }
+  return fetchGithubJson<CommitResponse>(
+    `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(headSha)}`,
+    headers,
+    fetchFn,
+    signal,
+    options,
+  );
 }
 
 /** Fetch one bounded page of the repo's recent commits, optionally filtered to a single author, and report
@@ -73,21 +103,19 @@ export async function hasVerifiedHistory(
   fetchFn: typeof fetch,
   author?: string,
   signal?: AbortSignal,
+  options: Pick<ScanOptions, "analysis" | "diagnostics"> = {},
 ): Promise<boolean | null> {
   if (signal?.aborted) return null;
   const authorQuery = author ? `author=${encodeURIComponent(author)}&` : "";
-  try {
-    const resp = await fetchFn(
-      `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits?${authorQuery}per_page=${HISTORY_PER_PAGE}`,
-      { headers, signal },
-    );
-    if (!resp.ok) return null;
-    const commits = (await resp.json()) as HistoryCommit[];
-    if (!Array.isArray(commits)) return null;
-    return commits.some((c) => c.commit?.verification?.verified === true);
-  } catch {
-    return null;
-  }
+  const commits = await fetchGithubJson<HistoryCommit[]>(
+    `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits?${authorQuery}per_page=${HISTORY_PER_PAGE}`,
+    headers,
+    fetchFn,
+    signal,
+    options,
+  );
+  if (!Array.isArray(commits)) return null;
+  return commits.some((c) => c.commit?.verification?.verified === true);
 }
 
 /** Analyzer entrypoint: inspect the head commit's signature + author provenance. Fail-safe — returns no finding
@@ -116,6 +144,7 @@ export async function scanCommitSignature(
     headers,
     fetchFn,
     options.signal,
+    options,
   );
   if (!head?.commit) return [];
 
@@ -142,6 +171,7 @@ export async function scanCommitSignature(
       fetchFn,
       authorLogin,
       options.signal,
+      options,
     );
     if (authorVerified === false && !options.signal?.aborted) {
       const repoVerified = await hasVerifiedHistory(
@@ -151,6 +181,7 @@ export async function scanCommitSignature(
         fetchFn,
         undefined,
         options.signal,
+        options,
       );
       newCommitter = repoVerified === true;
     }

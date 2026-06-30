@@ -647,6 +647,24 @@ describe("upstream ruleset drift tracking", () => {
     });
     expect(membership!.payload.repoChanges).toEqual(["owner/added: added", "owner/removed: removed"]);
 
+    // (#1792) A casing-only registry rename with identical hyperparameters must NOT surface as add + remove.
+    const casingPrevious = rulesetWithRegistry("casing-previous", [registryRepo("Owner/Repo")]);
+    const casingCurrent = rulesetWithRegistry("casing-current", [registryRepo("owner/repo")]);
+    const casingOnly = await buildUpstreamDriftReport(casingCurrent, casingPrevious);
+    // No registry drift events at all → the report degrades to the source-only signal, not a registry membership change.
+    expect(registryDriftPayload(casingOnly!).events).toEqual([]);
+    expect(casingOnly!.payload.repoChanges).toEqual([]);
+    expect(casingOnly!.affectedAreas).not.toContain("registry");
+
+    // (#1792) A casing change that ALSO changes a hyperparameter still reports the field change (under the new
+    // casing) and never a spurious repo add/remove.
+    const fieldChangePrevious = rulesetWithRegistry("casing-field-previous", [registryRepo("Owner/Repo", { maintainerCut: 0.3 })]);
+    const fieldChangeCurrent = rulesetWithRegistry("casing-field-current", [registryRepo("owner/repo", { maintainerCut: 0.5 })]);
+    const casingWithFieldChange = await buildUpstreamDriftReport(fieldChangeCurrent, fieldChangePrevious);
+    const fieldDrift = registryDriftPayload(casingWithFieldChange!);
+    expect(fieldDrift.affectedFields).toEqual(["maintainerCut"]);
+    expect(fieldDrift.events.map((event) => ({ repoFullName: event.repoFullName, field: event.field }))).toEqual([{ repoFullName: "owner/repo", field: "maintainerCut" }]);
+
     const env = createTestEnv();
     await persistUpstreamRulesetSnapshot(env, ruleset("current", "current-hash", "pending_saturation_model", 1, 0.01, new Date().toISOString()));
     await upsertUpstreamDriftReport(env, driftReport("bad-registry-payload", { affectedAreas: ["registry"], payload: { registryHyperparameterDrift: "bad" } }));

@@ -1,4 +1,7 @@
 import { retryableJobDelayMs } from "../queue/retryable";
+import { MAINTENANCE_RESERVED_HEADROOM } from "../github/rate-limit";
+import { githubWebhookCoalesceKey } from "../github/webhook-coalesce";
+import type { GitHubWebhookPayload, JobMessage } from "../types";
 import { extractPayloadType } from "./audit";
 
 const DEFAULT_RATE_LIMIT_JITTER_MS = 5 * 60_000;
@@ -13,6 +16,22 @@ export const FOREGROUND_QUEUE_PRIORITY_FLOOR = 8;
 // sit just below real webhooks, and sweep fan-out sits below those so stale surfaces are repaired during bursts.
 // Bot-generated comment edits are background noise; keeping them with real webhooks lets panel edits starve repair.
 const AGENT_REGATE_PRIORITY = 9;
+const GITHUB_BUDGET_BACKGROUND_TYPES = new Set<string>([
+  "agent-regate-sweep",
+  "backfill-registered-repos",
+  "backfill-repo-segment",
+  "backfill-pr-details",
+  "refresh-upstream-sources",
+  "build-upstream-ruleset",
+  "detect-upstream-drift",
+  "refresh-upstream-drift",
+  "file-upstream-drift-issues",
+  "build-contributor-evidence",
+  "build-contributor-decision-packs",
+  "refresh-contributor-activity",
+  "build-burden-forecasts",
+  "rag-index-repo",
+]);
 const PRIORITY_BY_TYPE = new Map([
   ["agent-regate-pr", AGENT_REGATE_PRIORITY],
   ["recapture-preview", 9],
@@ -58,6 +77,41 @@ export function queueBackgroundConcurrency(
       ? Math.floor(raw)
       : DEFAULT_BACKGROUND_CONCURRENCY;
   return Math.min(parsed, total);
+}
+
+export function isGitHubBudgetBackgroundJob(message: JobMessage): boolean {
+  if (message.type === "agent-regate-pr") {
+    if (typeof message.deliveryId !== "string") return false;
+    return !message.deliveryId.startsWith("manual-regate:");
+  }
+  return GITHUB_BUDGET_BACKGROUND_TYPES.has(message.type);
+}
+
+export function githubBackgroundRateLimitDelayMs(
+  observation:
+    | { remaining?: unknown; reset_at?: unknown; resetAt?: unknown }
+    | null
+    | undefined,
+  nowMs = Date.now(),
+): number | null {
+  const rawRemaining = observation?.remaining;
+  const remaining =
+    typeof rawRemaining === "number"
+      ? normalizedNumber(rawRemaining)
+      : typeof rawRemaining === "string"
+        ? normalizedNumber(Number(rawRemaining))
+        : null;
+  const resetAt =
+    typeof observation?.reset_at === "string"
+      ? observation.reset_at
+      : typeof observation?.resetAt === "string"
+        ? observation.resetAt
+        : null;
+  if (remaining === null || !resetAt) return null;
+  if (remaining > MAINTENANCE_RESERVED_HEADROOM) return null;
+  const ms = Date.parse(resetAt) - nowMs;
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return Math.max(30_000, Math.min(900_000, (Math.ceil(ms / 1000) + 15) * 1000));
 }
 
 function githubWebhookPriority(payload: string): number {
@@ -185,20 +239,7 @@ export function jobCoalesceKey(payload: string): string | null {
       repoFullName?: unknown;
       prNumber?: unknown;
       attempt?: unknown;
-      payload?: {
-        action?: unknown;
-        repository?: { full_name?: unknown } | null;
-        pull_request?: { number?: unknown; head?: { sha?: unknown } | null } | null;
-        check_suite?: {
-          head_sha?: unknown;
-          pull_requests?: Array<{ number?: unknown } | null> | null;
-        } | null;
-        check_run?: {
-          head_sha?: unknown;
-          check_suite?: { head_sha?: unknown } | null;
-          pull_requests?: Array<{ number?: unknown } | null> | null;
-        } | null;
-      } | null;
+      payload?: GitHubWebhookPayload | null;
     };
     const type = typeof message.type === "string" ? message.type : "";
     if (type === "agent-regate-pr") {
@@ -221,37 +262,9 @@ export function jobCoalesceKey(payload: string): string | null {
     if (type !== "github-webhook") return null;
     const eventName =
       typeof message.eventName === "string" ? message.eventName : "";
-    const action =
-      typeof message.payload?.action === "string" ? message.payload.action : "";
-    const repo = normalizedRepo(message.payload?.repository?.full_name);
-    if (!repo) return null;
-    if (
-      (eventName === "check_suite" || eventName === "check_run") &&
-      action === "completed"
-    ) {
-      const node = eventName === "check_suite" ? message.payload?.check_suite : message.payload?.check_run;
-      const headSha = normalizedSha(
-        node?.head_sha ??
-          (eventName === "check_run" ? message.payload?.check_run?.check_suite?.head_sha : undefined),
-      );
-      if (!headSha) return null;
-      const pullNumbers = (node?.pull_requests ?? [])
-        .map((entry) => normalizedNumber(entry?.number))
-        .filter((value): value is number => value !== null)
-        .sort((a, b) => a - b)
-        .join(",");
-      return `github-webhook:ci-completed:${repo}@${headSha}${pullNumbers ? `#${pullNumbers}` : ""}`;
-    }
-    if (eventName === "pull_request" && isCoalescablePullRequestAction(action)) {
-      const pr =
-        normalizedNumber(message.payload?.pull_request?.number) ??
-        normalizedNumber((message.payload as { number?: unknown } | null | undefined)?.number);
-      const headSha = normalizedSha(message.payload?.pull_request?.head?.sha);
-      return pr !== null
-        ? `github-webhook:pr-refresh:${repo}#${pr}${headSha ? `@${headSha}` : ""}`
-        : null;
-    }
-    return null;
+    return message.payload
+      ? githubWebhookCoalesceKey(eventName, message.payload)
+      : null;
   } catch {
     return null;
   }
@@ -281,23 +294,6 @@ function normalizedNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.floor(value)
     : null;
-}
-
-function normalizedSha(value: unknown): string | null {
-  return typeof value === "string" && /^[a-f0-9]{7,40}$/i.test(value.trim())
-    ? value.trim().toLowerCase()
-    : null;
-}
-
-function isCoalescablePullRequestAction(action: string): boolean {
-  return (
-    action === "opened" ||
-    action === "synchronize" ||
-    action === "edited" ||
-    action === "ready_for_review" ||
-    action === "labeled" ||
-    action === "unlabeled"
-  );
 }
 
 function numberHeader(

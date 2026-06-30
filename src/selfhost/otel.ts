@@ -9,6 +9,8 @@ type OtelProvider = {
   shutdown(): Promise<void>;
 };
 type SpanOptions = { parentTraceParent?: string | undefined };
+export type OtelTraceIds = { trace_id: string; span_id: string };
+export type OtelTraceLogFields = { trace_id: string; span_id?: string };
 
 let Otel: OtelApi | undefined;
 let provider: OtelProvider | undefined;
@@ -86,6 +88,77 @@ const SELFHOST_STATIC_ROUTES = new Set([
   "/v1/orb/webhook",
 ]);
 
+const GITHUB_WEBHOOK_EVENTS = new Set([
+  "branch_protection_configuration",
+  "branch_protection_rule",
+  "check_run",
+  "check_suite",
+  "code_scanning_alert",
+  "commit_comment",
+  "create",
+  "delete",
+  "dependabot_alert",
+  "deploy_key",
+  "deployment",
+  "deployment_protection_rule",
+  "deployment_review",
+  "deployment_status",
+  "discussion",
+  "discussion_comment",
+  "fork",
+  "github_app_authorization",
+  "gollum",
+  "installation",
+  "installation_repositories",
+  "installation_target",
+  "issue_comment",
+  "issues",
+  "label",
+  "marketplace_purchase",
+  "member",
+  "membership",
+  "merge_group",
+  "meta",
+  "milestone",
+  "org_block",
+  "organization",
+  "package",
+  "page_build",
+  "personal_access_token_request",
+  "ping",
+  "project",
+  "project_card",
+  "project_column",
+  "projects_v2_item",
+  "public",
+  "pull_request",
+  "pull_request_review",
+  "pull_request_review_comment",
+  "pull_request_review_thread",
+  "push",
+  "registry_package",
+  "release",
+  "repository",
+  "repository_advisory",
+  "repository_dispatch",
+  "repository_import",
+  "repository_ruleset",
+  "repository_vulnerability_alert",
+  "secret_scanning_alert",
+  "secret_scanning_alert_location",
+  "security_advisory",
+  "security_and_analysis",
+  "sponsorship",
+  "star",
+  "status",
+  "team",
+  "team_add",
+  "watch",
+  "workflow_dispatch",
+  "workflow_job",
+  "workflow_run",
+]);
+
 function selfHostHttpRoute(path: string): string {
   if (SELFHOST_STATIC_ROUTES.has(path)) return path;
   if (path.startsWith("/v1/internal/")) return "/v1/internal/*";
@@ -99,7 +172,7 @@ export function selfHostHttpRequestAttributes(request: Request, path = new URL(r
     "http.route": route,
   };
   const eventName = request.headers.get("x-github-event")?.trim();
-  if (eventName && (route === "/v1/github/webhook" || route === "/v1/orb/relay" || route === "/v1/orb/webhook"))
+  if (eventName && GITHUB_WEBHOOK_EVENTS.has(eventName) && (route === "/v1/github/webhook" || route === "/v1/orb/relay" || route === "/v1/orb/webhook"))
     attrs["github.webhook.event"] = eventName;
   if (route === "/v1/github/webhook") attrs["selfhost.webhook.transport"] = "github";
   else if (route === "/v1/orb/relay") attrs["selfhost.webhook.transport"] = "orb-relay";
@@ -145,24 +218,51 @@ function statusMessage(error: unknown): string {
   return exceptionFor(error).message.slice(0, MAX_ATTRIBUTE_LENGTH);
 }
 
-function activeContextFromTraceParent(traceParent: string | undefined): Context | undefined {
-  if (!traceParent || !Otel) return undefined;
+function parseTraceParent(traceParent: string | undefined): { traceId: string; spanId: string; traceFlags: number } | undefined {
+  if (!traceParent) return undefined;
   const match = TRACEPARENT_RE.exec(traceParent.trim());
   if (!match) return undefined;
-  return Otel.trace.setSpanContext(Otel.context.active(), {
+  return {
     traceId: match[1]!.toLowerCase(),
     spanId: match[2]!.toLowerCase(),
     traceFlags: Number.parseInt(match[3]!, 16) & 1,
+  };
+}
+
+function activeContextFromTraceParent(api: OtelApi, traceParent: string | undefined): Context | undefined {
+  const parsed = parseTraceParent(traceParent);
+  if (!parsed) return undefined;
+  return api.trace.setSpanContext(api.context.active(), {
+    traceId: parsed.traceId,
+    spanId: parsed.spanId,
+    traceFlags: parsed.traceFlags,
     isRemote: true,
   });
 }
 
-export function currentOtelTraceParent(): string | undefined {
+function currentOtelSpanContext() {
   if (!active || !Otel) return undefined;
-  const spanContext = Otel.trace.getSpanContext(contextStore.getStore() ?? Otel.context.active());
+  return Otel.trace.getSpanContext(contextStore.getStore() ?? Otel.context.active());
+}
+
+export function currentOtelTraceParent(): string | undefined {
+  const spanContext = currentOtelSpanContext();
   if (!spanContext) return undefined;
   const flags = (spanContext.traceFlags & 1).toString(16).padStart(2, "0");
   return `00-${spanContext.traceId}-${spanContext.spanId}-${flags}`;
+}
+
+export function currentOtelTraceIds(): OtelTraceIds | undefined {
+  const spanContext = currentOtelSpanContext();
+  if (!spanContext) return undefined;
+  return { trace_id: spanContext.traceId, span_id: spanContext.spanId };
+}
+
+export function otelTraceLogFields(fallbackTraceParent?: string): OtelTraceLogFields | undefined {
+  const activeTrace = currentOtelTraceIds();
+  if (activeTrace) return activeTrace;
+  const fallback = parseTraceParent(fallbackTraceParent);
+  return fallback ? { trace_id: fallback.traceId } : undefined;
 }
 
 export function setCurrentOtelSpanAttributes(attributes: Record<string, unknown>): void {
@@ -178,7 +278,7 @@ export async function withOtelSpan<T>(
   options?: SpanOptions,
 ): Promise<T> {
   if (!active || !Otel || !tracer) return await fn();
-  const parentContext = activeContextFromTraceParent(options?.parentTraceParent) ?? contextStore.getStore() ?? Otel.context.active();
+  const parentContext = activeContextFromTraceParent(Otel, options?.parentTraceParent) ?? contextStore.getStore() ?? Otel.context.active();
   const span = tracer.startSpan(name, { attributes: otelSafeAttributes(attributes) }, parentContext);
   const childContext = Otel.trace.setSpan(parentContext, span);
   return await contextStore.run(childContext, async () => {

@@ -43,7 +43,10 @@ const typeOf = (m: JobMessage): string => (m as unknown as { type: string }).typ
 describe("createSqliteQueue (durable #980)", () => {
   // Suppress audit log stdout noise.
   beforeEach(() => { vi.spyOn(process.stdout, "write").mockImplementation(() => true); });
-  afterEach(() => { vi.restoreAllMocks(); });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it("persists + drains FIFO through the consumer", async () => {
     const driver = makeDriver();
@@ -54,6 +57,26 @@ describe("createSqliteQueue (durable #980)", () => {
     await q.drain();
     expect(seen).toEqual(["a", "b"]);
     expect(q.size()).toBe(0);
+  });
+
+  it("copies carried webhook trace ids into job audit logs", async () => {
+    const driver = makeDriver();
+    const writes: string[] = [];
+    vi.mocked(process.stdout.write).mockImplementation((chunk) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    const q = createSqliteQueue(driver, async () => undefined);
+    const traced = prWebhook("trace-a");
+    if (traced.type === "github-webhook") traced.traceParent = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
+    await q.binding.send(traced);
+
+    await q.drain();
+
+    const audit = writes.find((line) => line.includes('"event":"job_complete"'));
+    expect(JSON.parse(audit!) as Record<string, unknown>).toMatchObject({
+      trace_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
   });
 
   it("tags webhook and PR review refresh jobs with elevated priorities (#review-latency)", async () => {
@@ -84,6 +107,118 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(prio(JSON.stringify(webhook({ login: "gittensory-orb[bot]", type: "Bot" })))).toBe(0);
     expect(prio(JSON.stringify(msg("rag-index-repo")))).toBe(0);
     expect(prio("{}")).toBe(0);
+  });
+
+  it("pre-yields GitHub-budget background jobs when the persisted REST budget is reserved", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
+    const oldJitter = process.env.QUEUE_RATE_LIMIT_JITTER_MS;
+    process.env.QUEUE_RATE_LIMIT_JITTER_MS = "0";
+    try {
+      const driver = makeDriver();
+      driver.query(
+        `CREATE TABLE github_rate_limit_observations (
+          id TEXT PRIMARY KEY,
+          repo_full_name TEXT NOT NULL,
+          resource TEXT NOT NULL,
+          path TEXT NOT NULL,
+          status_code INTEGER NOT NULL,
+          limit_value INTEGER,
+          remaining INTEGER,
+          reset_at TEXT,
+          observed_at TEXT NOT NULL
+        )`,
+        [],
+      );
+      driver.query(
+        `INSERT INTO github_rate_limit_observations (id, repo_full_name, resource, path, status_code, limit_value, remaining, reset_at, observed_at)
+         VALUES (?, ?, 'rest', ?, 200, 5000, 120, ?, ?)`,
+        ["rl-bg", "owner/repo", "/x", "2026-06-24T12:10:00.000Z", "2026-06-24T12:00:00.000Z"],
+      );
+      const seen: string[] = [];
+      const q = createSqliteQueue(driver, async (m) => void seen.push(typeOf(m)));
+
+      await q.binding.send({ type: "agent-regate-pr", deliveryId: "sweep:owner/repo#7", repoFullName: "owner/repo", prNumber: 7, installationId: 123 });
+      await q.binding.send({ type: "rag-index-repo", requestedBy: "schedule" });
+      await q.binding.send({ type: "github-webhook", deliveryId: "fresh", eventName: "pull_request", payload: {} });
+      await q.drain();
+
+      expect(seen).toEqual(["github-webhook"]);
+      const row = driver.query(
+        "SELECT status, attempts, run_after, last_error FROM _selfhost_jobs WHERE payload LIKE ?",
+        ['%"agent-regate-pr"%'],
+      ).rows[0] as { status: string; attempts: number; run_after: number; last_error: string };
+      expect(row).toMatchObject({
+        status: "pending",
+        attempts: 0,
+        run_after: Date.parse("2026-06-24T12:10:15.000Z"),
+        last_error: "github rate-limit background admission",
+      });
+      const pendingBackground = driver.query(
+        "SELECT COUNT(*) AS c FROM _selfhost_jobs WHERE status='pending' AND last_error=?",
+        ["github rate-limit background admission"],
+      ).rows[0] as { c: number };
+      expect(pendingBackground.c).toBe(2);
+      expect(q.stats()).toMatchObject({ gittensory_jobs_rate_limit_deferred_total: 2 });
+    } finally {
+      if (oldJitter === undefined) delete process.env.QUEUE_RATE_LIMIT_JITTER_MS;
+      else process.env.QUEUE_RATE_LIMIT_JITTER_MS = oldJitter;
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips the background-admission metric when the defer update changes no rows", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
+    const oldJitter = process.env.QUEUE_RATE_LIMIT_JITTER_MS;
+    process.env.QUEUE_RATE_LIMIT_JITTER_MS = "0";
+    try {
+      const base = makeDriver();
+      const driver = {
+        query(sql: string, params: unknown[]) {
+          if (sql.includes("SET status='pending', run_after=max")) {
+            return { rows: [], changes: 0, lastInsertRowid: 0 };
+          }
+          return base.query(sql, params);
+        },
+        exec(sql: string) {
+          base.exec(sql);
+        },
+      };
+      driver.query(
+        `CREATE TABLE github_rate_limit_observations (
+          id TEXT PRIMARY KEY,
+          repo_full_name TEXT NOT NULL,
+          resource TEXT NOT NULL,
+          path TEXT NOT NULL,
+          status_code INTEGER NOT NULL,
+          limit_value INTEGER,
+          remaining INTEGER,
+          reset_at TEXT,
+          observed_at TEXT NOT NULL
+        )`,
+        [],
+      );
+      driver.query(
+        `INSERT INTO github_rate_limit_observations (id, repo_full_name, resource, path, status_code, limit_value, remaining, reset_at, observed_at)
+         VALUES (?, ?, 'rest', ?, 200, 5000, 120, ?, ?)`,
+        ["rl-bg", "owner/repo", "/x", "2026-06-24T12:10:00.000Z", "2026-06-24T12:00:00.000Z"],
+      );
+      const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const seen: string[] = [];
+      const q = createSqliteQueue(driver, async (m) => void seen.push(typeOf(m)));
+
+      await q.binding.send({ type: "rag-index-repo", requestedBy: "schedule" });
+      await q.drain();
+
+      expect(seen).toEqual([]);
+      expect(warned).not.toHaveBeenCalled();
+      expect(q.stats()).not.toHaveProperty("gittensory_jobs_rate_limit_deferred_total");
+    } finally {
+      if (oldJitter === undefined) delete process.env.QUEUE_RATE_LIMIT_JITTER_MS;
+      else process.env.QUEUE_RATE_LIMIT_JITTER_MS = oldJitter;
+      vi.useRealTimers();
+    }
   });
 
   it("backfills stale priorities on startup so existing regate jobs are not buried", async () => {

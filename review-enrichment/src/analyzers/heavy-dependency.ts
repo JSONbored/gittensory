@@ -1,8 +1,14 @@
 // Heavy-dependency-for-trivial-use analyzer (#1505). For each newly-added/upgraded npm dependency, count direct
 // import/require usage in the PR's added lines and fetch package weight metadata. Flag only when the package is
 // both materially heavy and used trivially, so the review brief can ask whether a local helper/native API would do.
-import type { EnrichRequest, HeavyDependencyFinding } from "../types.js";
+import type {
+  AnalyzerDiagnostics,
+  EnrichRequest,
+  HeavyDependencyFinding,
+} from "../types.js";
+import type { AnalysisContext } from "../analysis-context.js";
 import { extractDependencyChanges } from "./dependency-scan.js";
+import { boundedFetchJson } from "../external-fetch.js";
 
 const MAX_WEIGHT_LOOKUPS = 20;
 const MAX_FINDINGS = 15;
@@ -31,6 +37,8 @@ export interface PackageWeight {
 
 interface ScanOptions {
   signal?: AbortSignal;
+  analysis?: Pick<AnalysisContext, "fetchJson">;
+  diagnostics?: AnalyzerDiagnostics;
 }
 
 function isSafeNpmPackageVersion(name: string, version: string): boolean {
@@ -132,21 +140,37 @@ export async function queryPackageWeight(
   version: string,
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
+  options: Pick<ScanOptions, "analysis" | "diagnostics"> = {},
 ): Promise<PackageWeight | null> {
   if (signal?.aborted) return null;
   try {
     const packageSpec = encodeURIComponent(`${pkg}@${version}`);
-    const response = await fetchImpl(
-      `https://bundlephobia.com/api/size?package=${packageSpec}`,
-      { signal },
-    );
-    if (!response.ok) return null;
-    const data = (await response.json()) as {
-      installSize?: unknown;
-      size?: unknown;
-      gzip?: unknown;
-      dependencyCount?: unknown;
+    const url = `https://bundlephobia.com/api/size?package=${packageSpec}`;
+    const fetchOptions = {
+      endpointCategory: "bundlephobia-size",
+      signal,
+      fetchImpl,
+      diagnostics: options.diagnostics,
+      phase: "heavy-dependency",
+      subcall: "bundlephobia-size",
+      maxBytes: 256 * 1024,
+      maxCallsPerCategory: MAX_WEIGHT_LOOKUPS,
     };
+    const response = options.analysis
+      ? await options.analysis.fetchJson<{
+          installSize?: unknown;
+          size?: unknown;
+          gzip?: unknown;
+          dependencyCount?: unknown;
+        }>(url, fetchOptions)
+      : await boundedFetchJson<{
+          installSize?: unknown;
+          size?: unknown;
+          gzip?: unknown;
+          dependencyCount?: unknown;
+        }>(url, fetchOptions);
+    if (!response.ok) return null;
+    const data = response.data;
     return {
       installSizeBytes: numberOrNull(data.installSize),
       bundleSizeBytes: numberOrNull(data.size),
@@ -203,6 +227,7 @@ export async function scanHeavyDependencies(
       change.to,
       fetchImpl,
       options.signal,
+      options,
     );
     if (!weight || !isHeavyPackageWeight(weight)) continue;
 

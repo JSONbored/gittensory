@@ -5,8 +5,14 @@
 //    reviewer cannot detect.
 // 2. Binary files and vendored/minified code committed by the PR — artifacts without an auditable source
 //    the reviewer can inspect. Detected purely by path pattern + extension (no network).
-import type { EnrichRequest, ProvenanceFinding } from "../types.js";
+import type {
+  AnalyzerDiagnostics,
+  EnrichRequest,
+  ProvenanceFinding,
+} from "../types.js";
+import type { AnalysisContext } from "../analysis-context.js";
 import { extractDependencyChanges } from "./dependency-scan.js";
+import { boundedFetchJson } from "../external-fetch.js";
 
 const MAX_ATTESTATION_CHECKS = 20; // bound network round-trips
 const MAX_FINDINGS = 30; // keep the brief bounded
@@ -51,17 +57,26 @@ export async function hasNpmAttestation(
   version: string,
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
+  options: Pick<ScanOptions, "analysis" | "diagnostics"> = {},
 ): Promise<boolean> {
   if (signal?.aborted) return true;
   try {
-    const res = await fetchImpl(
-      `https://registry.npmjs.org/-/npm/v1/attestations/${encodeURIComponent(`${pkg}@${version}`)}`,
-      { signal },
-    );
-    if (res.status === 404) return false; // unambiguously absent
-    if (!res.ok) return true; // other registry error → fail-safe
-    const data = (await res.json()) as { attestations?: unknown[] };
-    return (data.attestations?.length ?? 0) > 0;
+    const url = `https://registry.npmjs.org/-/npm/v1/attestations/${encodeURIComponent(`${pkg}@${version}`)}`;
+    const fetchOptions = {
+      endpointCategory: "npm-attestations",
+      signal,
+      fetchImpl,
+      diagnostics: options.diagnostics,
+      phase: "provenance",
+      subcall: "npm-attestations",
+      maxBytes: 256 * 1024,
+      maxCallsPerCategory: MAX_ATTESTATION_CHECKS,
+    };
+    const res = options.analysis
+      ? await options.analysis.fetchJson<{ attestations?: unknown[] }>(url, fetchOptions)
+      : await boundedFetchJson<{ attestations?: unknown[] }>(url, fetchOptions);
+    if (!res.ok) return res.status === 404 ? false : true; // other registry error → fail-safe
+    return (res.data.attestations?.length ?? 0) > 0;
   } catch {
     return true; // network / parse error → fail-safe
   }
@@ -91,21 +106,31 @@ export async function hasPypiProvenance(
   version: string,
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
+  options: Pick<ScanOptions, "analysis" | "diagnostics"> = {},
 ): Promise<boolean> {
   if (signal?.aborted) return true;
   try {
-    const res = await fetchImpl(
-      `https://pypi.org/simple/${encodeURIComponent(pkg.toLowerCase())}/`,
-      {
-        signal,
-        headers: { Accept: "application/vnd.pypi.simple.v1+json" },
-      },
-    );
-    if (!res.ok) return true; // fail-safe
-    const data = (await res.json()) as {
-      files?: Array<{ filename: string; provenance?: string }>;
+    const url = `https://pypi.org/simple/${encodeURIComponent(pkg.toLowerCase())}/`;
+    const fetchOptions = {
+      endpointCategory: "pypi-simple",
+      signal,
+      headers: { Accept: "application/vnd.pypi.simple.v1+json" },
+      fetchImpl,
+      diagnostics: options.diagnostics,
+      phase: "provenance",
+      subcall: "pypi-simple",
+      maxBytes: 1024 * 1024,
+      maxCallsPerCategory: MAX_ATTESTATION_CHECKS,
     };
-    const versionFiles = (data.files ?? []).filter((f) =>
+    const res = options.analysis
+      ? await options.analysis.fetchJson<{
+          files?: Array<{ filename: string; provenance?: string }>;
+        }>(url, fetchOptions)
+      : await boundedFetchJson<{
+          files?: Array<{ filename: string; provenance?: string }>;
+        }>(url, fetchOptions);
+    if (!res.ok) return true; // fail-safe
+    const versionFiles = (res.data.files ?? []).filter((f) =>
       matchesPypiVersion(f.filename, pkg, version),
     );
     if (!versionFiles.length) return true; // can't determine → don't flag
@@ -117,6 +142,8 @@ export async function hasPypiProvenance(
 
 interface ScanOptions {
   signal?: AbortSignal;
+  analysis?: Pick<AnalysisContext, "fetchJson">;
+  diagnostics?: AnalyzerDiagnostics;
 }
 
 /** Analyzer entrypoint: scan for newly-added deps lacking provenance attestations + binary/vendored files. */
@@ -154,6 +181,7 @@ export async function scanProvenance(
         change.to,
         fetchImpl,
         options.signal,
+        options,
       );
     } else if (change.ecosystem === "PyPI") {
       attested = await hasPypiProvenance(
@@ -161,6 +189,7 @@ export async function scanProvenance(
         change.to,
         fetchImpl,
         options.signal,
+        options,
       );
     } else {
       continue; // Go and other ecosystems — no provenance API to check yet

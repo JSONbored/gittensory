@@ -25,8 +25,11 @@ export interface EnrichRequest {
    *  whether the diff covers the issue's stated requirement without an extra fetch. Absent ⇒ alignment omitted. (#1478) */
   linkedIssue?: EnrichLinkedIssue;
   budget?: { timeoutMs?: number; maxBriefChars?: number };
+  profile?: ReesProfileName;
   analyzers?: string[];
 }
+
+export type ReesProfileName = "fast" | "balanced" | "deep";
 
 /** A PR's linked issue, as carried in the request envelope. `title`/`body` hold the stated requirement the history
  *  analyzer measures the diff against; only the number is mandatory. (#1478) */
@@ -287,9 +290,22 @@ export interface BriefFindings {
   iacMisconfig?: IacMisconfigFinding[];
   nativeBuild?: NativeBuildFinding[];
   history?: HistoryFinding[];
+  docCommentDrift?: DocCommentDriftFinding[];
 }
 
-export type AnalyzerStatus = "ok" | "degraded" | "skipped";
+/** A JSDoc/TSDoc block whose `@param` tags name parameters the adjacent function no longer declares — a
+ *  verifiable doc-vs-signature drift the PR introduced by changing the signature. Reports the function name +
+ *  the stale parameter names + location only. Functions with destructured/ambiguous params are skipped (so the
+ *  param set is always confidently enumerable). (#1519) */
+export interface DocCommentDriftFinding {
+  file: string;
+  line: number;
+  symbol: string;
+  /** `@param` names documented but absent from the function's actual parameter list. */
+  staleParams: string[];
+}
+
+export type AnalyzerStatus = "ok" | "degraded" | "skipped" | "capped" | "timeout";
 
 /** Internal, public-safe analyzer diagnostics for Sentry. Never attach request bodies, diffs, tokens, or raw prompts. */
 export interface AnalyzerDiagnostics {
@@ -298,12 +314,30 @@ export interface AnalyzerDiagnostics {
   partialStatus?: "complete" | "partial";
   partialReason?: string;
   githubEndpointCategory?: string;
+  endpointCategory?: string;
+  externalFailureReason?: string;
+  externalElapsedMs?: number;
   fileLookupCount?: number;
   commitLookupCount?: number;
   prLookupCount?: number;
   skippedFileCount?: number;
   capped?: boolean;
+  cacheHits?: number;
+  cacheMisses?: number;
+  externalCallsByCategory?: Record<string, number>;
+  skippedWorkByCategory?: Record<string, number>;
+  cappedWorkByCategory?: Record<string, number>;
+  analysisElapsedMs?: number;
   captureDegradation?: boolean;
+}
+
+export interface AnalyzerMetricsDiagnostics {
+  cacheHits: number;
+  cacheMisses: number;
+  externalCallsByCategory: Record<string, number>;
+  skippedWorkByCategory: Record<string, number>;
+  cappedWorkByCategory: Record<string, number>;
+  analysisElapsedMs: number;
 }
 
 /** Service → engine response. `promptSection` is spliced verbatim; `findings` is the structured backing data. */
@@ -316,7 +350,38 @@ export interface ReviewBrief {
   elapsedMs: number;
   partial: boolean;
   analyzerStatus: Record<string, AnalyzerStatus>;
+  telemetry: ReviewBriefTelemetry;
   findings: BriefFindings;
   promptSection: string;
   systemSuffix: string;
+}
+
+export interface ReviewBriefTelemetry {
+  profile: ReesProfileName;
+  responseReserveMs: number;
+  requestedAnalyzers: string[];
+  analyzerCount: {
+    requested: number;
+    runnable: number;
+    skipped: number;
+  };
+  analyzers: Record<string, AnalyzerTelemetry>;
+  cacheHits: number;
+  cacheMisses: number;
+  cacheHitRate: number;
+  externalCallsByCategory: Record<string, number>;
+  skippedWorkByCategory: Record<string, number>;
+  cappedWorkByCategory: Record<string, number>;
+  elapsedMs: number;
+}
+
+export interface AnalyzerTelemetry {
+  status: AnalyzerStatus;
+  elapsedMs: number;
+  timeoutMs?: number;
+  costClass?: string;
+  partialStatus?: "complete" | "partial";
+  partialReason?: string;
+  skipReason?: string;
+  capped?: boolean;
 }

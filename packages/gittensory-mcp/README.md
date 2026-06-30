@@ -42,6 +42,7 @@ gittensory-mcp profile list
 gittensory-mcp profile create work
 gittensory-mcp profile switch work
 gittensory-mcp cache status
+gittensory-mcp cache list
 gittensory-mcp cache clear
 gittensory-mcp init-client --print codex
 gittensory-mcp init-client --print claude
@@ -245,3 +246,5 @@ The cache excludes source contents and local paths, is bounded, and can be remov
 ```sh
 gittensory-mcp cache clear
 ```
+
+`gittensory-mcp cache list` shows the cached entries (newest first) with the login, when each was cached, and its API/package version and size — never the cached payload or the auth-cache key. `gittensory-mcp cache status` reports the aggregate entry count.
