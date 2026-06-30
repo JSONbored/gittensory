@@ -20,6 +20,9 @@ export interface DepChange {
 const MAX_MANIFEST_FILES = 20;
 const MAX_PATCH_LINES_PER_FILE = 500;
 const MAX_DEPENDENCY_QUERIES = 25;
+const OSV_QUERY_BATCH_SIZE = 10;
+const OSV_QUERY_MAX_BYTES = 512 * 1024;
+const OSV_QUERY_BATCH_MAX_BYTES = 1024 * 1024;
 
 export interface ScanLimits {
   maxManifestFiles?: number;
@@ -176,6 +179,42 @@ function mapOsvVulns(vulns: OsvVuln[] | undefined): Cve[] {
   }));
 }
 
+async function fetchOsvDirect(
+  ecosystem: string,
+  name: string,
+  version: string,
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+  options: Pick<ScanOptions, "analysis" | "diagnostics" | "limits"> = {},
+): Promise<Cve[]> {
+  if (signal?.aborted) return [];
+  const fetchOptions = {
+    endpointCategory: "osv-query",
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ package: { name, ecosystem }, version }),
+    signal,
+    fetchImpl,
+    diagnostics: options.diagnostics,
+    phase: "dependency",
+    subcall: "osv-query",
+    maxBytes: OSV_QUERY_MAX_BYTES,
+    maxCallsPerCategory:
+      options.limits?.maxDependencyQueries ?? MAX_DEPENDENCY_QUERIES,
+  };
+  const response = options.analysis
+    ? await options.analysis.fetchJson<{ vulns?: OsvVuln[] }>(
+        "https://api.osv.dev/v1/query",
+        fetchOptions,
+      )
+    : await boundedFetchJson<{ vulns?: OsvVuln[] }>(
+        "https://api.osv.dev/v1/query",
+        fetchOptions,
+      );
+  if (!response.ok) return [];
+  return mapOsvVulns(response.data.vulns);
+}
+
 /* Legacy direct path kept for tests and injected callers that do not have request context. */
 async function queryOsvDirect(
   ecosystem: string,
@@ -185,24 +224,9 @@ async function queryOsvDirect(
   signal?: AbortSignal,
   diagnostics?: AnalyzerDiagnostics,
 ): Promise<Cve[]> {
-  if (signal?.aborted) return [];
-  const response = await boundedFetchJson<{ vulns?: OsvVuln[] }>(
-    "https://api.osv.dev/v1/query",
-    {
-      endpointCategory: "osv-query",
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ package: { name, ecosystem }, version }),
-      signal,
-      fetchImpl,
-      diagnostics,
-      phase: "dependency",
-      subcall: "osv-query",
-      maxBytes: 512 * 1024,
-    },
-  );
-  if (!response.ok) return [];
-  return mapOsvVulns(response.data.vulns);
+  return fetchOsvDirect(ecosystem, name, version, fetchImpl, signal, {
+    diagnostics,
+  });
 }
 
 /*
@@ -243,39 +267,58 @@ export async function queryOsvBatch(
     uniqueChanges.push(change);
   }
 
-  const fetchOptions = {
-    endpointCategory: "osv-direct-querybatch",
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      queries: uniqueChanges.map((change) => ({
-        package: { name: change.package, ecosystem: change.ecosystem },
-        version: change.to,
-      })),
-    }),
-    signal,
-    fetchImpl,
-    diagnostics: options.diagnostics,
-    phase: "dependency",
-    subcall: "osv-direct-querybatch",
-    maxBytes: 1024 * 1024,
-    maxCallsPerCategory: 1,
-  };
-  const response = options.analysis
-    ? await options.analysis.fetchJson<{
-        results?: Array<{ vulns?: OsvVuln[] }>;
-      }>("https://api.osv.dev/v1/querybatch", fetchOptions)
-    : await boundedFetchJson<{
-        results?: Array<{ vulns?: OsvVuln[] }>;
-      }>("https://api.osv.dev/v1/querybatch", fetchOptions);
-  if (!response.ok) return results;
+  const maxBatchCalls = Math.ceil(uniqueChanges.length / OSV_QUERY_BATCH_SIZE);
+  for (let i = 0; i < uniqueChanges.length; i += OSV_QUERY_BATCH_SIZE) {
+    if (signal?.aborted) break;
+    const chunk = uniqueChanges.slice(i, i + OSV_QUERY_BATCH_SIZE);
+    const fetchOptions = {
+      endpointCategory: "osv-direct-querybatch",
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        queries: chunk.map((change) => ({
+          package: { name: change.package, ecosystem: change.ecosystem },
+          version: change.to,
+        })),
+      }),
+      signal,
+      fetchImpl,
+      diagnostics: options.diagnostics,
+      phase: "dependency",
+      subcall: "osv-direct-querybatch",
+      maxBytes: OSV_QUERY_BATCH_MAX_BYTES,
+      maxCallsPerCategory: maxBatchCalls,
+    };
+    const response = options.analysis
+      ? await options.analysis.fetchJson<{
+          results?: Array<{ vulns?: OsvVuln[] }>;
+        }>("https://api.osv.dev/v1/querybatch", fetchOptions)
+      : await boundedFetchJson<{
+          results?: Array<{ vulns?: OsvVuln[] }>;
+        }>("https://api.osv.dev/v1/querybatch", fetchOptions);
 
-  uniqueChanges.forEach((change, index) => {
-    results.set(
-      osvCacheKey(change),
-      mapOsvVulns(response.data.results?.[index]?.vulns),
-    );
-  });
+    if (!response.ok) {
+      for (const change of chunk) {
+        const cves = await fetchOsvDirect(
+          change.ecosystem,
+          change.package,
+          change.to,
+          fetchImpl,
+          signal,
+          options,
+        );
+        results.set(osvCacheKey(change), cves);
+      }
+      continue;
+    }
+
+    chunk.forEach((change, index) => {
+      results.set(
+        osvCacheKey(change),
+        mapOsvVulns(response.data.results?.[index]?.vulns),
+      );
+    });
+  }
   return results;
 }
 

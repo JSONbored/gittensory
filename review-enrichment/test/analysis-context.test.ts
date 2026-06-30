@@ -194,3 +194,108 @@ test("scanDependencyChanges batches and de-dupes OSV package lookups inside one 
   assert.equal(context.snapshotMetrics().cacheMisses, 1);
   assert.equal(context.snapshotMetrics().cacheHits, 0);
 });
+
+test("scanDependencyChanges chunks OSV batch lookups before fallback is needed", async () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 1810,
+  });
+  const batchSizes = [];
+  const fetchImpl = async (url, init = {}) => {
+    assert.equal(String(url), "https://api.osv.dev/v1/querybatch");
+    const body = JSON.parse(String(init.body));
+    batchSizes.push(body.queries.length);
+    return jsonResponse({
+      results: body.queries.map((query, index) => ({
+        vulns:
+          query.package.name === "pkg-10" && index === 0
+            ? [
+                {
+                  id: "GHSA-chunked",
+                  summary: "chunked advisory",
+                  database_specific: { severity: "HIGH" },
+                },
+              ]
+            : [],
+      })),
+    });
+  };
+  const changes = Array.from({ length: 12 }, (_, index) => ({
+    ecosystem: "npm",
+    package: `pkg-${index}`,
+    from: null,
+    to: "1.0.0",
+  }));
+
+  const findings = await scanDependencyChanges(changes, fetchImpl, {
+    analysis: context,
+    limits: { maxDependencyQueries: 25 },
+  });
+
+  assert.deepEqual(batchSizes, [10, 2]);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].package, "pkg-10");
+  assert.equal(findings[0].cves[0].id, "GHSA-chunked");
+  assert.deepEqual(context.snapshotMetrics().externalCallsByCategory, {
+    "osv-direct-querybatch": 2,
+  });
+});
+
+test("scanDependencyChanges falls back to direct OSV queries after an oversized batch response", async () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 1810,
+  });
+  let batchCalls = 0;
+  const directPackages = [];
+  const fetchImpl = async (url, init = {}) => {
+    if (String(url) === "https://api.osv.dev/v1/querybatch") {
+      batchCalls += 1;
+      return new Response("{}", {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(1024 * 1024 + 1),
+        },
+      });
+    }
+
+    assert.equal(String(url), "https://api.osv.dev/v1/query");
+    const body = JSON.parse(String(init.body));
+    directPackages.push(body.package.name);
+    return jsonResponse({
+      vulns:
+        body.package.name === "left-pad"
+          ? [
+              {
+                id: "GHSA-fallback",
+                summary: "direct fallback advisory",
+                database_specific: { severity: "HIGH" },
+              },
+            ]
+          : [],
+    });
+  };
+  const changes = [
+    { ecosystem: "npm", package: "left-pad", from: null, to: "1.3.0" },
+    { ecosystem: "npm", package: "lodash", from: null, to: "4.17.20" },
+    { ecosystem: "npm", package: "express", from: null, to: "4.18.0" },
+  ];
+
+  const findings = await scanDependencyChanges(changes, fetchImpl, {
+    analysis: context,
+    limits: { maxDependencyQueries: 25 },
+  });
+
+  assert.equal(batchCalls, 1);
+  assert.deepEqual(directPackages, ["left-pad", "lodash", "express"]);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].package, "left-pad");
+  assert.equal(findings[0].cves[0].id, "GHSA-fallback");
+  assert.deepEqual(context.snapshotMetrics().externalCallsByCategory, {
+    "osv-direct-querybatch": 1,
+    "osv-query": 3,
+  });
+  assert.equal(context.snapshotMetrics().cacheMisses, 4);
+  assert.equal(context.snapshotMetrics().cacheHits, 0);
+});
