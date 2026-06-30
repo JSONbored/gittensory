@@ -183,7 +183,10 @@ export async function enqueueRelayPending(
   if (coalesceKey && inserted.meta.changes > 0) {
     await env.DB
       .prepare(
-        "DELETE FROM orb_relay_pending WHERE installation_id = ? AND coalesce_key = ? AND delivery_id <> ?",
+        `DELETE FROM orb_relay_pending
+         WHERE installation_id = ?
+           AND coalesce_key = ?
+           AND rowid < (SELECT rowid FROM orb_relay_pending WHERE delivery_id = ?)`,
       )
       .bind(args.installationId, coalesceKey, args.deliveryId)
       .run();

@@ -476,6 +476,81 @@ describe("enqueueRelayPending", () => {
     expect(other ?? null).not.toBeNull();
   });
 
+  it("keeps the newer coalesced delivery when an older enqueue prunes after a newer insert", async () => {
+    const e = brokeredEnv();
+    const realDb = db(e);
+    type TestStatement = ReturnType<TestD1Database["prepare"]>;
+    let releaseOldPrune!: () => void;
+    let oldInserted!: () => void;
+    const oldMayPrune = new Promise<void>((resolve) => {
+      releaseOldPrune = resolve;
+    });
+    const oldInsertedPromise = new Promise<void>((resolve) => {
+      oldInserted = resolve;
+    });
+    e.DB = {
+      prepare(sql: string) {
+        const statement = realDb.prepare(sql);
+        let bound: unknown[] = [];
+        let wrapped: TestStatement;
+        wrapped = {
+          bind(...values: Parameters<TestStatement["bind"]>) {
+            bound = values;
+            statement.bind(...values);
+            return wrapped;
+          },
+          first<T = unknown>() {
+            return statement.first<T>();
+          },
+          all<T = unknown>() {
+            return statement.all<T>();
+          },
+          raw<T = unknown[]>() {
+            return statement.raw<T>();
+          },
+          async run() {
+            const result = await statement.run();
+            if (
+              sql.includes("INSERT INTO orb_relay_pending") &&
+              bound[0] === "ci-race-old"
+            ) {
+              oldInserted();
+              await oldMayPrune;
+            }
+            return result;
+          },
+        };
+        return wrapped;
+      },
+      batch(statements: TestStatement[]) {
+        return realDb.batch(statements);
+      },
+    } as unknown as D1Database;
+    const body = (marker: string) =>
+      JSON.stringify({
+        action: "completed",
+        repository: { full_name: "JSONbored/Gittensory" },
+        check_suite: {
+          head_sha: "d".repeat(40),
+          pull_requests: [{ number: 1838 }],
+        },
+        marker,
+      });
+
+    const older = enqueueRelayPending(e, { deliveryId: "ci-race-old", installationId: 9607, eventName: "check_suite", rawBody: body("old") });
+    await oldInsertedPromise;
+    await enqueueRelayPending(e, { deliveryId: "ci-race-new", installationId: 9607, eventName: "check_suite", rawBody: body("new") });
+    releaseOldPrune();
+    await older;
+
+    const rows = await db(e)
+      .prepare("SELECT delivery_id, raw_body FROM orb_relay_pending WHERE installation_id=9607 ORDER BY delivery_id")
+      .all<{ delivery_id: string; raw_body: string }>();
+    expect(rows.results).toHaveLength(1);
+    expect(rows.results[0]?.delivery_id).toBe("ci-race-new");
+    expect(JSON.parse(rows.results[0]?.raw_body ?? "{}")).toMatchObject({ marker: "new" });
+  });
+
   it("keeps exact duplicate coalescible delivery IDs idempotent", async () => {
     const e = brokeredEnv();
     const body = (marker: string) =>
