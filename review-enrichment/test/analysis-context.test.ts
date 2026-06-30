@@ -381,7 +381,23 @@ test("createAnalysisContext caps materialized diff surfaces", () => {
   });
 });
 
-test("createAnalysisContext caps oversized patch scans without splitting the full patch", () => {
+test("createAnalysisContext keeps uncapped context-only patches as no added lines", () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 1817,
+    files: [
+      {
+        path: "src/context-only.ts",
+        patch: "@@ -1,1 +1,1 @@\n const value = true;",
+      },
+    ],
+  });
+
+  assert.equal(context.hasAddedLines, false);
+  assert.deepEqual(context.snapshotMetrics().cappedWorkByCategory, {});
+});
+
+test("createAnalysisContext treats capped patch scans as added-line presence", () => {
   const context = createAnalysisContext({
     repoFullName: "JSONbored/gittensory",
     prNumber: 1817,
@@ -393,7 +409,7 @@ test("createAnalysisContext caps oversized patch scans without splitting the ful
     ],
   });
 
-  assert.equal(context.hasAddedLines, false);
+  assert.equal(context.hasAddedLines, true);
   assert.equal(context.addedLines.length, 0);
   assert.equal(
     context.snapshotMetrics().cappedWorkByCategory.has_added_lines_patch_bytes > 0,

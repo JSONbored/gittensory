@@ -372,6 +372,7 @@ export function filesHaveAddedLines(
       if (line.startsWith("+++") || line.startsWith("---")) continue;
       if (line.startsWith("+")) return true;
     }
+    if (file.patch.length > MAX_CONTEXT_PATCH_BYTES) return true;
   }
   return false;
 }
