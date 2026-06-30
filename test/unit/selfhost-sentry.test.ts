@@ -3,10 +3,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mock @sentry/node so the dynamic import inside initSentry() resolves to spies. Hoisted so vi.mock can see it.
 const mocks = vi.hoisted(() => {
   const scope = { setContext: vi.fn(), setLevel: vi.fn(), setTag: vi.fn(), setFingerprint: vi.fn() };
+  let activeSpan: { id: string } | null = null;
   return {
     scope,
     init: vi.fn(),
     withScope: vi.fn((cb: (s: typeof scope) => void) => cb(scope)),
+    startSpan: vi.fn(async (_options: unknown, cb: (span: { id: string }) => unknown) => {
+      const prev = activeSpan;
+      activeSpan = { id: "active-span" };
+      try {
+        return await cb(activeSpan);
+      } finally {
+        activeSpan = prev;
+      }
+    }),
+    continueTrace: vi.fn((_options: unknown, cb: () => unknown) => cb()),
+    getActiveSpan: vi.fn(() => activeSpan),
+    spanToTraceHeader: vi.fn(() => "sentry-trace-header"),
+    spanToBaggageHeader: vi.fn(() => "sentry-baggage-header"),
     captureException: vi.fn(),
     captureMessage: vi.fn(),
     captureCheckIn: vi.fn((checkIn: { checkInId?: string }) => checkIn.checkInId ?? "check-in-id"),
@@ -19,6 +33,11 @@ const otelMocks = vi.hoisted(() => ({
 vi.mock("@sentry/node", () => ({
   init: mocks.init,
   withScope: mocks.withScope,
+  startSpan: mocks.startSpan,
+  continueTrace: mocks.continueTrace,
+  getActiveSpan: mocks.getActiveSpan,
+  spanToTraceHeader: mocks.spanToTraceHeader,
+  spanToBaggageHeader: mocks.spanToBaggageHeader,
   captureException: mocks.captureException,
   captureMessage: mocks.captureMessage,
   captureCheckIn: mocks.captureCheckIn,
@@ -41,6 +60,10 @@ import {
   resetSentryForTest,
   withSentryMonitor,
 } from "../../src/selfhost/sentry";
+import {
+  currentReviewTraceHeaders,
+  withReviewSpan,
+} from "../../src/observability/review-trace";
 
 beforeEach(() => {
   resetSentryForTest();
@@ -91,6 +114,7 @@ describe("disabled when SENTRY_DSN is unset (modular opt-out → complete no-op)
     expect(await initSentry({} as unknown as NodeJS.ProcessEnv)).toBe(false);
     captureError(new Error("x"), { a: 1 });
     captureReviewFailure(new Error("y"), { repo: "o/r" });
+    await expect(withReviewSpan("off", { repo: "o/r" }, async () => "ok")).resolves.toBe("ok");
     await expect(
       withSentryMonitor(
         "scheduled-loop",
@@ -103,6 +127,7 @@ describe("disabled when SENTRY_DSN is unset (modular opt-out → complete no-op)
     expect(mocks.captureException).not.toHaveBeenCalled();
     expect(mocks.captureCheckIn).not.toHaveBeenCalled();
     expect(mocks.flush).not.toHaveBeenCalled();
+    expect(mocks.startSpan).not.toHaveBeenCalled();
   });
 });
 
@@ -152,6 +177,84 @@ describe("enabled when SENTRY_DSN is set", () => {
     expect(opts.release).toBe("v9");
     expect(opts.tracesSampleRate).toBe(0.5);
     expect(opts.serverName).toBe("https://self.host");
+  });
+
+  it("keeps review tracing inert when the Sentry trace sample rate is 0", async () => {
+    await initSentry({
+      SENTRY_DSN: "d",
+      SENTRY_TRACES_SAMPLE_RATE: "0",
+    } as unknown as NodeJS.ProcessEnv);
+
+    await expect(
+      withReviewSpan("selfhost.http.request", { repo: "o/r", pr: 7 }, async () => "ok"),
+    ).resolves.toBe("ok");
+    expect(currentReviewTraceHeaders()).toBeUndefined();
+    expect(mocks.startSpan).not.toHaveBeenCalled();
+  });
+
+  it("starts review spans only when the Sentry trace sample rate is non-zero", async () => {
+    await initSentry({
+      SENTRY_DSN: "d",
+      SENTRY_TRACES_SAMPLE_RATE: "0.25",
+    } as unknown as NodeJS.ProcessEnv);
+
+    let headers: ReturnType<typeof currentReviewTraceHeaders>;
+    await expect(
+      withReviewSpan(
+        "selfhost.http.request",
+        { repo: "o/r", pr: 7, secretToken: "drop", longText: "x".repeat(200) },
+        async () => {
+          headers = currentReviewTraceHeaders();
+          return "ok";
+        },
+        { forceTransaction: true, op: "http.server" },
+      ),
+    ).resolves.toBe("ok");
+
+    const options = mocks.startSpan.mock.calls[0]?.[0] as {
+      name: string;
+      forceTransaction?: boolean;
+      op?: string;
+      attributes: Record<string, unknown>;
+    };
+    expect(options).toMatchObject({
+      name: "selfhost.http.request",
+      forceTransaction: true,
+      op: "http.server",
+      attributes: { repo: "o/r", pr: 7 },
+    });
+    expect(options.attributes.secretToken).toBeUndefined();
+    expect(options.attributes.longText).toHaveLength(160);
+    expect(headers).toEqual({
+      sentryTrace: "sentry-trace-header",
+      baggage: "sentry-baggage-header",
+    });
+  });
+
+  it("continues a parent Sentry trace when queued work passes sentry headers", async () => {
+    await initSentry({
+      SENTRY_DSN: "d",
+      SENTRY_TRACES_SAMPLE_RATE: "0.1",
+    } as unknown as NodeJS.ProcessEnv);
+
+    await expect(
+      withReviewSpan(
+        "selfhost.queue.job",
+        { repo: "o/r", pr: 7 },
+        async () => "ok",
+        {
+          parent: {
+            sentryTrace: "queued-trace",
+            baggage: "queued-baggage",
+          },
+        },
+      ),
+    ).resolves.toBe("ok");
+
+    expect(mocks.continueTrace).toHaveBeenCalledWith(
+      { sentryTrace: "queued-trace", baggage: "queued-baggage" },
+      expect.any(Function),
+    );
   });
 
   it("uses the image-baked version as the release fallback and ignores blank overrides", async () => {

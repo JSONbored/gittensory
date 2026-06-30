@@ -11,6 +11,7 @@ import { isConfiguredSelfHostProvider, resolveConfiguredProviderNames } from "./
 export { assertNoLegacySharedAiEnv } from "./ai-config";
 import { incr } from "./metrics";
 import { withOtelSpan } from "./otel";
+import { withReviewSpan } from "../observability/review-trace";
 import { delimiter } from "node:path";
 
 interface AiRunOptions {
@@ -627,10 +628,21 @@ function runProviderWithOtel(
   model: string,
   options: AiRunOptions,
 ): Promise<AiResult> {
-  return withOtelSpan(
+  const spanAttributes = {
+    "ai.provider": provider.name,
+    "ai.model": model || "default",
+    "ai.request_kind": requestKind(options),
+  };
+  return withReviewSpan(
     "selfhost.ai.provider",
-    { "ai.provider": provider.name, "ai.model": model || "default", "ai.request_kind": requestKind(options) },
-    () => provider.ai.run(model, options),
+    spanAttributes,
+    async () =>
+      await withOtelSpan(
+        "selfhost.ai.provider",
+        spanAttributes,
+        () => provider.ai.run(model, options),
+      ),
+    { op: "ai.run" },
   );
 }
 

@@ -1,4 +1,5 @@
 import { Octokit } from "@octokit/core";
+import { withReviewSpan } from "../observability/review-trace";
 import { isGlobalAgentFrozen, recordAuditEvent } from "../db/repositories";
 import { isGlobalAgentPause, resolveAgentActionMode, type AgentActionMode } from "../settings/agent-execution";
 import { incr } from "../selfhost/metrics";
@@ -205,6 +206,19 @@ function rateLimitAdmissionKey(init: GitHubTimeoutFetchInit | undefined): GitHub
   return key ? key : null;
 }
 
+function githubSpanResource(url: string): string {
+  if (!url.startsWith(`${GITHUB_API_PREFIX}/`)) return "external";
+  const path = githubApiPath(url);
+  if (/^\/repos\/[^/]+\/[^/]+\/check-runs(?:$|[/?#])/.test(path)) return "check-runs";
+  if (/^\/repos\/[^/]+\/[^/]+\/issues\/\d+\/comments(?:$|[/?#])/.test(path)) return "issue-comments";
+  if (/^\/repos\/[^/]+\/[^/]+\/pulls(?:$|\/)/.test(path)) return "pulls";
+  if (/^\/repos\/[^/]+\/[^/]+\/branches\/[^/]+\/protection\/required_status_checks(?:$|[?#])/.test(path)) return "required-status-checks";
+  if (/^\/repos\/[^/]+\/[^/]+(?:$|[?#])/.test(path)) return "repository";
+  if (/^\/app\/installations\/\d+(?:$|[?#])/.test(path)) return "app-installations";
+  if (/^\/users\/[^/?#]+(?:$|[?#])/.test(path)) return "users";
+  return "github-rest";
+}
+
 function requestInitForFetch(init: GitHubTimeoutFetchInit | undefined): RequestInit | undefined {
   if (!init || (!("githubRateLimitAdmission" in init) && !("githubRateLimitAdmissionKey" in init))) return init;
   const { githubRateLimitAdmission: _omitted, githubRateLimitAdmissionKey: _omittedKey, ...rest } = init;
@@ -274,22 +288,43 @@ async function replayableResponse(response: Response): Promise<CachedGitHubRespo
 }
 
 async function fetchWithGitHubRetry(input: RequestInfo | URL, init?: GitHubTimeoutFetchInit): Promise<Response> {
-  let response: Response;
-  const fetchInit = requestInitForFetch(init);
-  const admissionKey = rateLimitAdmissionKey(init);
-  for (let attempt = 0; ; attempt += 1) {
-    response = fetchInit?.signal
-      ? await fetch(input, fetchInit)
-      : await fetch(input, {
-          ...(fetchInit ?? {}),
-          signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
-        });
-    if (admissionKey) observeGitHubRestRateLimit(requestUrl(input), response, admissionKey);
-    // Retry a transient rate-limit (with backoff) instead of surfacing it; stop once exhausted or it's not a limit.
-    if (attempt >= GITHUB_RATE_LIMIT_MAX_RETRIES || !(await isRateLimitedResponse(response))) break;
-    await sleep(rateLimitRetryMs(response, attempt));
-  }
-  return response;
+  const url = requestUrl(input);
+  const method = requestMethod(input, init);
+  const headers = requestHeaders(input, init);
+  const conditional = hasConditionalRequestHeader(headers);
+  const cls = method === "GET" && !conditional ? githubCacheClassForUrl(url) : null;
+  return await withReviewSpan(
+    "github.request",
+    {
+      "github.request.method": method,
+      "github.request.resource": githubSpanResource(url),
+      "github.request.cache_class": cls ?? "volatile",
+    },
+    async () => {
+      let response: Response;
+      const fetchInit = requestInitForFetch(init);
+      const admissionKey = rateLimitAdmissionKey(init);
+      for (let attempt = 0; ; attempt += 1) {
+        response = fetchInit?.signal
+          ? await fetch(input, fetchInit)
+          : await fetch(input, {
+              ...(fetchInit ?? {}),
+              signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
+            });
+        if (admissionKey) observeGitHubRestRateLimit(url, response, admissionKey);
+        // Retry a transient rate-limit (with backoff) instead of surfacing it; stop once exhausted or it's not a limit.
+        if (
+          attempt >= GITHUB_RATE_LIMIT_MAX_RETRIES ||
+          !(await isRateLimitedResponse(response))
+        ) {
+          break;
+        }
+        await sleep(rateLimitRetryMs(response, attempt));
+      }
+      return response;
+    },
+    { op: "http.client" },
+  );
 }
 
 async function fetchAndMaybeCacheGitHubGet(

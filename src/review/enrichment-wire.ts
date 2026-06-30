@@ -7,6 +7,7 @@
 // — is unaffected). Default OFF → gathers nothing, prompt byte-identical. FULLY FAIL-SAFE: any timeout / non-200 /
 // network / parse error, or an empty brief, returns undefined and the review proceeds on diff + grounding + RAG.
 import { extractLinkedIssueNumbers, getIssue } from "../db/repositories";
+import { withReviewSpan } from "../observability/review-trace";
 import { sanitizePublicComment } from "../queue-intelligence";
 import { neutralizePromptInjection } from "./prompt-injection";
 import type { PullRequestFileRecord } from "../types";
@@ -254,44 +255,55 @@ export async function buildReviewEnrichment(
   const profile = resolveReesProfile(env);
   const requestId = newReesRequestId();
   try {
-    const response = await fetch(`${base.replace(/\/+$/, "")}/v1/enrich`, {
-      method: "POST",
-      headers: {
-        "user-agent": "gittensory-selfhost/1.0",
-        accept: "application/json",
-        "content-type": "application/json",
-        "x-gittensory-request-id": requestId,
-        ...(sharedSecret ? { authorization: `Bearer ${sharedSecret}` } : {}),
+    const response = await withReviewSpan(
+      "review.enrichment.request",
+      {
+        repo: input.repoFullName,
+        pr: input.prNumber,
+        reesProfile: profile ?? "default",
+        requestedAnalyzers: analyzers?.length ?? REES_ANALYZER_NAMES.length,
       },
-      body: JSON.stringify({
-        repoFullName: input.repoFullName,
-        prNumber: input.prNumber,
-        headSha: input.headSha,
-        baseSha: input.baseSha ?? null,
-        title: input.title,
-        ...(input.body ? { body: input.body } : {}),
-        author: input.author ?? undefined,
-        ...(input.linkedIssue ? { linkedIssue: input.linkedIssue } : {}),
-        ...(input.githubToken ? { githubToken: input.githubToken } : {}),
-        files: input.files.map((file) => ({
-          path: file.path,
-          status: file.status ?? undefined,
-          previousPath: file.previousFilename ?? undefined,
-          patch:
-            typeof file.payload?.patch === "string"
-              ? file.payload.patch
-              : undefined,
-        })),
-        diff: input.diff,
-        ...(analyzers ? { analyzers } : {}),
-        ...(profile ? { profile } : {}),
-        budget: {
-          timeoutMs: analyzerBudgetMs,
-          maxBriefChars: MAX_ENRICHMENT_PROMPT_SECTION_CHARS,
-        },
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+      async () =>
+        await fetch(`${base.replace(/\/+$/, "")}/v1/enrich`, {
+          method: "POST",
+          headers: {
+            "user-agent": "gittensory-selfhost/1.0",
+            accept: "application/json",
+            "content-type": "application/json",
+            "x-gittensory-request-id": requestId,
+            ...(sharedSecret ? { authorization: `Bearer ${sharedSecret}` } : {}),
+          },
+          body: JSON.stringify({
+            repoFullName: input.repoFullName,
+            prNumber: input.prNumber,
+            headSha: input.headSha,
+            baseSha: input.baseSha ?? null,
+            title: input.title,
+            ...(input.body ? { body: input.body } : {}),
+            author: input.author ?? undefined,
+            ...(input.linkedIssue ? { linkedIssue: input.linkedIssue } : {}),
+            ...(input.githubToken ? { githubToken: input.githubToken } : {}),
+            files: input.files.map((file) => ({
+              path: file.path,
+              status: file.status ?? undefined,
+              previousPath: file.previousFilename ?? undefined,
+              patch:
+                typeof file.payload?.patch === "string"
+                  ? file.payload.patch
+                  : undefined,
+            })),
+            diff: input.diff,
+            ...(analyzers ? { analyzers } : {}),
+            ...(profile ? { profile } : {}),
+            budget: {
+              timeoutMs: analyzerBudgetMs,
+              maxBriefChars: MAX_ENRICHMENT_PROMPT_SECTION_CHARS,
+            },
+          }),
+          signal: AbortSignal.timeout(timeoutMs),
+        }),
+      { op: "http.client" },
+    );
     if (!response.ok) {
       const bodyPreview = await response.text().catch(() => "");
       // A non-2xx from REES (auth/5xx/bad-gateway) silently degraded the review to no-enrichment with no signal.

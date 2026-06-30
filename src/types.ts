@@ -12,6 +12,9 @@ export type JobMessage =
       redriven?: boolean;
       /** Self-host OTEL trace context for connecting ingress → queued review work. */
       traceParent?: string;
+      /** Self-host Sentry trace context for connecting ingress → queued review work when tracing is sampled on. */
+      sentryTrace?: string;
+      sentryBaggage?: string;
     }
   | {
       // Delayed self-poll to re-capture a PR's before/after preview once its preview deploy is live — the first

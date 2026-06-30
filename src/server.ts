@@ -73,7 +73,12 @@ import {
   withOtelSpan,
 } from "./selfhost/otel";
 import {
+  currentReviewTraceHeaders,
+  withReviewSpan,
+} from "./observability/review-trace";
+import {
   clearSelfHostRequestTraceParent,
+  setSelfHostRequestReviewTraceHeaders,
   setSelfHostRequestTraceParent,
 } from "./selfhost/trace-context";
 import {
@@ -686,55 +691,66 @@ async function main(): Promise<void> {
             );
           }
         }
-        return await withOtelSpan(
+        const requestSpanAttributes = selfHostHttpRequestAttributes(request, path);
+        return await withReviewSpan(
           "selfhost.http.request",
-          selfHostHttpRequestAttributes(request, path),
-          async () => {
-            const traceParent = currentOtelTraceParent();
-            if (traceParent) setSelfHostRequestTraceParent(request, traceParent);
-            try {
-              // Instrument real app traffic — status-class counter + latency histogram. (Infra endpoints
-              // /health /ready /metrics and the setup wizard already returned above and are not counted.)
-              const startedReq = Date.now();
-              const finish = (response: Response): Response => {
-                incr("gittensory_http_requests_total", {
-                  status: `${Math.floor(response.status / 100)}xx`,
-                });
-                observe(
-                  "gittensory_http_request_duration_seconds",
-                  (Date.now() - startedReq) / 1000,
+          requestSpanAttributes,
+          async () =>
+            await withOtelSpan(
+              "selfhost.http.request",
+              requestSpanAttributes,
+              async () => {
+                const traceParent = currentOtelTraceParent();
+                if (traceParent) setSelfHostRequestTraceParent(request, traceParent);
+                setSelfHostRequestReviewTraceHeaders(
+                  request,
+                  currentReviewTraceHeaders(),
                 );
-                setCurrentOtelSpanAttributes(selfHostHttpResponseAttributes(response.status));
-                return response;
-              };
-              // Webhook delivery dedup: return 204 immediately for already-processed delivery IDs.
-              // We mark only AFTER a successful response — failed/rejected webhooks must be retryable.
-              const isWebhook =
-                webhookCache &&
-                path === "/v1/github/webhook" &&
-                request.method === "POST";
-              const deliveryId = isWebhook
-                ? request.headers.get("x-github-delivery")
-                : null;
-              if (deliveryId) {
-                const seen = await webhookCache!.get(`delivery:${deliveryId}`);
-                if (seen) {
-                  incr("gittensory_webhook_dedup_total");
-                  return finish(new Response(null, { status: 204 }));
+                try {
+                  // Instrument real app traffic — status-class counter + latency histogram. (Infra endpoints
+                  // /health /ready /metrics and the setup wizard already returned above and are not counted.)
+                  const startedReq = Date.now();
+                  const finish = (response: Response): Response => {
+                    incr("gittensory_http_requests_total", {
+                      status: `${Math.floor(response.status / 100)}xx`,
+                    });
+                    observe(
+                      "gittensory_http_request_duration_seconds",
+                      (Date.now() - startedReq) / 1000,
+                    );
+                    setCurrentOtelSpanAttributes(selfHostHttpResponseAttributes(response.status));
+                    return response;
+                  };
+                  // Webhook delivery dedup: return 204 immediately for already-processed delivery IDs.
+                  // We mark only AFTER a successful response — failed/rejected webhooks must be retryable.
+                  const isWebhook =
+                    webhookCache &&
+                    path === "/v1/github/webhook" &&
+                    request.method === "POST";
+                  const deliveryId = isWebhook
+                    ? request.headers.get("x-github-delivery")
+                    : null;
+                  if (deliveryId) {
+                    const seen = await webhookCache!.get(`delivery:${deliveryId}`);
+                    if (seen) {
+                      incr("gittensory_webhook_dedup_total");
+                      return finish(new Response(null, { status: 204 }));
+                    }
+                  }
+                  const response = await worker.fetch(request, env, ctx);
+                  if (deliveryId && response.ok) {
+                    // Best-effort — never block the response on a cache write failure
+                    void webhookCache!
+                      .set(`delivery:${deliveryId}`, "1", 300)
+                      .catch(() => undefined);
+                  }
+                  return finish(response);
+                } finally {
+                  clearSelfHostRequestTraceParent(request);
                 }
-              }
-              const response = await worker.fetch(request, env, ctx);
-              if (deliveryId && response.ok) {
-                // Best-effort — never block the response on a cache write failure
-                void webhookCache!
-                  .set(`delivery:${deliveryId}`, "1", 300)
-                  .catch(() => undefined);
-              }
-              return finish(response);
-            } finally {
-              clearSelfHostRequestTraceParent(request);
-            }
-          },
+              },
+            ),
+          { forceTransaction: true, op: "http.server" },
         );
       },
       port,

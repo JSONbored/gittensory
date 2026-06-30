@@ -203,6 +203,7 @@ import {
   delayUntil,
   shouldWaitForGitHubRateLimit,
 } from "../github/rate-limit";
+import { withReviewSpan } from "../observability/review-trace";
 import {
   downgradeCloseToHold,
   downgradeMergeToHold,
@@ -1540,56 +1541,62 @@ async function maybeRunAgentMaintenance(
     settings.contributorBlacklist,
   );
 
-  const planned = planAgentMaintenanceActions({
-    conclusion: gate.conclusion,
-    blockerTitles: gate.blockers.map((blocker) => blocker.title),
-    // Public-safe finding identifiers retained for telemetry/action reasons. They no longer refute a blocker on
-    // green CI; once the gate says failure, the close/hold decision follows that verdict.
-    gateBlockerCodes: gate.blockers.map((blocker) => blocker.code),
-    autonomy: settings.autonomy,
-    autoMaintain: settings.autoMaintain,
-    slopGateMinScore: settings.slopGateMinScore,
-    changedPaths,
-    hardGuardrailGlobs,
-    authorIsOwner,
-    authorIsAutomationBot,
-    closeOwnerAuthors: settings.closeOwnerAuthors,
-    ciState: ciAggregate.ciState,
-    failingCheckNames: ciAggregate.failingDetails.map((detail) => detail.name),
-    ciRequiredContextsVerified: hasVerifiedRequiredContexts(requiredContexts),
-    ...(blacklistEntry !== null
-      ? { blacklistMatch: { matched: true, reason: blacklistEntry.reason } }
-      : {}),
-    // Always threaded (the DB layer populates it, default "slop"); the planner applies its own fallback.
-    blacklistLabel: settings.blacklistLabel,
-    ...(linkedIssueHardRule !== undefined ? { linkedIssueHardRule } : {}),
-    // Flag-then-close double-check: thread the loaded verify config so the planner FLAGS first then closes on
-    // re-verification (default ON). Only passed when a rule is on (the planner reads it only for a violation).
-    linkedIssueVerify: {
-      verifyBeforeClose: linkedIssueRulesConfig.verifyBeforeClose,
-      closeDelaySeconds: linkedIssueRulesConfig.closeDelaySeconds,
-    },
-    pr: {
-      mergeableState: liveMergeState ?? pr.mergeableState,
-      reviewDecision: liveReviewDecision ?? pr.reviewDecision,
-      slopRisk: pr.slopRisk,
-      labels: pr.labels,
-      // Duplicate-winner adjudication (#dup-winner): the gate's open-only duplicate siblings drive the close
-      // reason ("duplicate of another open PR" via agent-actions when count > 0). When the flag is ON and this
-      // PR is the cluster winner, force the count to 0 so the winner's close reason OMITS the duplicate cause
-      // (it can still close on its own merits — CI/conflict/blockers). Flag-OFF short-circuits ⇒ the real
-      // count is used (byte-identical). Sparse legacy rows fail closed so duplicate evidence remains visible.
-      linkedDuplicateCount: dupWinnerLinkedDuplicateCount(
-        linkedIssueDuplicatePullRequestRecordsForGate(pr, otherOpenPullRequests),
-        pr.number,
-        pr.linkedIssueClaimedAt,
-        env.GITTENSORY_DUPLICATE_WINNER === "true",
-      ),
-      headSha: pr.headSha,
-      mergeBlockedSha: pr.mergeBlockedSha,
-      approvedHeadSha: pr.approvedHeadSha,
-    },
-  });
+  const planned = await withReviewSpan(
+    "review.gate.actions",
+    { repo: repoFullName, pr: pr.number, gateConclusion: gate.conclusion },
+    async () =>
+      planAgentMaintenanceActions({
+        conclusion: gate.conclusion,
+        blockerTitles: gate.blockers.map((blocker) => blocker.title),
+        // Public-safe finding identifiers retained for telemetry/action reasons. They no longer refute a blocker on
+        // green CI; once the gate says failure, the close/hold decision follows that verdict.
+        gateBlockerCodes: gate.blockers.map((blocker) => blocker.code),
+        autonomy: settings.autonomy,
+        autoMaintain: settings.autoMaintain,
+        slopGateMinScore: settings.slopGateMinScore,
+        changedPaths,
+        hardGuardrailGlobs,
+        authorIsOwner,
+        authorIsAutomationBot,
+        closeOwnerAuthors: settings.closeOwnerAuthors,
+        ciState: ciAggregate.ciState,
+        failingCheckNames: ciAggregate.failingDetails.map((detail) => detail.name),
+        ciRequiredContextsVerified: hasVerifiedRequiredContexts(requiredContexts),
+        ...(blacklistEntry !== null
+          ? { blacklistMatch: { matched: true, reason: blacklistEntry.reason } }
+          : {}),
+        // Always threaded (the DB layer populates it, default "slop"); the planner applies its own fallback.
+        blacklistLabel: settings.blacklistLabel,
+        ...(linkedIssueHardRule !== undefined ? { linkedIssueHardRule } : {}),
+        // Flag-then-close double-check: thread the loaded verify config so the planner FLAGS first then closes on
+        // re-verification (default ON). Only passed when a rule is on (the planner reads it only for a violation).
+        linkedIssueVerify: {
+          verifyBeforeClose: linkedIssueRulesConfig.verifyBeforeClose,
+          closeDelaySeconds: linkedIssueRulesConfig.closeDelaySeconds,
+        },
+        pr: {
+          mergeableState: liveMergeState ?? pr.mergeableState,
+          reviewDecision: liveReviewDecision ?? pr.reviewDecision,
+          slopRisk: pr.slopRisk,
+          labels: pr.labels,
+          // Duplicate-winner adjudication (#dup-winner): the gate's open-only duplicate siblings drive the close
+          // reason ("duplicate of another open PR" via agent-actions when count > 0). When the flag is ON and this
+          // PR is the cluster winner, force the count to 0 so the winner's close reason OMITS the duplicate cause
+          // (it can still close on its own merits — CI/conflict/blockers). Flag-OFF short-circuits ⇒ the real
+          // count is used (byte-identical). Sparse legacy rows fail closed so duplicate evidence remains visible.
+          linkedDuplicateCount: dupWinnerLinkedDuplicateCount(
+            linkedIssueDuplicatePullRequestRecordsForGate(pr, otherOpenPullRequests),
+            pr.number,
+            pr.linkedIssueClaimedAt,
+            env.GITTENSORY_DUPLICATE_WINNER === "true",
+          ),
+          headSha: pr.headSha,
+          mergeBlockedSha: pr.mergeBlockedSha,
+          approvedHeadSha: pr.approvedHeadSha,
+        },
+      }),
+    { op: "gate.actions" },
+  );
   // Accuracy circuit-breakers (#self-improve / GAP-4): two INDEPENDENT, fail-open precision breakers, chained.
   //   • MERGE breaker (holdonly:<scope>): when set, convert a would-MERGE into a human HOLD before executing.
   //   • CLOSE breaker (closehold:<scope>): when set, convert a HEURISTIC would-CLOSE into a human HOLD (the
@@ -5090,7 +5097,12 @@ async function maybePublishPrPublicSurface(
       gateSizeContext,
     );
     gateEvaluation = gateEnabled
-      ? evaluateGateCheck(advisory, gatePolicy)
+      ? await withReviewSpan(
+          "review.gate.plan",
+          { repo: repoFullName, pr: pr.number, advisoryConclusion: advisory.conclusion },
+          async () => evaluateGateCheck(advisory, gatePolicy),
+          { op: "gate.plan" },
+        )
       : undefined;
     // Deterministic content/registry surface lane (#1255) — flag-gated + per-repo allowlist, byte-identical when
     // off (evaluateWithSurfaceLane returns the generic evaluation unchanged and resolves no files). A metagraphed

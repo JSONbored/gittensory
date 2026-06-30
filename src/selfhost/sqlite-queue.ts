@@ -8,6 +8,7 @@ import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import { withOtelSpan } from "./otel";
 import { captureError } from "./sentry";
+import { withReviewSpan } from "../observability/review-trace";
 import {
   consumingRetryDelayMs,
   deterministicJitterMs,
@@ -313,11 +314,36 @@ export function createSqliteQueue(
         return true;
       }
       try {
-        await withOtelSpan(
+        const spanAttributes = {
+          "job.type": message.type,
+          "queue.backend": "sqlite",
+          "job.attempt": job.attempts + 1,
+        };
+        await withReviewSpan(
           "selfhost.queue.job",
-          { "job.type": message.type, "queue.backend": "sqlite", "job.attempt": job.attempts + 1 },
-          () => consume(message),
-          { parentTraceParent: message.type === "github-webhook" ? message.traceParent : undefined },
+          spanAttributes,
+          async () =>
+            await withOtelSpan(
+              "selfhost.queue.job",
+              spanAttributes,
+              () => consume(message),
+              {
+                parentTraceParent:
+                  message.type === "github-webhook"
+                    ? message.traceParent
+                    : undefined,
+              },
+            ),
+          {
+            op: "queue.process",
+            parent:
+              message.type === "github-webhook"
+                ? {
+                    sentryTrace: message.sentryTrace,
+                    baggage: message.sentryBaggage,
+                  }
+                : undefined,
+          },
         );
         driver.query(`DELETE FROM ${TABLE} WHERE id=?`, [job.id]);
         recordQueueMetric(driver, "gittensory_jobs_processed_total");

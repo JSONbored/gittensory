@@ -10,6 +10,7 @@ import {
   timeoutFetch,
 } from "./client";
 import { maintainerControlPanelUrl } from "./footer";
+import { withReviewSpan } from "../observability/review-trace";
 import type { AgentActionMode } from "../settings/agent-execution";
 import { signRs256Jwt } from "../utils/crypto";
 import { errorMessage } from "../utils/json";
@@ -581,14 +582,22 @@ async function createOrUpdateNamedCheckRun(
   if (!owner || !repo)
     throw new Error(`Invalid repository full name: ${repoFullName}`);
 
-  return await withInstallationTokenRetry(env, installationId, async (token) => {
-    // makeInstallationOctokit injects the shared per-request timeout (a stalled PATCH can never orphan the
-    // in_progress check) AND suppresses the check-run writes under a non-live mode (dry-run / pause / freeze).
-    const octokit = makeInstallationOctokit(env, token, check.mode, githubRateLimitAdmissionKeyForInstallation(installationId));
-    // Point the merge-box "Details" link at the repo's Gittensory maintainer panel instead of GitHub's generic
-    // check page. Spread conditionally so a URL-construction failure (null) just omits it. (#audit-details-url)
-    const detailsUrl = maintainerControlPanelUrl(env, repoFullName);
-    const detailsUrlBody = detailsUrl ? { details_url: detailsUrl } : {};
+  return await withReviewSpan(
+    "review.publish.check_run",
+    {
+      repo: repoFullName,
+      name: check.name,
+      conclusion: check.conclusion ?? advisory.conclusion,
+    },
+    async () =>
+      await withInstallationTokenRetry(env, installationId, async (token) => {
+        // makeInstallationOctokit injects the shared per-request timeout (a stalled PATCH can never orphan the
+        // in_progress check) AND suppresses the check-run writes under a non-live mode (dry-run / pause / freeze).
+        const octokit = makeInstallationOctokit(env, token, check.mode, githubRateLimitAdmissionKeyForInstallation(installationId));
+        // Point the merge-box "Details" link at the repo's Gittensory maintainer panel instead of GitHub's generic
+        // check page. Spread conditionally so a URL-construction failure (null) just omits it. (#audit-details-url)
+        const detailsUrl = maintainerControlPanelUrl(env, repoFullName);
+        const detailsUrlBody = detailsUrl ? { details_url: detailsUrl } : {};
 
     // POST a fresh check-run THIS App owns. Used for a brand-new run AND as the cross-app fallback below.
     const postNewCheckRun = async (): Promise<CheckRunOutcome> => {
@@ -699,62 +708,60 @@ async function createOrUpdateNamedCheckRun(
       return outcome;
     };
 
-    try {
-      if (check.checkRunId) {
-        const out = await patchCheckRun(check.checkRunId);
-        if (out) return await finish(out);
-      } else if (check.updateExisting !== "never") {
-        const existing = await octokit.request(
-          "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
-          {
-            owner,
-            repo,
-            ref: headSha,
-            check_name: check.name,
-            filter: "latest",
-            per_page: 1,
-          },
-        );
-        const existingCheckRun = (existing.data as CheckRunListResponse)
-          .check_runs?.[0];
-        if (
-          existingCheckRun &&
-          (check.updateExisting !== "in_progress_only" ||
-            (existingCheckRun.status ?? "").toLowerCase() !== "completed")
-        ) {
-          const out = await patchCheckRun(existingCheckRun.id);
-          if (out) return await finish(out);
+        try {
+          if (check.checkRunId) {
+            const out = await patchCheckRun(check.checkRunId);
+            if (out) return await finish(out);
+          } else if (check.updateExisting !== "never") {
+            const existing = await octokit.request(
+              "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
+              {
+                owner,
+                repo,
+                ref: headSha,
+                check_name: check.name,
+                filter: "latest",
+                per_page: 1,
+              },
+            );
+            const existingCheckRun = (existing.data as CheckRunListResponse)
+              .check_runs?.[0];
+            if (
+              existingCheckRun &&
+              (check.updateExisting !== "in_progress_only" ||
+                (existingCheckRun.status ?? "").toLowerCase() !== "completed")
+            ) {
+              const out = await patchCheckRun(existingCheckRun.id);
+              if (out) return await finish(out);
+            }
+          }
+          return await finish(await postNewCheckRun());
+        } catch (error) {
+          if (isCheckRunPermissionError(error)) {
+            const e = error as { status?: number; message?: string };
+            console.error(
+              JSON.stringify({
+                level: "error",
+                event: "check_run_post_denied",
+                repository: `${owner}/${repo}`,
+                status: e.status ?? null,
+                message: (e.message ?? "Resource not accessible by integration").slice(
+                  0,
+                  300,
+                ),
+              }),
+            );
+            return {
+              kind: "permission_missing",
+              warning:
+                "GitHub App Checks: write permission is missing. Enable it in the GitHub App settings and re-approve the installation.",
+            };
+          }
+          throw error;
         }
-      }
-      return await finish(await postNewCheckRun());
-    } catch (error) {
-      if (isCheckRunPermissionError(error)) {
-        // Capture the ACTUAL response (status + body). A 403 here is often NOT a real permission gap (the App has
-        // Checks:write) — it can be a per-PR access quirk (e.g. a fork-head commit the App can't write to) — and this
-        // log is the only way to tell why, instead of an opaque "permission missing". Surfaces to Sentry with a real
-        // message via console.error (#review-403-context).
-        const e = error as { status?: number; message?: string };
-        console.error(
-          JSON.stringify({
-            level: "error",
-            event: "check_run_post_denied",
-            repository: `${owner}/${repo}`,
-            status: e.status ?? null,
-            message: (e.message ?? "Resource not accessible by integration").slice(
-              0,
-              300,
-            ),
-          }),
-        );
-        return {
-          kind: "permission_missing",
-          warning:
-            "GitHub App Checks: write permission is missing. Enable it in the GitHub App settings and re-approve the installation.",
-        };
-      }
-      throw error;
-    }
-  });
+      }),
+    { op: "github.check_run" },
+  );
 }
 
 function outputForCheckRunUpdate(output: CheckRunOutput): CheckRunOutput {

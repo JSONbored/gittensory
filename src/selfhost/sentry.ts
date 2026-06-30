@@ -2,6 +2,10 @@
 // env-gated, dynamically-imported selfhost-integration pattern (Redis/Qdrant/embed-provider in server.ts).
 // @sentry/node is NEVER imported at module top level — it loads lazily inside initSentry(), so it never enters
 // the Worker bundle (src/index.ts) and cloudflare:* stubbing stays clean. All helpers are safe to call when off.
+import {
+  setReviewTraceAdapter,
+  type ReviewSpanOptions,
+} from "../observability/review-trace";
 import { currentOtelTraceIds } from "./otel";
 
 type SentryNs = typeof import("@sentry/node");
@@ -13,7 +17,9 @@ type SentryScope = {
 };
 let Sentry: SentryNs | undefined;
 let active = false;
+let tracingActive = false;
 let sentryEnvironment = "production";
+const MAX_ATTRIBUTE_LENGTH = 160;
 
 const SECRET_KEY =
   /(token|secret|key|password|passwd|authorization|auth|dsn|cookie|bearer|credential|private)/i;
@@ -89,6 +95,76 @@ function safeMonitorContext(
   return safe;
 }
 
+function safeSpanAttributes(
+  attributes: Record<string, unknown> | undefined,
+): Record<string, string | number | boolean> {
+  const safe: Record<string, string | number | boolean> = {};
+  if (!attributes) return safe;
+  for (const [key, value] of Object.entries(attributes)) {
+    if (SECRET_KEY.test(key) || value === null || value === undefined) continue;
+    if (typeof value === "string") {
+      safe[key] =
+        value.length > MAX_ATTRIBUTE_LENGTH
+          ? `${value.slice(0, MAX_ATTRIBUTE_LENGTH - 3)}...`
+          : value;
+    } else if (typeof value === "number" && Number.isFinite(value)) safe[key] = value;
+    else if (typeof value === "boolean") safe[key] = value;
+  }
+  return safe;
+}
+
+function traceSampleRate(value: string | undefined): number {
+  const parsed = Number(value ?? "0");
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(1, parsed));
+}
+
+async function withSentryTraceSpan<T>(
+  name: string,
+  attributes: Record<string, unknown> | undefined,
+  fn: () => T | Promise<T>,
+  options?: ReviewSpanOptions,
+): Promise<T> {
+  if (!active || !tracingActive || !Sentry) return await fn();
+  const run = async (): Promise<T> =>
+    await Sentry!.startSpan(
+      {
+        name,
+        ...(options?.op ? { op: options.op } : {}),
+        ...(options?.forceTransaction ? { forceTransaction: true } : {}),
+        attributes: safeSpanAttributes(attributes),
+      },
+      async () => await fn(),
+    );
+  const parentTrace = options?.parent?.sentryTrace;
+  if (!parentTrace) return await run();
+  return await Sentry.continueTrace(
+    {
+      sentryTrace: parentTrace,
+      baggage: options?.parent?.baggage,
+    },
+    run,
+  );
+}
+
+function installTraceAdapter(): void {
+  if (!tracingActive || !Sentry) {
+    setReviewTraceAdapter(null);
+    return;
+  }
+  setReviewTraceAdapter({
+    withSpan: withSentryTraceSpan,
+    currentTraceHeaders() {
+      const span = Sentry!.getActiveSpan();
+      if (!span) return undefined;
+      return {
+        sentryTrace: Sentry!.spanToTraceHeader(span),
+        baggage: Sentry!.spanToBaggageHeader(span),
+      };
+    },
+  });
+}
+
 function setOtelTraceScope(scope: SentryScope): void {
   const trace = currentOtelTraceIds();
   if (!trace) return;
@@ -131,19 +207,25 @@ export function scrubEvent<T>(event: T): T {
 
 /** Initialize Sentry from the environment. Returns false (and stays a no-op) when SENTRY_DSN is unset. */
 export async function initSentry(env: NodeJS.ProcessEnv): Promise<boolean> {
-  if (!env.SENTRY_DSN) return false;
+  if (!env.SENTRY_DSN) {
+    setReviewTraceAdapter(null);
+    return false;
+  }
   Sentry = await import("@sentry/node");
   const release = resolveSentryRelease(env);
   sentryEnvironment = nonBlank(env.SENTRY_ENVIRONMENT) ?? "production";
+  const tracesSampleRate = traceSampleRate(env.SENTRY_TRACES_SAMPLE_RATE);
   Sentry.init({
     dsn: env.SENTRY_DSN,
     environment: sentryEnvironment,
     ...(release ? { release } : {}),
-    tracesSampleRate: Number(env.SENTRY_TRACES_SAMPLE_RATE ?? "0"),
+    tracesSampleRate,
     serverName: env.PUBLIC_API_ORIGIN,
     beforeSend: (e) => scrubEvent(e),
   });
   active = true;
+  tracingActive = tracesSampleRate > 0;
+  installTraceAdapter();
   return true;
 }
 
@@ -363,7 +445,9 @@ export async function flushSentry(timeoutMs = 2000): Promise<void> {
 export function resetSentryForTest(): void {
   Sentry = undefined;
   active = false;
+  tracingActive = false;
   sentryEnvironment = "production";
+  setReviewTraceAdapter(null);
 }
 
 interface StructuredLogConsole {

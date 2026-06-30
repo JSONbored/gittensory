@@ -5,6 +5,7 @@ import { getWebhookEvent, recordWebhookEvent } from "../../src/db/repositories";
 import { relaySignature } from "../../src/orb/relay";
 import {
   clearSelfHostRequestTraceParent,
+  setSelfHostRequestReviewTraceHeaders,
   setSelfHostRequestTraceParent,
 } from "../../src/selfhost/trace-context";
 import { createTestEnv } from "../helpers/d1";
@@ -220,7 +221,7 @@ describe("github webhook queue isolation (#audit-webhook-queue)", () => {
     expect(jobsSends).toBe(0); // never the shared maintenance queue
   });
 
-  it("copies the internal self-host traceparent onto queued webhook jobs", async () => {
+  it("copies the internal self-host trace headers onto queued webhook jobs", async () => {
     const env = createTestEnv();
     const sent: import("../../src/types").JobMessage[] = [];
     env.WEBHOOKS = { send: async (message: unknown) => void sent.push(message as import("../../src/types").JobMessage) } as unknown as Queue;
@@ -228,7 +229,12 @@ describe("github webhook queue isolation (#audit-webhook-queue)", () => {
     const signature = await signWebhook(rawBody, env.GITHUB_WEBHOOK_SECRET);
     const request = new Request("https://example.com/webhook", { method: "POST", body: rawBody });
     const traceParent = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
+    const sentryTrace = "0123456789abcdef0123456789abcdef-0123456789abcdef-1";
     setSelfHostRequestTraceParent(request, traceParent);
+    setSelfHostRequestReviewTraceHeaders(request, {
+      sentryTrace,
+      baggage: "sentry-environment=selfhost",
+    });
     const headers: Record<string, string> = {
       "x-github-delivery": "traceparent-1",
       "x-github-event": "pull_request",
@@ -252,7 +258,12 @@ describe("github webhook queue isolation (#audit-webhook-queue)", () => {
 
     expect(response.status).toBe(202);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ type: "github-webhook", traceParent });
+    expect(sent[0]).toMatchObject({
+      type: "github-webhook",
+      traceParent,
+      sentryTrace,
+      sentryBaggage: "sentry-environment=selfhost",
+    });
   });
 
   it("drops self-authored app comment webhooks before they add queue pressure", async () => {
