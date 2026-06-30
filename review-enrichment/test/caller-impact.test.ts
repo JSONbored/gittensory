@@ -9,6 +9,8 @@ import {
   collectDiffExports,
   isReferencedInDiff,
   referencesSymbol,
+  moduleBasename,
+  importsSymbolFromModule,
   scanCallerImpact,
 } from "../dist/analyzers/caller-impact.js";
 import { renderBrief } from "../dist/render.js";
@@ -19,16 +21,30 @@ const res = (body, { ok = true, status = 200 } = {}) => ({
   json: async () => body,
   text: async () => JSON.stringify(body),
 });
+const raw = (text, { ok = true, status = 200 } = {}) => ({
+  ok,
+  status,
+  json: async () => ({}),
+  text: async () => text,
+});
 const throwingFetch = async () => {
   throw new Error("network down");
 };
 
-// String substring / RegExp router so each test declares only the endpoints it exercises.
-function router(routes) {
+// A fetch stub routing /search/code (by encoded-symbol substring → items) and /contents/<path> (→ raw file content).
+function ghStub({ search = {}, contents = {} }) {
   return async (url) => {
-    for (const [match, handler] of routes) {
-      const hit = typeof match === "string" ? url.includes(match) : match.test(url);
-      if (hit) return handler;
+    if (url.includes("/search/code")) {
+      for (const [enc, items] of Object.entries(search)) {
+        if (url.includes(enc)) return res({ items });
+      }
+      return res({ items: [] });
+    }
+    if (url.includes("/contents/")) {
+      for (const [path, content] of Object.entries(contents)) {
+        if (url.includes("/contents/" + path)) return raw(content);
+      }
+      return raw("", { ok: false, status: 404 });
     }
     return res({ items: [] });
   };
@@ -51,6 +67,12 @@ test("parseExportedNames covers the common export forms", () => {
   assert.deepEqual(parseExportedNames("  export function indented() {}"), ["indented"]);
 });
 
+test("parseExportedNames enumerates every declarator and handles const enum", () => {
+  assert.deepEqual(parseExportedNames("export const a = 1, b = 2;"), ["a", "b"]);
+  assert.deepEqual(parseExportedNames("export let x = f(1, 2), y = 3;"), ["x", "y"]); // comma inside () is not a split
+  assert.deepEqual(parseExportedNames("export const enum Color { Red }"), ["Color"]);
+});
+
 test("parseExportedNames handles named export lists with aliases", () => {
   assert.deepEqual(parseExportedNames("export { a, b as c, d };"), ["a", "c", "d"]);
   assert.deepEqual(parseExportedNames("export type { T1, T2 };"), ["T1", "T2"]);
@@ -64,16 +86,31 @@ test("parseExportedNames returns [] for re-export-all, anonymous default, and no
   assert.deepEqual(parseExportedNames("import { foo } from './a';"), []);
 });
 
-test("collectDiffExports splits removed/added exports and added lines", () => {
+test("moduleBasename strips directories and extensions", () => {
+  assert.equal(moduleBasename("src/lib.ts"), "lib");
+  assert.equal(moduleBasename("./lib"), "lib");
+  assert.equal(moduleBasename("../utils/lib.js"), "lib");
+  assert.equal(moduleBasename("@scope/pkg/feature.d.ts"), "feature");
+});
+
+test("importsSymbolFromModule binds to a named import from the matching module only", () => {
+  assert.equal(importsSymbolFromModule("import { foo } from './lib';", "foo", "lib"), true);
+  assert.equal(importsSymbolFromModule("import { foo as bar } from '../lib.js';", "foo", "lib"), true);
+  assert.equal(importsSymbolFromModule("import { other } from './lib';", "foo", "lib"), false); // different symbol
+  assert.equal(importsSymbolFromModule("import { foo } from './other';", "foo", "lib"), false); // different module
+  assert.equal(importsSymbolFromModule("function foo() {}\nfoo();", "foo", "lib"), false); // own symbol, no import
+});
+
+test("collectDiffExports reconstructs pre/post export images and added lines", () => {
   const out = collectDiffExports([
     {
       path: "f.ts",
       patch: "@@ -1,1 +1,2 @@\n-export const removed = 1;\n+export const added = 1;\n+useSomething();",
     },
   ]);
-  assert.ok(out.removed.has("removed"));
-  assert.ok(out.added.has("added"));
-  assert.equal(out.addedExportFile.get("added"), "f.ts");
+  assert.ok(out.oldExports.has("removed"));
+  assert.ok(out.newExports.has("added"));
+  assert.equal(out.newExportFile.get("added"), "f.ts");
   assert.ok(out.addedLines.includes("useSomething();"));
 });
 
@@ -122,18 +159,16 @@ test("extractExports captures a multiline function signature for change comparis
 
 // ── scanCallerImpact ──────────────────────────────────────────────────────────
 
-test("scanCallerImpact: a removed export with external callers is flagged; changed files are excluded", async () => {
-  const fetchImpl = router([
-    [
-      "%22foo%22",
-      res({
-        items: [
-          { path: "src/caller.ts", text_matches: [{ fragment: "import { foo } from './lib';\nfoo();" }] },
-          { path: "src/lib.ts", text_matches: [{ fragment: "export function foo() {}" }] },
-        ],
-      }),
-    ],
-  ]);
+test("scanCallerImpact: a removed export with an importing caller is flagged; changed files are excluded", async () => {
+  const fetchImpl = ghStub({
+    search: {
+      "%22foo%22": [
+        { path: "src/caller.ts", text_matches: [{ fragment: "import { foo } from './lib';\nfoo();" }] },
+        { path: "src/lib.ts", text_matches: [{ fragment: "export function foo() {}" }] }, // changed file → excluded
+      ],
+    },
+    contents: { "src/caller.ts": "import { foo } from './lib';\nfoo();" },
+  });
   const out = await scanCallerImpact(
     {
       repoFullName: "o/r",
@@ -146,13 +181,40 @@ test("scanCallerImpact: a removed export with external callers is flagged; chang
   assert.equal(out.length, 1);
   assert.equal(out[0].symbol, "foo");
   assert.equal(out[0].kind, "removed-with-callers");
-  assert.deepEqual(out[0].callerFiles, ["src/caller.ts"]); // src/lib.ts (changed) filtered out
+  assert.deepEqual(out[0].callerFiles, ["src/caller.ts"]);
 });
 
-test("scanCallerImpact: a signature change with external callers is flagged as changed-with-callers", async () => {
-  const fetchImpl = router([
-    ["%22bar%22", res({ items: [{ path: "src/caller.ts", text_matches: [{ fragment: "bar(1);" }] }] })],
-  ]);
+test("scanCallerImpact: an unrelated file defining its OWN same-named symbol is not a caller", async () => {
+  const fetchImpl = ghStub({
+    search: {
+      "%22foo%22": [
+        { path: "src/real.ts", text_matches: [{ fragment: "foo();" }] },
+        { path: "src/unrelated.ts", text_matches: [{ fragment: "foo();" }] },
+      ],
+    },
+    contents: {
+      "src/real.ts": "import { foo } from './lib';\nfoo();", // real consumer of the removed module
+      "src/unrelated.ts": "function foo() {}\nfoo();", // its OWN foo — not the removed one
+    },
+  });
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [{ path: "src/lib.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" }],
+    },
+    fetchImpl,
+  );
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0].callerFiles, ["src/real.ts"]); // unrelated.ts excluded by import binding
+});
+
+test("scanCallerImpact: a signature change with an importing caller is changed-with-callers", async () => {
+  const fetchImpl = ghStub({
+    search: { "%22bar%22": [{ path: "src/caller.ts", text_matches: [{ fragment: "bar(1);" }] }] },
+    contents: { "src/caller.ts": "import { bar } from './lib';\nbar(1);" },
+  });
   const out = await scanCallerImpact(
     {
       repoFullName: "o/r",
@@ -171,11 +233,60 @@ test("scanCallerImpact: a signature change with external callers is flagged as c
   assert.equal(out[0].kind, "changed-with-callers");
 });
 
+test("scanCallerImpact: a change confined to a parameter line (export line is context) is detected", async () => {
+  const fetchImpl = ghStub({
+    search: { "%22foo%22": [{ path: "src/caller.ts", text_matches: [{ fragment: "foo(1);" }] }] },
+    contents: { "src/caller.ts": "import { foo } from './lib';\nfoo(1);" },
+  });
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [
+        {
+          path: "src/lib.ts",
+          // `export function foo(` and `): void;` are unchanged CONTEXT; only the parameter line is -/+.
+          patch: "@@ -1,3 +1,3 @@\n export function foo(\n-  a: string,\n+  a: number,\n ): void;",
+        },
+      ],
+    },
+    fetchImpl,
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].symbol, "foo");
+  assert.equal(out[0].kind, "changed-with-callers");
+});
+
+test("scanCallerImpact: a multiline signature change (whole block re-added) is changed-with-callers", async () => {
+  const fetchImpl = ghStub({
+    search: { "%22foo%22": [{ path: "src/caller.ts", text_matches: [{ fragment: "foo(1);" }] }] },
+    contents: { "src/caller.ts": "import { foo } from './lib';\nfoo(1);" },
+  });
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [
+        {
+          path: "src/lib.ts",
+          patch:
+            "@@ -1,3 +1,3 @@\n-export function foo(\n-  a: string,\n-): void;\n+export function foo(\n+  a: number,\n+): void;",
+        },
+      ],
+    },
+    fetchImpl,
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].kind, "changed-with-callers");
+});
+
 test("scanCallerImpact: an identical export on both sides (moved) is not searched or flagged", async () => {
   let searched = false;
   const tracking = async (url) => {
     if (url.includes("/search/code")) searched = true;
-    return res({ items: [{ path: "src/caller.ts" }] });
+    return res({ items: [] });
   };
   const out = await scanCallerImpact(
     {
@@ -190,6 +301,76 @@ test("scanCallerImpact: an identical export on both sides (moved) is not searche
   assert.equal(searched, false);
 });
 
+test("scanCallerImpact: pages past a noisy first page to find an importing caller on page 2", async () => {
+  const page1 = [
+    { path: "src/lib.ts", text_matches: [{ fragment: "export function foo() {}" }] }, // changed file → excluded
+    { path: "src/note.ts", text_matches: [{ fragment: "// foo is nice" }] }, // comment-only → not a reference
+    { path: "docs/x.md", text_matches: [{ fragment: "the foo helper" }] }, // markdown → excluded
+  ];
+  while (page1.length < 20) page1.push({ path: "docs/pad.md", text_matches: [{ fragment: "foo" }] });
+  const fetchImpl = async (url) => {
+    if (url.includes("/contents/src/real-caller.ts")) return raw("import { foo } from './lib';\nfoo();");
+    if (url.includes("/search/code")) {
+      if (url.includes("&page=1")) return res({ total_count: 21, items: page1 });
+      if (url.includes("&page=2")) {
+        return res({
+          total_count: 21,
+          items: [{ path: "src/real-caller.ts", text_matches: [{ fragment: "import { foo } from './lib';\nfoo();" }] }],
+        });
+      }
+    }
+    return res({ items: [] });
+  };
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [{ path: "src/lib.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" }],
+    },
+    fetchImpl,
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].kind, "removed-with-callers");
+  assert.deepEqual(out[0].callerFiles, ["src/real-caller.ts"]);
+});
+
+test("scanCallerImpact: a hit only in a comment, string, or markdown is not a caller", async () => {
+  const fetchImpl = ghStub({
+    search: {
+      "%22foo%22": [
+        { path: "src/comment.ts", text_matches: [{ fragment: "// foo is documented here" }] },
+        { path: "docs/readme.md", text_matches: [{ fragment: "the foo helper is great" }] },
+        { path: "src/strings.ts", text_matches: [{ fragment: "const label = 'foo';" }] },
+      ],
+    },
+  });
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [{ path: "src/lib.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" }],
+    },
+    fetchImpl,
+  );
+  assert.deepEqual(out, []);
+});
+
+test("scanCallerImpact: every declarator in a multi-declarator export is tracked (dead-on-arrival)", async () => {
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [{ path: "src/util.ts", patch: "@@ -0,0 +1,1 @@\n+export const a = 1, b = 2;" }],
+    },
+    throwingFetch,
+  );
+  const dead = out.filter((f) => f.kind === "dead-on-arrival").map((f) => f.symbol).sort();
+  assert.deepEqual(dead, ["a", "b"]);
+});
+
 test("scanCallerImpact: a new export referenced nowhere is dead-on-arrival (no network call)", async () => {
   const out = await scanCallerImpact(
     {
@@ -198,7 +379,7 @@ test("scanCallerImpact: a new export referenced nowhere is dead-on-arrival (no n
       githubToken: "t",
       files: [{ path: "src/util.ts", patch: "@@ -0,0 +1,1 @@\n+export const newThing = 1;" }],
     },
-    throwingFetch, // must NOT be called for the dead-on-arrival (diff-only) path
+    throwingFetch,
   );
   assert.equal(out.length, 1);
   assert.equal(out[0].symbol, "newThing");
@@ -219,6 +400,21 @@ test("scanCallerImpact: a new export used elsewhere in the diff is not dead", as
   assert.deepEqual(out, []);
 });
 
+test("scanCallerImpact: a comment mention does not suppress dead-on-arrival", async () => {
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [{ path: "src/util.ts", patch: "@@ -0,0 +1,2 @@\n+export const newThing = 1;\n+// TODO wire newThing later" }],
+    },
+    throwingFetch,
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].kind, "dead-on-arrival");
+  assert.equal(out[0].symbol, "newThing");
+});
+
 test("scanCallerImpact: a new export from a public entrypoint is not flagged dead", async () => {
   const out = await scanCallerImpact(
     {
@@ -230,6 +426,32 @@ test("scanCallerImpact: a new export from a public entrypoint is not flagged dea
     throwingFetch,
   );
   assert.deepEqual(out, []);
+});
+
+test("scanCallerImpact: a re-export does not suppress dead-on-arrival", async () => {
+  const out = await scanCallerImpact(
+    {
+      repoFullName: "o/r",
+      prNumber: 1,
+      githubToken: "t",
+      files: [
+        { path: "src/a.ts", patch: "@@ -0,0 +1,1 @@\n+export const orphan = 1;" },
+        { path: "src/barrel.ts", patch: "@@ -0,0 +1,1 @@\n+export { orphan } from './a';" },
+      ],
+    },
+    throwingFetch,
+  );
+  assert.ok(out.some((f) => f.symbol === "orphan" && f.kind === "dead-on-arrival"));
+});
+
+test("scanCallerImpact: dead-on-arrival runs without a token (diff-only, no network)", async () => {
+  const out = await scanCallerImpact(
+    { repoFullName: "o/r", prNumber: 1, files: [{ path: "src/util.ts", patch: "@@ -0,0 +1,1 @@\n+export const orphan = 1;" }] },
+    throwingFetch, // no token ⇒ no network; must not be called
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].kind, "dead-on-arrival");
+  assert.equal(out[0].symbol, "orphan");
 });
 
 test("scanCallerImpact: no token returns [] without any fetch", async () => {
@@ -256,84 +478,9 @@ test("scanCallerImpact: a rate-limited Code Search drops that symbol without thr
       githubToken: "t",
       files: [{ path: "src/lib.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" }],
     },
-    router([["/search/code", res({}, { ok: false, status: 403 })]]),
+    async (url) => (url.includes("/search/code") ? res({}, { ok: false, status: 403 }) : res({ items: [] })),
   );
   assert.deepEqual(out, []);
-});
-
-test("scanCallerImpact: pages past a noisy first page to find a real caller on page 2", async () => {
-  // Page 1 is a FULL page of non-callers (the changed file, a comment-only hit, and markdown docs); the real
-  // unchanged caller is only on page 2, so the analyzer must paginate to find it.
-  const page1 = [
-    { path: "src/lib.ts", text_matches: [{ fragment: "export function foo() {}" }] }, // changed file → excluded
-    { path: "src/note.ts", text_matches: [{ fragment: "// foo is nice" }] }, // comment-only → not a reference
-    { path: "docs/x.md", text_matches: [{ fragment: "the foo helper" }] }, // markdown → excluded
-  ];
-  while (page1.length < 20) page1.push({ path: "docs/pad.md", text_matches: [{ fragment: "foo" }] });
-  const fetchImpl = async (url) => {
-    if (url.includes("&page=1")) return res({ total_count: 21, items: page1 });
-    if (url.includes("&page=2")) {
-      return res({
-        total_count: 21,
-        items: [{ path: "src/real-caller.ts", text_matches: [{ fragment: "import { foo } from './lib';\nfoo();" }] }],
-      });
-    }
-    return res({ items: [] });
-  };
-  const out = await scanCallerImpact(
-    {
-      repoFullName: "o/r",
-      prNumber: 1,
-      githubToken: "t",
-      files: [{ path: "src/lib.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" }],
-    },
-    fetchImpl,
-  );
-  assert.equal(out.length, 1);
-  assert.equal(out[0].kind, "removed-with-callers");
-  assert.deepEqual(out[0].callerFiles, ["src/real-caller.ts"]);
-});
-
-test("scanCallerImpact: a multiline signature change is detected as changed-with-callers", async () => {
-  const fetchImpl = router([
-    ["%22foo%22", res({ items: [{ path: "src/caller.ts", text_matches: [{ fragment: "foo(1);" }] }] })],
-  ]);
-  const out = await scanCallerImpact(
-    {
-      repoFullName: "o/r",
-      prNumber: 1,
-      githubToken: "t",
-      files: [
-        {
-          path: "src/lib.ts",
-          // Whole declaration block removed + re-added; only a parameter line (not the first line) changes.
-          patch:
-            "@@ -1,3 +1,3 @@\n-export function foo(\n-  a: string,\n-): void;\n+export function foo(\n+  a: number,\n+): void;",
-        },
-      ],
-    },
-    fetchImpl,
-  );
-  assert.equal(out.length, 1);
-  assert.equal(out[0].symbol, "foo");
-  assert.equal(out[0].kind, "changed-with-callers");
-});
-
-test("scanCallerImpact: a re-export does not suppress dead-on-arrival", async () => {
-  // fileA adds the export; a barrel only re-exports it (API forwarding) — that is not real implementation use.
-  const out = await scanCallerImpact(
-    {
-      repoFullName: "o/r",
-      prNumber: 1,
-      githubToken: "t",
-      files: [
-        { path: "src/a.ts", patch: "@@ -0,0 +1,1 @@\n+export const orphan = 1;" },
-        { path: "src/barrel.ts", patch: "@@ -0,0 +1,1 @@\n+export { orphan } from './a';" },
-      ],
-    },
-    throwingFetch, // dead-on-arrival is diff-only
-  );
-  assert.ok(out.some((f) => f.symbol === "orphan" && f.kind === "dead-on-arrival"));
 });
 
 test("scanCallerImpact: an unsafe repoFullName is rejected before any fetch", async () => {
@@ -342,56 +489,6 @@ test("scanCallerImpact: an unsafe repoFullName is rejected before any fetch", as
     throwingFetch,
   );
   assert.deepEqual(out, []);
-});
-
-test("scanCallerImpact: a hit only in a comment, string, or markdown is NOT counted as a caller", async () => {
-  const fetchImpl = router([
-    [
-      "%22foo%22",
-      res({
-        items: [
-          { path: "src/comment.ts", text_matches: [{ fragment: "// foo is documented here" }] },
-          { path: "docs/readme.md", text_matches: [{ fragment: "the foo helper is great" }] },
-          { path: "src/strings.ts", text_matches: [{ fragment: "const label = 'foo';" }] },
-        ],
-      }),
-    ],
-  ]);
-  const out = await scanCallerImpact(
-    {
-      repoFullName: "o/r",
-      prNumber: 1,
-      githubToken: "t",
-      files: [{ path: "src/lib.ts", patch: "@@ -1,1 +0,0 @@\n-export function foo(): void;" }],
-    },
-    fetchImpl,
-  );
-  assert.deepEqual(out, []); // comment-only, markdown, and string-only matches are not real callers
-});
-
-test("scanCallerImpact: a comment mention does not suppress dead-on-arrival", async () => {
-  const out = await scanCallerImpact(
-    {
-      repoFullName: "o/r",
-      prNumber: 1,
-      githubToken: "t",
-      files: [{ path: "src/util.ts", patch: "@@ -0,0 +1,2 @@\n+export const newThing = 1;\n+// TODO wire newThing later" }],
-    },
-    throwingFetch,
-  );
-  assert.equal(out.length, 1);
-  assert.equal(out[0].kind, "dead-on-arrival");
-  assert.equal(out[0].symbol, "newThing");
-});
-
-test("scanCallerImpact: dead-on-arrival runs without a token (diff-only, no network)", async () => {
-  const out = await scanCallerImpact(
-    { repoFullName: "o/r", prNumber: 1, files: [{ path: "src/util.ts", patch: "@@ -0,0 +1,1 @@\n+export const orphan = 1;" }] },
-    throwingFetch, // no token ⇒ no network; must not be called
-  );
-  assert.equal(out.length, 1);
-  assert.equal(out[0].kind, "dead-on-arrival");
-  assert.equal(out[0].symbol, "orphan");
 });
 
 // ── render ──────────────────────────────────────────────────────────────────────
