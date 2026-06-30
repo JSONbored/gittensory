@@ -248,15 +248,16 @@ export async function timeoutFetch(input: RequestInfo | URL, init?: RequestInit)
     if (replay) return responseFromCached(replay, "coalesced");
   }
 
-  const request = fetchAndMaybeCacheGitHubGet(input, init, url, cacheKey, cls);
-  const shared = request.then(
-    (result) => result.cached,
-    () => null,
+  const request = fetchAndMaybeCacheGitHubGet(input, init, url, cacheKey, cls).then(
+    (result) => ({ ok: true as const, result }),
+    (error: unknown) => ({ ok: false as const, error }),
   );
+  const shared = request.then((settled) => (settled.ok ? settled.result.cached : null));
   const sharedWithCleanup = shared.finally(() => inFlightCacheableGets.delete(cacheKey));
   inFlightCacheableGets.set(cacheKey, sharedWithCleanup);
   const result = await request;
-  return result.response;
+  if (!result.ok) throw result.error;
+  return result.result.response;
 }
 
 /** Test-only: reset shared GitHub response cache state between tests. */

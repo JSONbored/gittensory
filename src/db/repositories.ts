@@ -377,16 +377,25 @@ function resolveLinkedIssueClaimedAt(
 ): string | null {
   if (linkedIssues.length === 0) return null;
   if (!existing) return observedLinkedIssueClaimedAt;
-  if (existing.linkedIssuesJson === linkedIssuesJson) return existing.linkedIssueClaimedAt ?? observedLinkedIssueClaimedAt;
-  if (existing.linkedIssueClaimedAt && linkedIssuesOverlap(parseJson<number[]>(existing.linkedIssuesJson, []), linkedIssues)) {
-    return existing.linkedIssueClaimedAt;
-  }
+  if (
+    existing.linkedIssuesJson === linkedIssuesJson ||
+    sameLinkedIssueSet(parseLinkedIssuesJson(existing.linkedIssuesJson), linkedIssues)
+  )
+    return existing.linkedIssueClaimedAt ?? observedLinkedIssueClaimedAt;
   return observedLinkedIssueClaimedAt;
 }
 
-function linkedIssuesOverlap(left: number[], right: number[]): boolean {
-  const rightIssues = new Set(right);
-  return left.some((issue) => rightIssues.has(issue));
+function parseLinkedIssuesJson(value: string): number[] {
+  const parsed = parseJson<unknown>(value, []);
+  return Array.isArray(parsed) ? (parsed as number[]) : [];
+}
+
+function sameLinkedIssueSet(left: number[], right: number[]): boolean {
+  return normalizedLinkedIssueSet(left) === normalizedLinkedIssueSet(right);
+}
+
+function normalizedLinkedIssueSet(numbers: number[]): string {
+  return jsonString([...new Set(numbers)].sort((left, right) => left - right));
 }
 
 export async function upsertIssueFromGitHub(env: Env, repoFullName: string, issue: GitHubIssuePayload, options: { seenOpenAt?: string } = {}): Promise<IssueRecord> {
@@ -3309,14 +3318,20 @@ export async function getCachedAiReview(
   pullNumber: number,
   headSha: string | null | undefined,
   mode: string,
-): Promise<{ notes: string; reviewerCount: number; findings: AdvisoryFinding[] } | null> {
+): Promise<{ notes: string; reviewerCount: number; findings: AdvisoryFinding[]; metadata?: Record<string, unknown> | undefined } | null> {
   if (!headSha) return null;
   const row = await env.DB
-    .prepare("SELECT notes, reviewer_count AS reviewerCount, ai_review_mode AS mode, findings_json AS findingsJson FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?")
+    .prepare("SELECT notes, reviewer_count AS reviewerCount, ai_review_mode AS mode, findings_json AS findingsJson, metadata_json AS metadataJson FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?")
     .bind(repoFullName, pullNumber, headSha)
-    .first<{ notes: string; reviewerCount: number; mode: string; findingsJson: string | null }>();
+    .first<{ notes: string; reviewerCount: number; mode: string; findingsJson: string | null; metadataJson: string | null }>();
   if (!row || row.mode !== mode) return null;
-  return { notes: row.notes, reviewerCount: row.reviewerCount, findings: parseJson<AdvisoryFinding[]>(row.findingsJson, []) };
+  const metadata = parseJson<Record<string, unknown>>(row.metadataJson, {});
+  return {
+    notes: row.notes,
+    reviewerCount: row.reviewerCount,
+    findings: parseJson<AdvisoryFinding[]>(row.findingsJson, []),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
 }
 
 /** Upsert the AI review for (repo, pull, head SHA). A nullish head SHA is a no-op. */
@@ -3326,17 +3341,18 @@ export async function putCachedAiReview(
   pullNumber: number,
   headSha: string | null | undefined,
   mode: string,
-  review: { notes: string; reviewerCount: number; findings?: AdvisoryFinding[] },
+  review: { notes: string; reviewerCount: number; findings?: AdvisoryFinding[]; metadata?: Record<string, unknown> | undefined },
 ): Promise<void> {
   if (!headSha) return;
+  const createdAt = nowIso();
   await env.DB
     .prepare(
-      `INSERT INTO ai_review_cache (repo_full_name, pull_number, head_sha, ai_review_mode, notes, reviewer_count, findings_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO ai_review_cache (repo_full_name, pull_number, head_sha, ai_review_mode, notes, reviewer_count, findings_json, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(repo_full_name, pull_number, head_sha) DO UPDATE SET
-         ai_review_mode = excluded.ai_review_mode, notes = excluded.notes, reviewer_count = excluded.reviewer_count, findings_json = excluded.findings_json, created_at = CURRENT_TIMESTAMP`,
+         ai_review_mode = excluded.ai_review_mode, notes = excluded.notes, reviewer_count = excluded.reviewer_count, findings_json = excluded.findings_json, metadata_json = excluded.metadata_json, created_at = excluded.created_at`,
     )
-    .bind(repoFullName, pullNumber, headSha, mode, review.notes, review.reviewerCount, jsonString(review.findings ?? []))
+    .bind(repoFullName, pullNumber, headSha, mode, review.notes, review.reviewerCount, jsonString(review.findings ?? []), jsonString(review.metadata ?? {}), createdAt)
     .run();
 }
 
