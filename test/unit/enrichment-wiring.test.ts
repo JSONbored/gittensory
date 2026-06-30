@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { runAiReviewForAdvisory } from "../../src/queue/processors";
-import { upsertRepositoryFromGitHub } from "../../src/db/repositories";
+import { upsertRepositoryFromGitHub, upsertIssueFromGitHub } from "../../src/db/repositories";
 import type { Advisory, RepositorySettings } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
 
@@ -85,6 +85,17 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
       REES_ANALYZERS: "secret,actionPin,redos",
     });
     await seedRepoFile(env, "acme/widgets");
+    await upsertIssueFromGitHub(env, "acme/widgets", {
+      number: 42,
+      title: "Add feature",
+      body: "Implement the requested feature.",
+      state: "open",
+      user: { login: "reporter" },
+      labels: [],
+      html_url: "https://github.com/acme/widgets/issues/42",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    });
     const reesRequest: {
       url?: string;
       auth?: string | null;
@@ -92,6 +103,8 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
         analyzers?: string[];
         baseSha?: string | null;
         author?: string;
+        body?: string;
+        linkedIssue?: { number: number; title?: string; body?: string };
         githubToken?: string;
       };
     } = {};
@@ -105,6 +118,8 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
             analyzers?: string[];
             baseSha?: string | null;
             author?: string;
+            body?: string;
+            linkedIssue?: { number: number; title?: string; body?: string };
             githubToken?: string;
           };
           return new Response(
@@ -124,8 +139,9 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
         pr: {
           number: 7,
           title: "Add a feature",
-          body: "Implements the thing.",
+          body: "Implements the thing. Fixes #42",
           baseSha: "base7",
+          linkedIssues: [42],
         },
         author: "alice",
         confirmedContributor: true,
@@ -141,6 +157,12 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
       ]);
       expect(reesRequest.body?.baseSha).toBe("base7");
       expect(reesRequest.body?.author).toBe("alice");
+      expect(reesRequest.body?.body).toBe("Implements the thing. Fixes #42");
+      expect(reesRequest.body?.linkedIssue).toEqual({
+        number: 42,
+        title: "Add feature",
+        body: "Implement the requested feature.",
+      });
       expect(reesRequest.body?.githubToken).toBe("public-read-token");
       // The brief's content flows into the user prompt, but the system prompt carries our FIXED
       // enrichment suffix — the REES-supplied systemSuffix is untrusted and is never spliced in.

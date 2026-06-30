@@ -3,11 +3,14 @@ import {
   isEnrichmentEnabled,
   buildReviewEnrichment,
   isReesGithubTokenForwardingEnabled,
+  resolveEnrichmentLinkedIssue,
   resolveReesAnalyzers,
   resolveReesAnalyzerBudgetMs,
   resolveReesProfile,
   resolveReesTransportTimeoutMs,
 } from "../../src/review/enrichment-wire";
+import { upsertIssueFromGitHub } from "../../src/db/repositories";
+import { createTestEnv } from "../helpers/d1";
 
 const env = (o: Record<string, string>) => o as unknown as Env;
 const input = {
@@ -83,7 +86,9 @@ describe("buildReviewEnrichment", () => {
       {
         ...input,
         baseSha: "baseabc",
+        body: "Fixes #12",
         author: "alice",
+        linkedIssue: { number: 12, title: "Add caching", body: "Cache registry sync." },
         githubToken: "gh-read-token",
       },
     );
@@ -106,6 +111,12 @@ describe("buildReviewEnrichment", () => {
     const body = JSON.parse(calls[0]!.init.body as string);
     expect(body.repoFullName).toBe("o/r");
     expect(body.baseSha).toBe("baseabc");
+    expect(body.body).toBe("Fixes #12");
+    expect(body.linkedIssue).toEqual({
+      number: 12,
+      title: "Add caching",
+      body: "Cache registry sync.",
+    });
     expect(body.author).toBe("alice");
     expect(body.githubToken).toBe("gh-read-token");
     expect(body.analyzers).toBeUndefined();
@@ -558,6 +569,47 @@ describe("resolveReesProfile", () => {
       ),
     ).toBe(true);
     warnSpy.mockRestore();
+  });
+});
+
+describe("resolveEnrichmentLinkedIssue", () => {
+  it("returns undefined when no linked issues are present", async () => {
+    const env = createTestEnv();
+    await expect(
+      resolveEnrichmentLinkedIssue(env, "o/r", []),
+    ).resolves.toBeUndefined();
+    await expect(
+      resolveEnrichmentLinkedIssue(env, "o/r", [0, -1]),
+    ).resolves.toBeUndefined();
+  });
+
+  it("returns number-only envelope when the issue row is missing", async () => {
+    const env = createTestEnv();
+    await expect(
+      resolveEnrichmentLinkedIssue(env, "o/r", [42]),
+    ).resolves.toEqual({ number: 42 });
+  });
+
+  it("returns title/body from the cached issue row", async () => {
+    const env = createTestEnv();
+    await upsertIssueFromGitHub(env, "o/r", {
+      number: 12,
+      title: "Add caching",
+      body: "Cache registry sync.",
+      state: "open",
+      user: { login: "alice" },
+      labels: [],
+      html_url: "https://github.com/o/r/issues/12",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    });
+    await expect(
+      resolveEnrichmentLinkedIssue(env, "o/r", [12]),
+    ).resolves.toEqual({
+      number: 12,
+      title: "Add caching",
+      body: "Cache registry sync.",
+    });
   });
 });
 

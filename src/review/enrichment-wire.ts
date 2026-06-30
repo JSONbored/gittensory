@@ -6,6 +6,7 @@
 // Single env switch: GITTENSORY_REVIEW_ENRICHMENT (+ REES_URL must be set, so the hosted Worker — which sets neither
 // — is unaffected). Default OFF → gathers nothing, prompt byte-identical. FULLY FAIL-SAFE: any timeout / non-200 /
 // network / parse error, or an empty brief, returns undefined and the review proceeds on diff + grounding + RAG.
+import { getIssue } from "../db/repositories";
 import { sanitizePublicComment } from "../queue-intelligence";
 import { neutralizePromptInjection } from "./prompt-injection";
 import type { PullRequestFileRecord } from "../types";
@@ -135,16 +136,42 @@ function headShaPrefix(headSha: string | null | undefined): string | undefined {
   return text ? text.slice(0, 12) : undefined;
 }
 
+export interface EnrichmentLinkedIssue {
+  number: number;
+  title?: string;
+  body?: string;
+}
+
 interface EnrichmentInput {
   repoFullName: string;
   prNumber: number;
   headSha: string | null;
   baseSha?: string | null;
   title?: string | undefined;
+  body?: string | undefined;
   author?: string | null | undefined;
+  linkedIssue?: EnrichmentLinkedIssue | undefined;
   githubToken?: string | undefined;
   files: PullRequestFileRecord[];
   diff: string;
+}
+
+/** Resolve the PR's primary linked issue into the compact REES envelope (#1478). Fail-safe: returns
+ *  `{ number }` when the issue row is missing so the history analyzer can still key on the number. */
+export async function resolveEnrichmentLinkedIssue(
+  env: Env,
+  repoFullName: string,
+  linkedIssues: number[],
+): Promise<EnrichmentLinkedIssue | undefined> {
+  const number = linkedIssues.find((candidate) => Number.isInteger(candidate) && candidate > 0);
+  if (!number) return undefined;
+  const issue = await getIssue(env, repoFullName, number).catch(() => null);
+  if (!issue) return { number };
+  return {
+    number: issue.number,
+    ...(issue.title ? { title: issue.title } : {}),
+    ...(issue.body ? { body: issue.body } : {}),
+  };
 }
 
 /** Optional comma-list of REES analyzers. Unset/"all" omits the field so REES runs its full registry.
@@ -232,7 +259,9 @@ export async function buildReviewEnrichment(
         headSha: input.headSha,
         baseSha: input.baseSha ?? null,
         title: input.title,
+        ...(input.body ? { body: input.body } : {}),
         author: input.author ?? undefined,
+        ...(input.linkedIssue ? { linkedIssue: input.linkedIssue } : {}),
         ...(input.githubToken ? { githubToken: input.githubToken } : {}),
         files: input.files.map((file) => ({
           path: file.path,
