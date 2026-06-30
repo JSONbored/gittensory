@@ -79,6 +79,7 @@ describe("explainScoreBreakdown", () => {
         "contributionBonus",
         "labelMultiplier",
         "issueMultiplier",
+        "branchEligibility",
         "credibilityMultiplier",
         "reviewPenaltyMultiplier",
         "openPrMultiplier",
@@ -92,7 +93,7 @@ describe("explainScoreBreakdown", () => {
       expect(["full", "reduced", "neutral", "blocked"]).toContain(component.band);
     }
     expect(breakdown.highestLeverageLever.component).toBeTruthy();
-    expect(breakdown.highestLeverageLever.lever).toMatch(/merge|close|credibility|open PR|linked issue|density|review/i);
+    expect(breakdown.highestLeverageLever.lever).toMatch(/merge|close|credibility|open PR|linked issue|density|review|branch/i);
     expect(JSON.stringify(breakdown)).not.toMatch(FORBIDDEN);
     // No open issues → within the allowance → full band on the open-issue gate.
     expect(breakdown.components.find((entry) => entry.component === "openIssueMultiplier")).toMatchObject({ band: "full" });
@@ -118,6 +119,166 @@ describe("explainScoreBreakdown", () => {
     expect(blocked.components.find((entry) => entry.component === "mergedHistoryMultiplier")).toMatchObject({ band: "blocked", leverageScore: 100 });
     expect(blocked.highestLeverageLever.lever).toMatch(/merge/i);
     expect(JSON.stringify(blocked)).not.toMatch(FORBIDDEN);
+  });
+
+  it("explains branch eligibility as neutral (not required), full (eligible), blocked (ineligible), and reduced (unknown/missing/stale)", () => {
+    const notRequired = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: { repoFullName: repo.fullName, sourceTokenScore: 40, totalTokenScore: 60, sourceLines: 80, linkedIssueMode: "none" },
+      }),
+    );
+    expect(notRequired.components.find((entry) => entry.component === "branchEligibility")).toMatchObject({ band: "neutral" });
+
+    const eligible = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 40,
+          totalTokenScore: 60,
+          sourceLines: 80,
+          linkedIssueMode: "standard",
+          linkedIssueContext: { status: "validated", source: "official_mirror", issueNumbers: [3], solvedByPullRequests: [44] },
+          branchEligibility: { status: "eligible", source: "github_metadata", checkedAt: "2026-05-30T00:00:00.000Z" },
+        },
+      }),
+    );
+    expect(eligible.components.find((entry) => entry.component === "branchEligibility")).toMatchObject({ band: "full" });
+
+    const ineligible = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 40,
+          totalTokenScore: 60,
+          sourceLines: 80,
+          linkedIssueMode: "standard",
+          linkedIssueContext: { status: "validated", source: "official_mirror", issueNumbers: [3], solvedByPullRequests: [44] },
+          branchEligibility: { status: "ineligible", source: "github_metadata", reason: "head branch is not eligible" },
+        },
+      }),
+    );
+    const ineligibleBranch = ineligible.components.find((entry) => entry.component === "branchEligibility");
+    expect(ineligibleBranch).toMatchObject({ band: "blocked", leverageScore: 90 });
+    expect(ineligibleBranch?.summary).toMatch(/head branch is not eligible/i);
+    expect(ineligibleBranch?.lever).toMatch(/eligible branch/i);
+
+    const ineligibleNoReason = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 40,
+          totalTokenScore: 60,
+          sourceLines: 80,
+          linkedIssueMode: "standard",
+          linkedIssueContext: { status: "raw", source: "github_cache", issueNumbers: [12] },
+          branchEligibility: { status: "ineligible", source: "github_metadata" },
+        },
+      }),
+    );
+    expect(ineligibleNoReason.components.find((entry) => entry.component === "branchEligibility")?.summary).toMatch(
+      /confirmed ineligible; standard linked-issue scoring is blocked/i,
+    );
+
+    const unknownMetadata = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 40,
+          totalTokenScore: 60,
+          sourceLines: 80,
+          linkedIssueMode: "standard",
+          linkedIssueContext: { status: "plausible", source: "github_cache", issueNumbers: [4] },
+          branchEligibility: { status: "unknown", source: "github_metadata" },
+        },
+      }),
+    );
+    expect(unknownMetadata.components.find((entry) => entry.component === "branchEligibility")?.summary).toMatch(/unknown/i);
+
+    const missing = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 40,
+          totalTokenScore: 60,
+          sourceLines: 80,
+          linkedIssueMode: "standard",
+          linkedIssueContext: { status: "raw", source: "github_cache", issueNumbers: [12] },
+        },
+      }),
+    );
+    expect(missing.components.find((entry) => entry.component === "branchEligibility")).toMatchObject({
+      band: "reduced",
+      summary: expect.stringMatching(/evidence is missing/i),
+    });
+
+    const stale = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 40,
+          totalTokenScore: 60,
+          sourceLines: 80,
+          linkedIssueMode: "standard",
+          linkedIssueContext: { status: "plausible", source: "github_cache", issueNumbers: [4] },
+          branchEligibility: { status: "eligible", source: "local_metadata", stale: true, checkedAt: "2026-05-01T00:00:00.000Z" },
+        },
+      }),
+    );
+    expect(stale.components.find((entry) => entry.component === "branchEligibility")?.summary).toMatch(/stale/i);
+
+    const userSupplied = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          sourceTokenScore: 40,
+          totalTokenScore: 60,
+          sourceLines: 80,
+          linkedIssueMode: "standard",
+          linkedIssueContext: { status: "plausible", source: "github_cache", issueNumbers: [4] },
+          branchEligibility: {},
+        },
+      }),
+    );
+    expect(userSupplied.components.find((entry) => entry.component === "branchEligibility")?.summary).toMatch(/user-supplied/i);
+    expect(JSON.stringify(ineligible)).not.toMatch(FORBIDDEN);
+  });
+
+  it("prioritizes ineligible branch metadata above invalid linked-issue context", () => {
+    const preview = buildScorePreview({
+      repo,
+      snapshot,
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 80,
+        totalTokenScore: 120,
+        sourceLines: 60,
+        openPrCount: 0,
+        credibility: 1,
+        linkedIssueMode: "standard",
+        linkedIssueContext: { status: "invalid", source: "github_cache", issueNumbers: [9], reason: "Issue #9 is closed." },
+        branchEligibility: { status: "ineligible", source: "github_metadata", reason: "head branch is not eligible" },
+      },
+    });
+
+    const breakdown = explainScoreBreakdown(preview);
+    expect(breakdown.components.find((entry) => entry.component === "branchEligibility")).toMatchObject({ band: "blocked" });
+    expect(breakdown.highestLeverageLever.component).toBe("branchEligibility");
   });
 
   it("explains an over-threshold open-issue count as a blocked open-issue spam gate", () => {
@@ -254,6 +415,7 @@ describe("explainScoreBreakdown", () => {
         credibility: 1,
         linkedIssueMode: "standard",
         linkedIssueContext: { status: "invalid", source: "github_cache", issueNumbers: [9], reason: "Issue #9 is closed." },
+        branchEligibility: { status: "eligible", source: "github_metadata" },
       },
     });
 

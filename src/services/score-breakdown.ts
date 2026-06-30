@@ -172,6 +172,57 @@ function issueMultiplierBreakdown(preview: ScorePreviewResult): ScoreMultiplierB
   return { component: "issueMultiplier", band, summary, lever, leverageScore };
 }
 
+// Sibling of issueMultiplierBreakdown: branch/base eligibility gates the standard linked-issue multiplier
+// even when issue metadata looks plausible (#90 / #178). Surfaced here so miners see the same actionable
+// breakdown other eligibility gates already provide.
+function branchEligibilityBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
+  const branch = preview.branchEligibility;
+  if (!branch.required || branch.status === "not_required") {
+    return {
+      component: "branchEligibility",
+      band: "neutral",
+      summary: "Branch eligibility is not required for this preview (no standard linked-issue lane).",
+      lever: "Use standard linked-issue mode when branch/base proof is required for issue-solving PRs.",
+      leverageScore: 0,
+    };
+  }
+  if (branch.status === "eligible" && branch.evidence === "provided" && !branch.stale) {
+    return {
+      component: "branchEligibility",
+      band: "full",
+      summary: "Branch/base eligibility is confirmed for standard linked-issue scoring.",
+      lever: "Keep branch and base metadata aligned with the repo's registered eligibility rules.",
+      leverageScore: 5,
+    };
+  }
+  if (branch.status === "ineligible") {
+    return {
+      component: "branchEligibility",
+      band: "blocked",
+      summary: branch.reason
+        ? `Branch/base eligibility is confirmed ineligible (${branch.reason}).`
+        : "Branch/base eligibility is confirmed ineligible; standard linked-issue scoring is blocked.",
+      lever: "Use an eligible branch or remove linked-issue assumptions before relying on this preview.",
+      leverageScore: 90,
+    };
+  }
+  const summary =
+    branch.evidence === "missing"
+      ? "Branch eligibility evidence is missing; standard linked-issue multiplier assumptions are not confirmed."
+      : branch.stale
+        ? "Branch eligibility evidence is stale; standard linked-issue multiplier assumptions need refresh."
+        : branch.status === "unknown" && branch.source === "user_supplied"
+          ? "Branch eligibility evidence is user-supplied; verified metadata is required for standard linked-issue scoring."
+          : branch.status === "unknown"
+            ? "Branch eligibility is unknown; standard linked-issue multiplier assumptions are not confirmed."
+            : branch.source === "user_supplied"
+              ? "Branch eligibility evidence is user-supplied; verified metadata is required for standard linked-issue scoring."
+              : "Branch eligibility is not confirmed; standard linked-issue multiplier assumptions are not applied.";
+  const lever = "Refresh branch/base eligibility metadata before relying on linked-issue assumptions.";
+  const leverageScore = branch.evidence === "missing" || branch.status === "unknown" ? 75 : 65;
+  return { component: "branchEligibility", band: "reduced", summary, lever, leverageScore };
+}
+
 function reviewPenaltyBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
   const { reviewPenaltyMultiplier } = preview.scoreEstimate;
   const band = bandForMultiplier(reviewPenaltyMultiplier, false);
@@ -267,6 +318,7 @@ export function explainScoreBreakdown(preview: ScorePreviewResult): ScoreBreakdo
     contributionBonusBreakdown(preview),
     labelMultiplierBreakdown(preview),
     issueMultiplierBreakdown(preview),
+    branchEligibilityBreakdown(preview),
     credibilityBreakdown(preview),
     reviewPenaltyBreakdown(preview),
     openPrBreakdown(preview),
