@@ -22,6 +22,7 @@ import {
   upsertPullRequestFile,
   upsertPullRequestFromGitHub,
   upsertIssueFromGitHub,
+  upsertRepoLabel,
   upsertRepositoryFromGitHub,
   upsertRepositorySettings,
 } from "../../src/db/repositories";
@@ -1222,6 +1223,263 @@ describe("GitHub backfill", () => {
 
     expect(result).toMatchObject({ status: "complete", fetchedCount: 1, expectedCount: 1 });
     expect(await listRepoLabels(env, "JSONbored/gittensory")).toEqual(expect.arrayContaining([expect.objectContaining({ name: "bug" })]));
+  });
+
+  it("validates unchanged single-page label segments with conditional REST requests", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    await seedRegisteredRepo(env);
+    const labelHeaders: Array<{ ifNoneMatch: string | null; ifModifiedSince: string | null }> = [];
+    let labelFetches = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://api.github.com/graphql") return githubTotalsResponse({ openIssues: 0, openPullRequests: 0, mergedPullRequests: 0, closedPullRequests: 0, labels: 1 });
+      if (url.includes("/labels?")) {
+        const headers = new Headers(init?.headers);
+        labelHeaders.push({ ifNoneMatch: headers.get("if-none-match"), ifModifiedSince: headers.get("if-modified-since") });
+        labelFetches += 1;
+        if (labelFetches === 1) {
+          return Response.json([{ name: "bug", color: "cc0000", description: "Bug" }], {
+            headers: { etag: '"labels-v1"', "last-modified": "Tue, 26 May 2026 00:00:00 GMT" },
+          });
+        }
+        if (labelFetches === 2) {
+          return new Response(null, { status: 304, headers: { etag: '"labels-v1"', "last-modified": "Tue, 26 May 2026 00:00:00 GMT" } });
+        }
+        return Response.json([{ name: "bug", color: "00cc00", description: "Bug" }], {
+          headers: { etag: '"labels-v2"', "last-modified": "Tue, 26 May 2026 00:05:00 GMT" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const first = await backfillRepositorySegment(env, { repoFullName: "JSONbored/gittensory", segment: "labels", mode: "resume", force: true });
+    const second = await backfillRepositorySegment(env, { repoFullName: "JSONbored/gittensory", segment: "labels", mode: "resume", force: true });
+    const third = await backfillRepositorySegment(env, { repoFullName: "JSONbored/gittensory", segment: "labels", mode: "resume", force: true });
+
+    expect(first).toMatchObject({ status: "complete", fetchedCount: 1, expectedCount: 1 });
+    expect(second).toMatchObject({ status: "not_modified", fetchedCount: 1, expectedCount: 1 });
+    expect(third).toMatchObject({ status: "complete", fetchedCount: 1, expectedCount: 1 });
+    expect(labelHeaders).toEqual([
+      { ifNoneMatch: null, ifModifiedSince: null },
+      { ifNoneMatch: '"labels-v1"', ifModifiedSince: "Tue, 26 May 2026 00:00:00 GMT" },
+      { ifNoneMatch: '"labels-v1"', ifModifiedSince: "Tue, 26 May 2026 00:00:00 GMT" },
+    ]);
+    expect(await listRepoLabels(env, "JSONbored/gittensory")).toEqual(expect.arrayContaining([expect.objectContaining({ name: "bug", color: "00cc00" })]));
+    expect(await listRepoSyncSegments(env, "JSONbored/gittensory")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          segment: "labels",
+          status: "complete",
+          fetchedCount: 1,
+          pageCount: 1,
+          lastCursor: "1",
+          etag: '"labels-v2"',
+          lastModified: "Tue, 26 May 2026 00:05:00 GMT",
+        }),
+      ]),
+    );
+    expect(await listRepoSyncStates(env)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ repoFullName: "JSONbored/gittensory", status: "success", labelsSyncedAt: expect.any(String) })]),
+    );
+  });
+
+  it("preserves stored validators when an unauthenticated fallback returns not modified without validators", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    await seedRegisteredRepo(env);
+    await upsertRepoLabel(env, {
+      repoFullName: "JSONbored/gittensory",
+      name: "bug",
+      color: "cc0000",
+      description: "Bug",
+      isConfigured: true,
+      observedCount: 0,
+      payload: {},
+      lastSeenAt: "2026-05-26T00:00:00.000Z",
+    });
+    await upsertRepoSyncSegment(env, {
+      repoFullName: "JSONbored/gittensory",
+      segment: "labels",
+      status: "complete",
+      sourceKind: "github",
+      mode: "resume",
+      fetchedCount: 1,
+      expectedCount: 1,
+      pageCount: 1,
+      lastCursor: "1",
+      etag: '"labels-v1"',
+      lastModified: "Tue, 26 May 2026 00:00:00 GMT",
+      warnings: [],
+    });
+    const labelRequests: Array<{ auth: string | null; ifNoneMatch: string | null; ifModifiedSince: string | null }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const headers = new Headers(init?.headers);
+      if (url === "https://api.github.com/graphql") return githubTotalsResponse({ openIssues: 0, openPullRequests: 0, mergedPullRequests: 0, closedPullRequests: 0, labels: 1 });
+      if (url.includes("/labels?")) {
+        labelRequests.push({
+          auth: headers.get("authorization"),
+          ifNoneMatch: headers.get("if-none-match"),
+          ifModifiedSince: headers.get("if-modified-since"),
+        });
+        if (headers.get("authorization") === "Bearer public-token") return new Response("", { status: 404 });
+        return new Response(null, { status: 304 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await backfillRepositorySegment(env, { repoFullName: "JSONbored/gittensory", segment: "labels", mode: "resume", force: true });
+
+    expect(result).toMatchObject({ status: "not_modified", fetchedCount: 1, expectedCount: 1 });
+    expect(labelRequests).toEqual([
+      { auth: "Bearer public-token", ifNoneMatch: '"labels-v1"', ifModifiedSince: "Tue, 26 May 2026 00:00:00 GMT" },
+      { auth: null, ifNoneMatch: '"labels-v1"', ifModifiedSince: "Tue, 26 May 2026 00:00:00 GMT" },
+    ]);
+    expect(await listRepoSyncSegments(env, "JSONbored/gittensory")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          segment: "labels",
+          status: "not_modified",
+          etag: '"labels-v1"',
+          lastModified: "Tue, 26 May 2026 00:00:00 GMT",
+        }),
+      ]),
+    );
+  });
+
+  it("uses last-modified validators for unchanged current open PR scans while preserving the resume marker", async () => {
+    const sent: Array<{ message: import("../../src/types").JobMessage; options?: QueueSendOptions }> = [];
+    const env = createTestEnv({
+      GITHUB_PUBLIC_TOKEN: "public-token",
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage, options?: QueueSendOptions) {
+          sent.push(options ? { message, options } : { message });
+        },
+      } as unknown as Queue,
+    });
+    await seedRegisteredRepo(env);
+    const prHeaders: Array<{ ifNoneMatch: string | null; ifModifiedSince: string | null }> = [];
+    let prFetches = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://api.github.com/graphql") return githubTotalsResponse({ openIssues: 0, openPullRequests: 1, mergedPullRequests: 0, closedPullRequests: 0, labels: 0 });
+      if (url.includes("/pulls?state=open")) {
+        const headers = new Headers(init?.headers);
+        prHeaders.push({ ifNoneMatch: headers.get("if-none-match"), ifModifiedSince: headers.get("if-modified-since") });
+        prFetches += 1;
+        if (prFetches === 1) {
+          return Response.json(
+            [{ number: 7, title: "Current PR", state: "open", user: { login: "oktofeesh1" }, head: { sha: "sha7" }, labels: [], body: "" }],
+            { headers: { etag: '"open-prs-v1"', "last-modified": "Tue, 26 May 2026 01:00:00 GMT" } },
+          );
+        }
+        return new Response(null, { status: 304, headers: { "last-modified": "Tue, 26 May 2026 01:00:00 GMT" } });
+      }
+      return Response.json([]);
+    });
+
+    const first = await backfillRepositorySegment(env, { repoFullName: "JSONbored/gittensory", segment: "open_pull_requests", mode: "resume", force: true });
+    const second = await backfillRepositorySegment(env, { repoFullName: "JSONbored/gittensory", segment: "open_pull_requests", mode: "resume", force: true });
+
+    expect(first).toMatchObject({ status: "complete", fetchedCount: 1, expectedCount: 1 });
+    expect(second).toMatchObject({ status: "not_modified", fetchedCount: 1, expectedCount: 1 });
+    expect(prHeaders).toEqual([
+      { ifNoneMatch: null, ifModifiedSince: null },
+      { ifNoneMatch: null, ifModifiedSince: "Tue, 26 May 2026 01:00:00 GMT" },
+    ]);
+    expect(await listRepoSyncSegments(env, "JSONbored/gittensory")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          segment: "open_pull_requests",
+          status: "not_modified",
+          etag: "gittensory-current-open-scan-v1",
+          lastModified: "Tue, 26 May 2026 01:00:00 GMT",
+        }),
+      ]),
+    );
+    expect(sent.filter((item) => item.message.type === "backfill-pr-details")).toHaveLength(2);
+  });
+
+  it("bypasses conditional validators when segment totals change", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    await seedRegisteredRepo(env);
+    await upsertRepoSyncSegment(env, {
+      repoFullName: "JSONbored/gittensory",
+      segment: "labels",
+      status: "complete",
+      sourceKind: "github",
+      mode: "resume",
+      fetchedCount: 1,
+      expectedCount: 1,
+      pageCount: 1,
+      lastCursor: "1",
+      etag: '"labels-v1"',
+      lastModified: "Tue, 26 May 2026 00:00:00 GMT",
+      warnings: [],
+    });
+    const labelHeaders: Array<{ ifNoneMatch: string | null; ifModifiedSince: string | null }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://api.github.com/graphql") return githubTotalsResponse({ openIssues: 0, openPullRequests: 0, mergedPullRequests: 0, closedPullRequests: 0, labels: 2 });
+      if (url.includes("/labels?")) {
+        const headers = new Headers(init?.headers);
+        labelHeaders.push({ ifNoneMatch: headers.get("if-none-match"), ifModifiedSince: headers.get("if-modified-since") });
+        return Response.json([
+          { name: "bug", color: "cc0000", description: "Bug" },
+          { name: "feature", color: "00cc00", description: "Feature" },
+        ]);
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await backfillRepositorySegment(env, { repoFullName: "JSONbored/gittensory", segment: "labels", mode: "resume", force: true });
+
+    expect(result).toMatchObject({ status: "complete", fetchedCount: 2, expectedCount: 2 });
+    expect(labelHeaders).toEqual([{ ifNoneMatch: null, ifModifiedSince: null }]);
+  });
+
+  it("bypasses conditional validators for prior segment rows that are not a complete single page", async () => {
+    for (const previous of [
+      { lastCursor: "2", nextCursor: undefined },
+      { lastCursor: "1", nextCursor: "2" },
+    ]) {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      await seedRegisteredRepo(env);
+      await upsertRepoSyncSegment(env, {
+        repoFullName: "JSONbored/gittensory",
+        segment: "labels",
+        status: "complete",
+        sourceKind: "github",
+        mode: "resume",
+        fetchedCount: 2,
+        expectedCount: 2,
+        pageCount: 2,
+        lastCursor: previous.lastCursor,
+        nextCursor: previous.nextCursor,
+        etag: '"labels-v1"',
+        lastModified: "Tue, 26 May 2026 00:00:00 GMT",
+        warnings: [],
+      });
+      const labelHeaders: Array<{ ifNoneMatch: string | null; ifModifiedSince: string | null }> = [];
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        if (url === "https://api.github.com/graphql") return githubTotalsResponse({ openIssues: 0, openPullRequests: 0, mergedPullRequests: 0, closedPullRequests: 0, labels: 2 });
+        if (url.includes("/labels?")) {
+          const headers = new Headers(init?.headers);
+          labelHeaders.push({ ifNoneMatch: headers.get("if-none-match"), ifModifiedSince: headers.get("if-modified-since") });
+          return Response.json([
+            { name: "bug", color: "cc0000", description: "Bug" },
+            { name: "feature", color: "00cc00", description: "Feature" },
+          ]);
+        }
+        return new Response("not found", { status: 404 });
+      });
+
+      const result = await backfillRepositorySegment(env, { repoFullName: "JSONbored/gittensory", segment: "labels", mode: "resume", force: true });
+
+      expect(result).toMatchObject({ status: "complete", fetchedCount: 2, expectedCount: 2 });
+      expect(labelHeaders).toEqual([{ ifNoneMatch: null, ifModifiedSince: null }]);
+      vi.unstubAllGlobals();
+    }
   });
 
   it("resumes paginated segments from stored cursors instead of restarting from page one", async () => {
