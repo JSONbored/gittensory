@@ -253,7 +253,7 @@ describe("explainScoreBreakdown", () => {
           sourceLines: 80,
           linkedIssueMode: "standard",
           linkedIssueContext: { status: "plausible", source: "github_cache", issueNumbers: [4] },
-          branchEligibility: {},
+          branchEligibility: { status: "unknown" },
         },
       }),
     );
