@@ -1380,7 +1380,14 @@ function shortText(value: string, maxLength: number): string {
     .replace(/\s+/g, " ")
     .trim();
   const safeText = neutralizePublicMarkdownText(sanitized);
-  return safeText.length > maxLength ? `${safeText.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...` : safeText;
+  if (safeText.length <= maxLength) return safeText;
+  // `slice` counts UTF-16 code units, so the cut can fall between the surrogate halves of an astral
+  // character (an emoji) and leave a lone high surrogate — invalid UTF-16 that becomes a U+FFFD mojibake
+  // glyph when the digest comment is UTF-8 encoded for the public GitHub comment. Drop a dangling high
+  // surrogate before the ellipsis so truncation never splits a pair.
+  let truncated = safeText.slice(0, Math.max(0, maxLength - 3));
+  if (/[\uD800-\uDBFF]$/.test(truncated)) truncated = truncated.slice(0, -1);
+  return `${truncated.trimEnd()}...`;
 }
 
 function neutralizePublicMarkdownText(value: string): string {

@@ -1738,6 +1738,62 @@ describe("GitHub mention commands", () => {
     }
   });
 
+  it("does not split a surrogate pair when truncating an over-long emoji digest title", () => {
+    // A string has a lone surrogate (and turns into a U+FFFD mojibake glyph once UTF-8 encoded for the
+    // GitHub comment) iff a high surrogate is not followed by a low one, or vice versa.
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    // 60 × 🎉 (U+1F389) = 120 UTF-16 code units, well over the 90/100-unit digest title caps. Each emoji
+    // is a surrogate pair on an even index, so an odd `maxLength - 3` cut would split the final kept pair.
+    const emojiTitle = "🎉".repeat(60);
+    const digest = {
+      ...sampleMaintainerDigest(),
+      reviewNowPullRequests: [
+        {
+          number: 88,
+          title: emojiTitle,
+          authorLogin: "miner",
+          linkedIssues: [8],
+          labels: [],
+          confirmedMiner: false,
+          ageDays: 0,
+          reasons: ["Linked issue is present."],
+          signals: [],
+        },
+      ],
+      duplicateClusters: [
+        {
+          id: "emoji-title",
+          risk: "high",
+          reason: "Likely_duplicate title cluster",
+          items: [{ type: "pull_request", number: 88, title: emojiTitle }],
+        },
+      ],
+    } satisfies ReturnType<typeof sampleMaintainerDigest>;
+
+    const reviewNow = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory review-now")!,
+      repo: { fullName: "owner/repo" } as any,
+      issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "maintainer",
+      maintainerDigest: digest,
+    });
+    const duplicateClusters = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory duplicate-clusters")!,
+      repo: { fullName: "owner/repo" } as any,
+      issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "maintainer",
+      maintainerDigest: digest,
+    });
+
+    for (const body of [reviewNow, duplicateClusters]) {
+      expect(body).toContain("..."); // the title was truncated
+      expect(loneSurrogate.test(body)).toBe(false); // no split surrogate pair
+      expect(body).not.toContain("�"); // no replacement-character mojibake
+    }
+  });
+
   it("falls back to repository placeholder when queue digest has no source records", () => {
     const digest = buildMaintainerQueueDigest({
       repo: null,
