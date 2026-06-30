@@ -7,7 +7,10 @@ import {
   resolveReesAnalyzerBudgetMs,
   resolveReesProfile,
   resolveReesTransportTimeoutMs,
+  resolveEnrichmentLinkedIssue,
 } from "../../src/review/enrichment-wire";
+import { createTestEnv } from "../helpers/d1";
+import { upsertIssueFromGitHub, upsertRepositoryFromGitHub } from "../../src/db/repositories";
 
 const env = (o: Record<string, string>) => o as unknown as Env;
 const input = {
@@ -128,6 +131,27 @@ describe("buildReviewEnrichment", () => {
       },
       { path: "b.ts", status: undefined, patch: undefined },
     ]);
+  });
+
+  it("includes linkedIssue in the REES POST when provided", async () => {
+    const calls: RequestInit[] = [];
+    globalThis.fetch = vi.fn(async (_url: unknown, init: RequestInit) => {
+      calls.push(init);
+      return {
+        ok: true,
+        json: async () => ({ promptSection: "brief" }),
+      } as Response;
+    }) as unknown as typeof fetch;
+    await buildReviewEnrichment(env({ REES_URL: "https://r" }), {
+      ...input,
+      linkedIssue: { number: 42, title: "Fix cache", body: "Details here." },
+    });
+    const body = JSON.parse(calls[0]!.body as string);
+    expect(body.linkedIssue).toEqual({
+      number: 42,
+      title: "Fix cache",
+      body: "Details here.",
+    });
   });
 
   it("sends an analyzer budget below the transport timeout and accepts partial degraded briefs", async () => {
@@ -535,6 +559,68 @@ describe("resolveReesAnalyzers", () => {
       ),
     ).toBe(true);
     warnSpy.mockRestore();
+  });
+});
+
+describe("resolveEnrichmentLinkedIssue", () => {
+  it("returns undefined when no linked issue numbers are provided", async () => {
+    const env = createTestEnv({});
+    expect(await resolveEnrichmentLinkedIssue(env, "o/r", [])).toBeUndefined();
+    expect(await resolveEnrichmentLinkedIssue(env, "o/r", [0, -1])).toBeUndefined();
+  });
+
+  it("returns the compact envelope from the local issue cache", async () => {
+    const env = createTestEnv({});
+    await upsertRepositoryFromGitHub(
+      env,
+      { name: "r", full_name: "o/r", private: false, owner: { login: "o" } },
+      1,
+    );
+    await upsertIssueFromGitHub(env, "o/r", {
+      number: 42,
+      title: "Fix cache race",
+      body: "Repro steps inside.",
+      state: "open",
+      user: { login: "reporter" },
+      labels: [],
+      html_url: "https://github.com/o/r/issues/42",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    });
+    expect(await resolveEnrichmentLinkedIssue(env, "o/r", [42])).toEqual({
+      number: 42,
+      title: "Fix cache race",
+      body: "Repro steps inside.",
+    });
+  });
+
+  it("falls back to number-only when the issue is not cached locally", async () => {
+    const env = createTestEnv({});
+    expect(await resolveEnrichmentLinkedIssue(env, "o/r", [99])).toEqual({ number: 99 });
+  });
+
+  it("uses the first positive linked issue number", async () => {
+    const env = createTestEnv({});
+    await upsertRepositoryFromGitHub(
+      env,
+      { name: "r", full_name: "o/r", private: false, owner: { login: "o" } },
+      1,
+    );
+    await upsertIssueFromGitHub(env, "o/r", {
+      number: 7,
+      title: "Primary",
+      body: "",
+      state: "open",
+      user: { login: "reporter" },
+      labels: [],
+      html_url: "https://github.com/o/r/issues/7",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    });
+    expect(await resolveEnrichmentLinkedIssue(env, "o/r", [0, 7, 8])).toEqual({
+      number: 7,
+      title: "Primary",
+    });
   });
 });
 
