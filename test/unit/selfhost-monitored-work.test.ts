@@ -32,7 +32,12 @@ describe("self-host monitored recurring work", () => {
 
     expect(mocks.withSentryMonitor).toHaveBeenCalledWith(
       "scheduled-loop",
-      { jobType: "scheduled-loop", cron: "*/2 * * * *" },
+      {
+        subsystem: "scheduler",
+        operation: "scheduled_loop",
+        jobType: "scheduled-loop",
+        cron: "*/2 * * * *",
+      },
       expect.any(Function),
     );
     expect(scheduled).toHaveBeenCalledTimes(1);
@@ -45,7 +50,7 @@ describe("self-host monitored recurring work", () => {
     await runOrbExportWithMonitor(exportBatch, log);
     expect(mocks.withSentryMonitor).toHaveBeenLastCalledWith(
       "orb-export",
-      { jobType: "orb-export" },
+      { subsystem: "orb", operation: "orb_export", jobType: "orb-export" },
       expect.any(Function),
     );
     expect(log).toHaveBeenCalledWith(
@@ -112,7 +117,12 @@ describe("self-host monitored recurring work", () => {
 
     expect(mocks.withSentryMonitor).toHaveBeenCalledWith(
       "orb-relay-drain",
-      { jobType: "orb-relay-drain", pendingAckCount: 1 },
+      {
+        subsystem: "orb",
+        operation: "relay_drain",
+        jobType: "orb-relay-drain",
+        pendingAckCount: 1,
+      },
       expect.any(Function),
     );
     expect(drain).toHaveBeenCalledWith(relayEnv, ["previous-delivery"]);

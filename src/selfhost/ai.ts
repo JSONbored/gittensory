@@ -483,6 +483,9 @@ function logSelfHostAiProviderFailed(input: {
     JSON.stringify({
       level: "error",
       event: "selfhost_ai_provider_failed",
+      subsystem: "ai",
+      operation: "provider_attempt",
+      reasonCode: "provider_error",
       provider: input.provider,
       model: input.model || "default",
       effort: input.effort,
@@ -599,13 +602,26 @@ export function createChainAi(providers: Array<{ name: string; ai: SelfHostAi }>
         } catch (error) {
           lastError = error;
           failures.push({ provider: p.name, error: errorMessage(error) });
-          console.error(JSON.stringify({ level: "warn", event: "selfhost_ai_provider_failed_in_chain", provider: p.name, error: errorMessage(error) }));
+          console.error(
+            JSON.stringify({
+              level: "warn",
+              event: "selfhost_ai_provider_failed_in_chain",
+              subsystem: "ai",
+              operation: "provider_chain",
+              reasonCode: "provider_error",
+              provider: p.name,
+              error: errorMessage(error),
+            }),
+          );
         }
       }
       console.error(
         JSON.stringify({
           level: "error",
           event: "selfhost_ai_providers_exhausted",
+          subsystem: "ai",
+          operation: "provider_chain",
+          reasonCode: "providers_exhausted",
           provider: failures.length === 1 ? failures[0]?.provider : undefined,
           model: model || "default",
           providers: failures.map((failure) => failure.provider),

@@ -220,13 +220,16 @@ async function mintInstallationToken(
         );
         return cached.token;
       }
-      console.error(
-        JSON.stringify({
-          level: "error",
-          event: "orb_broker_unavailable",
-          installationId,
-          error: errorMessage(error),
-        }),
+        console.error(
+          JSON.stringify({
+            level: "error",
+            event: "orb_broker_unavailable",
+            subsystem: "github",
+            operation: "broker_installation_token",
+            reasonCode: "orb_broker_unavailable",
+            installationId,
+            error: errorMessage(error),
+          }),
       );
       throw error;
     }
@@ -733,6 +736,9 @@ async function createOrUpdateNamedCheckRun(
           JSON.stringify({
             level: "error",
             event: "check_run_post_denied",
+            subsystem: "github",
+            operation: "check_run_publish",
+            reasonCode: "permission_denied",
             repository: `${owner}/${repo}`,
             status: e.status ?? null,
             message: (e.message ?? "Resource not accessible by integration").slice(

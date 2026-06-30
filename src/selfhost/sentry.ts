@@ -17,6 +17,27 @@ let sentryEnvironment = "production";
 
 const SECRET_KEY =
   /(token|secret|key|password|passwd|authorization|auth|dsn|cookie|bearer|credential|private)/i;
+const SENSITIVE_CONTENT_KEY =
+  /(raw_?body|request_?body|body|patch|diff|prompt|messages|review(_|)?(text|body)?|comment(_|)?(text|body)?|private_?repo_?config|repo_?config|auth_?path|auth_?file|codex_?home|claude_?code)/i;
+const PATH_KEY = /(path|file|dir|home)$/i;
+const PATH_SECRET_KEY = /(auth|token|secret|private|config|oauth|codex|claude)/i;
+const REDACTED = "[redacted]";
+const MAX_TAG_LENGTH = 120;
+const SENTRY_CONTEXT_TAGS = [
+  ["subsystem", ["subsystem"]],
+  ["operation", ["operation"]],
+  ["reasonCode", ["reasonCode", "reason"]],
+  ["jobType", ["jobType"]],
+  ["backend", ["backend", "queueBackend"]],
+  ["repo", ["repo", "repository"]],
+  ["pullNumber", ["pullNumber", "pull", "pr"]],
+  ["provider", ["provider"]],
+  ["model", ["model"]],
+  ["effort", ["effort"]],
+  ["monitor", ["monitor"]],
+  ["mode", ["mode"]],
+  ["kind", ["kind"]],
+] as const;
 
 function nonBlank(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -89,6 +110,29 @@ function safeMonitorContext(
   return safe;
 }
 
+function tagValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed.slice(0, MAX_TAG_LENGTH) : undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return undefined;
+}
+
+function setSafeContextTags(
+  scope: SentryScope,
+  context: Record<string, unknown>,
+): void {
+  for (const [tag, aliases] of SENTRY_CONTEXT_TAGS) {
+    for (const alias of aliases) {
+      const value = tagValue(context[alias]);
+      if (!value) continue;
+      scope.setTag(tag, value);
+      break;
+    }
+  }
+}
+
 function setOtelTraceScope(scope: SentryScope): void {
   const trace = currentOtelTraceIds();
   if (!trace) return;
@@ -110,17 +154,26 @@ export function scrubEvent<T>(event: T): T {
     if (!obj || typeof obj !== "object" || depth > 6) return;
     for (const key of Object.keys(obj as Record<string, unknown>)) {
       const rec = obj as Record<string, unknown>;
-      if (SECRET_KEY.test(key)) rec[key] = "[redacted]";
-      else if (typeof rec[key] === "object") redact(rec[key], depth + 1);
+      const value = rec[key];
+      if (
+        SECRET_KEY.test(key) ||
+        SENSITIVE_CONTENT_KEY.test(key) ||
+        (PATH_KEY.test(key) && PATH_SECRET_KEY.test(key))
+      ) {
+        rec[key] = REDACTED;
+      } else if (typeof value === "object") {
+        redact(value, depth + 1);
+      }
     }
   };
   try {
     const e = event as {
-      request?: { headers?: unknown };
+      request?: { headers?: unknown; body?: unknown };
       contexts?: unknown;
       extra?: unknown;
     };
     redact(e.request?.headers, 0);
+    redact(e.request, 0);
     redact(e.contexts, 0);
     redact(e.extra, 0);
   } catch {
@@ -155,7 +208,10 @@ export function captureError(
   if (!active || !Sentry) return;
   Sentry.withScope((scope) => {
     setOtelTraceScope(scope);
-    if (context) scope.setContext("gittensory", context);
+    if (context) {
+      scope.setContext("gittensory", context);
+      setSafeContextTags(scope, context);
+    }
     Sentry!.captureException(
       error instanceof Error ? error : new Error(String(error)),
     );
@@ -174,11 +230,7 @@ export function captureReviewFailure(
     setOtelTraceScope(scope);
     if (context) {
       scope.setContext("review", context);
-      for (const tag of ["owner", "repo", "pr", "head_sha"]) {
-        const value = context[tag];
-        if (value !== undefined && value !== null)
-          scope.setTag(tag, String(value));
-      }
+      setSafeContextTags(scope, context);
     }
     Sentry!.captureException(
       error instanceof Error ? error : new Error(String(error)),
@@ -188,7 +240,29 @@ export function captureReviewFailure(
 
 // The structured-log fields worth indexing as Sentry tags — the dimensions operators filter + group by. Only
 // string|number values are tagged; everything else stays in the full "log" context.
-const SENTRY_LOG_TAG_KEYS = ["repo", "repository", "installationId", "installation_id", "pull", "pullNumber", "pr", "project", "kind", "deliveryId", "provider", "model", "effort", "timeoutMs", "trace_id", "span_id"] as const;
+const SENTRY_LOG_TAG_KEYS = [
+  "event",
+  "subsystem",
+  "operation",
+  "reasonCode",
+  "repo",
+  "repository",
+  "pull",
+  "pullNumber",
+  "pr",
+  "project",
+  "kind",
+  "jobType",
+  "backend",
+  "provider",
+  "model",
+  "effort",
+  "mode",
+  "monitor",
+  "timeoutMs",
+  "trace_id",
+  "span_id",
+] as const;
 
 /** A SHORT location suffix — " (repo#pr)" — for a no-message error title, so the issue list shows WHERE without
  *  dumping every scalar field (which made titles unreadably long, e.g. trailing a full deliveryId). The complete

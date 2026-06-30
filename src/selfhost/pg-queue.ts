@@ -306,8 +306,11 @@ export function createPgQueue(
         }),
       );
       captureError(new Error("self-host queue processing lease expired"), {
+        subsystem: "queue",
+        operation: "job_claim",
         kind: "job_recovered",
         reason: "processing_timeout",
+        queueBackend: "postgres",
         recovered,
         timeoutMs: processingTimeoutMs,
       });
@@ -335,8 +338,11 @@ export function createPgQueue(
           error: "unparseable payload",
         });
         captureError(new Error("unparseable queue payload"), {
+          subsystem: "queue",
+          operation: "job_process",
           kind: "job_dead",
           reason: "unparseable_payload",
+          queueBackend: "postgres",
           jobId: job.id,
         });
         return true;
@@ -437,6 +443,11 @@ export function createPgQueue(
             JSON.stringify({
               level: "error",
               event: "selfhost_job_dead",
+              subsystem: "queue",
+              operation: "job_process",
+              reasonCode: "max_retries_exhausted",
+              backend: "postgres",
+              jobType: extractPayloadType(job.payload),
               id: job.id,
               attempts,
               error: errMsg,
@@ -452,8 +463,11 @@ export function createPgQueue(
             error: errMsg,
           }, jobTraceParent);
           captureError(error, {
+            subsystem: "queue",
+            operation: "job_process",
             kind: "job_dead",
             reason: "max_retries_exhausted",
+            queueBackend: "postgres",
             jobType: extractPayloadType(job.payload),
             jobId: job.id,
             attempts,

@@ -249,8 +249,11 @@ export function createSqliteQueue(
         }),
       );
       captureError(new Error("self-host queue processing lease expired"), {
+        subsystem: "queue",
+        operation: "job_claim",
         kind: "job_recovered",
         reason: "processing_timeout",
+        queueBackend: "sqlite",
         recovered,
         timeoutMs: processingTimeoutMs,
       });
@@ -278,8 +281,11 @@ export function createSqliteQueue(
           error: "unparseable payload",
         });
         captureError(new Error("unparseable queue payload"), {
+          subsystem: "queue",
+          operation: "job_process",
           kind: "job_dead",
           reason: "unparseable_payload",
+          queueBackend: "sqlite",
           jobId: job.id,
         });
         return true;
@@ -380,6 +386,11 @@ export function createSqliteQueue(
             JSON.stringify({
               level: "error",
               event: "selfhost_job_dead",
+              subsystem: "queue",
+              operation: "job_process",
+              reasonCode: "max_retries_exhausted",
+              backend: "sqlite",
+              jobType: extractPayloadType(job.payload),
               id: job.id,
               attempts,
               error: errMsg,
@@ -395,8 +406,11 @@ export function createSqliteQueue(
             error: errMsg,
           }, jobTraceParent);
           captureError(error, {
+            subsystem: "queue",
+            operation: "job_process",
             kind: "job_dead",
             reason: "max_retries_exhausted",
+            queueBackend: "sqlite",
             jobType: extractPayloadType(job.payload),
             jobId: job.id,
             attempts,

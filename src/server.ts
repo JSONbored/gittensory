@@ -278,12 +278,22 @@ async function main(): Promise<void> {
       }),
     );
     process.on("uncaughtException", (error) => {
-      captureError(error, { kind: "uncaughtException" });
+      captureError(error, {
+        subsystem: "runtime",
+        operation: "process_exception",
+        kind: "uncaughtException",
+        reason: "uncaught_exception",
+      });
       console.error(error);
       void flushSentry().finally(() => process.exit(1));
     });
     process.on("unhandledRejection", (reason) => {
-      captureError(reason, { kind: "unhandledRejection" });
+      captureError(reason, {
+        subsystem: "runtime",
+        operation: "process_rejection",
+        kind: "unhandledRejection",
+        reason: "unhandled_rejection",
+      });
       console.error(reason);
     });
     // Central error forwarding (#1468): operational failures are structured JSON logs emitted through stdout and
@@ -760,6 +770,9 @@ async function main(): Promise<void> {
         JSON.stringify({
           level: "error",
           event: "selfhost_cron_error",
+          subsystem: "scheduler",
+          operation: "scheduled_loop",
+          reasonCode: "scheduled_loop_failed",
           error: error instanceof Error ? error.message : "unknown error",
         }),
       ),
@@ -776,6 +789,9 @@ async function main(): Promise<void> {
         JSON.stringify({
           level: "error",
           event: "selfhost_orb_export_error",
+          subsystem: "orb",
+          operation: "orb_export",
+          reasonCode: "orb_export_failed",
           error: error instanceof Error ? error.message : "unknown error",
         }),
       ),
@@ -806,13 +822,23 @@ async function main(): Promise<void> {
           JSON.stringify({
             level: pull ? "warn" : "error",
             event: "selfhost_orb_relay_register_failed",
+            subsystem: "orb",
+            operation: "relay_register",
+            reasonCode: "relay_register_failed",
             mode: pull ? "pull" : "push",
             error: r.reason ?? "unknown",
           }),
         );
       }
     })
-    .catch((error) => captureError(error, { kind: "orb_relay_register" }));
+    .catch((error) =>
+      captureError(error, {
+        subsystem: "orb",
+        operation: "relay_register",
+        kind: "orb_relay_register",
+        reason: "relay_register_exception",
+      }),
+    );
 
   // Pull-mode relay drain (#secure-relay): when ORB_RELAY_MODE=pull, the engine DRAINS its events from the Orb on a
   // timer instead of exposing an inbound endpoint — the right fit behind NAT/tailnet. Acks the previous batch so the
@@ -839,7 +865,12 @@ async function main(): Promise<void> {
     setInterval(
       () =>
         void drainRelay().catch((error) =>
-          captureError(error, { kind: "orb_relay_drain" }),
+          captureError(error, {
+            subsystem: "orb",
+            operation: "relay_drain",
+            kind: "orb_relay_drain",
+            reason: "relay_drain_exception",
+          }),
         ),
       15_000,
     );
@@ -865,7 +896,12 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  captureError(error, { kind: "boot" });
+  captureError(error, {
+    subsystem: "runtime",
+    operation: "boot",
+    kind: "boot",
+    reason: "boot_failure",
+  });
   console.error(error);
   /* v8 ignore next -- boot failure exits the process; shutdown helper is covered independently. */
   void Promise.all([shutdownOpenTelemetry(), flushSentry()]).finally(() => process.exit(1));

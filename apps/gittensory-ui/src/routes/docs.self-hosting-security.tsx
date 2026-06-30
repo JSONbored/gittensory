@@ -90,6 +90,13 @@ function SelfHostingSecurity() {
         private scoring context, or maintainer-only notes. For hosted and self-host boundaries, keep
         <Link to="/docs/privacy-security"> Privacy and security</Link> nearby.
       </p>
+
+      <h2>Sentry data boundary</h2>
+      <p>
+        Self-host Sentry is opt-in only. When enabled, capture should keep tags low-cardinality and
+        scrub request bodies, raw diffs, prompts, review text, auth headers, private repo config,
+        and local auth paths before an event leaves the box.
+      </p>
     </DocsPage>
   );
 }

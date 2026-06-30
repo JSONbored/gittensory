@@ -22,7 +22,12 @@ export async function runScheduledLoopWithMonitor<T>(
 ): Promise<T> {
   return withSentryMonitor(
     "scheduled-loop",
-    { jobType: "scheduled-loop", cron },
+    {
+      subsystem: "scheduler",
+      operation: "scheduled_loop",
+      jobType: "scheduled-loop",
+      cron,
+    },
     () => Promise.resolve(scheduled()),
   );
 }
@@ -31,11 +36,15 @@ export async function runOrbExportWithMonitor(
   exportBatch: () => Promise<number>,
   log: (line: string) => void = console.log,
 ): Promise<void> {
-  await withSentryMonitor("orb-export", { jobType: "orb-export" }, async () => {
-    const exported = await exportBatch();
-    if (exported > 0)
-      log(JSON.stringify({ event: "selfhost_orb_export", exported }));
-  });
+  await withSentryMonitor(
+    "orb-export",
+    { subsystem: "orb", operation: "orb_export", jobType: "orb-export" },
+    async () => {
+      const exported = await exportBatch();
+      if (exported > 0)
+        log(JSON.stringify({ event: "selfhost_orb_export", exported }));
+    },
+  );
 }
 
 export async function drainOrbRelayWithMonitor(args: {
@@ -53,7 +62,12 @@ export async function drainOrbRelayWithMonitor(args: {
 }): Promise<void> {
   await withSentryMonitor(
     "orb-relay-drain",
-    { jobType: "orb-relay-drain", pendingAckCount: args.state.pendingAck.length },
+    {
+      subsystem: "orb",
+      operation: "relay_drain",
+      jobType: "orb-relay-drain",
+      pendingAckCount: args.state.pendingAck.length,
+    },
     async () => {
       const events = await args.drain(args.relayEnv, args.state.pendingAck);
       args.state.pendingAck = [];

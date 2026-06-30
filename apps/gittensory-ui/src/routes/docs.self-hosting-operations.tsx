@@ -115,6 +115,31 @@ review_context_fetch_failed`}
         log for the same subsystem.
       </p>
 
+      <h2>Sentry alert classes</h2>
+      <FeatureRow
+        items={[
+          {
+            title: "Page on persistent stoppage",
+            description:
+              "Alert on missed scheduled-loop or relay-drain monitors after two consecutive failures, not one late tick.",
+          },
+          {
+            title: "Ticket operational faults",
+            description:
+              "Open an issue for dead-letter growth, repeated check-run permission gaps, or repeated relay/register failures.",
+          },
+          {
+            title: "Warn on degradations",
+            description:
+              "AI provider exhaustion, broker fallback, and backup advisories should warn first and page only when they persist.",
+          },
+        ]}
+      />
+      <CodeBlock
+        code={`Tags: subsystem, operation, reasonCode, repo, pullNumber, jobType, backend, provider, model, effort, mode
+Do not tag: raw diff, prompt, review text, auth headers, installation IDs, delivery IDs, or local auth paths`}
+      />
+
       <h2>Routine checks</h2>
       <ul>
         <li>Queue pending count is not growing without processing.</li>

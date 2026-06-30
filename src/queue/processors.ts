@@ -4252,7 +4252,19 @@ async function auditGateCheckPermissionMissing(
   });
   // Surface the install-wide Checks:write gap to Sentry — until the scope is granted the required gate check-run
   // silently never posts on ANY PR for this install; an operator must SEE this config fault, not just the ledger.
-  console.error(JSON.stringify({ level: "error", event: "gate_check_permission_missing", message: warning, repository: repoFullName, pullNumber, deliveryId }));
+  console.error(
+    JSON.stringify({
+      level: "error",
+      event: "gate_check_permission_missing",
+      subsystem: "github",
+      operation: "gate_check_publish",
+      reasonCode: "permission_missing",
+      message: warning,
+      repository: repoFullName,
+      pullNumber,
+      deliveryId,
+    }),
+  );
 }
 
 /**
@@ -5149,7 +5161,19 @@ async function maybePublishPrPublicSurface(
           detail: checkRunResult.warning,
           metadata: { deliveryId: webhook.deliveryId, repoFullName },
         });
-        console.error(JSON.stringify({ level: "error", event: "check_run_permission_missing", message: checkRunResult.warning, repository: repoFullName, pullNumber: pr.number, deliveryId: webhook.deliveryId }));
+        console.error(
+          JSON.stringify({
+            level: "error",
+            event: "check_run_permission_missing",
+            subsystem: "github",
+            operation: "check_run_publish",
+            reasonCode: "permission_missing",
+            message: checkRunResult.warning,
+            repository: repoFullName,
+            pullNumber: pr.number,
+            deliveryId: webhook.deliveryId,
+          }),
+        );
       } else if (checkRunResult?.kind === "published") {
         publishedOutputs.push("check_run");
       }

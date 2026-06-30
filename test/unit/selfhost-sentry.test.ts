@@ -56,22 +56,32 @@ const lastCapturedError = (): Error =>
 describe("scrubEvent — redact secrets before an event leaves the box", () => {
   it("redacts secret-keyed fields in headers/contexts/extra, recurses, and leaves safe fields", () => {
     const ev = scrubEvent({
-      request: { headers: { authorization: "Bearer abc", "x-trace": "ok" } },
+      request: {
+        headers: { authorization: "Bearer abc", "x-trace": "ok" },
+        body: "{\"private\":true}",
+      },
       contexts: {
         gittensory: {
           jobId: "j1",
           apiKey: "shh",
           nested: { secretToken: "deep" },
+          prompt: "private prompt",
+          localAuthPath: "/srv/auth.json",
         },
       },
-      extra: { note: "fine" },
+      extra: { note: "fine", reviewText: "secret review", privateRepoConfig: "x" },
     }) as any;
     expect(ev.request.headers.authorization).toBe("[redacted]");
     expect(ev.request.headers["x-trace"]).toBe("ok");
+    expect(ev.request.body).toBe("[redacted]");
     expect(ev.contexts.gittensory.apiKey).toBe("[redacted]");
     expect(ev.contexts.gittensory.jobId).toBe("j1");
     expect(ev.contexts.gittensory.nested.secretToken).toBe("[redacted]");
+    expect(ev.contexts.gittensory.prompt).toBe("[redacted]");
+    expect(ev.contexts.gittensory.localAuthPath).toBe("[redacted]");
     expect(ev.extra.note).toBe("fine");
+    expect(ev.extra.reviewText).toBe("[redacted]");
+    expect(ev.extra.privateRepoConfig).toBe("[redacted]");
   });
 
   it("is safe when headers/contexts/extra are absent (the !obj branch)", () => {
@@ -181,12 +191,35 @@ describe("enabled when SENTRY_DSN is set", () => {
     ).toBe("custom@sha");
   });
 
-  it("captureError sends with context, and without context skips setContext", async () => {
+  it("captureError sends with safe context tags, and without context skips setContext", async () => {
     await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
-    captureError(new Error("boom"), { kind: "job_dead" });
-    expect(mocks.scope.setContext).toHaveBeenCalledWith("gittensory", {
+    captureError(new Error("boom"), {
+      subsystem: "queue",
+      operation: "job_process",
       kind: "job_dead",
+      reason: "max_retries_exhausted",
+      repo: "o/r",
+      pullNumber: 7,
+      installationId: 143010787,
+      deliveryId: "delivery-1",
     });
+    expect(mocks.scope.setContext).toHaveBeenCalledWith("gittensory", {
+      subsystem: "queue",
+      operation: "job_process",
+      kind: "job_dead",
+      reason: "max_retries_exhausted",
+      repo: "o/r",
+      pullNumber: 7,
+      installationId: 143010787,
+      deliveryId: "delivery-1",
+    });
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("subsystem", "queue");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("operation", "job_process");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("reasonCode", "max_retries_exhausted");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("repo", "o/r");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("pullNumber", "7");
+    expect(mocks.scope.setTag).not.toHaveBeenCalledWith("installationId", "143010787");
+    expect(mocks.scope.setTag).not.toHaveBeenCalledWith("deliveryId", "delivery-1");
     expect(mocks.captureException).toHaveBeenCalledTimes(1);
     mocks.scope.setContext.mockClear();
     captureError("plain string with no context");
@@ -194,7 +227,7 @@ describe("enabled when SENTRY_DSN is set", () => {
     expect(mocks.captureException).toHaveBeenCalledTimes(2);
   });
 
-  it("captureReviewFailure sets error level + repo/PR/SHA tags, skipping null/undefined, and works without context", async () => {
+  it("captureReviewFailure sets error level + safe repo/PR tags, skipping high-cardinality tags, and works without context", async () => {
     await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
     captureReviewFailure(new Error("rev"), {
       repo: "o/r",
@@ -204,12 +237,8 @@ describe("enabled when SENTRY_DSN is set", () => {
     });
     expect(mocks.scope.setLevel).toHaveBeenCalledWith("error");
     expect(mocks.scope.setTag).toHaveBeenCalledWith("repo", "o/r");
-    expect(mocks.scope.setTag).toHaveBeenCalledWith("pr", "7");
-    expect(mocks.scope.setTag).toHaveBeenCalledWith("head_sha", "abc");
-    expect(mocks.scope.setTag).not.toHaveBeenCalledWith(
-      "owner",
-      expect.anything(),
-    );
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("pullNumber", "7");
+    expect(mocks.scope.setTag).not.toHaveBeenCalledWith("head_sha", "abc");
     captureReviewFailure("string failure, no context");
     expect(mocks.captureException).toHaveBeenCalledTimes(2);
   });
@@ -438,6 +467,9 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
       JSON.stringify({
         level: "error",
         event: "orb_broker_unavailable",
+        subsystem: "github",
+        operation: "broker_installation_token",
+        reasonCode: "orb_broker_unavailable",
         error: "The operation was aborted due to timeout",
         repo: "JSONbored/gittensory",
         installationId: 143010787,
@@ -447,8 +479,17 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
     expect(lastCapturedError().name).toBe("orb_broker_unavailable");
     expect(lastCapturedError().message).toBe("The operation was aborted due to timeout");
     // The present log dimensions become filterable tags.
+    expect(mocks.scope.setTag).toHaveBeenCalledWith("subsystem", "github");
+    expect(mocks.scope.setTag).toHaveBeenCalledWith(
+      "operation",
+      "broker_installation_token",
+    );
+    expect(mocks.scope.setTag).toHaveBeenCalledWith(
+      "reasonCode",
+      "orb_broker_unavailable",
+    );
     expect(mocks.scope.setTag).toHaveBeenCalledWith("repo", "JSONbored/gittensory");
-    expect(mocks.scope.setTag).toHaveBeenCalledWith("installationId", "143010787");
+    expect(mocks.scope.setTag).not.toHaveBeenCalledWith("installationId", "143010787");
     // Recurrences of one failure group into a single issue by event.
     expect(mocks.scope.setFingerprint).toHaveBeenCalledWith(["gittensory-log", "orb_broker_unavailable"]);
   });
