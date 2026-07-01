@@ -477,8 +477,8 @@ describe("explainScoreBreakdown", () => {
     expect(breakdown.components.find((entry) => entry.component === "credibilityMultiplier")).toMatchObject({ band: "blocked" });
     expect(breakdown.components.find((entry) => entry.component === "openPrMultiplier")).toMatchObject({ band: "blocked" });
   });
-
   it("blocks base-score projection when the source-token gate has not passed", () => {
+
     const preview = buildScorePreview({
       repo,
       snapshot,
@@ -676,5 +676,25 @@ describe("explainScoreBreakdown", () => {
     expect(isSaturated).toMatchObject({ band: "full" });
     expect(isSaturated.summary).toMatch(/saturated near the score cap/);
     expect(JSON.stringify(explainScoreBreakdown(saturated))).not.toMatch(FORBIDDEN);
+  });
+
+  it("surfaces tied-leverage components when multiple levers share the top leverageScore", () => {
+    const preview = buildScorePreview({
+      repo,
+      snapshot,
+      input: {
+        repoFullName: repo.fullName,
+        sourceTokenScore: 80,
+        totalTokenScore: 90,
+        sourceLines: 50,
+        openPrCount: 20,
+        existingContributorTokenScore: 50,
+        credibility: 0.005,
+      },
+    });
+    const breakdown = explainScoreBreakdown(preview);
+    const top = breakdown.highestLeverageLever;
+    expect(top.tiedLeverageComponents).toBeDefined();
+    expect(Array.isArray(top.tiedLeverageComponents)).toBe(true);
   });
 });

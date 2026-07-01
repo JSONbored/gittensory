@@ -20,6 +20,9 @@ export type ScoreBreakdownExplanation = {
   highestLeverageLever: {
     component: string;
     lever: string;
+    /** Components that tie with the top one at the same leverageScore; surfaced so a contributor
+     *  can see the alphabetical tie-breaker isn't a strictly-dominant choice. Empty when no tie. */
+    tiedLeverageComponents: string[];
     reason: string;
   };
 };
@@ -361,15 +364,23 @@ function gateHighlightsFor(preview: ScorePreviewResult): ScoreBreakdownExplanati
 function pickHighestLeverage(components: ScoreMultiplierBreakdown[]): ScoreBreakdownExplanation["highestLeverageLever"] {
   const ranked = [...components].sort((left, right) => right.leverageScore - left.leverageScore || left.component.localeCompare(right.component));
   const top = ranked[0]!;
+  // Surface any components tied at the top leverageScore so the alphabetical tie-breaker
+  // (localeCompare above) is not silently dominant — a contributor fixing only the named top
+  // component would miss equally-impactful tied components. Empty when no tie exists.
+  const tied = ranked.filter((entry, idx) => idx > 0 && entry.leverageScore === top.leverageScore).map((entry) => entry.component);
+  const tiedClause = tied.length > 0
+    ? ` (${top.component} ties with ${tied.join(", ")} at the same leverage score; any of these is the highest-leverage lever.)`
+    : "";
   const reason =
     top.band === "blocked"
-      ? `${top.component} is fully blocking or zeroing part of the preview right now.`
+      ? `${top.component} is fully blocking or zeroing part of the preview right now.${tiedClause}`
       : top.band === "reduced"
-        ? `${top.component} is the largest remaining reducer in the multiplier stack.`
-        : `${top.component} is the best next optimization lever among non-blocking multipliers.`;
+        ? `${top.component} is the largest remaining reducer in the multiplier stack.${tiedClause}`
+        : `${top.component} is the best next optimization lever among non-blocking multipliers.${tiedClause}`;
   return {
     component: top.component,
     lever: top.lever,
+    tiedLeverageComponents: tied,
     reason: sanitizePublicComment(reason),
   };
 }
