@@ -56,7 +56,12 @@ function baseScoreBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdo
   const saturated = baseScoreCap !== undefined && baseScoreCap > 0 && baseScore / baseScoreCap >= BASE_SCORE_SATURATION_RATIO;
   const hasBonus = contributionBonus > 0;
   const bonusClause = hasBonus ? `; contribution bonus contributing at ${roundBand(contributionBonus)}` : "; contribution bonus not contributing";
-  const summary = `Base score is ${saturated ? "saturated near the score cap" : "contributing toward the score cap"} (current base ${roundBand(baseScore)}${bonusClause}).`;
+  const capClause = baseScoreCap === undefined
+    ? "using a fixed base score override (not bounded by the model cap)"
+    : saturated
+      ? "saturated near the score cap"
+      : "contributing toward the score cap";
+  const summary = `Base score is ${capClause} (current base ${roundBand(baseScore)}${bonusClause}).`;
   return {
     component: "baseScore",
     band: saturated ? "full" : "neutral",

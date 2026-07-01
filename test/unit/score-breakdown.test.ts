@@ -535,6 +535,7 @@ describe("explainScoreBreakdown", () => {
     // Use a snapshot with different constants to prove the threshold is not hardcoded to 29.5.
     // If MERGED_PR_BASE_SCORE=50 and MAX_CONTRIBUTION_BONUS=10, cap = 50 × 1.15 + 10 = 67.5.
     // 95% saturation ≈ 64.13. Inputs that would give baseScore=32 (well below 64) must NOT read as full.
+    // Cap: 50 × 1.15 + 10 = 67.5. 95% saturation ≈ 64.13.
     const altSnapshot: ScoringModelSnapshotRecord = {
       ...snapshot,
       id: "score-model-alt-cap",
@@ -544,8 +545,6 @@ describe("explainScoreBreakdown", () => {
         MAX_CONTRIBUTION_BONUS: 10,
       },
     };
-    const altCap = 50 * 1.15 + 10; // 67.5
-    const saturationRatio = 0.95;
     // With source 200 / lines 170 → density 1.15 → baseDensity = 50 × 1.15 = 57.5.
     // totalTokenScore 0 → contributionBonus 0 → baseScore = 57.5 < 64.13 → NOT saturated.
     const subCap = buildScorePreview({
