@@ -385,6 +385,19 @@ describe("fetchCachedGitHubGraphQl", () => {
     await expect(fetchCachedGitHubGraphQl(TOTALS_QUERY, "token-a")).rejects.toThrow("network down");
   });
 
+  it("defaults missing content-type when caching a GraphQL response", async () => {
+    const store = installMemoryResponseCache();
+    vi.stubGlobal("fetch", async () => {
+      const response = Response.json({ data: { repository: { issues: { totalCount: 1 } } } });
+      response.headers.delete("content-type");
+      return response;
+    });
+
+    await fetchCachedGitHubGraphQl(TOTALS_QUERY, "token-a");
+
+    expect([...store.values()][0]).toMatchObject({ contentType: "application/json" });
+  });
+
   it("bypasses caching when the shared response cache is disabled", async () => {
     clearGitHubResponseCacheForTest();
     let fetches = 0;
