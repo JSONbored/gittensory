@@ -7,6 +7,7 @@ import type { SqliteDriver } from "./d1-adapter";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import { withReviewSpan } from "./tracing";
+import { withOtelSpan } from "./otel";
 import { captureError } from "./sentry";
 import {
   consumingRetryDelayMs,
@@ -473,7 +474,15 @@ export function createSqliteQueue(
     ): Promise<void> {
       for (const m of messages) enqueue(m.body, m.delaySeconds ?? 0);
     },
-  } as unknown as Queue;
+    snapshot() {
+      return buildSelfHostQueueSnapshot(
+        driver.query(
+          `SELECT payload, status, run_after FROM ${TABLE} WHERE status IN ('pending','processing','dead')`,
+          [],
+        ).rows as Array<{ payload: string; status: string; run_after: number }>,
+      );
+    },
+  } as unknown as Queue & { snapshot(): SelfHostQueueSnapshot };
 
   return {
     binding,
@@ -521,14 +530,7 @@ export function createSqliteQueue(
     stats() {
       return readQueueStats(driver);
     },
-    snapshot() {
-      return buildSelfHostQueueSnapshot(
-        driver.query(
-          `SELECT payload, status, run_after FROM ${TABLE} WHERE status IN ('pending','processing','dead')`,
-          [],
-        ).rows as Array<{ payload: string; status: string; run_after: number }>,
-      );
-    },
+    snapshot: binding.snapshot,
   };
 }
 

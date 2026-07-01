@@ -6,6 +6,7 @@ import type { Pool } from "pg";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import { withReviewSpan } from "./tracing";
+import { withOtelSpan } from "./otel";
 import { captureError } from "./sentry";
 import {
   consumingRetryDelayMs,
@@ -527,7 +528,15 @@ export function createPgQueue(
     ): Promise<void> {
       for (const m of messages) await enqueue(m.body, m.delaySeconds ?? 0);
     },
-  } as unknown as Queue;
+    async snapshot() {
+      const res = await pool.query(
+        `SELECT payload, status, run_after FROM ${TABLE} WHERE status IN ('pending','processing','dead')`,
+      );
+      return buildSelfHostQueueSnapshot(
+        res.rows as Array<{ payload: string; status: string; run_after: string | number }>,
+      );
+    },
+  } as unknown as Queue & { snapshot(): Promise<SelfHostQueueSnapshot> };
 
   return {
     binding,
@@ -573,14 +582,7 @@ export function createPgQueue(
     async stats() {
       return readQueueStats();
     },
-    async snapshot() {
-      const res = await pool.query(
-        `SELECT payload, status, run_after FROM ${TABLE} WHERE status IN ('pending','processing','dead')`,
-      );
-      return buildSelfHostQueueSnapshot(
-        res.rows as Array<{ payload: string; status: string; run_after: string | number }>,
-      );
-    },
+    snapshot: binding.snapshot,
   };
 
   async function reclaimExpiredProcessingJobs(): Promise<number> {
