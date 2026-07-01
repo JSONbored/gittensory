@@ -509,6 +509,8 @@ services:
   # Active database backup (Postgres pg_dump or WAL-safe SQLite online backup) + a Qdrant snapshot, on a loop
   # (default daily), kept in the gittensory-backups volume with retention. Run on demand:
   #   docker compose --profile backup run --rm backup sh /backup.sh
+  # Verify the newest backup is restorable (pg_restore --list / SQLite integrity_check; opt-in scratch restore):
+  #   docker compose --profile backup run --rm backup sh /verify-backup.sh
   backup:
     image: alpine:3.20
     restart: unless-stopped
@@ -519,11 +521,16 @@ services:
       GITTENSORY_BACKUP_SOURCE_DATABASE_URL: "${GITTENSORY_BACKUP_SOURCE_DATABASE_URL:-}"
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       BACKUP_RETAIN: ${BACKUP_RETAIN:-7}
+      # Opt-in restore drill (verify-backup.sh): restore the newest dump into a THROWAWAY database, never the
+      # live one. Both must be set, and the scratch URL must differ from the backup source.
+      VERIFY_RESTORE_SCRATCH: "${VERIFY_RESTORE_SCRATCH:-}"
+      GITTENSORY_VERIFY_SCRATCH_DATABASE_URL: "${GITTENSORY_VERIFY_SCRATCH_DATABASE_URL:-}"
     volumes:
       # RW (not :ro) so SQLite's online-backup can use the WAL index; the script only ever reads the DB.
       - gittensory-data:/data
       - gittensory-backups:/backups
       - ./scripts/backup.sh:/backup.sh:ro
+      - ./scripts/verify-backup.sh:/verify-backup.sh:ro
     entrypoint: ["/bin/sh", "-c"]
     command:
       - "apk add --no-cache sqlite postgresql16-client curl >/dev/null 2>&1 && while true; do sh /backup.sh || echo '[backup] run failed'; sleep ${BACKUP_INTERVAL_SECONDS:-86400}; done"
