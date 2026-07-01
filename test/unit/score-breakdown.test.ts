@@ -75,6 +75,7 @@ describe("explainScoreBreakdown", () => {
     const componentNames = breakdown.components.map((entry) => entry.component);
     expect(componentNames).toEqual(
       expect.arrayContaining([
+        "baseScore",
         "densityMultiplier",
         "contributionBonus",
         "labelMultiplier",
@@ -445,5 +446,64 @@ describe("explainScoreBreakdown", () => {
     const breakdown = explainScoreBreakdown(preview);
     expect(breakdown.components.find((entry) => entry.component === "credibilityMultiplier")).toMatchObject({ band: "blocked" });
     expect(breakdown.components.find((entry) => entry.component === "openPrMultiplier")).toMatchObject({ band: "blocked" });
+  });
+
+  it("explains the saturated base-score cap as blocked (no source), neutral (low contribution), and full (saturated)", () => {
+    // Blocked: source-token gate not passed → baseScore sits at 0 with the gate copy.
+    const smallSource = buildScorePreview({
+      repo,
+      snapshot,
+      input: {
+        repoFullName: repo.fullName,
+        contributorLogin: "miner",
+        sourceTokenScore: 0,
+        totalTokenScore: 0,
+        sourceLines: 4,
+        openPrCount: 0,
+        credibility: 1,
+      },
+    });
+    const blocked = explainScoreBreakdown(smallSource).components.find((entry) => entry.component === "baseScore")!;
+    expect(blocked).toMatchObject({ band: "blocked", leverageScore: 70 });
+    expect(blocked.summary).toMatch(/not yet in the score pipeline|minimum meaningful source-change/);
+
+    // Neutral: gate passed, baseScore below the 30-point cap, contribution bonus present. The summary
+    // names BOTH dimensions explicitly (baseScore + contributionBonus) — avoids the §7 Tier A rule 3
+    // collapse-copy nit by always iterating on observed values.
+    const lowContribution = buildScorePreview({
+      repo,
+      snapshot,
+      input: {
+        repoFullName: repo.fullName,
+        contributorLogin: "miner",
+        sourceTokenScore: 25,
+        totalTokenScore: 800,
+        sourceLines: 120,
+        openPrCount: 0,
+        credibility: 1,
+      },
+    });
+    const neutral = explainScoreBreakdown(lowContribution).components.find((entry) => entry.component === "baseScore")!;
+    expect(neutral).toMatchObject({ band: "neutral" });
+    expect(neutral.summary).toMatch(/contributing toward|base \d|contribution bonus/);
+
+    // Full: source-token gate passed + baseScore saturated near the 30-point cap.
+    const saturated = buildScorePreview({
+      repo,
+      snapshot,
+      input: {
+        repoFullName: repo.fullName,
+        contributorLogin: "miner",
+        sourceTokenScore: 200,
+        totalTokenScore: 1800,
+        sourceLines: 800,
+        openPrCount: 0,
+        credibility: 1,
+      },
+    });
+    const fullEntry = explainScoreBreakdown(saturated).components.find((entry) => entry.component === "baseScore")!;
+    expect(fullEntry).toMatchObject({ band: "full" });
+    expect(fullEntry.summary).toMatch(/saturated near the 30-point cap/);
+    expect(JSON.stringify(explainScoreBreakdown(saturated))).not.toMatch(FORBIDDEN);
   });
 });

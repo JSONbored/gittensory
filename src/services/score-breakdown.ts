@@ -31,6 +31,39 @@ function bandForMultiplier(value: number, blockedAtZero = true): ScoreMultiplier
   return "reduced";
 }
 
+// Sibling of densityBreakdown for the saturated base-score value (#808 / entrius/gittensor
+// constants.py): `base_score = 25 × (1 - exp(-src_tok / SRC_TOK_SATURATION_SCALE=58))
+// + min(total_token_score / CONTRIBUTION_SCORE_FOR_FULL_BONUS=1500, 1) × MAX_CONTRIBUTION_BONUS=5`,
+// capped at 30. densityBreakdown surfaces the saturation ratio (densityMultiplier); this surfaces the
+// actual base_score the contributor has earned — the foundation that flows into estimatedMergedScore
+// before the multipliers apply — so a miner sees both the curve and the resulting cap contribution.
+function baseScoreBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
+  const { baseScore, contributionBonus } = preview.scoreEstimate;
+  const baseGatePassed = preview.gates.baseTokenGatePassed;
+  if (!baseGatePassed) {
+    return {
+      component: "baseScore",
+      band: "blocked",
+      summary: `Base score is not yet in the score pipeline — the change does not meet the minimum meaningful source-change threshold (current base is ${roundBand(baseScore)} of the 30-point cap).`,
+      lever: "Add more substantive source changes or tighten the diff before relying on this preview.",
+      leverageScore: 70,
+    };
+  }
+  const cappedAtMax = baseScore >= 29.5;
+  const hasBonus = contributionBonus > 0;
+  const bonusClause = hasBonus ? `; contribution bonus contributing at ${roundBand(contributionBonus)}` : "; contribution bonus not contributing";
+  const summary = `Base score is ${cappedAtMax ? "saturated near the 30-point cap" : "contributing toward the 30-point cap"} (current base ${roundBand(baseScore)}${bonusClause}).`;
+  return {
+    component: "baseScore",
+    band: cappedAtMax ? "full" : "neutral",
+    summary,
+    lever: cappedAtMax
+      ? "Maintain source quality on subsequent contributions; the base-score pipeline is at saturation."
+      : "Keep source changes substantive and proportional to supporting changes for the contribution bonus to continue earning.",
+    leverageScore: cappedAtMax ? 3 : hasBonus ? 7 : 12,
+  };
+}
+
 function densityBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
   const { densityMultiplier, contributionBonus } = preview.scoreEstimate;
   const baseGatePassed = preview.gates.baseTokenGatePassed;
@@ -308,6 +341,7 @@ function pickHighestLeverage(components: ScoreMultiplierBreakdown[]): ScoreBreak
  */
 export function explainScoreBreakdown(preview: ScorePreviewResult): ScoreBreakdownExplanation {
   const components = [
+    baseScoreBreakdown(preview),
     densityBreakdown(preview),
     contributionBonusBreakdown(preview),
     labelMultiplierBreakdown(preview),
