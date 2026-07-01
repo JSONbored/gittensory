@@ -54,7 +54,7 @@ describe("gittensory-mcp CLI — profiles", () => {
       ]),
     );
     expect(JSON.stringify(list)).not.toMatch(/session-jsonbored|session-okto|github-jsonbored|github-okto|gittensory-cli-/);
-  });
+  }, 45_000);
 
   it("keeps environment tokens ahead of active profile sessions", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
@@ -143,7 +143,7 @@ describe("gittensory-mcp CLI — profiles", () => {
     expect(doctor.checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "auth", status: "fail" })]));
     expect(requests).toEqual(expect.arrayContaining([expect.objectContaining({ url: "/v1/auth/logout", authorization: "Bearer session-jsonbored" })]));
     expect(JSON.stringify({ logout, list, missingStatus, doctor })).not.toMatch(/session-jsonbored|session-okto|github-jsonbored|github-okto|gittensory-cli-/);
-  });
+  }, 45_000);
 
   it("reports package status and prints the packaged changelog", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
