@@ -18,3 +18,41 @@ npm run build --workspace @jsonbored/gittensory-engine
 ```
 
 This runs `tsc -p tsconfig.json`, emitting `dist/` (the only published output alongside `CHANGELOG.md`).
+
+## Test
+
+```
+npm test --workspace @jsonbored/gittensory-engine
+```
+
+Compiles the package and the `test/` suite (`node:test`) to plain JS and runs it — no experimental runtime
+flags, so it works on the whole declared `engines` range.
+
+## `opportunity-ranker`
+
+The Phase-1 miner-discovery ranker. It composes five already-normalized `[0, 1]` signals into one ordinal score:
+
+```
+score = potential * feasibility * laneFit * freshness * (1 - dupRisk)
+```
+
+Every field is normalized before use, so a malformed upstream signal always degrades the score toward `0` rather
+than inverting or overflowing it — but the two directions are handled asymmetrically:
+
+- The four **positive** factors (`potential`, `feasibility`, `laneFit`, `freshness`) clamp into `[0, 1]`; a
+  non-finite value (`NaN`/`±Infinity`) maps to `0`.
+- **`dupRisk`** clamps into `[0, 1]` too, but **fails closed**: a non-finite `dupRisk` maps to `1` (maximum risk),
+  not `0`. An unknown contention signal must collapse the score, never masquerade as a safe, uncontested one.
+
+Any single factor at `0` (or a `dupRisk` of `1`) collapses the whole score to `0`.
+
+```ts
+import { rankOpportunities, rankOpportunityScore } from "@jsonbored/gittensory-engine";
+
+rankOpportunityScore({ potential: 0.9, feasibility: 0.8, laneFit: 1, freshness: 0.7, dupRisk: 0.1 }); // → 0.4536
+
+rankOpportunities(candidates); // sorted by descending score, each annotated with `rankScore`
+```
+
+`rankOpportunities` is a stable sort with an explicit index tie-break: candidates with an equal score keep their
+input order.
