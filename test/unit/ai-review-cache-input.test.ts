@@ -1,8 +1,6 @@
 import {
   AI_REVIEW_CACHE_INPUT_VERSION,
   aiReviewCacheInputFingerprint,
-  aiReviewCacheInputMatches,
-  cacheMetadataForAiReviewInput,
   type AiReviewCacheInput,
 } from "../../src/review/ai-review-cache-input";
 
@@ -11,6 +9,9 @@ const baseInput = (): AiReviewCacheInput => ({
   byok: false,
   provider: null,
   model: null,
+  aiReviewAllAuthors: false,
+  aiReviewCloseConfidence: null,
+  gatePack: null,
   reviewerPlan: null,
   selfHostProviderConfig: null,
   baseSha: null,
@@ -214,37 +215,17 @@ describe("aiReviewCacheInputFingerprint", () => {
     expect(emptyConfig).toBe(sparseConfig);
     expect(emptyConfig).not.toBe(nullConfig);
   });
-});
 
-describe("aiReviewCacheInputMatches", () => {
-  it("requires both the current input version and exact fingerprint", async () => {
-    const fingerprint = await aiReviewCacheInputFingerprint(baseInput());
-    expect(
-      aiReviewCacheInputMatches(
-        { inputVersion: AI_REVIEW_CACHE_INPUT_VERSION, inputFingerprint: fingerprint },
-        fingerprint,
-      ),
-    ).toBe(true);
-    expect(aiReviewCacheInputMatches(undefined, fingerprint)).toBe(false);
-    expect(aiReviewCacheInputMatches({ inputFingerprint: fingerprint }, fingerprint)).toBe(false);
-    expect(
-      aiReviewCacheInputMatches(
-        { inputVersion: AI_REVIEW_CACHE_INPUT_VERSION, inputFingerprint: "different" },
-        fingerprint,
-      ),
-    ).toBe(false);
-  });
+  it("changes when aiReviewAllAuthors, aiReviewCloseConfidence, or gatePack change", async () => {
+    const original = await aiReviewCacheInputFingerprint(baseInput());
+    const allAuthorsChanged = await aiReviewCacheInputFingerprint({ ...baseInput(), aiReviewAllAuthors: true });
+    const closeConfidenceChanged = await aiReviewCacheInputFingerprint({ ...baseInput(), aiReviewCloseConfidence: 0.9 });
+    const gatePackChanged = await aiReviewCacheInputFingerprint({ ...baseInput(), gatePack: "oss-anti-slop" });
+    const repeated = await aiReviewCacheInputFingerprint(baseInput());
 
-  it("adds cache input metadata without discarding existing review telemetry", async () => {
-    const fingerprint = await aiReviewCacheInputFingerprint(baseInput());
-    expect(cacheMetadataForAiReviewInput(null, fingerprint)).toEqual({
-      inputVersion: AI_REVIEW_CACHE_INPUT_VERSION,
-      inputFingerprint: fingerprint,
-    });
-    expect(cacheMetadataForAiReviewInput({ rag: { injected: true } }, fingerprint)).toEqual({
-      rag: { injected: true },
-      inputVersion: AI_REVIEW_CACHE_INPUT_VERSION,
-      inputFingerprint: fingerprint,
-    });
+    expect(allAuthorsChanged).not.toBe(original);
+    expect(closeConfidenceChanged).not.toBe(original);
+    expect(gatePackChanged).not.toBe(original);
+    expect(repeated).toBe(original);
   });
 });

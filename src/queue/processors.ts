@@ -19,6 +19,7 @@ import {
   getIssue,
   listContributorPullRequests,
   listContributorRepoStats,
+  getRepoSyncSegment,
   listIssues,
   listIssueSignalSample,
   listLatestSignalSnapshotsByTarget,
@@ -56,6 +57,7 @@ import {
   replaceCollisionEdges,
   upsertRepoQueueTrendSnapshot,
   upsertAgentCommandAnswer,
+  upsertCheckSummary,
   upsertOfficialMinerDetection,
   rollupProductUsageDaily,
   upsertBurdenForecast,
@@ -206,6 +208,7 @@ import {
 } from "../settings/agent-execution";
 import {
   SWEEP_FANOUT_DEDUP_MS,
+  SWEEP_MAX_PRS,
   isRegateSweepDraining,
   selectRegateCandidates,
 } from "../settings/agent-sweep";
@@ -215,10 +218,10 @@ import {
   shouldWaitForGitHubRateLimit,
 } from "../github/rate-limit";
 import {
-  aiReviewCacheInputFingerprint,
-  aiReviewCacheInputMatches,
-  cacheMetadataForAiReviewInput,
-} from "../review/ai-review-cache-input";
+  queueSnapshotBacklog,
+  queueSnapshotFromBinding,
+} from "../selfhost/queue-common";
+import { aiReviewCacheInputFingerprint } from "../review/ai-review-cache-input";
 import {
   downgradeCloseToHold,
   downgradeMergeToHold,
@@ -422,6 +425,8 @@ import { errorMessage, nowIso } from "../utils/json";
 
 const OFFICIAL_MINER_DETECTION_TTL_MS = 5 * 60 * 1000;
 const OFFICIAL_MINER_DETECTION_UNAVAILABLE_TTL_MS = 60 * 1000;
+const PER_PR_REGATE_BACKPRESSURE_TYPES = ["agent-regate-pr"] as const;
+const SWEEP_OPEN_PULL_REQUEST_SYNC_MAX_AGE_MS = 10 * 60 * 1000;
 const PR_PUBLIC_SURFACE_ACTIONS = new Set([
   "opened",
   "reopened",
@@ -1060,6 +1065,104 @@ async function fanOutAgentRegateSweepJobs(
   });
 }
 
+async function currentRegateBacklog(env: Env): Promise<number> {
+  const snapshot = await queueSnapshotFromBinding(env.JOBS).catch(() => null);
+  return queueSnapshotBacklog(snapshot, PER_PR_REGATE_BACKPRESSURE_TYPES);
+}
+
+function sweepOpenPullRequestSyncCredentialAvailable(
+  env: Env,
+  repo: NonNullable<Awaited<ReturnType<typeof getRepository>>>,
+): boolean {
+  if (env.GITHUB_PUBLIC_TOKEN) return true;
+  if (env.ORB_ENROLLMENT_SECRET) return true;
+  return Boolean(
+    repo.installationId &&
+      env.GITHUB_APP_PRIVATE_KEY?.includes("BEGIN"),
+  );
+}
+
+function openPullRequestSyncStale(
+  segment: Awaited<ReturnType<typeof getRepoSyncSegment>>,
+  nowMs: number,
+): boolean {
+  if (!segment) return true;
+  if (
+    segment.status === "running" ||
+    segment.status === "refreshing" ||
+    segment.status === "waiting_rate_limit"
+  )
+    return false;
+  if (segment.status !== "complete" && segment.status !== "not_modified")
+    return true;
+  const completedMs = Date.parse(segment.completedAt ?? "");
+  return (
+    !Number.isFinite(completedMs) ||
+    nowMs - completedMs > SWEEP_OPEN_PULL_REQUEST_SYNC_MAX_AGE_MS
+  );
+}
+
+async function refreshOpenPullRequestsForScheduledSweep(
+  env: Env,
+  repo: Awaited<ReturnType<typeof getRepository>>,
+  requestedBy: "schedule" | "api" | "test",
+): Promise<void> {
+  if (requestedBy !== "schedule") return;
+  if (!repo || !sweepOpenPullRequestSyncCredentialAvailable(env, repo)) return;
+  const segment = await getRepoSyncSegment(
+    env,
+    repo.fullName,
+    "open_pull_requests",
+  ).catch(() => null);
+  if (!openPullRequestSyncStale(segment, Date.now())) return;
+  await backfillRepositorySegment(env, {
+    repoFullName: repo.fullName,
+    segment: "open_pull_requests",
+    requestedBy,
+    mode: "light",
+    force: true,
+  }).catch((error) => {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        event: "sweep_open_pr_sync_failed",
+        repoFullName: repo.fullName,
+        error: errorMessage(error),
+      }),
+    );
+  });
+}
+
+async function surfaceRepairPriorityPullNumbers(
+  env: Env,
+  repoFullName: string,
+  pulls: readonly PullRequestRecord[],
+  gateCheckEnabled: boolean,
+): Promise<number[]> {
+  const priorityPullNumbers = new Set<number>();
+  for (const pr of pulls) {
+    if (pr.headSha && pr.lastPublishedSurfaceSha !== pr.headSha)
+      priorityPullNumbers.add(pr.number);
+  }
+  if (!gateCheckEnabled) return [...priorityPullNumbers];
+  await Promise.all(
+    pulls.map(async (pr) => {
+      if (!pr.headSha) return;
+      const checks = await listCheckSummaries(env, repoFullName, pr.number).catch(
+        () => [],
+      );
+      const currentGateCheck = checks.find(
+        (check) =>
+          check.name === GITTENSORY_GATE_CHECK_NAME &&
+          check.headSha === pr.headSha &&
+          check.status === "completed",
+      );
+      if (!currentGateCheck) priorityPullNumbers.add(pr.number);
+    }),
+  );
+  return [...priorityPullNumbers];
+}
+
 // Convergence (RAG / codebase index, flag GITTENSORY_REVIEW_RAG). The dispatch for the `rag-index-repo` job.
 // Caller already gated on isRagEnabled(env).
 //   - No repoFullName → cron fan-out: enqueue one FULL re-index job per registered + cutover-allowlisted repo.
@@ -1219,13 +1322,51 @@ async function sweepRepoRegate(
     });
     return;
   }
-  const [repo, openPullRequests] = await Promise.all([
-    getRepository(env, repoFullName),
-    listOpenPullRequests(env, repoFullName),
-  ]);
+  const repo = await getRepository(env, repoFullName);
+  await refreshOpenPullRequestsForScheduledSweep(
+    env,
+    repo,
+    requestedBy,
+  );
+  const openPullRequests = await listOpenPullRequests(env, repoFullName);
+  const priorityPullNumbers = await surfaceRepairPriorityPullNumbers(
+    env,
+    repoFullName,
+    openPullRequests,
+    settings.gateCheckMode === "enabled",
+  );
+  const regateBacklog = requestedBy === "schedule" ? await currentRegateBacklog(env) : 0;
+  // Normal stale maintenance yields behind existing per-PR repairs. Missing current Gate checks are outage repair:
+  // do not let one repo's draining sweep strand required statuses in another repo.
+  if (regateBacklog > 0 && priorityPullNumbers.length === 0) {
+    await recordAuditEvent(env, {
+      eventType: "agent.sweep.regate",
+      actor: "gittensory",
+      targetKey: repoFullName,
+      outcome: "queued",
+      detail:
+        "re-gate sweep deferred: prior scheduled re-gate work is still pending or processing",
+      metadata: { repoFullName, mode, deferred: true, regateBacklog },
+    });
+    return;
+  }
+  // With an active backlog (regateBacklog > 0), a priority repair PR earns an EXCEPTION to the "yield to
+  // backlog" rule above, not a license for the whole sweep to also drag along a full SWEEP_MAX_PRS batch of
+  // ordinary stale PRs -- selectRegateCandidates sorts priority PRs first, so capping max to exactly
+  // priorityPullNumbers.length restricts the candidate set to repairs only. No backlog pressure ⇒ a normal,
+  // full-size sweep as before.
+  const repairCandidateLimit =
+    priorityPullNumbers.length > 0
+      ? regateBacklog > 0
+        ? priorityPullNumbers.length
+        : Math.max(SWEEP_MAX_PRS, priorityPullNumbers.length)
+      : null;
   const candidates = selectRegateCandidates({
     pulls: openPullRequests,
     now: nowIso(),
+    priorityPullNumbers,
+    priorityBypassesFreshness: priorityPullNumbers.length > 0,
+    ...(repairCandidateLimit !== null ? { max: repairCandidateLimit } : {}),
   });
   // No stale PRs this tick — stay quiet rather than writing an empty heartbeat to the audit feed.
   if (candidates.length === 0) return;
@@ -3679,11 +3820,45 @@ async function processGitHubWebhook(
   }
 }
 
-type PublicSurfaceOutput = "comment" | "label" | "check_run";
+type PublicSurfaceOutput = "comment" | "label" | "check_run" | "gate_check_run";
 type PublicSurfaceOutputFailure = {
   output: PublicSurfaceOutput;
   error: string;
 };
+
+async function recordPublishedGateCheckSummary(
+  env: Env,
+  args: {
+    repoFullName: string;
+    pullNumber: number;
+    headSha: string | null | undefined;
+    checkRunId: number;
+    conclusion: string | null | undefined;
+    detailsUrl?: string | undefined;
+    deliveryId: string;
+  },
+): Promise<void> {
+  /* v8 ignore next -- createOrUpdateNamedCheckRun returns null without a head SHA, so published results have one. */
+  if (!args.headSha) return;
+  const completedAt = nowIso();
+  await upsertCheckSummary(env, {
+    id: String(args.checkRunId),
+    repoFullName: args.repoFullName,
+    pullNumber: args.pullNumber,
+    headSha: args.headSha,
+    name: GITTENSORY_GATE_CHECK_NAME,
+    status: "completed",
+    /* v8 ignore next -- Gate publication always supplies a conclusion; this keeps the DB value defensive. */
+    conclusion: args.conclusion ?? null,
+    startedAt: null,
+    completedAt,
+    ...(args.detailsUrl ? { detailsUrl: args.detailsUrl } : {}),
+    payload: {
+      deliveryId: args.deliveryId,
+      source: "gittensory_gate_check",
+    },
+  });
+}
 
 function mergeReadinessGateEnabled(
   settings: Pick<RepositorySettings, "mergeReadinessGateMode">,
@@ -4912,6 +5087,8 @@ async function maybePublishPrPublicSurface(
   let inlineCommentsEnabledForReview = false;
   let aiReviewExpected = false;
   let gateFinalized = false;
+  const publishedOutputs: PublicSurfaceOutput[] = [];
+  const failedOutputs: PublicSurfaceOutputFailure[] = [];
   const reviewedHeadSha = reviewedPullRequestHeadSha(pr.headSha, advisory.headSha);
   const freshnessForReviewOutput = (phase: string): Promise<PullRequestFreshness> =>
     reviewTargetFreshness(env, {
@@ -4957,6 +5134,123 @@ async function maybePublishPrPublicSurface(
         pullNumber: pr.number,
       });
     return reviewFiles;
+  };
+  const finishPublicSurfacePublication = async (): Promise<
+    ReturnType<typeof evaluateGateCheck> | undefined
+  > => {
+    const gateSurfaceIncomplete = gateEnabled && !gateFinalized;
+    if (publishedOutputs.length === 0) {
+      if (failedOutputs.length > 0) {
+        await recordAuditEvent(env, {
+          eventType: "github_app.pr_public_surface_failed",
+          actor: author,
+          targetKey: `${repoFullName}#${pr.number}`,
+          outcome: "error",
+          detail: failedOutputs.map((failure) => failure.output).join(","),
+          metadata: {
+            deliveryId: webhook.deliveryId,
+            repoFullName,
+            failedOutputs,
+            gateCheckRequired: gateEnabled,
+            gateCheckFinalized: gateFinalized,
+          },
+        });
+        // The advisory ran but NOTHING reached the PR (revoked token / perms removed / GitHub 5xx). For an
+        // advisory-only bot this is the worst failure — escalate to Sentry at error level, not just the audit ledger.
+        captureReviewFailure(new Error("PR public-surface publish failed — review produced output but nothing was posted to the PR"), {
+          kind: "publish",
+          installationId,
+          owner: repoFullName.split("/")[0],
+          repo: repoFullName,
+          pr: pr.number,
+          head_sha: advisory.headSha,
+          failedOutputs: failedOutputs.map((failure) => failure.output),
+        });
+      }
+      if (gateSurfaceIncomplete) {
+        await recordAuditEvent(env, {
+          eventType: "github_app.pr_public_surface_incomplete",
+          actor: author,
+          targetKey: `${repoFullName}#${pr.number}`,
+          outcome: "error",
+          detail: "required gate check did not finalize",
+          metadata: {
+            deliveryId: webhook.deliveryId,
+            repoFullName,
+            gateCheckMode: settings.gateCheckMode,
+            publishedOutputs,
+            failedOutputs,
+          },
+        }).catch(() => undefined);
+      }
+      return gateEvaluation;
+    }
+    if (gateSurfaceIncomplete) {
+      // This branch is reachable with publishedOutputs non-empty (e.g. gate-only: ["gate_check_run"]), which
+      // can happen via the early `!prelimHasPublicOutput` return below -- at that point `decision` is still
+      // `prelim` (never reassigned by decidePublicSurface's official-miner-aware pass). That is safe here:
+      // `willLabel` is a non-optional boolean on every PublicSurfaceDecision variant (never undefined), and
+      // prelimHasPublicOutput being false means "label" was not in prelim.actions, which decidePublicSurface
+      // never sets independently of willLabel -- so decision.willLabel is always false on this path anyway.
+      await recordAuditEvent(env, {
+        eventType: "github_app.pr_public_surface_incomplete",
+        actor: author,
+        targetKey: `${repoFullName}#${pr.number}`,
+        outcome: "error",
+        detail: "required gate check did not finalize",
+        metadata: {
+          deliveryId: webhook.deliveryId,
+          repoFullName,
+          publicSurface: settings.publicSurface,
+          label: decision.willLabel ? settings.gittensorLabel : null,
+          checkRunMode: settings.checkRunMode,
+          gateCheckMode: settings.gateCheckMode,
+          publicAudienceMode: settings.publicAudienceMode,
+          publishedOutputs,
+          failedOutputs,
+        },
+      }).catch(() => undefined);
+      return gateEvaluation;
+    }
+    await recordAuditEvent(env, {
+      eventType: "github_app.pr_public_surface_published",
+      actor: author,
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "completed",
+      metadata: {
+        deliveryId: webhook.deliveryId,
+        publicSurface: settings.publicSurface,
+        label: decision.willLabel ? settings.gittensorLabel : null,
+        checkRunMode: settings.checkRunMode,
+        gateCheckMode: settings.gateCheckMode,
+        publicAudienceMode: settings.publicAudienceMode,
+        publishedOutputs,
+        failedOutputs,
+        gateCheckFinalized: gateFinalized,
+      },
+    });
+    await recordGithubProductUsage(env, "pr_public_surface_published", {
+      actor: author,
+      repoFullName,
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "completed",
+      metadata: {
+        publicSurface: settings.publicSurface,
+        labelApplied: decision.willLabel,
+        checkRunMode: settings.checkRunMode,
+        gateCheckMode: settings.gateCheckMode,
+        publicAudienceMode: settings.publicAudienceMode,
+        publishedOutputs,
+        failedOutputs,
+        gateCheckFinalized: gateFinalized,
+      },
+    });
+    // Stamp the head SHA only after every required public surface for this repo completed. For gate-enabled repos,
+    // a comment/label without a finalized Orb gate check is incomplete and must stay repair-visible to the sweep.
+    await markPullRequestSurfacePublished(env, repoFullName, pr.number, advisory.headSha).catch((error) => {
+      console.error(JSON.stringify({ level: "warn", event: "surface_published_mark_failed", repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
+    });
+    return gateEvaluation;
   };
   try {
     const [repoIssues, repoPullRequests, repoBounties] = await Promise.all([
@@ -5278,6 +5572,9 @@ async function maybePublishPrPublicSurface(
             byok: settings.aiReviewByok,
             provider: settings.aiReviewProvider,
             model: settings.aiReviewModel,
+            aiReviewAllAuthors: settings.aiReviewAllAuthors,
+            aiReviewCloseConfidence: settings.aiReviewCloseConfidence,
+            gatePack: settings.gatePack,
             reviewerPlan: env.AI_REVIEW_PLAN,
             selfHostProviderConfig: env.AI_REVIEW_PLAN
               ? {
@@ -5332,12 +5629,9 @@ async function maybePublishPrPublicSurface(
                 pr.number,
                 advisory.headSha,
                 settings.aiReviewMode,
+                inputFingerprint,
               ).catch(() => null);
-          if (
-            cachedReview &&
-            aiReviewCacheInputMatches(cachedReview.metadata, inputFingerprint) &&
-            hasPublicReviewAssessment(cachedReview.notes)
-          ) {
+          if (cachedReview && hasPublicReviewAssessment(cachedReview.notes)) {
             advisory.findings.push(...cachedReview.findings);
             aiReview = cachedReview;
           } else {
@@ -5365,10 +5659,11 @@ async function maybePublishPrPublicSurface(
                 settings.aiReviewMode,
                 {
                   ...aiReview,
-                  metadata: cacheMetadataForAiReviewInput(
-                    aiReview.metadata,
+                  metadata: {
+                    /* v8 ignore next -- runAiReviewForAdvisory (the sole path reaching here) always sets metadata on its "ok" returns; the nullish fallback is a type-level (optional field) safeguard, not a reachable runtime path. */
+                    ...(aiReview.metadata ?? {}),
                     inputFingerprint,
-                  ),
+                  },
                 },
               ).catch(() => undefined);
           }
@@ -5573,7 +5868,30 @@ async function maybePublishPrPublicSurface(
               mode,
             ),
         );
-        if (gateCheckResult?.kind === "published") gateFinalized = true;
+        if (gateCheckResult?.kind === "published") {
+          gateFinalized = true;
+          publishedOutputs.push("gate_check_run");
+          await recordPublishedGateCheckSummary(env, {
+            repoFullName,
+            pullNumber: pr.number,
+            headSha: advisory.headSha,
+            checkRunId: gateCheckResult.id,
+            /* v8 ignore next -- gate-enabled publication always has a gate evaluation. */
+            conclusion: gateEvaluation?.conclusion ?? null,
+            detailsUrl: gateCheckResult.html_url,
+            deliveryId: webhook.deliveryId,
+          }).catch((error) => {
+            console.error(
+              JSON.stringify({
+                level: "warn",
+                event: "gate_check_summary_upsert_failed",
+                repoFullName,
+                pullNumber: pr.number,
+                error: errorMessage(error),
+              }),
+            );
+          });
+        }
         if (gateCheckResult?.kind === "permission_missing") {
           await auditGateCheckPermissionMissing(
             env,
@@ -5588,7 +5906,7 @@ async function maybePublishPrPublicSurface(
           // set), proving the App could write checks for this head at least once. Finalize the pending check to
           // neutral (mirrors the catch); if access was truly revoked this PATCH also fails and is swallowed.
           if (pendingGateCheckRunId !== undefined && !gateFinalized) {
-            await createOrUpdateErroredGateCheckRun(
+            const fallbackGateCheckResult = await createOrUpdateErroredGateCheckRun(
               env,
               installationId,
               repoFullName,
@@ -5596,7 +5914,29 @@ async function maybePublishPrPublicSurface(
               { checkRunId: pendingGateCheckRunId },
               mode,
             ).catch(() => undefined);
-            gateFinalized = true;
+            if (fallbackGateCheckResult?.kind === "published") {
+              gateFinalized = true;
+              publishedOutputs.push("gate_check_run");
+              await recordPublishedGateCheckSummary(env, {
+                repoFullName,
+                pullNumber: pr.number,
+                headSha: advisory.headSha,
+                checkRunId: fallbackGateCheckResult.id,
+                conclusion: "neutral",
+                detailsUrl: fallbackGateCheckResult.html_url,
+                deliveryId: webhook.deliveryId,
+              }).catch((error) => {
+                console.error(
+                  JSON.stringify({
+                    level: "warn",
+                    event: "gate_check_summary_upsert_failed",
+                    repoFullName,
+                    pullNumber: pr.number,
+                    error: errorMessage(error),
+                  }),
+                );
+              });
+            }
           }
         }
       } catch (checkError) {
@@ -5607,7 +5947,7 @@ async function maybePublishPrPublicSurface(
         // grew long with failing-check names) were silently never reviewed or closed. Finalize the pending
         // check to a neutral terminal state so it doesn't hang, log, and CONTINUE — do not re-throw.
         if (pendingGateCheckRunId !== undefined && !gateFinalized) {
-          await createOrUpdateErroredGateCheckRun(
+          const fallbackGateCheckResult = await createOrUpdateErroredGateCheckRun(
             env,
             installationId,
             repoFullName,
@@ -5615,7 +5955,29 @@ async function maybePublishPrPublicSurface(
             { checkRunId: pendingGateCheckRunId },
             mode,
           ).catch(() => undefined);
-          gateFinalized = true;
+          if (fallbackGateCheckResult?.kind === "published") {
+            gateFinalized = true;
+            publishedOutputs.push("gate_check_run");
+            await recordPublishedGateCheckSummary(env, {
+              repoFullName,
+              pullNumber: pr.number,
+              headSha: advisory.headSha,
+              checkRunId: fallbackGateCheckResult.id,
+              conclusion: "neutral",
+              detailsUrl: fallbackGateCheckResult.html_url,
+              deliveryId: webhook.deliveryId,
+            }).catch((error) => {
+              console.error(
+                JSON.stringify({
+                  level: "warn",
+                  event: "gate_check_summary_upsert_failed",
+                  repoFullName,
+                  pullNumber: pr.number,
+                  error: errorMessage(error),
+                }),
+              );
+            });
+          }
         }
         await recordAuditEvent(env, {
           eventType: "github_app.gate_check_failed_nonfatal",
@@ -5655,8 +6017,9 @@ async function maybePublishPrPublicSurface(
     throw error;
   }
 
-  if (!prelimHasPublicOutput) return gateEvaluation;
-  if (publicSurfaceSkipped || !official || !author) return gateEvaluation;
+  if (!prelimHasPublicOutput) return finishPublicSurfacePublication();
+  if (publicSurfaceSkipped || !official || !author)
+    return finishPublicSurfacePublication();
 
   const [github] = await Promise.all([
     fetchPublicContributorProfile(author, env),
@@ -5695,9 +6058,6 @@ async function maybePublishPrPublicSurface(
     repoStats,
     official.status === "confirmed" ? official.snapshot : null,
   );
-  const publishedOutputs: PublicSurfaceOutput[] = [];
-  const failedOutputs: PublicSurfaceOutputFailure[] = [];
-
   if (decision.willCheckRun && advisory.headSha) {
     try {
       // FIX B: the check-run annotations/details need the real diff too — reuse the shared resolver (one resolve
@@ -6137,74 +6497,7 @@ async function maybePublishPrPublicSurface(
       }
     }
   }
-  if (publishedOutputs.length === 0) {
-    if (failedOutputs.length > 0) {
-      await recordAuditEvent(env, {
-        eventType: "github_app.pr_public_surface_failed",
-        actor: author,
-        targetKey: `${repoFullName}#${pr.number}`,
-        outcome: "error",
-        detail: failedOutputs.map((failure) => failure.output).join(","),
-        metadata: {
-          deliveryId: webhook.deliveryId,
-          repoFullName,
-          failedOutputs,
-        },
-      });
-      // The advisory ran but NOTHING reached the PR (revoked token / perms removed / GitHub 5xx). For an
-      // advisory-only bot this is the worst failure — escalate to Sentry at error level, not just the audit ledger.
-      captureReviewFailure(new Error("PR public-surface publish failed — review produced output but nothing was posted to the PR"), {
-        kind: "publish",
-        installationId,
-        owner: repoFullName.split("/")[0],
-        repo: repoFullName,
-        pr: pr.number,
-        head_sha: advisory.headSha,
-        failedOutputs: failedOutputs.map((failure) => failure.output),
-      });
-    }
-    return gateEvaluation;
-  }
-  await recordAuditEvent(env, {
-    eventType: "github_app.pr_public_surface_published",
-    actor: author,
-    targetKey: `${repoFullName}#${pr.number}`,
-    outcome: "completed",
-    metadata: {
-      deliveryId: webhook.deliveryId,
-      publicSurface: settings.publicSurface,
-      label: decision.willLabel ? settings.gittensorLabel : null,
-      checkRunMode: settings.checkRunMode,
-      gateCheckMode: settings.gateCheckMode,
-      publicAudienceMode: settings.publicAudienceMode,
-      publishedOutputs,
-      failedOutputs,
-    },
-  });
-  await recordGithubProductUsage(env, "pr_public_surface_published", {
-    actor: author,
-    repoFullName,
-    targetKey: `${repoFullName}#${pr.number}`,
-    outcome: "completed",
-    metadata: {
-      publicSurface: settings.publicSurface,
-      labelApplied: decision.willLabel,
-      checkRunMode: settings.checkRunMode,
-      gateCheckMode: settings.gateCheckMode,
-      publicAudienceMode: settings.publicAudienceMode,
-      publishedOutputs,
-      failedOutputs,
-    },
-  });
-  // Stamp the head SHA we just published at for reporting and stale-surface diagnostics. This is not a hard
-  // re-review skip: GitHub comments/checks can be stale or incomplete even when this marker matches the current
-  // head. Reached only when at least one surface output actually published (the zero-output early-return above
-  // covers the suppressed/dry-run case). The helper no-ops on a null head, and its WHERE pins head_sha so a head
-  // that advanced mid-pass won't stamp.
-  await markPullRequestSurfacePublished(env, repoFullName, pr.number, advisory.headSha).catch((error) => {
-    console.error(JSON.stringify({ level: "warn", event: "surface_published_mark_failed", repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
-  });
-  return gateEvaluation;
+  return finishPublicSurfacePublication();
 }
 
 async function recordPublicSurfaceOutputFailure(

@@ -11,6 +11,14 @@ export type AiReviewCacheInput = {
   byok: boolean;
   provider: string | null | undefined;
   model: string | null | undefined;
+  // Eligibility/interpretation settings that don't shape the prompt itself but decide whether AI runs at all
+  // (aiReviewAllAuthors, gatePack) or how a cached finding's embedded confidence is later interpreted
+  // (aiReviewCloseConfidence). None of these change what the model would output for the same prompt, but a
+  // repo flipping any of them warrants a fresh review rather than replaying a decision made under different
+  // eligibility/interpretation rules.
+  aiReviewAllAuthors: boolean;
+  aiReviewCloseConfidence: number | null | undefined;
+  gatePack: string | null | undefined;
   reviewerPlan:
     | {
         combine?: string | null | undefined;
@@ -62,6 +70,10 @@ export type AiReviewCacheInput = {
     additions: number;
     deletions: number;
   }[];
+  // grounding/rag/enrichment/reputation each pull TIME-VARYING external context that can change for an
+  // unchanged head SHA without any of these booleans flipping (live CI checks, the vector index, REES/CVE data,
+  // the submitter's evolving reputation) -- a boolean can't detect that drift, so the caller bypasses the cache
+  // entirely whenever any of these is true rather than relying on this fingerprint to catch a content change.
   features: {
     grounding: boolean;
     rag: boolean;
@@ -77,6 +89,9 @@ export async function aiReviewCacheInputFingerprint(input: AiReviewCacheInput): 
     byok: input.byok,
     provider: input.provider ?? null,
     model: input.model ?? null,
+    aiReviewAllAuthors: input.aiReviewAllAuthors,
+    aiReviewCloseConfidence: input.aiReviewCloseConfidence ?? null,
+    gatePack: input.gatePack ?? null,
     reviewerPlan: input.reviewerPlan
       ? {
           combine: input.reviewerPlan.combine ?? null,
@@ -124,27 +139,6 @@ export async function aiReviewCacheInputFingerprint(input: AiReviewCacheInput): 
     features: input.features,
   };
   return `${AI_REVIEW_CACHE_INPUT_VERSION}:${await sha256Hex(stableStringify(payload))}`;
-}
-
-export function aiReviewCacheInputMatches(
-  metadata: Record<string, unknown> | null | undefined,
-  fingerprint: string,
-): boolean {
-  return (
-    metadata?.inputVersion === AI_REVIEW_CACHE_INPUT_VERSION &&
-    metadata.inputFingerprint === fingerprint
-  );
-}
-
-export function cacheMetadataForAiReviewInput(
-  metadata: Record<string, unknown> | null | undefined,
-  fingerprint: string,
-): Record<string, unknown> {
-  return {
-    ...(metadata ?? {}),
-    inputVersion: AI_REVIEW_CACHE_INPUT_VERSION,
-    inputFingerprint: fingerprint,
-  };
 }
 
 function normalizeStringList(values: readonly string[]): string[] {
