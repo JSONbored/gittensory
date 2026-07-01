@@ -15,6 +15,7 @@ describe("test evidence helpers", () => {
     expect(isTestPath("components/__snapshots__/Card.tsx.snap")).toBe(true);
     expect(isTestPath("pkg/auth/testdata/golden.json")).toBe(true);
     expect(isTestPath("internal/widget/testdata/input.txt")).toBe(true);
+    expect(isTestPath("src/testdata/client.ts")).toBe(true);
     expect(isTestPath("src/state.snap")).toBe(false);
     expect(isTestPath("src/widget.rs")).toBe(false);
   });
@@ -24,7 +25,6 @@ describe("test evidence helpers", () => {
     expect(isTestPath("src/playwright/client.ts")).toBe(false);
     expect(isTestPath("src/cypress/client.ts")).toBe(false);
     expect(isTestPath("src/e2e/client.ts")).toBe(false);
-    expect(isTestPath("src/testdata/client.ts")).toBe(false);
     expect(isTestPath("src/integration/auth.test.ts")).toBe(true);
     expect(isTestPath("src/playwright/client.e2e.ts")).toBe(true);
     expect(isTestPath("src/cypress/client.cy.ts")).toBe(true);
