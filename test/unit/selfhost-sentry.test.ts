@@ -267,16 +267,16 @@ describe("scrubEvent — redact secrets before an event leaves the box", () => {
       culprit: "forwardStructuredLogToSentry",
       fingerprint: ["gittensory-log", "orb_broker_unavailable"],
       tags: { event: "orb_broker_unavailable" },
-      exception: [{ type: "orb_broker_unavailable", value: "timeout" }],
+      exception: { values: [{ type: "orb_broker_unavailable", value: "timeout" }] },
     }) as { culprit?: string };
     expect(ev.culprit).toBe("orb_broker_unavailable");
   });
 
-  it("falls back to the synthetic exception type when a structured log omits the event tag", () => {
+  it("falls back to exception.values[0].type when a structured log omits the event tag", () => {
     const ev = scrubbedEvent({
       culprit: "forwardStructuredLogToSentry",
       fingerprint: ["gittensory-log", "relay_drained_error"],
-      exception: [{ type: "relay_drained_error", value: "relay failed" }],
+      exception: { values: [{ type: "relay_drained_error", value: "relay failed" }] },
     }) as { culprit?: string };
     expect(ev.culprit).toBe("relay_drained_error");
   });

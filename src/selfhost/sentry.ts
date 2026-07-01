@@ -138,6 +138,21 @@ export function resolveSentryRelease(
   return nonBlank(env.SENTRY_RELEASE) ?? nonBlank(env.GITTENSORY_VERSION);
 }
 
+function structuredLogExceptionType(exception: unknown): string | undefined {
+  if (!exception || typeof exception !== "object") return undefined;
+  const values = (exception as { values?: Array<{ type?: unknown }> }).values;
+  if (Array.isArray(values)) {
+    const type = values[0]?.type;
+    if (typeof type === "string") return type;
+  }
+  // Convenience/test shape only — production Sentry events use exception.values[0].type.
+  if (Array.isArray(exception)) {
+    const type = (exception[0] as { type?: unknown } | undefined)?.type;
+    if (typeof type === "string") return type;
+  }
+  return undefined;
+}
+
 /** Structured console.error logs are forwarded as synthetic exceptions whose stack always originates in
  *  forwardStructuredLogToSentry. Re-attribute the Sentry culprit to the log's event slug so operators see
  *  orb_broker_unavailable (etc.) instead of the forwarder frame. */
@@ -145,13 +160,13 @@ function attributeStructuredLogCulprit(event: {
   culprit?: string;
   fingerprint?: unknown;
   tags?: Record<string, unknown>;
-  exception?: Array<{ type?: string }>;
+  exception?: unknown;
 }): void {
   const fingerprint = event.fingerprint;
   if (!Array.isArray(fingerprint) || fingerprint[0] !== "gittensory-log") return;
   const eventSlug =
     (typeof event.tags?.event === "string" ? event.tags.event : undefined) ??
-    event.exception?.[0]?.type;
+    structuredLogExceptionType(event.exception);
   if (eventSlug) event.culprit = eventSlug;
 }
 
