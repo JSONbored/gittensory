@@ -34,6 +34,7 @@ import {
   enqueueRepositoryOpenDataBackfill,
   enrichInstallationHealth,
   fetchAndStorePullRequestFilesForReview,
+  fetchLinkedIssueFacts,
   fetchLiveCiAggregate,
   fetchLiveReviewThreadBlockers,
   fetchRequiredStatusContexts,
@@ -4843,6 +4844,32 @@ describe("GitHub backfill", () => {
       (env as Env & { GITTENSORY_REQUIRED_CI_CONTEXTS?: string }).GITTENSORY_REQUIRED_CI_CONTEXTS = "stale-required-context";
       vi.stubGlobal("fetch", async () => new Response("forbidden", { status: 403 }));
       expect(await fetchRequiredStatusContexts(env, "JSONbored/gittensory", "main", "public-token")).toBeNull();
+    });
+  });
+
+  describe("fetchLinkedIssueFacts (#2136)", () => {
+    it("returns a found result with the extracted facts, falling back to the requested number and open state when the payload omits them", async () => {
+      const env = createTestEnv({});
+      // Sparse payload: no `number`, no `state` — exercises the `data.number ?? issueNumber` and
+      // `data.state ?? "open"` defensive fallbacks.
+      vi.stubGlobal("fetch", async () => Response.json({ labels: [{ name: "bug" }, "manual-string-label"], assignees: [{ login: "maintainer" }], user: { login: "reporter" } }));
+      const result = await fetchLinkedIssueFacts(env, "JSONbored/gittensory", 42, "tok");
+      expect(result).toEqual({
+        status: "found",
+        facts: { number: 42, labels: ["bug", "manual-string-label"], assignees: ["maintainer"], state: "open", authorLogin: "reporter" },
+      });
+    });
+
+    it("returns not_found on a confirmed 404, distinct from a transient fetch error", async () => {
+      const env = createTestEnv({});
+      vi.stubGlobal("fetch", async () => new Response("missing", { status: 404 }));
+      expect(await fetchLinkedIssueFacts(env, "JSONbored/gittensory", 999999, "tok")).toEqual({ status: "not_found" });
+    });
+
+    it("returns fetch_error on a transient failure (5xx), never conflating it with not_found", async () => {
+      const env = createTestEnv({});
+      vi.stubGlobal("fetch", async () => new Response("server error", { status: 500 }));
+      expect(await fetchLinkedIssueFacts(env, "JSONbored/gittensory", 42, "tok")).toEqual({ status: "fetch_error" });
     });
   });
 
