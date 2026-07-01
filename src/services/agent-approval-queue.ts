@@ -59,16 +59,21 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
     });
     return { status: "rejected", action: { ...pending, status: "rejected", decidedBy: input.decidedBy }, executionOutcome: "head_moved" };
   }
-  // An unpinned staged approve (no expectedHeadSha) cannot be safety-verified against a force-push that
-  // happened during the queue wait: unlike merge's `sha` param (which GitHub 409s on mismatch), the reviews API's
-  // `commit_id` is purely advisory -- GitHub will happily post an APPROVE at any valid commit, current or not.
-  // The check above only fires when a pin EXISTS and disagrees with the live head; a row staged with no pin at
-  // all (e.g. by code predating this head-pinning fix, or a planning pass that ran against a transiently-null
-  // stored head SHA) would otherwise fall through to the executor's `ctx.headSha` fallback and silently approve
-  // whatever commit is live NOW, under the authority of a review that was never actually performed against it.
+  // An unpinned staged approve or merge (no expectedHeadSha) cannot be safety-verified against a force-push that
+  // happened during the queue wait. For a PINNED merge, GitHub's `sha` param 409s on mismatch -- a real backstop.
+  // But that backstop only exists because there's something to compare against; an UNPINNED merge falls back to
+  // performAction's `mergeSha = action.expectedHeadSha ?? ctx.headSha`, which by construction substitutes
+  // whatever head is live right now, so it trivially "matches" and no 409 is possible. The reviews API's
+  // `commit_id` has no server-side staleness rejection at all, pinned or not (#2377). Either way, the check above
+  // only fires when a pin EXISTS and disagrees with the live head; a row staged with no pin at all (e.g. by code
+  // predating this head-pinning fix, or a planning pass that ran against a transiently-null stored head SHA)
+  // would otherwise fall through to the executor's `ctx.headSha` fallback and silently ratify whatever commit is
+  // live NOW, under the authority of a review/merge that was never actually performed against it (#2422).
   // dismissStaleApproval is exempt: it RETRACTS the bot's existing approval rather than granting a new one at a
   // specific commit, so it carries no "ratify unreviewed code" risk and is safe to replay unpinned.
-  if (!stagedHead && pending.actionClass === "approve" && !pending.params.dismissStaleApproval) {
+  const isUnpinnedRatifyingAction =
+    !stagedHead && ((pending.actionClass === "approve" && !pending.params.dismissStaleApproval) || pending.actionClass === "merge");
+  if (isUnpinnedRatifyingAction) {
     await setPendingAgentActionStatus(env, pending.id, { status: "rejected", decidedBy: input.decidedBy });
     await recordAuditEvent(env, {
       eventType: "agent.pending_action.superseded",
