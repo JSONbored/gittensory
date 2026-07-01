@@ -116,7 +116,7 @@ describe("self-host observability trace config", () => {
     expect(backupExporter.command).toEqual([
       "/bin/sh",
       "-c",
-      "apk add --no-cache busybox-extras >/dev/null 2>&1 && sh /backup-metrics.sh",
+      "apk add --no-cache busybox-extras && sh /backup-metrics.sh",
     ]);
     expect(backupExporter.healthcheck?.test).toEqual([
       "CMD-SHELL",

@@ -5251,6 +5251,28 @@ async function maybePublishPrPublicSurface(
               .filter(Boolean)
               .join("\n\n") || null;
           const convergedRepoAllowed = isConvergenceRepoAllowed(env, repoFullName);
+          // Resolved ONCE and reused both for the fingerprint AND the cache-bypass decision below: grounding/RAG/
+          // enrichment/reputation each pull TIME-VARYING external context (live CI checks, the vector index,
+          // REES/CVE data, the submitter's evolving reputation) that can change for the SAME head SHA without
+          // any of these booleans flipping. Fingerprinting only "is the feature on" can't detect that drift
+          // without fetching the content itself (which would defeat caching), so a repo with ANY of these active
+          // bypasses the cache entirely rather than fingerprinting a value that can't prove freshness.
+          const dynamicReviewFeatures = {
+            grounding: isGroundingEnabled(env) && convergedRepoAllowed,
+            rag: resolveConvergedFeature(env, reviewManifest, "rag", repoFullName),
+            enrichment: isEnrichmentEnabled(env) && convergedRepoAllowed,
+            reputation: resolveConvergedFeature(
+              env,
+              reviewManifest,
+              "reputation",
+              repoFullName,
+            ),
+          };
+          const dynamicReviewContextActive =
+            dynamicReviewFeatures.grounding ||
+            dynamicReviewFeatures.rag ||
+            dynamicReviewFeatures.enrichment ||
+            dynamicReviewFeatures.reputation;
           const inputFingerprint = await aiReviewCacheInputFingerprint({
             mode: settings.aiReviewMode,
             byok: settings.aiReviewByok,
@@ -5293,29 +5315,24 @@ async function maybePublishPrPublicSurface(
               additions: file.additions,
               deletions: file.deletions,
             })),
-            features: {
-              grounding: isGroundingEnabled(env) && convergedRepoAllowed,
-              rag: resolveConvergedFeature(env, reviewManifest, "rag", repoFullName),
-              enrichment: isEnrichmentEnabled(env) && convergedRepoAllowed,
-              reputation: resolveConvergedFeature(
-                env,
-                reviewManifest,
-                "reputation",
-                repoFullName,
-              ),
-            },
+            features: dynamicReviewFeatures,
           });
           // #1 self-host AI-review cache: the LLM output for a PR changes only when the code (head SHA), review
           // mode, reviewer plan, feature activation, or prompt-shaping inputs change. A re-delivered webhook or the
           // block-mode re-gate sweep can reuse that exact review; stale same-head reviews from older private review
           // instructions or feature config are intentionally treated as misses. The deterministic gate still runs.
-          const cachedReview = await getCachedAiReview(
-            env,
-            repoFullName,
-            pr.number,
-            advisory.headSha,
-            settings.aiReviewMode,
-          ).catch(() => null);
+          // A repo with an active dynamic-context feature (grounding/RAG/enrichment/reputation) bypasses the
+          // cache entirely — see dynamicReviewContextActive above — since a cache hit there could replay a
+          // review built against now-stale external context for an otherwise-unchanged head.
+          const cachedReview = dynamicReviewContextActive
+            ? null
+            : await getCachedAiReview(
+                env,
+                repoFullName,
+                pr.number,
+                advisory.headSha,
+                settings.aiReviewMode,
+              ).catch(() => null);
           if (
             cachedReview &&
             aiReviewCacheInputMatches(cachedReview.metadata, inputFingerprint) &&
@@ -5339,7 +5356,7 @@ async function maybePublishPrPublicSurface(
               reviewExcludePaths,
               reviewInlineComments,
             });
-            if (aiReview && aiReview.cacheable !== false)
+            if (aiReview && aiReview.cacheable !== false && !dynamicReviewContextActive)
               await putCachedAiReview(
                 env,
                 repoFullName,

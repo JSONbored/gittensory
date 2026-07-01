@@ -1768,6 +1768,80 @@ describe("queue processors", () => {
     expect(aiCalls).toBeGreaterThan(0);
   });
 
+  it("bypasses the AI review cache entirely while a dynamic-context feature (grounding) is active (#2119)", async () => {
+    // Grounding/RAG/enrichment/reputation each pull TIME-VARYING external context (live CI checks, the vector
+    // index, REES/CVE data, reputation) that can change for the SAME head SHA without the feature flags
+    // themselves flipping — so a cache hit here could replay a review built against now-stale context. A repo
+    // with any of these active must re-run AI on EVERY review of the same head, never reuse a prior cache entry.
+    let aiCalls = 0;
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      AI: {
+        run: async () => {
+          aiCalls += 1;
+          return { response: JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: [], suggestions: [] }) };
+        },
+      } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+      GITTENSORY_REVIEW_GROUNDING: "true",
+      GITTENSORY_REVIEW_REPOS: "JSONbored/gittensory",
+    });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      aiReviewMode: "block",
+      gatePack: "oss-anti-slop",
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.endsWith("/pulls/7")) return Response.json({ number: 7, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+      if (url.includes("/commits/a7/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a7/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/issues/7/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/7/comments") && method === "POST") return Response.json({ id: 1 }, { status: 201 });
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+
+    const webhook = {
+      type: "github-webhook" as const,
+      eventName: "pull_request" as const,
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" as const } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 7, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" },
+      },
+    };
+    await processJob(env, { ...webhook, deliveryId: "dynamic-context-bypass-1" });
+    const firstRunAiCalls = aiCalls;
+    expect(firstRunAiCalls).toBeGreaterThan(0);
+    // Re-review of the SAME head with the SAME (unchanged) inputs. A plain fingerprint match would reuse the
+    // first run's cached review here (leaving aiCalls unchanged) — this asserts the AI ran the SAME full set of
+    // calls again instead, proving the cache was never written (or never read) while grounding stayed active.
+    await processJob(env, { ...webhook, deliveryId: "dynamic-context-bypass-2" });
+    expect(aiCalls).toBe(firstRunAiCalls * 2);
+  });
+
   it("continues to final verdict when the reviewing placeholder audit write fails", async () => {
     const originalRecordAuditEvent = repositoriesModule.recordAuditEvent;
     const auditSpy = vi.spyOn(repositoriesModule, "recordAuditEvent").mockImplementation(async (auditEnv, event) => {
