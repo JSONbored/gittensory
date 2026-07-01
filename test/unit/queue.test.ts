@@ -825,6 +825,35 @@ describe("queue processors", () => {
     resyncUpsertSpy.mockRestore();
   });
 
+  it("#regate-terminal-exit: a swept PR CLOSED on GitHub reconciles the stored row then early-exits — no files/CI reads, no review (#1942)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    // STORED row still reads open — the `closed` webhook was dropped (relay down); GitHub's LIVE state is closed.
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Closed PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+    let filesFetched = false;
+    let ciFetched = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/pulls/7")) return Response.json({ number: 7, title: "Closed PR", state: "closed", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+      if (url.includes("/pulls/7/files")) { filesFetched = true; return Response.json([]); }
+      if (url.includes("/commits/")) { ciFetched = true; return Response.json({ total_count: 0, check_runs: [] }); }
+      return Response.json({});
+    });
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "resync-closed", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+
+    // Reconciled: the stored row now reflects the live terminal state, so the NEXT sweep skips it outright.
+    const stored = await getPullRequest(env, "owner/agent-repo", 7);
+    expect(stored?.state).toBe("closed");
+    // Early-exit BEFORE the expensive resync + readiness reads: no files, no CI reads (and no review output).
+    expect(filesFetched).toBe(false);
+    expect(ciFetched).toBe(false);
+  });
+
   // REST-budget dedup (#audit-rate-headroom): one per-PR re-review threads request-local live GitHub facts through
   // readiness and auto-maintain, while post-gate planning refreshes facts that can change after the bot publishes
   // review/check state. Mergeability can advance to clean; CI can flip red and must still suppress merge.

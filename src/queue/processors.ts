@@ -1810,6 +1810,15 @@ async function reReviewStoredPullRequest(
     resyncAdmissionKey,
   );
   primeLiveMergeState(liveFacts, repoFullName, prNumber, resyncToken, live?.mergeable_state);
+  // Terminal early-exit (#1942): the PR is CLOSED/merged on GitHub even though the stored row still reads open — a
+  // dropped `closed` webhook (relay down). Reconcile the stored row from the live payload and RETURN before the
+  // expensive resync (files) + readiness + re-review reads. A stale sweep must never spend GitHub budget — or post
+  // visible output — re-reviewing a PR that can no longer produce a valid outcome. Fail-open: only a live NON-open
+  // state early-exits (a fetch hiccup leaves `live` undefined → proceed with the stored open PR).
+  if (live && live.state !== "open") {
+    await upsertPullRequestFromGitHub(env, repoFullName, live).catch(() => undefined);
+    return;
+  }
   if (live?.head?.sha && live.head.sha !== pr.headSha) {
     await upsertPullRequestFromGitHub(env, repoFullName, live).catch(
       () => undefined,
