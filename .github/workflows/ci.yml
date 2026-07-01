@@ -82,9 +82,11 @@ jobs:
             # into `Test with coverage` today. Its real dependency surface is narrower than "any backend
             # change" -- the CLI-harness tests spawn packages/gittensory-mcp against a fixture server (never
             # importing src/ directly) seeded via src/db/repositories + src/registry/*, and mcp-discovery /
-            # mcp-output-schemas exercise src/mcp/server.ts in-process. Skipping tests can only ever make
-            # Codecov's patch-coverage number look WORSE, never hide a real bug (a changed line this cluster
-            # uniquely covers just fails patch coverage loudly), so a path-scoped skip is safe here.
+            # mcp-output-schemas exercise src/mcp/server.ts in-process. package.json/package-lock.json are
+            # included too: a dependency bump can change MCP runtime behavior (e.g. the MCP SDK, node:sqlite)
+            # that this cluster is the ONLY thing exercising -- unlike a changed-lines gap, that risk is NOT
+            # caught by Codecov's patch-coverage number, so this path-scoped skip must cover it explicitly,
+            # matching how the pre-existing `mcp` filter above already treats dependency files as relevant.
             mcpCliCluster:
               - 'packages/gittensory-mcp/**'
               - 'src/mcp/**'
@@ -93,6 +95,8 @@ jobs:
               - 'src/registry/normalize.ts'
               - 'src/registry/sync.ts'
               - 'src/services/repo-outcome-patterns.ts'
+              - 'package.json'
+              - 'package-lock.json'
               - 'test/unit/mcp-cli-*.test.ts'
               - 'test/unit/mcp-discovery.test.ts'
               - 'test/unit/mcp-output-schemas.test.ts'
