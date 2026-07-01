@@ -363,7 +363,49 @@ export function extractLockfileChanges(
   return changes;
 }
 
-/** Batch-query OSV.dev for lockfile resolutions. Best-effort: returns empty CVE arrays on any failure. */
+/**
+ * Direct single-package OSV query — the per-package fallback for a failed batch. Without it a transient
+ * /v1/querybatch outage silently yields zero transitive CVEs (#1502): a fail-closed blind spot where a
+ * vulnerable lockfile-only pin escapes the scan entirely. Mirrors the graceful batch→direct degradation the
+ * manifest dependency-scan analyzer already performs.
+ */
+async function queryOsvSingle(
+  change: LockfileChange,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal | undefined,
+  options: Pick<ScanOptions, "analysis" | "diagnostics">,
+): Promise<Cve[]> {
+  if (signal?.aborted) return [];
+  const fetchOptions = {
+    endpointCategory: "osv-query",
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      package: { name: change.package, ecosystem: change.ecosystem },
+      version: change.to,
+    }),
+    signal,
+    fetchImpl,
+    diagnostics: options.diagnostics,
+    phase: "lockfile-drift",
+    subcall: "osv-query",
+    maxBytes: 1024 * 1024,
+    maxCallsPerCategory: MAX_OSV_QUERIES,
+  };
+  const response = options.analysis
+    ? await options.analysis.fetchJson<{ vulns?: OsvVuln[] }>(
+        "https://api.osv.dev/v1/query",
+        fetchOptions,
+      )
+    : await boundedFetchJson<{ vulns?: OsvVuln[] }>(
+        "https://api.osv.dev/v1/query",
+        fetchOptions,
+      );
+  if (!response.ok) return [];
+  return toCves(response.data.vulns);
+}
+
+/** Batch-query OSV.dev for lockfile resolutions. Best-effort: on batch failure, falls back to per-package direct queries. */
 export async function queryOsvBatch(
   changes: LockfileChange[],
   fetchImpl: typeof fetch = fetch,
@@ -397,7 +439,19 @@ export async function queryOsvBatch(
     : await boundedFetchJson<{
       results?: Array<{ vulns?: OsvVuln[] }>;
     }>("https://api.osv.dev/v1/querybatch", fetchOptions);
-  if (!response.ok) return results;
+  if (!response.ok) {
+    // The batch endpoint failed as a whole. Fall back to per-package direct queries so a transient
+    // /v1/querybatch outage does not silently report zero transitive CVEs — the empty-map path here was a
+    // fail-closed blind spot. Mirrors the dependency-scan analyzer's batch→direct fallback.
+    for (const change of changes) {
+      if (signal?.aborted) break;
+      results.set(
+        `${change.ecosystem}::${change.package}@${change.to}`,
+        await queryOsvSingle(change, fetchImpl, signal, options),
+      );
+    }
+    return results;
+  }
   changes.forEach((change, index) => {
     results.set(
       `${change.ecosystem}::${change.package}@${change.to}`,

@@ -419,6 +419,53 @@ test("queryOsvBatch: sends lockfile resolutions to OSV batch and maps indexed re
   assert.equal(cves.get("npm::minimist@0.0.8")[0].fixedIn, "1.2.6");
 });
 
+test("queryOsvBatch: falls back to per-package direct queries when the batch endpoint fails", async () => {
+  // Regression (#1502): a failed /v1/querybatch used to return an empty map, silently reporting zero
+  // transitive CVEs for every package. The direct fallback must still surface the vulnerable pin.
+  const cves = await queryOsvBatch(
+    [
+      { file: "package-lock.json", line: 3, ecosystem: "npm", package: "minimist", from: "1.2.8", to: "0.0.8" },
+      { file: "package-lock.json", line: 9, ecosystem: "npm", package: "lodash", from: "4.17.21", to: "4.17.11" },
+    ],
+    async (url, init) => {
+      if (String(url).endsWith("/querybatch")) return { ok: false, status: 503, json: async () => ({}) };
+      const name = JSON.parse(String(init?.body)).package.name;
+      const vulns =
+        name === "minimist"
+          ? [{ id: "GHSA-x", database_specific: { severity: "HIGH" }, affected: [{ ranges: [{ events: [{ fixed: "1.2.6" }] }] }] }]
+          : [];
+      return { ok: true, json: async () => ({ vulns }) };
+    },
+  );
+  assert.equal(cves.get("npm::minimist@0.0.8")[0].severity, "high");
+  assert.equal(cves.get("npm::minimist@0.0.8")[0].fixedIn, "1.2.6");
+  assert.deepEqual(cves.get("npm::lodash@4.17.11"), []); // queried, not silently dropped
+});
+
+test("queryOsvBatch: batch and direct both failing yields empty CVEs (no crash)", async () => {
+  const cves = await queryOsvBatch(
+    [{ file: "package-lock.json", line: 3, ecosystem: "npm", package: "minimist", from: "1.2.8", to: "0.0.8" }],
+    async () => ({ ok: false, status: 500, json: async () => ({}) }),
+  );
+  assert.deepEqual(cves.get("npm::minimist@0.0.8"), []);
+});
+
+test("queryOsvBatch: an aborted signal stops the direct fallback", async () => {
+  const controller = new AbortController();
+  const cves = await queryOsvBatch(
+    [{ file: "package-lock.json", line: 3, ecosystem: "npm", package: "minimist", from: "1.2.8", to: "0.0.8" }],
+    async (url) => {
+      if (String(url).endsWith("/querybatch")) {
+        controller.abort();
+        return { ok: false, status: 503, json: async () => ({}) };
+      }
+      return { ok: true, json: async () => ({ vulns: [] }) };
+    },
+    controller.signal,
+  );
+  assert.equal(cves.size, 0); // aborted before the fallback loop queried anything
+});
+
 test("scanLockfileDrift: reports only vulnerable lockfile-only resolutions", async () => {
   const findings = await scanLockfileDrift(
     {
