@@ -34,8 +34,7 @@
     "build": "node --check bin/gittensory-miner.js && node --check lib/cli.js"
   },
   "dependencies": {
-    "@jsonbored/gittensory-engine": "0.1.0",
-    "zod": "^4.4.3"
+    "@jsonbored/gittensory-engine": "0.1.0"
   },
   "engines": {
     "node": ">=22.0.0"

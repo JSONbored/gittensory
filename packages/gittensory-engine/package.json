@@ -23,6 +23,8 @@
   "publishConfig": {
     "access": "public"
   },
+  "main": "./lib/index.js",
+  "exports": "./lib/index.js",
   "files": [
     "lib"
   ],
