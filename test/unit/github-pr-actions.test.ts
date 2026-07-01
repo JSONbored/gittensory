@@ -28,7 +28,22 @@ describe("GitHub PR action primitives (#778)", () => {
     const result = await createPullRequestReview(envWithKey(), 123, "owner/repo", 7, "REQUEST_CHANGES", "please fix");
     expect(result).toEqual({ id: 99 });
     expect(calls[0]).toMatchObject({ method: "POST", body: { event: "REQUEST_CHANGES", body: "please fix" } });
+    expect(calls[0]?.body).not.toHaveProperty("commit_id"); // no commitId passed → no commit_id sent
     expect(calls[0]?.url).toMatch(/\/repos\/owner\/repo\/pulls\/7\/reviews$/);
+  });
+
+  it("pins an approve review to the reviewed commit via commit_id when provided (#2262)", async () => {
+    const calls: Array<{ method: string; url: string; body: unknown }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      calls.push({ method: init?.method ?? "GET", url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (url.endsWith("/pulls/7/reviews")) return Response.json({ id: 100 });
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await createPullRequestReview(envWithKey(), 123, "owner/repo", 7, "APPROVE", "lgtm", "reviewed-sha");
+    expect(result).toEqual({ id: 100 });
+    expect(calls[0]).toMatchObject({ method: "POST", body: { event: "APPROVE", body: "lgtm", commit_id: "reviewed-sha" } });
   });
 
   it("posts a quiet COMMENT review with inline comments anchored to the head SHA (#inline-comments)", async () => {

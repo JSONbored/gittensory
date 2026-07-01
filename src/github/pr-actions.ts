@@ -19,7 +19,10 @@ function splitRepo(repoFullName: string): { owner: string; repo: string } {
 
 export type PullRequestReviewEvent = "REQUEST_CHANGES" | "APPROVE" | "COMMENT";
 
-/** Post a pull-request review (request-changes / approve / comment). `body` is required for REQUEST_CHANGES. */
+/** Post a pull-request review (request-changes / approve / comment). `body` is required for REQUEST_CHANGES.
+ *  `commitId`, when given, pins the review to that exact commit (GitHub's `commit_id`) instead of defaulting to
+ *  the PR's CURRENT head — so a review staged/reviewed against one commit can never silently land on a
+ *  force-pushed, unreviewed later commit (#2262). */
 export async function createPullRequestReview(
   env: Env,
   installationId: number,
@@ -27,6 +30,7 @@ export async function createPullRequestReview(
   pullNumber: number,
   event: PullRequestReviewEvent,
   body: string,
+  commitId?: string,
 ): Promise<{ id: number }> {
   const { owner, repo } = splitRepo(repoFullName);
   const token = await createInstallationToken(env, installationId);
@@ -37,6 +41,7 @@ export async function createPullRequestReview(
     pull_number: pullNumber,
     event,
     body,
+    ...(commitId ? { commit_id: commitId } : {}),
   });
   return { id: (response.data as { id: number }).id };
 }

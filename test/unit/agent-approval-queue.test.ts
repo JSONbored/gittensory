@@ -21,7 +21,7 @@ vi.mock("../../src/github/pr-freshness", async (importOriginal) => {
   };
 });
 
-import { mergePullRequest } from "../../src/github/pr-actions";
+import { createPullRequestReview, mergePullRequest } from "../../src/github/pr-actions";
 import { ensurePullRequestLabel } from "../../src/github/labels";
 import { actionParams, executeAgentMaintenanceActions, pendingActionToPlanned, type AgentActionExecutionContext } from "../../src/services/agent-action-executor";
 import { decidePendingAgentAction } from "../../src/services/agent-approval-queue";
@@ -154,6 +154,40 @@ describe("agent approval queue (#779)", () => {
     expect(result.executionOutcome).toBe("completed");
     // Pinned to the REVIEWED head from the staged params — not merely whatever the current head happens to be.
     expect(mergePullRequest).toHaveBeenCalledWith(env, 5, "owner/repo", 7, { mergeMethod: "squash", sha: "h7" });
+  });
+
+  it("accept executes a staged approve when the staged head still matches the live head, pinned to the reviewed SHA (#2262)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { approve: "auto_with_approval" } });
+    await seedInstallation(env);
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "x" });
+    const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber: 7, installationId: 5, actionClass: "approve", autonomyLevel: "auto_with_approval", params: { reviewBody: "lgtm", expectedHeadSha: "h7" }, reason: "gate passed" });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    expect(result.status).toBe("accepted");
+    expect(result.executionOutcome).toBe("completed");
+    // Pinned to the REVIEWED head via commit_id — not merely whatever the current head happens to be.
+    expect(createPullRequestReview).toHaveBeenCalledWith(env, 5, "owner/repo", 7, "APPROVE", "lgtm", "h7");
+  });
+
+  it("accept supersedes a staged approve when the live head moved after staging (force-push fail-safe, #2262)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { approve: "auto_with_approval" } });
+    await seedInstallation(env);
+    // The PR head is now h-NEW: the contributor force-pushed after the approve was staged against h-OLD. Before
+    // #2262, expectedHeadSha was never set on a planned approve, so this staleness guard was a silent no-op and
+    // the accept would have approved the new, unreviewed commit.
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h-NEW" }, labels: [], body: "x" });
+    const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber: 7, installationId: 5, actionClass: "approve", autonomyLevel: "auto_with_approval", params: { reviewBody: "lgtm", expectedHeadSha: "h-OLD" }, reason: "gate passed" });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    expect(result.status).toBe("rejected");
+    expect(result.executionOutcome).toBe("head_moved");
+    expect(createPullRequestReview).not.toHaveBeenCalled();
+    expect((await getPendingAgentAction(env, action.id))?.status).toBe("rejected");
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("agent.pending_action.superseded").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("denied");
+    expect(audit?.detail).toContain("force-push after staging");
   });
 
   it("accept does not supersede when the PR record is absent (no live head to compare) — proceeds to the executor", async () => {

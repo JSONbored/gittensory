@@ -436,6 +436,12 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       requiresApproval: approval("approve"),
       reason: "gate passed, CI green",
       reviewBody: "Gittensory approves — the gate is satisfied and CI is green.",
+      // Pin the approve to the EXACT reviewed head (#2262), matching the merge action's existing pin. For an
+      // auto_with_approval stage this travels into the pending row (actionParams persists expectedHeadSha), so
+      // the accept-time supersede check — which only fires when expectedHeadSha is truthy — actually engages: a
+      // force-push after staging is detected and denied instead of the accept silently approving the NEW,
+      // unreviewed commit. The executor also pins createPullRequestReview's commit_id to this SHA.
+      ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),
     });
   }
 

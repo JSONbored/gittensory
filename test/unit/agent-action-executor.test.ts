@@ -79,7 +79,9 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect(outcomes.map((o) => o.outcome)).toEqual(["completed", "completed", "completed", "completed", "completed", "completed"]);
     expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "gittensory:ready-to-merge", { createMissingLabel: true });
     expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "REQUEST_CHANGES", "please fix");
-    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "APPROVE", "lgtm");
+    // Falls back to ctx.headSha ("sha7") as the pinned commit_id when the action carries no expectedHeadSha of
+    // its own — a live sweep's approve plans no explicit pin, so this is the unpinned/live-sweep case (#2262).
+    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "APPROVE", "lgtm", "sha7");
     expect(mergePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7, { mergeMethod: "squash", sha: "sha7" });
     expect(createIssueComment).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "closing");
     expect(closePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7);
@@ -96,6 +98,15 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     await executeAgentMaintenanceActions(env, ctx({ headSha: "live-sha" }), [pinnedMerge]);
     expect(mergePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7, { mergeMethod: "squash", sha: "reviewed-sha" });
     expect(fetchPullRequestFreshness).toHaveBeenCalledWith(env, expect.objectContaining({ expectedHeadSha: "reviewed-sha" }));
+  });
+
+  it("LIVE approve pins the review to the action's reviewed head (expectedHeadSha) over the context head, falling back to an empty body (#2262)", async () => {
+    const env = createTestEnv({});
+    // A staged approve replayed on accept carries the REVIEWED head — same pin as merge already has — and this
+    // one also has no reviewBody set, exercising the empty-string fallback.
+    const pinnedApprove: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "gate passed", expectedHeadSha: "reviewed-sha" };
+    await executeAgentMaintenanceActions(env, ctx({ headSha: "live-sha" }), [pinnedApprove]);
+    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "APPROVE", "", "reviewed-sha");
   });
 
   it("LIVE label with labelOp=add + comment: adds the label AND posts the comment", async () => {
