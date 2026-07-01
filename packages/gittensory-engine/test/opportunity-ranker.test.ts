@@ -1,8 +1,14 @@
 // Units for the opportunity ranker (#2302). Runs against the compiled dist/ (built by the `test` script first),
-// mirroring the review-enrichment package's node:test convention. Pure module — no network, never flakes.
+// mirroring the review-enrichment package's node:test convention. Imports through the package's public barrel
+// (dist/index.js) so the export contract itself is exercised. Pure module — no network, never flakes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rankOpportunityScore, rankOpportunities } from "../dist/opportunity-ranker.js";
+import { rankOpportunityScore, rankOpportunities } from "../dist/index.js";
+
+test("barrel: the public entrypoint re-exports the ranker API", () => {
+  assert.equal(typeof rankOpportunityScore, "function");
+  assert.equal(typeof rankOpportunities, "function");
+});
 
 const full = { potential: 1, feasibility: 1, laneFit: 1, freshness: 1, dupRisk: 0 };
 
