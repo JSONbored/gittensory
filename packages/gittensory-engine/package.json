@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "license": "AGPL-3.0-only",
   "type": "module",
-  "description": "Shared pure engine helpers for Gittensory miner and gate logic.",
+  "description": "Shared deterministic engine logic for the Gittensory review stack and gittensory-miner.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JSONbored/gittensory.git",
@@ -17,19 +17,27 @@
     "gittensor",
     "gittensory",
     "engine",
-    "shared",
-    "miner"
+    "deterministic",
+    "scoring",
+    "signals"
   ],
   "publishConfig": {
     "access": "public"
   },
-  "main": "./lib/index.js",
-  "exports": "./lib/index.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "files": [
-    "lib"
+    "dist",
+    "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "node --check lib/index.js"
+    "build": "tsc -p tsconfig.json"
   },
   "engines": {
     "node": ">=22.0.0"
