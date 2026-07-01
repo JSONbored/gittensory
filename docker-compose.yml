@@ -531,9 +531,22 @@ services:
       - gittensory-backups:/backups
       - ./scripts/backup.sh:/backup.sh:ro
       - ./scripts/verify-backup.sh:/verify-backup.sh:ro
-    entrypoint: ["/bin/sh", "-c"]
+    # `docker compose run --rm backup sh /backup.sh` (or /verify-backup.sh) REPLACES `command:`, not
+    # `entrypoint:`, so the package install must live in the entrypoint or an on-demand run gets a bare
+    # container with no pg_restore/sqlite3/psql. The entrypoint installs packages once, then `exec "$@"`
+    # runs whatever command is in effect — the default loop below, or a `run` override. The trailing `sh`
+    # entrypoint arg is a placeholder $0 so the real payload lands in "$@" starting at $1, not $0.
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        apk add --no-cache sqlite postgresql16-client curl >/dev/null 2>&1
+        exec "$@"
+      - sh
     command:
-      - "apk add --no-cache sqlite postgresql16-client curl >/dev/null 2>&1 && while true; do sh /backup.sh || echo '[backup] run failed'; sleep ${BACKUP_INTERVAL_SECONDS:-86400}; done"
+      - sh
+      - -c
+      - "while true; do sh /backup.sh || echo '[backup] run failed'; sleep ${BACKUP_INTERVAL_SECONDS:-86400}; done"
 
 volumes:
   gittensory-data:
