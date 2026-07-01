@@ -1202,6 +1202,7 @@ describe("queue processors", () => {
       hasVisiblePending: false,
       failingDetails: [],
       nonRequiredFailingDetails: [],
+      ciCompletenessWarning: null,
     });
     let gateChecks = 0;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1250,6 +1251,7 @@ describe("queue processors", () => {
       hasVisiblePending: false,
       failingDetails: [],
       nonRequiredFailingDetails: [],
+      ciCompletenessWarning: null,
     });
     let gateChecks = 0;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1307,6 +1309,7 @@ describe("queue processors", () => {
       hasVisiblePending: false,
       failingDetails: [],
       nonRequiredFailingDetails: [],
+      ciCompletenessWarning: null,
     });
     let gateChecks = 0;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1331,6 +1334,83 @@ describe("queue processors", () => {
         .bind("github_app.review_finalized_ci_stuck")
         .first<{ n: number }>();
       expect(finalized?.n).toBe(1);
+    } finally {
+      liveCiSpy.mockRestore();
+      requiredContextsSpy.mockRestore();
+    }
+  });
+
+  it("records an informational audit event when the live CI aggregate carries a completeness warning (#2137)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", checks: "write" }, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto", update_branch: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "CI completeness unverified", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+    const requiredContextsSpy = vi.spyOn(backfillModule, "fetchRequiredStatusContexts").mockResolvedValue(null);
+    const liveCiSpy = vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl").mockResolvedValue({
+      ciState: "passed",
+      hasPending: false,
+      hasVisiblePending: false,
+      failingDetails: [],
+      nonRequiredFailingDetails: [],
+      ciCompletenessWarning: "CI resolved to passed with no branch-protection required checks configured — cannot verify every expected workflow ran.",
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") return Response.json({ number: 7, title: "CI completeness unverified", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      return Response.json({});
+    });
+
+    try {
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "ci-completeness-unverified", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+
+      const audit = await env.DB.prepare("select outcome, detail, metadata_json from audit_events where event_type = ?").bind("github_app.ci_completeness_unverified").first<{ outcome: string; detail: string; metadata_json: string }>();
+      expect(audit?.outcome).toBe("completed"); // informational only — never a denial, never changes the disposition
+      expect(audit?.detail).toContain("branch-protection required checks");
+      // REGRESSION: deliveryId must actually thread through from maybeRunAgentMaintenance's args down into
+      // runAgentMaintenancePlanAndExecute — a prior version referenced args.deliveryId on a type that never
+      // declared or received the field (a typecheck break that slipped past CI on the commit that added #2137).
+      expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ deliveryId: "ci-completeness-unverified" });
+    } finally {
+      liveCiSpy.mockRestore();
+      requiredContextsSpy.mockRestore();
+    }
+  });
+
+  it("does NOT record the CI-completeness audit event when the live CI aggregate carries no warning", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", checks: "write" }, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto", update_branch: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "CI fully verified", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+    const requiredContextsSpy = vi.spyOn(backfillModule, "fetchRequiredStatusContexts").mockResolvedValue(new Set(["trusted-required-ci"]));
+    const liveCiSpy = vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl").mockResolvedValue({
+      ciState: "passed",
+      hasPending: false,
+      hasVisiblePending: false,
+      failingDetails: [],
+      nonRequiredFailingDetails: [],
+      ciCompletenessWarning: null,
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") return Response.json({ number: 7, title: "CI fully verified", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      return Response.json({});
+    });
+
+    try {
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "ci-fully-verified", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+
+      const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.ci_completeness_unverified").first<{ n: number }>();
+      expect(audit?.n).toBe(0);
     } finally {
       liveCiSpy.mockRestore();
       requiredContextsSpy.mockRestore();
@@ -7548,6 +7628,7 @@ describe("queue processors", () => {
         hasVisiblePending: false,
         failingDetails: [],
         nonRequiredFailingDetails: [],
+        ciCompletenessWarning: null,
       });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -11088,7 +11169,10 @@ describe("one-shot reopen prevention", () => {
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
       if (url.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" });
-      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "maintainer" } }]);
+      // Both a "closed" event (by the write collaborator) AND a "reopened" event (by the contributor, still the
+      // most recent reopener) — the new live re-check (#2369) reads this same endpoint to confirm the contributor
+      // is still the current reopener before proceeding to close.
+      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "maintainer" } }, { event: "reopened", actor: { login: "contributor" } }]);
       if (url.endsWith("/issues/42/comments")) return Response.json({ id: 99 }, { status: 201 });
       if (url.endsWith("/pulls/42") && method === "PATCH") return Response.json({ state: "closed" });
       return new Response("not found", { status: 404 });
@@ -11176,6 +11260,157 @@ describe("one-shot reopen prevention", () => {
     const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string; detail: string }>();
     expect(audit?.outcome).toBe("denied");
     expect(audit?.detail).toContain("now holds maintainer permission");
+  });
+
+  it("REGRESSION: does NOT re-close when a DIFFERENT (maintainer) reopener supersedes the original disallowed reopen (#2369)", async () => {
+    // The original contributor reopen is what triggered this handler, but by the time it runs, a real maintainer
+    // has ALSO reopened the same PR (a legitimate, authorized reopen is now the current reason it's open). Head/
+    // state freshness and the reopener's OWN permission re-check both miss this — neither sees WHO most recently
+    // reopened. The timeline shows a "closed" event by "maintainer" (the original one-shot close) followed by a
+    // LATER "reopened" event by a different maintainer login ("second-maintainer"), after the contributor's own
+    // earlier reopen.
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
+      if (url.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" });
+      if (url.includes("/issues/42/events")) {
+        return Response.json([
+          { event: "closed", actor: { login: "maintainer" } },
+          { event: "reopened", actor: { login: "contributor" } },
+          { event: "closed", actor: { login: "maintainer" } },
+          { event: "reopened", actor: { login: "second-maintainer" } },
+        ]);
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await repositoriesModule.upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { merge: "auto", request_changes: "auto" } });
+
+    await processJob(env, { type: "github-webhook", deliveryId: "reopen-superseded", eventName: "pull_request", payload: reopenedPayload("contributor") });
+
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(false);
+    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("denied");
+    expect(audit?.detail).toContain("second-maintainer");
+    expect(audit?.detail).toContain("not contributor");
+  });
+
+  it("happy path unaffected: re-closes when the same reopener is still the latest reopener on the timeline (#2369)", async () => {
+    // Confirms the new live re-check does not spuriously block the ordinary case: the contributor is BOTH the
+    // original AND the still-current reopener (no one else reopened it again in the meantime).
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
+      if (url.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" });
+      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "maintainer" } }, { event: "reopened", actor: { login: "contributor" } }]);
+      if (url.endsWith("/issues/42/comments")) return Response.json({ id: 99 }, { status: 201 });
+      if (url.endsWith("/pulls/42") && method === "PATCH") return Response.json({ state: "closed" });
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await repositoriesModule.upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { merge: "auto", request_changes: "auto" } });
+
+    await processJob(env, { type: "github-webhook", deliveryId: "reopen-same-latest", eventName: "pull_request", payload: reopenedPayload("contributor") });
+
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(true);
+    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
+    const audit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string }>();
+    expect(audit?.outcome).toBe("completed");
+  });
+
+  it("REGRESSION: fails CLOSED (denies the re-close) when the reopener-timeline read errors (#2369)", async () => {
+    // The reopener-timeline lookup errors (network failure) → getLastReopenerLogin catches and returns
+    // { login: null, coveredAllPages: false } — the same ambiguous shape as an un-covered window. The design
+    // explicitly fails CLOSED here (deny the close) rather than proceeding, since wrongly re-closing a
+    // maintainer-authorized PR is worse than leaving a disallowed reopen open for one more tick.
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
+      if (url.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" });
+      if (url.includes("/issues/42/events")) throw new Error("GitHub events API down");
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await repositoriesModule.upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { merge: "auto", request_changes: "auto" } });
+
+    await processJob(env, { type: "github-webhook", deliveryId: "reopen-timeline-error", eventName: "pull_request", payload: reopenedPayload("contributor") });
+
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(false);
+    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("denied");
+    expect(audit?.detail).toContain("could not confirm");
+  });
+
+  it("REGRESSION: denies with an 'unknown' current-reopener detail when the timeline genuinely has no reopen event at all (#2369)", async () => {
+    // The window is FULLY covered (a single page, no Link header) but contains no "reopened" event whatsoever —
+    // getLastReopenerLogin returns { login: null, coveredAllPages: true }, which is NOT the ambiguous case (that
+    // requires coveredAllPages: false); it lands on the "superseded by a different actor" arm with a null login,
+    // exercising the `latestReopenerLogin ?? "unknown"` fallback in the audit detail.
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
+      if (url.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" });
+      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "maintainer" } }]);
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await repositoriesModule.upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { merge: "auto", request_changes: "auto" } });
+
+    await processJob(env, { type: "github-webhook", deliveryId: "reopen-no-reopen-event", eventName: "pull_request", payload: reopenedPayload("contributor") });
+
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(false);
+    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("denied");
+    expect(audit?.detail).toContain("the current reopener is now unknown, not contributor");
+  });
+
+  it("swallows a recordAuditEvent failure on the superseded-reopener denial path — handler still completes (#2369)", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
+      if (url.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" });
+      if (url.includes("/issues/42/events")) {
+        return Response.json([
+          { event: "closed", actor: { login: "maintainer" } },
+          { event: "reopened", actor: { login: "contributor" } },
+          { event: "closed", actor: { login: "maintainer" } },
+          { event: "reopened", actor: { login: "second-maintainer" } },
+        ]);
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await repositoriesModule.upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { merge: "auto", request_changes: "auto" } });
+    vi.spyOn(repositoriesModule, "recordAuditEvent").mockRejectedValueOnce(new Error("D1 write error"));
+
+    await expect(
+      processJob(env, { type: "github-webhook", deliveryId: "reopen-superseded-audit-fail", eventName: "pull_request", payload: reopenedPayload("contributor") }),
+    ).resolves.toBeUndefined();
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(false);
+    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
   });
 
   it("swallows a recordAuditEvent failure on the stale-reopen denial path — handler still completes (#2130)", async () => {
@@ -11321,12 +11556,16 @@ describe("one-shot reopen prevention", () => {
       if (url.includes("/issues/42/events")) {
         // Long timeline (lastPage=12): the contributor padded the events so the real close sits before the
         // inspected newest window. No "closed" appears in the read pages → null closer + coveredAllPages=false.
+        // The tail DOES include the contributor's own "reopened" event (the one this whole handler is reacting
+        // to), so the new live re-check (#2369) still finds `contributor` as the current reopener and does not
+        // itself block the re-close — only the (deliberately fail-closed) window-evasion path above does.
         const page = Number(new URL(url).searchParams.get("page") ?? "1");
         if (page === 1) {
           return Response.json([{ event: "labeled", actor: { login: "contributor" } }], {
             headers: { link: '<https://api.github.com/repos/owner/repo/issues/42/events?per_page=100&page=12>; rel="last"' },
           });
         }
+        if (page === 12) return Response.json([{ event: "labeled", actor: { login: "contributor" } }, { event: "reopened", actor: { login: "contributor" } }]);
         return Response.json([{ event: "labeled", actor: { login: "contributor" } }]);
       }
       if (url.endsWith("/issues/42/comments")) return Response.json({ id: 99 }, { status: 201 });
@@ -11349,7 +11588,7 @@ describe("one-shot reopen prevention", () => {
       calls.push({ url, method });
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
-      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "gittensory[bot]" } }]);
+      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "gittensory[bot]" } }, { event: "reopened", actor: { login: "contributor" } }]);
       if (url.endsWith("/issues/42/comments")) return Response.json({ id: 99 }, { status: 201 });
       if (url.endsWith("/pulls/42") && method === "PATCH") return Response.json({ state: "closed" });
       return new Response("not found", { status: 404 });
@@ -11397,7 +11636,7 @@ describe("one-shot reopen prevention", () => {
       const url = input.toString();
       if (url.includes("/access_tokens")) return Response.json({ token: "t" });
       if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
-      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "maintainer" } }]);
+      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "maintainer" } }, { event: "reopened", actor: { login: "contributor" } }]);
       if (url.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" });
       // createIssueComment (POST) and closePullRequest (PATCH) both throw → their .catch(() => undefined) bodies run
       throw new Error("GitHub API unavailable");
@@ -11667,6 +11906,25 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
 
     // Author = "JSONbored" = repo owner → no close.
     await processJob(env, { type: "github-webhook", deliveryId: "draft-owner", eventName: "pull_request", payload: draftPayload("JSONbored") });
+
+    expect(calls.some((c) => c.includes("PATCH") && c.includes("/pulls/42"))).toBe(false);
+  });
+
+  it("no-ops when the PR author is an ADMIN_GITHUB_LOGINS fleet-operator, not just the literal repo owner (#2133)", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      return new Response("not found", { status: 404 });
+    });
+
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory", ADMIN_GITHUB_LOGINS: "admin-user" });
+    await setupRepo(env);
+    await recordGateBlockOutcome(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", blockerCodes: ["missing_linked_issue"] });
+
+    // Author = "admin-user" ≠ repo owner "JSONbored", but IS in ADMIN_GITHUB_LOGINS → no close.
+    await processJob(env, { type: "github-webhook", deliveryId: "draft-admin", eventName: "pull_request", payload: draftPayload("admin-user") });
 
     expect(calls.some((c) => c.includes("PATCH") && c.includes("/pulls/42"))).toBe(false);
   });

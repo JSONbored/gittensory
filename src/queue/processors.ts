@@ -389,6 +389,7 @@ import {
   closePullRequest,
   createIssueComment,
   getLastCloserLogin,
+  getLastReopenerLogin,
 } from "../github/pr-actions";
 import {
   loadLinkedIssueHardRules,
@@ -1711,6 +1712,7 @@ async function maybeRunAgentMaintenance(
       pr,
       settings,
       otherOpenPullRequests,
+      deliveryId: args.deliveryId,
       gate,
       liveFacts: args.liveFacts,
     });
@@ -1730,6 +1732,7 @@ async function runAgentMaintenancePlanAndExecute(
     pr: PullRequestRecord;
     settings: RepositorySettings;
     otherOpenPullRequests: PullRequestRecord[];
+    deliveryId: string;
     gate: ReturnType<typeof evaluateGateCheck>;
     liveFacts: LiveGithubFacts;
   },
@@ -1792,6 +1795,27 @@ async function runAgentMaintenancePlanAndExecute(
     token,
     admissionKey,
   );
+  // #2137: informational-only nudge for the operator — never affects the disposition below (ciState is
+  // unchanged). recordAuditEvent is a DB write with its own internal failure handling; a failure here must
+  // never block the maintenance pass, hence the outer .catch().
+  if (ciAggregate.ciCompletenessWarning) {
+    /* v8 ignore next -- ciCompletenessWarning is only ever set when ciState === "passed", and
+     * fetchLiveCiAggregate/reduceLiveCiAggregate short-circuit to "unverified" for a falsy headSha before ever
+     * reaching that computation — so pr.headSha (the same value passed into refreshLiveCiAggregate above) is
+     * always truthy here; the fallback is defensive. */
+    const ciCompletenessHeadSha = pr.headSha ?? null;
+    await recordAuditEvent(env, {
+      eventType: "github_app.ci_completeness_unverified",
+      actor: "gittensory",
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "completed",
+      detail: ciAggregate.ciCompletenessWarning,
+      metadata: { deliveryId: args.deliveryId, repoFullName, headSha: ciCompletenessHeadSha },
+    }).catch(
+      /* v8 ignore next -- fail-safe: an audit write failure never blocks the handler */
+      () => undefined,
+    );
+  }
   const changedPaths = changedPathsForGuardrail(changedFiles);
   const repoOwner = repoFullName.includes("/")
     ? repoFullName.slice(0, repoFullName.indexOf("/"))
@@ -1800,6 +1824,12 @@ async function runAgentMaintenancePlanAndExecute(
   const authorIsOwner =
     authorLogin.length > 0 &&
     authorLogin.toLowerCase() === repoOwner.toLowerCase();
+  // Fleet-operator identity (#2133): the same ADMIN_GITHUB_LOGINS allowlist already honored by the
+  // reopen-reclose path's hasMaintainerPermission, folded into the primary close-eligibility computation so an
+  // admin login (not the literal repo owner) gets the identical never-auto-closed exemption everywhere.
+  const authorIsAdmin =
+    authorLogin.length > 0 &&
+    parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(authorLogin.toLowerCase());
   const authorIsAutomationBot = isProtectedAutomationAuthor(pr.authorLogin);
 
   // Linked-issue HARD-RULE close (#linked-issue-hard-rules): when the repo enabled any rule, a body that links
@@ -1842,9 +1872,11 @@ async function runAgentMaintenancePlanAndExecute(
     changedPaths,
     hardGuardrailGlobs,
     authorIsOwner,
+    authorIsAdmin,
     authorIsAutomationBot,
     closeOwnerAuthors: settings.closeOwnerAuthors,
     ciState: ciAggregate.ciState,
+    ciHasPending: ciAggregate.hasPending,
     failingCheckNames: ciAggregate.failingDetails.map((detail) => detail.name),
     ciRequiredContextsVerified: hasVerifiedRequiredContexts(requiredContexts),
     ...(blacklistEntry !== null
@@ -3719,14 +3751,21 @@ async function processGitHubWebhook(
         const repoOwner = repoFullName.includes("/")
           ? repoFullName.slice(0, repoFullName.indexOf("/")).toLowerCase()
           : "";
+        const draftDodgeAuthorLogin = (pr.authorLogin ?? "").toLowerCase();
         const authorIsOwner =
-          (pr.authorLogin ?? "").toLowerCase() === repoOwner &&
-          repoOwner.length > 0;
+          draftDodgeAuthorLogin === repoOwner && repoOwner.length > 0;
+        // Fleet-operator identity (#2133): same ADMIN_GITHUB_LOGINS exemption as the primary close-eligibility
+        // computation above and hasMaintainerPermission below — an admin login must never be auto-closed here
+        // either, matching every other actuation path's trusted-operator definition.
+        const authorIsAdmin =
+          draftDodgeAuthorLogin.length > 0 &&
+          parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(draftDodgeAuthorLogin);
         if (
           block &&
           block.headSha === pr.headSha &&
           !block.overridden &&
-          !authorIsOwner
+          !authorIsOwner &&
+          !authorIsAdmin
         ) {
           // Respect the agent action mode (#killswitch-gap): the outer guard already excludes a per-repo pause,
           // but this close path must also honor the global freeze and dry-run — so a freeze is a COMPLETE stop
@@ -7793,6 +7832,39 @@ async function maybeRecloseDisallowedReopen(
       metadata: { deliveryId, repoFullName },
     }).catch(() => undefined);
     return true; // handled (decision made); a newly-authorized reopener still counts as handled
+  }
+  // Live re-check #3 (#2369): head/state freshness and the reopener's OWN permission are not the only things that
+  // can move in the window before this fires — a DIFFERENT person (e.g. an actual maintainer) can reopen the SAME
+  // PR again after the original disallowed reopen, which is a legitimate, authorized reopen. Since the PR was
+  // already open, that second reopen doesn't change head/state, so checks #1/#2 above cannot see it. Ask directly:
+  // is `reopener` STILL the most recent "reopened" actor on this PR's timeline? If someone else's reopen is now the
+  // live reason the PR is open, re-closing it would wrongly undo that person's authorized action.
+  const latestReopener = await getLastReopenerLogin(
+    env,
+    installationId,
+    repoFullName,
+    pr.number,
+  );
+  const latestReopenerLogin = latestReopener.login?.toLowerCase() ?? null;
+  // Ambiguous ("can't prove no later reopen exists beyond the inspected window") must fail CLOSED here — the
+  // opposite of the closer-lookup's fail-open bias above — because wrongly re-closing a maintainer-authorized PR
+  // is the worse failure mode than leaving a disallowed reopen unclosed for one more tick.
+  const reopenerWindowAmbiguous =
+    latestReopenerLogin == null && !latestReopener.coveredAllPages;
+  const reopenerSuperseded =
+    reopenerWindowAmbiguous || latestReopenerLogin !== reopener;
+  if (reopenerSuperseded) {
+    await recordAuditEvent(env, {
+      eventType: "github_app.reopen_reclosed",
+      actor: "gittensory",
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "denied",
+      detail: reopenerWindowAmbiguous
+        ? `could not confirm ${reopener} is still the most recent reopener (event window not fully covered) — reopen re-close not executed`
+        : `the current reopener is now ${latestReopenerLogin ?? "unknown"}, not ${reopener} — reopen re-close not executed`,
+      metadata: { deliveryId, repoFullName },
+    }).catch(() => undefined);
+    return true; // handled (decision made); a superseded/ambiguous reopener still counts as handled
   }
   await createIssueComment(
     env,

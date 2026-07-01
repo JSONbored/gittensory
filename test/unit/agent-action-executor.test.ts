@@ -31,7 +31,7 @@ vi.mock("../../src/github/app", async (importOriginal) => ({
 // deterministic; individual tests below override this to exercise the staleness-denial path.
 vi.mock("../../src/github/backfill", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/github/backfill")>()),
-  fetchLiveCiAggregate: vi.fn(async () => ({ ciState: "passed" as const, hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [] })),
+  fetchLiveCiAggregate: vi.fn(async () => ({ ciState: "passed" as const, hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null })),
 }));
 
 import { closePullRequest, createIssueComment, createPullRequestReview, dismissLatestBotApproval, mergePullRequest, updatePullRequestBranch } from "../../src/github/pr-actions";
@@ -92,7 +92,9 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect(outcomes.map((o) => o.outcome)).toEqual(["completed", "completed", "completed", "completed", "completed", "completed"]);
     expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "gittensory:ready-to-merge", { createMissingLabel: true });
     expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "REQUEST_CHANGES", "please fix");
-    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "APPROVE", "lgtm");
+    // Falls back to ctx.headSha ("sha7") as the pinned commit_id when the action carries no expectedHeadSha of
+    // its own — a live sweep's approve plans no explicit pin, so this is the unpinned/live-sweep case (#2262).
+    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "APPROVE", "lgtm", "sha7");
     expect(mergePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7, { mergeMethod: "squash", sha: "sha7" });
     expect(createIssueComment).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "closing");
     expect(closePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7);
@@ -156,7 +158,9 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     const bareApprove: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "passed" };
     await executeAgentMaintenanceActions(env, ctx(), [bareRequestChanges, bareApprove]);
     expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "REQUEST_CHANGES", "");
-    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "APPROVE", "");
+    // The approve still falls back to ctx.headSha ("sha7") as the pinned commit_id, same as the "LIVE: executes
+    // each action class" test above — request_changes has no head-pinning of its own (unaffected).
+    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "APPROVE", "", "sha7");
   });
 
   it("LIVE merge pins the GitHub merge to the action's reviewed head (expectedHeadSha) over the context head", async () => {
@@ -169,10 +173,19 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect(fetchPullRequestFreshness).toHaveBeenCalledWith(env, expect.objectContaining({ expectedHeadSha: "reviewed-sha" }));
   });
 
+  it("LIVE approve pins the review to the action's reviewed head (expectedHeadSha) over the context head, falling back to an empty body (#2262)", async () => {
+    const env = createTestEnv({});
+    // A staged approve replayed on accept carries the REVIEWED head — same pin as merge already has — and this
+    // one also has no reviewBody set, exercising the empty-string fallback.
+    const pinnedApprove: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "gate passed", expectedHeadSha: "reviewed-sha" };
+    await executeAgentMaintenanceActions(env, ctx({ headSha: "live-sha" }), [pinnedApprove]);
+    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "APPROVE", "", "reviewed-sha");
+  });
+
   it("LIVE heuristic close is denied when live CI has since turned green (#2128)", async () => {
     const env = createTestEnv({});
     const heuristicClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "CI failed", closeComment: "closing", closeKind: "heuristic" };
-    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "passed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [] });
+    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "passed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [heuristicClose]);
     expect(outcomes[0]?.outcome).toBe("denied");
     expect(outcomes[0]?.detail).toContain("CI state changed since planning (now: passed)");
@@ -182,7 +195,7 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
   it("LIVE heuristic close proceeds when live CI is still failing (#2128)", async () => {
     const env = createTestEnv({});
     const heuristicClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "CI failed", closeComment: "closing", closeKind: "heuristic" };
-    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "failed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [] });
+    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "failed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [heuristicClose]);
     expect(outcomes[0]?.outcome).toBe("completed");
     expect(closePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7);
@@ -197,7 +210,7 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     const persisted = actionParams(heuristicClose);
     const replayed = pendingActionToPlanned({ actionClass: "close", params: persisted, reason: heuristicClose.reason });
     expect(replayed.closeKind).toBe("heuristic");
-    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "passed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [] });
+    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "passed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [replayed]);
     expect(outcomes[0]?.outcome).toBe("denied");
     expect(outcomes[0]?.detail).toContain("CI state changed since planning (now: passed)");
@@ -214,7 +227,7 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
 
   it("LIVE merge is denied when live CI has since turned failing (#2128)", async () => {
     const env = createTestEnv({});
-    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "failed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [] });
+    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "failed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
     expect(outcomes[0]?.outcome).toBe("denied");
     expect(outcomes[0]?.detail).toContain("live CI is no longer passing (now: failed)");
@@ -223,7 +236,7 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
 
   it("REGRESSION (#2364): LIVE merge is denied when live CI has since become pending, not just failed", async () => {
     const env = createTestEnv({});
-    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "pending", hasPending: true, hasVisiblePending: true, failingDetails: [], nonRequiredFailingDetails: [] });
+    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "pending", hasPending: true, hasVisiblePending: true, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
     expect(outcomes[0]?.outcome).toBe("denied");
     expect(outcomes[0]?.detail).toContain("live CI is no longer passing (now: pending)");
@@ -232,7 +245,7 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
 
   it("REGRESSION (#2364): LIVE merge is denied when live CI has since become unverified (unreadable), not just failed", async () => {
     const env = createTestEnv({});
-    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "unverified", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [] });
+    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "unverified", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
     expect(outcomes[0]?.outcome).toBe("denied");
     expect(outcomes[0]?.detail).toContain("live CI is no longer passing (now: unverified)");

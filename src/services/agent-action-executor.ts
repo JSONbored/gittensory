@@ -235,13 +235,23 @@ async function performAction(env: Env, ctx: AgentActionExecutionContext, action:
     case "request_changes":
       await createPullRequestReview(env, ctx.installationId, ctx.repoFullName, ctx.pullNumber, "REQUEST_CHANGES", action.reviewBody ?? "");
       return;
-    case "approve":
+    case "approve": {
       if (action.dismissStaleApproval) {
         await dismissLatestBotApproval(env, ctx.installationId, ctx.repoFullName, ctx.pullNumber, "Gittensory retracted this approval — a newer commit no longer qualifies.");
-      } else {
-        await createPullRequestReview(env, ctx.installationId, ctx.repoFullName, ctx.pullNumber, "APPROVE", action.reviewBody ?? "");
+        return;
       }
+      // Pin the approve to the REVIEWED head (#2262), mirroring the merge case's identical pattern immediately
+      // below: for an approval-queue replay this is the commit the maintainer reviewed, not necessarily the
+      // current head, so GitHub's own commit_id targeting keeps a force-push after staging from silently
+      // landing on the new, unreviewed commit. A live sweep plans expectedHeadSha == ctx.headSha, so its
+      // behavior is unchanged; the fallback covers any unpinned plan.
+      const approveSha = action.expectedHeadSha ?? ctx.headSha;
+      /* v8 ignore next -- the step-5 freshness guard above already denies the action when
+       * action.expectedHeadSha ?? ctx.headSha is falsy, so approveSha (the same expression) is always a
+       * truthy string here; the ?? undefined only satisfies createPullRequestReview's string|undefined type. */
+      await createPullRequestReview(env, ctx.installationId, ctx.repoFullName, ctx.pullNumber, "APPROVE", action.reviewBody ?? "", approveSha ?? undefined);
       return;
+    }
     case "merge": {
       // Pin the merge to the REVIEWED head (action.expectedHeadSha) when present — for an approval-queue replay
       // this is the commit the maintainer reviewed, not necessarily the current head, so a force-push after

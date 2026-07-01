@@ -2176,6 +2176,14 @@ export type LiveCiAggregate = {
   failingDetails: Array<{ name: string; summary?: string; detailsUrl?: string }>;
   // Historical compatibility: non-required red checks are now folded into failingDetails so this stays empty.
   nonRequiredFailingDetails: Array<{ name: string; summary?: string; detailsUrl?: string }>;
+  // Informational-only (#2137): set when the aggregate resolved to "passed" with no branch-protection required
+  // contexts configured (`enforceRequiredOnly` false) — meaning a workflow that never triggers on this commit at
+  // all (e.g. path-filtered out, or a broken YAML trigger) is indistinguishable from one that doesn't exist, and
+  // would silently pass as long as at least one OTHER check ran and passed. NEVER changes ciState/disposition —
+  // a self-hosted repo without an expected-checks list would otherwise get stuck "pending" forever on a workflow
+  // that structurally can never complete. Surfaced to the operator as a nudge toward configuring branch
+  // protection or an expected-checks list, not a gate blocker.
+  ciCompletenessWarning: string | null;
 };
 
 /**
@@ -2331,7 +2339,17 @@ async function reduceLiveCiAggregate(
   // Fail CLOSED on incomplete visibility: an OBSERVED failure is authoritative and preserved.
   if ((checkRunsIncomplete || statusIncomplete) && ciState !== "failed") ciState = "pending";
   const hasPending = anyVisiblePending || anyPending || checkRunsIncomplete || statusIncomplete || ciState === "pending";
-  return { ciState, hasPending, hasVisiblePending: anyRequiredVisiblePending, failingDetails, nonRequiredFailingDetails };
+  // #2137 interim mitigation: without required-context branch protection, a workflow that never triggers at all
+  // (path-filtered, or a broken trigger) is indistinguishable from one that doesn't exist, and folds into
+  // "passed" as long as some OTHER check ran and passed. Never changes ciState (a self-hosted repo with no
+  // expected-checks config would otherwise get stuck "pending" forever on a workflow that can structurally never
+  // complete) — informational only, for the operator to notice and configure branch protection / an
+  // expected-checks list against.
+  const ciCompletenessWarning =
+    !enforceRequiredOnly && ciState === "passed"
+      ? "CI resolved to passed with no branch-protection required checks configured — gittensory cannot verify every expected workflow ran on this commit (a path-filtered or misconfigured workflow that never triggers is indistinguishable from one that doesn't exist). Configure branch protection or an expected-checks list for full CI-completeness verification."
+      : null;
+  return { ciState, hasPending, hasVisiblePending: anyRequiredVisiblePending, failingDetails, nonRequiredFailingDetails, ciCompletenessWarning };
 }
 
 /**
@@ -2353,7 +2371,7 @@ export async function fetchLiveCiAggregate(
   requiredContexts?: ReadonlySet<string> | null,
   admissionKey?: GitHubRateLimitAdmissionKey,
 ): Promise<LiveCiAggregate> {
-  if (!headSha) return { ciState: "unverified", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [] };
+  if (!headSha) return { ciState: "unverified", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null };
   // Check-runs + classic statuses are accumulated across pages here; the single classification lives in
   // reduceLiveCiAggregate so the REST and GraphQL paths reach byte-identical verdicts (#1941).
   const checkRuns: LiveCiCheckRun[] = [];
