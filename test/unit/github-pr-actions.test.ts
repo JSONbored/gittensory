@@ -314,6 +314,20 @@ describe("GitHub PR action primitives (#778)", () => {
     await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 121)).resolves.toEqual({ login: "contributor", coveredAllPages: true });
   });
 
+  it("getLastReopenerLogin: a single (lastPage<=1) page with no matching event falls back to null (#2369)", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/122/events")) {
+        return Response.json([{ event: "labeled", actor: { login: "someone" } }], {
+          headers: { link: '<https://api.github.test/issues/122/events?per_page=100&page=1>; rel="last"' },
+        });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 122)).resolves.toEqual({ login: null, coveredAllPages: true });
+  });
+
   it("getLastReopenerLogin: returns null when the events API throws (catch path, #2369)", async () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       if (input.toString().includes("/access_tokens")) return Response.json({ token: "t" });
