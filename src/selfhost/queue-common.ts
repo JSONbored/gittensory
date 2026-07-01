@@ -565,8 +565,7 @@ export function queueProcessingTimeoutMs(): number {
 }
 
 export function queueStartupJitterMinJobs(): number {
-  const raw = Number(process.env.QUEUE_STARTUP_JITTER_MIN_JOBS ?? DEFAULT_STARTUP_JITTER_MIN_JOBS);
-  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : DEFAULT_STARTUP_JITTER_MIN_JOBS;
+  return parsePositiveIntEnv("QUEUE_STARTUP_JITTER_MIN_JOBS", { min: 0, fallback: DEFAULT_STARTUP_JITTER_MIN_JOBS });
 }
 
 export function deterministicJitterMs(seed: string, maxJitterMs: number): number {
@@ -806,9 +805,38 @@ function queueRateLimitJitterMs(): number {
   return envDurationMs("QUEUE_RATE_LIMIT_JITTER_MS", DEFAULT_RATE_LIMIT_JITTER_MS);
 }
 
+function warnEnvKnobRejected(knob: string, supplied: string, using: number): void {
+  console.warn(JSON.stringify({ level: "warn", event: "selfhost_env_knob_rejected", knob, supplied, using }));
+}
+
+/**
+ * Parse a positive-integer env tuning knob with bounds and a fallback, emitting one structured warn line when a
+ * supplied value is rejected so a misconfiguration is visible instead of silently becoming a surprising default.
+ *
+ * - A missing value uses `fallback` silently (an unset knob is not a misconfiguration).
+ * - A non-finite value (e.g. `NaN`), or a value below `min`, is rejected to `fallback` with a warning.
+ * - A value above `max` (when provided) is clamped down to `max` with a warning.
+ * - Otherwise the value is floored to an integer.
+ */
+export function parsePositiveIntEnv(name: string, opts: { min: number; max?: number; fallback: number }): number {
+  const supplied = process.env[name];
+  if (supplied === undefined) return opts.fallback;
+  const parsed = Number(supplied);
+  if (!Number.isFinite(parsed) || parsed < opts.min) {
+    warnEnvKnobRejected(name, supplied, opts.fallback);
+    return opts.fallback;
+  }
+  // Compare the SUPPLIED value (not the floored one) against max, so a fractional value just above the cap
+  // (e.g. 64.9 with max 64) is reported as clamped rather than silently floored back into range.
+  if (opts.max !== undefined && parsed > opts.max) {
+    warnEnvKnobRejected(name, supplied, opts.max);
+    return opts.max;
+  }
+  return Math.floor(parsed);
+}
+
 function envDurationMs(name: string, fallback: number): number {
-  const raw = Number(process.env[name] ?? fallback);
-  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : fallback;
+  return parsePositiveIntEnv(name, { min: 0, fallback });
 }
 
 function normalizedRepo(value: unknown): string | null {
