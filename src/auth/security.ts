@@ -168,7 +168,7 @@ export const __securityInternals = {
 function shouldUseSecureCookie(requestUrl: string): boolean {
   try {
     const hostname = new URL(requestUrl).hostname;
-    return hostname !== "localhost" && hostname !== "127.0.0.1";
+    return hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "::1" && hostname !== "[::1]";
   } catch {
     return true;
   }
