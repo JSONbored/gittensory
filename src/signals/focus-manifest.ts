@@ -1,6 +1,7 @@
 import { parse as parseYaml } from "yaml";
 import type { GatePolicyPack, GateRuleMode, JsonValue, RepositorySettings } from "../types";
 import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy } from "../settings/autonomy";
+import { normalizeCommandAuthorizationPolicy } from "../settings/command-authorization";
 import { mergeContributorBlacklists, normalizeContributorBlacklist } from "../settings/contributor-blacklist";
 import { PUBLIC_LOCAL_PATH_INLINE } from "./redaction";
 
@@ -98,6 +99,7 @@ export type FocusManifestSettings = Partial<
     | "autoMaintain"
     | "agentPaused"
     | "agentDryRun"
+    | "commandAuthorization"
     | "contributorBlacklist"
     | "blacklistLabel"
   >
@@ -615,6 +617,17 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   // field) and overlays the DB value via the resolver. Only a mapping is honoured; anything else is ignored.
   if (typeof r.autoMaintain === "object" && r.autoMaintain !== null && !Array.isArray(r.autoMaintain)) {
     out.autoMaintain = normalizeAutoMaintainPolicy(r.autoMaintain);
+  }
+  // Command authorization policy (#2268 config-as-code parity): `settings.commandAuthorization` declares the
+  // full role policy the same way `autoMaintain` does — the normalizer always fills any unset/invalid field
+  // from DEFAULT_COMMAND_AUTHORIZATION_POLICY (the same secure default used when the DB has none), so once
+  // the key is present in yml it always yields a complete, safe policy that overlays the DB value via the
+  // resolver's `{...dbSettings, ...manifest.settings}` spread. Normalization warnings are folded in so an
+  // invalid shape is visible rather than silently dropped.
+  if (r.commandAuthorization !== undefined) {
+    const { policy, warnings: commandAuthorizationWarnings } = normalizeCommandAuthorizationPolicy(r.commandAuthorization);
+    warnings.push(...commandAuthorizationWarnings);
+    out.commandAuthorization = policy;
   }
   // Contributor blacklist (#1425): `settings.contributorBlacklist` is a list of banned-login entries. Only set it
   // when at least one VALID entry survives normalization, so a malformed block never blanks the DB-configured

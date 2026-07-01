@@ -19,6 +19,7 @@ import {
   settingsOverrideToJson,
   type FocusManifest,
 } from "../../src/signals/focus-manifest";
+import { DEFAULT_COMMAND_AUTHORIZATION_POLICY } from "../../src/settings/command-authorization";
 import type { RepositorySettings } from "../../src/types";
 
 const FULL_MANIFEST = {
@@ -1097,6 +1098,35 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     // A non-mapping autoMaintain is ignored, leaving the DB policy intact.
     const ignored = resolveEffectiveSettings({ autoMaintain: { requireApprovals: 2, mergeMethod: "merge" } } as unknown as RepositorySettings, parseFocusManifest({ settings: { autoMaintain: "nope" } }));
     expect(ignored.autoMaintain).toEqual({ requireApprovals: 2, mergeMethod: "merge" });
+  });
+
+  it("parses + resolves commandAuthorization from the settings: block, overlaying the DB (#2268)", () => {
+    const manifest = parseFocusManifest({ settings: { commandAuthorization: { commands: { "gate-override": ["maintainer"] } } } });
+    expect(manifest.settings.commandAuthorization).toEqual({
+      ...DEFAULT_COMMAND_AUTHORIZATION_POLICY,
+      commands: { ...DEFAULT_COMMAND_AUTHORIZATION_POLICY.commands, "gate-override": ["maintainer"] },
+    });
+    expect(manifest.warnings.some((w) => /commandAuthorization/.test(w))).toBe(false);
+
+    const dbPolicy = { default: ["maintainer", "collaborator", "confirmed_miner", "pr_author"], commands: {} } as RepositorySettings["commandAuthorization"];
+    const eff = resolveEffectiveSettings({ commandAuthorization: dbPolicy } as unknown as RepositorySettings, manifest);
+    expect(eff.commandAuthorization?.commands["gate-override"]).toEqual(["maintainer"]); // yml overlays DB
+
+    // Unset key means "no opinion" and must leave the DB-stored policy untouched — never reset to defaults.
+    const noOverride = resolveEffectiveSettings({ commandAuthorization: dbPolicy } as unknown as RepositorySettings, parseFocusManifest({ settings: { commentMode: "off" } }));
+    expect(noOverride.commandAuthorization).toEqual(dbPolicy);
+  });
+
+  it("falls back to the secure built-in default with a visible warning on an invalid commandAuthorization shape (#2268)", () => {
+    const manifest = parseFocusManifest({ settings: { commandAuthorization: "nope" } });
+    expect(manifest.settings.commandAuthorization).toEqual(DEFAULT_COMMAND_AUTHORIZATION_POLICY);
+    expect(manifest.warnings.some((w) => /commandAuthorization must be an object/.test(w))).toBe(true);
+
+    // A spoofable role on a maintainer-only command is clamped back to the default for that command, not
+    // dropped silently — the maintainer-only invariant holds even inside a partially-valid override.
+    const badRole = parseFocusManifest({ settings: { commandAuthorization: { commands: { "gate-override": ["pr_author"] } } } });
+    expect(badRole.settings.commandAuthorization?.commands["gate-override"]).toEqual(["maintainer", "collaborator"]);
+    expect(badRole.warnings.some((w) => /maintainer-only command/.test(w))).toBe(true);
   });
 
   it("parses + resolves contributorBlacklist + blacklistLabel from the settings: block, overlaying the DB (#1425)", () => {

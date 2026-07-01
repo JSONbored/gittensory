@@ -247,6 +247,12 @@ settings:
     mergeMethod: squash
     requireApprovals: 1
 
-  # Command authorization role policy. Map. Default: the built-in policy.
-  # Omit to inherit the safe built-in default.
-  # commandAuthorization: {}
+  # Command authorization role policy — which roles (maintainer | collaborator | pr_author |
+  # confirmed_miner) may invoke each bot command. Map. Default: the built-in policy.
+  # Omit to inherit the DB-stored policy, or the built-in default if neither is set. An
+  # invalid shape falls back to the built-in default with a warning rather than being
+  # silently dropped.
+  # commandAuthorization:
+  #   default: [maintainer, collaborator, confirmed_miner]
+  #   commands:
+  #     gate-override: [maintainer, collaborator]
