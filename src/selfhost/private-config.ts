@@ -101,7 +101,10 @@ export function parseReviewSkill(filename: string, text: string): RepoReviewSkil
   const fm = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/.exec(text);
   const head = fm?.[1] ?? "";
   const body = (fm?.[2] ?? text).trim();
-  const name = /(?:^|\n)name:\s*(.+)/.exec(head)?.[1]?.trim() || filename.replace(/\.md$/i, "");
+  // Strip surrounding quotes on `name` too, symmetric with `when` below — a quoted scalar
+  // (`name: "SQL Rubric"`) is ordinary YAML frontmatter, so the quotes must not survive into the label.
+  const nameRaw = /(?:^|\n)name:\s*(.+)/.exec(head)?.[1]?.trim();
+  const name = (nameRaw ?? "").replace(/^["']|["']$/g, "") || filename.replace(/\.md$/i, "");
   const whenRaw = /(?:^|\n)when:\s*(.+)/.exec(head)?.[1]?.trim();
   const when = (whenRaw ?? "always").replace(/^["']|["']$/g, "") || "always";
   return { name, when, body };
