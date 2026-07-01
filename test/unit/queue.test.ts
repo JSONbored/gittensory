@@ -10700,6 +10700,29 @@ describe("one-shot reopen prevention", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("swallows a recordAuditEvent failure on the promoted-reopener denial path — handler still completes (#2130 follow-up)", async () => {
+    let contributorPermissionCalls = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/collaborators/contributor/permission")) {
+        contributorPermissionCalls += 1;
+        return Response.json({ permission: contributorPermissionCalls === 1 ? "read" : "write" });
+      }
+      if (url.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" });
+      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "maintainer" } }]);
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await repositoriesModule.upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { merge: "auto", request_changes: "auto" } });
+    vi.spyOn(repositoriesModule, "recordAuditEvent").mockRejectedValueOnce(new Error("D1 write error"));
+
+    await expect(
+      processJob(env, { type: "github-webhook", deliveryId: "reopen-promoted-audit-fail", eventName: "pull_request", payload: reopenedPayload("contributor") }),
+    ).resolves.toBeUndefined();
+    expect(contributorPermissionCalls).toBe(2);
+  });
+
   it("does NOT re-close a disallowed reopen on an OBSERVE-only / un-opted-in repo (autonomy floor, #review-audit)", async () => {
     const calls: Array<{ url: string; method: string }> = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
