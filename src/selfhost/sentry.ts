@@ -18,6 +18,9 @@ type SentryScope = {
 let Sentry: SentryNs | undefined;
 let active = false;
 let sentryEnvironment = "production";
+// The resolved tracing sample rate. Tracing stays a complete no-op (no spans started, no trace traffic) until this
+// is configured above 0 — distinct from error capture, which is on whenever the DSN is set. (#1734)
+let tracesSampleRate = 0;
 
 const SECRET_KEY =
   /(token|secret|key|password|passwd|authorization|auth|dsn|cookie|bearer|credential|private)/i;
@@ -136,6 +139,14 @@ export function resolveSentryRelease(
   env: NodeJS.ProcessEnv,
 ): string | undefined {
   return nonBlank(env.SENTRY_RELEASE) ?? nonBlank(env.GITTENSORY_VERSION);
+}
+
+/** Resolve the trace sample rate, clamped to [0, 1]. Defaults to 0 (tracing off) — a malformed value is treated as
+ *  off rather than full sampling, so a typo can never accidentally flood the tracer. (#1734) */
+export function resolveTracesSampleRate(env: NodeJS.ProcessEnv): number {
+  const parsed = Number(env.SENTRY_TRACES_SAMPLE_RATE ?? "0");
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.min(1, Math.max(0, parsed));
 }
 
 /** beforeSend scrubber — redact anything token/secret-like before an event leaves the box (privacy boundary). */
@@ -295,11 +306,12 @@ export async function initSentry(env: NodeJS.ProcessEnv): Promise<boolean> {
   Sentry = await import("@sentry/node");
   const release = resolveSentryRelease(env);
   sentryEnvironment = nonBlank(env.SENTRY_ENVIRONMENT) ?? "production";
+  tracesSampleRate = resolveTracesSampleRate(env);
   Sentry.init({
     dsn: env.SENTRY_DSN,
     environment: sentryEnvironment,
     ...(release ? { release } : {}),
-    tracesSampleRate: Number(env.SENTRY_TRACES_SAMPLE_RATE ?? "0"),
+    tracesSampleRate,
     serverName: env.PUBLIC_API_ORIGIN,
     beforeSend: (e) => scrubEvent(e),
     beforeSendTransaction: (e) => scrubEvent(e),
@@ -345,6 +357,42 @@ export function captureReviewFailure(
       error instanceof Error ? error : new Error(String(error)),
     );
   });
+}
+
+/** True only when error capture is active AND trace sampling is configured above 0. When false, every span helper
+ *  is a complete no-op — no span is started and no trace traffic is emitted (the #1734 "sampling off" guarantee). */
+export function sentryTracingEnabled(): boolean {
+  return active && Sentry !== undefined && tracesSampleRate > 0;
+}
+
+/** Project an attribute bag onto the safe, low-cardinality subset allowed on a span: drop secret-keyed keys and
+ *  null/undefined, keep finite numbers + booleans, and truncate strings — never a prompt/diff/token/body. */
+export function sentrySpanAttributes(
+  input: Record<string, unknown> | undefined,
+): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
+  if (!input) return out;
+  for (const [key, value] of Object.entries(input)) {
+    if (SECRET_KEY.test(key) || value === null || value === undefined) continue;
+    if (typeof value === "string") out[key] = value.length > 160 ? `${value.slice(0, 157)}...` : value;
+    else if (typeof value === "number" && Number.isFinite(value)) out[key] = value;
+    else if (typeof value === "boolean") out[key] = value;
+  }
+  return out;
+}
+
+/** Run `fn` inside a Sentry span named `name`, tagged with the safe attributes. The span auto-closes and is marked
+ *  errored if `fn` throws (so slow/failed stages are filterable). A pure pass-through to `fn` when tracing is off. */
+export async function withSentrySpan<T>(
+  name: string,
+  attributes: Record<string, unknown> | undefined,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  if (!sentryTracingEnabled()) return fn();
+  return Sentry!.startSpan(
+    { name, op: name, attributes: sentrySpanAttributes(attributes) },
+    () => fn(),
+  );
 }
 
 // The structured-log fields worth indexing as Sentry tags — the dimensions operators filter + group by. Only
@@ -456,6 +504,12 @@ export function forwardStructuredLogToSentry(line: unknown, fromErrorSink = fals
       .join(" ") || "(no message — see the log context)");
   const errorEvent = new Error(value);
   errorEvent.name = event ?? "GittensoryLog";
+  // This exception is SYNTHETIC — minted here from a console line, never thrown at the code that failed. Its captured
+  // JS stack therefore points at this forwarder and the console sink that called it (installStructuredLogForwarding),
+  // not at the origin. Left attached, Sentry computes EVERY forwarded issue's culprit as forwardStructuredLogToSentry,
+  // burying the real signal. Reduce the stack to its header line (the parser yields zero frames from it) so no frame
+  // is misattributed; the event slug supplies the culprit below and the `log` context keeps the full payload.
+  errorEvent.stack = `${errorEvent.name}: ${value}`;
   Sentry.withScope((scope) => {
     scope.setLevel(severity);
     setOtelTraceScope(scope);
@@ -469,6 +523,15 @@ export function forwardStructuredLogToSentry(line: unknown, fromErrorSink = fals
     }
     // Group recurrences of ONE failure into a single issue (by event, not the variable detail in the value).
     if (event) scope.setFingerprint(["gittensory-log", event]);
+    // Give the issue a legible culprit (the location Sentry shows under the title). It derives from event.transaction
+    // when set, else from the now-stripped stack — so point it at the operational event slug (e.g.
+    // "orb_broker_unavailable") rather than the forwarder. setTransactionName on the scope does NOT populate
+    // event.transaction in this SDK version, so set it on the event via a scoped processor.
+    if (event)
+      scope.addEventProcessor((sentryEvent) => {
+        sentryEvent.transaction = event;
+        return sentryEvent;
+      });
     Sentry!.captureException(errorEvent);
   });
 }
@@ -525,6 +588,7 @@ export function resetSentryForTest(): void {
   Sentry = undefined;
   active = false;
   sentryEnvironment = "production";
+  tracesSampleRate = 0;
 }
 
 interface StructuredLogConsole {

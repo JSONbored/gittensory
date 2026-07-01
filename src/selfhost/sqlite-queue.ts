@@ -6,6 +6,7 @@
 import type { SqliteDriver } from "./d1-adapter";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
+import { withReviewSpan } from "./tracing";
 import { withOtelSpan } from "./otel";
 import { captureError } from "./sentry";
 import {
@@ -321,7 +322,7 @@ export function createSqliteQueue(
         return true;
       }
       try {
-        await withOtelSpan(
+        await withReviewSpan(
           "selfhost.queue.job",
           { "job.type": message.type, "queue.backend": "sqlite", "job.attempt": job.attempts + 1 },
           () => consume(message),
