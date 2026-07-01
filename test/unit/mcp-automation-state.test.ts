@@ -10,6 +10,15 @@ import { createTestEnv } from "../helpers/d1";
 vi.mock("../../src/github/app", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/github/app")>()),
   getRepositoryCollaboratorPermission: vi.fn(),
+  createInstallationToken: vi.fn(async () => "test-installation-token"),
+}));
+// decidePendingAgentAction's accept-time live re-check (#2126) needs these off-network, deterministic here — the
+// dedicated staleness-supersede test coverage lives in agent-approval-queue.test.ts, not this MCP-surface file.
+vi.mock("../../src/github/backfill", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/github/backfill")>()),
+  fetchLiveCiAggregate: vi.fn(async () => ({ ciState: "passed" as const, hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [] })),
+  fetchLivePullRequestMergeState: vi.fn(async () => "clean"),
+  fetchLivePullRequestReviewDecision: vi.fn(async () => undefined),
 }));
 const mockedPermission = vi.mocked(getRepositoryCollaboratorPermission);
 
