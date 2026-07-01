@@ -1,0 +1,35 @@
+{
+  "name": "@jsonbored/gittensory-engine",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "description": "Shared pure engine helpers for Gittensory miner and gate logic.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JSONbored/gittensory.git",
+    "directory": "packages/gittensory-engine"
+  },
+  "homepage": "https://github.com/JSONbored/gittensory#readme",
+  "bugs": {
+    "url": "https://github.com/JSONbored/gittensory/issues"
+  },
+  "keywords": [
+    "gittensor",
+    "gittensory",
+    "engine",
+    "shared",
+    "miner"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "build": "node --check lib/index.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
