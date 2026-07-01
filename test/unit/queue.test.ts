@@ -7440,6 +7440,56 @@ describe("queue processors", () => {
     expect(usageEvents.some((event) => event.eventName === "agent_command_replied")).toBe(false);
   });
 
+  it("a @gittensory maintainer-digest command respects agentDryRun — records dry_run, not agent_paused (#2258)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", agentDryRun: true });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 78,
+      title: "Dry-run digest context",
+      state: "open",
+      user: { login: "oktofeesh1" },
+      author_association: "NONE",
+      labels: [],
+      body: "Fixes #1",
+    });
+    const calls = { commentPosts: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "maintain" });
+      if (url.includes("/issues/") && url.includes("/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/") && url.includes("/comments") && method === "POST") {
+        calls.commentPosts += 1;
+        return Response.json({ id: 1002 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "agent-command-queue-summary-dry-run",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 78, title: "Dry-run digest context", state: "open", pull_request: {}, user: { login: "oktofeesh1" }, author_association: "NONE" },
+        comment: { id: 2, body: "@gittensory queue-summary", user: { login: "maintainer", type: "User" }, author_association: "OWNER" },
+      },
+    });
+
+    expect(calls.commentPosts).toBe(0); // the digest must never post live on a dry-run repo
+    const skipped = await env.DB.prepare("select outcome, detail, metadata_json from audit_events where event_type = ?")
+      .bind("github_app.agent_command_reply_skipped")
+      .first<{ outcome: string; detail: string; metadata_json: string }>();
+    expect(skipped).toMatchObject({ outcome: "completed", detail: "dry_run" });
+    const usageEvents = await listProductUsageEvents(env, { limit: 10 });
+    expect(usageEvents).toEqual(
+      expect.arrayContaining([expect.objectContaining({ eventName: "agent_command_reply_skipped", outcome: "skipped", metadata: expect.objectContaining({ family: "queue_digest" }) })]),
+    );
+  });
+
   it("posts maintainer-only queue digest commands from cached public-safe metadata", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     delete (env as Partial<Env>).PUBLIC_SITE_ORIGIN;
@@ -8734,6 +8784,66 @@ describe("queue processors", () => {
     expect(settingsAfter?.gate_check_mode).toBe("enabled");
     const overrideAdvisory = await env.DB.prepare("select id from advisories where target_key = ?").bind("JSONbored/gittensory#90").first<{ id: string }>();
     expect(overrideAdvisory ?? null).toBeNull();
+  });
+
+  it("a real gate-override still completes even when the false-positive telemetry write fails (best-effort)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "off",
+    });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 94,
+      title: "Override me (telemetry write fails)",
+      state: "open",
+      user: { login: "contributor" },
+      author_association: "CONTRIBUTOR",
+      head: { sha: "override-sha-telemetry" },
+      labels: [],
+      body: "Validation: npm test",
+    });
+    const telemetrySpy = vi.spyOn(repositoriesModule, "markGateOutcomeOverridden").mockRejectedValueOnce(new Error("D1 write failed"));
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+      if (url.includes("/commits/override-sha-telemetry/check-runs") && method === "GET") {
+        return Response.json({ total_count: 1, check_runs: [{ id: 559, name: "Gittensory Orb Review Agent" }] });
+      }
+      if (url.includes("/check-runs/559") && method === "PATCH") return Response.json({ id: 559 });
+      if (url.includes("/issues/94/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/94/comments") && method === "POST") return Response.json({ id: 9104 });
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-override-telemetry-fail",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 94, title: "Override me (telemetry write fails)", state: "open", user: { login: "contributor" }, pull_request: {} },
+        comment: { id: 812, body: "@gittensory gate-override known flaky", author_association: "NONE", user: { login: "maintainer", type: "User" } },
+        sender: { login: "maintainer", type: "User" },
+      },
+    });
+
+    expect(telemetrySpy).toHaveBeenCalled();
+    // The override itself (audit + usage) still completed — the false-positive flag is best-effort and never
+    // affects the primary override outcome.
+    const audit = await env.DB.prepare("select outcome from audit_events where event_type = ? and target_key = ?")
+      .bind("github_app.gate_overridden", "JSONbored/gittensory#94")
+      .first<{ outcome: string }>();
+    expect(audit?.outcome).toBe("completed");
   });
 
   it("gate-override respects agentPaused — never flips the live check-run or posts a confirmation comment (#2256)", async () => {
