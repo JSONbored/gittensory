@@ -215,9 +215,10 @@ import {
   shouldWaitForGitHubRateLimit,
 } from "../github/rate-limit";
 import {
-  queueSnapshotBacklog,
-  queueSnapshotFromBinding,
-} from "../selfhost/queue-common";
+  aiReviewCacheInputFingerprint,
+  aiReviewCacheInputMatches,
+  cacheMetadataForAiReviewInput,
+} from "../review/ai-review-cache-input";
 import {
   downgradeCloseToHold,
   downgradeMergeToHold,
@@ -421,7 +422,6 @@ import { errorMessage, nowIso } from "../utils/json";
 
 const OFFICIAL_MINER_DETECTION_TTL_MS = 5 * 60 * 1000;
 const OFFICIAL_MINER_DETECTION_UNAVAILABLE_TTL_MS = 60 * 1000;
-const PER_PR_REGATE_BACKPRESSURE_TYPES = ["agent-regate-pr"] as const;
 const PR_PUBLIC_SURFACE_ACTIONS = new Set([
   "opened",
   "reopened",
@@ -1060,11 +1060,6 @@ async function fanOutAgentRegateSweepJobs(
   });
 }
 
-async function currentRegateBacklog(env: Env): Promise<number> {
-  const snapshot = await queueSnapshotFromBinding(env.JOBS).catch(() => null);
-  return queueSnapshotBacklog(snapshot, PER_PR_REGATE_BACKPRESSURE_TYPES);
-}
-
 // Convergence (RAG / codebase index, flag GITTENSORY_REVIEW_RAG). The dispatch for the `rag-index-repo` job.
 // Caller already gated on isRagEnabled(env).
 //   - No repoFullName → cron fan-out: enqueue one FULL re-index job per registered + cutover-allowlisted repo.
@@ -1221,19 +1216,6 @@ async function sweepRepoRegate(
       outcome: "denied",
       detail: "agent actions paused — re-gate sweep skipped",
       metadata: { repoFullName, mode },
-    });
-    return;
-  }
-  const regateBacklog = requestedBy === "schedule" ? await currentRegateBacklog(env) : 0;
-  if (regateBacklog > 0) {
-    await recordAuditEvent(env, {
-      eventType: "agent.sweep.regate",
-      actor: "gittensory",
-      targetKey: repoFullName,
-      outcome: "queued",
-      detail:
-        "re-gate sweep deferred: prior scheduled re-gate work is still pending or processing",
-      metadata: { repoFullName, mode, deferred: true, regateBacklog },
     });
     return;
   }
@@ -5232,10 +5214,75 @@ async function maybePublishPrPublicSurface(
           agent: "dual-ai",
         },
         async () => {
-          // #1 self-host AI-review cache: the LLM output for a PR changes only when the code (head SHA) or the review
-          // mode changes, so reuse a prior review for this exact (repo, pr, head SHA, mode) — a re-delivered webhook or
-          // the block-mode ~2-min re-gate sweep (which re-runs the AI for every open PR) need not re-spend the call. On
-          // self-host there is no AI gateway, so this is the only AI cache. The deterministic gate below still runs.
+          const reviewManifest = await loadRepoFocusManifest(env, repoFullName).catch(() => null);
+          // `.gittensory.yml` review.profile + review.path_instructions + review.exclude_paths (#review-profile /
+          // #review-path-instructions / #review-exclude-paths): resolve from the manifest (cached from settings
+          // resolution, so a cheap cache hit — no extra fetch) and thread them into the AI review. Profile shapes
+          // nitpickiness; path-instructions add per-path guidance; exclude-paths drop files from review. Absent ⇒
+          // byte-identical prompt. Fail-safe to defaults on any read error (resolveReviewPromptOverrides).
+          const {
+            profile: reviewProfile,
+            inlineComments: reviewInlineComments,
+            pathInstructions: reviewPathInstructions,
+            instructions: manifestReviewInstructions,
+            excludePaths: reviewExcludePaths,
+          } = resolveReviewPromptOverrides(reviewManifest);
+          inlineCommentsEnabledForReview = shouldRequestInlineFindings(
+            env,
+            repoFullName,
+            reviewInlineComments,
+          );
+          const reviewFilesForAi = await getReviewFiles();
+          const changedPaths = reviewFilesForAi.map((file) => file.path);
+          // Per-repo review CONTEXT (#review-skills): fold the container-private review/AGENTS.md (or legacy
+          // review/CLAUDE.md) guide + the matching review/skills/*.md modules into the SAME review-instructions slot,
+          // so reviews follow each repo's conventions.
+          // Glob-gated for cost (only skills matching the changed files are injected); absent config dir ⇒ empty ⇒
+          // byte-identical prompt. getReviewFiles() is memoized, so the second call reuses the loaded diff.
+          const reviewInstructions =
+            [
+              manifestReviewInstructions,
+              composeRepoReviewContext(
+                await loadRepoReviewContext(repoFullName),
+                changedPaths,
+              ),
+            ]
+              .map((part) => part?.trim())
+              .filter(Boolean)
+              .join("\n\n") || null;
+          const convergedRepoAllowed = isConvergenceRepoAllowed(env, repoFullName);
+          const inputFingerprint = await aiReviewCacheInputFingerprint({
+            mode: settings.aiReviewMode,
+            byok: settings.aiReviewByok,
+            provider: settings.aiReviewProvider,
+            model: settings.aiReviewModel,
+            reviewerPlan: env.AI_REVIEW_PLAN,
+            profile: reviewProfile,
+            inlineComments: inlineCommentsEnabledForReview,
+            pathInstructions: reviewPathInstructions,
+            pathGuidance: resolveReviewPathInstructions(
+              reviewPathInstructions,
+              changedPaths,
+            ),
+            repoInstructions: reviewInstructions,
+            excludePaths: reviewExcludePaths,
+            changedPaths,
+            features: {
+              grounding: isGroundingEnabled(env) && convergedRepoAllowed,
+              rag: resolveConvergedFeature(env, reviewManifest, "rag", repoFullName),
+              enrichment: isEnrichmentEnabled(env) && convergedRepoAllowed,
+              reputation: resolveConvergedFeature(
+                env,
+                reviewManifest,
+                "reputation",
+                repoFullName,
+              ),
+            },
+          });
+          // #1 self-host AI-review cache: the LLM output for a PR changes only when the code (head SHA), review
+          // mode, reviewer plan, feature activation, or prompt-shaping inputs change. A re-delivered webhook or the
+          // block-mode re-gate sweep can reuse that exact review; stale same-head reviews from older private review
+          // instructions or feature config are intentionally treated as misses. The deterministic gate still runs.
           const cachedReview = await getCachedAiReview(
             env,
             repoFullName,
@@ -5243,46 +5290,14 @@ async function maybePublishPrPublicSurface(
             advisory.headSha,
             settings.aiReviewMode,
           ).catch(() => null);
-          if (cachedReview && hasPublicReviewAssessment(cachedReview.notes)) {
+          if (
+            cachedReview &&
+            aiReviewCacheInputMatches(cachedReview.metadata, inputFingerprint) &&
+            hasPublicReviewAssessment(cachedReview.notes)
+          ) {
             advisory.findings.push(...cachedReview.findings);
             aiReview = cachedReview;
           } else {
-            // `.gittensory.yml` review.profile + review.path_instructions + review.exclude_paths (#review-profile /
-            // #review-path-instructions / #review-exclude-paths): resolve from the manifest (cached from settings
-            // resolution, so a cheap cache hit — no extra fetch) and thread them into the AI review. Profile shapes
-            // nitpickiness; path-instructions add per-path guidance; exclude-paths drop files from review. Absent ⇒
-            // byte-identical prompt. Fail-safe to defaults on any read error (resolveReviewPromptOverrides).
-            const {
-              profile: reviewProfile,
-              inlineComments: reviewInlineComments,
-              pathInstructions: reviewPathInstructions,
-              instructions: manifestReviewInstructions,
-              excludePaths: reviewExcludePaths,
-            } = resolveReviewPromptOverrides(
-              /* v8 ignore next -- fail-open manifest-read rejection is exercised in runAiReviewForAdvisory; this wrapper preserves the same fallback. */
-              await loadRepoFocusManifest(env, repoFullName).catch(() => null),
-            );
-            inlineCommentsEnabledForReview = shouldRequestInlineFindings(
-              env,
-              repoFullName,
-              reviewInlineComments,
-            );
-            // Per-repo review CONTEXT (#review-skills): fold the container-private review/AGENTS.md (or legacy
-            // review/CLAUDE.md) guide + the matching review/skills/*.md modules into the SAME review-instructions slot,
-            // so reviews follow each repo's conventions.
-            // Glob-gated for cost (only skills matching the changed files are injected); absent config dir ⇒ empty ⇒
-            // byte-identical prompt. getReviewFiles() is memoized, so the second call reuses the loaded diff.
-            const reviewInstructions =
-              [
-                manifestReviewInstructions,
-                composeRepoReviewContext(
-                  await loadRepoReviewContext(repoFullName),
-                  (await getReviewFiles()).map((file) => file.path),
-                ),
-              ]
-                .map((part) => part?.trim())
-                .filter(Boolean)
-                .join("\n\n") || null;
             aiReview = await runAiReviewForAdvisory(env, {
               settings,
               advisory,
@@ -5291,7 +5306,7 @@ async function maybePublishPrPublicSurface(
               pr: { ...pr, baseSha: webhook.baseSha ?? null },
               author,
               confirmedContributor,
-              files: await getReviewFiles(),
+              files: reviewFilesForAi,
               reviewProfile,
               reviewPathInstructions,
               reviewInstructions,
@@ -5305,7 +5320,13 @@ async function maybePublishPrPublicSurface(
                 pr.number,
                 advisory.headSha,
                 settings.aiReviewMode,
-                aiReview,
+                {
+                  ...aiReview,
+                  metadata: cacheMetadataForAiReviewInput(
+                    aiReview.metadata,
+                    inputFingerprint,
+                  ),
+                },
               ).catch(() => undefined);
           }
         },

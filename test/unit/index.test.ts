@@ -277,20 +277,24 @@ describe("worker entrypoint", () => {
     expect(sent).toEqual([{ type: "agent-regate-sweep", requestedBy: "schedule" }]);
   });
 
-  it("does not enqueue scheduled sweep/backfill work while prior regate jobs are still queued", async () => {
+  it("keeps enqueueing scheduled sweeps while prior regate jobs are queued", async () => {
     const sent: Array<import("../../src/types").JobMessage> = [];
+    let snapshotCalled = false;
     const env = createTestEnv({
       JOBS: {
         async send(message: import("../../src/types").JobMessage) {
           sent.push(message);
         },
-        snapshot: async () => ({
-          totals: { pending: 2, processing: 1, dead: 0, due: 2 },
-          byType: [
-            { type: "agent-regate-pr", status: "pending", count: 2, due: 2 },
-            { type: "agent-regate-sweep", status: "processing", count: 1, due: 0 },
-          ],
-        }),
+        snapshot: async () => {
+          snapshotCalled = true;
+          return {
+            totals: { pending: 2, processing: 1, dead: 0, due: 2 },
+            byType: [
+              { type: "agent-regate-pr", status: "pending", count: 2, due: 2 },
+              { type: "agent-regate-sweep", status: "processing", count: 1, due: 0 },
+            ],
+          };
+        },
       } as unknown as Queue,
     });
     const waitUntil: Promise<unknown>[] = [];
@@ -299,12 +303,15 @@ describe("worker entrypoint", () => {
     await Promise.all(waitUntil);
 
     expect(sent).toEqual([
+      { type: "agent-regate-sweep", requestedBy: "schedule" },
+      { type: "backfill-registered-repos", requestedBy: "schedule", mode: "light" },
       { type: "repair-data-fidelity", requestedBy: "schedule" },
       { type: "refresh-installation-health", requestedBy: "schedule" },
     ]);
+    expect(snapshotCalled).toBe(false);
   });
 
-  it("fails open when queue introspection is unavailable so scheduled maintenance still runs", async () => {
+  it("does not require queue introspection for regular review sweep scheduling", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const sent: Array<import("../../src/types").JobMessage> = [];
     const env = createTestEnv({
@@ -323,7 +330,7 @@ describe("worker entrypoint", () => {
     await Promise.all(waitUntil);
 
     expect(sent).toEqual([{ type: "agent-regate-sweep", requestedBy: "schedule" }]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("selfhost_queue_snapshot_failed"));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("selfhost_queue_snapshot_failed"));
   });
 
   it("does not enqueue review sweeps from a broker-only Cloudflare runtime", async () => {

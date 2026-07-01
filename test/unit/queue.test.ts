@@ -45,6 +45,10 @@ import {
   putCachedAiReview,
 } from "../../src/db/repositories";
 import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, contributorEvidenceBatchSize, processJob } from "../../src/queue/processors";
+import {
+  aiReviewCacheInputFingerprint,
+  cacheMetadataForAiReviewInput,
+} from "../../src/review/ai-review-cache-input";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
@@ -811,7 +815,7 @@ describe("queue processors", () => {
     expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ repoFullName: "owner/agent-repo", examined: 1 });
   });
 
-  it("agent re-gate sweep runs blocking AI review before auto-maintenance (regression)", async () => {
+  it("agent re-gate sweep ignores stale same-head AI cache inputs before auto-maintenance (regression)", async () => {
     let aiCalls = 0;
     const env = createTestEnv({
       GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
@@ -839,6 +843,11 @@ describe("queue processors", () => {
     });
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Stale PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
     await upsertPullRequestFile(env, { repoFullName: "owner/agent-repo", pullNumber: 7, path: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, payload: { patch: "@@\n+export const ok = value.length;" } });
+    await putCachedAiReview(env, "owner/agent-repo", 7, "a7", "block", {
+      notes: "stale cached review from older review inputs",
+      reviewerCount: 2,
+      findings: [{ code: "ai_review_split", severity: "critical", title: "Old cache", detail: "Old prompt inputs." }],
+    });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
@@ -1541,10 +1550,31 @@ describe("queue processors", () => {
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Stale PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
     await upsertPullRequestFile(env, { repoFullName: "owner/agent-repo", pullNumber: 7, path: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, payload: { patch: "@@\n+export const ok = value.length;" } });
     // Pre-seed the AI review for this exact head SHA + mode → the sweep's block-mode review must reuse it, not re-run.
+    const inputFingerprint = await aiReviewCacheInputFingerprint({
+      mode: "block",
+      byok: false,
+      provider: null,
+      model: null,
+      reviewerPlan: env.AI_REVIEW_PLAN,
+      profile: null,
+      inlineComments: false,
+      pathInstructions: [],
+      pathGuidance: "",
+      repoInstructions: null,
+      excludePaths: [],
+      changedPaths: ["src/a.ts"],
+      features: {
+        grounding: false,
+        rag: false,
+        enrichment: false,
+        reputation: false,
+      },
+    });
     await putCachedAiReview(env, "owner/agent-repo", 7, "a7", "block", {
       notes: "cached review",
       reviewerCount: 2,
       findings: [{ code: "ai_consensus_defect", severity: "critical", title: "Cached defect", detail: "Cached critical defect." }],
+      metadata: cacheMetadataForAiReviewInput(null, inputFingerprint),
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -2378,17 +2408,21 @@ describe("queue processors", () => {
     expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ deferred: true });
   });
 
-  it("REGRESSION: a scheduled repo sweep does not fan out more per-PR regates while prior regate work is queued", async () => {
+  it("REGRESSION: a scheduled repo sweep still fans out when unrelated per-PR regate work is queued", async () => {
     const sent: import("../../src/types").JobMessage[] = [];
+    let snapshotCalled = false;
     const env = createTestEnv({
       JOBS: {
         async send(m: import("../../src/types").JobMessage) {
           sent.push(m);
         },
-        snapshot: async () => ({
-          totals: { pending: 1, processing: 0, dead: 0, due: 1 },
-          byType: [{ type: "agent-regate-pr", status: "pending", count: 1, due: 1 }],
-        }),
+        snapshot: async () => {
+          snapshotCalled = true;
+          return {
+            totals: { pending: 1, processing: 0, dead: 0, due: 1 },
+            byType: [{ type: "agent-regate-pr", status: "pending", count: 1, due: 1 }],
+          };
+        },
       } as unknown as Queue,
     });
     await upsertInstallation(env, { action: "created", installation: { id: 9201, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
@@ -2401,12 +2435,21 @@ describe("queue processors", () => {
 
     await processJob(env, { type: "agent-regate-sweep", requestedBy: "schedule", repoFullName: "owner/agent-repo" });
 
-    expect(sent.filter((m) => m.type === "agent-regate-pr")).toEqual([]);
-    expect(getRepo).not.toHaveBeenCalled();
-    expect(listOpen).not.toHaveBeenCalled();
+    expect(sent.filter((m) => m.type === "agent-regate-pr")).toEqual([
+      expect.objectContaining({
+        type: "agent-regate-pr",
+        deliveryId: "regate-sweep:owner/agent-repo#7",
+        repoFullName: "owner/agent-repo",
+        prNumber: 7,
+        installationId: 9201,
+      }),
+    ]);
+    expect(getRepo).toHaveBeenCalled();
+    expect(listOpen).toHaveBeenCalled();
+    expect(snapshotCalled).toBe(false);
     const audit = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("agent.sweep.regate").first<{ outcome: string; metadata_json: string }>();
-    expect(audit?.outcome).toBe("queued");
-    expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ deferred: true, regateBacklog: 1 });
+    expect(audit?.outcome).toBe("completed");
+    expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ examined: 1 });
   });
 
   it("REGRESSION: a scheduled repo sweep ignores sweep rows when deciding per-PR regate backlog", async () => {
@@ -2441,7 +2484,7 @@ describe("queue processors", () => {
     ]);
   });
 
-  it("INVARIANT: a scheduled repo sweep fails open when queue introspection throws", async () => {
+  it("INVARIANT: a scheduled repo sweep does not require queue introspection", async () => {
     const sent: import("../../src/types").JobMessage[] = [];
     const env = createTestEnv({
       JOBS: {
