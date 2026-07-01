@@ -66,8 +66,12 @@ test("scanLicenses flags copyleft and unknown licenses while ignoring permissive
 });
 
 test("scanLicenses treats an empty or absent license list as unknown", async () => {
-  const findings = await scanLicenses(req([npmAdd("mystery-lib")]), async () =>
-    jsonResponse({}),
+  const findings = await scanLicenses(
+    req([npmAdd("mystery-lib"), npmAdd("empty-license-lib")]),
+    async (url) =>
+      jsonResponse(
+        String(url).includes("empty-license-lib") ? { licenses: [] } : {},
+      ),
   );
 
   assert.deepEqual(findings, [
@@ -78,10 +82,17 @@ test("scanLicenses treats an empty or absent license list as unknown", async () 
       licenses: [],
       classification: "unknown",
     },
+    {
+      ecosystem: "npm",
+      package: "empty-license-lib",
+      version: "1.0.0",
+      licenses: [],
+      classification: "unknown",
+    },
   ]);
 });
 
-test("scanLicenses resolves PyPI and Go dependency systems without flagging known permissive licenses", async () => {
+test("scanLicenses resolves PyPI and Go systems and flags only the copyleft result", async () => {
   const urls = [];
   const findings = await scanLicenses(
     req([pypiAdd("django", "5.0.1"), goAdd("github.com/acme/lib", "1.2.3")]),
@@ -144,4 +155,10 @@ test("scanLicenses fails safe when deps.dev cannot resolve a package", async () 
   );
 
   assert.deepEqual(findings, []);
+
+  const thrown = await scanLicenses(req([npmAdd("throws")]), async () => {
+    throw new Error("network down");
+  });
+
+  assert.deepEqual(thrown, []);
 });
