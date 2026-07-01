@@ -192,7 +192,10 @@ describe("MCP gittensory_propose_action (#784)", () => {
   it("denies a static MCP-token caller when the repo is not in MCP_ACTUATION_REPO_ALLOWLIST (#2253)", async () => {
     // GITTENSORY_MCP_TOKEN is a shared, end-user-obtainable CLI credential — unlike an explicit maintainer
     // session, it must not implicitly stage actions on every repo the App happens to be installed on.
-    const env = createTestEnv({ MCP_ACTUATION_REPO_ALLOWLIST: undefined });
+    // createTestEnv's own default is MCP_ACTUATION_REPO_ALLOWLIST: "*" (so unrelated tests aren't broken
+    // by this restriction); "" overrides that back to unset (isMcpActuationRepoAllowed treats "" the same
+    // as undefined) to exercise the real deny-by-default behavior.
+    const env = createTestEnv({ MCP_ACTUATION_REPO_ALLOWLIST: "" });
     await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 5);
     const client = await connect(env); // default identity: { kind: "static", actor: "mcp" }
     const result = await client.callTool({ name: "gittensory_propose_action", arguments: { owner: "owner", repo: "repo", pullNumber: 7, actionClass: "merge" } });
@@ -219,7 +222,8 @@ describe("MCP gittensory_propose_action (#784)", () => {
     // api/internal are operator-only Worker secrets, never handed to end users — unlike the mcp actor, they are
     // NOT scoped to MCP_ACTUATION_REPO_ALLOWLIST. Confirmed here with the allowlist unset, so this only passes
     // because api/internal skip that check entirely (not because the repo happens to be allowlisted).
-    const env = createTestEnv({ MCP_ACTUATION_REPO_ALLOWLIST: undefined });
+    // MCP_ACTUATION_REPO_ALLOWLIST is irrelevant here: api/internal skip that check entirely (see below).
+    const env = createTestEnv({});
     await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 5);
     const client = await connect(env, { kind: "static", actor: "api" } as AuthIdentity);
     const result = await client.callTool({ name: "gittensory_propose_action", arguments: { owner: "owner", repo: "repo", pullNumber: 7, actionClass: "merge" } });
@@ -376,7 +380,8 @@ describe("MCP gittensory_decide_pending_action (#784)", () => {
   });
 
   it("denies a static MCP-token caller from deciding a pending action when the repo is not allowlisted (#2253)", async () => {
-    const env = createTestEnv({ MCP_ACTUATION_REPO_ALLOWLIST: undefined });
+    // "" overrides createTestEnv's own MCP_ACTUATION_REPO_ALLOWLIST: "*" default back to unset.
+    const env = createTestEnv({ MCP_ACTUATION_REPO_ALLOWLIST: "" });
     await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 5);
     const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber: 7, installationId: 5, actionClass: "merge", autonomyLevel: "auto_with_approval", params: {}, reason: "x" });
 
@@ -388,7 +393,8 @@ describe("MCP gittensory_decide_pending_action (#784)", () => {
   });
 
   it("leaves the api/internal static identities unconditionally trusted for the approval queue too (#2253)", async () => {
-    const env = createTestEnv({ MCP_ACTUATION_REPO_ALLOWLIST: undefined });
+    // MCP_ACTUATION_REPO_ALLOWLIST is irrelevant here: api/internal skip that check entirely (see below).
+    const env = createTestEnv({});
     await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 5);
     const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber: 7, installationId: 5, actionClass: "merge", autonomyLevel: "auto_with_approval", params: {}, reason: "x" });
     const client = await connect(env, { kind: "static", actor: "internal" } as AuthIdentity);
