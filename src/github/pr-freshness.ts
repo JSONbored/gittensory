@@ -19,7 +19,7 @@ export type PullRequestFreshness =
 
 function normalizedHead(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
+  return trimmed ? trimmed.toLowerCase() : null;
 }
 
 export function reviewedPullRequestHeadSha(
