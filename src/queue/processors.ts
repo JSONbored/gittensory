@@ -2047,9 +2047,10 @@ async function prReadyForReview(
   if (ci?.hasPending) {
     // Staleness cap: inferred or unreadable pending CI can otherwise defer FOREVER (orphaned required context,
     // transiently unreadable pages, fork check that never reports). Past STUCK_CI_DEFER_MS we stop deferring and
-    // let the gate FINALIZE so the PR surfaces. A visibly queued/in_progress GitHub check/status is active CI,
-    // though, so never cut in front of it. first-seen is tracked in the self-host Redis transient cache per
-    // PR+headSha (a new push = a fresh window); a cache miss degrades to the old defer. (#ci-stuck-finalize)
+    // let the gate FINALIZE so the PR surfaces. A trusted required/base-repo visibly queued/in_progress CI
+    // signal is active CI, though, so never cut in front of it. first-seen is tracked in the self-host Redis
+    // transient cache per PR+headSha (a new push = a fresh window); a cache miss degrades to the old defer.
+    // (#ci-stuck-finalize)
     if (
       ci.hasVisiblePending ||
       !(await ciPendingDeferStuck(env, repoFullName, pr.number, pr.headSha))

@@ -3613,7 +3613,7 @@ describe("GitHub backfill", () => {
 
       expect(aggregate.ciState).toBe("failed");
       expect(aggregate.hasPending).toBe(true);
-      expect(aggregate.hasVisiblePending).toBe(true);
+      expect(aggregate.hasVisiblePending).toBe(false);
       expect(aggregate.failingDetails.map((detail) => detail.name).sort()).toEqual(["attacker/non-required-check", "attacker/non-required-status"]);
       expect(aggregate.nonRequiredFailingDetails).toEqual([]);
     });
@@ -3981,6 +3981,23 @@ describe("GitHub backfill", () => {
       expect(aggregate.ciState).toBe("pending");
       expect(aggregate.hasPending).toBe(true);
       expect(suitesFetched).toBe(true);
+    });
+
+    it("ENFORCE-required mode treats suite-only optional pending as stale-cap eligible, not required-visible", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "in_progress", app: { slug: "github-actions" } }] });
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "test", status: "completed", conclusion: "success" }] });
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        return new Response("not found", { status: 404 });
+      });
+
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["test"]));
+
+      expect(aggregate.ciState).toBe("pending");
+      expect(aggregate.hasPending).toBe(true);
+      expect(aggregate.hasVisiblePending).toBe(false);
     });
 
     it("ENFORCE-required mode does not over-pend when check-suites are unreadable after required checks passed", async () => {

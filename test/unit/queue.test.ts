@@ -1225,6 +1225,63 @@ describe("queue processors", () => {
     }
   });
 
+  it("surfaces stale optional CI after the stale-CI cap", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", checks: "write" }, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto", update_branch: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Stale optional CI", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+    await env.SELFHOST_TRANSIENT_CACHE?.set(
+      "ci-pending-first-seen:owner/agent-repo#7:a7",
+      String(Date.now() - 31 * 60 * 1000),
+      7 * 24 * 3600,
+    );
+    const requiredContextsSpy = vi.spyOn(backfillModule, "fetchRequiredStatusContexts").mockResolvedValue(new Set(["trusted-required-ci"]));
+    const liveCiSpy = vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl").mockResolvedValue({
+      ciState: "passed",
+      hasPending: true,
+      hasVisiblePending: false,
+      failingDetails: [],
+      nonRequiredFailingDetails: [],
+    });
+    let gateChecks = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") return Response.json({ number: 7, title: "Stale optional CI", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.includes("/check-runs") && (method === "POST" || method === "PATCH")) {
+        gateChecks += 1;
+        return Response.json({ id: 901 }, { status: method === "POST" ? 201 : 200 });
+      }
+      return Response.json({});
+    });
+
+    try {
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "stale-optional-ci", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+
+      expect(liveCiSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        "owner/agent-repo",
+        "a7",
+        expect.any(String),
+        new Set(["trusted-required-ci"]),
+        "installation:9001",
+      );
+      expect(gateChecks).toBeGreaterThan(0);
+      const finalized = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?")
+        .bind("github_app.review_finalized_ci_stuck")
+        .first<{ n: number }>();
+      expect(finalized?.n).toBe(1);
+    } finally {
+      liveCiSpy.mockRestore();
+      requiredContextsSpy.mockRestore();
+    }
+  });
+
   it("surfaces inferred pending CI after the stale-CI cap", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", checks: "write" }, events: [] } });
