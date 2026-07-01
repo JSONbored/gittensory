@@ -7430,6 +7430,14 @@ describe("queue processors", () => {
     });
 
     expect(calls.commentPosts).toBe(0); // the answer card must never post live on a paused repo
+    // REGRESSION: a paused command must not be audited/usage-tracked as a real, completed reply.
+    const replied = await env.DB.prepare("select id from audit_events where event_type = ?").bind("github_app.agent_command_replied").first<{ id: string }>();
+    expect(replied).toBeUndefined();
+    const skipped = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.agent_command_reply_skipped").first<{ outcome: string; detail: string }>();
+    expect(skipped).toMatchObject({ outcome: "completed", detail: "agent_paused" });
+    const usageEvents = await listProductUsageEvents(env, { limit: 10 });
+    expect(usageEvents).toEqual(expect.arrayContaining([expect.objectContaining({ eventName: "agent_command_reply_skipped", outcome: "skipped" })]));
+    expect(usageEvents.some((event) => event.eventName === "agent_command_replied")).toBe(false);
   });
 
   it("posts maintainer-only queue digest commands from cached public-safe metadata", async () => {
@@ -8789,6 +8797,85 @@ describe("queue processors", () => {
     // Neither write reached GitHub — a pause must stop this exactly like every other agent-driven write.
     expect(calls.checkPatches).toBe(0);
     expect(calls.commentPosts).toBe(0);
+    // REGRESSION: a paused command must not be audited/usage-tracked as a real, completed override.
+    const overridden = await env.DB.prepare("select id from audit_events where event_type = ?").bind("github_app.gate_overridden").first<{ id: string }>();
+    expect(overridden).toBeUndefined();
+    const skipped = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.gate_override_skipped").first<{ outcome: string; detail: string }>();
+    expect(skipped).toMatchObject({ outcome: "completed", detail: "agent_paused" });
+    const usageEvents = await listProductUsageEvents(env, { limit: 10 });
+    expect(usageEvents).toEqual(expect.arrayContaining([expect.objectContaining({ eventName: "gate_override_skipped", outcome: "skipped" })]));
+    expect(usageEvents.some((event) => event.eventName === "gate_overridden")).toBe(false);
+  });
+
+  it("gate-override respects agentDryRun on a PR with no head sha — records dry_run, not agent_paused (#2256)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "off",
+      agentDryRun: true,
+    });
+    // No head sha — also exercises the metadata's `?? null` fallback on the skip-path audit/usage records.
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 93,
+      title: "Override me (dry-run, no head)",
+      state: "open",
+      user: { login: "contributor" },
+      author_association: "CONTRIBUTOR",
+      head: {},
+      labels: [],
+      body: "Validation: npm test",
+    });
+    const calls = { checkPatches: 0, commentPosts: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+      if (url.includes("/pulls/93") && method === "GET") return Response.json({ number: 93, state: "open", head: {} });
+      if (url.includes("/issues/93/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/93/comments") && method === "POST") {
+        calls.commentPosts += 1;
+        return Response.json({ id: 9103 });
+      }
+      if (url.includes("/check-runs") && method === "PATCH") {
+        calls.checkPatches += 1;
+        return Response.json({ id: 557 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-override-dry-run-no-head",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 93, title: "Override me (dry-run, no head)", state: "open", user: { login: "contributor" }, pull_request: {} },
+        comment: { id: 811, body: "@gittensory gate-override please", author_association: "NONE", user: { login: "maintainer", type: "User" } },
+        sender: { login: "maintainer", type: "User" },
+      },
+    });
+
+    expect(calls.checkPatches).toBe(0);
+    expect(calls.commentPosts).toBe(0);
+    const skipped = await env.DB.prepare("select outcome, detail, metadata_json from audit_events where event_type = ?")
+      .bind("github_app.gate_override_skipped")
+      .first<{ outcome: string; detail: string; metadata_json: string }>();
+    expect(skipped).toMatchObject({ outcome: "completed", detail: "dry_run" });
+    const metadata = JSON.parse(skipped?.metadata_json ?? "{}") as { headSha?: string | null; cachedHeadSha?: string | null; mode?: string };
+    expect(metadata.headSha).toBeNull();
+    expect(metadata.cachedHeadSha).toBeNull();
+    expect(metadata.mode).toBe("dry_run");
+    const usageEvents = await listProductUsageEvents(env, { limit: 10 });
+    expect(usageEvents).toEqual(expect.arrayContaining([expect.objectContaining({ eventName: "gate_override_skipped", outcome: "skipped" })]));
   });
 
   it("overrides the LIVE head, not the stale cached SHA, when a commit landed after the command (#16)", async () => {

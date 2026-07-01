@@ -6383,19 +6383,6 @@ async function maybeProcessGateOverrideCommand(
     { actor, reason: safeReason },
     mode,
   );
-  await recordAuditEvent(env, {
-    eventType: "github_app.gate_overridden",
-    actor,
-    targetKey: `${repoFullName}#${pr.number}`,
-    outcome: "completed",
-    detail: safeReason,
-    metadata: {
-      deliveryId,
-      repoFullName,
-      headSha: advisory.headSha ?? null,
-      cachedHeadSha: pr.headSha ?? null,
-    },
-  });
   const confirmation = sanitizePublicComment(
     [
       AGENT_COMMAND_COMMENT_MARKER,
@@ -6418,22 +6405,69 @@ async function maybeProcessGateOverrideCommand(
     confirmation,
     mode,
   );
-  await recordGithubProductUsage(env, "gate_overridden", {
-    actor,
-    repoFullName,
-    targetKey: `${repoFullName}#${pr.number}`,
-    outcome: "completed",
-    metadata: {
-      actorKind: authorization.actorKind,
-      headSha: advisory.headSha ?? null,
-    },
-  });
-  // #554 gate false-positive telemetry: flag the gate-block row as maintainer-overridden — the strongest
-  // false-positive signal (a human explicitly judged the block wrong). Best-effort + no-op if no block was
-  // recorded; never affects the override outcome above.
-  await markGateOutcomeOverridden(env, repoFullName, pr.number).catch(
-    () => undefined,
-  );
+  // createOrUpdateOverriddenGateCheckRun/createOrUpdateAgentCommandComment already suppress the actual GitHub
+  // writes for a non-live mode -- calling them unconditionally is fine (and lets a dry-run still exercise the
+  // code path). What must NOT happen unconditionally is recording this as a completed override: a paused or
+  // dry-run command never flipped the check-run or posted the confirmation, so audit/usage must reflect that
+  // instead of reporting a real override that did not occur (mirrors recordPlanSkip's *_skipped convention).
+  if (mode === "live") {
+    await recordAuditEvent(env, {
+      eventType: "github_app.gate_overridden",
+      actor,
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "completed",
+      detail: safeReason,
+      metadata: {
+        deliveryId,
+        repoFullName,
+        headSha: advisory.headSha ?? null,
+        cachedHeadSha: pr.headSha ?? null,
+      },
+    });
+    await recordGithubProductUsage(env, "gate_overridden", {
+      actor,
+      repoFullName,
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "completed",
+      metadata: {
+        actorKind: authorization.actorKind,
+        headSha: advisory.headSha ?? null,
+      },
+    });
+    // #554 gate false-positive telemetry: flag the gate-block row as maintainer-overridden — the strongest
+    // false-positive signal (a human explicitly judged the block wrong). Best-effort + no-op if no block was
+    // recorded; never affects the override outcome above. Only meaningful once the check-run was actually
+    // flipped (mode === "live") -- a paused/dry-run "override" never changed the live gate result.
+    await markGateOutcomeOverridden(env, repoFullName, pr.number).catch(
+      () => undefined,
+    );
+  } else {
+    await recordAuditEvent(env, {
+      eventType: "github_app.gate_override_skipped",
+      actor,
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "completed",
+      detail: mode === "dry_run" ? "dry_run" : "agent_paused",
+      metadata: {
+        deliveryId,
+        repoFullName,
+        headSha: advisory.headSha ?? null,
+        cachedHeadSha: pr.headSha ?? null,
+        mode,
+      },
+    });
+    await recordGithubProductUsage(env, "gate_override_skipped", {
+      actor,
+      repoFullName,
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "skipped",
+      metadata: {
+        actorKind: authorization.actorKind,
+        headSha: advisory.headSha ?? null,
+        mode,
+      },
+    });
+  }
   return true;
 }
 
@@ -7370,52 +7404,98 @@ async function maybeProcessGittensoryMentionCommand(
       responseCommentStored: Boolean(responseComment?.id),
     },
   });
-  await recordAuditEvent(env, {
-    eventType: "github_app.agent_command_replied",
-    actor: commenter,
-    targetKey: `${repoFullName}#${issue.number}`,
-    outcome: "completed",
-    metadata: {
+  // createOrUpdateAgentCommandComment already suppresses the answer-card post for a non-live mode. As with
+  // gate-override above, what must NOT happen unconditionally is recording this as a completed reply: a
+  // paused/dry-run mention command never posted the card, so telemetry (and the feedback prompt, which
+  // presumes a real reply exists to react to) must reflect that instead of a reply that never happened.
+  if (mentionMode === "live") {
+    await recordAuditEvent(env, {
+      eventType: "github_app.agent_command_replied",
+      actor: commenter,
+      targetKey: `${repoFullName}#${issue.number}`,
+      outcome: "completed",
+      metadata: {
+        deliveryId,
+        command: command.name,
+        actorKind: authorization.actorKind,
+        runId: bundle?.run.id ?? null,
+        answerId,
+      },
+    });
+    await recordAgentCommandUsage(env, {
+      repoFullName,
+      targetKey,
+      actor: commenter,
+      command: command.name,
+      actorKind: authorization.actorKind,
+      outcome: "replied",
+      detail:
+        bundle?.run.status ?? (maintainerDigest ? "maintainer_digest" : "no_run"),
+      family: maintainerDigest ? "maintainer_digest" : "agent_command",
+      runId: bundle?.run.id ?? null,
+    });
+    await recordGithubProductUsage(env, "agent_command_replied", {
+      actor: commenter,
+      repoFullName,
+      targetKey: `${repoFullName}#${issue.number}`,
+      outcome: "completed",
+      metadata: {
+        command: command.name,
+        actorKind: authorization.actorKind,
+        hasAgentRun: Boolean(bundle),
+        family: maintainerDigest ? "queue_digest" : "agent_command",
+      },
+    });
+    await recordAgentCommandFeedbackPrompt(env, {
       deliveryId,
       command: command.name,
-      actorKind: authorization.actorKind,
-      runId: bundle?.run.id ?? null,
-      answerId,
-    },
-  });
-  await recordAgentCommandUsage(env, {
-    repoFullName,
-    targetKey,
-    actor: commenter,
-    command: command.name,
-    actorKind: authorization.actorKind,
-    outcome: "replied",
-    detail:
-      bundle?.run.status ?? (maintainerDigest ? "maintainer_digest" : "no_run"),
-    family: maintainerDigest ? "maintainer_digest" : "agent_command",
-    runId: bundle?.run.id ?? null,
-  });
-  await recordGithubProductUsage(env, "agent_command_replied", {
-    actor: commenter,
-    repoFullName,
-    targetKey: `${repoFullName}#${issue.number}`,
-    outcome: "completed",
-    metadata: {
+      actor: commenter,
+      targetKey: `${repoFullName}#${issue.number}`,
+      actorKind:
+        authorization.actorKind === "maintainer" ? "maintainer" : "author",
+      family: maintainerDigest ? "maintainer_digest" : "agent_command",
+    });
+  } else {
+    const reason = mentionMode === "dry_run" ? "dry_run" : "agent_paused";
+    await recordAuditEvent(env, {
+      eventType: "github_app.agent_command_reply_skipped",
+      actor: commenter,
+      targetKey: `${repoFullName}#${issue.number}`,
+      outcome: "completed",
+      detail: reason,
+      metadata: {
+        deliveryId,
+        command: command.name,
+        actorKind: authorization.actorKind,
+        answerId,
+        mode: mentionMode,
+      },
+    });
+    await recordAgentCommandUsage(env, {
+      repoFullName,
+      targetKey,
+      actor: commenter,
       command: command.name,
       actorKind: authorization.actorKind,
-      hasAgentRun: Boolean(bundle),
-      family: maintainerDigest ? "queue_digest" : "agent_command",
-    },
-  });
-  await recordAgentCommandFeedbackPrompt(env, {
-    deliveryId,
-    command: command.name,
-    actor: commenter,
-    targetKey: `${repoFullName}#${issue.number}`,
-    actorKind:
-      authorization.actorKind === "maintainer" ? "maintainer" : "author",
-    family: maintainerDigest ? "maintainer_digest" : "agent_command",
-  });
+      outcome: "skipped",
+      detail: reason,
+      family: maintainerDigest ? "maintainer_digest" : "agent_command",
+      runId: bundle?.run.id ?? null,
+    });
+    await recordGithubProductUsage(env, "agent_command_reply_skipped", {
+      actor: commenter,
+      repoFullName,
+      targetKey: `${repoFullName}#${issue.number}`,
+      outcome: "skipped",
+      metadata: {
+        command: command.name,
+        actorKind: authorization.actorKind,
+        hasAgentRun: Boolean(bundle),
+        family: maintainerDigest ? "queue_digest" : "agent_command",
+        mode: mentionMode,
+      },
+    });
+  }
   return true;
 }
 
