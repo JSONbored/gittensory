@@ -819,6 +819,36 @@ describe("createSqliteQueue (durable #980)", () => {
     });
   });
 
+  it("snapshot() reports pending/processing/dead queue depth by job type", async () => {
+    const driver = makeDriver();
+    const q = createSqliteQueue(driver, async () => undefined);
+    await q.binding.send(msg("agent-regate-pr"), { delaySeconds: 60 });
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, ?, 0, 10)",
+      [JSON.stringify(msg("github-webhook")), Date.now() - 1],
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'processing', 0, ?, 0, 9)",
+      [JSON.stringify(msg("agent-regate-pr")), Date.now()],
+    );
+    driver.query(
+      "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'dead', 0, ?, 0, 0)",
+      [JSON.stringify(msg("rag-index-repo")), Date.now()],
+    );
+
+    const snapshot = q.snapshot();
+
+    expect(snapshot.totals).toMatchObject({ pending: 2, processing: 1, dead: 1 });
+    expect(snapshot.byType).toEqual(
+      expect.arrayContaining([
+        { type: "agent-regate-pr", status: "pending", count: 1, due: 0 },
+        { type: "agent-regate-pr", status: "processing", count: 1, due: 0 },
+        { type: "github-webhook", status: "pending", count: 1, due: 1 },
+        { type: "rag-index-repo", status: "dead", count: 1, due: 0 },
+      ]),
+    );
+  });
+
   it("coalesces recurring maintenance jobs by semantic scope and keeps distinct scopes separate", async () => {
     const driver = makeDriver();
     const q = createSqliteQueue(driver, async () => undefined);
@@ -892,8 +922,8 @@ describe("createSqliteQueue (durable #980)", () => {
       "backfill-registered-repos:jsonbored/gittensory:light:1",
       "generate-weekly-value-report:operator:7",
       "generate-weekly-value-report:public:7",
-      'rag-index-repo:jsonbored/gittensory:["src/a.ts","src/b.ts"]',
-      'rag-index-repo:jsonbored/gittensory:["src/c.ts"]',
+      "rag-index-repo:jsonbored/gittensory:sha256:170cb2cfb288ab59ba4d35b2633120223c9acc6893fd5baec3465c434ad5bedf",
+      "rag-index-repo:jsonbored/gittensory:sha256:f4f9970f7a842b1b7b619cbd49f05da577a7d725ff1616ba2de8beed1ae5616f",
     ]);
     expect(rows.map((row) => JSON.parse(row.payload).requestedBy)).toEqual([
       "api",

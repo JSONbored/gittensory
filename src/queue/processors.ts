@@ -74,7 +74,7 @@ import {
   enqueueRepositoryOpenDataBackfill,
   fetchAndStorePullRequestFilesForReview,
   fetchLinkedIssueFacts,
-  fetchLiveCiAggregate,
+  fetchLiveCiAggregatePreferGraphQl,
   type LiveCiAggregate,
   fetchLivePullRequest,
   fetchLivePullRequestHeadSha,
@@ -209,6 +209,10 @@ import {
   delayUntil,
   shouldWaitForGitHubRateLimit,
 } from "../github/rate-limit";
+import {
+  queueSnapshotBacklog,
+  queueSnapshotFromBinding,
+} from "../selfhost/queue-common";
 import {
   downgradeCloseToHold,
   downgradeMergeToHold,
@@ -408,6 +412,7 @@ import { errorMessage, nowIso } from "../utils/json";
 
 const OFFICIAL_MINER_DETECTION_TTL_MS = 5 * 60 * 1000;
 const OFFICIAL_MINER_DETECTION_UNAVAILABLE_TTL_MS = 60 * 1000;
+const PER_PR_REGATE_BACKPRESSURE_TYPES = ["agent-regate-pr"] as const;
 const PR_PUBLIC_SURFACE_ACTIONS = new Set([
   "opened",
   "reopened",
@@ -498,11 +503,13 @@ function fetchLiveCiAggregateWithRequiredContexts(
   baseRef: string | null | undefined,
   token: string | undefined,
 ): Promise<LiveCiAggregate> {
-  // CI refresh callers need fresh check/status state; branch protection contexts move slowly enough to stay request-cached.
+  // CI refresh callers need fresh check/status state; branch protection contexts move slowly enough to stay
+  // request-cached. When the #1941 flag is on, fetchLiveCiAggregatePreferGraphQl collapses the check/status reads
+  // into one GraphQL rollup (reusing these requiredContexts), else it uses the proven REST aggregate.
   return cachedRequiredStatusContexts(env, repoFullName, facts, baseRef, token)
     .catch(() => null)
     .then((requiredContexts) =>
-      fetchLiveCiAggregate(env, repoFullName, headSha, token, requiredContexts),
+      fetchLiveCiAggregatePreferGraphQl(env, repoFullName, headSha, token, requiredContexts),
     );
 }
 
@@ -791,7 +798,7 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
         await fanOutAgentRegateSweepJobs(env, message.requestedBy);
         return;
       }
-      await sweepRepoRegate(env, message.repoFullName);
+      await sweepRepoRegate(env, message.repoFullName, message.requestedBy);
       return;
     case "agent-regate-pr":
       // One bounded re-gate unit fanned out by the sweep (#audit-sweep-fanout): re-review + stamp a single PR.
@@ -1020,6 +1027,11 @@ async function fanOutAgentRegateSweepJobs(
   });
 }
 
+async function currentRegateBacklog(env: Env): Promise<number> {
+  const snapshot = await queueSnapshotFromBinding(env.JOBS).catch(() => null);
+  return queueSnapshotBacklog(snapshot, PER_PR_REGATE_BACKPRESSURE_TYPES);
+}
+
 // Convergence (RAG / codebase index, flag GITTENSORY_REVIEW_RAG). The dispatch for the `rag-index-repo` job.
 // Caller already gated on isRagEnabled(env).
 //   - No repoFullName → cron fan-out: enqueue one FULL re-index job per registered + cutover-allowlisted repo.
@@ -1142,6 +1154,7 @@ async function maybeEnqueueRagReindexForMergedPr(
 async function sweepRepoRegate(
   env: Env,
   repoFullName: string | undefined,
+  requestedBy: "schedule" | "api" | "test",
 ): Promise<void> {
   if (!repoFullName) return;
   const settings = await resolveRepositorySettings(env, repoFullName);
@@ -1168,6 +1181,19 @@ async function sweepRepoRegate(
       outcome: "denied",
       detail: "agent actions paused — re-gate sweep skipped",
       metadata: { repoFullName, mode },
+    });
+    return;
+  }
+  const regateBacklog = requestedBy === "schedule" ? await currentRegateBacklog(env) : 0;
+  if (regateBacklog > 0) {
+    await recordAuditEvent(env, {
+      eventType: "agent.sweep.regate",
+      actor: "gittensory",
+      targetKey: repoFullName,
+      outcome: "queued",
+      detail:
+        "re-gate sweep deferred: prior scheduled re-gate work is still pending or processing",
+      metadata: { repoFullName, mode, deferred: true, regateBacklog },
     });
     return;
   }
@@ -1932,14 +1958,13 @@ async function prReadyForReview(
   // block/close, but hasPending tracks any visible non-bot CI that is not settled yet.
   const ci = await cachedLiveCiAggregate(env, repoFullName, liveFacts, pr.headSha, pr.baseRef, token).catch(() => undefined);
   if (ci?.hasPending) {
-    // Staleness cap: genuinely-running CI settles in minutes. A required check that stays pending far longer
-    // (an orphaned / never-completing check — e.g. a fork check that never reports back) would otherwise make us
-    // defer FOREVER → the PR is silently stuck and never surfaces (the dominant metagraphed stall). Past
-    // STUCK_CI_DEFER_MS we stop deferring and let the gate FINALIZE, so the PR is surfaced (held / needs-human),
-    // or disposed if a verdict is reachable — never silently deferred. first-seen is tracked in the self-host
-    // Redis transient cache per PR+headSha (a new push = new SHA = fresh window); a cache miss degrades to the
-    // old defer (safe — never acts early). (#ci-stuck-finalize)
+    // Staleness cap: inferred or unreadable pending CI can otherwise defer FOREVER (orphaned required context,
+    // transiently unreadable pages, fork check that never reports). Past STUCK_CI_DEFER_MS we stop deferring and
+    // let the gate FINALIZE so the PR surfaces. A visibly queued/in_progress GitHub check/status is active CI,
+    // though, so never cut in front of it. first-seen is tracked in the self-host Redis transient cache per
+    // PR+headSha (a new push = a fresh window); a cache miss degrades to the old defer. (#ci-stuck-finalize)
     if (
+      ci.hasVisiblePending ||
       !(await ciPendingDeferStuck(env, repoFullName, pr.number, pr.headSha))
     ) {
       await recordAuditEvent(env, {

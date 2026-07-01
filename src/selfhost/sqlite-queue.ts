@@ -6,7 +6,7 @@
 import type { SqliteDriver } from "./d1-adapter";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
-import { withOtelSpan } from "./otel";
+import { withReviewSpan } from "./tracing";
 import { captureError } from "./sentry";
 import {
   consumingRetryDelayMs,
@@ -16,6 +16,7 @@ import {
   githubRateLimitAdmissionTargetForJob,
   githubRateLimitMetricContext,
   githubRateLimitRetryDelayMs,
+  buildSelfHostQueueSnapshot,
   jobCoalesceKey,
   jobPriority,
   queueBackgroundConcurrency,
@@ -26,6 +27,7 @@ import {
   rateLimitRetryDelayWithJitter,
   matchesGitHubRateLimitAdmissionTarget,
   type GitHubRateLimitAdmissionTarget,
+  type SelfHostQueueSnapshot,
 } from "./queue-common";
 import type { JobMessage } from "../types";
 
@@ -62,6 +64,7 @@ export interface DurableQueue {
   size(): number;
   deadCount(): number;
   stats(): Record<string, number>;
+  snapshot(): SelfHostQueueSnapshot;
 }
 
 interface JobRow {
@@ -318,7 +321,7 @@ export function createSqliteQueue(
         return true;
       }
       try {
-        await withOtelSpan(
+        await withReviewSpan(
           "selfhost.queue.job",
           { "job.type": message.type, "queue.backend": "sqlite", "job.attempt": job.attempts + 1 },
           () => consume(message),
@@ -517,6 +520,14 @@ export function createSqliteQueue(
     },
     stats() {
       return readQueueStats(driver);
+    },
+    snapshot() {
+      return buildSelfHostQueueSnapshot(
+        driver.query(
+          `SELECT payload, status, run_after FROM ${TABLE} WHERE status IN ('pending','processing','dead')`,
+          [],
+        ).rows as Array<{ payload: string; status: string; run_after: number }>,
+      );
     },
   };
 }

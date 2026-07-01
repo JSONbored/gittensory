@@ -5,7 +5,7 @@
 import type { Pool } from "pg";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
-import { withOtelSpan } from "./otel";
+import { withReviewSpan } from "./tracing";
 import { captureError } from "./sentry";
 import {
   consumingRetryDelayMs,
@@ -15,6 +15,7 @@ import {
   githubRateLimitAdmissionTargetForJob,
   githubRateLimitMetricContext,
   githubRateLimitRetryDelayMs,
+  buildSelfHostQueueSnapshot,
   jobCoalesceKey,
   jobPriority,
   queueBackgroundConcurrency,
@@ -25,6 +26,7 @@ import {
   rateLimitRetryDelayWithJitter,
   matchesGitHubRateLimitAdmissionTarget,
   type GitHubRateLimitAdmissionTarget,
+  type SelfHostQueueSnapshot,
 } from "./queue-common";
 import type { JobMessage } from "../types";
 
@@ -60,6 +62,7 @@ export interface PgDurableQueue {
   size(): Promise<number>;
   deadCount(): Promise<number>;
   stats(): Promise<Record<string, number>>;
+  snapshot(): Promise<SelfHostQueueSnapshot>;
 }
 
 interface JobRow {
@@ -375,7 +378,7 @@ export function createPgQueue(
         return true;
       }
       try {
-        await withOtelSpan(
+        await withReviewSpan(
           "selfhost.queue.job",
           { "job.type": message.type, "queue.backend": "postgres", "job.attempt": Number(job.attempts) + 1 },
           () => consume(message),
@@ -569,6 +572,14 @@ export function createPgQueue(
     },
     async stats() {
       return readQueueStats();
+    },
+    async snapshot() {
+      const res = await pool.query(
+        `SELECT payload, status, run_after FROM ${TABLE} WHERE status IN ('pending','processing','dead')`,
+      );
+      return buildSelfHostQueueSnapshot(
+        res.rows as Array<{ payload: string; status: string; run_after: string | number }>,
+      );
     },
   };
 
