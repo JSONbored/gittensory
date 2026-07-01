@@ -154,8 +154,8 @@ import {
   buildIssueAdvisory,
   buildPullRequestAdvisory,
   evaluateGateCheck,
-  isTestPath,
 } from "../rules/advisory";
+import { isTestPath } from "../signals/test-evidence";
 import { detectNotificationEvents } from "../notifications/events";
 import {
   deliverNotification,

@@ -669,6 +669,36 @@ describe("advisory rules", () => {
     expect(JSON.stringify(annotations)).not.toMatch(/trust score|wallet|hotkey|reward estimate|reviewability/i);
   });
 
+  it("does not flag Missing test evidence when a Cypress/e2e test accompanies a code change (regression)", () => {
+    // isTestPath now delegates to the canonical src/signals/test-evidence matcher, which recognizes
+    // *.cy./*.e2e./__snapshots__/_spec.rb tests. A stale local copy dropped those branches, so a code
+    // change shipped with only a Cypress test was wrongly annotated "Missing test evidence".
+    const advisory = buildPullRequestAdvisory(repo, {
+      repoFullName: repo.fullName,
+      number: 20,
+      title: "Guard the login route with a Cypress test",
+      state: "open",
+      authorLogin: "contributor",
+      authorAssociation: "NONE",
+      labels: [],
+      linkedIssues: [],
+    });
+    const files: PullRequestFileRecord[] = [
+      { repoFullName: repo.fullName, pullNumber: 20, path: "src/auth/login.ts", additions: 20, deletions: 0, changes: 20, payload: {} },
+      { repoFullName: repo.fullName, pullNumber: 20, path: "cypress/e2e/login.cy.ts", additions: 30, deletions: 0, changes: 30, payload: {} },
+    ];
+    const collisions: CollisionReport = {
+      repoFullName: repo.fullName,
+      generatedAt: "2026-06-10T00:00:00.000Z",
+      summary: { clusterCount: 0, highRiskCount: 0, itemsReviewed: 0 },
+      clusters: [],
+    };
+
+    const { annotations } = buildCheckRunAnnotations(advisory, { files, collisions, pullNumber: 20 }, "standard");
+
+    expect(annotations.some((entry) => entry.title === "Missing test evidence")).toBe(false);
+  });
+
   it("buildCheckRunAnnotations uses notice level for medium-risk collisions and critical public finding text", () => {
     const advisory = {
       ...buildPullRequestAdvisory(repo, null),
