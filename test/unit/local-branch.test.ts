@@ -1759,6 +1759,8 @@ describe("local MCP git metadata collection", () => {
     expect(parseGitRemote("https://github.com/JSONbored/gittensory.git")).toBe("JSONbored/gittensory");
     expect(parseGitRemote("https://github.com/JSONbored/gittensory/")).toBe("JSONbored/gittensory");
     expect(parseGitRemote("https://github.com/JSONbored/gittensory////")).toBe("JSONbored/gittensory");
+    expect(parseGitRemote("http://github.com/JSONbored/gittensory.git")).toBe("JSONbored/gittensory");
+    expect(parseGitRemote("git://github.com/JSONbored/gittensory.git")).toBe("JSONbored/gittensory");
     expect(parseGitRemote(`x${"/".repeat(32_000)}x`)).toBeUndefined();
 
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-local-"));

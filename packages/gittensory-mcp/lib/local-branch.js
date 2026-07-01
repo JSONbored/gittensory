@@ -16,7 +16,9 @@ export function parseGitRemote(remoteUrl) {
   const patterns = [
     /^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/,
     /^https:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/,
+    /^http:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/,
     /^ssh:\/\/git@github\.com\/([^/]+)\/(.+?)(?:\.git)?$/,
+    /^git:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/,
   ];
   for (const pattern of patterns) {
     const match = trimmed.match(pattern);
