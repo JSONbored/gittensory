@@ -152,16 +152,22 @@ jobs:
           # should fail CI instead of allowing a PR to merge without patch data.
           fail_ci_if_error: true
       # Fork PRs run without secrets, so they cannot use the token path above. codecov-action v4+ supports
-      # tokenless upload for public repos: it derives branch/commit/PR from the GitHub Actions run's own
-      # (trustworthy, not fork-writable) environment instead of an override or a token. This keeps the
-      # gate enforced on forks with a single, synchronous upload — no separate workflow, no artifact
-      # staging, no fork-authored attribution data to validate.
+      # tokenless upload for public repos, but its commit auto-detection cannot be trusted here: for
+      # pull_request events GITHUB_SHA is the ephemeral auto-merge commit, and codecov-cli's fallback to
+      # recover the real head sha assumes HEAD is that 2-parent merge commit -- our checkout step above
+      # deliberately checks out github.event.pull_request.head.sha directly (so tests run the contributor's
+      # actual commit, not a synthetic merge), so HEAD has one parent and that recovery can't fire. Pass
+      # the same explicit overrides as the trusted upload above so the report attaches to the real PR head,
+      # not a merge sha GitHub's PR checks list has no reason to display.
       - name: Upload coverage to Codecov (fork PR tokenless)
         if: ${{ success() && needs.changes.outputs.backend == 'true' && github.event.pull_request.head.repo.fork == true }}
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: ./coverage/lcov.info
           disable_search: true
+          override_branch: ${{ github.event.pull_request.head.ref }}
+          override_commit: ${{ github.event.pull_request.head.sha }}
+          override_pr: ${{ github.event.pull_request.number }}
           fail_ci_if_error: true
       # Test results are useful Codecov annotations, not the coverage gate. Keep
       # their upload non-blocking so a JUnit ingestion hiccup does not fail CI
@@ -185,6 +191,9 @@ jobs:
           files: ./reports/junit/vitest.xml
           report_type: test_results
           disable_search: true
+          override_branch: ${{ github.event.pull_request.head.ref }}
+          override_commit: ${{ github.event.pull_request.head.sha }}
+          override_pr: ${{ github.event.pull_request.number }}
           fail_ci_if_error: false
       - name: Worker runtime tests
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}

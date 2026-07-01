@@ -96,6 +96,13 @@ describe("Codecov policy", () => {
     expect(forkCoverageWith.files).toBe("./coverage/lcov.info");
     expect(forkCoverageWith.disable_search).toBe(true);
     expect(forkCoverageWith.fail_ci_if_error).toBe(true);
+    // GITHUB_SHA is the ephemeral auto-merge commit on pull_request events, and codecov-cli's fallback to
+    // recover the real head sha assumes a 2-parent merge commit at HEAD -- which our checkout step (it
+    // fetches github.event.pull_request.head.sha directly) never produces. Without an explicit override,
+    // the report would attach to a sha GitHub's PR checks list has no reason to ever display.
+    expect(forkCoverageWith.override_branch).toBe("${{ github.event.pull_request.head.ref }}");
+    expect(forkCoverageWith.override_commit).toBe("${{ github.event.pull_request.head.sha }}");
+    expect(forkCoverageWith.override_pr).toBe("${{ github.event.pull_request.number }}");
 
     const forkTestResultsUpload = steps.find(
       (step) => step.name === "Upload Vitest results to Codecov (fork PR tokenless)",
@@ -105,6 +112,7 @@ describe("Codecov policy", () => {
     expect(forkTestResultsWith.token).toBeUndefined();
     expect(forkTestResultsWith.report_type).toBe("test_results");
     expect(forkTestResultsWith.fail_ci_if_error).toBe(false);
+    expect(forkTestResultsWith.override_commit).toBe("${{ github.event.pull_request.head.sha }}");
 
     // The trusted (token) path must still explicitly exclude forks -- it must never see the token env
     // used, and the two paths must be mutually exclusive so a fork PR never double-uploads.
