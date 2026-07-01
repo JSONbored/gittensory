@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { closePullRequest, createIssueComment, createPullRequestReview, createPullRequestReviewComments, getLastCloserLogin, mergePullRequest, updatePullRequestBranch } from "../../src/github/pr-actions";
+import { clearInstallationTokenCacheForTest } from "../../src/github/app";
 import { createTestEnv } from "../helpers/d1";
 
 function envWithKey() {
@@ -86,6 +87,33 @@ describe("GitHub PR action primitives (#778)", () => {
     expect(result).toEqual({ state: "closed" });
     expect(calls[0]).toMatchObject({ method: "PATCH", body: { state: "closed" } });
     expect(calls[0]?.url).toMatch(/\/repos\/owner\/repo\/pulls\/7$/);
+  });
+
+  it("evicts a rejected installation token and retries once with a freshly-minted token on a 401 (#2263)", async () => {
+    clearInstallationTokenCacheForTest();
+    let tokenMints = 0;
+    let closeAttempts = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) {
+        tokenMints += 1;
+        return Response.json({ token: `token-${tokenMints}` });
+      }
+      if (url.endsWith("/pulls/7") && (init?.method ?? "GET") === "PATCH") {
+        closeAttempts += 1;
+        // The FIRST attempt uses the (stale, cached) token and is rejected; the RETRY, with a freshly-minted
+        // token, succeeds — mirroring the existing check-run/comment poster behavior via withInstallationTokenRetry.
+        if (closeAttempts === 1) return Response.json({ message: "Bad credentials" }, { status: 401 });
+        return Response.json({ state: "closed" });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+
+    const result = await closePullRequest(envWithKey(), 998877, "owner/repo", 7);
+
+    expect(result).toEqual({ state: "closed" });
+    expect(closeAttempts).toBe(2); // one rejected attempt + one retry
+    expect(tokenMints).toBe(2); // the rejected token was evicted, forcing a fresh mint for the retry
   });
 
   it("posts a plain issue comment", async () => {
@@ -286,6 +314,49 @@ describe("GitHub PR action primitives (#778)", () => {
     });
     await expect(updatePullRequestBranch(envWithKey(), 123, "owner/repo", 55)).resolves.toBeUndefined();
     expect(requestBodies.some((b) => !b.includes("expected_head_sha"))).toBe(true);
+  });
+
+  it("updates branch WITH an expected head sha (includes expected_head_sha — TRUE branch of the spread ternary)", async () => {
+    const requestBodies: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/pulls/56/update-branch")) {
+        requestBodies.push(String(init?.body ?? ""));
+        return new Response("{}", { status: 201, headers: { "content-type": "application/json" } });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(updatePullRequestBranch(envWithKey(), 123, "owner/repo", 56, "expected-sha-1")).resolves.toBeUndefined();
+    expect(requestBodies.some((b) => b.includes('"expected_head_sha":"expected-sha-1"'))).toBe(true);
+  });
+
+  it("returns the page-1 closer when rel=last explicitly reports a single page (lastPage<=1)", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/27/events")) {
+        return Response.json([{ event: "closed", actor: { login: "solo-page-closer" } }], {
+          headers: { link: '<https://api.github.test/issues/27/events?per_page=100&page=1>; rel="last"' },
+        });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 27)).resolves.toEqual({ login: "solo-page-closer", coveredAllPages: true });
+  });
+
+  it("returns null when rel=last explicitly reports a single page with no close event (?? null right branch)", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/28/events")) {
+        return Response.json([{ event: "labeled" }], {
+          headers: { link: '<https://api.github.test/issues/28/events?per_page=100&page=1>; rel="last"' },
+        });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 28)).resolves.toEqual({ login: null, coveredAllPages: true });
   });
 });
 
