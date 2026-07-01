@@ -511,7 +511,7 @@ describe("explainScoreBreakdown", () => {
   it("surfaces the base score as saturated (full) near the score cap", () => {
     // Density model: baseScoreCap = MERGED_PR_BASE_SCORE × MAX_CODE_DENSITY_MULTIPLIER +
     // MAX_CONTRIBUTION_BONUS = 25 × 1.15 + 5 = 33.75. Need baseScore / baseScoreCap ≥ 0.95 (≈ 32.06).
-    // With densityMultiplier = 1.15 and totalTokenScore ≥ 993 (full bonus 5), baseScore = 28.75 + 5 = 33.75.
+    // With densityMultiplier = 1.15 and totalTokenScore = 1500 (full bonus 5), baseScore = 28.75 + 5 = 33.75.
     const preview = buildScorePreview({
       repo,
       snapshot,

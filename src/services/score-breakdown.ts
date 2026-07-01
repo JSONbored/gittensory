@@ -53,7 +53,7 @@ function baseScoreBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdo
       leverageScore: 75,
     };
   }
-  const saturated = baseScoreCap !== undefined && baseScore / baseScoreCap >= BASE_SCORE_SATURATION_RATIO;
+  const saturated = baseScoreCap !== undefined && baseScoreCap > 0 && baseScore / baseScoreCap >= BASE_SCORE_SATURATION_RATIO;
   const hasBonus = contributionBonus > 0;
   const bonusClause = hasBonus ? `; contribution bonus contributing at ${roundBand(contributionBonus)}` : "; contribution bonus not contributing";
   const summary = `Base score is ${saturated ? "saturated near the score cap" : "contributing toward the score cap"} (current base ${roundBand(baseScore)}${bonusClause}).`;
