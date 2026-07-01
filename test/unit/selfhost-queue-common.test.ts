@@ -676,6 +676,23 @@ describe("self-host queue common helpers", () => {
     );
   });
 
+  it("keys build-contributor-evidence by login/all, and fanned-out batches by their FIRST login (never one shared key) (#1941)", () => {
+    // A single-login (re-index) job coalesces by login; the scheduled trigger (no login/logins) → the "all" slot.
+    expect(jobCoalesceKey(payload({ type: "build-contributor-evidence", requestedBy: "schedule", login: "Alice" }))).toBe("build-contributor-evidence:alice");
+    expect(jobCoalesceKey(payload({ type: "build-contributor-evidence", requestedBy: "schedule" }))).toBe("build-contributor-evidence:all");
+    // Fanned-out batches key by their FIRST login → DISTINCT batches get DISTINCT keys (none is dropped by coalescing).
+    const batchA = jobCoalesceKey(payload({ type: "build-contributor-evidence", requestedBy: "schedule", logins: ["Bob", "Carol"] }));
+    const batchB = jobCoalesceKey(payload({ type: "build-contributor-evidence", requestedBy: "schedule", logins: ["Dave", "Erin"] }));
+    expect(batchA).toBe("build-contributor-evidence:batch:bob");
+    expect(batchB).toBe("build-contributor-evidence:batch:dave");
+    expect(batchA).not.toBe(batchB);
+    expect(batchA).not.toBe("build-contributor-evidence:all"); // the footgun: a batch must never collapse into "all"
+    // An EMPTY batch (no logins) is the scheduled-trigger shape → the "all" slot.
+    expect(jobCoalesceKey(payload({ type: "build-contributor-evidence", requestedBy: "schedule", logins: [] }))).toBe("build-contributor-evidence:all");
+    // A non-empty batch whose first login is unusable is left UNCOALESCED (null) — never collapsed into "all".
+    expect(jobCoalesceKey(payload({ type: "build-contributor-evidence", requestedBy: "schedule", logins: [""] }))).toBeNull();
+  });
+
   it("returns no coalesce key for malformed payloads", () => {
     expect(jobCoalesceKey("not-json")).toBeNull();
   });

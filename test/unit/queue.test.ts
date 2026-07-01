@@ -44,7 +44,7 @@ import {
   upsertRepositoryFromGitHub,
   putCachedAiReview,
 } from "../../src/db/repositories";
-import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, processJob } from "../../src/queue/processors";
+import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, contributorEvidenceBatchSize, processJob } from "../../src/queue/processors";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
@@ -100,6 +100,67 @@ describe("queue processors", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("fans build-contributor-evidence out into per-batch jobs when the login set exceeds CONTRIBUTOR_EVIDENCE_BATCH_SIZE (#1941)", async () => {
+    vi.stubEnv("CONTRIBUTOR_EVIDENCE_BATCH_SIZE", "1"); // force a fan-out at > 1 derived login
+    const env = createTestEnv();
+    // Two contributors via stored PRs with distinct authors → a derived login set of 2.
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 1, title: "PR one", state: "open", user: { login: "alice" }, head: { sha: "a1" }, labels: [], body: "x" });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 2, title: "PR two", state: "open", user: { login: "bob" }, head: { sha: "b2" }, labels: [], body: "y" });
+
+    const fanned: import("../../src/types").JobMessage[] = [];
+    const send = env.JOBS.send.bind(env.JOBS);
+    env.JOBS.send = (async (message: import("../../src/types").JobMessage, options?: QueueSendOptions) => {
+      if (message.type === "build-contributor-evidence") fanned.push(message);
+      return send(message, options);
+    }) as typeof env.JOBS.send;
+
+    await processJob(env, { type: "build-contributor-evidence", requestedBy: "schedule" });
+    env.JOBS.send = send;
+
+    // The scheduled trigger fanned out into one per-batch job per login (batch size 1), each carrying a `logins`
+    // array — not a single giant inline job.
+    expect(fanned).toHaveLength(2);
+    const batched = fanned.flatMap((m) => (m as { logins?: string[] }).logins ?? []).sort();
+    expect(batched).toEqual(["alice", "bob"]);
+    expect(fanned.every((m) => Array.isArray((m as { logins?: string[] }).logins))).toBe(true);
+  });
+
+  it("reads CONTRIBUTOR_EVIDENCE_BATCH_SIZE, defaulting on unset / invalid / negative values", () => {
+    expect(contributorEvidenceBatchSize()).toBe(150); // unset → default
+    vi.stubEnv("CONTRIBUTOR_EVIDENCE_BATCH_SIZE", "40");
+    expect(contributorEvidenceBatchSize()).toBe(40);
+    vi.stubEnv("CONTRIBUTOR_EVIDENCE_BATCH_SIZE", "0");
+    expect(contributorEvidenceBatchSize()).toBe(0); // 0 = disable fan-out
+    vi.stubEnv("CONTRIBUTOR_EVIDENCE_BATCH_SIZE", "-5");
+    expect(contributorEvidenceBatchSize()).toBe(150); // negative → default
+    vi.stubEnv("CONTRIBUTOR_EVIDENCE_BATCH_SIZE", "not-a-number");
+    expect(contributorEvidenceBatchSize()).toBe(150); // NaN → default
+  });
+
+  it("does NOT fan out when batching is disabled (CONTRIBUTOR_EVIDENCE_BATCH_SIZE=0) — the scheduled trigger stays one job (#1941)", async () => {
+    vi.stubEnv("CONTRIBUTOR_EVIDENCE_BATCH_SIZE", "0");
+    vi.stubGlobal("fetch", async () => Response.json({})); // inline path makes per-login + scoring reads; keep off-network
+    const env = createTestEnv();
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 1, title: "PR one", state: "open", user: { login: "alice" }, head: { sha: "a1" }, labels: [], body: "x" });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 2, title: "PR two", state: "open", user: { login: "bob" }, head: { sha: "b2" }, labels: [], body: "y" });
+    const batches: import("../../src/types").JobMessage[] = [];
+    const send = env.JOBS.send.bind(env.JOBS);
+    env.JOBS.send = (async (message: import("../../src/types").JobMessage, options?: QueueSendOptions) => {
+      if (message.type === "build-contributor-evidence" && Array.isArray((message as { logins?: string[] }).logins)) batches.push(message);
+      return send(message, options);
+    }) as typeof env.JOBS.send;
+    await processJob(env, { type: "build-contributor-evidence", requestedBy: "schedule" });
+    env.JOBS.send = send;
+    expect(batches).toHaveLength(0); // never fanned out — processed inline
+  });
+
+  it("build-contributor-evidence is a no-op when there are no contributors (empty derived set) (#1941)", async () => {
+    const env = createTestEnv();
+    // No PRs/issues → no derived logins → the worker early-returns before loading aggregate data or making any read.
+    await expect(processJob(env, { type: "build-contributor-evidence", requestedBy: "schedule" })).resolves.toBeUndefined();
   });
 
   it("processes registry, backfill, installation health, and signal snapshot jobs", async () => {

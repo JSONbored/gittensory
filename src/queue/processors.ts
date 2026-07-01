@@ -781,7 +781,7 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       await fileUpstreamDriftIssues(env);
       return;
     case "build-contributor-evidence":
-      await buildContributorEvidence(env, message.login);
+      await buildContributorEvidence(env, message.login, message.logins);
       return;
     case "build-contributor-decision-packs":
       await buildContributorDecisionPacks(env, message.login);
@@ -2540,10 +2540,70 @@ async function loadContributorPullRequestFilePaths(
   return files;
 }
 
+const CONTRIBUTOR_EVIDENCE_LOGIN_CAP = 500;
+const DEFAULT_CONTRIBUTOR_EVIDENCE_BATCH_SIZE = 150;
+
+// Max logins processed per build-contributor-evidence job before the scheduled trigger fans out into per-batch jobs.
+// 0 disables the fan-out (single job). Read from process.env so it works on cloud + self-host without a binding.
+export function contributorEvidenceBatchSize(): number {
+  const raw = Number(process.env.CONTRIBUTOR_EVIDENCE_BATCH_SIZE ?? String(DEFAULT_CONTRIBUTOR_EVIDENCE_BATCH_SIZE));
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : DEFAULT_CONTRIBUTOR_EVIDENCE_BATCH_SIZE;
+}
+
 async function buildContributorEvidence(
   env: Env,
   login?: string,
+  batchLogins?: string[],
 ): Promise<void> {
+  // A single login or a fanned-out batch → process exactly those (no derivation).
+  const explicitLogins = batchLogins?.length ? batchLogins : login ? [login] : null;
+  if (explicitLogins) {
+    await processContributorEvidenceLogins(env, explicitLogins);
+    return;
+  }
+  // Scheduled trigger: derive the full contributor set from stored PRs + issues.
+  const [allPullRequests, allIssues] = await Promise.all([
+    listAllPullRequests(env),
+    listAllIssues(env),
+  ]);
+  const derivedLogins = [
+    ...new Set(
+      [...allPullRequests, ...allIssues].flatMap((record) =>
+        record.authorLogin ? [record.authorLogin] : [],
+      ),
+    ),
+  ].slice(0, CONTRIBUTOR_EVIDENCE_LOGIN_CAP);
+  const batchSize = contributorEvidenceBatchSize();
+  // Fan out into per-batch jobs so the per-login GitHub reads (/users/{login} + its repos pages) spread across the
+  // queue's paced execution + rate-limit admission instead of bursting for every contributor in one job. Stays one
+  // job when the set fits a batch or the fan-out is disabled (CONTRIBUTOR_EVIDENCE_BATCH_SIZE=0).
+  if (batchSize > 0 && derivedLogins.length > batchSize) {
+    const batches: string[][] = [];
+    for (let i = 0; i < derivedLogins.length; i += batchSize) {
+      batches.push(derivedLogins.slice(i, i + batchSize));
+    }
+    await Promise.all(
+      batches.map((batch, index) => {
+        const message: JobMessage = { type: "build-contributor-evidence", requestedBy: "schedule", logins: batch };
+        const delaySeconds = Math.min(index * 15, 600);
+        return delaySeconds > 0 ? env.JOBS.send(message, { delaySeconds }) : env.JOBS.send(message);
+      }),
+    );
+    return;
+  }
+  // Small enough (or fan-out disabled): process inline, reusing the PRs + issues loaded above.
+  await processContributorEvidenceLogins(env, derivedLogins, { allPullRequests, allIssues });
+}
+
+async function processContributorEvidenceLogins(
+  env: Env,
+  logins: string[],
+  preloaded?: {
+    allPullRequests: Awaited<ReturnType<typeof listAllPullRequests>>;
+    allIssues: Awaited<ReturnType<typeof listAllIssues>>;
+  },
+): Promise<void> {
+  if (logins.length === 0) return;
   const [
     allPullRequests,
     allIssues,
@@ -2552,22 +2612,13 @@ async function buildContributorEvidence(
     allBounties,
     snapshot,
   ] = await Promise.all([
-    listAllPullRequests(env),
-    listAllIssues(env),
+    preloaded ? Promise.resolve(preloaded.allPullRequests) : listAllPullRequests(env),
+    preloaded ? Promise.resolve(preloaded.allIssues) : listAllIssues(env),
     listRepositories(env),
     listRepoSyncStates(env),
     listBounties(env),
     getOrCreateScoringModelSnapshot(env),
   ]);
-  const logins = login
-    ? [login]
-    : [
-        ...new Set(
-          [...allPullRequests, ...allIssues].flatMap((record) =>
-            record.authorLogin ? [record.authorLogin] : [],
-          ),
-        ),
-      ].slice(0, 500);
   const issueQualityByRepo = await loadIssueQualityReportMap(env, repositories);
   for (const contributorLogin of logins) {
     // Isolate each login so one failure (transient GitHub/D1 error) doesn't abort the whole
