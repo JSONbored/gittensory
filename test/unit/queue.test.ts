@@ -11415,7 +11415,8 @@ describe("one-shot reopen prevention", () => {
     expect(calls.some((call) => call.url.endsWith("/collaborators/maintainer/permission"))).toBe(true);
     expect(calls.some((call) => call.method === "POST" && call.url.endsWith("/issues/42/comments"))).toBe(true);
     expect(calls.some((call) => call.method === "PATCH" && call.url.endsWith("/pulls/42"))).toBe(true);
-    const audit = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ detail: string }>();
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("completed"); // #2260: a successful close is unaffected
     expect(audit?.detail).toContain("originally closed by maintainer");
     // #review-audit: the early return after a re-close stamps the delivery processed (was left "queued").
     const webhookRow = await env.DB.prepare("select status from webhook_events where delivery_id = ?").bind("reopen-write-collab-close").first<{ status: string }>();
@@ -11676,6 +11677,41 @@ describe("one-shot reopen prevention", () => {
       processJob(env, { type: "github-webhook", deliveryId: "reopen-promoted-audit-fail", eventName: "pull_request", payload: reopenedPayload("contributor") }),
     ).resolves.toBeUndefined();
     expect(contributorPermissionCalls).toBe(2);
+  });
+
+  it("records outcome:error (not completed) when the reclose PATCH call itself fails (#2260)", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
+      if (url.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" });
+      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "maintainer" } }]);
+      if (url.endsWith("/issues/42/comments")) return Response.json({ id: 99 }, { status: 201 }); // the courtesy comment succeeds
+      if (url.endsWith("/pulls/42") && method === "PATCH") return new Response("forbidden", { status: 403 }); // the close itself fails
+      return new Response("not found", { status: 404 });
+    });
+
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await repositoriesModule.upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { merge: "auto", request_changes: "auto" } });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "reopen-close-fails",
+      eventName: "pull_request",
+      payload: reopenedPayload("contributor"),
+    });
+
+    expect(calls.some((call) => call.method === "PATCH" && call.url.endsWith("/pulls/42"))).toBe(true); // the close WAS attempted
+    const audit = await env.DB.prepare("select outcome, detail, metadata_json from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string; detail: string; metadata_json: string }>();
+    expect(audit?.outcome).toBe("error"); // NOT "completed" — the close did not actually succeed
+    expect(audit?.detail).toContain("FAILED to re-close");
+    expect(JSON.parse(audit?.metadata_json ?? "{}").error).toBeTruthy();
+    // The handler still owns the decision (never falls through to normal re-review) even though the API call failed.
+    const webhookRow = await env.DB.prepare("select status from webhook_events where delivery_id = ?").bind("reopen-close-fails").first<{ status: string }>();
+    expect(webhookRow?.status).toBe("processed");
   });
 
   it("does NOT re-close a disallowed reopen on an OBSERVE-only / un-opted-in repo (autonomy floor, #review-audit)", async () => {

@@ -8016,6 +8016,7 @@ async function maybeRecloseDisallowedReopen(
     }).catch(() => undefined);
     return true; // handled (decision made); a superseded/ambiguous reopener still counts as handled
   }
+  // The comment is a courtesy notice; its failure must not mask whether the close itself succeeded (below).
   await createIssueComment(
     env,
     installationId,
@@ -8023,16 +8024,23 @@ async function maybeRecloseDisallowedReopen(
     pr.number,
     "This pull request was closed by Gittensory and can't be reopened — reviews are one-shot. Please open a new pull request with the issues resolved.",
   ).catch(() => undefined);
-  await closePullRequest(env, installationId, repoFullName, pr.number).catch(
-    () => undefined,
-  );
+  // #2260: the audit outcome must reflect whether the close actually happened on GitHub, not just whether this
+  // handler ran. A swallowed 403/404/5xx here previously still recorded outcome:"completed", so an operator
+  // trusting the audit trail believed a one-shot close was enforced when it may not have been.
+  const closeError = await closePullRequest(env, installationId, repoFullName, pr.number)
+    .then(() => null)
+    .catch((error: unknown) => error);
+  const originallyClosedBy = closer ?? "Gittensory (close beyond the inspected event window)";
   await recordAuditEvent(env, {
     eventType: "github_app.reopen_reclosed",
     actor: "gittensory",
     targetKey: `${repoFullName}#${pr.number}`,
-    outcome: "completed",
-    detail: `re-closed a disallowed reopen by ${reopener} (originally closed by ${closer ?? "Gittensory (close beyond the inspected event window)"}) — one-shot; resubmit a new PR`,
-    metadata: { deliveryId, repoFullName },
+    outcome: closeError === null ? "completed" : "error",
+    detail:
+      closeError === null
+        ? `re-closed a disallowed reopen by ${reopener} (originally closed by ${originallyClosedBy}) — one-shot; resubmit a new PR`
+        : `FAILED to re-close a disallowed reopen by ${reopener} (originally closed by ${originallyClosedBy}) — the close API call did not succeed; the PR may still be open`,
+    metadata: closeError === null ? { deliveryId, repoFullName } : { deliveryId, repoFullName, error: errorMessage(closeError) },
   }).catch(() => undefined);
   return true;
 }
