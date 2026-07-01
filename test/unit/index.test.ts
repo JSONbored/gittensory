@@ -277,7 +277,9 @@ describe("worker entrypoint", () => {
     expect(sent).toEqual([{ type: "agent-regate-sweep", requestedBy: "schedule" }]);
   });
 
-  it("keeps enqueueing scheduled sweeps while prior regate jobs are queued", async () => {
+  it("keeps enqueueing scheduled sweeps while prior per-PR regate jobs are queued (#2119)", async () => {
+    // Per-PR "agent-regate-pr" backlog is normal, expected, ongoing work (staggered/rate-deferred re-reviews) —
+    // it must NOT block the next scheduled fan-out trigger, or the sweep starves under any sustained load.
     const sent: Array<import("../../src/types").JobMessage> = [];
     let snapshotCalled = false;
     const env = createTestEnv({
@@ -288,11 +290,8 @@ describe("worker entrypoint", () => {
         snapshot: async () => {
           snapshotCalled = true;
           return {
-            totals: { pending: 2, processing: 1, dead: 0, due: 2 },
-            byType: [
-              { type: "agent-regate-pr", status: "pending", count: 2, due: 2 },
-              { type: "agent-regate-sweep", status: "processing", count: 1, due: 0 },
-            ],
+            totals: { pending: 2, processing: 0, dead: 0, due: 2 },
+            byType: [{ type: "agent-regate-pr", status: "pending", count: 2, due: 2 }],
           };
         },
       } as unknown as Queue,
@@ -308,7 +307,34 @@ describe("worker entrypoint", () => {
       { type: "repair-data-fidelity", requestedBy: "schedule" },
       { type: "refresh-installation-health", requestedBy: "schedule" },
     ]);
-    expect(snapshotCalled).toBe(false);
+    expect(snapshotCalled).toBe(true);
+  });
+
+  it("defers a new sweep trigger while a prior one is still pending or processing (#2119, #audit-sweep-fanout)", async () => {
+    const sent: Array<import("../../src/types").JobMessage> = [];
+    const env = createTestEnv({
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+        snapshot: async () => ({
+          totals: { pending: 0, processing: 1, dead: 0, due: 0 },
+          byType: [{ type: "agent-regate-sweep", status: "processing", count: 1, due: 0 }],
+        }),
+      } as unknown as Queue,
+    });
+    const waitUntil: Promise<unknown>[] = [];
+
+    await worker.scheduled(controllerFor("2026-05-25T05:30:00.000Z"), env, executionContext(waitUntil));
+    await Promise.all(waitUntil);
+
+    // No SECOND "agent-regate-sweep" trigger is enqueued behind the one already in flight; the other :30 jobs
+    // are unaffected since they never depended on the (removed, broad) backlog check.
+    expect(sent).toEqual([
+      { type: "backfill-registered-repos", requestedBy: "schedule", mode: "light" },
+      { type: "repair-data-fidelity", requestedBy: "schedule" },
+      { type: "refresh-installation-health", requestedBy: "schedule" },
+    ]);
   });
 
   it("does not require queue introspection for regular review sweep scheduling", async () => {
@@ -329,8 +355,10 @@ describe("worker entrypoint", () => {
     await worker.scheduled(controllerFor("2026-05-25T05:14:00.000Z"), env, executionContext(waitUntil));
     await Promise.all(waitUntil);
 
+    // Fails OPEN on a broken snapshot binding: the sweep still enqueues, and the failure is surfaced (not
+    // silently swallowed) so an operator can see the introspection is unavailable.
     expect(sent).toEqual([{ type: "agent-regate-sweep", requestedBy: "schedule" }]);
-    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("selfhost_queue_snapshot_failed"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("selfhost_queue_snapshot_failed"));
   });
 
   it("does not enqueue review sweeps from a broker-only Cloudflare runtime", async () => {

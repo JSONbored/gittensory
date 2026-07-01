@@ -9,12 +9,21 @@ import { isRagEnabled } from "./review/rag-wire";
 import { isSelfTuneEnabled } from "./review/selftune-wire";
 import {
   isGitHubBudgetBackgroundJob,
+  queueSnapshotBacklog,
+  queueSnapshotFromBinding,
   scheduledEnqueueDelaySeconds,
 } from "./selfhost/queue-common";
 import { isReviewExecutionJob, isSelfHostedReviewRuntime } from "./selfhost/review-runtime";
 import type { JobMessage } from "./types";
 
 const app = createApp();
+// Scoped to the top-level fan-out TRIGGER only (#audit-sweep-fanout) — NOT "agent-regate-pr", whose per-repo
+// backlog is normal, expected, and can legitimately stay nonzero for long periods (staggered/rate-deferred
+// per-PR re-reviews), which is exactly what caused the prior broad backlog check to starve the scheduled sweep
+// entirely. A pending/processing "agent-regate-sweep" message means a fan-out is already in flight; the
+// per-repo drain guard (getLatestRegatedAt / isRegateSweepDraining) already protects individual repos once that
+// single fan-out runs, so this only needs to stop a SECOND trigger from queuing up behind the first.
+const REGATE_SWEEP_TRIGGER_TYPES = ["agent-regate-sweep"] as const;
 
 export { RateLimiter };
 
@@ -102,11 +111,29 @@ async function enqueueScheduledJobs(env: Env, controller: ScheduledController): 
   // tick (~2 min) retries, and after the bucket resets the sweep resumes. Webhooks never pre-yield.
   const jobs: JobMessage[] = [];
   const selfHostedReviews = isSelfHostedReviewRuntime(env);
+  const queueSnapshot = selfHostedReviews
+    ? await queueSnapshotFromBinding(env.JOBS).catch((error) => {
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            event: "selfhost_queue_snapshot_failed",
+            error: error instanceof Error ? error.message : "unknown error",
+          }),
+        );
+        return null;
+      })
+    : null;
+  const sweepTriggerBacklog = queueSnapshotBacklog(queueSnapshot, REGATE_SWEEP_TRIGGER_TYPES);
   let sweepThrottledUntil: string | undefined;
   if (selfHostedReviews) {
     sweepThrottledUntil = await shouldWaitForGitHubRateLimit(env, MAINTENANCE_RESERVED_HEADROOM);
     if (sweepThrottledUntil) {
       console.log(JSON.stringify({ event: "regate_sweep_throttled", resetAt: sweepThrottledUntil }));
+    } else if (sweepTriggerBacklog > 0) {
+      // A fan-out trigger is already pending/processing — skip re-arming so the queue never accumulates a
+      // second identical trigger behind the first (#audit-sweep-fanout). This is scoped to the trigger job
+      // itself; it does not look at (and is not blocked by) per-repo "agent-regate-pr" backlog.
+      console.log(JSON.stringify({ event: "regate_sweep_trigger_backlog_deferred", backlog: sweepTriggerBacklog }));
     } else {
       jobs.push({ type: "agent-regate-sweep", requestedBy: "schedule" });
     }
