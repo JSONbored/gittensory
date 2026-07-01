@@ -69,13 +69,20 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
   if (pending.actionClass === "merge" && pr?.headSha) {
     const token = await createInstallationToken(env, pending.installationId).catch(() => undefined);
     const admissionKey = githubRateLimitAdmissionKeyForToken(env, token, pending.installationId);
-    const [ciAggregate, mergeableState, reviewDecision] = await Promise.all([
+    // Promise.allSettled, not Promise.all: each live re-check is independently best-effort (per the comment
+    // above), so ONE transient rejection must fail open on that specific check, not throw the whole accept
+    // out of decidePendingAgentAction. A settled-rejected check is treated the same as "nothing concerning
+    // found" -- exactly what each function's own internal fail-safe catch already resolves to on success.
+    const [ciResult, mergeableResult, reviewResult] = await Promise.allSettled([
       fetchLiveCiAggregate(env, pending.repoFullName, pr.headSha, token, undefined, admissionKey),
       fetchLivePullRequestMergeState(env, pending.repoFullName, pending.pullNumber, token, admissionKey),
       fetchLivePullRequestReviewDecision(env, pending.repoFullName, pending.pullNumber, token, admissionKey),
     ]);
+    const ciState = ciResult.status === "fulfilled" ? ciResult.value.ciState : "unverified";
+    const mergeableState = mergeableResult.status === "fulfilled" ? mergeableResult.value : undefined;
+    const reviewDecision = reviewResult.status === "fulfilled" ? reviewResult.value : undefined;
     const staleReason =
-      ciAggregate.ciState === "failed"
+      ciState === "failed"
         ? "live CI is now failing"
         : mergeableState === "dirty"
           ? "the base branch now conflicts (mergeable_state: dirty)"
@@ -90,7 +97,7 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
         targetKey,
         outcome: "denied",
         detail: `superseded ${pending.actionClass}: ${staleReason} since staging`,
-        metadata: { ...baseMetadata, ciState: ciAggregate.ciState, mergeableState: mergeableState ?? null, reviewDecision: reviewDecision ?? null },
+        metadata: { ...baseMetadata, ciState, mergeableState: mergeableState ?? null, reviewDecision: reviewDecision ?? null },
       });
       return { status: "rejected", action: { ...pending, status: "rejected", decidedBy: input.decidedBy }, executionOutcome: "stale_disposition" };
     }
