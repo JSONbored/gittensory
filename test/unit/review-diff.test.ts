@@ -50,4 +50,14 @@ describe("buildUnifiedReviewDiff — the #1528 fix: never silently drop the file
     expect(reduced).not.toContain("context"); // the low-signal hunk is dropped
     expect(reduced).toContain("dropped"); // and the drop is announced
   });
+
+  it("keeps every hunk when they fit exactly (the join uses N-1 separators, not N)", () => {
+    // Two 10-char hunks joined with one "\n" = 21 chars, exactly the budget. Charging a separator for
+    // BOTH hunks over-counts by one and wrongly drops the second even though it fits.
+    const patch = "@@ a\n+x\n+y\n@@ b\n+p\n+q";
+    expect(patch.length).toBe(21);
+    expect(keepHighSignalHunks(patch, 21)).toBe(patch); // no hunk dropped
+    // One char short → the second hunk genuinely does not fit and is announced as dropped.
+    expect(keepHighSignalHunks(patch, 20)).toContain("dropped");
+  });
 });
