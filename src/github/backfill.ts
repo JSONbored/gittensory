@@ -3228,10 +3228,15 @@ function githubRestHeaders(token?: string, validators?: GitHubConditionalValidat
   };
 }
 
-async function githubGraphQl<T>(env: Env, query: string, token: string): Promise<T> {
+async function githubGraphQl<T>(
+  env: Env,
+  query: string,
+  token: string,
+  admissionKey?: GitHubRateLimitAdmissionKey,
+): Promise<T> {
   const response = await fetchCachedGitHubGraphQl(query, token);
   if (!isGitHubResponseCacheReplay(response)) {
-    await recordGitHubResponse(env, null, "/graphql", response, "graphql");
+    await recordGitHubResponse(env, null, "/graphql", response, "graphql", admissionKey);
   }
   if (!response.ok) {
     const body = await response.text();
