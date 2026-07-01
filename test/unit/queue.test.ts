@@ -163,6 +163,47 @@ describe("queue processors", () => {
     await expect(processJob(env, { type: "build-contributor-evidence", requestedBy: "schedule" })).resolves.toBeUndefined();
   });
 
+  it("a fanned-out batch job (explicit `logins`) processes exactly those logins — never re-derives or re-fans (#1941)", async () => {
+    vi.stubEnv("CONTRIBUTOR_EVIDENCE_BATCH_SIZE", "1");
+    vi.stubGlobal("fetch", async () => Response.json({})); // per-login reads stay off-network
+    const env = createTestEnv();
+    // Stored PRs from OTHER authors — an explicit batch must ignore them (no derivation from stored records).
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 1, title: "PR one", state: "open", user: { login: "alice" }, head: { sha: "a1" }, labels: [], body: "x" });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 2, title: "PR two", state: "open", user: { login: "bob" }, head: { sha: "b2" }, labels: [], body: "y" });
+    const refanned: import("../../src/types").JobMessage[] = [];
+    const send = env.JOBS.send.bind(env.JOBS);
+    env.JOBS.send = (async (message: import("../../src/types").JobMessage, options?: QueueSendOptions) => {
+      if (message.type === "build-contributor-evidence") refanned.push(message);
+      return send(message, options);
+    }) as typeof env.JOBS.send;
+    // A batch carrying an explicit `logins` array processes exactly that set (even a login with no stored PRs)...
+    await expect(
+      processJob(env, { type: "build-contributor-evidence", requestedBy: "schedule", logins: ["carol"] }),
+    ).resolves.toBeUndefined();
+    env.JOBS.send = send;
+    // ...and short-circuits BEFORE the fan-out: it never re-derives from stored PRs nor re-enqueues evidence jobs.
+    expect(refanned).toHaveLength(0);
+  });
+
+  it("derives only records that have an author — a null-author (ghost/deleted account) record contributes nothing (#1941)", async () => {
+    vi.stubEnv("CONTRIBUTOR_EVIDENCE_BATCH_SIZE", "1"); // force a fan-out so the derived set is observable via the batch jobs
+    const env = createTestEnv();
+    // Two real authors + a ghost issue with no `user` (deleted account) → the ghost must NOT become a derived login.
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 1, title: "PR one", state: "open", user: { login: "alice" }, head: { sha: "a1" }, labels: [], body: "x" });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 2, title: "PR two", state: "open", user: { login: "bob" }, head: { sha: "b2" }, labels: [], body: "y" });
+    await upsertIssueFromGitHub(env, "owner/repo", { number: 9, title: "ghost issue", state: "open", labels: [], body: "z" }); // no user → null authorLogin
+    const fanned: import("../../src/types").JobMessage[] = [];
+    const send = env.JOBS.send.bind(env.JOBS);
+    env.JOBS.send = (async (message: import("../../src/types").JobMessage, options?: QueueSendOptions) => {
+      if (message.type === "build-contributor-evidence") fanned.push(message);
+      return send(message, options);
+    }) as typeof env.JOBS.send;
+    await processJob(env, { type: "build-contributor-evidence", requestedBy: "schedule" });
+    env.JOBS.send = send;
+    const derived = fanned.flatMap((m) => (m as { logins?: string[] }).logins ?? []).sort();
+    expect(derived).toEqual(["alice", "bob"]); // only the real authors; the null-author issue is filtered out
+  });
+
   it("processes registry, backfill, installation health, and signal snapshot jobs", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
