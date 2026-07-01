@@ -3502,33 +3502,60 @@ async function processGitHubWebhook(
             agentDryRun: settings.agentDryRun,
           });
           if (draftMode === "live") {
-            const codes = block.blockerCodes.join(", ");
-            await createIssueComment(
-              env,
+            // Live re-check (#2130): the two async DB reads above (getGateBlockOutcome, resolveAgentActionMode's
+            // isGlobalAgentFrozen) leave a window where a maintainer could merge/close the PR, or a fresh push
+            // could clear the gate failure, before this fires. Unlike the main gate-close path — which routes
+            // every close through executeAgentMaintenanceActions's freshness guard — this handler acted purely
+            // off the stale webhook-ingestion payload. Re-verify live state immediately before the mutation.
+            const freshness = await fetchPullRequestFreshness(env, {
               installationId,
               repoFullName,
-              pr.number,
-              `Gate verdict stands for this commit — converting to draft does not reset the review. Re-submit a new PR with the issues addressed${codes ? ` (${codes})` : ""}.`,
-            ).catch(() => undefined);
-            await closePullRequest(
-              env,
-              installationId,
-              repoFullName,
-              pr.number,
-            ).catch(() => undefined);
-            await recordAuditEvent(env, {
-              eventType: "github_app.draft_dodge_closed",
-              actor: "gittensory",
-              targetKey: `${repoFullName}#${pr.number}`,
-              outcome: "completed",
-              detail: `closed draft-dodge attempt by ${pr.authorLogin ?? "unknown"} — prior gate failure on headSha ${pr.headSha} stands`,
-              metadata: {
-                deliveryId,
+              pullNumber: pr.number,
+              expectedHeadSha: pr.headSha,
+            });
+            if (freshness.status !== "current") {
+              await recordAuditEvent(env, {
+                eventType: "github_app.draft_dodge_closed",
+                actor: "gittensory",
+                targetKey: `${repoFullName}#${pr.number}`,
+                outcome: "denied",
+                detail: `${pullRequestFreshnessDetail(freshness)} — draft-dodge close not executed`,
+                metadata: {
+                  deliveryId,
+                  repoFullName,
+                  headSha: pr.headSha,
+                  blockerCodes: block.blockerCodes,
+                },
+              }).catch(() => undefined);
+            } else {
+              const codes = block.blockerCodes.join(", ");
+              await createIssueComment(
+                env,
+                installationId,
                 repoFullName,
-                headSha: pr.headSha,
-                blockerCodes: block.blockerCodes,
-              },
-            }).catch(() => undefined);
+                pr.number,
+                `Gate verdict stands for this commit — converting to draft does not reset the review. Re-submit a new PR with the issues addressed${codes ? ` (${codes})` : ""}.`,
+              ).catch(() => undefined);
+              await closePullRequest(
+                env,
+                installationId,
+                repoFullName,
+                pr.number,
+              ).catch(() => undefined);
+              await recordAuditEvent(env, {
+                eventType: "github_app.draft_dodge_closed",
+                actor: "gittensory",
+                targetKey: `${repoFullName}#${pr.number}`,
+                outcome: "completed",
+                detail: `closed draft-dodge attempt by ${pr.authorLogin ?? "unknown"} — prior gate failure on headSha ${pr.headSha} stands`,
+                metadata: {
+                  deliveryId,
+                  repoFullName,
+                  headSha: pr.headSha,
+                  blockerCodes: block.blockerCodes,
+                },
+              }).catch(() => undefined);
+            }
           } else if (draftMode === "dry_run") {
             /* v8 ignore next -- a deleted-account PR yields a null author login; the fallback is defensive */
             const draftAuthor = pr.authorLogin ?? "unknown";
@@ -7490,6 +7517,27 @@ async function maybeRecloseDisallowedReopen(
       () => undefined,
     );
     return true; // handled (decision made); never falls through to act on a stood-down repo
+  }
+  // Live re-check (#2130): the maintainer-permission lookup, getLastCloserLogin's timeline read, and
+  // resolveRepositorySettings/isGlobalAgentFrozen above leave a window where the PR's live state could have
+  // moved — e.g. a maintainer re-closes it themselves, or reopens it a second time with real authorization —
+  // before this fires. Mirrors the draft-dodge sibling's identical fix; re-verify immediately before the mutation.
+  const reopenFreshness = await fetchPullRequestFreshness(env, {
+    installationId,
+    repoFullName,
+    pullNumber: pr.number,
+    expectedHeadSha: pr.headSha,
+  });
+  if (reopenFreshness.status !== "current") {
+    await recordAuditEvent(env, {
+      eventType: "github_app.reopen_reclosed",
+      actor: "gittensory",
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "denied",
+      detail: `${pullRequestFreshnessDetail(reopenFreshness)} — reopen re-close not executed`,
+      metadata: { deliveryId, repoFullName },
+    }).catch(() => undefined);
+    return true; // handled (decision made); a stale re-check still counts as handled, not a fallthrough
   }
   await createIssueComment(
     env,

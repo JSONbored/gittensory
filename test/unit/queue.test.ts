@@ -10618,6 +10618,53 @@ describe("one-shot reopen prevention", () => {
     expect(webhookRow?.status).toBe("processed");
   });
 
+  it("does NOT re-close a disallowed reopen when live PR state has moved since the webhook was received (#2130, #2261)", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
+      if (url.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" });
+      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "maintainer" } }]);
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await repositoriesModule.upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { merge: "auto", request_changes: "auto" } });
+    // A maintainer legitimately reopened/re-approved the PR — or a queue retry replayed a stale payload — in
+    // the window between the original webhook delivery and this handler's permission/closer-history reads. The
+    // live re-check must catch it and deny the re-close rather than overwriting a live maintainer decision.
+    vi.mocked(fetchPullRequestFreshness).mockResolvedValueOnce({ status: "stale", reason: "head_changed", expectedHeadSha: "abc123", liveHeadSha: "def456", liveState: "open" });
+
+    await processJob(env, { type: "github-webhook", deliveryId: "reopen-stale", eventName: "pull_request", payload: reopenedPayload("contributor") });
+
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(false);
+    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("denied");
+    expect(audit?.detail).toContain("reopen re-close not executed");
+  });
+
+  it("swallows a recordAuditEvent failure on the stale-reopen denial path — handler still completes (#2130)", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
+      if (url.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" });
+      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "maintainer" } }]);
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await repositoriesModule.upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { merge: "auto", request_changes: "auto" } });
+    vi.mocked(fetchPullRequestFreshness).mockResolvedValueOnce({ status: "stale", reason: "head_changed", expectedHeadSha: "abc123", liveHeadSha: "def456", liveState: "open" });
+    vi.spyOn(repositoriesModule, "recordAuditEvent").mockRejectedValueOnce(new Error("D1 write error"));
+
+    await expect(
+      processJob(env, { type: "github-webhook", deliveryId: "reopen-stale-audit-fail", eventName: "pull_request", payload: reopenedPayload("contributor") }),
+    ).resolves.toBeUndefined();
+  });
+
   it("does NOT re-close a disallowed reopen on an OBSERVE-only / un-opted-in repo (autonomy floor, #review-audit)", async () => {
     const calls: Array<{ url: string; method: string }> = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -10884,6 +10931,49 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
     const audit = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.draft_dodge_closed").first<{ detail: string }>();
     expect(audit?.detail).toContain("abc123");
     expect(audit?.detail).toContain("contributor");
+  });
+
+  it("does NOT draft-dodge close when live PR state has moved since the webhook was received (#2130)", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await setupRepo(env);
+    await recordGateBlockOutcome(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", blockerCodes: ["missing_linked_issue"] });
+    // A maintainer merged/closed the PR — or a fresh commit resolved the gate failure — in the window between
+    // webhook ingestion and this handler's async DB reads (getGateBlockOutcome, isGlobalAgentFrozen). The live
+    // re-check must catch it and deny the close rather than firing blind off the stale ingestion-time payload.
+    vi.mocked(fetchPullRequestFreshness).mockResolvedValueOnce({ status: "stale", reason: "closed", expectedHeadSha: "abc123", liveHeadSha: "abc123", liveState: "closed" });
+
+    await processJob(env, { type: "github-webhook", deliveryId: "draft-dodge-stale", eventName: "pull_request", payload: draftPayload("contributor") });
+
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(false);
+    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.draft_dodge_closed").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("denied");
+    expect(audit?.detail).toContain("draft-dodge close not executed");
+  });
+
+  it("swallows a recordAuditEvent failure on the stale-draft-dodge denial path — handler still completes (#2130)", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await setupRepo(env);
+    await recordGateBlockOutcome(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", blockerCodes: ["missing_linked_issue"] });
+    vi.mocked(fetchPullRequestFreshness).mockResolvedValueOnce({ status: "stale", reason: "closed", expectedHeadSha: "abc123", liveHeadSha: "abc123", liveState: "closed" });
+    vi.spyOn(repositoriesModule, "recordAuditEvent").mockRejectedValueOnce(new Error("D1 write error"));
+
+    await expect(
+      processJob(env, { type: "github-webhook", deliveryId: "draft-dodge-stale-audit-fail", eventName: "pull_request", payload: draftPayload("contributor") }),
+    ).resolves.toBeUndefined();
   });
 
   it("does NOT draft-dodge close while the global freeze is on (#killswitch-gap)", async () => {
