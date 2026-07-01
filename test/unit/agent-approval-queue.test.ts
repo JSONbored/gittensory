@@ -34,11 +34,22 @@ vi.mock("../../src/github/backfill", async (importOriginal) => ({
   fetchLivePullRequestMergeState: vi.fn(async () => "clean"),
   fetchLivePullRequestReviewDecision: vi.fn(async () => undefined),
 }));
+// resolveLinkedIssueHardRule defaults to the REAL implementation, which is a safe no-op here: loadLinkedIssueHardRules
+// (also real, unmocked) always returns the all-off default config, so the real resolver returns undefined (not
+// violated) without any GitHub fetch. Individual tests override it to exercise the accept-time recheck (#2132).
+vi.mock("../../src/review/linked-issue-hard-rules", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/review/linked-issue-hard-rules")>();
+  return {
+    ...actual,
+    resolveLinkedIssueHardRule: vi.fn(actual.resolveLinkedIssueHardRule),
+  };
+});
 
 import { createPullRequestReview, mergePullRequest } from "../../src/github/pr-actions";
 import { ensurePullRequestLabel } from "../../src/github/labels";
 import { createInstallationToken } from "../../src/github/app";
 import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLivePullRequestReviewDecision } from "../../src/github/backfill";
+import { resolveLinkedIssueHardRule } from "../../src/review/linked-issue-hard-rules";
 import { actionParams, executeAgentMaintenanceActions, pendingActionToPlanned, type AgentActionExecutionContext } from "../../src/services/agent-action-executor";
 import { decidePendingAgentAction } from "../../src/services/agent-approval-queue";
 import {
@@ -465,6 +476,89 @@ describe("agent approval queue (#779)", () => {
     const { closePullRequest } = await import("../../src/github/pr-actions");
     expect(closePullRequest).not.toHaveBeenCalled();
     expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 5, "owner/repo", 8, "gittensory:needs-human-review", { createMissingLabel: true });
+  });
+
+  it("accept supersedes a staged merge when the linked issue trips a hard rule after staging (#2132)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto_with_approval" } });
+    await seedInstallation(env);
+    // Staged against a CONTRIBUTOR PR whose linked issue was eligible at plan time; between staging and accept
+    // another maintainer relabeled the linked issue (head SHA unchanged, so the freshness check above misses it).
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "Closes #9" });
+    vi.mocked(resolveLinkedIssueHardRule).mockResolvedValueOnce({ violated: true, reason: "Linked issue #9 is labeled `maintainer-only` — it is not open for community PRs." });
+    const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber: 7, installationId: 5, actionClass: "merge", autonomyLevel: "auto_with_approval", params: { mergeMethod: "squash", expectedHeadSha: "h7" }, reason: "clean" });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    expect(result.status).toBe("rejected");
+    expect(result.executionOutcome).toBe("linked_issue_hard_rule");
+    expect(mergePullRequest).not.toHaveBeenCalled();
+    expect((await getPendingAgentAction(env, action.id))?.status).toBe("rejected");
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("agent.pending_action.superseded").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("denied");
+    expect(audit?.detail).toContain("maintainer-only");
+  });
+
+  it("accept executes a staged merge when the linked issue remains eligible", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto_with_approval" } });
+    await seedInstallation(env);
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "Closes #9" });
+    vi.mocked(resolveLinkedIssueHardRule).mockResolvedValueOnce({ violated: false, reason: null });
+    const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber: 7, installationId: 5, actionClass: "merge", autonomyLevel: "auto_with_approval", params: { mergeMethod: "squash", expectedHeadSha: "h7" }, reason: "clean" });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    expect(result.status).toBe("accepted");
+    expect(result.executionOutcome).toBe("completed");
+    expect(mergePullRequest).toHaveBeenCalledWith(env, 5, "owner/repo", 7, { mergeMethod: "squash", sha: "h7" });
+  });
+
+  it("accept supersedes with a fallback reason when the hard-rule result omits one", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto_with_approval" } });
+    await seedInstallation(env);
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "Closes #9" });
+    vi.mocked(resolveLinkedIssueHardRule).mockResolvedValueOnce({ violated: true, reason: null });
+    const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber: 7, installationId: 5, actionClass: "merge", autonomyLevel: "auto_with_approval", params: { mergeMethod: "squash", expectedHeadSha: "h7" }, reason: "clean" });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    expect(result.status).toBe("rejected");
+    expect(result.executionOutcome).toBe("linked_issue_hard_rule");
+    const audit = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("agent.pending_action.superseded").first<{ detail: string }>();
+    expect(audit?.detail).toContain("ineligible linked issue");
+  });
+
+  it("accept tolerates a slash-less repoFullName and a missing PR author login (defensive fallbacks)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "solorepo", autonomy: { merge: "auto_with_approval" } });
+    await upsertInstallation(env, {
+      installation: { id: 5, account: { login: "owner", id: 1, type: "User" }, repository_selection: "selected", permissions: { metadata: "read", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "solorepo", full_name: "solorepo", private: false, owner: { login: "owner" } }],
+    });
+    // No `user` on the payload → authorLogin stored null; repoFullName has no "/" → repoOwner falls back to "".
+    await upsertPullRequestFromGitHub(env, "solorepo", { number: 7, title: "PR", state: "open", head: { sha: "h7" }, labels: [], body: "x" });
+    const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "solorepo", pullNumber: 7, installationId: 5, actionClass: "merge", autonomyLevel: "auto_with_approval", params: { mergeMethod: "squash", expectedHeadSha: "h7" }, reason: "clean" });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    expect(result.status).toBe("accepted");
+    expect(result.executionOutcome).toBe("completed");
+    expect(mergePullRequest).toHaveBeenCalledWith(env, 5, "solorepo", 7, { mergeMethod: "squash", sha: "h7" });
+  });
+
+  it("accept does not consult the linked-issue hard rule for an owner-authored staged merge (mirrors the planner's closeEligible exemption)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto_with_approval" } });
+    await seedInstallation(env);
+    // Author IS the repo owner ("owner/repo" → owner login "owner"); closeOwnerAuthors defaults false, so the
+    // hard rule must never even be consulted for this PR, regardless of what it would say.
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "owner" }, head: { sha: "h7" }, labels: [], body: "Closes #9" });
+    vi.mocked(resolveLinkedIssueHardRule).mockResolvedValueOnce({ violated: true, reason: "would have violated, but must not even be checked" });
+    const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber: 7, installationId: 5, actionClass: "merge", autonomyLevel: "auto_with_approval", params: { mergeMethod: "squash", expectedHeadSha: "h7" }, reason: "clean" });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    expect(result.status).toBe("accepted");
+    expect(result.executionOutcome).toBe("completed");
+    expect(mergePullRequest).toHaveBeenCalledWith(env, 5, "owner/repo", 7, { mergeMethod: "squash", sha: "h7" });
+    expect(resolveLinkedIssueHardRule).not.toHaveBeenCalled();
   });
 
   it("accept does not supersede when the PR record is absent (no live head to compare) — proceeds to the executor", async () => {

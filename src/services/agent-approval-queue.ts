@@ -1,8 +1,9 @@
 import { getInstallation, getPullRequest, getRepositorySettings, getPendingAgentAction, recordAuditEvent, setPendingAgentActionStatus } from "../db/repositories";
-import { executeAgentMaintenanceActions, pendingActionToPlanned } from "./agent-action-executor";
-import { downgradeCloseToHold, downgradeMergeToHold, type PlannedAgentAction } from "../settings/agent-actions";
-import { isCloseHoldOnly, isHoldOnly } from "../review/outcomes-wire";
 import { createInstallationToken } from "../github/app";
+import { loadLinkedIssueHardRules, resolveLinkedIssueHardRule } from "../review/linked-issue-hard-rules";
+import { executeAgentMaintenanceActions, pendingActionToPlanned } from "./agent-action-executor";
+import { downgradeCloseToHold, downgradeMergeToHold, isProtectedAutomationAuthor, type PlannedAgentAction } from "../settings/agent-actions";
+import { isCloseHoldOnly, isHoldOnly } from "../review/outcomes-wire";
 import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLivePullRequestReviewDecision } from "../github/backfill";
 import { githubRateLimitAdmissionKeyForToken } from "../github/client";
 import type { AgentPendingActionParams, AgentPendingActionRecord } from "../types";
@@ -147,6 +148,46 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
   let plan: PlannedAgentAction[] = [pendingActionToPlanned({ actionClass: pending.actionClass, params: liveParams, reason: pending.reason })];
   if (holdOnly) plan = downgradeMergeToHold(plan, true);
   if (closeHoldOnly) plan = downgradeCloseToHold(plan, true);
+
+  // Re-validate a staged MERGE against the CURRENT linked-issue hard-rule state (#2132). The hard rule is
+  // evaluated fresh on every planning pass and takes precedence over merge (see planAgentMaintenanceActions),
+  // but a staged merge only replays the PLAN-TIME snapshot — a maintainer relabeling/reassigning the linked
+  // issue between staging and accept (head SHA unchanged, so the check above doesn't catch it) would otherwise
+  // still merge a now-ineligible PR. Mirrors the planner's own owner/automation exemption (closeEligible) so an
+  // owner's staged merge, which the hard rule never blocks in the first place, is not wrongly denied here.
+  if (pending.actionClass === "merge" && pr) {
+    const repoOwner = pending.repoFullName.includes("/") ? pending.repoFullName.slice(0, pending.repoFullName.indexOf("/")) : "";
+    const authorLogin = pr.authorLogin ?? "";
+    const authorIsOwner = authorLogin.length > 0 && authorLogin.toLowerCase() === repoOwner.toLowerCase();
+    const authorIsAutomationBot = isProtectedAutomationAuthor(pr.authorLogin);
+    const closeEligible = (!authorIsOwner && !authorIsAutomationBot) || (authorIsOwner && settings.closeOwnerAuthors === true);
+    if (closeEligible) {
+      const linkedIssueRulesConfig = await loadLinkedIssueHardRules(env, pending.repoFullName);
+      const ciToken = await createInstallationToken(env, pending.installationId).catch(() => undefined);
+      const linkedIssueHardRule = await resolveLinkedIssueHardRule({
+        env,
+        repoFullName: pending.repoFullName,
+        repoOwner,
+        config: linkedIssueRulesConfig,
+        body: pr.body,
+        linkedIssues: pr.linkedIssues,
+        ciToken,
+        installationId: pending.installationId,
+      });
+      if (linkedIssueHardRule?.violated) {
+        await setPendingAgentActionStatus(env, pending.id, { status: "rejected", decidedBy: input.decidedBy });
+        await recordAuditEvent(env, {
+          eventType: "agent.pending_action.superseded",
+          actor: input.decidedBy,
+          targetKey,
+          outcome: "denied",
+          detail: `superseded merge: linked-issue hard rule now violated — ${linkedIssueHardRule.reason ?? "ineligible linked issue"}`,
+          metadata: { ...baseMetadata, linkedIssueReason: linkedIssueHardRule.reason },
+        });
+        return { status: "rejected", action: { ...pending, status: "rejected", decidedBy: input.decidedBy }, executionOutcome: "linked_issue_hard_rule" };
+      }
+    }
+  }
 
   const outcomes = await executeAgentMaintenanceActions(
     env,
