@@ -44,7 +44,7 @@ Options:
   --postgres-url <url>     Postgres target URL. Defaults to DATABASE_URL.
   --migrations-dir <path>  Migration directory. Defaults to migrations.
   --execute                Commit the copy. Omit for a rollback dry run.
-  --allow-non-empty        Allow non-empty target app tables. Off by default.
+  --allow-non-empty        Allow non-empty target tables only when overlapping primary keys are identical.
   --include-vectors        Also copy _selfhost_vectors into pgvector.
   --batch-size <n>         Rows per INSERT batch. Defaults to 250.`;
 }
@@ -155,6 +155,34 @@ async function pgColumns(client: PoolClient, table: string): Promise<string[]> {
   return res.rows.map((row) => row.column_name);
 }
 
+async function prunePgSchemaInitSeed(client: PoolClient, table: string, columns: string[]): Promise<number> {
+  if (table === "global_agent_controls") {
+    const lastFanoutPredicate = columns.includes("last_regate_fanout_at") ? "AND last_regate_fanout_at IS NULL" : "";
+    const res = await client.query(
+      `
+        DELETE FROM global_agent_controls
+        WHERE id = 'singleton'
+          AND frozen = 0
+          AND updated_by IS NULL
+          ${lastFanoutPredicate}
+      `,
+    );
+    return res.rowCount ?? 0;
+  }
+  if (table === "global_contributor_blacklist") {
+    const res = await client.query(
+      `
+        DELETE FROM global_contributor_blacklist
+        WHERE id = 'singleton'
+          AND contributor_blacklist_json = '[]'
+          AND updated_by IS NULL
+      `,
+    );
+    return res.rowCount ?? 0;
+  }
+  return 0;
+}
+
 async function pgPrimaryKey(client: PoolClient, table: string): Promise<string[]> {
   const res = await client.query<{ column_name: string }>(
     `
@@ -222,13 +250,9 @@ function insertSql(table: string, columns: string[], primaryKey: string[], rowCo
   }).join(", ");
   const conflictColumns = primaryKey.filter((column) => columns.includes(column));
   if (conflictColumns.length === 0) return `INSERT INTO ${quoteIdent(table)} (${columnSql}) VALUES ${valuesSql}`;
-  const updateColumns = columns.filter((column) => !conflictColumns.includes(column));
   const conflictTarget = conflictColumns.map(quoteIdent).join(", ");
-  if (updateColumns.length === 0) {
-    return `INSERT INTO ${quoteIdent(table)} (${columnSql}) VALUES ${valuesSql} ON CONFLICT (${conflictTarget}) DO NOTHING`;
-  }
-  const updates = updateColumns.map((column) => `${quoteIdent(column)} = EXCLUDED.${quoteIdent(column)}`).join(", ");
-  return `INSERT INTO ${quoteIdent(table)} (${columnSql}) VALUES ${valuesSql} ON CONFLICT (${conflictTarget}) DO UPDATE SET ${updates}`;
+  // Conflict compatibility is checked before copy; never overwrite an existing target row implicitly.
+  return `INSERT INTO ${quoteIdent(table)} (${columnSql}) VALUES ${valuesSql} ON CONFLICT (${conflictTarget}) DO NOTHING`;
 }
 
 async function copyTable(db: DatabaseSync, client: PoolClient, table: string, columns: string[], primaryKey: string[], batchSize: number): Promise<number> {
@@ -271,6 +295,38 @@ async function countTargetRowsMatchingSourceRows(
   return matched;
 }
 
+async function countConflictingTargetRowsForSourceKeys(
+  db: DatabaseSync,
+  client: PoolClient,
+  table: string,
+  keyColumns: string[],
+  compareColumns: string[],
+  batchSize: number,
+): Promise<number> {
+  const total = sqliteCount(db, table);
+  let conflicts = 0;
+  for (let offset = 0; offset < total; offset += batchSize) {
+    const rows = sqliteRows(db, table, compareColumns, batchSize, offset);
+    if (rows.length === 0) continue;
+    const values: unknown[] = [];
+    const condition = rows
+      .map((row) => {
+        const parameterByColumn = new Map<string, number>();
+        for (const column of compareColumns) {
+          values.push(row[column] ?? null);
+          parameterByColumn.set(column, values.length);
+        }
+        const keyPredicates = keyColumns.map((column) => `${quoteIdent(column)} IS NOT DISTINCT FROM $${parameterByColumn.get(column)}`);
+        const differencePredicates = compareColumns.map((column) => `${quoteIdent(column)} IS DISTINCT FROM $${parameterByColumn.get(column)}`);
+        return `((${keyPredicates.join(" AND ")}) AND (${differencePredicates.join(" OR ")}))`;
+      })
+      .join(" OR ");
+    const res = await client.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM ${quoteIdent(table)} WHERE ${condition}`, values);
+    conflicts += Number(res.rows[0]?.count ?? 0);
+  }
+  return conflicts;
+}
+
 async function copyAll(opts: Options, db: DatabaseSync, client: PoolClient): Promise<{ copied: CopyResult[]; skipped: SkipResult[] }> {
   const copied: CopyResult[] = [];
   const skipped: SkipResult[] = [];
@@ -283,12 +339,15 @@ async function copyAll(opts: Options, db: DatabaseSync, client: PoolClient): Pro
       continue;
     }
     if (!targetTables.has(table)) throw new Error(`Target Postgres schema is missing source table: ${table}`);
-    const targetRowsBefore = await pgCount(client, table);
-    if (targetRowsBefore > 0 && !opts.allowNonEmpty && !TABLES_ALLOWED_AFTER_SCHEMA_INIT.has(table)) {
-      throw new Error(`Target table ${table} already contains ${targetRowsBefore} row(s); rerun with --allow-non-empty only if this is intentional`);
-    }
     const sourceColumns = sqliteColumns(db, table);
     const targetColumns = await pgColumns(client, table);
+    if (TABLES_ALLOWED_AFTER_SCHEMA_INIT.has(table)) {
+      await prunePgSchemaInitSeed(client, table, targetColumns);
+    }
+    const targetRowsBefore = await pgCount(client, table);
+    if (targetRowsBefore > 0 && !opts.allowNonEmpty) {
+      throw new Error(`Target table ${table} already contains ${targetRowsBefore} row(s); rerun with --allow-non-empty only if this is intentional`);
+    }
     const commonColumns = sourceColumns.filter((column) => targetColumns.includes(column));
     if (commonColumns.length === 0) {
       skipped.push({ table, reason: "no common columns" });
@@ -296,6 +355,12 @@ async function copyAll(opts: Options, db: DatabaseSync, client: PoolClient): Pro
     }
     const primaryKey = await pgPrimaryKey(client, table);
     const keyColumns = primaryKey.filter((column) => commonColumns.includes(column));
+    if (targetRowsBefore > 0 && keyColumns.length > 0) {
+      const conflicts = await countConflictingTargetRowsForSourceKeys(db, client, table, keyColumns, commonColumns, opts.batchSize);
+      if (conflicts > 0) {
+        throw new Error(`Target table ${table} already contains ${conflicts} conflicting row(s); --allow-non-empty only permits identical overlapping primary keys`);
+      }
+    }
     const rows = await copyTable(db, client, table, commonColumns, primaryKey, opts.batchSize);
     copied.push({ table, rows, targetRowsBefore, keyColumns, commonColumns });
   }
@@ -343,7 +408,11 @@ async function main(): Promise<void> {
   const pool = new pg.Pool({ connectionString: opts.postgresUrl, max: 1 });
   const client = await pool.connect();
   let finished = false;
+  let sqliteTransactionOpen = false;
   try {
+    // Pin one source snapshot across COUNT + paged reads so a live writer cannot create a mixed copy.
+    sqlite.exec("BEGIN DEFERRED TRANSACTION;");
+    sqliteTransactionOpen = true;
     await client.query("BEGIN");
     const db = createPgAdapter(client as unknown as pg.Pool);
     const migrationsApplied = await runSelfHostMigrations(db, opts.migrationsDir);
@@ -377,6 +446,13 @@ async function main(): Promise<void> {
     if (!finished) await client.query("ROLLBACK").catch(() => undefined);
     client.release();
     await pool.end();
+    if (sqliteTransactionOpen) {
+      try {
+        sqlite.exec("ROLLBACK");
+      } catch {
+        // Read-only snapshot cleanup is best-effort; Postgres rollback above is the safety boundary.
+      }
+    }
     sqlite.close();
   }
 }
