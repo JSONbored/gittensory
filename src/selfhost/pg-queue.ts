@@ -6,6 +6,7 @@ import type { Pool } from "pg";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import { withReviewSpan } from "./tracing";
+import { withOtelSpan } from "./otel";
 import { captureError } from "./sentry";
 import {
   consumingRetryDelayMs,
