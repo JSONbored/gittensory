@@ -158,7 +158,9 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     const bareApprove: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "passed" };
     await executeAgentMaintenanceActions(env, ctx(), [bareRequestChanges, bareApprove]);
     expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "REQUEST_CHANGES", "");
-    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "APPROVE", "");
+    // The approve still falls back to ctx.headSha ("sha7") as the pinned commit_id, same as the "LIVE: executes
+    // each action class" test above — request_changes has no head-pinning of its own (unaffected).
+    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "APPROVE", "", "sha7");
   });
 
   it("LIVE merge pins the GitHub merge to the action's reviewed head (expectedHeadSha) over the context head", async () => {
