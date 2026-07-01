@@ -156,6 +156,62 @@ function timeDecayBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdo
   };
 }
 
+// Issue-discovery validity floor (upstream MIN_VALID_SOLVED_ISSUES + MIN_ISSUE_CREDIBILITY; constants.py
+// mirror #808): a preview that engages the issue-discovery lane but has fewer solved-issues or lower
+// credibility than the upstream floors has the multiplier zeroed. Mirrors mergedHistoryBreakdown /
+// openPr / openIssue so the public projection explains the gate cleanly without collapsing the two
+// evidence dimensions into a single phrase (the nit that closed the previous attempt at this surface).
+function issueDiscoveryHistoryBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
+  const { issueDiscoveryHistoryMultiplier } = preview.scoreEstimate;
+  const { validSolvedIssues, validSolvedIssuesFloor, issueCredibility, issueCredibilityFloor } = preview.gates;
+  const relevant = preview.linkedIssueMultiplier.mode !== "none";
+  const known = validSolvedIssues !== undefined && issueCredibility !== undefined;
+  if (issueDiscoveryHistoryMultiplier >= 1) {
+    if (!relevant) {
+      return {
+        component: "issueDiscoveryHistoryMultiplier",
+        band: "neutral",
+        summary: "Issue-discovery lane is not engaged for this preview (linked-issue mode is none), so the validity floor multiplier is 1 by intent.",
+        lever: "Select a linked-issue mode (standard or maintainer) on subsequent previews to engage the issue-discovery lane.",
+        leverageScore: 0,
+      };
+    }
+    if (!known) {
+      const dimClauses: string[] = [];
+      if (validSolvedIssues !== undefined) dimClauses.push(`${validSolvedIssues} valid solved-issue(s) observed`);
+      else dimClauses.push("valid solved-issue count still missing");
+      if (issueCredibility !== undefined) dimClauses.push(`${(issueCredibility * 100).toFixed(0)}% credibility observed`);
+      else dimClauses.push("issue credibility still missing");
+      return {
+        component: "issueDiscoveryHistoryMultiplier",
+        band: "neutral",
+        summary: `Issue-discovery validity floor is partially observed for this preview (${dimClauses.join("; ")}; upstream floors are ${validSolvedIssuesFloor} solved and ${(issueCredibilityFloor * 100).toFixed(0)}% credibility).`,
+        lever: "No action needed; the floor is not enforced until both dimensions are observed in a subsequent preview.",
+        leverageScore: 0,
+      };
+    }
+    return {
+      component: "issueDiscoveryHistoryMultiplier",
+      band: "full",
+      summary: `Issue-discovery evidence meets both upstream floors (${validSolvedIssues} solved / ${(issueCredibility! * 100).toFixed(0)}% credibility vs floors ${validSolvedIssuesFloor} / ${(issueCredibilityFloor * 100).toFixed(0)}%).`,
+      lever: "Keep issue-discovery activity healthy: file solvable issues and resolve them with validated PRs.",
+      leverageScore: 4,
+    };
+  }
+  const failSolved = validSolvedIssues !== undefined && validSolvedIssues < validSolvedIssuesFloor;
+  const failCredibility = issueCredibility !== undefined && issueCredibility < issueCredibilityFloor;
+  const causes: string[] = [];
+  if (failSolved) causes.push(`valid solved issues (${validSolvedIssues} < ${validSolvedIssuesFloor})`);
+  if (failCredibility) causes.push(`issue credibility (${(issueCredibility! * 100).toFixed(0)}% < ${(issueCredibilityFloor * 100).toFixed(0)}%)`);
+  return {
+    component: "issueDiscoveryHistoryMultiplier",
+    band: "blocked",
+    summary: `Issue-discovery validity floor is failing the preview: ${causes.join(" and ")}.`,
+    lever: "Land more solved issues (each with a solving-PR token-score ≥ upstream MIN_TOKEN_SCORE_FOR_VALID_ISSUE) and stabilize credibility at or above the floor before relying on this preview.",
+    leverageScore: 100,
+  };
+}
+
 function credibilityBreakdown(preview: ScorePreviewResult): ScoreMultiplierBreakdown {
   const { credibilityMultiplier } = preview.scoreEstimate;
   const { credibilityObserved, credibilityFloor } = preview.gates;
@@ -319,6 +375,7 @@ export function explainScoreBreakdown(preview: ScorePreviewResult): ScoreBreakdo
     openIssueBreakdown(preview),
     mergedHistoryBreakdown(preview),
     timeDecayBreakdown(preview),
+    issueDiscoveryHistoryBreakdown(preview),
   ].map((entry) => ({
     ...entry,
     summary: sanitizePublicComment(entry.summary),

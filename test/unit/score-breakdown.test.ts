@@ -86,6 +86,7 @@ describe("explainScoreBreakdown", () => {
         "openIssueMultiplier",
         "mergedHistoryMultiplier",
         "timeDecayMultiplier",
+        "issueDiscoveryHistoryMultiplier",
       ]),
     );
     for (const component of breakdown.components) {
@@ -187,6 +188,141 @@ describe("explainScoreBreakdown", () => {
     expect(decayed.summary).toMatch(/time-decayed|decay/i);
     expect(decayed.lever).toMatch(/fresh|time-decay curve|sigmoid/i);
     expect(JSON.stringify(agedBreakdown)).not.toMatch(FORBIDDEN);
+  });
+
+  it("explains the issue-discovery history floor: lane-off / unobserved neutral, meeting-floor full, below-floor blocked", () => {
+    // Lane not engaged (linkedIssueMode=none) => multiplier is 1 by intent, breakdown neutral + lane-off copy.
+    const laneOff = explainScoreBreakdown(
+      buildScorePreview({ repo, snapshot, input: { repoFullName: repo.fullName, contributorLogin: "miner", sourceTokenScore: 40, totalTokenScore: 60, sourceLines: 80, openPrCount: 1, credibility: 0.9, linkedIssueMode: "none" } }),
+    );
+    expect(laneOff.components.find((entry) => entry.component === "issueDiscoveryHistoryMultiplier")).toMatchObject({ band: "neutral" });
+
+    // Lane engaged + only one dimension observed => partial-evidence neutral that explicitly names the
+    // missing dim (avoids the collapse-copy nit from #1874).
+    const partial = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          contributorLogin: "miner",
+          sourceTokenScore: 40,
+          totalTokenScore: 60,
+          sourceLines: 80,
+          openPrCount: 1,
+          credibility: 0.9,
+          linkedIssueMode: "standard",
+          linkedIssueContext: { status: "validated", source: "official_mirror", issueNumbers: [1513], solvedByPullRequests: [22] },
+          validSolvedIssues: 5,
+          // issueCredibility intentionally omitted to trigger the partial branch.
+        },
+      }),
+    );
+    const partialEntry = partial.components.find((entry) => entry.component === "issueDiscoveryHistoryMultiplier")!;
+    expect(partialEntry).toMatchObject({ band: "neutral" });
+    // After the sanitizer replaces "credibility" with "private context" (#1874 nit: don't collapse the
+    // missing dimension into a generic "no solved-issue observed" — the copy must still name it).
+    expect(partialEntry.summary).toMatch(/still missing.*private context|partial/i);
+
+    // Mirror partial: issueCredibility observed, validSolvedIssues missing. Same neutral band,
+    // copy names the OTHER missing dimension — the two halves of the nit must both be covered.
+    const partialMirror = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          contributorLogin: "miner",
+          sourceTokenScore: 40,
+          totalTokenScore: 60,
+          sourceLines: 80,
+          openPrCount: 1,
+          credibility: 0.9,
+          linkedIssueMode: "standard",
+          linkedIssueContext: { status: "validated", source: "official_mirror", issueNumbers: [1513], solvedByPullRequests: [22] },
+          // validSolvedIssues intentionally omitted; issueCredibility observed.
+          issueCredibility: 0.9,
+        },
+      }),
+    );
+    const partialMirrorEntry = partialMirror.components.find((entry) => entry.component === "issueDiscoveryHistoryMultiplier")!;
+    expect(partialMirrorEntry).toMatchObject({ band: "neutral" });
+    expect(partialMirrorEntry.summary).toMatch(/valid solved-issue count still missing/);
+
+    // Lane engaged + both observed + both meet upstream floors => full band with concrete numbers.
+    const meeting = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          contributorLogin: "miner",
+          sourceTokenScore: 40,
+          totalTokenScore: 60,
+          sourceLines: 80,
+          openPrCount: 1,
+          credibility: 0.9,
+          linkedIssueMode: "standard",
+          linkedIssueContext: { status: "validated", source: "official_mirror", issueNumbers: [1513], solvedByPullRequests: [22] },
+          validSolvedIssues: 5,
+          issueCredibility: 0.9,
+        },
+      }),
+    );
+    expect(meeting.components.find((entry) => entry.component === "issueDiscoveryHistoryMultiplier")).toMatchObject({ band: "full" });
+
+    // Lane engaged + validSolvedIssues below upstream floor => blocked band that names the failing dim
+    // specifically (avoid the same collapse-copy nit).
+    const belowFloor = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          contributorLogin: "miner",
+          sourceTokenScore: 40,
+          totalTokenScore: 60,
+          sourceLines: 80,
+          openPrCount: 1,
+          credibility: 0.9,
+          linkedIssueMode: "standard",
+          linkedIssueContext: { status: "validated", source: "official_mirror", issueNumbers: [1513], solvedByPullRequests: [22] },
+          validSolvedIssues: 0,
+          issueCredibility: 0.9,
+        },
+      }),
+    );
+    const blockedEntry = belowFloor.components.find((entry) => entry.component === "issueDiscoveryHistoryMultiplier")!;
+    expect(blockedEntry).toMatchObject({ band: "blocked", leverageScore: 100 });
+    expect(blockedEntry.summary).toMatch(/valid solved issues/i);
+    expect(blockedEntry.lever).toMatch(/solved issues|MIN_TOKEN_SCORE_FOR_VALID_ISSUE/i);
+    expect(JSON.stringify(belowFloor)).not.toMatch(FORBIDDEN);
+
+    // Mirror blocked: issueCredibility is below the upstream floor (the OTHER half of the below-floor
+    // nit must both be covered: both dimensions can independently trigger the gate).
+    const belowFloorCredibility = explainScoreBreakdown(
+      buildScorePreview({
+        repo,
+        snapshot,
+        input: {
+          repoFullName: repo.fullName,
+          contributorLogin: "miner",
+          sourceTokenScore: 40,
+          totalTokenScore: 60,
+          sourceLines: 80,
+          openPrCount: 1,
+          credibility: 0.9,
+          linkedIssueMode: "standard",
+          linkedIssueContext: { status: "validated", source: "official_mirror", issueNumbers: [1513], solvedByPullRequests: [22] },
+          validSolvedIssues: 5,
+          issueCredibility: 0.5,
+        },
+      }),
+    );
+    const blockedCredEntry = belowFloorCredibility.components.find((entry) => entry.component === "issueDiscoveryHistoryMultiplier")!;
+    expect(blockedCredEntry).toMatchObject({ band: "blocked" });
+    // "credibility" is sanitized to "private context" before reaching the public surface.
+    expect(blockedCredEntry.summary).toMatch(/issue (credibility|private context)/i);
   });
 
   it("includes gate highlights without leaking forbidden language", () => {
