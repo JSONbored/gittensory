@@ -933,7 +933,7 @@ describe("createPgQueue (durable #977)", () => {
       expect.stringContaining("DELETE FROM _selfhost_jobs WHERE id=$1"),
       ["2"],
     );
-    expect(await renderMetrics()).toContain('gittensory_jobs_rate_limited_by_type_total{job_type="refresh-registry",key_scope="global",kind="unknown"} 1');
+    expect(await renderMetrics()).toContain('gittensory_jobs_rate_limited_by_type_total{job_type="refresh-registry",key_scope="unknown",kind="unknown"} 1');
   });
 
   it("defers matching GitHub-budget jobs and coalesces a keyed rate-limit retry into the pending duplicate", async () => {
