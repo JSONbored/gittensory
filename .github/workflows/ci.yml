@@ -146,9 +146,11 @@ jobs:
           override_branch: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref_name }}
           override_commit: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           override_pr: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || '' }}
-          # Coverage upload is part of the hard gate: upload or service errors
-          # should fail CI instead of allowing a PR to merge without patch data.
-          fail_ci_if_error: true
+          # Coverage upload is part of the hard gate for trusted CI (main pushes and
+          # upstream-repo PRs with CODECOV_TOKEN). Fork PRs cannot read repo secrets,
+          # so Codecov rejects tokenless uploads to protected branches — keep those
+          # uploads best-effort so validate-code still runs tests and emits lcov.
+          fail_ci_if_error: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true }}
       # Test results are useful Codecov annotations, not the coverage gate. Keep
       # their upload non-blocking so a JUnit ingestion hiccup does not fail CI
       # after the tests and hard coverage upload have already passed.

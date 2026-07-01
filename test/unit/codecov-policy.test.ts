@@ -59,7 +59,8 @@ describe("Codecov policy", () => {
     const coverageUploadWith = record(coverageUpload.with, "coverage upload with");
     expect(coverageUploadWith.files).toBe("./coverage/lcov.info");
     expect(coverageUploadWith.disable_search).toBe(true);
-    expect(coverageUploadWith.fail_ci_if_error).toBe(true);
+    expect(String(coverageUploadWith.fail_ci_if_error)).toContain("fork");
+    expect(String(coverageUploadWith.fail_ci_if_error)).toContain("pull_request");
 
     const testResultsUploadWith = record(testResultsUpload.with, "test results upload with");
     expect(testResultsUploadWith.report_type).toBe("test_results");
