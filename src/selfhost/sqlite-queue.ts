@@ -7,6 +7,7 @@ import type { SqliteDriver } from "./d1-adapter";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
 import { withReviewSpan } from "./tracing";
+import { withOtelSpan } from "./otel";
 import { captureError } from "./sentry";
 import {
   consumingRetryDelayMs,
