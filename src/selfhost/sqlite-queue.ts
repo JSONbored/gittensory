@@ -6,6 +6,7 @@
 import type { SqliteDriver } from "./d1-adapter";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
+import { withReviewSpan } from "./tracing";
 import { withOtelSpan } from "./otel";
 import { captureError } from "./sentry";
 import {
@@ -16,6 +17,7 @@ import {
   githubRateLimitAdmissionTargetForJob,
   githubRateLimitMetricContext,
   githubRateLimitRetryDelayMs,
+  buildSelfHostQueueSnapshot,
   jobCoalesceKey,
   jobPriority,
   queueBackgroundConcurrency,
@@ -26,6 +28,7 @@ import {
   rateLimitRetryDelayWithJitter,
   matchesGitHubRateLimitAdmissionTarget,
   type GitHubRateLimitAdmissionTarget,
+  type SelfHostQueueSnapshot,
 } from "./queue-common";
 import type { JobMessage } from "../types";
 
@@ -62,6 +65,7 @@ export interface DurableQueue {
   size(): number;
   deadCount(): number;
   stats(): Record<string, number>;
+  snapshot(): SelfHostQueueSnapshot;
 }
 
 interface JobRow {
@@ -282,7 +286,7 @@ export function createSqliteQueue(
       const rateLimitAdmission = rateLimitAdmissionDelayMs(driver, message);
       if (rateLimitAdmission !== null) {
         const rateLimitMetric = githubRateLimitMetricContext(message, rateLimitAdmission);
-        await withOtelSpan(
+        await withReviewSpan(
           "selfhost.queue.admission_deferred",
           {
             "job.type": message.type,
@@ -318,7 +322,7 @@ export function createSqliteQueue(
         return true;
       }
       try {
-        await withOtelSpan(
+        await withReviewSpan(
           "selfhost.queue.job",
           { "job.type": message.type, "queue.backend": "sqlite", "job.attempt": job.attempts + 1 },
           () => consume(message),
@@ -470,7 +474,15 @@ export function createSqliteQueue(
     ): Promise<void> {
       for (const m of messages) enqueue(m.body, m.delaySeconds ?? 0);
     },
-  } as unknown as Queue;
+    snapshot() {
+      return buildSelfHostQueueSnapshot(
+        driver.query(
+          `SELECT payload, status, run_after FROM ${TABLE} WHERE status IN ('pending','processing','dead')`,
+          [],
+        ).rows as Array<{ payload: string; status: string; run_after: number }>,
+      );
+    },
+  } as unknown as Queue & { snapshot(): SelfHostQueueSnapshot };
 
   return {
     binding,
@@ -518,6 +530,7 @@ export function createSqliteQueue(
     stats() {
       return readQueueStats(driver);
     },
+    snapshot: binding.snapshot,
   };
 }
 

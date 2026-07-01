@@ -6,18 +6,29 @@ import {
   PUBLIC_LOCAL_PATH_SCRUB_PATTERN,
   PUBLIC_UNSAFE_TERMS,
 } from "../signals/redaction";
-import { currentOtelTraceIds } from "./otel";
+import { hostname } from "node:os";
+import {
+  currentOtelTraceIds,
+  openTelemetryTraceExportEnabled,
+  type OpenTelemetryBridge,
+} from "./otel";
+import { hashedInstallationIdWith } from "./review-tracing";
 
 type SentryNs = typeof import("@sentry/node");
+type SentryClient = NonNullable<ReturnType<SentryNs["init"]>>;
 type SentryMonitorConfig = NonNullable<Parameters<SentryNs["captureCheckIn"]>[1]>;
 export type SentryMonitorName = "scheduled-loop" | "orb-export" | "orb-relay-drain";
 type SentryScope = {
   setContext(name: string, context: Record<string, unknown>): void;
   setTag(key: string, value: string): void;
 };
+type DigestHex = (input: string) => string;
 let Sentry: SentryNs | undefined;
+let sentryClient: SentryClient | undefined;
+let sentryTraceSampleRate: number | undefined;
 let active = false;
 let sentryEnvironment = "production";
+let digestHexSync: DigestHex | undefined;
 
 const SECRET_KEY =
   /(token|secret|key|password|passwd|authorization|auth|dsn|cookie|bearer|credential|private)/i;
@@ -55,6 +66,12 @@ const REDACTED = "[redacted]";
 function nonBlank(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+async function loadNodeHasher(): Promise<void> {
+  const { createHash } = await import("node:crypto");
+  digestHexSync = (input: string): string =>
+    createHash("sha256").update(input).digest("hex");
 }
 
 const SENTRY_MONITORS: Record<SentryMonitorName, { slug: string; config: SentryMonitorConfig }> = {
@@ -138,6 +155,16 @@ export function resolveSentryRelease(
   return nonBlank(env.SENTRY_RELEASE) ?? nonBlank(env.GITTENSORY_VERSION);
 }
 
+export function resolveSentryTracesSampleRate(
+  env: NodeJS.ProcessEnv,
+): number | undefined {
+  const raw = nonBlank(env.SENTRY_TRACES_SAMPLE_RATE);
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return Math.min(parsed, 1);
+}
+
 /** beforeSend scrubber — redact anything token/secret-like before an event leaves the box (privacy boundary). */
 export function scrubEvent<T>(event: T): T | null {
   try {
@@ -182,6 +209,34 @@ function shouldRedactKey(key: string): boolean {
   );
 }
 
+function isInstallationIdKey(key: string): boolean {
+  return key.replace(/[^A-Za-z0-9]/g, "").toLowerCase() === "installationid";
+}
+
+function installationIdHash(value: unknown): string | undefined {
+  if (!digestHexSync) return undefined;
+  return hashedInstallationIdWith(value, digestHexSync);
+}
+
+function hashedInstallationContext(
+  context: Record<string, unknown>,
+): Record<string, unknown> {
+  const hasInstallationId =
+    "installation_id" in context || "installationId" in context;
+  const hash = installationIdHash(context.installation_id ?? context.installationId);
+  if (!hash && !hasInstallationId) return context;
+  const safe: Record<string, unknown> = { ...context };
+  if (hash) safe.installation_id_hash = hash;
+  delete safe.installation_id;
+  delete safe.installationId;
+  return safe;
+}
+
+function tagHashedInstallation(scope: SentryScope, context: Record<string, unknown>): void {
+  const hash = installationIdHash(context.installation_id ?? context.installationId);
+  if (hash) scope.setTag("installation_id_hash", hash);
+}
+
 function scrubString(value: string): string {
   return value
     .replace(QUERY_SECRET_VALUE, `$1${REDACTED}`)
@@ -207,6 +262,12 @@ function scrubRecord(obj: unknown, depth: number): void {
   }
   const rec = obj as Record<string, unknown>;
   for (const key of Object.keys(rec)) {
+    if (isInstallationIdKey(key)) {
+      const hash = installationIdHash(rec[key]);
+      if (hash) rec.installation_id_hash = hash;
+      delete rec[key];
+      continue;
+    }
     if (shouldRedactKey(key)) {
       rec[key] = REDACTED;
       continue;
@@ -292,20 +353,44 @@ function scrubAllowedContexts(contexts: Record<string, unknown> | undefined): vo
 /** Initialize Sentry from the environment. Returns false (and stays a no-op) when SENTRY_DSN is unset. */
 export async function initSentry(env: NodeJS.ProcessEnv): Promise<boolean> {
   if (!env.SENTRY_DSN) return false;
+  await loadNodeHasher();
   Sentry = await import("@sentry/node");
   const release = resolveSentryRelease(env);
+  sentryTraceSampleRate = resolveSentryTracesSampleRate(env);
+  const useCustomOpenTelemetry =
+    sentryTraceSampleRate !== undefined || openTelemetryTraceExportEnabled(env);
   sentryEnvironment = nonBlank(env.SENTRY_ENVIRONMENT) ?? "production";
-  Sentry.init({
+  sentryClient = Sentry.init({
     dsn: env.SENTRY_DSN,
     environment: sentryEnvironment,
     ...(release ? { release } : {}),
-    tracesSampleRate: Number(env.SENTRY_TRACES_SAMPLE_RATE ?? "0"),
-    serverName: env.PUBLIC_API_ORIGIN,
+    ...(sentryTraceSampleRate !== undefined
+      ? { tracesSampleRate: sentryTraceSampleRate }
+      : {}),
+    ...(useCustomOpenTelemetry ? { skipOpenTelemetrySetup: true } : {}),
+    // Identify this instance by a CLEAN, configurable name, not the public-origin URL. An operator sets
+    // SENTRY_SERVER_NAME (e.g. "gittensory-us-east"); unset falls back to the OS hostname.
+    serverName: nonBlank(env.SENTRY_SERVER_NAME) ?? hostname(),
     beforeSend: (e) => scrubEvent(e),
     beforeSendTransaction: (e) => scrubEvent(e),
   });
   active = true;
   return true;
+}
+
+export async function buildSentryOpenTelemetryBridge(): Promise<OpenTelemetryBridge | undefined> {
+  if (!active || !Sentry || !sentryClient) return undefined;
+  const SentryOtel = await import("@sentry/opentelemetry");
+  const exportSentrySpans = sentryTraceSampleRate !== undefined;
+  return {
+    ...(exportSentrySpans ? { sampler: new SentryOtel.SentrySampler(sentryClient) } : {}),
+    propagator: new SentryOtel.SentryPropagator(),
+    contextManager: new Sentry.SentryContextManager(),
+    ...(exportSentrySpans ? { spanProcessor: new SentryOtel.SentrySpanProcessor() } : {}),
+    validate: () => {
+      Sentry?.validateOpenTelemetrySetup?.();
+    },
+  };
 }
 
 /** Capture an error with optional structured context. No-op when Sentry is off. */
@@ -316,7 +401,8 @@ export function captureError(
   if (!active || !Sentry) return;
   Sentry.withScope((scope) => {
     setOtelTraceScope(scope);
-    if (context) scope.setContext("gittensory", context);
+    if (context) scope.setContext("gittensory", hashedInstallationContext(context));
+    if (context) tagHashedInstallation(scope, context);
     Sentry!.captureException(
       error instanceof Error ? error : new Error(String(error)),
     );
@@ -334,9 +420,11 @@ export function captureReviewFailure(
     scope.setLevel("error");
     setOtelTraceScope(scope);
     if (context) {
-      scope.setContext("review", context);
-      for (const tag of ["owner", "repo", "pr", "head_sha"]) {
-        const value = context[tag];
+      const safeContext = hashedInstallationContext(context);
+      scope.setContext("review", safeContext);
+      tagHashedInstallation(scope, context);
+      for (const tag of ["owner", "repo", "pr", "head_sha", "operation", "agent", "decision_outcome"]) {
+        const value = safeContext[tag];
         if (value !== undefined && value !== null)
           scope.setTag(tag, String(value));
       }
@@ -349,7 +437,7 @@ export function captureReviewFailure(
 
 // The structured-log fields worth indexing as Sentry tags — the dimensions operators filter + group by. Only
 // string|number values are tagged; everything else stays in the full "log" context.
-const SENTRY_LOG_TAG_KEYS = ["repo", "repository", "installationId", "installation_id", "pull", "pullNumber", "pr", "project", "kind", "deliveryId", "provider", "model", "effort", "timeoutMs", "trace_id", "span_id"] as const;
+const SENTRY_LOG_TAG_KEYS = ["repo", "repository", "installation_id_hash", "pull", "pullNumber", "pr", "project", "kind", "deliveryId", "provider", "model", "effort", "timeoutMs", "trace_id", "span_id", "operation", "agent", "decision_outcome"] as const;
 
 /** A SHORT location suffix — " (repo#pr)" — for a no-message error title, so the issue list shows WHERE without
  *  dumping every scalar field (which made titles unreadably long, e.g. trailing a full deliveryId). The complete
@@ -384,8 +472,13 @@ const SUMMARY_SKIP_KEYS = new Set([
   "error",
   "repo",
   "repository",
+  "installationId",
+  "installation_id",
+  "installation_id_hash",
   "pullNumber",
   "deliveryId",
+  "trace_id",
+  "span_id",
 ]);
 function redactSummaryValue(value: unknown, depth = 0): unknown {
   if (!value || typeof value !== "object") return value;
@@ -430,6 +523,7 @@ export function forwardStructuredLogToSentry(line: unknown, fromErrorSink = fals
   } catch {
     return; // not JSON — an ordinary log line
   }
+  const safeObj = hashedInstallationContext(obj);
   // A console.error sink is error-level by DEFAULT even when the JSON omits an explicit level (many engine error
   // logs do) — that's how those errors reach Sentry instead of printing to stderr and vanishing. An EXPLICIT level
   // always wins, so a deliberate level:"warn" emitted via console.error is still skipped.
@@ -451,24 +545,34 @@ export function forwardStructuredLogToSentry(line: unknown, fromErrorSink = fals
   // like close_breaker_engaged shows "project=x, closePrecision=0.6, floor=0.8") → else a context pointer.
   const value =
     detail ??
-    ([logLocation(obj).trim(), summarizeLogFields(obj)]
+    ([logLocation(safeObj).trim(), summarizeLogFields(safeObj)]
       .filter(Boolean)
       .join(" ") || "(no message — see the log context)");
   const errorEvent = new Error(value);
   errorEvent.name = event ?? "GittensoryLog";
+  // This exception is synthetic: it was minted from a console line, never thrown at the failing code. Strip the
+  // wrapper stack so Sentry does not attribute forwarded operational issues to this forwarding helper.
+  errorEvent.stack = `${errorEvent.name}: ${value}`;
   Sentry.withScope((scope) => {
     scope.setLevel(severity);
     setOtelTraceScope(scope);
-    scope.setContext("log", obj);
+    scope.setContext("log", safeObj);
     if (event) scope.setTag("event", event);
     // Index the dimensions operators filter + group by, so issues are findable without digging into the context.
     for (const key of SENTRY_LOG_TAG_KEYS) {
-      const tagValue = obj[key];
+      const tagValue = safeObj[key];
       if (typeof tagValue === "string" || typeof tagValue === "number")
         scope.setTag(key, String(tagValue));
     }
     // Group recurrences of ONE failure into a single issue (by event, not the variable detail in the value).
     if (event) scope.setFingerprint(["gittensory-log", event]);
+    // Sentry uses event.transaction as the issue culprit fallback when the stack has no frames; point it at the
+    // operational event slug rather than the forwarding helper.
+    if (event)
+      scope.addEventProcessor((sentryEvent) => {
+        sentryEvent.transaction = event;
+        return sentryEvent;
+      });
     Sentry!.captureException(errorEvent);
   });
 }
@@ -523,8 +627,11 @@ export async function flushSentry(timeoutMs = 2000): Promise<void> {
 /** Test-only: reset module state between cases. */
 export function resetSentryForTest(): void {
   Sentry = undefined;
+  sentryClient = undefined;
+  sentryTraceSampleRate = undefined;
   active = false;
   sentryEnvironment = "production";
+  digestHexSync = undefined;
 }
 
 interface StructuredLogConsole {

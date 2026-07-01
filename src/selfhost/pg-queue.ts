@@ -5,6 +5,7 @@
 import type { Pool } from "pg";
 import { logAudit, extractPayloadType } from "./audit";
 import { incr } from "./metrics";
+import { withReviewSpan } from "./tracing";
 import { withOtelSpan } from "./otel";
 import { captureError } from "./sentry";
 import {
@@ -15,6 +16,7 @@ import {
   githubRateLimitAdmissionTargetForJob,
   githubRateLimitMetricContext,
   githubRateLimitRetryDelayMs,
+  buildSelfHostQueueSnapshot,
   jobCoalesceKey,
   jobPriority,
   queueBackgroundConcurrency,
@@ -25,6 +27,7 @@ import {
   rateLimitRetryDelayWithJitter,
   matchesGitHubRateLimitAdmissionTarget,
   type GitHubRateLimitAdmissionTarget,
+  type SelfHostQueueSnapshot,
 } from "./queue-common";
 import type { JobMessage } from "../types";
 
@@ -60,6 +63,7 @@ export interface PgDurableQueue {
   size(): Promise<number>;
   deadCount(): Promise<number>;
   stats(): Promise<Record<string, number>>;
+  snapshot(): Promise<SelfHostQueueSnapshot>;
 }
 
 interface JobRow {
@@ -339,7 +343,7 @@ export function createPgQueue(
       const rateLimitAdmission = await rateLimitAdmissionDelayMs(message);
       if (rateLimitAdmission !== null) {
         const rateLimitMetric = githubRateLimitMetricContext(message, rateLimitAdmission);
-        await withOtelSpan(
+        await withReviewSpan(
           "selfhost.queue.admission_deferred",
           {
             "job.type": message.type,
@@ -375,7 +379,7 @@ export function createPgQueue(
         return true;
       }
       try {
-        await withOtelSpan(
+        await withReviewSpan(
           "selfhost.queue.job",
           { "job.type": message.type, "queue.backend": "postgres", "job.attempt": Number(job.attempts) + 1 },
           () => consume(message),
@@ -524,7 +528,15 @@ export function createPgQueue(
     ): Promise<void> {
       for (const m of messages) await enqueue(m.body, m.delaySeconds ?? 0);
     },
-  } as unknown as Queue;
+    async snapshot() {
+      const res = await pool.query(
+        `SELECT payload, status, run_after FROM ${TABLE} WHERE status IN ('pending','processing','dead')`,
+      );
+      return buildSelfHostQueueSnapshot(
+        res.rows as Array<{ payload: string; status: string; run_after: string | number }>,
+      );
+    },
+  } as unknown as Queue & { snapshot(): Promise<SelfHostQueueSnapshot> };
 
   return {
     binding,
@@ -570,6 +582,7 @@ export function createPgQueue(
     async stats() {
       return readQueueStats();
     },
+    snapshot: binding.snapshot,
   };
 
   async function reclaimExpiredProcessingJobs(): Promise<number> {
