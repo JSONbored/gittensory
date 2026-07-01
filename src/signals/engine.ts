@@ -4746,7 +4746,7 @@ function validationComponent(pr: PullRequestRecord, preflight: PreflightResult):
   const missingTests = findingCodes.some((code) => /missing.*test|test.*missing|no_test/i.test(code));
   const explicitValidation = hasValidationNote(pr.body ?? "");
   if (preflight.status === "hold") {
-    return { score: 5, evidence: "Preflight is holding this PR; address the blocker before review.", action: "Fix the blocker." };
+    return { score: 5, evidence: "Preflight is holding this PR: the review lane is unavailable, so it is not ready for automated review.", action: "Await review-lane availability." };
   }
   if (missingTests) {
     // A body validation note is an UNBACKED claim when no test files accompany the change. Cap it just above the

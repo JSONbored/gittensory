@@ -5850,6 +5850,9 @@ async function maybePublishPrPublicSurface(
         mergeReadiness,
         heldForReview,
         neverClosed,
+        // A preflight HOLD (e.g. the review lane is unavailable → the review is incomplete) must never render as
+        // "safe to merge"; the renderer downgrades an otherwise-ready status to a manual-review hold. (#2002)
+        preflightHeld: preflight.status === "hold",
         extraCollapsibles: buildPublicSafeCollapsibles({
           repo,
           pr,
