@@ -129,10 +129,15 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
       const ciToken = await createInstallationToken(env, ctx.installationId).catch(() => undefined);
       const admissionKey = githubRateLimitAdmissionKeyForToken(env, ciToken, ctx.installationId);
       const liveCi = await fetchLiveCiAggregate(env, ctx.repoFullName, expectedHeadSha, ciToken, undefined, admissionKey);
+      // The planner itself only ever stages a merge when ciState === "passed" exactly (reviewGood in
+      // agent-actions.ts; "pending" short-circuits to no actions at all upstream) -- the live re-check must
+      // require the SAME exact state, not just "not failed". Otherwise a check that regressed to pending or
+      // became unreadable (unverified) between planning and actuation would still merge, on the assumption
+      // that only an explicit failure invalidates the plan.
       const staleReason =
         action.actionClass === "merge"
-          ? liveCi.ciState === "failed"
-            ? "live CI is now failing"
+          ? liveCi.ciState !== "passed"
+            ? `live CI is no longer passing (now: ${liveCi.ciState})`
             : null
           : liveCi.ciState !== "failed"
             ? `CI state changed since planning (now: ${liveCi.ciState})`

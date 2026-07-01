@@ -20,6 +20,16 @@ vi.mock("../../src/github/pr-freshness", async (importOriginal) => {
     })),
   };
 });
+// #2364's live CI re-check (in executeAgentMaintenanceActions) runs for every merge/heuristic-close accept.
+// Default to a green re-check so the existing "accept executes the staged merge" happy path still executes
+// live instead of being (correctly) denied for CI that this test was never simulating.
+vi.mock("../../src/github/backfill", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/github/backfill")>();
+  return {
+    ...actual,
+    fetchLiveCiAggregate: vi.fn(async () => ({ ciState: "passed" as const, hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [] })),
+  };
+});
 
 import { mergePullRequest } from "../../src/github/pr-actions";
 import { createSessionForGitHubUser } from "../../src/auth/security";

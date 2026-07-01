@@ -142,7 +142,25 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "failed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [] });
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
     expect(outcomes[0]?.outcome).toBe("denied");
-    expect(outcomes[0]?.detail).toContain("live CI is now failing");
+    expect(outcomes[0]?.detail).toContain("live CI is no longer passing (now: failed)");
+    expect(mergePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("REGRESSION (#2364): LIVE merge is denied when live CI has since become pending, not just failed", async () => {
+    const env = createTestEnv({});
+    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "pending", hasPending: true, hasVisiblePending: true, failingDetails: [], nonRequiredFailingDetails: [] });
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
+    expect(outcomes[0]?.outcome).toBe("denied");
+    expect(outcomes[0]?.detail).toContain("live CI is no longer passing (now: pending)");
+    expect(mergePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("REGRESSION (#2364): LIVE merge is denied when live CI has since become unverified (unreadable), not just failed", async () => {
+    const env = createTestEnv({});
+    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "unverified", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [] });
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
+    expect(outcomes[0]?.outcome).toBe("denied");
+    expect(outcomes[0]?.detail).toContain("live CI is no longer passing (now: unverified)");
     expect(mergePullRequest).not.toHaveBeenCalled();
   });
 
