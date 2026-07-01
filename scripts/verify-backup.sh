@@ -48,14 +48,45 @@ verify_postgres() {
       return 1
       ;;
   esac
-  if [ "$scratch" = "$PG_DB" ]; then
-    echo "[verify] refusing scratch restore: GITTENSORY_VERIFY_SCRATCH_DATABASE_URL must differ from the live backup source" >&2
-    return 1
-  fi
   if ! command -v psql >/dev/null 2>&1; then
     echo "[verify] psql not found; cannot run the scratch restore smoke" >&2
     return 1
   fi
+  # Identity check, NOT a string comparison: a differently-spelled URL (postgres:// vs postgresql://, a host
+  # alias, an explicit vs default port) can still point at the SAME database, and a naive `[ "$scratch" =
+  # "$PG_DB" ]` misses that — letting `pg_restore --clean` drop live objects. Ask Postgres itself for the
+  # connection's actual identity instead of comparing the raw strings: `pg_control_system()`'s system_identifier
+  # is a random 64-bit value fixed for the life of that specific cluster's data directory (independent of how
+  # the connection was dialed — unlike a network-address fingerprint, e.g. inet_server_addr(), which can
+  # legitimately differ for the SAME server across connections over different address families, such as an IPv4
+  # vs IPv6 loopback — a false "these differ" that would defeat the guard). Combined with current_database(),
+  # this correctly matches "same server AND same database" while still treating a different database name on
+  # the same cluster as distinct (a legitimate, common scratch-DB setup). No special privilege is required:
+  # PUBLIC has EXECUTE on pg_control_system() by default. Any failure to fingerprint EITHER side aborts (fail
+  # closed) rather than assuming the databases differ.
+  db_identity() {
+    psql "$1" -X -q -t -A -v ON_ERROR_STOP=1 \
+      -c "SELECT current_database() || '@' || (SELECT system_identifier FROM pg_control_system())::text" \
+      2>/dev/null
+  }
+  scratch_identity="$(db_identity "$scratch")" || scratch_identity=""
+  if [ -z "$scratch_identity" ]; then
+    echo "[verify] could not connect to the scratch database to verify its identity; refusing to proceed" >&2
+    return 1
+  fi
+  case "$PG_DB" in
+    postgres://* | postgresql://*)
+      live_identity="$(db_identity "$PG_DB")" || live_identity=""
+      if [ -z "$live_identity" ]; then
+        echo "[verify] could not connect to the live backup source to verify its identity; refusing to proceed" >&2
+        return 1
+      fi
+      if [ "$scratch_identity" = "$live_identity" ]; then
+        echo "[verify] refusing scratch restore: the scratch URL resolves to the SAME database as the live backup source ($scratch_identity)" >&2
+        return 1
+      fi
+      ;;
+  esac
   echo "[verify] restoring $dump into the scratch database…"
   if ! pg_restore --clean --if-exists --no-owner --no-privileges --dbname "$scratch" "$dump" >/dev/null 2>&1; then
     echo "[verify] scratch restore failed for $dump" >&2

@@ -40,12 +40,42 @@ if [ "$mode" = list ]; then
 fi
 exit 0
 `;
-const PSQL = `#!/bin/sh
-echo "\${FAKE_PSQL_TABLE_COUNT:-3}"
-`;
 const SQLITE3 = `#!/bin/sh
 echo "\${FAKE_SQLITE_INTEGRITY:-ok}"
 `;
+
+// Builds a fake `psql` that distinguishes the scratch-restore guard's identity query (`current_database()`)
+// from the post-restore table-count sanity query, and returns a caller-mapped identity per connection URL —
+// lets tests simulate two DIFFERENTLY-SPELLED URLs resolving to the SAME actual database (or genuinely
+// different ones), which is exactly the distinction the real db_identity() guard has to get right. A URL with
+// no entry in `identities` makes the identity query fail (exit 1), modeling "could not connect/fingerprint".
+function fakePsql(identities: Record<string, string>, tableCount = "3"): string {
+  const cases = Object.entries(identities)
+    .map(([url, identity]) => `    "${url}") printf '%s\\n' "${identity}" ;;`)
+    .join("\n");
+  return `#!/bin/sh
+url="$1"
+shift
+sql=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -c) sql="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$sql" in
+  *current_database*)
+    case "$url" in
+${cases}
+      *) exit 1 ;;
+    esac
+    ;;
+  *)
+    printf '%s\\n' "${tableCount}"
+    ;;
+esac
+`;
+}
 
 function fakeBin(root: string, bins: Record<string, string>): string {
   const bin = join(root, "bin");
@@ -144,14 +174,14 @@ describe("self-host verify-backup script", () => {
       root,
       [],
       { GITTENSORY_BACKUP_SOURCE_DATABASE_URL: "postgres://u:p@h/live", VERIFY_RESTORE_SCRATCH: "1" },
-      { pg_restore: PG_RESTORE, psql: PSQL },
+      { pg_restore: PG_RESTORE, psql: fakePsql({}) },
     );
 
     expect(r.status).toBe(1);
     expect(r.out).toContain("needs GITTENSORY_VERIFY_SCRATCH_DATABASE_URL");
   });
 
-  it("refuses the scratch restore when the scratch URL is the live database", () => {
+  it("refuses the scratch restore when the scratch URL is byte-for-byte the live database", () => {
     const root = tmpRoot();
     writePgDump(root, "gittensory-a.dump", true);
     const live = "postgres://u:p@h/live";
@@ -164,14 +194,46 @@ describe("self-host verify-backup script", () => {
         VERIFY_RESTORE_SCRATCH: "1",
         GITTENSORY_VERIFY_SCRATCH_DATABASE_URL: live,
       },
-      { pg_restore: PG_RESTORE, psql: PSQL },
+      { pg_restore: PG_RESTORE, psql: fakePsql({ [live]: "same-cluster@10.0.0.5:5432/live" }) },
     );
 
     expect(r.status).toBe(1);
-    expect(r.out).toContain("must differ from the live backup source");
+    expect(r.out).toContain("SAME database as the live backup source");
   });
 
-  it("runs the guarded scratch restore into a throwaway database and sanity-checks it", () => {
+  it("refuses the scratch restore when a DIFFERENTLY-SPELLED URL resolves to the SAME database (regression: naive string compare bypass)", () => {
+    const root = tmpRoot();
+    writePgDump(root, "gittensory-a.dump", true);
+    // Same database, deliberately spelled differently: scheme (postgres vs postgresql) AND an explicit vs
+    // default port — a `[ "$scratch" = "$PG_DB" ]` string compare would wrongly treat these as distinct.
+    const live = "postgres://gittensory:pw@postgres/gittensory";
+    const scratch = "postgresql://gittensory:pw@postgres:5432/gittensory";
+    expect(scratch).not.toBe(live);
+
+    const r = runVerify(
+      root,
+      [],
+      {
+        GITTENSORY_BACKUP_SOURCE_DATABASE_URL: live,
+        VERIFY_RESTORE_SCRATCH: "1",
+        GITTENSORY_VERIFY_SCRATCH_DATABASE_URL: scratch,
+      },
+      {
+        pg_restore: PG_RESTORE,
+        // Both URLs resolve to the identical real connection identity, exactly as they would in production
+        // if they point at the same Postgres server/database despite the different spelling.
+        psql: fakePsql({
+          [live]: "gittensory@10.0.0.5:5432",
+          [scratch]: "gittensory@10.0.0.5:5432",
+        }),
+      },
+    );
+
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("SAME database as the live backup source");
+  });
+
+  it("refuses (fails closed) when the scratch database's identity cannot be determined", () => {
     const root = tmpRoot();
     writePgDump(root, "gittensory-a.dump", true);
 
@@ -182,9 +244,55 @@ describe("self-host verify-backup script", () => {
         GITTENSORY_BACKUP_SOURCE_DATABASE_URL: "postgres://u:p@h/live",
         VERIFY_RESTORE_SCRATCH: "1",
         GITTENSORY_VERIFY_SCRATCH_DATABASE_URL: "postgres://u:p@h/scratch",
-        FAKE_PSQL_TABLE_COUNT: "42",
       },
-      { pg_restore: PG_RESTORE, psql: PSQL },
+      // No identity entries at all: the scratch identity query fails, so the guard must abort rather than
+      // silently assume the databases differ.
+      { pg_restore: PG_RESTORE, psql: fakePsql({}) },
+    );
+
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("could not connect to the scratch database");
+  });
+
+  it("refuses (fails closed) when the live database's identity cannot be determined", () => {
+    const root = tmpRoot();
+    writePgDump(root, "gittensory-a.dump", true);
+    const scratch = "postgres://u:p@h/scratch";
+
+    const r = runVerify(
+      root,
+      [],
+      {
+        GITTENSORY_BACKUP_SOURCE_DATABASE_URL: "postgres://u:p@h/live",
+        VERIFY_RESTORE_SCRATCH: "1",
+        GITTENSORY_VERIFY_SCRATCH_DATABASE_URL: scratch,
+      },
+      // Scratch resolves fine, but the live URL has no mapping — its identity query fails.
+      { pg_restore: PG_RESTORE, psql: fakePsql({ [scratch]: "gittensory@10.0.0.9:5432/scratch" }) },
+    );
+
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("could not connect to the live backup source");
+  });
+
+  it("runs the guarded scratch restore into a throwaway database and sanity-checks it", () => {
+    const root = tmpRoot();
+    writePgDump(root, "gittensory-a.dump", true);
+    const live = "postgres://u:p@h/live";
+    const scratch = "postgres://u:p@h/scratch";
+
+    const r = runVerify(
+      root,
+      [],
+      {
+        GITTENSORY_BACKUP_SOURCE_DATABASE_URL: live,
+        VERIFY_RESTORE_SCRATCH: "1",
+        GITTENSORY_VERIFY_SCRATCH_DATABASE_URL: scratch,
+      },
+      {
+        pg_restore: PG_RESTORE,
+        psql: fakePsql({ [live]: "gittensory@10.0.0.5:5432/live", [scratch]: "gittensory@10.0.0.5:5432/scratch" }, "42"),
+      },
     );
 
     expect(r.status).toBe(0);
