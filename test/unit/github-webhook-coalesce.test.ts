@@ -40,6 +40,13 @@ describe("githubWebhookCoalesceKey", () => {
         pull_request: { number: 100, head: { sha: "BEEF123" } },
       } as GitHubWebhookPayload),
     ).toBe("github-webhook:pr-refresh:jsonbored/gittensory#100@beef123");
+    expect(
+      githubWebhookCoalesceKey("pull_request", {
+        action: "ready_for_review",
+        repository: { full_name: "JSONbored/Gittensory" },
+        pull_request: { number: 101, head: { sha: "CAFE999" } },
+      } as GitHubWebhookPayload),
+    ).toBe("github-webhook:pr-refresh:jsonbored/gittensory#101@cafe999");
     for (const action of ["labeled", "unlabeled", "closed"]) {
       expect(
         githubWebhookCoalesceKey("pull_request", {
