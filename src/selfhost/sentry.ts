@@ -138,6 +138,23 @@ export function resolveSentryRelease(
   return nonBlank(env.SENTRY_RELEASE) ?? nonBlank(env.GITTENSORY_VERSION);
 }
 
+/** Structured console.error logs are forwarded as synthetic exceptions whose stack always originates in
+ *  forwardStructuredLogToSentry. Re-attribute the Sentry culprit to the log's event slug so operators see
+ *  orb_broker_unavailable (etc.) instead of the forwarder frame. */
+function attributeStructuredLogCulprit(event: {
+  culprit?: string;
+  fingerprint?: unknown;
+  tags?: Record<string, unknown>;
+  exception?: Array<{ type?: string }>;
+}): void {
+  const fingerprint = event.fingerprint;
+  if (!Array.isArray(fingerprint) || fingerprint[0] !== "gittensory-log") return;
+  const eventSlug =
+    (typeof event.tags?.event === "string" ? event.tags.event : undefined) ??
+    event.exception?.[0]?.type;
+  if (eventSlug) event.culprit = eventSlug;
+}
+
 /** beforeSend scrubber — redact anything token/secret-like before an event leaves the box (privacy boundary). */
 export function scrubEvent<T>(event: T): T | null {
   try {
@@ -153,6 +170,8 @@ export function scrubEvent<T>(event: T): T | null {
       spans?: unknown;
       transaction?: unknown;
       user?: unknown;
+      culprit?: string;
+      fingerprint?: unknown;
     };
     scrubRequest(e.request);
     scrubAllowedContexts(e.contexts);
@@ -167,6 +186,7 @@ export function scrubEvent<T>(event: T): T | null {
     if (Array.isArray(e.breadcrumbs)) {
       for (const breadcrumb of e.breadcrumbs) scrubRecord(breadcrumb, 0);
     }
+    attributeStructuredLogCulprit(e);
   } catch {
     return null;
   }

@@ -261,6 +261,34 @@ describe("scrubEvent — redact secrets before an event leaves the box", () => {
 
     expect(scrubEvent(event)).toBeNull();
   });
+
+  it("attributes structured-log issues to the log event slug, not the forwarder frame", () => {
+    const ev = scrubbedEvent({
+      culprit: "forwardStructuredLogToSentry",
+      fingerprint: ["gittensory-log", "orb_broker_unavailable"],
+      tags: { event: "orb_broker_unavailable" },
+      exception: [{ type: "orb_broker_unavailable", value: "timeout" }],
+    }) as { culprit?: string };
+    expect(ev.culprit).toBe("orb_broker_unavailable");
+  });
+
+  it("falls back to the synthetic exception type when a structured log omits the event tag", () => {
+    const ev = scrubbedEvent({
+      culprit: "forwardStructuredLogToSentry",
+      fingerprint: ["gittensory-log", "relay_drained_error"],
+      exception: [{ type: "relay_drained_error", value: "relay failed" }],
+    }) as { culprit?: string };
+    expect(ev.culprit).toBe("relay_drained_error");
+  });
+
+  it("leaves non-structured-log events unchanged", () => {
+    const ev = scrubbedEvent({
+      culprit: "buildReviewEnrichment",
+      fingerprint: ["other"],
+      tags: { event: "orb_broker_unavailable" },
+    }) as { culprit?: string };
+    expect(ev.culprit).toBe("buildReviewEnrichment");
+  });
 });
 
 describe("disabled when SENTRY_DSN is unset (modular opt-out → complete no-op)", () => {
