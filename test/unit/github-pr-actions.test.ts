@@ -297,6 +297,23 @@ describe("GitHub PR action primitives (#778)", () => {
     expect(calls.some((url) => url.includes("per_page=100") && url.includes("page=2"))).toBe(true);
   });
 
+  it("getLastReopenerLogin: a single page with an EXPLICIT rel=\"last\" pointing at page 1 is read directly, no forward scan (#2369)", async () => {
+    // Distinct from the "no Link header at all" case above: here GitHub DOES emit rel="last", it just already
+    // points at page 1 (a genuinely single-page timeline), exercising the lastPage<=1 branch rather than the
+    // lastPage===null branch.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/issues/121/events")) {
+        return Response.json([{ event: "reopened", actor: { login: "contributor" } }], {
+          headers: { link: '<https://api.github.test/issues/121/events?per_page=100&page=1>; rel="last"' },
+        });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 121)).resolves.toEqual({ login: "contributor", coveredAllPages: true });
+  });
+
   it("getLastReopenerLogin: returns null when the events API throws (catch path, #2369)", async () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       if (input.toString().includes("/access_tokens")) return Response.json({ token: "t" });
