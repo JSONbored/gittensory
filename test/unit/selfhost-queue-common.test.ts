@@ -20,6 +20,7 @@ import {
   jobPriority,
   matchesGitHubRateLimitAdmissionTarget,
   nonConsumingRetryDelayMs,
+  parsePositiveIntEnv,
   queueBackgroundConcurrency,
   queueProcessingTimeoutMs,
   queueRecoveryJitterMs,
@@ -1062,5 +1063,64 @@ describe("self-host queue common helpers", () => {
       if (old === undefined) delete process.env.SCHEDULED_ENQUEUE_JITTER_MS;
       else process.env.SCHEDULED_ENQUEUE_JITTER_MS = old;
     }
+  });
+});
+
+describe("parsePositiveIntEnv", () => {
+  const KNOB = "GITTENSORY_TEST_ENV_KNOB";
+  const saved = process.env[KNOB];
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env[KNOB];
+    else process.env[KNOB] = saved;
+    vi.restoreAllMocks();
+  });
+
+  it("uses the fallback silently when the knob is unset", () => {
+    delete process.env[KNOB];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(parsePositiveIntEnv(KNOB, { min: 1, fallback: 4 })).toBe(4);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("floors a valid in-range value", () => {
+    process.env[KNOB] = "8.9";
+    expect(parsePositiveIntEnv(KNOB, { min: 1, fallback: 4 })).toBe(8);
+  });
+
+  it("rejects a non-numeric value to the fallback with one warn line", () => {
+    process.env[KNOB] = "not-a-number";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(parsePositiveIntEnv(KNOB, { min: 1, fallback: 4 })).toBe(4);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(String(warn.mock.calls[0]?.[0])).toContain("selfhost_env_knob_rejected");
+  });
+
+  it("rejects a below-min value to the fallback with a warning", () => {
+    process.env[KNOB] = "0";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(parsePositiveIntEnv(KNOB, { min: 1, fallback: 4 })).toBe(4);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("clamps an above-max value down to max with a warning", () => {
+    process.env[KNOB] = "500";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(parsePositiveIntEnv(KNOB, { min: 1, max: 64, fallback: 4 })).toBe(64);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("clamps a fractional value just above max and still warns (supplied-value semantics)", () => {
+    process.env[KNOB] = "64.9";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(parsePositiveIntEnv(KNOB, { min: 1, max: 64, fallback: 4 })).toBe(64);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("does not clamp when no max is configured", () => {
+    process.env[KNOB] = "5000";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(parsePositiveIntEnv(KNOB, { min: 0, fallback: 4 })).toBe(5000);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
