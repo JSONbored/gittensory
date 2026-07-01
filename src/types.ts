@@ -683,6 +683,10 @@ export type AgentPendingActionParams = {
   mergeMethod?: AutoMergeMethod;
   closeComment?: string;
   expectedHeadSha?: string;
+  // For an `approve` action: retract the bot's own stale approval instead of posting a new one (see
+  // PlannedAgentAction.dismissStaleApproval). Must round-trip through staging like every other action-specific
+  // field. (#2254)
+  dismissStaleApproval?: boolean;
 };
 
 export type AgentPendingActionStatus = "pending" | "accepted" | "rejected";

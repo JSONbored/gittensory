@@ -6,6 +6,7 @@ vi.mock("../../src/github/pr-actions", () => ({
   closePullRequest: vi.fn(async () => ({ state: "closed" })),
   createIssueComment: vi.fn(async () => ({ id: 2 })),
   updatePullRequestBranch: vi.fn(async () => undefined),
+  dismissLatestBotApproval: vi.fn(async () => ({ dismissed: true })),
 }));
 vi.mock("../../src/github/labels", () => ({
   ensurePullRequestLabel: vi.fn(async () => ({ applied: true, created: false })),
@@ -23,7 +24,7 @@ vi.mock("../../src/github/pr-freshness", async (importOriginal) => {
   };
 });
 
-import { closePullRequest, createIssueComment, createPullRequestReview, mergePullRequest, updatePullRequestBranch } from "../../src/github/pr-actions";
+import { closePullRequest, createIssueComment, createPullRequestReview, dismissLatestBotApproval, mergePullRequest, updatePullRequestBranch } from "../../src/github/pr-actions";
 import { ensurePullRequestLabel, removePullRequestLabel } from "../../src/github/labels";
 import { fetchPullRequestFreshness } from "../../src/github/pr-freshness";
 import { actionParams, executeAgentMaintenanceActions, pendingClosureLabelApplied, type AgentActionExecutionContext, type AgentActionOutcome } from "../../src/services/agent-action-executor";
@@ -86,6 +87,29 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect(updatePullRequestBranch).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "sha7");
     expect(fetchPullRequestFreshness).toHaveBeenCalledTimes(6);
     expect((await auditFor(env, "merge"))?.outcome).toBe("completed");
+  });
+
+  it("LIVE approve with dismissStaleApproval retracts the stale review instead of posting a new one (#2254)", async () => {
+    const env = createTestEnv({});
+    const dismiss: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "stale approval retracted", dismissStaleApproval: true };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [dismiss]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(dismissLatestBotApproval).toHaveBeenCalledWith(env, 123, "owner/repo", 7, expect.any(String));
+    expect(createPullRequestReview).not.toHaveBeenCalled();
+  });
+
+  it("actionParams threads dismissStaleApproval for a stale-approval retraction action", () => {
+    const dismiss: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "stale", dismissStaleApproval: true };
+    expect(actionParams(dismiss)).toEqual({ dismissStaleApproval: true });
+  });
+
+  it("LIVE request_changes/approve without a reviewBody falls back to an empty string", async () => {
+    const env = createTestEnv({});
+    const bareRequestChanges: PlannedAgentAction = { actionClass: "request_changes", requiresApproval: false, reason: "blocked" };
+    const bareApprove: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "passed" };
+    await executeAgentMaintenanceActions(env, ctx(), [bareRequestChanges, bareApprove]);
+    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "REQUEST_CHANGES", "");
+    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "APPROVE", "");
   });
 
   it("LIVE merge pins the GitHub merge to the action's reviewed head (expectedHeadSha) over the context head", async () => {

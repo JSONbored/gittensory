@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
-import { closePullRequest, createIssueComment, createPullRequestReview, createPullRequestReviewComments, getLastCloserLogin, mergePullRequest, updatePullRequestBranch } from "../../src/github/pr-actions";
+import { closePullRequest, createIssueComment, createPullRequestReview, createPullRequestReviewComments, dismissLatestBotApproval, getLastCloserLogin, mergePullRequest, updatePullRequestBranch } from "../../src/github/pr-actions";
 import { createTestEnv } from "../helpers/d1";
 
 function envWithKey() {
@@ -271,6 +271,50 @@ describe("GitHub PR action primitives (#778)", () => {
       return new Response("unexpected", { status: 500 });
     });
     await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 24)).resolves.toEqual({ login: null, coveredAllPages: true });
+  });
+
+  it("dismisses the bot's own LATEST approve review, ignoring other reviewers and earlier bot reviews (#2254)", async () => {
+    const calls: Array<{ method: string; url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/pulls/7/reviews") && !url.includes("/dismissals") && method === "GET") {
+        return Response.json([
+          { id: 1, state: "COMMENTED", user: { login: "human-reviewer" } },
+          { id: 2, state: "APPROVED", user: { login: "gittensory[bot]" } }, // an EARLIER bot approve
+          { id: 3, state: "CHANGES_REQUESTED", user: { login: "gittensory[bot]" } },
+          { id: 4, state: "APPROVED", user: { login: "gittensory[bot]" } }, // the LATEST bot approve — this one
+        ]);
+      }
+      if (url.includes("/pulls/7/reviews/4/dismissals") && method === "PUT") {
+        calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : {} });
+        return Response.json({ id: 4, state: "DISMISSED" });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await dismissLatestBotApproval(envWithKey(), 123, "owner/repo", 7, "stale approval retracted");
+    expect(result).toEqual({ dismissed: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.body).toMatchObject({ message: "stale approval retracted", event: "DISMISS" });
+  });
+
+  it("is a no-op when the bot never approved this PR", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/pulls/8/reviews")) return Response.json([{ id: 1, state: "APPROVED", user: { login: "human-reviewer" } }]);
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(dismissLatestBotApproval(envWithKey(), 123, "owner/repo", 8, "retract")).resolves.toEqual({ dismissed: false });
+  });
+
+  it("is best-effort — an API error returns dismissed:false instead of throwing", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (input.toString().includes("/access_tokens")) return Response.json({ token: "t" });
+      throw new Error("network failure");
+    });
+    await expect(dismissLatestBotApproval(envWithKey(), 123, "owner/repo", 9, "retract")).resolves.toEqual({ dismissed: false });
   });
 
   it("updates branch without an expected head sha (omits expected_head_sha — FALSE branch of the spread ternary)", async () => {

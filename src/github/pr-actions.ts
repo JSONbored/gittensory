@@ -92,6 +92,40 @@ export async function mergePullRequest(
   return { merged: data.merged ?? true, sha: data.sha ?? null };
 }
 
+/** Dismiss the bot's own most recent APPROVE review (#2254). GitHub's `reviewDecision` is derived from the
+ *  LATEST review per reviewer, so a stale bot approval left in place after a later commit no longer qualifies
+ *  can still satisfy a "require approving reviews" branch-protection rule and let a human merge un-reviewed
+ *  code directly on GitHub, bypassing this gate entirely. Best-effort: any failure (no bot review found, the
+ *  review already dismissed, a transient API error) returns `dismissed: false` rather than throwing — this is
+ *  a cleanup action, not the primary mutation, and must never crash the maintenance pass it runs alongside. */
+export async function dismissLatestBotApproval(env: Env, installationId: number, repoFullName: string, pullNumber: number, message: string): Promise<{ dismissed: boolean }> {
+  try {
+    const { owner, repo } = splitRepo(repoFullName);
+    const token = await createInstallationToken(env, installationId);
+    const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
+    const botLogin = `${env.GITHUB_APP_SLUG}[bot]`;
+    const response = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", { owner, repo, pull_number: pullNumber, per_page: 100 });
+    const reviews = response.data as Array<{ id: number; state?: string; user?: { login?: string | null } | null }>;
+    // Reviews are returned oldest-first; the LAST matching entry is the bot's most recent APPROVE.
+    let latestApprovalId: number | undefined;
+    for (const review of reviews) {
+      if (review.user?.login === botLogin && review.state === "APPROVED") latestApprovalId = review.id;
+    }
+    if (latestApprovalId === undefined) return { dismissed: false };
+    await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals", {
+      owner,
+      repo,
+      pull_number: pullNumber,
+      review_id: latestApprovalId,
+      message,
+      event: "DISMISS",
+    });
+    return { dismissed: true };
+  } catch {
+    return { dismissed: false };
+  }
+}
+
 /** Rebase a PR onto its base via GitHub's update-branch (merges the current base into the PR head). Keeps a
  *  BEHIND PR current before reviewing/merging so the review + required CI run against the merged result —
  *  reviewbot parity. `expectedHeadSha` guards against racing a head that moved since we read it. The PUT
