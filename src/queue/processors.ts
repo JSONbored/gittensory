@@ -1571,6 +1571,48 @@ async function maybeRunAgentMaintenance(
   if (pr.isDraft) return;
   if (!gate) return;
 
+  // Per-PR mutual exclusion (#2129): a webhook re-review and a sweep-driven agent-regate-pr job use different
+  // coalesce-key shapes (jobCoalesceKey never matches one against the other) and QUEUE_CONCURRENCY explicitly
+  // overlaps I/O-bound jobs, so two passes for the SAME PR can both reach this point concurrently, each with its
+  // own independently-timed live CI/mergeable/reviewDecision read. If those reads disagree, both could plan and
+  // execute DIFFERENT actions for the same PR. Claim a short-TTL advisory lock before the plan-and-execute
+  // critical section (extracted below so the try/finally doesn't force-reindent that whole block); a pass that
+  // loses the race defers cleanly — the next webhook/sweep tick is the backstop. Lightweight stand-in for the
+  // per-PR SubmissionLock Durable Object noted as a longer-term TODO in env.d.ts.
+  if (!(await claimAgentMaintenanceLock(env, repoFullName, pr.number))) return;
+  try {
+    await runAgentMaintenancePlanAndExecute(env, {
+      installationId,
+      repoFullName,
+      repo: args.repo,
+      pr,
+      settings,
+      otherOpenPullRequests,
+      gate,
+      liveFacts: args.liveFacts,
+    });
+  } finally {
+    await releaseAgentMaintenanceLock(env, repoFullName, pr.number);
+  }
+}
+
+/** The plan-and-execute critical section of {@link maybeRunAgentMaintenance}, extracted so the caller's
+ *  per-PR lock (#2129) wraps it in a try/finally without reindenting this whole block. */
+async function runAgentMaintenancePlanAndExecute(
+  env: Env,
+  args: {
+    installationId: number;
+    repoFullName: string;
+    repo: Awaited<ReturnType<typeof getRepository>>;
+    pr: PullRequestRecord;
+    settings: RepositorySettings;
+    otherOpenPullRequests: PullRequestRecord[];
+    gate: ReturnType<typeof evaluateGateCheck>;
+    liveFacts: LiveGithubFacts;
+  },
+): Promise<void> {
+  const { installationId, repoFullName, pr, settings, otherOpenPullRequests, gate } = args;
+
   // Convergence safety: feed the planner the PR's changed paths + the repo's hard-guardrail globs so guarded
   // paths force manual review, and flag owner-authored PRs so they are never auto-closed (standing rule).
   // FIX B: resolve files via the shared resolver so an EMPTY stored list (the maintenance ran before the
@@ -2182,6 +2224,50 @@ async function ciHeadShaResolutionCoalesced(
     env,
     `ci-head-sha-resolve:${repoFullName.toLowerCase()}@${headSha.toLowerCase()}`,
   );
+}
+
+// Per-PR advisory lock around maybeRunAgentMaintenance's plan-and-execute critical section (#2129). The TTL is a
+// crash-safety backstop only — the normal path releases explicitly in a finally block within a few seconds — so
+// it is sized well above any realistic pass duration (matches CI_COALESCE_WINDOW_SECONDS, an already-vetted
+// value for a comparable-scale operation in this file), not to bound throughput.
+const AGENT_MAINTENANCE_LOCK_TTL_SECONDS = 60;
+
+function agentMaintenanceLockKey(repoFullName: string, prNumber: number): string {
+  return `agent-maintenance-lock:${repoFullName.toLowerCase()}#${prNumber}`;
+}
+
+/**
+ * Claim the per-PR advisory lock. Returns false when another pass already holds it (caller must skip this pass
+ * — the next webhook/sweep tick is the backstop). A missing cache or cache hiccup fails OPEN (returns true —
+ * the lock is a defense-in-depth serializer, not the primary safety gate, and must never itself block actuation).
+ */
+export async function claimAgentMaintenanceLock(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+): Promise<boolean> {
+  // getTransientKey/putTransientKey already fail open internally (a missing cache or a thrown read/write error
+  // both resolve rather than throw), so this never needs its own try/catch — a cache fault surfaces here as
+  // "no lock held", which correctly falls through to claiming it.
+  const key = agentMaintenanceLockKey(repoFullName, prNumber);
+  if (await getTransientKey(env, key)) return false; // another pass is already in-flight for this PR
+  await putTransientKey(env, key, "1", AGENT_MAINTENANCE_LOCK_TTL_SECONDS);
+  return true;
+}
+
+/** Best-effort release, called from a finally block so the lock frees promptly instead of waiting out the TTL. */
+export async function releaseAgentMaintenanceLock(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+): Promise<void> {
+  try {
+    await env.SELFHOST_TRANSIENT_CACHE?.del?.(
+      agentMaintenanceLockKey(repoFullName, prNumber),
+    );
+  } catch {
+    // best-effort; the TTL is the backstop if release fails
+  }
 }
 
 /** Read the CI head SHA off a `check_suite`/`check_run` `completed` payload (the event node carries `head_sha`;
