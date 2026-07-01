@@ -3611,7 +3611,7 @@ describe("GitHub backfill", () => {
 
       const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", null, "public-token", null);
 
-      expect(aggregate).toEqual({ ciState: "unverified", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [] });
+      expect(aggregate).toEqual({ ciState: "unverified", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
@@ -3979,6 +3979,52 @@ describe("GitHub backfill", () => {
       });
       const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
       expect(aggregate.ciState).toBe("passed"); // a first-party run was observed and passed; do not over-pend
+    });
+
+    it("surfaces a completeness warning when CI resolves to passed with no branch-protection required contexts, without changing ciState (#2137)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        // Workflow A ("test") ran and passed; workflow B (e.g. a path-filtered e2e-tests job) never triggered at
+        // all — no check-run, no check-suite entry, indistinguishable from a workflow that doesn't exist.
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "test", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+      // Disposition is UNCHANGED (interim mitigation, not the full fix): a self-hosted repo with no
+      // expected-checks config would otherwise get stuck "pending" forever on a workflow that can structurally
+      // never complete. The gap is surfaced as an informational warning instead.
+      expect(aggregate.ciState).toBe("passed");
+      expect(aggregate.ciCompletenessWarning).toMatch(/branch-protection required checks/i);
+    });
+
+    it("does NOT surface a completeness warning when branch-protection required contexts ARE configured", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "test", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["test"]));
+      expect(aggregate.ciState).toBe("passed");
+      expect(aggregate.ciCompletenessWarning).toBeNull();
+    });
+
+    it("does NOT surface a completeness warning when ciState is anything other than passed", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "test", status: "completed", conclusion: "failure", app: { slug: "github-actions" } }] });
+        if (url.includes("/status?")) return Response.json({ statuses: [] });
+        return new Response("not found", { status: 404 });
+      });
+      const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", null);
+      expect(aggregate.ciState).toBe("failed");
+      expect(aggregate.ciCompletenessWarning).toBeNull();
     });
 
     it("fold-all: a non-completed THIRD-PARTY suite is ignored (only first-party GitHub-Actions suites gate)", async () => {

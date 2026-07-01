@@ -1627,6 +1627,27 @@ async function maybeRunAgentMaintenance(
     token,
     admissionKey,
   );
+  // #2137: informational-only nudge for the operator — never affects the disposition below (ciState is
+  // unchanged). recordAuditEvent is a DB write with its own internal failure handling; a failure here must
+  // never block the maintenance pass, hence the outer .catch().
+  if (ciAggregate.ciCompletenessWarning) {
+    /* v8 ignore next -- ciCompletenessWarning is only ever set when ciState === "passed", and
+     * fetchLiveCiAggregate/reduceLiveCiAggregate short-circuit to "unverified" for a falsy headSha before ever
+     * reaching that computation — so pr.headSha (the same value passed into refreshLiveCiAggregate above) is
+     * always truthy here; the fallback is defensive. */
+    const ciCompletenessHeadSha = pr.headSha ?? null;
+    await recordAuditEvent(env, {
+      eventType: "github_app.ci_completeness_unverified",
+      actor: "gittensory",
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "completed",
+      detail: ciAggregate.ciCompletenessWarning,
+      metadata: { deliveryId: args.deliveryId, repoFullName, headSha: ciCompletenessHeadSha },
+    }).catch(
+      /* v8 ignore next -- fail-safe: an audit write failure never blocks the handler */
+      () => undefined,
+    );
+  }
   const changedPaths = changedPathsForGuardrail(changedFiles);
   const repoOwner = repoFullName.includes("/")
     ? repoFullName.slice(0, repoFullName.indexOf("/"))
