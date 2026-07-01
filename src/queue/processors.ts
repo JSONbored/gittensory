@@ -2447,37 +2447,29 @@ async function ciHeadShaResolutionCoalesced(
 
 /**
  * Best-effort exclusive claim against the self-host transient cache, shared by every per-PR/per-review advisory
- * lock below. Prefers the store's native atomic claim() (Redis SET NX) — the only way to fully CLOSE the race
- * between two concurrent callers each observing an absent key. When the adapter hasn't implemented claim() yet,
- * falls back to an optimistic write-then-verify instead of a plain get-then-set pair: write a token unique to
- * THIS attempt, then read the key back. A correctly-behaved key-value store serializes writes to a single key —
- * there is only ever one current value — so only the caller whose token survives the final read actually won;
- * every other concurrent caller reads back a DIFFERENT (later) token and correctly backs off. A plain
- * get-then-set pair can't make that distinction: both callers can observe an absent key BEFORE either writes,
- * and both wrongly believe they claimed it (#confirmed-bug). A missing cache or any read/write error fails OPEN
- * (returns true) — every lock built on this helper is defense-in-depth, never the primary safety gate, and must
- * never itself block real work from running.
+ * lock below. Requires the store's native atomic claim() (Redis SET NX) to provide any real exclusivity — it is
+ * the only way to close the race between two concurrent callers each observing an absent key. A plain
+ * get-then-set pair CANNOT close that race in general, even with an extra write-then-verify re-read: caller A
+ * can write its own token, read it straight back, and return true entirely BEFORE caller B's later write/read
+ * also completes and also returns true — both callers "win" (#confirmed-bug). Rather than pretend to serialize
+ * via a check that silently fails under exactly the concurrent load this lock exists to guard against, an
+ * adapter without claim() gets NO exclusivity from this helper: every caller proceeds. This is honest about the
+ * limitation rather than a false guarantee, and costs nothing in practice — self-host's Redis-backed cache (the
+ * only cache adapter this codebase ships) always implements claim(), so this is a documented limitation for a
+ * hypothetical future adapter, not a live gap. A missing cache or a thrown claim() also fails OPEN (returns
+ * true) — every lock built on this helper is defense-in-depth, never the primary safety gate, and must never
+ * itself block real work from running.
  */
 async function claimTransientLock(
   env: Env,
   key: string,
   ttlSeconds: number,
 ): Promise<boolean> {
-  if (env.SELFHOST_TRANSIENT_CACHE?.claim) {
-    try {
-      return await env.SELFHOST_TRANSIENT_CACHE.claim(key, "1", ttlSeconds);
-    } catch {
-      return true; // fail open — see the doc comment above.
-    }
-  }
-  if (!env.SELFHOST_TRANSIENT_CACHE) return true; // no cache configured — nothing to serialize against.
+  if (!env.SELFHOST_TRANSIENT_CACHE?.claim) return true; // no atomic primitive — nothing to serialize against.
   try {
-    if (await env.SELFHOST_TRANSIENT_CACHE.get(key)) return false; // already claimed by someone else
-    const token = crypto.randomUUID();
-    await env.SELFHOST_TRANSIENT_CACHE.set(key, token, ttlSeconds);
-    return (await env.SELFHOST_TRANSIENT_CACHE.get(key)) === token;
+    return await env.SELFHOST_TRANSIENT_CACHE.claim(key, "1", ttlSeconds);
   } catch {
-    return true; // fail open — a cache fault must never itself block real work.
+    return true; // fail open — see the doc comment above.
   }
 }
 

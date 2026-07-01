@@ -3524,10 +3524,14 @@ describe("queue processors", () => {
     expect(calls).toEqual(["claim"]); // never falls through to the racy get/set pair when claim is available
   });
 
-  it("claimAgentMaintenanceLock falls back to the get/set pair and still denies a held key when the cache has no claim() (#2368)", async () => {
-    // A cache adapter that hasn't implemented the atomic claim() primitive yet must still deny a second claim —
-    // just via the older, non-atomic get-then-set pair (documented as strictly no worse than this function's
-    // prior behavior), not by skipping the check entirely.
+  it("claimAgentMaintenanceLock returns true unconditionally when the cache has no claim() — no false exclusivity guarantee (#confirmed-bug, review round 2)", async () => {
+    // A prior version of this helper fell back to a get-then-set pair (even with an extra write-then-verify
+    // re-read) when claim() wasn't available. That is NOT a real exclusivity guarantee: caller A can write its
+    // own token, read it straight back, and return true entirely before caller B's later write/read also
+    // completes and also returns true -- both callers "win". Rather than pretend to serialize via a check that
+    // silently fails under exactly the concurrent load this lock exists to guard against, a cache without
+    // claim() now gets NO exclusivity at all -- every call proceeds, sequential or concurrent, even for a key a
+    // previous call already "set" via get/set.
     const values = new Map<string, string>();
     const env = createTestEnv({
       SELFHOST_TRANSIENT_CACHE: {
@@ -3536,15 +3540,13 @@ describe("queue processors", () => {
       },
     });
     expect(await claimAgentMaintenanceLock(env, "owner/agent-repo", 7)).toBe(true);
-    expect(await claimAgentMaintenanceLock(env, "owner/agent-repo", 7)).toBe(false);
+    expect(await claimAgentMaintenanceLock(env, "owner/agent-repo", 7)).toBe(true);
   });
 
-  it("REGRESSION (#confirmed-bug): claimAgentMaintenanceLock's get/set fallback still can't be won by two genuinely concurrent callers when the cache has no claim()", async () => {
-    // A PLAIN get-then-set pair has a window between the read and the write where two concurrent callers can
-    // both observe an absent key before either writes, and both wrongly believe they claimed it — the exact
-    // defect flagged against claimAiReviewLock's identical fallback. Force that interleaving here: both get()
-    // calls yield via queueMicrotask before resolving, so with a plain get-then-set pair both would read "unset"
-    // and both would return true. The fallback's write-then-verify re-read must still let only one caller win.
+  it("REGRESSION (#confirmed-bug, review round 2): claimAgentMaintenanceLock does not falsely deny — and does not falsely claim exclusivity for — two genuinely concurrent callers when the cache has no claim()", async () => {
+    // Documents the corrected, honest contract under the exact interleaving the gate flagged: with no atomic
+    // claim() primitive, BOTH concurrent callers proceed (true), because this helper no longer attempts a
+    // get/set-based serialization that can't actually provide exclusivity.
     const values = new Map<string, string>();
     const yieldThenRun = <T,>(fn: () => T): Promise<T> => new Promise((resolve) => queueMicrotask(() => resolve(fn())));
     const env = createTestEnv({
@@ -3557,7 +3559,7 @@ describe("queue processors", () => {
       claimAgentMaintenanceLock(env, "owner/agent-repo", 7),
       claimAgentMaintenanceLock(env, "owner/agent-repo", 7),
     ]);
-    expect([first, second].filter(Boolean)).toHaveLength(1);
+    expect([first, second]).toEqual([true, true]);
   });
 
   it("claimAiReviewLock claims when free, denies when held (per-PR+head+mode, not globally), and release frees it again (#confirmed-bug)", async () => {
@@ -3635,9 +3637,14 @@ describe("queue processors", () => {
     expect(calls).toEqual(["claim"]); // never falls through to the racy get/set pair when claim is available
   });
 
-  it("claimAiReviewLock falls back to the get/set pair and still denies a held key when the cache has no claim() (#confirmed-bug)", async () => {
-    // A cache adapter that hasn't implemented the atomic claim() primitive yet must still deny a second claim —
-    // just via the older, non-atomic get-then-set pair, not by skipping the check entirely.
+  it("claimAiReviewLock returns true unconditionally when the cache has no claim() — no false exclusivity guarantee (#confirmed-bug, review round 2)", async () => {
+    // A prior version of this helper fell back to a get-then-set pair (even with an extra write-then-verify
+    // re-read) when claim() wasn't available. That is NOT a real exclusivity guarantee: caller A can write its
+    // own token, read it straight back, and return true entirely before caller B's later write/read also
+    // completes and also returns true -- both callers "win". Rather than pretend to serialize via a check that
+    // silently fails under exactly the concurrent load this lock exists to guard against (duplicate LLM calls),
+    // a cache without claim() now gets NO exclusivity at all -- every call proceeds, sequential or concurrent,
+    // even for a key a previous call already "set" via get/set.
     const values = new Map<string, string>();
     const env = createTestEnv({
       SELFHOST_TRANSIENT_CACHE: {
@@ -3646,16 +3653,14 @@ describe("queue processors", () => {
       },
     });
     expect(await claimAiReviewLock(env, "owner/agent-repo", 7, "sha1", "block")).toBe(true);
-    expect(await claimAiReviewLock(env, "owner/agent-repo", 7, "sha1", "block")).toBe(false);
+    expect(await claimAiReviewLock(env, "owner/agent-repo", 7, "sha1", "block")).toBe(true);
   });
 
-  it("REGRESSION (#confirmed-bug): claimAiReviewLock's get/set fallback still can't be won by two genuinely concurrent callers when the cache has no claim()", async () => {
-    // The exact gap the gate flagged: a plain get-then-set pair has a window between the read and the write
-    // where two concurrent callers (a webhook pass and a sweep pass) can both observe an absent key before
-    // either writes, and both wrongly fire a real LLM call for the same PR head. Force that interleaving here:
-    // both get() calls yield via queueMicrotask before resolving, so with a plain get-then-set pair both would
-    // read "unset" and both would return true. The fallback's write-then-verify re-read must still let only one
-    // caller win — the other reads back the winner's token on its own final check and correctly backs off.
+  it("REGRESSION (#confirmed-bug, review round 2): claimAiReviewLock does not falsely claim exclusivity for two genuinely concurrent callers when the cache has no claim()", async () => {
+    // Documents the corrected, honest contract under the exact interleaving the gate flagged: with no atomic
+    // claim() primitive, BOTH concurrent callers proceed (true) -- a webhook pass and a sweep pass racing for
+    // the same PR head both fire their LLM call, same as before this lock existed, rather than one of them
+    // wrongly believing it has exclusive ownership when it doesn't.
     const values = new Map<string, string>();
     const yieldThenRun = <T,>(fn: () => T): Promise<T> => new Promise((resolve) => queueMicrotask(() => resolve(fn())));
     const env = createTestEnv({
@@ -3668,7 +3673,7 @@ describe("queue processors", () => {
       claimAiReviewLock(env, "owner/agent-repo", 7, "sha1", "block"),
       claimAiReviewLock(env, "owner/agent-repo", 7, "sha1", "block"),
     ]);
-    expect([first, second].filter(Boolean)).toHaveLength(1);
+    expect([first, second]).toEqual([true, true]);
   });
 
   it("INVARIANT (#2129 per-PR lock): a maintenance pass defers when another pass already holds the PR's lock", async () => {
