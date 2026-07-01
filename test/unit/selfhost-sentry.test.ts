@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock @sentry/node so the dynamic import inside initSentry() resolves to spies. Hoisted so vi.mock can see it.
 const mocks = vi.hoisted(() => {
-  const scope = { setContext: vi.fn(), setLevel: vi.fn(), setTag: vi.fn(), setFingerprint: vi.fn() };
+  const scope = { setContext: vi.fn(), setLevel: vi.fn(), setTag: vi.fn(), setFingerprint: vi.fn(), addEventProcessor: vi.fn() };
   return {
     scope,
     init: vi.fn(),
@@ -633,6 +633,35 @@ describe("forwardStructuredLogToSentry — central console.log → Sentry error 
     expect(mocks.scope.setTag).toHaveBeenCalledWith("installationId", "143010787");
     // Recurrences of one failure group into a single issue by event.
     expect(mocks.scope.setFingerprint).toHaveBeenCalledWith(["gittensory-log", "orb_broker_unavailable"]);
+  });
+
+  it("strips the synthetic wrapper stack so the issue culprit is not forwardStructuredLogToSentry", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    forwardStructuredLogToSentry(
+      JSON.stringify({ level: "error", event: "orb_broker_unavailable", error: "timeout" }),
+    );
+    // The captured Error's stack is reduced to its header line — no "at …" frames — so Sentry cannot attribute the
+    // issue to this forwarder (or the console sink) the way it did when the real (synthetic) stack was attached.
+    const stack = lastCapturedError().stack ?? "";
+    expect(stack).not.toMatch(/\n\s+at /);
+    expect(stack).toBe("orb_broker_unavailable: timeout");
+  });
+
+  it("sets the issue culprit (event.transaction) to the event slug, and skips it when there is no event", async () => {
+    await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
+    forwardStructuredLogToSentry(
+      JSON.stringify({ level: "error", event: "orb_broker_unavailable", error: "timeout" }),
+    );
+    // The scoped event processor stamps the operational event slug as the transaction (Sentry's culprit input).
+    const processor = mocks.scope.addEventProcessor.mock.calls.at(-1)?.[0] as (
+      e: Record<string, unknown>,
+    ) => Record<string, unknown>;
+    expect(processor({})).toEqual({ transaction: "orb_broker_unavailable" });
+
+    // A no-event error log has no slug to use as a culprit, so no transaction processor is registered.
+    mocks.scope.addEventProcessor.mockClear();
+    forwardStructuredLogToSentry(JSON.stringify({ level: "error", code: 500 }));
+    expect(mocks.scope.addEventProcessor).not.toHaveBeenCalled();
   });
 
   it("indexes self-host AI provider dimensions as Sentry tags", async () => {

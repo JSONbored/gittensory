@@ -456,6 +456,12 @@ export function forwardStructuredLogToSentry(line: unknown, fromErrorSink = fals
       .join(" ") || "(no message — see the log context)");
   const errorEvent = new Error(value);
   errorEvent.name = event ?? "GittensoryLog";
+  // This exception is SYNTHETIC — minted here from a console line, never thrown at the code that failed. Its captured
+  // JS stack therefore points at this forwarder and the console sink that called it (installStructuredLogForwarding),
+  // not at the origin. Left attached, Sentry computes EVERY forwarded issue's culprit as forwardStructuredLogToSentry,
+  // burying the real signal. Reduce the stack to its header line (the parser yields zero frames from it) so no frame
+  // is misattributed; the event slug supplies the culprit below and the `log` context keeps the full payload.
+  errorEvent.stack = `${errorEvent.name}: ${value}`;
   Sentry.withScope((scope) => {
     scope.setLevel(severity);
     setOtelTraceScope(scope);
@@ -469,6 +475,15 @@ export function forwardStructuredLogToSentry(line: unknown, fromErrorSink = fals
     }
     // Group recurrences of ONE failure into a single issue (by event, not the variable detail in the value).
     if (event) scope.setFingerprint(["gittensory-log", event]);
+    // Give the issue a legible culprit (the location Sentry shows under the title). It derives from event.transaction
+    // when set, else from the now-stripped stack — so point it at the operational event slug (e.g.
+    // "orb_broker_unavailable") rather than the forwarder. setTransactionName on the scope does NOT populate
+    // event.transaction in this SDK version, so set it on the event via a scoped processor.
+    if (event)
+      scope.addEventProcessor((sentryEvent) => {
+        sentryEvent.transaction = event;
+        return sentryEvent;
+      });
     Sentry!.captureException(errorEvent);
   });
 }
