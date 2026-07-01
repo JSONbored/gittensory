@@ -341,7 +341,9 @@ describe("GitHub mention commands", () => {
     expect(askFindings).toContain("Source: cached GitHub open PR/issue queue; freshness: fresh");
     expect(askFindings).toContain("Source: cached GitHub issues, PRs, reviews, and checks; freshness: fresh");
     expect(askFindings).toContain("Source: official Gittensor API/cache; freshness: fresh");
-    expect(askFindings).toContain("signal data-quality status; freshness:");
+    // The 5th citation overflows into "Additional safe details", not Findings, and is not duplicated across both.
+    expect(ask.slice(ask.indexOf("Additional safe details"))).toContain("signal data-quality status; freshness:");
+    expect(askFindings).not.toContain("signal data-quality status");
     expect(ask).toMatch(/Connected source contributor decision pack snapshot: freshness fresh/);
     expect(ask).toContain("README/docs context is included only when connected repo sources");
     expect(ask).not.toContain("source: action choose_next_work");
@@ -756,7 +758,9 @@ describe("GitHub mention commands", () => {
     expect(askMetadata).toContain("repo sync freshness metadata");
     expect(askMetadata).toContain("branch eligibility metadata");
     expect(askMetadata).not.toContain("Contribution readiness status");
-    expect(publicCardFindings(askMetadata)).toContain("freshness: partial");
+    // The data-quality citation (freshness partial) is the 5th+ source, so it overflows into
+    // "Additional safe details" rather than being duplicated into Findings.
+    expect(askMetadata.slice(askMetadata.indexOf("Additional safe details"))).toContain("freshness: partial");
     expect(askMetadata).not.toContain("No concrete cached source reference is available for this response.");
 
     const askNoSources = buildPublicAgentCommandComment({
@@ -937,6 +941,69 @@ describe("GitHub mention commands", () => {
     expect(withPrFallbackScope).toContain("| Scope | owner/from-pr#5 |");
     expect(withPrFallbackScope).toContain("After tests pass.");
 
+  });
+
+  it("does not duplicate ask citations across Findings and Additional safe details when there are 5+ sources", () => {
+    // Five distinct contributing sources → five citations. The first four render under Findings and the
+    // overflow (citations 5+) under Additional safe details; no citation should appear in both sections.
+    const ask = buildPublicAgentCommandComment({
+      command: parseGittensoryMentionCommand("@gittensory ask what is missing?")!,
+      repo: null,
+      issue: { number: 61, title: "PR", state: "open", pull_request: {} },
+      pullRequest: null,
+      actorKind: "author",
+      bundle: {
+        run: completedRun("run-ask-dup-citations"),
+        actions: [
+          {
+            id: "ask-dup-citations",
+            runId: "run-ask-dup-citations",
+            actionType: "choose_next_work",
+            status: "recommended",
+            recommendation: "Next",
+            why: [],
+            blockedBy: [],
+            publicSafeSummary: "Use cached queue context before opening new work.",
+            approvalRequired: false,
+            safetyClass: "private",
+            payload: {},
+          },
+        ],
+        contextSnapshots: [
+          {
+            id: "snap-ask-dup",
+            runId: "run-ask-dup-citations",
+            repoSignalSnapshotIds: [],
+            freshnessWarnings: [],
+            payload: {
+              evidenceGraph: {
+                sources: [
+                  { source: "github_cache", freshness: "fresh" },
+                  { source: "computed", freshness: "fresh" },
+                  { source: "mirror", freshness: "stale" },
+                  { source: "repo_focus_manifest", freshness: "fresh" },
+                  { source: "issue_quality", freshness: "partial" },
+                ],
+              },
+            },
+          },
+        ],
+        summary: "ask duplicate citations",
+      },
+    });
+
+    // Each citation line contains exactly one "; freshness: " marker and it appears nowhere else in the
+    // card (the Evidence section renders "freshness <x>" without the "; freshness: " punctuation). So the
+    // total rendered citations must equal the five unique sources — not six, which a Findings/safeDetails
+    // overlap would produce by repeating the 5th citation.
+    const citationCount = (ask.match(/; freshness: /g) ?? []).length;
+    expect(citationCount).toBe(5);
+    // ...and the split is exact: the first four citations render under Findings, and citation 5 overflows
+    // into Additional safe details exactly once (not duplicated back into Findings).
+    const findingsSection = ask.slice(ask.indexOf("**Findings**"), ask.indexOf("**Evidence**"));
+    const safeDetailsSection = ask.slice(ask.indexOf("Additional safe details"));
+    expect((findingsSection.match(/; freshness: /g) ?? []).length).toBe(4);
+    expect((safeDetailsSection.match(/; freshness: /g) ?? []).length).toBe(1);
   });
 
   it("covers blocker label fallbacks, rerun bullets, and duplicate-risk heuristics", () => {
