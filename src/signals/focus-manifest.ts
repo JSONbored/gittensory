@@ -440,6 +440,13 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     dryRun: normalizeOptionalBoolean(record.dryRun, "gate.dryRun", warnings),
     firstTimeContributorGrace: normalizeOptionalBoolean(record.firstTimeContributorGrace, "gate.firstTimeContributorGrace", warnings),
   };
+  // #2266: the flag is parsed, clamped, and threaded end-to-end, but the gate evaluator never reads it — a
+  // maintainer who sets it to true believing it softens a blocker for newcomers gets no such effect. Surface
+  // that inertness at parse time rather than leaving it silently no-op; `false`/unset matches the (also inert)
+  // default, so only an explicit `true` is worth flagging.
+  if (gate.firstTimeContributorGrace === true) {
+    warnings.push(`Manifest field "gate.firstTimeContributorGrace" is currently reserved/inert — it does not soften a blocker outcome for first-time contributors.`);
+  }
   gate.present =
     gate.enabled !== null ||
     gate.pack !== null ||

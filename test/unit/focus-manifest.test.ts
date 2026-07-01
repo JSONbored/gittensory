@@ -797,6 +797,19 @@ describe("parseFocusManifest gate config", () => {
     expect(bad.gate.present).toBe(false);
   });
 
+  it("warns that gate.firstTimeContributorGrace is reserved/inert when explicitly set true (#2266)", () => {
+    const m = parseFocusManifest({ gate: { firstTimeContributorGrace: true } });
+    expect(m.gate.firstTimeContributorGrace).toBe(true);
+    expect(m.warnings.some((w) => /gate\.firstTimeContributorGrace.*reserved\/inert/i.test(w))).toBe(true);
+  });
+
+  it("does not warn about firstTimeContributorGrace when left unset or explicitly false (matches the inert default)", () => {
+    const unset = parseFocusManifest({ gate: { linkedIssue: "block" } });
+    expect(unset.warnings.some((w) => /firstTimeContributorGrace/i.test(w))).toBe(false);
+    const explicitFalse = parseFocusManifest({ gate: { firstTimeContributorGrace: false } });
+    expect(explicitFalse.warnings.some((w) => /firstTimeContributorGrace/i.test(w))).toBe(false);
+  });
+
   it("parses gate.selfAuthoredLinkedIssue + settings.selfAuthoredLinkedIssueGateMode, round-trips + resolves them (the gate alias wins)", () => {
     const m = parseFocusManifest({ gate: { selfAuthoredLinkedIssue: "block" }, settings: { selfAuthoredLinkedIssueGateMode: "advisory" } });
     expect(m.gate.present).toBe(true);
