@@ -270,12 +270,13 @@ export function actionParams(action: PlannedAgentAction): AgentPendingActionPara
     ...(action.reviewBody !== undefined ? { reviewBody: action.reviewBody } : {}),
     ...(action.mergeMethod !== undefined ? { mergeMethod: action.mergeMethod } : {}),
     ...(action.closeComment !== undefined ? { closeComment: action.closeComment } : {}),
-    ...(action.closeKind !== undefined ? { closeKind: action.closeKind } : {}),
     ...(action.expectedHeadSha !== undefined ? { expectedHeadSha: action.expectedHeadSha } : {}),
     ...(action.dismissStaleApproval !== undefined ? { dismissStaleApproval: action.dismissStaleApproval } : {}),
     // Round-trip closeKind so a staged close's kind survives to accept-time — without it, the close-precision
     // breaker's isHeuristicClose check (which matches on closeKind === "heuristic") could never fire for any
-    // staged close, silently defeating the breaker for the entire approval-queue accept path (#2127).
+    // staged close, silently defeating the breaker for the entire approval-queue accept path (#2127), and the
+    // actuation-time live-CI re-check above (#2364) — which only applies to a heuristic close — would be
+    // silently skipped for a lost discriminator.
     ...(action.closeKind !== undefined ? { closeKind: action.closeKind } : {}),
   };
 }
