@@ -22,6 +22,7 @@ interface CopyResult {
   rows: number;
   targetRowsBefore: number;
   keyColumns: string[];
+  commonColumns: string[];
 }
 
 interface SkipResult {
@@ -175,6 +176,37 @@ async function pgCount(client: PoolClient, table: string): Promise<number> {
   return Number(res.rows[0]?.count ?? 0);
 }
 
+async function resetPgSequences(client: PoolClient, tables: Set<string>): Promise<void> {
+  const tableNames = [...tables];
+  if (tableNames.length === 0) return;
+  const res = await client.query<{ table_name: string; column_name: string; sequence_name: string }>(
+    `
+      SELECT
+        c.table_name,
+        c.column_name,
+        pg_get_serial_sequence(format('%I.%I', c.table_schema, c.table_name), c.column_name) AS sequence_name
+      FROM information_schema.columns c
+      WHERE c.table_schema = 'public'
+        AND c.table_name = ANY($1::text[])
+        AND pg_get_serial_sequence(format('%I.%I', c.table_schema, c.table_name), c.column_name) IS NOT NULL
+      ORDER BY c.table_name, c.ordinal_position
+    `,
+    [tableNames],
+  );
+  for (const row of res.rows) {
+    await client.query(
+      `
+        SELECT setval(
+          $1::regclass,
+          COALESCE((SELECT MAX(${quoteIdent(row.column_name)}) FROM ${quoteIdent(row.table_name)}), 1),
+          (SELECT COUNT(${quoteIdent(row.column_name)}) > 0 FROM ${quoteIdent(row.table_name)})
+        )
+      `,
+      [row.sequence_name],
+    );
+  }
+}
+
 function valuePlaceholder(index: number, table: string, column: string): string {
   const base = `$${index}`;
   if (table === "_selfhost_vectors" && column === "embedding") return `${base}::vector`;
@@ -210,35 +242,29 @@ async function copyTable(db: DatabaseSync, client: PoolClient, table: string, co
   return total;
 }
 
-async function countTargetRowsMatchingSourceKeys(
+async function countTargetRowsMatchingSourceRows(
   db: DatabaseSync,
   client: PoolClient,
   table: string,
-  keyColumns: string[],
+  columns: string[],
   batchSize: number,
 ): Promise<number> {
   const total = sqliteCount(db, table);
   let matched = 0;
   for (let offset = 0; offset < total; offset += batchSize) {
-    const rows = sqliteRows(db, table, keyColumns, batchSize, offset);
+    const rows = sqliteRows(db, table, columns, batchSize, offset);
     if (rows.length === 0) continue;
     const values: unknown[] = [];
     for (const row of rows) {
-      for (const column of keyColumns) {
-        const value = row[column] ?? null;
-        if (value === null) throw new Error(`Validation failed for ${table}: source primary key ${column} is null`);
-        values.push(value);
-      }
+      for (const column of columns) values.push(row[column] ?? null);
     }
-    const condition =
-      keyColumns.length === 1
-        ? `${quoteIdent(keyColumns[0] as string)} IN (${values.map((_, index) => `$${index + 1}`).join(", ")})`
-        : `(${keyColumns.map(quoteIdent).join(", ")}) IN (${rows
-            .map((_, rowIndex) => {
-              const base = rowIndex * keyColumns.length;
-              return `(${keyColumns.map((__, columnIndex) => `$${base + columnIndex + 1}`).join(", ")})`;
-            })
-            .join(", ")})`;
+    const condition = rows
+      .map((_, rowIndex) => {
+        const base = rowIndex * columns.length;
+        const predicates = columns.map((column, columnIndex) => `${quoteIdent(column)} IS NOT DISTINCT FROM $${base + columnIndex + 1}`);
+        return `(${predicates.join(" AND ")})`;
+      })
+      .join(" OR ");
     const res = await client.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM ${quoteIdent(table)} WHERE ${condition}`, values);
     matched += Number(res.rows[0]?.count ?? 0);
   }
@@ -271,19 +297,16 @@ async function copyAll(opts: Options, db: DatabaseSync, client: PoolClient): Pro
     const primaryKey = await pgPrimaryKey(client, table);
     const keyColumns = primaryKey.filter((column) => commonColumns.includes(column));
     const rows = await copyTable(db, client, table, commonColumns, primaryKey, opts.batchSize);
-    copied.push({ table, rows, targetRowsBefore, keyColumns });
+    copied.push({ table, rows, targetRowsBefore, keyColumns, commonColumns });
   }
 
-  if (targetTables.has("_selfhost_jobs")) {
-    await client.query(
-      "SELECT setval(pg_get_serial_sequence('_selfhost_jobs', 'id'), COALESCE((SELECT MAX(id) FROM _selfhost_jobs), 1), (SELECT COUNT(*) > 0 FROM _selfhost_jobs))",
-    );
-  }
+  await resetPgSequences(client, new Set(copied.map((result) => result.table)));
 
   // Re-run queue init after copying so migrated processing rows are recovered and derived job metadata is current.
   const queue = createPgQueue(client as unknown as pg.Pool, async () => undefined);
   await queue.init();
   await queue.stop();
+  await resetPgSequences(client, new Set(copied.map((result) => result.table)));
   targetTables = await pgTables(client);
 
   for (const result of copied) {
@@ -293,16 +316,15 @@ async function copyAll(opts: Options, db: DatabaseSync, client: PoolClient): Pro
       if (targetCount < result.targetRowsBefore) {
         throw new Error(`Validation failed for ${result.table}: expected to preserve at least ${result.targetRowsBefore} existing row(s), target has ${targetCount}`);
       }
-      if (result.rows > 0 && result.keyColumns.length > 0) {
-        const matched = await countTargetRowsMatchingSourceKeys(db, client, result.table, result.keyColumns, opts.batchSize);
-        if (matched !== result.rows) {
-          throw new Error(`Validation failed for ${result.table}: copied ${result.rows} source row(s), target has ${matched} matching source key(s)`);
+      const validationColumns = result.keyColumns.length > 0 ? result.keyColumns : result.commonColumns;
+      if (result.rows > 0 && validationColumns.length > 0) {
+        const matched = await countTargetRowsMatchingSourceRows(db, client, result.table, validationColumns, opts.batchSize);
+        const validMatchCount = result.keyColumns.length > 0 ? matched === result.rows : matched >= result.rows;
+        if (!validMatchCount) {
+          const unit = result.keyColumns.length > 0 ? "source key(s)" : "source row(s)";
+          throw new Error(`Validation failed for ${result.table}: copied ${result.rows} source row(s), target has ${matched} matching ${unit}`);
         }
         continue;
-      }
-      const minimumExpectedRows = result.targetRowsBefore + result.rows;
-      if (targetCount < minimumExpectedRows) {
-        throw new Error(`Validation failed for ${result.table}: expected at least ${minimumExpectedRows} row(s), target has ${targetCount}`);
       }
       continue;
     }
