@@ -1089,6 +1089,20 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(parseFocusManifest({ settings: { commentMode: "off" } }).present).toBe(true);
   });
 
+  it("downgrades settings.qualityGateMode: block to advisory with a deprecation warning, same as gate.readiness.mode (#2267)", () => {
+    // The generic settings: override is the SAME dashboard/API-facing qualityGateMode field, read through a
+    // different manifest path than gate.readiness.mode — it must get the identical downgrade, not just a
+    // "must be one of" pass-through, or a maintainer using this path keeps the false-enforcement belief.
+    const m = parseFocusManifest({ settings: { qualityGateMode: "block" } });
+    expect(m.settings.qualityGateMode).toBe("advisory");
+    expect(m.warnings.some((w) => /settings\.qualityGateMode.*no longer accepts "block"/.test(w))).toBe(true);
+    // Genuinely invalid values still take the ORIGINAL "must be one of" warning path, unchanged.
+    const bad = parseFocusManifest({ settings: { qualityGateMode: "sometimes" } });
+    expect(bad.settings.qualityGateMode).toBeUndefined();
+    expect(bad.warnings.some((w) => /settings\.qualityGateMode.*must be one of/.test(w))).toBe(true);
+    expect(bad.warnings.some((w) => /no longer accepts "block"/.test(w))).toBe(false);
+  });
+
   it("round-trips settings through settingsOverrideToJson and serializes empty as null", () => {
     const original = parseFocusManifest({ settings: { commentMode: "all_prs", qualityGateMinScore: 40 } });
     const reparsed = parseFocusManifest({ settings: settingsOverrideToJson(original.settings) });
@@ -1168,6 +1182,17 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
       parseFocusManifest(null),
     );
     expect(eff.linkedIssueGateMode).toBe("block");
+  });
+
+  it("REGRESSION: downgrades a pre-existing DB qualityGateMode: block to advisory, even with no gate.readiness.mode override (#2267)", () => {
+    // Simulates a repo whose DB row already has quality_gate_mode = "block" from before the write-time guards
+    // (the settings.qualityGateMode parser, the settings-write API routes) existed — the dashboard/API path's
+    // "still survives" loophole this resolver-level guard closes for good, regardless of source or vintage.
+    const db = { qualityGateMode: "block" } as unknown as RepositorySettings;
+    expect(resolveEffectiveSettings(db, parseFocusManifest(null)).qualityGateMode).toBe("advisory");
+    // A non-"block" value is untouched — the downgrade only ever fires for "block".
+    const dbAdvisory = { qualityGateMode: "advisory" } as unknown as RepositorySettings;
+    expect(resolveEffectiveSettings(dbAdvisory, parseFocusManifest(null)).qualityGateMode).toBe("advisory");
   });
 });
 

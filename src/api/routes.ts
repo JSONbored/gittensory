@@ -238,7 +238,7 @@ import { isRagEnabled } from "../review/rag-wire";
 import { getPublicStats, isPublicStatsEnabled } from "../review/public-stats";
 import { buildMaintainerQualityDashboard, isMaintainerQualityDataStale } from "../services/maintainer-quality-dashboard";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
-import { compileFocusManifestPolicy, MAX_FOCUS_MANIFEST_BYTES } from "../signals/focus-manifest";
+import { compileFocusManifestPolicy, MAX_FOCUS_MANIFEST_BYTES, normalizeReadinessGateMode } from "../signals/focus-manifest";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import { loadPublicRepoFocusManifest, loadRepoFocusManifest, upsertRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildRepoOnboardingPackPreviewForRepo } from "../services/repo-onboarding-pack";
@@ -265,6 +265,7 @@ import type {
   PullRequestRecord,
   RepoSyncSegmentRecord,
   RepositoryRecord,
+  RepositorySettings,
 } from "../types";
 import { errorMessage, nowIso } from "../utils/json";
 
@@ -685,6 +686,21 @@ const maintainerSettingsSchema = z
     autoMaintain: z.object({ requireApprovals: z.number().int().min(0).max(10).optional(), mergeMethod: z.enum(["merge", "squash", "rebase"]).optional() }),
   })
   .partial();
+
+/** Readiness/quality can never hard-block a PR (buildQualityGateWarning is always advisory-severity;
+ *  isConfiguredGateBlocker has no branch for it) — downgrade a settings-write's `qualityGateMode: "block"` to
+ *  `"advisory"` here too, mirroring the same downgrade `.gittensory.yml`'s `gate.readiness.mode` /
+ *  `settings.qualityGateMode` already get in normalizeReadinessGateMode, so the dashboard/API save path can
+ *  never persist a value that implies enforcement it doesn't have (#2267). Callers check for `undefined`
+ *  (a PATCH-style save that didn't touch this field) before calling — this only handles the defined case, so
+ *  the return type never needs `undefined` under `exactOptionalPropertyTypes`. The warnings array is scratch;
+ *  these routes have no warnings-response protocol. */
+function downgradeQualityGateMode(mode: "off" | "advisory" | "block"): "off" | "advisory" {
+  /* v8 ignore next -- never null for a Zod-validated "off"|"advisory"|"block" input (normalizeReadinessGateMode's
+     "must be one of" branch only fires for a value outside that set); the fallback only satisfies the shared
+     parser's broader return type. */
+  return (normalizeReadinessGateMode(mode, "qualityGateMode", []) as "off" | "advisory" | null) ?? "advisory";
+}
 
 // Maintainer BYOK provider key. Write-only: the key is encrypted at rest and never returned. A loose
 // prefix check catches the common provider/key mismatch (e.g. pasting an OpenAI key under Anthropic)
@@ -2105,7 +2121,8 @@ export function createApp() {
     const parsed = maintainerSettingsSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_repository_settings", issues: parsed.error.issues }, 400);
     const current = await getRepositorySettings(c.env, fullName);
-    const changes = Object.fromEntries(Object.entries(parsed.data).filter(([, value]) => value !== undefined));
+    const changes = Object.fromEntries(Object.entries(parsed.data).filter(([, value]) => value !== undefined)) as Partial<RepositorySettings>;
+    if (changes.qualityGateMode !== undefined) changes.qualityGateMode = downgradeQualityGateMode(changes.qualityGateMode);
     const updated = await upsertRepositorySettings(c.env, { ...current, ...changes, repoFullName: fullName });
     await recordAuditEvent(c.env, {
       eventType: "repo.settings_updated",
@@ -3424,7 +3441,7 @@ export function createApp() {
         gatePack: parsed.data.gatePack,
         linkedIssueGateMode: parsed.data.linkedIssueGateMode,
         duplicatePrGateMode: parsed.data.duplicatePrGateMode,
-        qualityGateMode: parsed.data.qualityGateMode,
+        qualityGateMode: downgradeQualityGateMode(parsed.data.qualityGateMode),
         qualityGateMinScore: parsed.data.qualityGateMinScore,
         aiReviewMode: parsed.data.aiReviewMode,
         aiReviewByok: parsed.data.aiReviewByok,
