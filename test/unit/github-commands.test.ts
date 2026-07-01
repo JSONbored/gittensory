@@ -992,11 +992,18 @@ describe("GitHub mention commands", () => {
       },
     });
 
-    // Each citation line contains exactly one "; freshness: " and appears nowhere else, so the count of
-    // rendered citations must equal the five unique sources — not six (which a Findings/safeDetails overlap
-    // would produce by repeating the 5th citation).
+    // Each citation line contains exactly one "; freshness: " marker and it appears nowhere else in the
+    // card (the Evidence section renders "freshness <x>" without the "; freshness: " punctuation). So the
+    // total rendered citations must equal the five unique sources — not six, which a Findings/safeDetails
+    // overlap would produce by repeating the 5th citation.
     const citationCount = (ask.match(/; freshness: /g) ?? []).length;
     expect(citationCount).toBe(5);
+    // ...and the split is exact: the first four citations render under Findings, and citation 5 overflows
+    // into Additional safe details exactly once (not duplicated back into Findings).
+    const findingsSection = ask.slice(ask.indexOf("**Findings**"), ask.indexOf("**Evidence**"));
+    const safeDetailsSection = ask.slice(ask.indexOf("Additional safe details"));
+    expect((findingsSection.match(/; freshness: /g) ?? []).length).toBe(4);
+    expect((safeDetailsSection.match(/; freshness: /g) ?? []).length).toBe(1);
   });
 
   it("covers blocker label fallbacks, rerun bullets, and duplicate-risk heuristics", () => {
