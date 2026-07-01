@@ -102,6 +102,9 @@ export type AgentActionPlanInput = {
   // failing checks) / HOLDS the owner's, and DEFERS every action while "pending" (settle-before-decide — the
   // check-completion webhook re-runs this planner once CI settles).
   ciState: "passed" | "failed" | "pending" | "unverified";
+  // True when any visible CI check/status is still queued or in progress, even when branch protection lets
+  // ciState stay "passed" because the pending context is non-required. The planner must still settle first.
+  ciHasPending?: boolean | undefined;
   // The names of the failing checks, surfaced in the close/request-changes reason so the contributor knows
   // WHY (e.g. "codecov/patch"). Empty unless ciState === "failed".
   failingCheckNames?: string[] | undefined;
@@ -282,7 +285,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   const ciPassed = input.ciState === "passed";
   const ciFailed = input.ciState === "failed";
   // Settle-before-decide: never approve / merge / close on a half-finished CI run.
-  if (input.ciState === "pending") return actions;
+  if (input.ciState === "pending" || input.ciHasPending === true) return actions;
 
   // The gate verdict is authoritative. Green CI is still required for merge/approve, but it does not rewrite an AI
   // or review-thread blocker into success once the gate has classified it as blocking.

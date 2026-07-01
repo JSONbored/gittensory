@@ -423,6 +423,21 @@ describe("planAgentMaintenanceActions (#778)", () => {
       expect(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto", approve: "auto", merge: "auto", close: "auto" }, ciState: "pending", pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }))).toEqual([]);
     });
 
+    it("DEFERS every action when optional visible CI is still pending after required CI passed", () => {
+      expect(
+        planAgentMaintenanceActions(
+          input({
+            conclusion: "success",
+            autonomy: { label: "auto", approve: "auto", merge: "auto", close: "auto" },
+            autoMaintain: { requireApprovals: 0, mergeMethod: "squash" },
+            ciState: "passed",
+            ciHasPending: true,
+            pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" },
+          }),
+        ),
+      ).toEqual([]);
+    });
+
     it("HOLDS a contributor's gate-passing PR whose CI is UNVERIFIED — NEVER closes it (fork workflows awaiting approval) (#harm-stop)", () => {
       const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto", approve: "auto", merge: "auto", close: "auto" }, ciState: "unverified", pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const cls = classes(plan);

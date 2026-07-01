@@ -1680,6 +1680,7 @@ async function maybeRunAgentMaintenance(
     authorIsAutomationBot,
     closeOwnerAuthors: settings.closeOwnerAuthors,
     ciState: ciAggregate.ciState,
+    ciHasPending: ciAggregate.hasPending,
     failingCheckNames: ciAggregate.failingDetails.map((detail) => detail.name),
     ciRequiredContextsVerified: hasVerifiedRequiredContexts(requiredContexts),
     ...(blacklistEntry !== null
