@@ -99,6 +99,31 @@ describe("pending PR scenario detection", () => {
     expect(classified.reasons.join(" ")).toMatch(/failing or cancelled check/i);
   });
 
+  it("counts failure and startup_failure checks as failing, matching the gate CI-failing set (regression)", () => {
+    // startup_failure (a workflow that failed to start) was previously omitted, so an approved PR whose CI
+    // never ran was optimistically classified merge_ready instead of blocked.
+    for (const conclusion of ["failure", "startup_failure"]) {
+      const classified = classifyOpenPullRequest({
+        pr: pr({ number: 78 }),
+        roleContext: outsideContributorRole,
+        reviews: [approvedReview(78)],
+        checks: [{ id: "c78", repoFullName: "entrius/allways-ui", pullNumber: 78, name: "ci", status: "completed", conclusion, payload: {} }],
+      });
+      expect(classified.classification).toBe("blocked");
+      expect(classified.reasons.join(" ")).toMatch(/failing or cancelled check/i);
+    }
+  });
+
+  it("does not count a passing check as a failing one", () => {
+    const classified = classifyOpenPullRequest({
+      pr: pr({ number: 79 }),
+      roleContext: outsideContributorRole,
+      reviews: [approvedReview(79)],
+      checks: [{ id: "c79", repoFullName: "entrius/allways-ui", pullNumber: 79, name: "ci", status: "completed", conclusion: "success", payload: {} }],
+    });
+    expect(classified.classification).toBe("merge_ready");
+  });
+
   it("counts stale approved PRs as pending closes and projects the post-cleanup open count", () => {
     const staleDate = new Date(Date.now() - 30 * 86_400_000).toISOString();
     const detection = detectPendingPrScenario({

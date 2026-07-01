@@ -184,7 +184,14 @@ export function classifyOpenPullRequest(args: {
   const approvalCount = args.reviews.filter((review) => review.state.toUpperCase() === "APPROVED").length;
   const changeRequestCount = args.reviews.filter((review) => review.state.toUpperCase() === "CHANGES_REQUESTED").length;
   const checkFailureCount = args.checks.filter(
-    (check) => check.conclusion === "failure" || check.conclusion === "timed_out" || check.conclusion === "cancelled",
+    // Mirror the gate's CI-failing set (CI_FAILING_CONCLUSIONS in github/backfill.ts): a workflow that failed
+    // to start reports `startup_failure`, so an approved PR whose CI never ran must be blocked, not treated as
+    // merge-ready. `action_required` stays excluded (fork PR awaiting "Approve and run", not a failure).
+    (check) =>
+      check.conclusion === "failure" ||
+      check.conclusion === "timed_out" ||
+      check.conclusion === "cancelled" ||
+      check.conclusion === "startup_failure",
   ).length;
   const ageDays = daysSince(args.pr.updatedAt ?? args.pr.createdAt);
 
