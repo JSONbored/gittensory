@@ -6,6 +6,7 @@ vi.mock("../../src/github/pr-actions", () => ({
   closePullRequest: vi.fn(async () => ({ state: "closed" })),
   createIssueComment: vi.fn(async () => ({ id: 2 })),
   updatePullRequestBranch: vi.fn(async () => undefined),
+  dismissLatestBotApproval: vi.fn(async () => ({ dismissed: true })),
 }));
 vi.mock("../../src/github/labels", () => ({
   ensurePullRequestLabel: vi.fn(async () => ({ applied: true, created: false })),
@@ -23,13 +24,13 @@ vi.mock("../../src/github/pr-freshness", async (importOriginal) => {
   };
 });
 
-import { closePullRequest, createIssueComment, createPullRequestReview, mergePullRequest, updatePullRequestBranch } from "../../src/github/pr-actions";
+import { closePullRequest, createIssueComment, createPullRequestReview, dismissLatestBotApproval, mergePullRequest, updatePullRequestBranch } from "../../src/github/pr-actions";
 import { ensurePullRequestLabel, removePullRequestLabel } from "../../src/github/labels";
 import { fetchPullRequestFreshness } from "../../src/github/pr-freshness";
 import { actionParams, executeAgentMaintenanceActions, pendingClosureLabelApplied, type AgentActionExecutionContext, type AgentActionOutcome } from "../../src/services/agent-action-executor";
 import type { PlannedAgentAction } from "../../src/settings/agent-actions";
 import { AGENT_LABEL_PENDING_CLOSURE } from "../../src/review/linked-issue-hard-rules";
-import { isGlobalAgentFrozen, setGlobalAgentFrozen } from "../../src/db/repositories";
+import { isGlobalAgentFrozen, setGlobalAgentFrozen, upsertPullRequestFromGitHub } from "../../src/db/repositories";
 import { createTestEnv } from "../helpers/d1";
 
 function ctx(over: Partial<AgentActionExecutionContext> = {}): AgentActionExecutionContext {
@@ -86,6 +87,64 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect(updatePullRequestBranch).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "sha7");
     expect(fetchPullRequestFreshness).toHaveBeenCalledTimes(6);
     expect((await auditFor(env, "merge"))?.outcome).toBe("completed");
+  });
+
+  it("LIVE approve with dismissStaleApproval retracts the stale review instead of posting a new one (#2254)", async () => {
+    const env = createTestEnv({});
+    const dismiss: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "stale approval retracted", dismissStaleApproval: true };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [dismiss]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(dismissLatestBotApproval).toHaveBeenCalledWith(env, 123, "owner/repo", 7, expect.any(String));
+    expect(createPullRequestReview).not.toHaveBeenCalled();
+  });
+
+  it("actionParams threads dismissStaleApproval for a stale-approval retraction action", () => {
+    const dismiss: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "stale", dismissStaleApproval: true };
+    expect(actionParams(dismiss)).toEqual({ dismissStaleApproval: true });
+  });
+
+  it("REGRESSION (#2361): retracting a stale approval does NOT stamp the current (unqualified) head as approved", async () => {
+    const env = createTestEnv({});
+    // approvedHeadSha starts at the OLD (actually-reviewed) commit; ctx().headSha ("sha7") is the NEWER,
+    // no-longer-qualifying commit this dismissal is reacting to.
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "c" }, head: { sha: "sha7" }, labels: [], body: "" });
+    const dismiss: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "stale approval retracted", dismissStaleApproval: true };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [dismiss]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(dismissLatestBotApproval).toHaveBeenCalled();
+    const row = await env.DB.prepare("select approved_head_sha as approvedHeadSha from pull_requests where repo_full_name = ? and number = ?")
+      .bind("owner/repo", 7)
+      .first<{ approvedHeadSha: string | null }>();
+    // A real approve would have set this to "sha7" (see the "LIVE: executes each action class" test above for
+    // that positive case) -- a dismissal must never mark the un-reviewed head as approved.
+    expect(row?.approvedHeadSha).not.toBe("sha7");
+  });
+
+  it("REGRESSION (#2361): a queued stale-approval dismissal pinned to an evaluated head is denied when the live head has since moved again", async () => {
+    const env = createTestEnv({});
+    vi.mocked(fetchPullRequestFreshness).mockResolvedValueOnce({
+      status: "stale",
+      reason: "head_changed",
+      expectedHeadSha: "evaluated-sha",
+      liveHeadSha: "sha7",
+      liveState: "open",
+    });
+    // ctx().headSha ("sha7") is the CURRENT live head at accept/replay time; expectedHeadSha ("evaluated-sha")
+    // is the head this dismissal was actually staged against. Without the pin, the freshness guard would fall
+    // back to ctx.headSha and treat this as fresh, retracting whatever bot approval currently sits on "sha7".
+    const dismiss: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "stale approval retracted", dismissStaleApproval: true, expectedHeadSha: "evaluated-sha" };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [dismiss]);
+    expect(outcomes[0]?.outcome).toBe("denied");
+    expect(dismissLatestBotApproval).not.toHaveBeenCalled();
+  });
+
+  it("LIVE request_changes/approve without a reviewBody falls back to an empty string", async () => {
+    const env = createTestEnv({});
+    const bareRequestChanges: PlannedAgentAction = { actionClass: "request_changes", requiresApproval: false, reason: "blocked" };
+    const bareApprove: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "passed" };
+    await executeAgentMaintenanceActions(env, ctx(), [bareRequestChanges, bareApprove]);
+    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "REQUEST_CHANGES", "");
+    expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "APPROVE", "");
   });
 
   it("LIVE merge pins the GitHub merge to the action's reviewed head (expectedHeadSha) over the context head", async () => {
@@ -164,6 +223,23 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
   it("isGlobalAgentFrozen fails open (false) on a read error — a D1 hiccup never freezes the fleet by itself", async () => {
     const broken = { ...createTestEnv({}), DB: null } as unknown as Env;
     expect(await isGlobalAgentFrozen(broken)).toBe(false);
+  });
+
+  it("isGlobalAgentFrozen's fail-open is never SILENT — a read error is observable, not indistinguishable from a genuine unfrozen state (#2125)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const broken = { ...createTestEnv({}), DB: null } as unknown as Env;
+    expect(await isGlobalAgentFrozen(broken)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("global_kill_switch_read_error"));
+    warn.mockRestore();
+  });
+
+  it("isGlobalAgentFrozen also warns (but still fails open) when the table exists but the singleton row is absent (#2125)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const env = createTestEnv({});
+    await env.DB.prepare("DELETE FROM global_agent_controls WHERE id = 'singleton'").run();
+    expect(await isGlobalAgentFrozen(env)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("global_kill_switch_row_missing"));
+    warn.mockRestore();
   });
 
   it("auto_with_approval: stages the action (queued) instead of executing", async () => {
