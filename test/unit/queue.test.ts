@@ -1368,9 +1368,13 @@ describe("queue processors", () => {
     try {
       await processJob(env, { type: "agent-regate-pr", deliveryId: "ci-completeness-unverified", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
 
-      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.ci_completeness_unverified").first<{ outcome: string; detail: string }>();
+      const audit = await env.DB.prepare("select outcome, detail, metadata_json from audit_events where event_type = ?").bind("github_app.ci_completeness_unverified").first<{ outcome: string; detail: string; metadata_json: string }>();
       expect(audit?.outcome).toBe("completed"); // informational only — never a denial, never changes the disposition
       expect(audit?.detail).toContain("branch-protection required checks");
+      // REGRESSION: deliveryId must actually thread through from maybeRunAgentMaintenance's args down into
+      // runAgentMaintenancePlanAndExecute — a prior version referenced args.deliveryId on a type that never
+      // declared or received the field (a typecheck break that slipped past CI on the commit that added #2137).
+      expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ deliveryId: "ci-completeness-unverified" });
     } finally {
       liveCiSpy.mockRestore();
       requiredContextsSpy.mockRestore();

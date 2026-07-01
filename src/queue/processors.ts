@@ -1712,6 +1712,7 @@ async function maybeRunAgentMaintenance(
       pr,
       settings,
       otherOpenPullRequests,
+      deliveryId: args.deliveryId,
       gate,
       liveFacts: args.liveFacts,
     });
@@ -1731,6 +1732,7 @@ async function runAgentMaintenancePlanAndExecute(
     pr: PullRequestRecord;
     settings: RepositorySettings;
     otherOpenPullRequests: PullRequestRecord[];
+    deliveryId: string;
     gate: ReturnType<typeof evaluateGateCheck>;
     liveFacts: LiveGithubFacts;
   },
