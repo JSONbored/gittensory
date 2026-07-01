@@ -1350,9 +1350,16 @@ async function sweepRepoRegate(
     });
     return;
   }
+  // With an active backlog (regateBacklog > 0), a priority repair PR earns an EXCEPTION to the "yield to
+  // backlog" rule above, not a license for the whole sweep to also drag along a full SWEEP_MAX_PRS batch of
+  // ordinary stale PRs -- selectRegateCandidates sorts priority PRs first, so capping max to exactly
+  // priorityPullNumbers.length restricts the candidate set to repairs only. No backlog pressure ⇒ a normal,
+  // full-size sweep as before.
   const repairCandidateLimit =
     priorityPullNumbers.length > 0
-      ? Math.max(SWEEP_MAX_PRS, priorityPullNumbers.length)
+      ? regateBacklog > 0
+        ? priorityPullNumbers.length
+        : Math.max(SWEEP_MAX_PRS, priorityPullNumbers.length)
       : null;
   const candidates = selectRegateCandidates({
     pulls: openPullRequests,
@@ -5179,6 +5186,12 @@ async function maybePublishPrPublicSurface(
       return gateEvaluation;
     }
     if (gateSurfaceIncomplete) {
+      // This branch is reachable with publishedOutputs non-empty (e.g. gate-only: ["gate_check_run"]), which
+      // can happen via the early `!prelimHasPublicOutput` return below -- at that point `decision` is still
+      // `prelim` (never reassigned by decidePublicSurface's official-miner-aware pass). That is safe here:
+      // `willLabel` is a non-optional boolean on every PublicSurfaceDecision variant (never undefined), and
+      // prelimHasPublicOutput being false means "label" was not in prelim.actions, which decidePublicSurface
+      // never sets independently of willLabel -- so decision.willLabel is always false on this path anyway.
       await recordAuditEvent(env, {
         eventType: "github_app.pr_public_surface_incomplete",
         actor: author,

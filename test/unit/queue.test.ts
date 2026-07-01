@@ -2290,6 +2290,54 @@ describe("queue processors", () => {
     });
   });
 
+  it("REGRESSION: an active per-PR regate backlog restricts the sweep to priority repairs, not a full stale-PR batch too", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({
+      JOBS: {
+        async send(m: import("../../src/types").JobMessage) {
+          sent.push(m);
+        },
+        // A nonzero per-PR regate backlog (agent-regate-pr pending/processing > 0) -- the same signal the
+        // "waiting behind another repo backlog" deferral above reacts to.
+        snapshot() {
+          return {
+            totals: { pending: 1, processing: 0, dead: 0, due: 1 },
+            byType: [{ type: "agent-regate-pr", status: "pending", count: 1, due: 1 }],
+          };
+        },
+      } as unknown as Queue,
+    });
+    await upsertInstallation(env, { action: "created", installation: { id: 9403, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9403);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    // PR 1: missing its current Gate check -- the one priority repair.
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 1, title: "Repair 1", state: "open", user: { login: "c" }, head: { sha: "repair-1" }, labels: [], body: "" });
+    await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 1, "repair-1");
+    // PRs 2-5: ordinary, already-current, stale-by-time PRs -- a normal (no-backlog) sweep would pick these up
+    // too, but while the backlog is draining they must sit out so the sweep only carries the priority repair.
+    for (const number of [2, 3, 4, 5]) {
+      const headSha = `stale-${number}`;
+      await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number, title: `Stale ${number}`, state: "open", user: { login: "c" }, head: { sha: headSha }, labels: [], body: "" });
+      await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", number, headSha);
+      await upsertCheckSummary(env, {
+        id: `gate-current-${number}`,
+        repoFullName: "owner/agent-repo",
+        pullNumber: number,
+        headSha,
+        name: "Gittensory Orb Review Agent",
+        status: "completed",
+        conclusion: "success",
+        payload: {},
+      });
+    }
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "schedule", repoFullName: "owner/agent-repo" });
+
+    const fanned = sent.filter((job): job is Extract<import("../../src/types").JobMessage, { type: "agent-regate-pr" }> => job.type === "agent-regate-pr");
+    expect(fanned.map((job) => job.prNumber)).toEqual([1]); // only the priority repair, not PRs 2-5
+  });
+
   it("agent re-gate sweep fail-opens when current Gate check reads fail during repair priority selection", async () => {
     const sent: import("../../src/types").JobMessage[] = [];
     const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
