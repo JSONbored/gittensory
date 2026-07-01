@@ -27,7 +27,9 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       ui: ${{ steps.filter.outputs.ui }}
+      uiContract: ${{ steps.filter.outputs.uiContract }}
       mcp: ${{ steps.filter.outputs.mcp }}
+      mcpCliCluster: ${{ steps.filter.outputs.mcpCliCluster }}
       rees: ${{ steps.filter.outputs.rees }}
     steps:
       - name: Checkout
@@ -41,6 +43,10 @@ jobs:
         uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         with:
           filters: |
+            # MAINTENANCE NOTE: `mcpCliCluster` below intentionally copies every non-src/test category from
+            # this `backend` filter verbatim (see its own comment for why). If you add/remove a category HERE
+            # (e.g. a new config-file glob), mirror the change there too, or the MCP CLI test cluster could
+            # start skipping on a category this filter now considers backend-relevant.
             backend:
               - 'src/**'
               - 'test/**'
@@ -51,14 +57,23 @@ jobs:
               - 'scripts/**'
               - 'migrations/**'
               - '.github/workflows/**'
+            # The UI's own app/extension code -- triggers the FULL toolchain (lint/typecheck/test/build).
+            # A dependency bump (package.json/package-lock.json) stays here too since it can break the UI
+            # build or types in ways only that full toolchain would catch.
             ui:
               - 'apps/gittensory-ui/**'
               - 'apps/gittensory-extension/**'
-              - 'src/**'
-              - 'scripts/write-ui-openapi.ts'
               - 'scripts/build-extension.mjs'
               - 'package.json'
               - 'package-lock.json'
+            # Backend changes that can drift the OpenAPI contract the UI type-checks against, but say
+            # nothing about the UI app's OWN code -- only the lightweight drift check needs to run, not
+            # ui:lint/typecheck/test/build (#ci-scope). If a backend PR's change IS UI-relevant, regenerating
+            # `apps/gittensory-ui/public/openapi.json` per CONTRIBUTING.md lands a change under `ui` above,
+            # which correctly re-triggers the full toolchain.
+            uiContract:
+              - 'src/**'
+              - 'scripts/write-ui-openapi.ts'
             mcp:
               # Self-contained package: build is `node --check` on its own files
               # and the pack check only inspects the tarball. Root src/ cannot
@@ -66,6 +81,40 @@ jobs:
               - 'packages/gittensory-mcp/**'
               - 'scripts/check-mcp-package.mjs'
               - 'package-lock.json'
+            # The MCP CLI test cluster (test/unit/mcp-cli-*.test.ts, mcp-discovery, mcp-output-schemas): slow
+            # (subprocess-per-test / real MCP protocol handshakes, ~115s combined) and unconditionally bundled
+            # into `Test with coverage` today. DELIBERATE DESIGN: this is `backend` above, VERBATIM, for every
+            # category except src/**/test/** -- only those two are narrowed to the specific files this cluster
+            # actually touches (that's where the real savings are: most backend PRs touch SOME src/test file,
+            # but rarely these specific ones). Every other backend-relevant category (config, scripts, deps,
+            # migrations, the workflow file itself) is copied unchanged, so this can never silently drift out
+            # of sync with what `backend` already knows can affect a test run -- an earlier, narrower version
+            # of this filter missed test/helpers/**, vitest*.config.ts, migrations/**, and ci.yml itself before
+            # this was corrected to mirror `backend` directly instead of re-deriving a second opinion.
+            # Skipping tests can widen what Codecov's patch-coverage number can catch (a changed line this
+            # cluster uniquely covers just fails patch coverage loudly) but does NOT catch a pure runtime/
+            # dependency-behavior regression with no line-coverage signature -- hence copying `backend`'s
+            # non-src/test categories exactly, rather than re-guessing which of them matter.
+            mcpCliCluster:
+              - 'vitest*.config.ts'
+              - 'tsconfig*.json'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'scripts/**'
+              - 'migrations/**'
+              - '.github/workflows/**'
+              - 'packages/gittensory-mcp/**'
+              - 'src/mcp/**'
+              - 'src/auth/security.ts'
+              - 'src/db/repositories.ts'
+              - 'src/registry/normalize.ts'
+              - 'src/registry/sync.ts'
+              - 'src/services/repo-outcome-patterns.ts'
+              - 'test/helpers/**'
+              - 'test/unit/mcp-cli-*.test.ts'
+              - 'test/unit/mcp-discovery.test.ts'
+              - 'test/unit/mcp-output-schemas.test.ts'
+              - 'test/unit/support/mcp-cli-harness.ts'
             rees:
               - 'review-enrichment/**'
               - '.github/workflows/ci.yml'
@@ -122,7 +171,25 @@ jobs:
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
         env:
           VITEST_JUNIT_PATH: reports/junit/vitest.xml
-        run: npm run test:coverage -- --maxWorkers=100%
+          # Push always runs the full suite (keeps the coverage baseline solid); a PR skips the slow MCP CLI
+          # cluster only when its real dependency surface (see the mcpCliCluster filter above) didn't change.
+          SKIP_MCP_CLI_CLUSTER: ${{ github.event_name == 'pull_request' && needs.changes.outputs.mcpCliCluster != 'true' }}
+        # Pinned to the self-hosted runner's actual Docker CPU quota (4), not "100%": Node's os.cpus()
+        # reports the HOST's full core count inside the container, ignoring the cgroup CPU limit, so
+        # --maxWorkers=100% oversubscribed the worker pool far past what the runner can actually execute
+        # in parallel, causing thrashing. A GitHub-hosted fork-PR runner has no such limit, but the
+        # standard 4-core GitHub runner makes 4 the right number there too.
+        run: |
+          EXCLUDE_ARGS=()
+          if [ "$SKIP_MCP_CLI_CLUSTER" = "true" ]; then
+            echo "Skipping the MCP CLI test cluster (no mcp-relevant paths changed)."
+            EXCLUDE_ARGS=(
+              --exclude "test/unit/mcp-cli-*.test.ts"
+              --exclude "test/unit/mcp-discovery.test.ts"
+              --exclude "test/unit/mcp-output-schemas.test.ts"
+            )
+          fi
+          npm run test:coverage -- --maxWorkers=4 "${EXCLUDE_ARGS[@]}"
       - name: Test failure guidance
         if: ${{ failure() && steps.coverage.conclusion == 'failure' }}
         run: |
@@ -215,10 +282,13 @@ jobs:
         if: ${{ github.event_name == 'push' || needs.changes.outputs.rees == 'true' }}
         run: npm run rees:test
       - name: OpenAPI drift check
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.uiContract == 'true' }}
         run: npm run ui:openapi:check
+      # Checks apps/gittensory-ui/src' known-latest MCP version string against the published package, so
+      # its dependency is `ui` (the file it scans) + `mcp` (the package it checks against) -- NOT the
+      # OpenAPI contract, which this script never reads.
       - name: UI/MCP version audit
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.mcp == 'true' }}
         run: npm run ui:version-audit
       - name: UI lint
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
