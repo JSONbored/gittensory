@@ -442,6 +442,32 @@ test("scanDuplication: respects MAX_FETCHES (caps candidate blob fetches at 30)"
   assert.equal(counter.blob, 30);
 });
 
+test("scanDuplication: bounds matching work for highly repetitive added and candidate blocks", async () => {
+  // Regression for an availability bug: the same MIN_RUN window can appear thousands of times in both the added
+  // block and candidate. The scan should keep enough starts to report the duplicate, but must not compare every
+  // added window against every candidate start and extend each pair synchronously.
+  const repeated = Array.from(
+    { length: 1600 },
+    () => "const repeatedSignificantLine = computeRepeatedValueForDuplicationScan(inputValue)",
+  );
+  const fetchImpl = makeFetch({
+    tree: [{ path: "src/existing-repeated.ts", sha: "d".repeat(40) }],
+    blobs: { ["d".repeat(40)]: repeated.join("\n") },
+  });
+  const req = baseReq({
+    files: [{ path: "src/new-repeated.ts", status: "added", patch: addedPatch(repeated) }],
+  });
+
+  const started = performance.now();
+  const findings = await scanDuplication(req, fetchImpl);
+  const elapsedMs = performance.now() - started;
+
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].sourceFile, "src/existing-repeated.ts");
+  assert.equal(findings[0].lines, repeated.length);
+  assert.ok(elapsedMs < 1000, `repetitive scan took ${elapsedMs}ms`);
+});
+
 test("scanDuplication: respects MAX_CANDIDATES (only the closest 40 candidates are considered)", async () => {
   // 100 candidates but MAX_CANDIDATES=40 caps the set; combined with MAX_FETCHES=30 only 30 blobs fetched, and the
   // proximity sort means the in-directory candidate (sharing src/) is preferred and the match is still found.

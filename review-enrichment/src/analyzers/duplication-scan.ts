@@ -27,6 +27,9 @@ const MIN_SIGNIFICANT_LEN = 12; // lines shorter than this (after trim) are trea
 const MAX_FILE_BYTES = 500_000; // skip an oversized candidate blob so one huge (likely generated) file can't eat the budget
 const MAX_TREE_JSON_BYTES = 4 * 1024 * 1024; // recursive git tree can be large; bound it like asset-weight does
 const MAX_BLOB_JSON_BYTES = 1024 * 1024; // a base64 blob payload is ~4/3 of the file; bound the JSON we read
+const MAX_WINDOW_STARTS = 8; // cap repetitive MIN_RUN-window hit lists so one line pattern cannot explode CPU
+const MAX_MATCH_COMPARISONS = 20_000; // per added/candidate block pair; fail closed with best-so-far/none under attack
+const ABORT_POLL_INTERVAL = 1024; // cheap bitmask-friendly polling inside synchronous matching loops
 
 // Source-code extensions whose copy-paste is meaningful. Text data / config / lockfiles are intentionally excluded.
 const SOURCE_EXTS = new Set([
@@ -248,8 +251,9 @@ function buildGramIndex(block: NormBlock): GramIndex {
   for (let i = 0; i + MIN_RUN <= block.norm.length; i++) {
     const key = block.norm.slice(i, i + MIN_RUN).join("\n");
     const list = windows.get(key);
-    if (list) list.push(i);
-    else windows.set(key, [i]);
+    if (list) {
+      if (list.length < MAX_WINDOW_STARTS) list.push(i);
+    } else windows.set(key, [i]);
   }
   return { block, windows };
 }
@@ -260,15 +264,25 @@ function buildGramIndex(block: NormBlock): GramIndex {
 function longestSharedRun(
   added: NormBlock,
   index: GramIndex,
+  signal?: AbortSignal,
 ): { headLine: number; sourceLine: number; length: number } | null {
   const cand = index.block;
   let best: { headLine: number; sourceLine: number; length: number } | null =
     null;
+  let comparisons = 0;
   for (let a = 0; a + MIN_RUN <= added.norm.length; a++) {
+    if ((comparisons & (ABORT_POLL_INTERVAL - 1)) === 0 && signal?.aborted) return best;
+    const potential = Math.min(added.norm.length - a, cand.norm.length);
+    if (best && potential <= best.length) break;
     const key = added.norm.slice(a, a + MIN_RUN).join("\n");
     const starts = index.windows.get(key);
     if (!starts) continue;
     for (const c of starts) {
+      comparisons++;
+      if (comparisons > MAX_MATCH_COMPARISONS) return best;
+      if ((comparisons & (ABORT_POLL_INTERVAL - 1)) === 0 && signal?.aborted) return best;
+      const potential = Math.min(added.norm.length - a, cand.norm.length - c);
+      if (best && potential <= best.length) continue;
       // Verify + extend the run forward from the matched window.
       let len = MIN_RUN;
       while (
@@ -277,6 +291,7 @@ function longestSharedRun(
         added.norm[a + len] === cand.norm[c + len]
       ) {
         len++;
+        if ((len & (ABORT_POLL_INTERVAL - 1)) === 0 && signal?.aborted) return best;
       }
       if (!best || len > best.length) {
         best = {
@@ -510,9 +525,14 @@ export async function scanDuplication(
         for (const block of file.blocks) {
           let best: { headLine: number; sourceLine: number; length: number } | null = null;
           for (const index of indices) {
-            const run = longestSharedRun(block, index);
+            if (options.signal?.aborted) {
+              aborted = true;
+              break;
+            }
+            const run = longestSharedRun(block, index, options.signal);
             if (run && (!best || run.length > best.length)) best = run;
           }
+          if (aborted) break;
           if (!best) continue;
           const key = `${file.path}:${best.headLine}|${cand.path}:${best.sourceLine}`;
           if (seen.has(key)) continue;
@@ -525,6 +545,7 @@ export async function scanDuplication(
             lines: best.length,
           });
         }
+        if (aborted) break;
       }
     }
   }
