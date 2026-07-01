@@ -100,6 +100,8 @@ import {
   getRepositoryAiKeyStatus,
   upsertRepositoryAiKey,
   deleteRepositoryAiKey,
+  getGlobalAgentFrozenState,
+  setGlobalAgentFrozen,
 } from "../db/repositories";
 import { pruneExpiredRecords, RETENTION_POLICY } from "../db/retention";
 import {
@@ -769,6 +771,12 @@ const commandFeedbackSchema = z
   })
   .strict();
 
+const killSwitchUpdateSchema = z
+  .object({
+    frozen: z.boolean(),
+  })
+  .strict();
+
 const digestSubscriptionSchema = z
   .object({
     email: z.string().email().max(320),
@@ -1330,6 +1338,53 @@ export function createApp() {
     const forbidden = await requireAppRole(c, ["operator"]);
     if (forbidden) return forbidden;
     return c.json(await buildOperatorDashboardPayload(c.env));
+  });
+
+  // Global agent kill-switch (#2359): the write side (setGlobalAgentFrozen) previously had zero callers — the
+  // only way to flip it was raw SQL. isGlobalAgentFrozen's fail-open read is right for the enforcement hot path,
+  // but wrong here: getGlobalAgentFrozenState throws instead, so a read failure surfaces as a clear error rather
+  // than a falsely reassuring "unfrozen".
+  app.get("/v1/app/kill-switch", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    try {
+      const state = await getGlobalAgentFrozenState(c.env);
+      return c.json({ ...state, generatedAt: nowIso() });
+    } catch (error) {
+      return c.json({ error: "kill_switch_read_failed", message: errorMessage(error) }, 503);
+    }
+  });
+
+  app.post("/v1/app/kill-switch", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- requireAppRole already rejects an unauthenticated caller before this handler runs. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const body = await c.req.json().catch(() => null);
+    const parsed = killSwitchUpdateSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_kill_switch_update", issues: parsed.error.issues }, 400);
+    const actorLogin = identity.actor;
+    await setGlobalAgentFrozen(c.env, parsed.data.frozen, actorLogin);
+    // Read-after-write verification (#2359): confirm the write actually landed before telling the caller it
+    // succeeded, rather than trusting the INSERT/UPDATE call not to have silently no-opped under a degraded D1.
+    let verified: { frozen: boolean; updatedAt: string | null; updatedBy: string | null };
+    try {
+      verified = await getGlobalAgentFrozenState(c.env);
+    } catch (error) {
+      return c.json({ error: "kill_switch_verify_failed", message: errorMessage(error) }, 503);
+    }
+    if (verified.frozen !== parsed.data.frozen) {
+      return c.json({ error: "kill_switch_write_unconfirmed", requested: parsed.data.frozen, observed: verified.frozen }, 502);
+    }
+    await recordAuditEvent(c.env, {
+      eventType: "operator.kill_switch_set",
+      actor: actorLogin,
+      targetKey: "global_agent_controls#singleton",
+      outcome: "completed",
+      metadata: { frozen: verified.frozen, identityKind: identity.kind },
+    });
+    return c.json({ ok: true, ...verified });
   });
 
   app.get("/v1/app/notification-model", async (c) => {
