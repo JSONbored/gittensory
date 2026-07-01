@@ -1303,6 +1303,26 @@ describe("GitHub backfill", () => {
     );
   });
 
+  it("resumes from the same page when a cap truncates it mid-page", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    await seedRegisteredRepo(env);
+    vi.stubGlobal("fetch", issuesOffsetFetch(200));
+
+    // Cap at 150 against a repo with 200 issues: page 1 (per_page=100) yields 1-100, page 2 yields 101-200
+    // but the cap leaves room for only 50, so page 2 is consumed partway. The resume cursor must point at
+    // page 2 (the partially consumed page), not page 3, so a later run picks up 151-200 rather than skipping
+    // them. All 150 within the cap are stored (a shrinking-per_page crawl would store only 100).
+    const result = await backfillRegisteredRepositories(env, {
+      mode: "full",
+      limits: { issues: 150, pullRequests: 0, recentMergedPullRequests: 0, pullRequestDetails: 0 },
+    });
+
+    expect(result.repos[0]).toMatchObject({ openIssues: 150 });
+    expect(await listRepoSyncSegments(env, "JSONbored/gittensory")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ segment: "open_issues", status: "capped", nextCursor: "2" })]),
+    );
+  });
+
   it("runs a targeted labels segment refresh", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
     await seedRegisteredRepo(env);
