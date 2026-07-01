@@ -1581,26 +1581,35 @@ describe("queue processors", () => {
     expect(fetchCount).toBe(0); // never even minted a token — bailed before touching GitHub
   });
 
-  it("issue label change respects the CI-completion coalesce window shared with the linked PR", async () => {
+  it("REGRESSION (#2371): an unrelated CI-completion coalesce claim does NOT suppress the issue-side wake for the same PR", async () => {
+    // The two triggers are not interchangeable: a CI-completion webhook re-review and an issue-side
+    // label/assignment re-review answer different questions. Sharing one coalesce window let a completely
+    // unrelated CI re-review silently swallow a genuine issue-side signal, leaving the PR on stale linked-issue
+    // state until the window expired or the sweep eventually reached it. The issue-side wake must use its OWN
+    // window and proceed regardless of what the CI-completion window holds.
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_REPOS: "owner/agent-repo" });
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
-    // PR #7 was already re-reviewed within the window (e.g. by a concurrent CI completion) — this issue-side
-    // signal must not double-fire a redundant re-review for the same PR within it.
+    // A CI completion for this exact PR claimed the CI-completion window moments earlier — a wholly separate
+    // trigger from the issue-side label change below.
     await env.SELFHOST_TRANSIENT_CACHE?.set("ci-coalesce:owner/agent-repo#7", "1", 60);
     let checkRunsFetched = false;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
-      checkRunsFetched ||= url.includes("/commits/a7/check-runs");
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/pulls/7")) return Response.json({ number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+      if (url.includes("/commits/a7/check-runs")) { checkRunsFetched = true; return Response.json({ total_count: 0, check_runs: [] }); }
+      if (url.includes("/commits/a7/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [{ name: "maintainer-only" }], user: { login: "owner" } });
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
       return Response.json({});
     });
 
     await processJob(env, {
       type: "github-webhook",
-      deliveryId: "issue-label-coalesced",
+      deliveryId: "issue-label-not-suppressed-by-ci-coalesce",
       eventName: "issues",
       payload: {
         action: "labeled",
@@ -1611,7 +1620,50 @@ describe("queue processors", () => {
       } as never,
     });
 
-    expect(checkRunsFetched).toBe(false); // coalesced — no redundant re-review within the window
+    expect(checkRunsFetched).toBe(true); // the CI window's claim is irrelevant to the issue-side wake
+  });
+
+  it("issue label change coalesces a burst of same-PR issue-side signals within its OWN window (#2371)", async () => {
+    // The issue-side window's legitimate purpose: bound FREQUENCY for a burst of label/assignment churn on the
+    // same PR, without depending on (or being defeated by) the unrelated CI-completion window.
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_REPOS: "owner/agent-repo" });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+    let fetchCallCount = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      fetchCallCount += 1;
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/pulls/7")) return Response.json({ number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+      if (url.includes("/commits/a7/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a7/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [{ name: "maintainer-only" }] });
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+    const labeled = (deliveryId: string) => ({
+      type: "github-webhook" as const,
+      deliveryId,
+      eventName: "issues",
+      payload: {
+        action: "labeled",
+        repository: { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } },
+        installation: { id: 9001 },
+        issue: { number: 1, title: "Issue", state: "open", labels: [{ name: "maintainer-only" }] },
+        label: { name: "maintainer-only" },
+      } as never,
+    });
+
+    await processJob(env, labeled("issue-label-burst-1"));
+    expect(fetchCallCount).toBeGreaterThan(0); // sanity: the first signal genuinely re-reviewed
+    const fetchCallCountAfterFirst = fetchCallCount;
+
+    await processJob(env, labeled("issue-label-burst-2"));
+
+    // Second signal within the window coalesces — no additional GitHub interaction at all, not even a token mint.
+    expect(fetchCallCount).toBe(fetchCallCountAfterFirst);
   });
 
   it("#4 stale-surface repair: a rebased PR resyncs + re-reviews at the new head, and the marker survives the resync", async () => {

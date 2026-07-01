@@ -2173,6 +2173,25 @@ async function ciReReviewCoalesced(
   );
 }
 
+// Issue-side wake coalescing (#2371): a DEDICATED key namespace, distinct from ciReReviewCoalesced's
+// `ci-coalesce:` window. The two triggers are semantically different — CI-completion webhooks for the same run
+// are interchangeable (whichever wins the race re-fetches the SAME already-settled CI state), but an issue-side
+// label/assignment change is not: a completely unrelated CI re-review claiming the shared window would silently
+// suppress a genuinely different issue-side signal, leaving the PR on stale linked-issue state until the window
+// expires or the sweep eventually reaches it. Reusing ciReReviewCoalesced's key made that cross-domain collision
+// possible; a separate namespace confines coalescing to a burst of same-PR issue-side events (its legitimate,
+// intended purpose — bound FREQUENCY, not correctness, same as the CI window's own philosophy).
+async function issueLinkedPrReReviewCoalesced(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+): Promise<boolean> {
+  return ciCompletionCoalesced(
+    env,
+    `issue-link-coalesce:${repoFullName.toLowerCase()}#${prNumber}`,
+  );
+}
+
 async function ciHeadShaResolutionCoalesced(
   env: Env,
   repoFullName: string,
@@ -2360,9 +2379,9 @@ async function maybeReReviewOnCiCompletion(
  * assigning/unassigning on a linked ISSUE can flip a linked-issue hard-rule verdict, but that only gets
  * re-evaluated when the PR ITSELF receives a webhook or the staleness-ordered sweep eventually reaches it —
  * which can lag for many cycles on a repo with more than a few open PRs. Re-review every OPEN PR that links
- * this issue promptly instead of waiting. Reuses the CI-completion coalesce window (ciReReviewCoalesced): its
- * purpose is identical here — bound re-review FREQUENCY per PR, never correctness, since the re-review always
- * re-fetches live state regardless of what triggered it.
+ * this issue promptly instead of waiting. Uses its OWN coalesce window (issueLinkedPrReReviewCoalesced,
+ * DISTINCT from CI-completion's — #2371): the two triggers are not interchangeable, so a shared window let an
+ * unrelated CI re-review silently suppress a genuinely different issue-side signal.
  */
 async function maybeReReviewOnLinkedIssueChange(
   env: Env,
@@ -2388,7 +2407,7 @@ async function maybeReReviewOnLinkedIssueChange(
       .filter((pr) => pr.linkedIssues.includes(issueNumber))
       .map((pr) => pr.number);
     for (const prNumber of linkingPrNumbers) {
-      if (await ciReReviewCoalesced(env, repoFullName, prNumber)) continue;
+      if (await issueLinkedPrReReviewCoalesced(env, repoFullName, prNumber)) continue;
       await reReviewStoredPullRequest(
         env,
         deliveryId,
