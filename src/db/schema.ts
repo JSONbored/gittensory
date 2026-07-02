@@ -106,6 +106,12 @@ export const repositorySettings = sqliteTable("repository_settings", {
   // runAgentMaintenancePlanAndExecute, not here.
   accountAgeThresholdDays: integer("account_age_threshold_days"),
   newAccountLabel: text("new_account_label").notNull().default("new-account"),
+  // Per-command @gittensory rate limit (#2560, anti-abuse): generalizes review-nag's cooldown pattern to every
+  // command, keyed by (actor, command, targetKey) independent of review-nag's own thread-author-only scope.
+  commandRateLimitPolicy: text("command_rate_limit_policy").notNull().default("off"),
+  commandRateLimitMaxPerWindow: integer("command_rate_limit_max_per_window").notNull().default(20),
+  commandRateLimitAiMaxPerWindow: integer("command_rate_limit_ai_max_per_window").notNull().default(5),
+  commandRateLimitWindowHours: integer("command_rate_limit_window_hours").notNull().default(24),
   createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
 });

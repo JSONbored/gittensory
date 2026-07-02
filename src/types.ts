@@ -676,6 +676,28 @@ export type RepositorySettings = {
    *  configurable-with-fallback shape. Always populated by the DB layer (default `"new-account"`); optional so
    *  existing settings fixtures/callers need not be touched. */
   newAccountLabel?: string | undefined;
+  /** Per-command @gittensory rate limit (#2560, anti-abuse): generalizes the review-nag cooldown's counting
+   *  pattern (the audit-events ledger) to EVERY `@gittensory` command, keyed by `(actor, command, targetKey)` --
+   *  independent of, and complementary to, review-nag's own narrower thread-author-only scope. `"off"` (default)
+   *  is a no-op; `"hold"` posts a deterministic cooldown reply and skips the command's own dispatch. Always
+   *  populated by the DB layer (default `"off"`); optional so existing settings fixtures/callers need not be
+   *  touched. */
+  commandRateLimitPolicy?: "off" | "hold" | undefined;
+  /** Per-command rate limit (#2560): how many invocations of a single command an actor may make within
+   *  {@link commandRateLimitWindowHours} before the (N+1)th is throttled -- for a CHEAP command (cache-only,
+   *  no AI orchestrator call). Always populated by the DB layer (default `20`); optional so existing settings
+   *  fixtures/callers need not be touched. Only meaningful when {@link commandRateLimitPolicy} is not `"off"`. */
+  commandRateLimitMaxPerWindow?: number | undefined;
+  /** Per-command rate limit (#2560): the same threshold as {@link commandRateLimitMaxPerWindow}, but for an
+   *  AI-cost-bearing command (dispatches to a real orchestrator call: `ask`, `blockers`, `preflight`,
+   *  `reviewability`, `packet`, `duplicate-check`, `next-action`, `repo-fit`). Deliberately tighter than the
+   *  cheap-command default. Always populated by the DB layer (default `5`); optional so existing settings
+   *  fixtures/callers need not be touched. */
+  commandRateLimitAiMaxPerWindow?: number | undefined;
+  /** Per-command rate limit (#2560): the rolling window (in hours) both {@link commandRateLimitMaxPerWindow}
+   *  and {@link commandRateLimitAiMaxPerWindow} count against. Always populated by the DB layer (default `24`);
+   *  optional so existing settings fixtures/callers need not be touched. */
+  commandRateLimitWindowHours?: number | undefined;
   /** Agent-layer autonomy dial (#773): per-action-class level. Always populated by the DB layer (default
    *  `{}` = deny-by-default = "observe" for every class); optional so existing settings fixtures/callers
    *  need not be touched. The single source the action layer (#778) reads via `resolveAutonomy`. */

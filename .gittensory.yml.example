@@ -339,3 +339,12 @@ settings:
   # Never fires for the repo owner, admin logins, or automation bots. PR-path only. Off by default.
   # accountAgeThresholdDays: null  # Positive integer, or null/omitted to disable. Default: null (off).
   # newAccountLabel: new-account  # Label applied to a below-threshold-age account's PR. Default: new-account.
+
+  # Per-command @gittensory rate limit (#2560, anti-abuse): generalizes review-nag's cooldown pattern to
+  # EVERY @gittensory command (help/ask/preflight/blockers/... and the maintainer queue-digest commands),
+  # not just review-request pings — independent of review-nag's own thread-author-only scope. "hold"
+  # replies with a cooldown notice and skips the command's own dispatch. Off by default.
+  # commandRateLimitPolicy: off             # off | hold. Default: off.
+  # commandRateLimitMaxPerWindow: 20        # Positive integer. Per-command invocation limit for a CHEAP command (cache-only, no AI call) within the window. Default: 20.
+  # commandRateLimitAiMaxPerWindow: 5       # Positive integer. Tighter limit for an AI-cost-bearing command (ask/blockers/preflight/reviewability/packet/duplicate-check/next-action/repo-fit). Default: 5.
+  # commandRateLimitWindowHours: 24         # Positive integer. Rolling window (hours) both limits above count against. Default: 24.

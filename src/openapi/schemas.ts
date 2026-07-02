@@ -652,6 +652,10 @@ export const RepositorySettingsSchema = z
     autoCloseExemptLogins: z.array(z.string()).optional(),
     accountAgeThresholdDays: z.number().int().positive().nullable().optional(),
     newAccountLabel: z.string().optional(),
+    commandRateLimitPolicy: z.enum(["off", "hold"]).optional(),
+    commandRateLimitMaxPerWindow: z.number().int().positive().optional(),
+    commandRateLimitAiMaxPerWindow: z.number().int().positive().optional(),
+    commandRateLimitWindowHours: z.number().int().positive().optional(),
     createdAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
   })

@@ -513,6 +513,10 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       requireFreshRebaseWindowMinutes: null,
       accountAgeThresholdDays: null,
       newAccountLabel: "new-account",
+      commandRateLimitPolicy: "off",
+      commandRateLimitMaxPerWindow: 20,
+      commandRateLimitAiMaxPerWindow: 5,
+      commandRateLimitWindowHours: 24,
     };
   }
   return {
@@ -568,6 +572,10 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     requireFreshRebaseWindowMinutes: normalizeOpenItemCap(row.requireFreshRebaseWindowMinutes),
     accountAgeThresholdDays: normalizeOpenItemCap(row.accountAgeThresholdDays),
     newAccountLabel: row.newAccountLabel,
+    commandRateLimitPolicy: normalizeCommandRateLimitPolicy(row.commandRateLimitPolicy),
+    commandRateLimitMaxPerWindow: normalizePositiveIntWithDefault(row.commandRateLimitMaxPerWindow, 20),
+    commandRateLimitAiMaxPerWindow: normalizePositiveIntWithDefault(row.commandRateLimitAiMaxPerWindow, 5),
+    commandRateLimitWindowHours: normalizePositiveIntWithDefault(row.commandRateLimitWindowHours, 24),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -655,6 +663,10 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     requireFreshRebaseWindowMinutes: normalizeOpenItemCap(settings.requireFreshRebaseWindowMinutes),
     accountAgeThresholdDays: normalizeOpenItemCap(settings.accountAgeThresholdDays),
     newAccountLabel: settings.newAccountLabel ?? "new-account",
+    commandRateLimitPolicy: normalizeCommandRateLimitPolicy(settings.commandRateLimitPolicy),
+    commandRateLimitMaxPerWindow: normalizePositiveIntWithDefault(settings.commandRateLimitMaxPerWindow, 20),
+    commandRateLimitAiMaxPerWindow: normalizePositiveIntWithDefault(settings.commandRateLimitAiMaxPerWindow, 5),
+    commandRateLimitWindowHours: normalizePositiveIntWithDefault(settings.commandRateLimitWindowHours, 24),
   };
   const db = getDb(env.DB);
   await db
@@ -712,6 +724,10 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       requireFreshRebaseWindowMinutes: resolved.requireFreshRebaseWindowMinutes,
       accountAgeThresholdDays: resolved.accountAgeThresholdDays,
       newAccountLabel: resolved.newAccountLabel,
+      commandRateLimitPolicy: resolved.commandRateLimitPolicy,
+      commandRateLimitMaxPerWindow: resolved.commandRateLimitMaxPerWindow,
+      commandRateLimitAiMaxPerWindow: resolved.commandRateLimitAiMaxPerWindow,
+      commandRateLimitWindowHours: resolved.commandRateLimitWindowHours,
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -770,6 +786,10 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         requireFreshRebaseWindowMinutes: resolved.requireFreshRebaseWindowMinutes,
         accountAgeThresholdDays: resolved.accountAgeThresholdDays,
         newAccountLabel: resolved.newAccountLabel,
+        commandRateLimitPolicy: resolved.commandRateLimitPolicy,
+        commandRateLimitMaxPerWindow: resolved.commandRateLimitMaxPerWindow,
+        commandRateLimitAiMaxPerWindow: resolved.commandRateLimitAiMaxPerWindow,
+        commandRateLimitWindowHours: resolved.commandRateLimitWindowHours,
         updatedAt: nowIso(),
       },
     });
@@ -5788,6 +5808,10 @@ function parseAutoCloseExemptLogins(value: string): string[] {
 
 function normalizeReviewNagPolicy(value: string | null | undefined): "off" | "hold" | "close" {
   return value === "hold" || value === "close" ? value : "off";
+}
+
+function normalizeCommandRateLimitPolicy(value: string | null | undefined): "off" | "hold" {
+  return value === "hold" ? value : "off";
 }
 
 // A review-nag threshold/window is a discrete positive count, not a score — reuses the same non-clamping,

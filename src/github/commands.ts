@@ -201,6 +201,26 @@ export function isMaintainerOnlyCommand(command: GittensoryMentionCommandName): 
   return isMaintainerQueueDigestCommand(command);
 }
 
+// Commands that dispatch to a real AI orchestrator call (planNextWork / explainBlockersWithAgent /
+// preflightBranchWithAgent / preparePrPacketWithAgent in buildMentionCommandBundle), as opposed to `help`,
+// `miner-context` (both no-op), and every maintainer queue-digest command (cache-only DB reads via
+// buildMaintainerQueueDigestForCommand, no AI call at all) (#2560). Used to apply a tighter per-command rate
+// limit to the AI-cost-bearing surface than the cheap one.
+const AI_COST_BEARING_COMMANDS = new Set<GittensoryMentionCommandName>([
+  "ask",
+  "blockers",
+  "preflight",
+  "reviewability",
+  "packet",
+  "duplicate-check",
+  "next-action",
+  "repo-fit",
+]);
+
+export function isAiCostBearingCommand(command: GittensoryMentionCommandName): boolean {
+  return AI_COST_BEARING_COMMANDS.has(command);
+}
+
 export function isAuthorizedCommandActor(args: {
   commandName?: GittensoryMentionCommandName | undefined;
   commenterLogin?: string | null | undefined;

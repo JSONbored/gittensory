@@ -152,6 +152,10 @@ export type FocusManifestSettings = Partial<
     | "autoCloseExemptLogins"
     | "accountAgeThresholdDays"
     | "newAccountLabel"
+    | "commandRateLimitPolicy"
+    | "commandRateLimitMaxPerWindow"
+    | "commandRateLimitAiMaxPerWindow"
+    | "commandRateLimitWindowHours"
   >
 >;
 
@@ -879,6 +883,15 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   }
   const newAccountLabel = normalizeOptionalString(r.newAccountLabel, "settings.newAccountLabel", warnings);
   if (newAccountLabel !== null) out.newAccountLabel = newAccountLabel;
+  // Per-command @gittensory rate limit (#2560): generalizes review-nag's cooldown pattern to every command.
+  const commandRateLimitPolicy = normalizeOptionalEnum(r.commandRateLimitPolicy, "settings.commandRateLimitPolicy", ["off", "hold"] as const, warnings);
+  if (commandRateLimitPolicy !== null) out.commandRateLimitPolicy = commandRateLimitPolicy;
+  const commandRateLimitMaxPerWindow = normalizeOptionalPositiveInteger(r.commandRateLimitMaxPerWindow, "settings.commandRateLimitMaxPerWindow", warnings);
+  if (commandRateLimitMaxPerWindow !== null) out.commandRateLimitMaxPerWindow = commandRateLimitMaxPerWindow;
+  const commandRateLimitAiMaxPerWindow = normalizeOptionalPositiveInteger(r.commandRateLimitAiMaxPerWindow, "settings.commandRateLimitAiMaxPerWindow", warnings);
+  if (commandRateLimitAiMaxPerWindow !== null) out.commandRateLimitAiMaxPerWindow = commandRateLimitAiMaxPerWindow;
+  const commandRateLimitWindowHours = normalizeOptionalPositiveInteger(r.commandRateLimitWindowHours, "settings.commandRateLimitWindowHours", warnings);
+  if (commandRateLimitWindowHours !== null) out.commandRateLimitWindowHours = commandRateLimitWindowHours;
   return out;
 }
 

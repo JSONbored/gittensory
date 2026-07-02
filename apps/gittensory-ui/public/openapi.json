@@ -8697,6 +8697,28 @@
           },
           "newAccountLabel": {
             "type": "string"
+          },
+          "commandRateLimitPolicy": {
+            "type": "string",
+            "enum": [
+              "off",
+              "hold"
+            ]
+          },
+          "commandRateLimitMaxPerWindow": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "commandRateLimitAiMaxPerWindow": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "commandRateLimitWindowHours": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
           }
         },
         "required": [
