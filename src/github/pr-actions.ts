@@ -1,4 +1,4 @@
-import { createInstallationToken, withInstallationTokenRetry } from "./app";
+import { withInstallationTokenRetry } from "./app";
 import { githubRateLimitAdmissionKeyForInstallation, makeInstallationOctokit } from "./client";
 import type { AgentActionMode } from "../settings/agent-execution";
 import type { AutoMergeMethod } from "../types";
@@ -67,17 +67,18 @@ export async function createPullRequestReviewComments(
   mode: AgentActionMode,
 ): Promise<{ id: number }> {
   const { owner, repo } = splitRepo(repoFullName);
-  const token = await createInstallationToken(env, installationId);
-  const octokit = makeInstallationOctokit(env, token, mode, githubRateLimitAdmissionKeyForInstallation(installationId));
-  const response = await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
-    owner,
-    repo,
-    pull_number: pullNumber,
-    commit_id: commitId,
-    event: "COMMENT",
-    comments,
+  return withInstallationTokenRetry(env, installationId, async (token) => {
+    const octokit = makeInstallationOctokit(env, token, mode, githubRateLimitAdmissionKeyForInstallation(installationId));
+    const response = await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
+      owner,
+      repo,
+      pull_number: pullNumber,
+      commit_id: commitId,
+      event: "COMMENT",
+      comments,
+    });
+    return { id: (response.data as { id: number }).id };
   });
-  return { id: (response.data as { id: number }).id };
 }
 
 /** Merge a pull request with the configured method. Pass `sha` to make the merge fail (409) if the head moved
@@ -113,30 +114,31 @@ export async function mergePullRequest(
 export async function dismissLatestBotApproval(env: Env, installationId: number, repoFullName: string, pullNumber: number, message: string): Promise<{ dismissed: boolean }> {
   try {
     const { owner, repo } = splitRepo(repoFullName);
-    const token = await createInstallationToken(env, installationId);
-    const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
-    const botLogin = `${env.GITHUB_APP_SLUG}[bot]`;
-    // Reviews are returned oldest-first; the LAST matching entry across ALL pages is the bot's most recent
-    // APPROVE. Stopping at page 1 would find (or miss) the wrong review on a PR with >100 total reviews.
-    let latestApprovalId: number | undefined;
-    for (let page = 1; page <= REVIEW_PAGE_LIMIT; page += 1) {
-      const response = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", { owner, repo, pull_number: pullNumber, per_page: REVIEW_PAGE_SIZE, page });
-      const batch = response.data as Array<{ id: number; state?: string; user?: { login?: string | null } | null }>;
-      for (const review of batch) {
-        if (review.user?.login === botLogin && review.state === "APPROVED") latestApprovalId = review.id;
+    return await withInstallationTokenRetry(env, installationId, async (token) => {
+      const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
+      const botLogin = `${env.GITHUB_APP_SLUG}[bot]`;
+      // Reviews are returned oldest-first; the LAST matching entry across ALL pages is the bot's most recent
+      // APPROVE. Stopping at page 1 would find (or miss) the wrong review on a PR with >100 total reviews.
+      let latestApprovalId: number | undefined;
+      for (let page = 1; page <= REVIEW_PAGE_LIMIT; page += 1) {
+        const response = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", { owner, repo, pull_number: pullNumber, per_page: REVIEW_PAGE_SIZE, page });
+        const batch = response.data as Array<{ id: number; state?: string; user?: { login?: string | null } | null }>;
+        for (const review of batch) {
+          if (review.user?.login === botLogin && review.state === "APPROVED") latestApprovalId = review.id;
+        }
+        if (batch.length < REVIEW_PAGE_SIZE) break;
       }
-      if (batch.length < REVIEW_PAGE_SIZE) break;
-    }
-    if (latestApprovalId === undefined) return { dismissed: false };
-    await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals", {
-      owner,
-      repo,
-      pull_number: pullNumber,
-      review_id: latestApprovalId,
-      message,
-      event: "DISMISS",
+      if (latestApprovalId === undefined) return { dismissed: false };
+      await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals", {
+        owner,
+        repo,
+        pull_number: pullNumber,
+        review_id: latestApprovalId,
+        message,
+        event: "DISMISS",
+      });
+      return { dismissed: true };
     });
-    return { dismissed: true };
   } catch {
     return { dismissed: false };
   }

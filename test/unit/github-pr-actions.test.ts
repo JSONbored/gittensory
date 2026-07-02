@@ -62,6 +62,30 @@ describe("GitHub PR action primitives (#778)", () => {
     expect(calls[0]).toMatchObject({ method: "POST", body: { event: "COMMENT", commit_id: "headsha1", comments } });
   });
 
+  it("REGRESSION (#confirmed-bug, review round 2): createPullRequestReviewComments evicts a rejected installation token and retries once with a freshly-minted token", async () => {
+    clearInstallationTokenCacheForTest();
+    let tokenMints = 0;
+    let postAttempts = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) {
+        tokenMints += 1;
+        return Response.json({ token: `token-${tokenMints}` });
+      }
+      if (url.endsWith("/pulls/7/reviews") && (init?.method ?? "GET") === "POST") {
+        postAttempts += 1;
+        if (postAttempts === 1) return Response.json({ message: "Bad credentials" }, { status: 401 });
+        return Response.json({ id: 71 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const comments = [{ path: "src/a.ts", line: 2, side: "RIGHT" as const, body: "**Nit:** guard this." }];
+    const result = await createPullRequestReviewComments(envWithKey(), 998877, "owner/repo", 7, "headsha1", comments, "live");
+    expect(result).toEqual({ id: 71 });
+    expect(postAttempts).toBe(2);
+    expect(tokenMints).toBe(2);
+  });
+
   it("merges a PR with the method and head-sha guard", async () => {
     const calls: Array<{ method: string; url: string; body: Record<string, unknown> }> = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -485,6 +509,33 @@ describe("GitHub PR action primitives (#778)", () => {
       throw new Error("network failure");
     });
     await expect(dismissLatestBotApproval(envWithKey(), 123, "owner/repo", 9, "retract")).resolves.toEqual({ dismissed: false });
+  });
+
+  it("REGRESSION (#confirmed-bug, review round 2): dismissLatestBotApproval evicts a rejected installation token and retries once with a freshly-minted token", async () => {
+    clearInstallationTokenCacheForTest();
+    let tokenMints = 0;
+    let getAttempts = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) {
+        tokenMints += 1;
+        return Response.json({ token: `token-${tokenMints}` });
+      }
+      if (url.includes("/pulls/11/reviews") && !url.includes("/dismissals") && method === "GET") {
+        getAttempts += 1;
+        if (getAttempts === 1) return Response.json({ message: "Bad credentials" }, { status: 401 });
+        return Response.json([{ id: 5, state: "APPROVED", user: { login: "gittensory[bot]" } }]);
+      }
+      if (url.includes("/pulls/11/reviews/5/dismissals") && method === "PUT") {
+        return Response.json({ id: 5, state: "DISMISSED" });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await dismissLatestBotApproval(envWithKey(), 998877, "owner/repo", 11, "stale approval retracted");
+    expect(result).toEqual({ dismissed: true });
+    expect(getAttempts).toBe(2);
+    expect(tokenMints).toBe(2);
   });
 
   it("updates branch without an expected head sha (omits expected_head_sha — FALSE branch of the spread ternary)", async () => {
