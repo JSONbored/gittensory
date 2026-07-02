@@ -420,3 +420,24 @@ test("createAnalysisContext treats capped patch scans as added-line presence", (
     true,
   );
 });
+
+test("categorizes bare .env and .env.* dotfiles as config (not unknown)", () => {
+  // These dotfiles have no positive-index dot, so extensionOf() returns "" (or a variant suffix like
+  // ".local"); the config check must match them by basename or the canonical env-config files are missed.
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 2600,
+    headSha: "abcdef1234567890",
+    files: [
+      { path: ".env", patch: "@@ -0,0 +1 @@\n+API_KEY=x" },
+      { path: ".env.production", patch: "@@ -0,0 +1 @@\n+API_KEY=y" },
+      { path: "config/.env.local", patch: "@@ -0,0 +1 @@\n+API_KEY=z" },
+      { path: "settings.env", patch: "@@ -0,0 +1 @@\n+API_KEY=w" },
+    ],
+  });
+
+  assert.deepEqual(
+    context.fileCategories.map((f) => f.category),
+    ["config", "config", "config", "config"],
+  );
+});

@@ -427,6 +427,11 @@ function categorizeFile(path: string): FileCategory {
   }
   if (
     /^Dockerfile(?:\..*)?$/.test(basename) ||
+    // `.env` and its `.env.local` / `.env.production` variants are dotfiles, so `extensionOf` returns "" (or
+    // a variant suffix like ".local"); match them by basename so the canonical env-config files categorize as
+    // "config" (only a bare-extension `foo.env` was matched via the list below).
+    basename === ".env" ||
+    basename.startsWith(".env.") ||
     [".env", ".hcl", ".ini", ".json", ".tf", ".toml", ".yaml", ".yml"].includes(extension)
   ) {
     return { path, extension, category: "config" };
