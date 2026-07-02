@@ -180,6 +180,14 @@ describe("runMetagraphedSurfaceGate (injected loader — adapter logic)", () => 
     const out = await run([{ path: SUBNET, status: "added" }], { [`head:${SUBNET}`]: doc([newEntry]) });
     expect(out?.conclusion).toBe("success");
   });
+
+  it("a same-PR duplicate append (METAGRAPHED_LANE_SPEC's opt-in duplicateKeyFields) → failure end-to-end through the live adapter wiring", async () => {
+    const advisory = { findings: [] as AdvisoryFinding[] };
+    const copy = { ...newEntry, id: "a-copy" };
+    const out = await run([{ path: SUBNET, status: "modified" }], { [`head:${SUBNET}`]: doc([existing, newEntry, copy]), [`base:${SUBNET}`]: doc([existing]) }, advisory);
+    expect(out?.conclusion).toBe("failure");
+    expect(advisory.findings.map((f) => f.code)).toEqual(["surface_lane_reject"]);
+  });
 });
 
 describe("resolveSurfaceRefs", () => {
