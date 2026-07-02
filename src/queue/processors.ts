@@ -43,6 +43,7 @@ import {
   getCachedAiReview,
   putCachedAiReview,
   markPullRequestsRegated,
+  markPullRequestReviewsInvalidated,
   markPullRequestSurfacePublished,
   getLatestRegatedAt,
   claimRegateFanoutSlot,
@@ -4220,6 +4221,29 @@ async function processGitHubWebhook(
           }),
         );
       });
+      // Reviews-cache invalidation (#2537): a `pull_request_review` webhook (submitted/dismissed/edited) is
+      // the ONLY event that can change the set of reviews GitHub reports for this PR, so it is the sole signal
+      // fetchAndStorePullRequestDetails's reviewsUpToDate check needs to know the cached reviews are stale.
+      // Independent of, and does not gate, any downstream processing below — best-effort like the outcome/
+      // reversal recording above, so a transient D1 failure here never blocks the webhook.
+      if (
+        eventName === "pull_request_review" &&
+        (payload.action === "submitted" || payload.action === "dismissed" || payload.action === "edited")
+      ) {
+        await markPullRequestReviewsInvalidated(env, repoFullName, payloadPullRequest.number).catch((error) => {
+          /* v8 ignore next -- best-effort: cache-invalidation stamping never blocks the webhook. */
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              event: "pull_request_reviews_invalidate_failed",
+              deliveryId,
+              repository: repoFullName,
+              pullNumber: payloadPullRequest.number,
+              error: errorMessage(error),
+            }),
+          );
+        });
+      }
       const pr = await upsertPullRequestFromGitHub(
         env,
         repoFullName,

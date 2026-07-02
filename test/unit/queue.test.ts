@@ -18,6 +18,7 @@ import {
   getInstallation,
   getLatestUpstreamRulesetSnapshot,
   getPullRequest,
+  getPullRequestDetailSyncState,
   getRepository,
   listUpstreamDriftReports,
   listInstallationHealth,
@@ -12411,6 +12412,100 @@ describe("queue processors", () => {
     expect(enqueued).not.toContainEqual(expect.objectContaining({ type: "notify-evaluate" }));
     // With no installation we cannot verify the reviewer, so no permission lookup is attempted.
     expect(permissionCalls).toEqual([]);
+  });
+
+  it.each(["submitted", "dismissed", "edited"] as const)(
+    "bumps reviewsInvalidatedAt for the right repo+PR on a pull_request_review '%s' webhook (#2537)",
+    async (action) => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        JOBS: { async send() {} } as unknown as Queue,
+      });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        return new Response("not found", { status: 404 });
+      });
+      // Seed an existing sync-state row so the assertion can confirm ONLY reviewsInvalidatedAt moved.
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+        number: 42,
+        title: "Add feature",
+        state: "open",
+        user: { login: "contributor" },
+        head: { sha: "sha-42" },
+        labels: [],
+        body: "",
+      });
+
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: `review-invalidate-${action}`,
+        eventName: "pull_request_review",
+        payload: {
+          action,
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: {
+            number: 42,
+            title: "Add feature",
+            state: "open",
+            user: { login: "contributor", type: "User" },
+            html_url: "https://github.com/JSONbored/gittensory/pull/42",
+          },
+          review: {
+            state: action === "dismissed" ? "DISMISSED" : "APPROVED",
+            user: { login: "maintainer", type: "User" },
+            submitted_at: "2026-05-28T12:00:00.000Z",
+            html_url: "https://github.com/JSONbored/gittensory/pull/42#pullrequestreview-1",
+          },
+          sender: { login: "maintainer", type: "User" },
+        },
+      });
+
+      const state = await getPullRequestDetailSyncState(env, "JSONbored/gittensory", 42);
+      expect(state?.reviewsInvalidatedAt).toBeTruthy();
+    },
+  );
+
+  it("does not bump reviewsInvalidatedAt for a pull_request_review action outside submitted/dismissed/edited", async () => {
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      JOBS: { async send() {} } as unknown as Queue,
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "review-invalidate-unsupported-action",
+      eventName: "pull_request_review",
+      payload: {
+        // "submitted" | "dismissed" | "edited" are the only invalidating actions; GitHub also emits others
+        // (e.g. review comments carry their own event) that must NOT stamp the cache marker.
+        action: "unrecognized_action" as unknown as "submitted",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: {
+          number: 43,
+          title: "Add feature",
+          state: "open",
+          user: { login: "contributor", type: "User" },
+          html_url: "https://github.com/JSONbored/gittensory/pull/43",
+        },
+        review: {
+          state: "APPROVED",
+          user: { login: "maintainer", type: "User" },
+          submitted_at: "2026-05-28T12:00:00.000Z",
+          html_url: "https://github.com/JSONbored/gittensory/pull/43#pullrequestreview-1",
+        },
+        sender: { login: "maintainer", type: "User" },
+      },
+    });
+
+    expect(await getPullRequestDetailSyncState(env, "JSONbored/gittensory", 43)).toBeNull();
   });
 
   it("notifies issue-watchers when a new grabbable maintainer-created issue opens (#699 path B)", async () => {

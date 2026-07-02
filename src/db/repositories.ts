@@ -1152,6 +1152,7 @@ export async function upsertPullRequestDetailSyncState(env: Env, state: PullRequ
       headSha: state.headSha,
       filesSyncedAt: state.filesSyncedAt,
       reviewsSyncedAt: state.reviewsSyncedAt,
+      reviewsInvalidatedAt: state.reviewsInvalidatedAt,
       checksSyncedAt: state.checksSyncedAt,
       lastSyncedAt: state.lastSyncedAt,
       errorSummary: state.errorSummary,
@@ -1164,10 +1165,38 @@ export async function upsertPullRequestDetailSyncState(env: Env, state: PullRequ
         headSha: state.headSha,
         filesSyncedAt: state.filesSyncedAt,
         reviewsSyncedAt: state.reviewsSyncedAt,
+        reviewsInvalidatedAt: state.reviewsInvalidatedAt,
         checksSyncedAt: state.checksSyncedAt,
         lastSyncedAt: state.lastSyncedAt,
         errorSummary: state.errorSummary,
         updatedAt: nowIso(),
+      },
+    });
+}
+
+/** Reviews-cache invalidation stamp (#2537): a pure single-field bump of `reviewsInvalidatedAt`, leaving
+ *  every other column (`headSha`/`filesSyncedAt`/`reviewsSyncedAt`/`checksSyncedAt`/...) untouched when the
+ *  row already exists — mirrors the narrow single-field touches on `pull_requests` (markPullRequestApproved,
+ *  markPullRequestRegated). Creates the row (all other columns default/NULL) if this repo+PR has never been
+ *  synced yet, so an early review webhook is not silently dropped. A plain D1 write, independent of headSha. */
+export async function markPullRequestReviewsInvalidated(env: Env, repoFullName: string, pullNumber: number): Promise<void> {
+  const db = getDb(env.DB);
+  const now = nowIso();
+  await db
+    .insert(pullRequestDetailSyncState)
+    .values({
+      id: `${repoFullName}#${pullNumber}`,
+      repoFullName,
+      pullNumber,
+      status: "never_synced",
+      reviewsInvalidatedAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [pullRequestDetailSyncState.repoFullName, pullRequestDetailSyncState.pullNumber],
+      set: {
+        reviewsInvalidatedAt: now,
+        updatedAt: now,
       },
     });
 }
@@ -4226,6 +4255,7 @@ function toPullRequestDetailSyncStateRecord(row: typeof pullRequestDetailSyncSta
     headSha: row.headSha,
     filesSyncedAt: row.filesSyncedAt,
     reviewsSyncedAt: row.reviewsSyncedAt,
+    reviewsInvalidatedAt: row.reviewsInvalidatedAt,
     checksSyncedAt: row.checksSyncedAt,
     lastSyncedAt: row.lastSyncedAt,
     errorSummary: row.errorSummary,

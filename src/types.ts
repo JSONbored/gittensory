@@ -870,6 +870,7 @@ export type PullRequestDetailSyncStateRecord = {
   headSha?: string | null | undefined;
   filesSyncedAt?: string | null | undefined;
   reviewsSyncedAt?: string | null | undefined;
+  reviewsInvalidatedAt?: string | null | undefined;
   checksSyncedAt?: string | null | undefined;
   lastSyncedAt?: string | null | undefined;
   errorSummary?: string | null | undefined;

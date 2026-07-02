@@ -1982,13 +1982,42 @@ async function fetchAndStorePullRequestDetails(
   // Durable repo+PR+headSha file snapshot (#audit-rate-headroom): a bare URL cache is insufficient because
   // `/pulls/{n}/files` has the SAME url across different heads. Reuse the stored `pull_request_files` rows
   // instead of refetching when the last successful files sync already covered the PR's CURRENT head SHA —
-  // only files are cached here; reviews/checks are more volatile at a fixed head and still refresh every call.
-  const existingState = !options.forceFiles && pr.headSha ? await getPullRequestDetailSyncState(env, repoFullName, pr.number) : null;
+  // only files are cached here; checks are more volatile at a fixed head and still refresh every call.
+  //
+  // The lookup below is gated by `!options.forceFiles || !pr.headSha` rather than by the files-only
+  // `!options.forceFiles && pr.headSha` condition the ORIGINAL (files-only) cache used. Reviews caching
+  // (#2537) reuses this SAME row (rather than adding a second DB read) but does not depend on `headSha`
+  // at all and is never controlled by `forceFiles` (that flag only ever forces a FILES re-fetch — see its
+  // name and its only caller, refreshPullRequestDetails's manual "force" option). If the lookup stayed
+  // gated on `pr.headSha` being present, a PR with a momentarily-empty head SHA would silently lose review
+  // caching too, even though reviews never needed a head SHA to begin with. So: skip the read only in the
+  // one case where NEITHER cache can use it (forceFiles is set AND headSha is present, i.e. the files-only
+  // force path) — every other combination still fetches the row so reviewsUpToDate can be computed.
+  const existingState = options.forceFiles && pr.headSha ? null : await getPullRequestDetailSyncState(env, repoFullName, pr.number);
   const filesUpToDate = Boolean(existingState?.headSha) && existingState?.headSha === pr.headSha && Boolean(existingState?.filesSyncedAt);
+  // Reviews cache (#2537): independent of headSha — a new commit alone does not invalidate existing review
+  // state, only an actual `pull_request_review` webhook (submitted/dismissed/edited) does, via
+  // markPullRequestReviewsInvalidated. Up to date when a prior sync recorded reviewsSyncedAt and either no
+  // invalidation has been recorded since, or the invalidation predates that sync.
+  //
+  // Every caller of this function stamps reviewsSyncedAt UNCONDITIONALLY once fetchAndStorePullRequestDetails
+  // returns, even when the reviews fetch itself failed (there is no per-segment success timestamp, only the
+  // aggregate PR-level errorSummary/status). Trusting a bare reviewsSyncedAt presence alone would let a
+  // transient review-fetch failure poison the cache forever, so this also excludes the case where the row's
+  // OWN errorSummary is the review-sync failure fetchPullRequestReviews just recorded for THIS PR (the same
+  // `Review sync failed for #<n>` message every caller already greps for — see the /Review sync failed/i
+  // filters in backfillRepositorySegment). A files/checks-only failure still leaves reviews cached, matching
+  // the reviews-are-independent-of-files intent; only a review-specific failure forces a retry.
+  const reviewsSyncedAt = existingState?.reviewsSyncedAt;
+  const reviewsFetchPreviouslyFailed = Boolean(existingState?.errorSummary?.startsWith(`Review sync failed for #${pr.number}:`));
+  const reviewsUpToDate =
+    Boolean(reviewsSyncedAt) &&
+    !reviewsFetchPreviouslyFailed &&
+    (!existingState?.reviewsInvalidatedAt || (reviewsSyncedAt ?? "") >= existingState.reviewsInvalidatedAt);
   const warningStart = warnings.length;
   const [files, reviews, checks] = await Promise.all([
     filesUpToDate ? Promise.resolve<GitHubFilePayload[]>([]) : fetchPullRequestFiles(env, repoFullName, pr.number, token, warnings, admissionKey, caller),
-    fetchPullRequestReviews(env, repoFullName, pr.number, token, warnings, admissionKey),
+    reviewsUpToDate ? Promise.resolve<GitHubReviewPayload[]>([]) : fetchPullRequestReviews(env, repoFullName, pr.number, token, warnings, admissionKey),
     fetchPullRequestChecks(env, repoFullName, pr, token, warnings, admissionKey),
   ]);
   const fileSyncFailed = warnings.slice(warningStart).some((warning) => warning.startsWith(`File sync failed for #${pr.number}:`));

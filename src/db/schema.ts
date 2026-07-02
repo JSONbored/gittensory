@@ -231,6 +231,12 @@ export const pullRequestDetailSyncState = sqliteTable(
     headSha: text("head_sha"),
     filesSyncedAt: text("files_synced_at"),
     reviewsSyncedAt: text("reviews_synced_at"),
+    // Bumped by a `pull_request_review` webhook (submitted/dismissed/edited) to signal the cached reviews are
+    // stale. NULL, or a value <= reviewsSyncedAt, means the last sync already covers every invalidating event,
+    // so fetchAndStorePullRequestDetails can skip the `GET /pulls/{n}/reviews` call. Reviews are independent of
+    // headSha (a new commit alone does not invalidate existing review state; only an actual review-webhook event
+    // does) -- unlike the files cache, which is why this uses its own timestamp column instead of headSha matching.
+    reviewsInvalidatedAt: text("reviews_invalidated_at"),
     checksSyncedAt: text("checks_synced_at"),
     lastSyncedAt: text("last_synced_at"),
     errorSummary: text("error_summary"),
