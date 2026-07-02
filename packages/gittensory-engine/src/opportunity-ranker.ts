@@ -27,15 +27,17 @@ function clamp01(value: number): number {
 }
 
 /**
- * Clamp the contention/risk signal to [0, 1], failing CLOSED: a non-finite value (a broken upstream) is treated as
- * MAXIMUM risk (1), not 0. An unknown contention signal must collapse the opportunity score, never masquerade as a
- * safe, uncontested one — mirroring the fail-closed convention in `src/signals/duplicate-winner.ts` (sparse rows
- * fail closed). This keeps the "malformed input degrades the score toward 0" contract true in BOTH directions:
- * a broken positive factor → 0, a broken `dupRisk` → 1 → `(1 - 1) = 0`.
+ * Normalize the contention/risk signal, failing CLOSED: any value that is not a real number in [0, 1] — non-finite
+ * (`NaN`/`±Infinity`), negative, or above 1 — is treated as MAXIMUM risk (1), not passed through and not clamped to
+ * a lower risk. A malformed contention signal must collapse the opportunity score, never masquerade as a safe,
+ * uncontested one; a below-range value is as malformed as `NaN`, so both directions fail closed (mirroring the
+ * fail-closed convention in `src/signals/duplicate-winner.ts`, where sparse rows fail closed). This keeps the
+ * "malformed input degrades the score toward 0" contract true in BOTH directions: a broken positive factor → 0, a
+ * broken `dupRisk` → 1 → `(1 - 1) = 0`.
  */
 function clampRisk(value: number): number {
-  if (!Number.isFinite(value)) return 1;
-  return Math.min(1, Math.max(0, value));
+  if (!(value >= 0 && value <= 1)) return 1;
+  return value;
 }
 
 /**
@@ -47,7 +49,7 @@ function clampRisk(value: number): number {
  *
  * Signal-source map for the composing caller (a later issue): `feasibility` ← the per-repo report in
  * `src/services/issue-quality.ts`; `laneFit` ← `MinerGoalSpec.preferredLanes` (the goal-model issue); `freshness`
- * ← `src/signals/reward-risk.ts`'s `freshnessFactor` (~lines 88-93); `dupRisk` ← `src/signals/reward-risk.ts`'s
+ * ← `src/signals/reward-risk.ts`'s `freshnessFactor`; `dupRisk` ← `src/signals/reward-risk.ts`'s
  * `competitionFactor` combined with `src/signals/duplicate-winner.ts`'s claim adjudication.
  */
 export function rankOpportunityScore(input: OpportunityRankInput): number {

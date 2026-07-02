@@ -41,8 +41,9 @@ than inverting or overflowing it — but the two directions are handled asymmetr
 
 - The four **positive** factors (`potential`, `feasibility`, `laneFit`, `freshness`) clamp into `[0, 1]`; a
   non-finite value (`NaN`/`±Infinity`) maps to `0`.
-- **`dupRisk`** clamps into `[0, 1]` too, but **fails closed**: a non-finite `dupRisk` maps to `1` (maximum risk),
-  not `0`. An unknown contention signal must collapse the score, never masquerade as a safe, uncontested one.
+- **`dupRisk`** **fails closed**: any value that is not a real number in `[0, 1]` — non-finite (`NaN`/`±Infinity`),
+  negative, or above `1` — maps to `1` (maximum risk), not `0`. A malformed contention signal must collapse the
+  score, never masquerade as a safe, uncontested one (a below-range value is as malformed as `NaN`).
 
 Any single factor at `0` (or a `dupRisk` of `1`) collapses the whole score to `0`.
 

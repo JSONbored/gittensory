@@ -56,11 +56,9 @@ test("rankOpportunityScore: every positive factor clamps out-of-range/non-finite
 
 test("rankOpportunityScore: dupRisk clamps in-range but FAILS CLOSED on out-of-range/non-finite input", () => {
   closeTo(rankOpportunityScore({ ...full, dupRisk: 0.25 }), 0.75); // in-range penalty applies: 1 - 0.25
-  assert.equal(rankOpportunityScore({ ...full, dupRisk: 1.4 }), 0); // >1 clamps to 1 → (1 - 1) = 0
-  assert.equal(rankOpportunityScore({ ...full, dupRisk: -2 }), 1); // <0 clamps to 0 → no penalty
-  // A non-finite dupRisk fails closed to MAX risk (1) → (1 - 1) = 0, so unknown contention can't preserve a high
-  // score. This is the deliberate asymmetry vs the positive factors, which degrade a non-finite value to 0.
-  for (const bad of NON_FINITE) {
+  // Any risk outside [0,1] — above OR below range — is malformed and fails closed to MAX risk (1) → (1 - 1) = 0,
+  // so a bad contention signal can't preserve a high score. (Contrast the positive factors, which degrade to 0.)
+  for (const bad of [1.4, -2, ...NON_FINITE]) {
     assert.equal(rankOpportunityScore({ ...full, dupRisk: bad }), 0, `dupRisk=${bad} must fail closed to 0`);
   }
 });
