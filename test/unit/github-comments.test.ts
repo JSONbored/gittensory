@@ -378,6 +378,22 @@ describe("GitHub PR intelligence comments", () => {
 
   it("rejects invalid repository names before calling GitHub", async () => {
     await expect(createOrUpdatePrIntelligenceComment(createTestEnv(), 123, "invalid", 12, "body")).rejects.toThrow(/Invalid repository full name/);
+    await expect(createOrUpdatePrIntelligenceComment(createTestEnv(), 123, "owner/repo/extra", 12, "body")).rejects.toThrow(
+      /Invalid repository full name/,
+    );
+    await expect(createOrUpdatePrIntelligenceComment(createTestEnv(), 123, " owner/repo ", 12, "body")).rejects.toThrow(
+      /Invalid repository full name/,
+    );
+    let called = false;
+    vi.stubGlobal("fetch", async () => {
+      called = true;
+      return Response.json({ token: "t" });
+    });
+    const privateKey = await generatePrivateKeyPem();
+    await expect(
+      createOrUpdatePrIntelligenceComment(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "owner/repo/extra", 12, "body"),
+    ).rejects.toThrow(/Invalid repository full name/);
+    expect(called).toBe(false);
   });
 });
 

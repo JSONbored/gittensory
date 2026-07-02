@@ -19,6 +19,17 @@ type IssueComment = {
   } | null;
 };
 
+function parseRepoFullName(repoFullName: string): { owner: string; repo: string } {
+  if (repoFullName !== repoFullName.trim()) {
+    throw new Error(`Invalid repository full name: ${repoFullName}`);
+  }
+  const parts = repoFullName.split("/");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error(`Invalid repository full name: ${repoFullName}`);
+  }
+  return { owner: parts[0], repo: parts[1] };
+}
+
 export async function createOrUpdatePrIntelligenceComment(
   env: Env,
   installationId: number,
@@ -50,8 +61,7 @@ async function createOrUpdateIssueCommentWithMarker(
   marker: string,
   options: { createIfMissing?: boolean | undefined; mode?: AgentActionMode } = {},
 ): Promise<{ id: number; html_url?: string } | null> {
-  const [owner, repo] = repoFullName.split("/");
-  if (!owner || !repo) throw new Error(`Invalid repository full name: ${repoFullName}`);
+  const { owner, repo } = parseRepoFullName(repoFullName);
 
   return await withInstallationTokenRetry(env, installationId, async (token) => {
     // Non-live mode suppresses the comment create/update writes; the GET marker-search probe below still runs.
