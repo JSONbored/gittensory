@@ -38,6 +38,20 @@ describe("docker-compose.override.yml.example", () => {
     expect(appShares).toBeGreaterThan(runnerShares);
   });
 
+  it("pins the runner's documented cpus ceiling to a sane, non-zero value within the example host's assumed capacity", () => {
+    const example = readYaml("docker-compose.override.yml.example");
+    const services = example.services as Record<string, Record<string, unknown>>;
+
+    // The file's own comments size this example for an 8-vCPU host -- a ceiling above that would
+    // contradict the documented scenario (cpus is per-container, not a reservation, so it's fine for
+    // it to be a meaningful fraction of the host rather than host-vCPUs / replica-count).
+    const runnerCpus = Number(services.runner?.cpus);
+    expect(Number.isFinite(runnerCpus)).toBe(true);
+    expect(runnerCpus).toBeGreaterThan(0);
+    expect(runnerCpus).toBeLessThanOrEqual(8);
+    expect(services.runner?.cpus).toBe("4.0");
+  });
+
   it(".gitignore excludes a real docker-compose.override.yml but keeps the example tracked", () => {
     const gitignore = readFileSync(".gitignore", "utf8");
     expect(gitignore).toContain("docker-compose.override.yml\n");
