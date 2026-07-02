@@ -137,7 +137,14 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
     //    check that flipped in this narrow window is never acted on from stale information. Non-CI closes
     //    (gate verdict, duplicate/slop, conflict, linked-issue hard-rule, blacklist) are exempt — their adverse
     //    signal does not depend on CI still being red.
-    if (action.actionClass === "merge" || (action.actionClass === "close" && action.closeRequiresCiState === "failed")) {
+    //    A heuristic close staged BEFORE #2478 has no closeRequiresCiState at all -- that field didn't exist yet
+    //    -- so `undefined` here is genuinely ambiguous (a legacy CI-driven close and a legacy non-CI close are
+    //    byte-identical in storage). The planner now ALWAYS sets the field going forward (never omits it), so
+    //    `undefined` can only mean a legacy row; treat it with the old, broader pre-#2478 guard (require CI still
+    //    failed) rather than skipping the recheck, which would let a stale CI-driven close silently execute
+    //    after CI recovers (flagged by the gate's own review of #2478).
+    const isAmbiguousLegacyHeuristicClose = action.actionClass === "close" && action.closeKind === "heuristic" && action.closeRequiresCiState === undefined;
+    if (action.actionClass === "merge" || (action.actionClass === "close" && action.closeRequiresCiState === "failed") || isAmbiguousLegacyHeuristicClose) {
       const ciToken = await createInstallationToken(env, ctx.installationId).catch(() => undefined);
       const admissionKey = githubRateLimitAdmissionKeyForToken(env, ciToken, ctx.installationId);
       const liveCi = await fetchLiveCiAggregate(env, ctx.repoFullName, expectedHeadSha, ciToken, undefined, admissionKey);
@@ -151,7 +158,9 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
           ? liveCi.ciState !== "passed"
             ? `live CI is no longer passing (now: ${liveCi.ciState})`
             : null
-          : liveCi.ciState !== action.closeRequiresCiState
+          // isAmbiguousLegacyHeuristicClose falls back to "failed" (the old unconditional requirement); an
+          // explicitly-tagged fresh close compares against its own recorded requirement.
+          : liveCi.ciState !== (action.closeRequiresCiState ?? "failed")
             ? `CI state changed since planning (now: ${liveCi.ciState})`
             : null;
       if (staleReason) {

@@ -357,7 +357,9 @@ describe("planAgentMaintenanceActions (#778)", () => {
       const cls = classes(plan);
       expect(cls).not.toContain("merge");
       expect(cls).toContain("close");
-      expect(plan.find((a) => a.actionClass === "close")?.closeRequiresCiState).toBeUndefined();
+      // "not_required", not undefined -- the planner always tags a heuristic close explicitly (#2478) so a
+      // REPLAYED staged action can tell "not CI-driven" apart from "legacy row, field didn't exist yet".
+      expect(plan.find((a) => a.actionClass === "close")?.closeRequiresCiState).toBe("not_required");
       expect(plan.find((a) => a.actionClass === "label")?.label).toBe(AGENT_LABEL_CHANGES);
     });
 

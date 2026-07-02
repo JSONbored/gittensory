@@ -697,7 +697,9 @@ export type AgentPendingActionParams = {
   closeKind?: "linked-issue-hard-rule" | "blacklist" | "heuristic";
   // For a CI-driven heuristic close, persist the CI state that must still hold when the staged action replays
   // (#2364). This is separate from closeKind because heuristic closes also cover non-CI adverse signals.
-  closeRequiresCiState?: "failed";
+  // ALWAYS set (to "failed" or "not_required") for a freshly planned heuristic close (#2478) -- never omitted --
+  // so `undefined` unambiguously means a LEGACY row staged before this field existed, not "not CI-driven".
+  closeRequiresCiState?: "failed" | "not_required";
   expectedHeadSha?: string;
   // For an `approve` action: retract the bot's own stale approval instead of posting a new one (see
   // PlannedAgentAction.dismissStaleApproval). Must round-trip through staging like every other action-specific

@@ -64,7 +64,9 @@ export type PlannedAgentAction = {
   closeKind?: "linked-issue-hard-rule" | "blacklist" | "heuristic";
   // For a CI-driven heuristic close, the CI state that must still hold at actuation time. Other heuristic
   // closes (gate verdict, duplicate/slop, conflict) do not depend on red CI and must not be blocked by green CI.
-  closeRequiresCiState?: "failed";
+  // ALWAYS set for a heuristic close (never omitted) -- see the field's doc comment on AgentPendingActionParams
+  // in types.ts for why the tri-state (rather than an optional "failed") matters (#2478).
+  closeRequiresCiState?: "failed" | "not_required";
   expectedHeadSha?: string;
   // For an `approve` action: retract the bot's own prior approval instead of posting a new one — a later commit
   // no longer qualifies for approval, but the PR isn't merging or closing this pass, so the stale APPROVE
@@ -562,7 +564,9 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       // Pin like merge/approve (#2452): lets the accept-time supersede check detect a force-push after staging;
       // the executor's own step-6 live-CI re-check (#2128) separately covers the CI-driven reason above.
       ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),
-      ...(ciFailed ? { closeRequiresCiState: "failed" as const } : {}),
+      // Always explicit (never omitted) -- see the field's doc comment (#2478): an omitted value on a REPLAYED
+      // staged action must unambiguously mean "legacy row, predates this field", not "not CI-driven".
+      closeRequiresCiState: ciFailed ? "failed" : "not_required",
     });
   }
   // else: guarded → manual (needs-human/changes label above); not-good OWNER/automation → held

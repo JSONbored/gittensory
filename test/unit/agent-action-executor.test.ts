@@ -233,11 +233,35 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
 
   it("LIVE non-CI heuristic close proceeds when live CI is passing because the close reason is independent of CI", async () => {
     const env = createTestEnv({});
-    const gateClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "policy gate blocker", closeComment: "closing", closeKind: "heuristic" };
+    // "not_required", not omitted: the planner always tags a fresh heuristic close explicitly (#2478).
+    const gateClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "policy gate blocker", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "not_required" };
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [gateClose]);
     expect(outcomes[0]?.outcome).toBe("completed");
     expect(closePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7);
     expect(fetchLiveCiAggregate).not.toHaveBeenCalled();
+  });
+
+  it("REGRESSION (#2478, flagged by the gate's own review of #2478): a LEGACY heuristic close staged before closeRequiresCiState existed (closeKind heuristic, field entirely absent) still re-checks live CI and is DENIED once CI has turned green", async () => {
+    // Simulates a pending_agent_actions row persisted by code that predates #2478 -- closeKind: "heuristic" with
+    // no closeRequiresCiState key at all, since the field didn't exist yet. The fix must NOT silently skip the
+    // live-CI recheck for this row just because the new "not_required" tag is absent, or a stale CI-driven close
+    // could execute after CI recovers.
+    const env = createTestEnv({});
+    const legacyHeuristicClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "CI failed", closeComment: "closing", closeKind: "heuristic" };
+    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "passed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [legacyHeuristicClose]);
+    expect(outcomes[0]?.outcome).toBe("denied");
+    expect(outcomes[0]?.detail).toContain("CI state changed since planning (now: passed)");
+    expect(closePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("a LEGACY heuristic close (closeRequiresCiState absent) still proceeds when live CI is genuinely still failing, matching the old pre-#2478 behavior", async () => {
+    const env = createTestEnv({});
+    const legacyHeuristicClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "CI failed", closeComment: "closing", closeKind: "heuristic" };
+    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "failed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [legacyHeuristicClose]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(closePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7);
   });
 
   it("LIVE non-heuristic close (linked-issue hard-rule) skips the live CI re-check entirely (#2128)", async () => {
