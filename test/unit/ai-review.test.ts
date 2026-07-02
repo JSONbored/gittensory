@@ -6,6 +6,7 @@ import {
   type GittensoryAiReviewInput,
 } from "../../src/services/ai-review";
 import { createTestEnv } from "../helpers/d1";
+import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 
 const {
   parseModelReview,
@@ -87,6 +88,7 @@ const baseInput: GittensoryAiReviewInput = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  resetMetrics();
 });
 
 describe("runGittensoryAiReview gating", () => {
@@ -474,6 +476,8 @@ describe("runGittensoryAiReview block mode (consensus)", () => {
     expect(result.consensusDefect).toBeNull();
     expect(result.inconclusive).toBe(true); // FAIL-CLOSED: a missing second opinion holds the PR, never passes it
     expect(result.advisoryNotes).not.toBeNull(); // notes still come from the one parseable opinion
+    // Observability (#2540): the single canonical increment fires once for this inconclusive review.
+    expect(await renderMetrics()).toContain('gittensory_ai_review_inconclusive_total{mode="block"} 1');
   });
 
   it("a clean dual review is NOT inconclusive (both models parsed, neither blocks → passes)", async () => {
@@ -486,6 +490,8 @@ describe("runGittensoryAiReview block mode (consensus)", () => {
     });
     expect(result.status === "ok" && result.consensusDefect).toBeNull();
     expect(result.status === "ok" && result.inconclusive).toBe(false);
+    // A non-inconclusive review must NOT increment the inconclusive counter.
+    expect(await renderMetrics()).not.toContain("gittensory_ai_review_inconclusive_total");
   });
 
   it("block mode with BYOK: provider writes the advisory, the free Workers-AI pair drives consensus", async () => {
