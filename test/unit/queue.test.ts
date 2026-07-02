@@ -11538,11 +11538,43 @@ describe("one-shot reopen prevention", () => {
     expect(audit?.outcome).toBe("completed");
   });
 
-  it("REGRESSION: fails CLOSED (denies the re-close) when the reopener-timeline read errors (#2369)", async () => {
+  it("REGRESSION: re-closes when the reopener is hidden beyond the inspected event window", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
+      if (url.includes("/issues/42/events")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        if (page === 1) {
+          return Response.json([{ event: "closed", actor: { login: "maintainer" } }, { event: "reopened", actor: { login: "contributor" } }], {
+            headers: { link: '<https://api.github.com/repos/owner/repo/issues/42/events?per_page=100&page=12>; rel="last"' },
+          });
+        }
+        return Response.json([{ event: "renamed", actor: { login: "contributor" } }]);
+      }
+      if (url.endsWith("/issues/42/comments")) return Response.json({ id: 99 }, { status: 201 });
+      if (url.endsWith("/pulls/42") && method === "PATCH") return Response.json({ state: "closed" });
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await repositoriesModule.upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { merge: "auto", request_changes: "auto" } });
+
+    await processJob(env, { type: "github-webhook", deliveryId: "reopen-window-stuffed", eventName: "pull_request", payload: reopenedPayload("contributor") });
+
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(true);
+    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("completed");
+    expect(audit?.detail).toContain("beyond the inspected event window");
+  });
+
+  it("REGRESSION: re-closes when the reopener-timeline read errors (#2369)", async () => {
     // The reopener-timeline lookup errors (network failure) → getLastReopenerLogin catches and returns
-    // { login: null, coveredAllPages: false } — the same ambiguous shape as an un-covered window. The design
-    // explicitly fails CLOSED here (deny the close) rather than proceeding, since wrongly re-closing a
-    // maintainer-authorized PR is worse than leaving a disallowed reopen open for one more tick.
+    // { login: null, coveredAllPages: false }. The handler still enforces the one-shot close instead of
+    // treating that ambiguous shape as a superseding maintainer reopen.
     const calls: Array<{ url: string; method: string }> = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -11559,11 +11591,10 @@ describe("one-shot reopen prevention", () => {
 
     await processJob(env, { type: "github-webhook", deliveryId: "reopen-timeline-error", eventName: "pull_request", payload: reopenedPayload("contributor") });
 
-    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(false);
-    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
-    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string; detail: string }>();
-    expect(audit?.outcome).toBe("denied");
-    expect(audit?.detail).toContain("could not confirm");
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(true);
+    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
+    const audit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string }>();
+    expect(audit?.outcome).toBe("error");
   });
 
   it("REGRESSION: denies with an 'unknown' current-reopener detail when the timeline genuinely has no reopen event at all (#2369)", async () => {

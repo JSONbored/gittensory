@@ -8101,25 +8101,23 @@ async function recloseDisallowedReopenIfNeeded(
     pr.number,
   );
   const latestReopenerLogin = latestReopener.login?.toLowerCase() ?? null;
-  // Ambiguous ("can't prove no later reopen exists beyond the inspected window") must fail CLOSED here — the
-  // opposite of the closer-lookup's fail-open bias above — because wrongly re-closing a maintainer-authorized PR
-  // is the worse failure mode than leaving a disallowed reopen unclosed for one more tick.
-  const reopenerWindowAmbiguous =
-    latestReopenerLogin == null && !latestReopener.coveredAllPages;
+  // A bounded scan that cannot see any reopened event must NOT deny the re-close: otherwise a contributor can
+  // pad the event timeline until their disallowed reopen falls outside the inspected window. Only a fully covered
+  // timeline with no reopen, or a visible different latest reopener, proves this webhook was superseded.
   const reopenerSuperseded =
-    reopenerWindowAmbiguous || latestReopenerLogin !== reopener;
+    latestReopener.coveredAllPages
+      ? latestReopenerLogin !== reopener
+      : latestReopenerLogin != null && latestReopenerLogin !== reopener;
   if (reopenerSuperseded) {
     await recordAuditEvent(env, {
       eventType: "github_app.reopen_reclosed",
       actor: "gittensory",
       targetKey: `${repoFullName}#${pr.number}`,
       outcome: "denied",
-      detail: reopenerWindowAmbiguous
-        ? `could not confirm ${reopener} is still the most recent reopener (event window not fully covered) — reopen re-close not executed`
-        : `the current reopener is now ${latestReopenerLogin ?? "unknown"}, not ${reopener} — reopen re-close not executed`,
+      detail: `the current reopener is now ${latestReopenerLogin ?? "unknown"}, not ${reopener} — reopen re-close not executed`,
       metadata: { deliveryId, repoFullName },
     }).catch(() => undefined);
-    return true; // handled (decision made); a superseded/ambiguous reopener still counts as handled
+    return true; // handled (decision made); a confirmed superseding reopener still counts as handled
   }
   // The comment is a courtesy notice; its failure must not mask whether the close itself succeeded (below).
   await createIssueComment(
