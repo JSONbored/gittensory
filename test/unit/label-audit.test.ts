@@ -85,7 +85,14 @@ describe("buildLabelAudit branch coverage", () => {
     expect(audit.findings).toEqual([]);
   });
 
-  it("returns empty arrays when registryConfig or labelMultipliers is absent (?? {} arm)", () => {
+  it("returns empty arrays when registryConfig is null (?? {} arm for registryConfig.labelMultipliers)", () => {
+    const repo = { ...repoWith({ bug: 1.2 }), registryConfig: null } as unknown as RepositoryRecord;
+    const audit = buildLabelAudit(repo, noLabels, noIssues, noPRs, "octo/demo");
+    expect(audit.configuredLabels).toEqual([]);
+    expect(audit.trustedPipelineReady).toBe(false);
+  });
+
+  it("returns empty arrays when labelMultipliers is absent (?? {} arm for labelMultipliers)", () => {
     const repo = { ...repoWith(undefined), registryConfig: { repo: "octo/demo", emissionShare: 0.02, issueDiscoveryShare: 0.25, maintainerCut: 0, raw: {} } } as RepositoryRecord;
     const audit = buildLabelAudit(repo, noLabels, noIssues, noPRs, "octo/demo");
     expect(audit.configuredLabels).toEqual([]);
