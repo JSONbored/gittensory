@@ -53,6 +53,40 @@ describe("change-guardrail glob matching", () => {
     // FAIL-SAFE (#1062): guardrails configured but the changed-file set is empty (unknown) ⇒ treat as a hit.
     expect(isGuardrailHit([], globs)).toBe(true);
   });
+
+  it("SECURITY (ReDoS): a glob with too many chained wildcards no longer risks catastrophic backtracking — it fails SAFE TOWARD GUARDING (matches every path) instead of ever compiling the pathological pattern", () => {
+    // 7 chained single-segment wildcards, empirically catastrophic against a near-miss input (a sibling test in
+    // this file's SECURITY section proves >6 stars would otherwise hang for seconds). Must resolve INSTANTLY.
+    const pathological = "src/*-*-*-*-*-*-*-final.ts";
+    const start = Date.now();
+    // A pathological guardrail glob still HOLDS the PR for manual review (the safe direction for a guardrail —
+    // silently disabling protection would be far worse than an unnecessary hold).
+    expect(matchesAny("completely/unrelated/path.md", [pathological])).toBe(true);
+    expect(matchesAny("", [pathological])).toBe(true);
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(changedPathsHittingGuardrail(["unrelated/file.ts"], [pathological])).toEqual(["unrelated/file.ts"]);
+    expect(isGuardrailHit(["unrelated/file.ts"], [pathological])).toBe(true);
+  });
+
+  it("SECURITY (ReDoS): a glob AT the safe cap (6 wildcards) still compiles and matches NORMALLY (not the fail-safe path)", () => {
+    // Exactly 6 stars: at the cap, still safely compiled/evaluated — proves the cap is inclusive, not exclusive,
+    // and that ordinary (non-pathological) multi-wildcard globs keep their real matching semantics.
+    const atCap = "src/*/*/*/*/*/*.ts";
+    expect(matchesAny("src/a/b/c/d/e/f.ts", [atCap])).toBe(true);
+    expect(matchesAny("src/a/b/c/d/e/f.js", [atCap])).toBe(false); // wrong extension — genuinely doesn't match
+  });
+
+  it("a wildcard-free literal glob (e.g. an exact guarded file like '.gittensory.yml') is never treated as unsafe", () => {
+    expect(matchesAny(".gittensory.yml", [".gittensory.yml"])).toBe(true);
+    expect(matchesAny("other-file.yml", [".gittensory.yml"])).toBe(false);
+  });
+
+  it("a mix of one pathological glob among otherwise-fine globs still forces a hold for ANY path (fail-safe dominates)", () => {
+    const globs = ["docs/**", "src/*-*-*-*-*-*-*-final.ts"];
+    // "docs/**" alone would not match this path, but the pathological glob's fail-safe short-circuits matchesAny
+    // to true for every path once any configured glob is judged unsafe to compile.
+    expect(matchesAny("completely/unrelated.md", globs)).toBe(true);
+  });
 });
 
 // #flood-readiness: the live hard-guardrail globs must guard crucial files that live OUTSIDE the dir-prefix

@@ -38,10 +38,31 @@ export function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${re}$`);
 }
 
-/** True if `path` matches any of the globs (`*` within a segment, `**` across `/`), case-insensitively. */
+// globToRegExp's COMPILATION is linear-time (its own docstring is correct about that), but the COMPILED
+// pattern's .test() can be exponential-time on an adversarial near-miss input when MULTIPLE `*` wildcards chain
+// in one glob (empirically verified: 5 chained wildcards against a 300-char adversarial input took ~19 SECONDS;
+// 3 stays under 5ms at the same length). hardGuardrailGlobs today are 100% hardcoded engine constants (see
+// review/guardrail-config.ts) — no maintainer/contributor input reaches this function today — but globToRegExp
+// is exported for reuse (content-lane/spec-resolver.ts), so this guards the function itself rather than relying
+// on every future caller to separately remember the risk.
+const MAX_GLOB_WILDCARDS = 6;
+
+/** True if `glob` has more `*` wildcards than can be safely compiled to a RegExp without risking catastrophic
+ *  backtracking (see the MAX_GLOB_WILDCARDS rationale above). */
+function hasUnsafeWildcardCount(glob: string): boolean {
+  return (glob.match(/\*/g) ?? []).length > MAX_GLOB_WILDCARDS;
+}
+
+/**
+ * True if `path` matches any of the globs (`*` within a segment, `**` across `/`), case-insensitively. A glob
+ * with more wildcards than can be safely compiled (see hasUnsafeWildcardCount) is treated as matching EVERY
+ * path — fail SAFE TOWARD GUARDING, mirroring isGuardrailHit's own "unknown ⇒ treat as a hit" philosophy (an
+ * over-complex guardrail glob still forces manual review) rather than silently never matching, which would
+ * silently disable the maintainer's intended protection — the worse failure mode for a safety guardrail.
+ */
 export function matchesAny(path: string, globs: string[]): boolean {
   const canonicalPath = canonicalize(path);
-  return globs.some((g) => globToRegExp(g).test(canonicalPath));
+  return globs.some((g) => hasUnsafeWildcardCount(g) || globToRegExp(g).test(canonicalPath));
 }
 
 /**
