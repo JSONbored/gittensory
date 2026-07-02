@@ -276,6 +276,15 @@ async function mintInstallationToken(
     expireCachedAppJwt(env.GITHUB_APP_ID);
     const freshJwt = await createAppJwt(env);
     response = await requestInstallationTokenWithJwt(freshJwt, installationId);
+    if (response.status === 401) {
+      // The freshly-signed retry JWT was ALSO rejected. createAppJwt caches optimistically -- before this POST
+      // proves the JWT valid -- so without this the just-rejected JWT would sit in the cache and keep poisoning
+      // every mint fleet-wide for up to APP_JWT_REUSE_MS, exactly the bug this whole retry exists to fix
+      // (flagged by the gate's own review of #2453). Evict again; the throw below still surfaces this failure to
+      // the caller, but the NEXT mint attempt (this one or any other installation's) gets a fresh JWT instead of
+      // replaying the poisoned one.
+      expireCachedAppJwt(env.GITHUB_APP_ID);
+    }
   }
   if (!response.ok) {
     const body = await response.text();
