@@ -28,6 +28,8 @@ import { labelSelfHostReviewerModels, labelSelfHostReviewerNames, resolveConfigu
 import { incr } from "../selfhost/metrics";
 import { errorMessage } from "../utils/json";
 import type { ReviewProfile } from "../signals/focus-manifest";
+import { isCodeFile } from "../signals/local-branch";
+import { isTestPath } from "../signals/test-evidence";
 
 /**
  * The best free Workers-AI model pair for review accuracy — two different families for independence,
@@ -178,6 +180,14 @@ export type GittensoryAiReviewInput = {
    * (the default) ⇒ no instruction is appended, so the prompt is byte-identical and the model emits none.
    */
   inlineFindings?: boolean | undefined;
+  /**
+   * This PR's changed file paths (#2558) — reused to splice a concise "changed code files with zero
+   * test-path evidence" section into the user prompt via the engine's own deterministic classifier
+   * (src/signals/test-evidence.ts), so the reviewer can name specific untested files instead of guessing
+   * from the raw diff. Additional CONTEXT only, never a new blocker/nit rule. Absent/empty, or when the PR
+   * has ANY test-path changes ⇒ no section is appended (byte-identical to today).
+   */
+  changedFiles?: ReadonlyArray<{ path: string }> | null | undefined;
 };
 
 /** A consensus critical defect, already public-safe, ready to become a gate blocker finding. */
@@ -491,7 +501,26 @@ function buildUserPrompt(input: GittensoryAiReviewInput): string {
   // GITTENSORY_REVIEW_ENRICHMENT on AND REES_URL set). Absent/empty (the default) → the prompt is byte-identical.
   const enrichmentSection = input.enrichment?.promptSection;
   if (enrichmentSection) lines.push("", enrichmentSection);
+  // Test-evidence classifier (#2558): ground the reviewer's test-adequacy judgment in the engine's own
+  // deterministic classification instead of eyeballing the diff. Absent/no changed code files without test
+  // evidence ⇒ the prompt is byte-identical.
+  const testEvidenceSection = buildTestEvidencePromptSection(input.changedFiles ?? []);
+  if (testEvidenceSection) lines.push("", testEvidenceSection);
   return lines.join("\n");
+}
+
+/**
+ * A concise "changed code files with zero test-path evidence" section for the user prompt (#2558). Reuses the
+ * existing deterministic classifiers (isCodeFile, isTestPath) — no new signal, this is a wiring gap only.
+ * Mirrors slop.ts's buildMissingTestEvidenceFinding's whole-PR semantics: ANY changed path that already looks
+ * like a test file means there IS test evidence for this PR, so nothing is called out (a partial-but-real test
+ * change is not "zero evidence") — only a fully test-free PR touching real code files gets a section.
+ */
+export function buildTestEvidencePromptSection(files: ReadonlyArray<{ path: string }>): string | undefined {
+  const codePaths = files.map((file) => file.path).filter(Boolean).filter(isCodeFile);
+  if (codePaths.length === 0) return undefined;
+  if (files.some((file) => isTestPath(file.path))) return undefined;
+  return `Test evidence (engine classifier): this PR has NO test-path changes. The following changed code file(s) have zero test-path evidence: ${codePaths.join(", ")}.`;
 }
 
 // `.gittensory.yml` review.profile → an appended tone instruction (#review-profile). `balanced`/absent appends

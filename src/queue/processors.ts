@@ -5271,6 +5271,7 @@ export async function runAiReviewForAdvisory(
         files.map((file) => file.path),
       ),
       repoInstructions: args.reviewInstructions ?? null,
+      changedFiles: files,
     });
     if (result.status !== "ok") return undefined;
     const findings: AdvisoryFinding[] = [];
