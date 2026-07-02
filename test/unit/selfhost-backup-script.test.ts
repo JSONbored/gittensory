@@ -28,6 +28,7 @@ function fakePgDump(root: string): string {
     join(bin, "pg_dump"),
     `#!/bin/sh
 out=''
+original_args="$*"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -f)
@@ -42,6 +43,12 @@ done
 if [ -z "$out" ]; then
   echo 'missing -f output' >&2
   exit 2
+fi
+if [ -n "\${PG_DUMP_ARGS_FILE:-}" ]; then
+  printf '%s\\n' "$original_args" > "$PG_DUMP_ARGS_FILE"
+fi
+if [ -n "\${PG_DUMP_ENV_FILE:-}" ]; then
+  printf '%s\\n' "$PGHOST|$PGPORT|$PGDATABASE|\${PGUSER:-}|\${PGPASSFILE:-}" > "$PG_DUMP_ENV_FILE"
 fi
 printf 'postgres dump\\n' > "$out"
 `,
@@ -91,6 +98,8 @@ describe("self-host backup script", () => {
 
     const output = runBackup(root, {
       DATABASE_URL: "postgres://gittensory:pw@postgres:5432/gittensory",
+      PG_DUMP_ARGS_FILE: join(root, "pg-dump.args"),
+      PG_DUMP_ENV_FILE: join(root, "pg-dump.env"),
       DATABASE_PATH: staleSqlite,
       PATH: `${pgBin}:${process.env.PATH ?? ""}`,
     });
@@ -100,6 +109,26 @@ describe("self-host backup script", () => {
     expect(postgresBackups).toHaveLength(1);
     expect(postgresBackups[0]).toMatch(/^gittensory-\d{8}T\d{6}Z\.dump$/);
     expect(readdirSync(join(root, "backups", "sqlite"))).toEqual([]);
+  });
+
+  it("does not pass Postgres credentials in pg_dump arguments", () => {
+    const root = tmpRoot();
+    const pgBin = fakePgDump(root);
+    const argsFile = join(root, "pg-dump.args");
+    const envFile = join(root, "pg-dump.env");
+
+    runBackup(root, {
+      DATABASE_URL: "postgresql://app_user:SuperSecret123%21@db.example:6543/gittensory",
+      PATH: `${pgBin}:${process.env.PATH ?? ""}`,
+      PG_DUMP_ARGS_FILE: argsFile,
+      PG_DUMP_ENV_FILE: envFile,
+    });
+
+    const args = execFileSync("cat", [argsFile], { encoding: "utf8" });
+    const pgEnv = execFileSync("cat", [envFile], { encoding: "utf8" }).trim();
+    expect(args).not.toContain("SuperSecret123");
+    expect(args).not.toContain("postgresql://");
+    expect(pgEnv).toMatch(/^db\.example\|6543\|gittensory\|app_user\|\/tmp\/gittensory-pgpass\./);
   });
 
   it("keeps the SQLite online backup path when no Postgres URL is configured", () => {
