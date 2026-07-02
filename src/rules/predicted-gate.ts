@@ -93,6 +93,11 @@ function publicSafeFinding(finding: { code: string; title: string; detail: strin
   };
 }
 
+/** GitHub full names are case-insensitive — mirror `sameRepo` in the live gate paths. */
+function sameRepoFullName(left: string | null | undefined, right: string | null | undefined): boolean {
+  return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
+}
+
 export function buildPredictedGateVerdict(args: {
   input: PredictedGateInput;
   manifest: FocusManifest;
@@ -174,11 +179,16 @@ export function buildPredictedGateVerdict(args: {
   // finding too — evaluateGateCheck below already receives gate.selfAuthoredLinkedIssue, but without this finding it
   // had nothing to act on, so a configured self-authored gate never showed in the preview. Offline path: resolved
   // from the snapshot, never a live fetch. (#self-authored-parity)
-  const issueAuthorByNumber = new Map(issues.filter((issue) => issue.repoFullName === input.repoFullName).map((issue) => [issue.number, issue.authorLogin ?? null]));
+  const issueAuthorByNumber = new Map(issues.filter((issue) => sameRepoFullName(issue.repoFullName, input.repoFullName)).map((issue) => [issue.number, issue.authorLogin ?? null]));
   const linkedIssueAuthorLogins = syntheticPr.linkedIssues.map((issueNumber) => issueAuthorByNumber.get(issueNumber) ?? null);
-  // Mirror the live gate (listOtherOpenPullRequests): a closed/merged PR sharing a linked issue must not fire
-  // duplicate_pr_risk. authorHistory below still needs every state for its grace counts.
-  const openSiblings = pullRequests.filter((otherPr) => otherPr.state === "open");
+  // Mirror the live gate (listOtherOpenPullRequests): repo-scoped open siblings only; closed/merged PRs sharing a
+  // linked issue must not fire duplicate_pr_risk. authorHistory below still needs every state for its grace counts.
+  const openSiblings = pullRequests.filter(
+    (otherPr) =>
+      otherPr.state === "open" &&
+      sameRepoFullName(otherPr.repoFullName, input.repoFullName) &&
+      otherPr.number !== syntheticPr.number,
+  );
   const advisory = buildPullRequestAdvisory(repo, syntheticPr, { otherOpenPullRequests: openSiblings, requireLinkedIssue, linkedIssueAuthorLogins });
 
   // Deterministic pre-merge checks parity (#11/#18): the LIVE gate enforces the repo's `review.pre_merge_checks`
@@ -226,7 +236,7 @@ export function buildPredictedGateVerdict(args: {
   // Case-insensitive author match so the PREDICTOR agrees with the live gate (which matches case-insensitively).
   // First-time grace is retained as compatibility context, but blocker findings are no longer softened by it.
   const contributorLoginLc = input.contributorLogin?.toLowerCase();
-  const authorHistory = pullRequests.filter((pr) => pr.repoFullName === input.repoFullName && pr.authorLogin?.toLowerCase() === contributorLoginLc);
+  const authorHistory = pullRequests.filter((pr) => sameRepoFullName(pr.repoFullName, input.repoFullName) && pr.authorLogin?.toLowerCase() === contributorLoginLc);
 
   const evaluation = evaluateGateCheck(advisory, {
     linkedIssueGateMode: gate.linkedIssue ?? undefined,

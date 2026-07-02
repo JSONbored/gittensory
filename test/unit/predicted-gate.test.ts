@@ -67,6 +67,15 @@ describe("buildPredictedGateVerdict", () => {
     expect(result.title.toLowerCase()).toContain("gittensory orb review agent");
   });
 
+  it("does NOT raise duplicate_pr_risk for an open PR in a different repo sharing the same issue number (repo-scoped parity)", () => {
+    const result = verdict({
+      gate: { duplicates: "block" },
+      pullRequests: [{ ...openPr(42, "Other repo retry", [7], "someone-else"), repoFullName: "other/repo" }],
+    });
+    expect(result.blockers.some((b) => b.code === "duplicate_pr_risk")).toBe(false);
+    expect(result.conclusion).toBe("success");
+  });
+
   it("does NOT block on a duplicate when duplicates:off", () => {
     const result = verdict({ gate: { duplicates: "off" }, pullRequests: [openPr(42, "Retry uploads on 5xx responses", [7])] });
     expect(result.conclusion).not.toBe("failure");
@@ -102,6 +111,15 @@ describe("buildPredictedGateVerdict", () => {
     const blocked = verdict({ gate: { selfAuthoredLinkedIssue: "block" }, issues: [openIssue(7, "Uploads should retry on 5xx", "miner1")] });
     expect(blocked.conclusion).toBe("failure");
     expect(blocked.blockers.some((b) => b.code === "self_authored_linked_issue")).toBe(true);
+
+    // Repo full names are case-insensitive on GitHub — mixed-case snapshot must still resolve the author.
+    const mixedCaseRepo = verdict({
+      gate: { selfAuthoredLinkedIssue: "block" },
+      input: { repoFullName: "acme/widgets" },
+      issues: [{ ...openIssue(7, "Uploads should retry on 5xx", "miner1"), repoFullName: "Acme/Widgets" }],
+    });
+    expect(mixedCaseRepo.conclusion).toBe("failure");
+    expect(mixedCaseRepo.blockers.some((b) => b.code === "self_authored_linked_issue")).toBe(true);
 
     // Authored by someone else → no self-authored finding.
     const otherAuthor = verdict({ gate: { selfAuthoredLinkedIssue: "block" }, issues: [openIssue(7, "Uploads should retry on 5xx", "reporter")] });
