@@ -51,6 +51,26 @@ test("scanBlameLink: resolves the originating PR for a modified line", async () 
   assert.match(brief, /#42/);
 });
 
+test("scanBlameLink: reports the OLD-file line on a shifted hunk, and renders it as an old line", async () => {
+  const findings = await scanBlameLink(
+    // hunk shifted: old side starts at 20, new side at 25 — the blamed coordinate is the OLD line, not the new one
+    req([{ path: "src/app.ts", status: "modified", patch: "@@ -20,3 +25,3 @@\n keep\n-old\n+new\n" }], { baseSha: "b" }),
+    routedFetch({ commitSha: "abcdef1234567890", prNumber: 5 }),
+  );
+  assert.equal(findings[0].line, 21); // old 20 (header) + 1 context; NOT the new-side 26
+  assert.match(renderBrief({ blameLink: findings }).promptSection, /old line 21/);
+});
+
+test("scanBlameLink: a removed file is blamed via its path even without a patch", async () => {
+  const findings = await scanBlameLink(
+    req([{ path: "src/gone.ts", status: "removed" }], { baseSha: "b" }),
+    routedFetch({ commitSha: "abcdef1234567890", prNumber: 8 }),
+  );
+  assert.deepEqual(findings, [
+    { file: "src/gone.ts", line: 1, introducedByShaPrefix: "abcdef123456", introducedByPr: 8 },
+  ]);
+});
+
 test("scanBlameLink: a commit with no associated PR still surfaces the SHA prefix", async () => {
   const findings = await scanBlameLink(
     req([{ path: "src/app.ts", status: "modified", patch: modifyPatch(1) }]),

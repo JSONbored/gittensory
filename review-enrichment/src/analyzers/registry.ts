@@ -470,7 +470,7 @@ export const ANALYZER_DESCRIPTORS = [
               ? `commit ${helpers.safeCodeSpan(item.introducedByShaPrefix)}`
               : "an unknown prior change";
         lines.push(
-          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} was most recently introduced by ${origin}`,
+          `- ${helpers.safeCodeSpan(item.file)} (old line ${item.line}) was most recently introduced by ${origin}`,
         );
       }
       return lines;

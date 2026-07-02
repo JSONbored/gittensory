@@ -75,6 +75,7 @@ async function fetchGithubJson<T>(
   fetchFn: typeof fetch,
   signal: AbortSignal | undefined,
   options: Pick<ScanOptions, "analysis" | "diagnostics">,
+  subcall: string,
 ): Promise<T | null> {
   const fetchOptions = {
     endpointCategory: "github-commits",
@@ -83,7 +84,7 @@ async function fetchGithubJson<T>(
     fetchImpl: fetchFn,
     diagnostics: options.diagnostics,
     phase: "blame-link",
-    subcall: "github-commits",
+    subcall,
     maxBytes: 256 * 1024,
     maxCallsPerCategory: MAX_LOOKUPS,
   };
@@ -109,7 +110,7 @@ export async function fetchLatestCommitSha(
   const url =
     `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits` +
     `?path=${encodeURIComponent(path)}&per_page=1${shaQuery}`;
-  const commits = await fetchGithubJson<CommitListItem[]>(url, headers, fetchFn, signal, options);
+  const commits = await fetchGithubJson<CommitListItem[]>(url, headers, fetchFn, signal, options, "github-commits");
   const sha = Array.isArray(commits) ? commits[0]?.sha : undefined;
   return typeof sha === "string" && sha ? sha : null;
 }
@@ -125,7 +126,7 @@ export async function fetchPrForCommit(
   options: Pick<ScanOptions, "analysis" | "diagnostics">,
 ): Promise<number | null> {
   const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}/pulls`;
-  const pulls = await fetchGithubJson<AssociatedPr[]>(url, headers, fetchFn, signal, options);
+  const pulls = await fetchGithubJson<AssociatedPr[]>(url, headers, fetchFn, signal, options, "github-commit-pulls");
   const number = Array.isArray(pulls) ? pulls[0]?.number : undefined;
   return typeof number === "number" ? number : null;
 }
@@ -150,9 +151,12 @@ export async function scanBlameLink(
   // additions (a patch with no deletion line has no prior author to attribute).
   const candidates: Array<{ path: string; line: number }> = [];
   for (const file of files) {
-    if (file.status === "added" || SKIP_RE.test(file.path) || !file.patch) continue;
-    const line = firstTouchedOldLine(file.patch);
-    if (line === null) continue;
+    if (file.status === "added" || SKIP_RE.test(file.path)) continue;
+    let line = file.patch ? firstTouchedOldLine(file.patch) : null;
+    // A removed file is entirely a deletion: its path alone drives the history lookup even when the diff carries no
+    // usable patch (binary/truncated). Anchor to line 1 as the representative point.
+    if (line === null && file.status === "removed") line = 1;
+    if (line === null) continue; // a modified file with only additions / no usable patch → nothing to blame
     candidates.push({ path: file.path, line });
     if (candidates.length >= MAX_FILES_PROBED) break;
   }
