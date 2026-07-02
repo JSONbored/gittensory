@@ -62,6 +62,9 @@ export type PlannedAgentAction = {
   // (silently holding a close whose comment already promised closure would be incoherent). Absent on non-close
   // actions; treated as a heuristic close only when explicitly tagged "heuristic".
   closeKind?: "linked-issue-hard-rule" | "blacklist" | "heuristic";
+  // For a CI-driven heuristic close, the CI state that must still hold at actuation time. Other heuristic
+  // closes (gate verdict, duplicate/slop, conflict) do not depend on red CI and must not be blocked by green CI.
+  closeRequiresCiState?: "failed";
   expectedHeadSha?: string;
   // For an `approve` action: retract the bot's own prior approval instead of posting a new one — a later commit
   // no longer qualifies for approval, but the PR isn't merging or closing this pass, so the stale APPROVE
@@ -559,6 +562,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       // Pin like merge/approve (#2452): lets the accept-time supersede check detect a force-push after staging;
       // the executor's own step-6 live-CI re-check (#2128) separately covers the CI-driven reason above.
       ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),
+      ...(ciFailed ? { closeRequiresCiState: "failed" as const } : {}),
     });
   }
   // else: guarded → manual (needs-human/changes label above); not-good OWNER/automation → held

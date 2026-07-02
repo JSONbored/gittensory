@@ -886,7 +886,7 @@ describe("agent approval queue (#779)", () => {
     expect(actionParams({ actionClass: "close", requiresApproval: false, reason: "x", closeComment: "C" })).toEqual({ closeComment: "C" });
     // closeKind must round-trip through staging — without it the close-precision breaker could never match a
     // staged close as heuristic on accept (#2127).
-    expect(actionParams({ actionClass: "close", requiresApproval: false, reason: "x", closeComment: "C", closeKind: "heuristic" })).toEqual({ closeComment: "C", closeKind: "heuristic" });
+    expect(actionParams({ actionClass: "close", requiresApproval: false, reason: "x", closeComment: "C", closeKind: "heuristic", closeRequiresCiState: "failed" })).toEqual({ closeComment: "C", closeKind: "heuristic", closeRequiresCiState: "failed" });
   });
 
   it("lists all pending actions unfiltered and stores a null reason when omitted", async () => {

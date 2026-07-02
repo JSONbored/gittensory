@@ -693,10 +693,11 @@ export type AgentPendingActionParams = {
   closeComment?: string;
   // Which kind of close this is (see PlannedAgentAction.closeKind), persisted so it round-trips through staging:
   // the close-precision circuit-breaker still scopes itself correctly when a staged close is later accepted
-  // (#2127), and the actuation-time live-CI re-check (#2364) — which only applies to a heuristic close — still
-  // fires correctly once the row is replayed through pendingActionToPlanned, rather than silently skipping for
-  // a lost discriminator.
+  // (#2127).
   closeKind?: "linked-issue-hard-rule" | "blacklist" | "heuristic";
+  // For a CI-driven heuristic close, persist the CI state that must still hold when the staged action replays
+  // (#2364). This is separate from closeKind because heuristic closes also cover non-CI adverse signals.
+  closeRequiresCiState?: "failed";
   expectedHeadSha?: string;
   // For an `approve` action: retract the bot's own stale approval instead of posting a new one (see
   // PlannedAgentAction.dismissStaleApproval). Must round-trip through staging like every other action-specific

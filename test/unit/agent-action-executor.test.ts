@@ -197,7 +197,7 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
 
   it("LIVE heuristic close is denied when live CI has since turned green (#2128)", async () => {
     const env = createTestEnv({});
-    const heuristicClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "CI failed", closeComment: "closing", closeKind: "heuristic" };
+    const heuristicClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "CI failed", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "failed" };
     vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "passed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [heuristicClose]);
     expect(outcomes[0]?.outcome).toBe("denied");
@@ -207,7 +207,7 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
 
   it("LIVE heuristic close proceeds when live CI is still failing (#2128)", async () => {
     const env = createTestEnv({});
-    const heuristicClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "CI failed", closeComment: "closing", closeKind: "heuristic" };
+    const heuristicClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "CI failed", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "failed" };
     vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "failed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [heuristicClose]);
     expect(outcomes[0]?.outcome).toBe("completed");
@@ -216,18 +216,28 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
 
   it("REGRESSION (#2364): a queued heuristic close still re-checks live CI after the approval-queue replay round trip", async () => {
     const env = createTestEnv({});
-    const heuristicClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "CI failed", closeComment: "closing", closeKind: "heuristic" };
+    const heuristicClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "CI failed", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "failed" };
     // Simulate the persist/replay path: stageForApproval calls actionParams() to persist the row, and accept
-    // rebuilds it via pendingActionToPlanned(). Without persisting closeKind, the rebuilt action would lose the
-    // discriminator the live-CI re-check keys on, silently skipping it for every accepted queued heuristic close.
+    // rebuilds it via pendingActionToPlanned(). Persist both the broad close kind and the narrower CI
+    // dependency so queued red-CI closes still get the live-CI re-check without applying it to every heuristic close.
     const persisted = actionParams(heuristicClose);
     const replayed = pendingActionToPlanned({ actionClass: "close", params: persisted, reason: heuristicClose.reason });
     expect(replayed.closeKind).toBe("heuristic");
+    expect(replayed.closeRequiresCiState).toBe("failed");
     vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "passed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [replayed]);
     expect(outcomes[0]?.outcome).toBe("denied");
     expect(outcomes[0]?.detail).toContain("CI state changed since planning (now: passed)");
     expect(closePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("LIVE non-CI heuristic close proceeds when live CI is passing because the close reason is independent of CI", async () => {
+    const env = createTestEnv({});
+    const gateClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "policy gate blocker", closeComment: "closing", closeKind: "heuristic" };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [gateClose]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(closePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7);
+    expect(fetchLiveCiAggregate).not.toHaveBeenCalled();
   });
 
   it("LIVE non-heuristic close (linked-issue hard-rule) skips the live CI re-check entirely (#2128)", async () => {

@@ -357,6 +357,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
       const cls = classes(plan);
       expect(cls).not.toContain("merge");
       expect(cls).toContain("close");
+      expect(plan.find((a) => a.actionClass === "close")?.closeRequiresCiState).toBeUndefined();
       expect(plan.find((a) => a.actionClass === "label")?.label).toBe(AGENT_LABEL_CHANGES);
     });
 
@@ -485,6 +486,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
       expect(close).toBeTruthy();
       expect(close?.reason).toContain("CI is failing");
       expect(close?.reason).toContain("codecov/patch");
+      expect(close?.closeRequiresCiState).toBe("failed");
     });
 
     it("NEVER closes the owner's red-CI PR — held via the changes-requested LABEL only (no blocking request_changes), left open", () => {
