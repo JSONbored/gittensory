@@ -1985,7 +1985,9 @@ async function runAgentMaintenancePlanAndExecute(
   // Fires for a CONTRIBUTOR only — same standing owner/admin/automation-bot exemption as every other
   // anti-abuse mechanism above. The label is applied directly (fire-and-forget, matching mode gating) rather
   // than threaded through the planner: this is advisory/visibility only, independent of the merit/CI/AI
-  // disposition the planner computes below.
+  // disposition the planner computes below. Gate finding: a direct label mutation still needs the SAME
+  // label-autonomy opt-in every other label write goes through (resolveAutonomy(..., "label") === "auto") —
+  // a repo that has not opted into automatic label actions must not have this throttle silently write labels.
   let isNewAccount = false;
   const accountAgeThresholdDays = settings.accountAgeThresholdDays;
   if (typeof accountAgeThresholdDays === "number" && pr.authorLogin && !authorIsOwner && !authorIsAdmin && !authorIsAutomationBot) {
@@ -1994,7 +1996,7 @@ async function runAgentMaintenancePlanAndExecute(
       const ageDays = (Date.now() - Date.parse(createdAt)) / (24 * 60 * 60 * 1000);
       isNewAccount = ageDays < accountAgeThresholdDays;
     }
-    if (isNewAccount) {
+    if (isNewAccount && resolveAutonomy(settings.autonomy, "label") === "auto") {
       const newAccountMode = resolveAgentActionMode({
         globalPaused: isGlobalAgentPause(env) || (await isGlobalAgentFrozen(env)),
         agentPaused: settings.agentPaused,

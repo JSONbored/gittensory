@@ -6755,6 +6755,125 @@ describe("queue processors", () => {
     expect(seen.labels).not.toContain("new-account");
   });
 
+  it("account-age throttle (#2561): disabled (no threshold configured, the default) never fetches the GitHub user or labels", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      gateCheckMode: "enabled",
+      autonomy: { close: "auto", label: "auto" },
+      // accountAgeThresholdDays intentionally omitted — off by default.
+    });
+    const seen = { labels: [] as string[], accountAgeUsersFetched: false };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      // Distinct from the UNRELATED, always-on public-contributor-profile lookup (src/github/public.ts), which
+      // hits this same bare /users/{login} URL but with NO authorization header (GITHUB_PUBLIC_TOKEN unset in
+      // this test) — only getGithubUserCreatedAt's account-age-specific call sends a Bearer installation token.
+      if (url.includes("/users/") && (init?.headers as Record<string, string> | undefined)?.authorization) {
+        seen.accountAgeUsersFetched = true;
+        return Response.json({ login: "newbie", created_at: new Date().toISOString() });
+      }
+      if (url.includes("/users/")) return Response.json({ login: "newbie" });
+      if (url.includes("/pulls/67/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
+      if (url.includes("/pulls/67/reviews")) return Response.json([]);
+      if (url.includes("/pulls/67/commits")) return Response.json([]);
+      if (url.endsWith("/pulls/67")) return Response.json({ number: 67, state: "open", user: { login: "newbie" }, head: { sha: "s67" }, mergeable_state: "clean" });
+      if (url.includes("/commits/s67/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/s67/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/67/labels") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/67/labels") && method === "POST") { seen.labels.push(...((JSON.parse(String(init?.body ?? "{}")).labels ?? []) as string[])); return Response.json([]); }
+      if (url.includes("/issues/67/comments")) return Response.json([]);
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "account-age-disabled",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 67, title: "Newbie's PR", state: "open", user: { login: "newbie" }, head: { sha: "s67" }, labels: [], body: "x", mergeable_state: "clean" },
+      },
+    });
+
+    expect(seen.accountAgeUsersFetched).toBe(false);
+    expect(seen.labels).not.toContain("new-account");
+  });
+
+  it("account-age throttle (#2561): a configured newAccountLabel is used instead of the default", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      gateCheckMode: "enabled",
+      autonomy: { close: "auto", label: "auto" },
+      accountAgeThresholdDays: 30,
+      newAccountLabel: "custom-new-account-label",
+    });
+    const seen = { labels: [] as string[], closed: false };
+    vi.stubGlobal("fetch", stubAccountAgeFetch(68, new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), seen));
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "account-age-custom-label",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 68, title: "Newbie's PR", state: "open", user: { login: "newbie" }, head: { sha: "s68" }, labels: [], body: "x", mergeable_state: "clean" },
+      },
+    });
+
+    expect(seen.labels).toContain("custom-new-account-label");
+    expect(seen.labels).not.toContain("new-account");
+  });
+
+  it("account-age throttle (#2561): a below-threshold account is NOT labeled when the repo has not opted into label autonomy (regression, gate finding)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      gateCheckMode: "enabled",
+      // autonomy intentionally omitted — deny-by-default ("observe" for every action class, including "label").
+      accountAgeThresholdDays: 30,
+    });
+    const seen = { labels: [] as string[], closed: false };
+    vi.stubGlobal("fetch", stubAccountAgeFetch(69, new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), seen));
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "account-age-label-not-autonomous",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 69, title: "Newbie's PR", state: "open", user: { login: "newbie" }, head: { sha: "s69" }, labels: [], body: "x", mergeable_state: "clean" },
+      },
+    });
+
+    expect(seen.labels).not.toContain("new-account");
+  });
+
   it("contributor open-PR cap (#2270): out-of-order webhook delivery wakes and self-corrects the missed sibling (regression, gate finding on #2479)", async () => {
     // PR56 (the NEWER PR) is delivered BEFORE PR55 exists in the DB — a real possibility under concurrent/
     // retried webhook delivery. At that moment PR56 only sees {54, 56} (2 total, AT the cap of 2, not over),

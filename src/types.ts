@@ -666,12 +666,13 @@ export type RepositorySettings = {
    *  force -- a `mergeable_state: clean` read is trusted exactly as it is today. Layered like every other
    *  settings field (`.gittensory.yml` `gate.requireFreshRebaseWindow` > DB > `null`). */
   requireFreshRebaseWindowMinutes?: number | null | undefined;
-  /** Account-age throttle (#2561, anti-abuse): a PR/issue from an account younger than this many days gets
-   *  the {@link newAccountLabel} and/or a tighter effective contributor cap -- friction/visibility, NEVER an
+  /** Account-age throttle (#2561, anti-abuse): a PR from an account younger than this many days gets the
+   *  {@link newAccountLabel} and a tighter effective contributor cap -- friction/visibility, NEVER an
    *  automatic close on account age alone. `null`/undefined (default) = off, zero behavior change. Never
-   *  fires for the repo owner, admin logins, or automation bots. */
+   *  fires for the repo owner, admin logins, or automation bots. PR-path only for now -- the issue-path
+   *  enforcement `maybeCloseIssueOverContributorCap` already goes through does not yet read this setting. */
   accountAgeThresholdDays?: number | null | undefined;
-  /** The label applied to a below-threshold-age account's PR/issue (#2561), mirroring {@link blacklistLabel}'s
+  /** The label applied to a below-threshold-age account's PR (#2561), mirroring {@link blacklistLabel}'s
    *  configurable-with-fallback shape. Always populated by the DB layer (default `"new-account"`); optional so
    *  existing settings fixtures/callers need not be touched. */
   newAccountLabel?: string | undefined;

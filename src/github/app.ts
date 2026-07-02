@@ -426,8 +426,8 @@ export async function getGithubUserCreatedAt(
       },
     );
     if (!response.ok) return null;
-    const payload = (await response.json()) as { created_at?: string };
-    return payload.created_at ?? null;
+    const payload = (await response.json()) as { created_at?: unknown };
+    return typeof payload.created_at === "string" ? payload.created_at : null;
   } catch {
     return null;
   }
