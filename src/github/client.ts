@@ -60,7 +60,9 @@ type EnvLookup = Record<string, string | undefined>;
 export type GitHubTimeoutFetchInit = RequestInit & {
   /** Opt in to using this response's REST bucket headers for self-host queue admission control. */
   githubRateLimitAdmission?: boolean;
-  /** Stable actor key for admission control. Installation-token reads should use the installation id. */
+  /** Stable actor key for admission control AND (independent of githubRateLimitAdmission) the response-cache key —
+   *  present whenever it, so a cacheable GET's cache key stays stable across token rotation instead of being
+   *  derived from the raw token. Installation-token reads should use the installation id. */
   githubRateLimitAdmissionKey?: string;
   /** Consulted ONLY when this GET is about to make a NETWORK read (a cache hit is always served first, for free).
    *  Return true to skip the network read — timeoutFetch then resolves to a synthetic 503 so a best-effort caller
@@ -236,11 +238,19 @@ async function sha256Short(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 16);
 }
 
-async function responseCacheKey(url: string, headers: Headers): Promise<string> {
-  const authHash = await sha256Short(headers.get("authorization") || "");
+// Prefer the SAME stable per-installation/public-token identity already used for rate-limit admission scoping
+// (githubRateLimitAdmissionKeyForToken) over hashing the raw Authorization header. An installation token rotates
+// roughly hourly by design (plus on auth failure, plus on every redeploy if not persisted); hashing it means EVERY
+// rotation invalidates the ENTIRE cached-response namespace for that installation across all cache classes at once
+// — not just entries that are actually stale — even though every entry is still within its own TTL. Keying by the
+// stable identity instead means a token rotation no longer touches the cache at all. A caller that doesn't thread
+// an admission key falls back to the previous token-hash behavior: still correctly isolated, just without the
+// cross-rotation benefit (mirrors the App-JWT-reuse fix for the same class of problem, #1940). (#2538)
+async function responseCacheKey(url: string, headers: Headers, admissionKey: GitHubRateLimitAdmissionKey | null): Promise<string> {
+  const authIdentity = admissionKey ? `key:${admissionKey}` : `auth:${await sha256Short(headers.get("authorization") || "")}`;
   const accept = encodeURIComponent(headers.get("accept") || "");
   const apiVersion = encodeURIComponent(headers.get("x-github-api-version") || "");
-  return `v2:${authHash}:${accept}:${apiVersion}:${url}`;
+  return `v3:${authIdentity}:${accept}:${apiVersion}:${url}`;
 }
 
 type VolatileSingleFlightScope = { requestKey: string; authorization: string };
@@ -283,6 +293,14 @@ function requestSignal(input: RequestInfo | URL, init: GitHubTimeoutFetchInit | 
 function rateLimitAdmissionKey(init: GitHubTimeoutFetchInit | undefined): GitHubRateLimitAdmissionKey | null {
   if (init?.githubRateLimitAdmission !== true) return null;
   const key = init.githubRateLimitAdmissionKey?.trim();
+  return key ? key : null;
+}
+
+// Deliberately NOT gated on githubRateLimitAdmission (unlike rateLimitAdmissionKey above): a caller may know its
+// stable identity and want it used for cache keying without opting into local rate-limit observation for this
+// particular call. A blank/whitespace-only key is treated as absent, same as rateLimitAdmissionKey. (#2538)
+function cacheKeyAdmissionIdentity(init: GitHubTimeoutFetchInit | undefined): GitHubRateLimitAdmissionKey | null {
+  const key = init?.githubRateLimitAdmissionKey?.trim();
   return key ? key : null;
 }
 
@@ -493,7 +511,7 @@ export async function timeoutFetch(input: RequestInfo | URL, init?: GitHubTimeou
     return fetchWithGitHubRetry(input, init);
   }
 
-  const cacheKey = await responseCacheKey(url, headers);
+  const cacheKey = await responseCacheKey(url, headers, cacheKeyAdmissionIdentity(init));
   let hit: CachedGitHubResponse | null = null;
   try {
     hit = await responseCache!.get(cacheKey);

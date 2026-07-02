@@ -81,6 +81,23 @@ describe("resolveUpstreamCommitSha — one shared, cached, budget-gated upstream
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("keys its cache entry by the stable public-token admission identity, surviving a GITHUB_PUBLIC_TOKEN change (#2538)", async () => {
+    rateLimitMock.shouldWaitForGitHubRateLimit.mockResolvedValue(undefined);
+    const store = new Map<string, CachedGitHubResponse>();
+    setGitHubResponseCache({ get: async (k) => store.get(k) ?? null, set: async (k, v) => void store.set(k, v) });
+    let fetches = 0;
+    vi.stubGlobal("fetch", async () => {
+      fetches += 1;
+      return Response.json({ sha: "stable-across-rotation" });
+    });
+    expect(await resolveUpstreamCommitSha(env, config)).toBe("stable-across-rotation");
+    // Simulate an operator rotating the shared public token (e.g. a redeploy with a new value) -- the entry the
+    // first call just set is still within its TTL and must still be served, not re-fetched.
+    const rotatedEnv = { GITHUB_PUBLIC_TOKEN: "pub-tok-rotated" } as unknown as Env;
+    expect(await resolveUpstreamCommitSha(rotatedEnv, config)).toBe("stable-across-rotation");
+    expect(fetches).toBe(1);
+  });
+
   it("fails open (null) on a non-OK status, a missing/empty sha, or a thrown fetch", async () => {
     rateLimitMock.shouldWaitForGitHubRateLimit.mockResolvedValue(undefined);
     vi.stubGlobal("fetch", async () => new Response("nope", { status: 404 }));

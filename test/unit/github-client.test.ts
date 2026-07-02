@@ -443,6 +443,108 @@ describe("timeoutFetch", () => {
     expect([...store.keys()].filter((key) => key.includes(url))).toHaveLength(2);
   });
 
+  it("keys a cacheable GET by the stable rate-limit admission identity, surviving a token rotation (#2538)", async () => {
+    const store = installMemoryResponseCache();
+    let getFetches = 0;
+    vi.stubGlobal("fetch", async () => {
+      getFetches += 1;
+      return Response.json({ fetches: getFetches });
+    });
+
+    const url = "https://api.github.com/repos/o/r";
+    const admissionKey = githubRateLimitAdmissionKeyForInstallation(42);
+    const beforeRotation = await timeoutFetch(url, {
+      headers: { authorization: "Bearer old-token", accept: "application/vnd.github+json" },
+      githubRateLimitAdmissionKey: admissionKey,
+    });
+    // A minted replacement installation token for the SAME installation -- rotation must not evict the entry
+    // beforeRotation just set, since it's still within its own TTL.
+    const afterRotation = await timeoutFetch(url, {
+      headers: { authorization: "Bearer new-token-after-rotation", accept: "application/vnd.github+json" },
+      githubRateLimitAdmissionKey: admissionKey,
+    });
+
+    expect(await beforeRotation.json()).toEqual({ fetches: 1 });
+    expect(await afterRotation.json()).toEqual({ fetches: 1 });
+    expect(afterRotation.headers.get(GITHUB_RESPONSE_CACHE_REPLAY_HEADER)).toBe("hit");
+    expect(getFetches).toBe(1);
+    expect([...store.keys()].filter((key) => key.includes(url))).toHaveLength(1);
+    expect([...store.keys()].some((key) => key.includes("old-token") || key.includes("new-token-after-rotation"))).toBe(false);
+  });
+
+  it("keeps two installations' admission-keyed cache entries isolated even if they briefly share raw token bytes (#2538)", async () => {
+    const store = installMemoryResponseCache();
+    let getFetches = 0;
+    vi.stubGlobal("fetch", async () => {
+      getFetches += 1;
+      return Response.json({ fetches: getFetches });
+    });
+
+    const url = "https://api.github.com/repos/o/r";
+    const first = await timeoutFetch(url, {
+      headers: { authorization: "Bearer shared-token", accept: "application/vnd.github+json" },
+      githubRateLimitAdmissionKey: githubRateLimitAdmissionKeyForInstallation(1),
+    });
+    const second = await timeoutFetch(url, {
+      headers: { authorization: "Bearer shared-token", accept: "application/vnd.github+json" },
+      githubRateLimitAdmissionKey: githubRateLimitAdmissionKeyForInstallation(2),
+    });
+
+    expect(await first.json()).toEqual({ fetches: 1 });
+    expect(await second.json()).toEqual({ fetches: 2 });
+    expect(getFetches).toBe(2);
+    expect([...store.keys()].filter((key) => key.includes(url))).toHaveLength(2);
+  });
+
+  it("scopes the public-token admission key distinctly from an installation-scoped key for the same URL (#2538)", async () => {
+    installMemoryResponseCache();
+    let getFetches = 0;
+    vi.stubGlobal("fetch", async () => {
+      getFetches += 1;
+      return Response.json({ fetches: getFetches });
+    });
+
+    // The bare-commit "commit" cache class -- the exact shape resolveUpstreamCommitSha reads with the shared
+    // public token, distinct from an installation-token read of the same URL.
+    const url = "https://api.github.com/repos/o/r/commits/main";
+    const viaInstallation = await timeoutFetch(url, {
+      headers: { authorization: "Bearer tok", accept: "application/vnd.github+json" },
+      githubRateLimitAdmissionKey: githubRateLimitAdmissionKeyForInstallation(7),
+    });
+    const viaPublicToken = await timeoutFetch(url, {
+      headers: { authorization: "Bearer tok", accept: "application/vnd.github+json" },
+      githubRateLimitAdmissionKey: githubRateLimitAdmissionKeyForPublicToken(),
+    });
+
+    expect(await viaInstallation.json()).toEqual({ fetches: 1 });
+    expect(await viaPublicToken.json()).toEqual({ fetches: 2 });
+    expect(getFetches).toBe(2);
+  });
+
+  it("treats a blank admission key as absent, keeping the auth-hash fallback for keying (#2538)", async () => {
+    installMemoryResponseCache();
+    let getFetches = 0;
+    vi.stubGlobal("fetch", async () => {
+      getFetches += 1;
+      return Response.json({ fetches: getFetches });
+    });
+
+    const url = "https://api.github.com/repos/o/r";
+    const first = await timeoutFetch(url, {
+      headers: { authorization: "Bearer token-a", accept: "application/vnd.github+json" },
+      githubRateLimitAdmissionKey: "   ",
+    });
+    const second = await timeoutFetch(url, {
+      headers: { authorization: "Bearer token-b", accept: "application/vnd.github+json" },
+      githubRateLimitAdmissionKey: "   ",
+    });
+
+    expect(await first.json()).toEqual({ fetches: 1 });
+    // A different token with only a blank admission key falls back to auth-hash keying -- still a MISS.
+    expect(await second.json()).toEqual({ fetches: 2 });
+    expect(getFetches).toBe(2);
+  });
+
   it("replays pagination and validator headers while dropping rate-limit headers", async () => {
     installMemoryResponseCache();
     let getFetches = 0;
