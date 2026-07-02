@@ -24,7 +24,7 @@ function repoWith(labelMultipliers: Record<string, number> | undefined, extras?:
 }
 
 function label(name: string, observedCount = 0): RepoLabelRecord {
-  return { repoFullName: "octo/demo", name, observedCount };
+  return { repoFullName: "octo/demo", name, observedCount, isConfigured: false, payload: {} };
 }
 
 function issue(labels: string[]): IssueRecord {
@@ -148,7 +148,9 @@ describe("buildLabelAudit branch coverage", () => {
   });
 
   it("emits trusted_labels_missing finding when trustedLabelPipeline is set and labels are missing", () => {
-    const audit = buildLabelAudit(repoWith({ bug: 1.2 }, { registryConfig: { repo: "octo/demo", emissionShare: 0.02, issueDiscoveryShare: 0.25, labelMultipliers: { bug: 1.2 }, maintainerCut: 0, raw: {}, trustedLabelPipeline: true } } as RepositoryRecord), noLabels, noIssues, noPRs, "octo/demo");
+    const repo = repoWith({ bug: 1.2 });
+    repo.registryConfig!.trustedLabelPipeline = true;
+    const audit = buildLabelAudit(repo, noLabels, noIssues, noPRs, "octo/demo");
     expect(audit.findings.some((f) => f.code === "trusted_labels_missing")).toBe(true);
     expect(audit.trustedPipelineReady).toBe(false);
   });
@@ -174,13 +176,9 @@ describe("buildLabelAudit branch coverage", () => {
   });
 
   it("marks trustedPipelineReady true when pipeline is set, no missing labels, and no suspicious labels", () => {
-    const audit = buildLabelAudit(
-      { ...repoWith({ bug: 1.2 }), registryConfig: { repo: "octo/demo", emissionShare: 0.02, issueDiscoveryShare: 0.25, labelMultipliers: { bug: 1.2 }, maintainerCut: 0, raw: {}, trustedLabelPipeline: true } } as RepositoryRecord,
-      [label("bug")],
-      [issue(["bug"])],
-      noPRs,
-      "octo/demo",
-    );
+    const repo = repoWith({ bug: 1.2 });
+    repo.registryConfig!.trustedLabelPipeline = true;
+    const audit = buildLabelAudit(repo, [label("bug")], [issue(["bug"])], noPRs, "octo/demo");
     expect(audit.trustedPipelineReady).toBe(true);
     expect(audit.missingConfiguredLabels).toEqual([]);
     expect(audit.suspiciousConfiguredLabels).toEqual([]);
