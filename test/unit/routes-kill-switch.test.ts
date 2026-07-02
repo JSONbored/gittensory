@@ -57,6 +57,20 @@ describe("kill-switch operator route (#2359)", () => {
     expect(res.status).toBe(401);
   });
 
+  it("rejects the shared MCP token without changing the global kill-switch", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    const headers = { authorization: `Bearer ${env.GITTENSORY_MCP_TOKEN}`, "content-type": "application/json" };
+
+    const read = await app.request("/v1/app/kill-switch", { headers }, env);
+    expect(read.status).toBe(403);
+
+    const write = await app.request("/v1/app/kill-switch", { method: "POST", headers, body: JSON.stringify({ frozen: true }) }, env);
+    expect(write.status).toBe(403);
+    await expect(getGlobalAgentFrozenState(env)).resolves.toMatchObject({ frozen: false, updatedBy: null });
+    expect(setGlobalAgentFrozen).not.toHaveBeenCalled();
+  });
+
   it("GET surfaces a clear 503 (never a falsely reassuring unfrozen) when the singleton row is missing", async () => {
     const app = createApp();
     const env = createTestEnv();

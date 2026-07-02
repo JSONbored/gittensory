@@ -4948,7 +4948,11 @@ async function getRoleSummaryForIdentity(env: Env, identity: AuthIdentity) {
 async function requireAppRole(c: ProtectedRouteContext, allowedRoles: ControlPanelRoleName[]): Promise<Response | null> {
   const identity = await authenticateRequestIdentity(c);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
-  if (identity.kind !== "session") return null;
+  if (identity.kind !== "session") {
+    // GITTENSORY_MCP_TOKEN is a shared end-user credential; it must not satisfy app-role gates implicitly.
+    if (identity.actor === "mcp") return c.json({ error: "insufficient_role" }, 403);
+    return null;
+  }
   const summary = await loadControlPanelRoleSummary(c.env, identity.actor);
   return summary.roles.some((role) => allowedRoles.includes(role)) ? null : c.json({ error: "insufficient_role" }, 403);
 }
