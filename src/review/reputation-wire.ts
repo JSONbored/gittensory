@@ -32,11 +32,8 @@ export function isReputationEnabled(env: { GITTENSORY_REVIEW_REPUTATION?: string
 // burstFloor: a submitter who has flooded the project with at least this many submissions while landing
 //   almost none of them is treated as a burst abuser (the #submitter-burst anti-abuse pattern).
 // burstMaxMerged: …and has merged fewer than this many (so a high-volume GOOD contributor is never caught).
-// closeRateFloor: an established submitter (>= burstFloor submissions) whose close-rate is at/above this is
-//   low-reputation regardless of the windowed signal (the all-time aggregate backstop).
 const REPUTATION_BURST_SUBMISSION_FLOOR = 8;
 const REPUTATION_BURST_MAX_MERGED = 1;
-const REPUTATION_CLOSE_RATE_FLOOR = 0.85;
 
 /**
  * Decide whether this submitter's reputation should DOWNGRADE the review to deterministic-only (skip the AI
@@ -44,20 +41,15 @@ const REPUTATION_CLOSE_RATE_FLOOR = 0.85;
  *   • `signal === "low"` — the windowed, quality-weighted reputation signal (genuine recent abuse / serial
  *     quality-failure). Live once the review_targets source lands; "neutral" until then (fail-safe).
  *   • a BURST pattern — many recent submissions, almost none merged (the #submitter-burst anti-abuse signal).
- *   • a high all-time close-rate on an established submitter — the aggregate backstop.
- * A submitter with little history, or a healthy merge record, is NEVER downgraded (returns false).
+ * A submitter with little history, an established merge record, or a non-low windowed signal outside the
+ * burst shape is NEVER downgraded (returns false).
  */
 export function shouldDowngradeToDeterministic(stats: SubmitterStats): boolean {
   if (stats.signal === "low") return true;
   const burst = stats.submissions >= REPUTATION_BURST_SUBMISSION_FLOOR && stats.merged < REPUTATION_BURST_MAX_MERGED;
   if (burst) return true;
-  // The all-time close-rate backstop is INDEPENDENT of the burst pattern (see closeRateFloor above): an
-  // established submitter whose close-rate is at/above the floor is low-reputation regardless of a few merges.
-  // The prior extra `&& merged < REPUTATION_BURST_MAX_MERGED` made this a strict subset of the burst check
-  // above (dead code), so an established submitter with a high close-rate but ≥1 merge was never downgraded.
-  // `closeRate = closed/(merged+closed)`, so `closeRate >= floor` already means the merge record is not
-  // healthy — consistent with "a healthy merge record is NEVER downgraded".
-  if (stats.submissions >= REPUTATION_BURST_SUBMISSION_FLOOR && stats.closeRate >= REPUTATION_CLOSE_RATE_FLOOR) return true;
+  // `submitter_stats` is operator/statistics data and can be influenced by ordinary PR closes, so the
+  // all-time close-rate aggregate must not independently skip AI review for established submitters.
   return false;
 }
 
