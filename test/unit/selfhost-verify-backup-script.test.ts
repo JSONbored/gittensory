@@ -390,6 +390,73 @@ describe("self-host verify-backup script", () => {
     expect(lines[2]).not.toMatch(/PGPASSFILE=\/./);
   });
 
+  it("strips EVERY occurrence of a repeated query-string password, not just the first", () => {
+    const root = tmpRoot();
+    writePgDump(root, "gittensory-a.dump", true);
+    const captureFile = join(root, "pg-capture.log");
+    // A malformed URL repeating `password=` isn't rejected by libpq's own parser -- stripping only the
+    // first occurrence would leave a second one sitting in argv, still a leaked credential regardless of
+    // which one libpq itself would actually authenticate with.
+    const scratch = "postgresql://u@h/scratch?password=oneSecret&sslmode=require&password=twoSecret";
+
+    const r = runVerify(
+      root,
+      [],
+      {
+        GITTENSORY_BACKUP_SOURCE_DATABASE_URL: "postgres://u:p@h/live",
+        VERIFY_RESTORE_SCRATCH: "1",
+        GITTENSORY_VERIFY_SCRATCH_DATABASE_URL: scratch,
+        PG_CAPTURE_FILE: captureFile,
+      },
+      // No identity entries: db_identity(scratch) fails before ever reaching db_identity(live) or the
+      // actual restore -- the point of this test is what reached argv along the way, not the happy path.
+      { pg_restore: PG_RESTORE, psql: fakePsql({}) },
+    );
+
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("could not connect to the scratch database");
+    const capture = execFileSync("cat", [captureFile], { encoding: "utf8" });
+    expect(capture).not.toContain("oneSecret");
+    expect(capture).not.toContain("twoSecret");
+    expect(capture).not.toContain("password=");
+    expect(capture).toContain("postgresql://u@h/scratch?sslmode=require");
+  });
+
+  it("proves the userinfo-password form through the same full scratch-restore flow as the query-string form", () => {
+    const root = tmpRoot();
+    writePgDump(root, "gittensory-a.dump", true);
+    const captureFile = join(root, "pg-capture.log");
+    // Mirrors the query-string-password test above, but with the password in userinfo instead -- both
+    // forms must be proven through the identical multi-connection flow (identity checks, the actual
+    // restore, and the sanity query), not just in isolation.
+    const live = "postgresql://gittensory@postgres/gittensory";
+    const scratch = "postgres://gittensory:SuperSecret123%21@postgres/scratch";
+
+    const r = runVerify(
+      root,
+      [],
+      {
+        GITTENSORY_BACKUP_SOURCE_DATABASE_URL: live,
+        VERIFY_RESTORE_SCRATCH: "1",
+        GITTENSORY_VERIFY_SCRATCH_DATABASE_URL: scratch,
+        PG_CAPTURE_FILE: captureFile,
+      },
+      {
+        pg_restore: PG_RESTORE,
+        psql: fakePsql(
+          { [sanitizedUrl(scratch)]: "gittensory@10.0.0.5:5432/scratch", [sanitizedUrl(live)]: "gittensory@10.0.0.5:5432/live" },
+          "9",
+        ),
+      },
+    );
+
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("scratch restore OK: 9 tables");
+    const capture = execFileSync("cat", [captureFile], { encoding: "utf8" });
+    expect(capture).not.toContain("SuperSecret123");
+    expect(capture.trim().split("\n")).toHaveLength(5);
+  });
+
   it("verifies an explicit dump path argument", () => {
     const root = tmpRoot();
     const target = writePgDump(root, "chosen.dump", true);
