@@ -79,6 +79,7 @@ import {
   fetchLinkedIssueFacts,
   fetchLiveCiAggregatePreferGraphQl,
   type LiveCiAggregate,
+  fetchLiveIssueState,
   fetchLivePullRequest,
   fetchLivePullRequestHeadSha,
   fetchLivePullRequestMergeState,
@@ -3592,9 +3593,14 @@ async function loadOpenQueueCounts(
  * it. Closes EVERY number in the over-cap set discovered by THIS delivery, not just the incoming issue, so
  * whichever delivery happens to see the complete picture corrects any sibling a prior delivery missed. Unlike
  * the PR path (which enqueues a `agent-regate-pr` wake job so each sibling gets its own live-head/CI-freshness
- * re-check before acting), issues have no such staleness risk to guard against — a plain issue has no head SHA
- * or CI to go stale, and there's no issue-side "regate" job type to reuse — so acting directly on the
- * already-fetched snapshot here is safe.
+ * re-check before acting), issues have no head SHA or CI to go stale, and there's no issue-side "regate" job
+ * type to reuse — so that PARTICULAR staleness risk does not apply here.
+ *
+ * Stale-closed-sibling guard (#2479 gate finding, second pass): a DIFFERENT staleness risk DOES apply —
+ * `listOpenIssues` reads the local DB cache, which can still say `open` for a sibling already closed on GitHub
+ * (manually, by another automation, or by a webhook this instance hasn't processed yet). An inflated count from
+ * such a stale row could wrongly put a newly opened issue over the REAL cap. Guarded by live-verifying each
+ * counted sibling below before trusting it (fail-open to the stored state on an unreadable fetch).
  */
 async function maybeCloseIssueOverContributorCap(
   env: Env,
@@ -3613,9 +3619,29 @@ async function maybeCloseIssueOverContributorCap(
 
   const otherOpenIssues = await listOpenIssues(env, repoFullName);
   const authorLoginLower = authorLogin.toLowerCase();
-  const authorOpenIssueNumbers = otherOpenIssues
+  const otherAuthorIssueNumbers = otherOpenIssues
     .filter((other) => (other.authorLogin ?? "").toLowerCase() === authorLoginLower && other.number !== issue.number)
-    .map((other) => other.number)
+    .map((other) => other.number);
+
+  // Live-verify each OTHER counted sibling before trusting it toward the cap (#2479 gate finding): the stored
+  // open-issue cache lags GitHub, so a sibling already closed elsewhere (manually, by another automation, or a
+  // webhook this instance hasn't processed yet) can still read `open` here and inflate the count enough to close
+  // a newly opened issue that is actually within the real cap. `issue` itself is trusted unverified -- it is the
+  // issue THIS webhook just delivered, so it is open by construction. Fail-open to the stored "open" state on an
+  // unreadable live fetch (mirrors reconcileLiveDuplicateSiblings above): only drop a sibling on a POSITIVE
+  // "not open" confirmation, never on a transient fetch failure.
+  const token = await createInstallationToken(env, installationId).catch(() => undefined);
+  const liveToken = token ?? env.GITHUB_PUBLIC_TOKEN;
+  const admissionKey = githubAdmissionKeyForToken(env, installationId, liveToken);
+  const staleClosed = new Set<number>();
+  await Promise.all(
+    otherAuthorIssueNumbers.map(async (number) => {
+      const liveState = await fetchLiveIssueState(env, repoFullName, number, liveToken, admissionKey).catch(() => undefined);
+      if (liveState !== undefined && liveState !== "open") staleClosed.add(number);
+    }),
+  );
+  const authorOpenIssueNumbers = otherAuthorIssueNumbers
+    .filter((number) => !staleClosed.has(number))
     .concat(issue.number)
     .sort((a, b) => a - b);
   const overCapNumbers = new Set(authorOpenIssueNumbers.slice(cap));

@@ -2590,6 +2590,23 @@ export async function fetchLivePullRequestState(
   return result?.data.state ?? undefined;
 }
 
+/** The issue's LIVE state ("open" / "closed") via REST `GET /issues/{n}`. Mirrors {@link fetchLivePullRequestState}
+ *  for issues: the stored open-issue cache lags GitHub, so a sibling closed on GitHub (or elsewhere) can still
+ *  read `open` locally. The per-contributor open-issue cap (#2479 gate finding) confirms each counted sibling's
+ *  live state before treating a newly opened issue as over cap, so a stale row never inflates the count and
+ *  wrongly closes an issue that is within the real cap. Best-effort: returns undefined on any error so the
+ *  caller fails open to the stored state (same fail-open contract as the PR-side helper). */
+export async function fetchLiveIssueState(
+  env: Env,
+  repoFullName: string,
+  issueNumber: number,
+  token: string | undefined,
+  admissionKey?: GitHubRateLimitAdmissionKey,
+): Promise<string | undefined> {
+  const result = await githubJsonWithHeaders<{ state?: string | null }>(env, repoFullName, `/issues/${issueNumber}`, token, githubRateLimitOptions(admissionKey)).catch(() => undefined);
+  return result?.data.state ?? undefined;
+}
+
 /** The PR's LIVE head commit SHA via REST `GET /pulls/{n}`. The stored `pr.headSha` lags GitHub when a commit
  *  lands between a webhook and its processing; the gate-override command (#16 / audit) re-fetches the live head
  *  so the neutral check-run targets the commit a maintainer is actually looking at, not a phantom old SHA.
