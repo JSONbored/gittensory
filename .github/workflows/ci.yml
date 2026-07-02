@@ -134,7 +134,30 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      # actions/checkout wipes node_modules (git clean -ffdx) on every run regardless of the self-hosted
+      # runner's own persistence, and npm ci always deletes+reinstalls node_modules by design -- so
+      # neither the runner nor npm ci gives node_modules any real cross-run reuse on its own. This
+      # explicit restore/save pair (via GitHub's own cache service, not the wiped local disk) fills that
+      # gap: an exact package-lock.json match skips npm ci entirely. Keyed separately per fork/trusted
+      # (see the runs-on expression above) because self-hosted's Docker image and GitHub's ubuntu-latest
+      # image are not guaranteed binary-compatible for native modules (sharp, workerd, fsevents, ...) --
+      # crossing them could load an incompatible native binary. Fork PRs get read-only cache tokens (a
+      # documented actions/cache behavior), so a "fork"-keyed entry can never actually be written; that's
+      # fine, it just means fork PRs keep doing a full npm ci exactly as before -- no regression, no risk
+      # on the highest-stakes (no-retry) population.
+      - name: Restore node_modules cache
+        id: node-modules-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            node_modules
+            apps/gittensory-ui/node_modules
+          # hashFiles('.nvmrc') matters as much as the lockfile: a Node bump with no lockfile change
+          # would otherwise still hit and silently reuse node_modules whose native addons (sharp,
+          # workerd, fsevents) were compiled against the OLD Node's ABI.
+          key: npm-${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'fork' || 'trusted' }}-${{ hashFiles('.nvmrc') }}-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (retry on transient failures)
+        if: ${{ steps.node-modules-cache.outputs.cache-hit != 'true' }}
         run: |
           for attempt in 1 2 3; do
             if npm ci --prefer-offline --no-audit --no-fund; then
@@ -145,6 +168,17 @@ jobs:
           done
           echo "::error::npm ci failed after 3 attempts"
           exit 1
+      # Placed immediately after install (not as an automatic post-job hook) so a cache is only ever
+      # saved once npm ci has actually succeeded -- a job that fails here never reaches this step, so a
+      # broken/partial node_modules can never get written to the cache for a future run to inherit.
+      - name: Save node_modules cache
+        if: ${{ steps.node-modules-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            node_modules
+            apps/gittensory-ui/node_modules
+          key: ${{ steps.node-modules-cache.outputs.cache-primary-key }}
       - name: Lint workflows
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
         run: npm run actionlint
@@ -270,9 +304,29 @@ jobs:
       - name: MCP package check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.mcp == 'true' }}
         run: npm run test:mcp-pack
+      # review-enrichment is not an npm workspace member (its own package-lock.json), so it needs its own
+      # cache entry -- same restore/save-after-success pattern and fork/trusted key split as the root
+      # install above, for the same reasons.
+      - name: Restore review-enrichment node_modules cache
+        id: rees-node-modules-cache
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.rees == 'true' }}
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: review-enrichment/node_modules
+          # Same Node-version guard as the root cache key above -- REES runs on the same pinned .nvmrc.
+          key: npm-rees-${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'fork' || 'trusted' }}-${{ hashFiles('.nvmrc') }}-${{ hashFiles('review-enrichment/package-lock.json') }}
+      - name: REES install
+        if: ${{ (github.event_name == 'push' || needs.changes.outputs.rees == 'true') && steps.rees-node-modules-cache.outputs.cache-hit != 'true' }}
+        run: npm run rees:install
+      - name: Save review-enrichment node_modules cache
+        if: ${{ (github.event_name == 'push' || needs.changes.outputs.rees == 'true') && steps.rees-node-modules-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: review-enrichment/node_modules
+          key: ${{ steps.rees-node-modules-cache.outputs.cache-primary-key }}
       - name: REES build, source-map validation, and tests
         if: ${{ github.event_name == 'push' || needs.changes.outputs.rees == 'true' }}
-        run: npm run rees:test
+        run: npm --prefix review-enrichment test
       - name: OpenAPI drift check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.uiContract == 'true' }}
         run: npm run ui:openapi:check
