@@ -461,9 +461,7 @@ export const ANALYZER_DESCRIPTORS = [
     },
     render: (findings, helpers) => {
       if (!findings.length) return [];
-      const lines = [
-        "### Recent history of changed files (last PR to touch each — file-level context, bounded scan)",
-      ];
+      const lines = ["### Recent history of changed files (last PR to touch each, file-level)"];
       for (const item of findings) {
         const toucher =
           item.lastTouchedByPr !== undefined

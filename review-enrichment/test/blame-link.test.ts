@@ -66,7 +66,31 @@ test("scanBlameLink: file-level only — it does NOT attribute the last-touch PR
   ]);
   // The finding carries no "introducedBy"/origin field for the line — attribution is file-level by construction.
   assert.equal("introducedByPr" in findings[0], false);
-  assert.match(renderBrief({ blameLink: findings }).promptSection, /file-level context/i);
+  const brief = renderBrief({ blameLink: findings }).promptSection;
+  assert.match(brief, /file-level/i);
+  assert.doesNotMatch(brief, /introduced/i); // never claims the PR introduced the line
+});
+
+test("scanBlameLink: a renamed file resolves history against its OLD path, displays the new path", async () => {
+  let probedPath;
+  const captureFetch = async (url) => {
+    if (url.includes("/pulls")) return jsonResponse([{ number: 12 }]);
+    if (url.includes("/commits?")) {
+      probedPath = new URL(url).searchParams.get("path");
+      return jsonResponse([{ sha: "abcdef1234567890" }]);
+    }
+    return jsonResponse([], 404);
+  };
+  const findings = await scanBlameLink(
+    req(
+      [{ path: "src/new-name.ts", previousPath: "src/old-name.ts", status: "renamed", patch: "@@ -3,2 +3,2 @@\n keep\n-old\n+new\n" }],
+      { baseSha: "b" },
+    ),
+    captureFetch,
+  );
+  assert.equal(probedPath, "src/old-name.ts"); // history is looked up under the OLD path (base tree)
+  assert.equal(findings[0].file, "src/new-name.ts"); // but the reviewer sees the NEW path
+  assert.equal(findings[0].lastTouchedByPr, 12);
 });
 
 test("scanBlameLink: reports the OLD-file line on a shifted hunk, and renders it as an old line", async () => {

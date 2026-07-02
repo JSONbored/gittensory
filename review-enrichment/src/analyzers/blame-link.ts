@@ -155,25 +155,28 @@ export async function scanBlameLink(
   const headers = githubHeaders(githubToken);
   // Only files that alter pre-existing lines can be blamed: skip added files, generated/binary paths, and pure
   // additions (a patch with no deletion line has no prior author to attribute).
-  const candidates: Array<{ path: string; line: number }> = [];
+  const candidates: Array<{ lookupPath: string; displayPath: string; line: number }> = [];
   for (const file of files) {
     if (file.status === "added" || SKIP_RE.test(file.path)) continue;
     let line = file.patch ? firstTouchedOldLine(file.patch) : null;
-    // A removed file is entirely a deletion: its path alone drives the history lookup even when the diff carries no
-    // usable patch (binary/truncated). Anchor to line 1 as the representative point.
-    if (line === null && file.status === "removed") line = 1;
+    // A removed OR renamed file resolves against the base tree even without a usable patch (binary/truncated, or a
+    // pure rename with no content change). Anchor to line 1 as the representative point.
+    if (line === null && (file.status === "removed" || file.status === "renamed")) line = 1;
     if (line === null) continue; // a modified file with only additions / no usable patch → nothing to blame
-    candidates.push({ path: file.path, line });
+    // The base tree holds a renamed file under its OLD path, so resolve history against `previousPath` while still
+    // showing the reviewer the new (display) path.
+    const lookupPath = file.status === "renamed" && file.previousPath ? file.previousPath : file.path;
+    candidates.push({ lookupPath, displayPath: file.path, line });
     if (candidates.length >= MAX_FILES_PROBED) break;
   }
 
   const findings: BlameLinkFinding[] = [];
   let lookups = 0;
-  for (const { path, line } of candidates) {
+  for (const { lookupPath, displayPath, line } of candidates) {
     if (options.signal?.aborted) break;
     if (lookups >= MAX_LOOKUPS) break; // cap reached → emit partial
     lookups += 1;
-    const sha = await fetchLatestCommitSha(owner, repo, path, baseSha, headers, fetchFn, options.signal, options);
+    const sha = await fetchLatestCommitSha(owner, repo, lookupPath, baseSha, headers, fetchFn, options.signal, options);
     if (!sha) continue; // no prior commit on the path → no finding
     let lastTouchedByPr: number | null = null;
     if (lookups < MAX_LOOKUPS && !options.signal?.aborted) {
@@ -181,7 +184,7 @@ export async function scanBlameLink(
       lastTouchedByPr = await fetchPrForCommit(owner, repo, sha, headers, fetchFn, options.signal, options);
     }
     findings.push({
-      file: path,
+      file: displayPath,
       line,
       lastTouchedByShaPrefix: sha.slice(0, SHA_PREFIX_LEN),
       ...(lastTouchedByPr !== null ? { lastTouchedByPr } : {}),
