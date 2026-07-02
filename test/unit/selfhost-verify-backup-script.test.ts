@@ -422,6 +422,36 @@ describe("self-host verify-backup script", () => {
     expect(capture).toContain("postgresql://u@h/scratch?sslmode=require");
   });
 
+  it("strips a query-string password even when its KEY NAME is percent-encoded", () => {
+    const root = tmpRoot();
+    writePgDump(root, "gittensory-a.dump", true);
+    const captureFile = join(root, "pg-capture.log");
+    // libpq percent-decodes query KEY NAMES before matching them against connection keywords, so
+    // pass%77ord (%77 = 'w') is just as much `password` as the literal spelling -- a literal string match
+    // against "password=" would miss it entirely, leaving a real credential in argv.
+    const scratch = "postgresql://u@h/scratch?sslmode=require&pass%77ord=SuperSecret123%21&application_name=app";
+
+    const r = runVerify(
+      root,
+      [],
+      {
+        GITTENSORY_BACKUP_SOURCE_DATABASE_URL: "postgres://u:p@h/live",
+        VERIFY_RESTORE_SCRATCH: "1",
+        GITTENSORY_VERIFY_SCRATCH_DATABASE_URL: scratch,
+        PG_CAPTURE_FILE: captureFile,
+      },
+      { pg_restore: PG_RESTORE, psql: fakePsql({}) },
+    );
+
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("could not connect to the scratch database");
+    const capture = execFileSync("cat", [captureFile], { encoding: "utf8" });
+    expect(capture).not.toContain("SuperSecret123");
+    expect(capture).not.toContain("pass%77ord");
+    expect(capture).not.toContain("password=");
+    expect(capture).toContain("postgresql://u@h/scratch?sslmode=require&application_name=app");
+  });
+
   it("proves the userinfo-password form through the same full scratch-restore flow as the query-string form", () => {
     const root = tmpRoot();
     writePgDump(root, "gittensory-a.dump", true);
