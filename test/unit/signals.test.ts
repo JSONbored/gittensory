@@ -423,6 +423,21 @@ describe("world-class backend signals", () => {
     expect(result.findings.map((finding) => finding.code)).toContain("missing_test_evidence");
   });
 
+  it("preflight treats Cypress and snapshot paths as test evidence", () => {
+    const result = buildPreflightResult(
+      {
+        repoFullName: repo.fullName,
+        title: "Add Cypress login coverage",
+        body: "Fixes #7",
+        changedFiles: ["cypress/e2e/login.cy.ts", "src/auth.ts"],
+      },
+      repo,
+      issues,
+      pullRequests,
+    );
+    expect(result.findings.map((finding) => finding.code)).not.toContain("missing_test_evidence");
+  });
+
   it("gates public comments to detected contributors and sanitizes comment text", () => {
     const currentPr = pullRequests[0]!;
     const priorPr: PullRequestRecord = {
