@@ -144,6 +144,11 @@ declare global {
      *  list, or `*`/`all` for every repo). Unset ⇒ none — GITTENSORY_MCP_TOKEN is a shared, end-user-obtainable
      *  credential, so it must not implicitly actuate on every installed repo (#2253). */
     MCP_ACTUATION_REPO_ALLOWLIST?: string;
+    /** Repos the shared GITTENSORY_MCP_TOKEN may READ via MCP tools (repo context, issue quality, watch
+     *  subscriptions) — comma/whitespace `owner/repo` list, or `*`/`all` for every repo AND for the
+     *  non-repo-scoped contributor/operator tools (another contributor's private data, fleet analytics). Unset
+     *  ⇒ none. A separate allowlist from MCP_ACTUATION_REPO_ALLOWLIST so read and write trust can differ (#2455). */
+    MCP_READ_REPO_ALLOWLIST?: string;
     /** Shared bearer secret required by the hosted Orb ingest collector. */
     ORB_INGEST_TOKEN?: string;
     /** AES-256-GCM master secret for maintainer BYOK provider keys (encrypt/decrypt at rest). A Worker/self-host

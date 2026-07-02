@@ -188,6 +188,33 @@ describe("MCP tool calls return schema-valid structured content", () => {
     expect(data.repoFullName).toBe("octo/demo");
   });
 
+  // Regression test for #2455: api/internal static identities are operator-only Worker secrets (never handed to
+  // end users, unlike the shared GITTENSORY_MCP_TOKEN), so canAccessRepo must remain unconditionally trusted for
+  // them even with MCP_READ_REPO_ALLOWLIST unset — mirroring the existing api/internal-trusted tests for the
+  // write-side MCP_ACTUATION_REPO_ALLOWLIST guards.
+  it("gittensory_get_repo_context trusts the api static identity unconditionally, regardless of MCP_READ_REPO_ALLOWLIST (#2455)", async () => {
+    const { client } = await connectTestClient(createTestEnv({ MCP_READ_REPO_ALLOWLIST: "" }), { kind: "static", actor: "api" });
+    const result = await client.callTool({ name: "gittensory_get_repo_context", arguments: { owner: "octo", repo: "demo" } });
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.repoFullName).toBe("octo/demo");
+  });
+
+  // Regression test for #2455: the shared, end-user-obtainable GITTENSORY_MCP_TOKEN must not read an arbitrary
+  // repo's context by default.
+  it("gittensory_get_repo_context forbids the static mcp identity without an MCP_READ_REPO_ALLOWLIST wildcard/scoped opt-in (#2455)", async () => {
+    const { client } = await connectTestClient(createTestEnv({ MCP_READ_REPO_ALLOWLIST: "" }));
+    const result = await client.callTool({ name: "gittensory_get_repo_context", arguments: { owner: "octo", repo: "demo" } });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/cannot access this repository/i);
+  });
+
+  it("gittensory_get_repo_context allows the static mcp identity once the repo is explicitly allowlisted (#2455)", async () => {
+    const { client } = await connectTestClient(createTestEnv({ MCP_READ_REPO_ALLOWLIST: "octo/demo" }));
+    const result = await client.callTool({ name: "gittensory_get_repo_context", arguments: { owner: "octo", repo: "demo" } });
+    expect(result.isError).toBeFalsy();
+  });
+
   it("gittensory_get_maintainer_noise returns a structured noise triage report for a repo", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "demo", full_name: "octo/demo", private: false, owner: { login: "octo" }, default_branch: "main" });

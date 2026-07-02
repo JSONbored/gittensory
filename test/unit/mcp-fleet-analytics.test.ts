@@ -59,4 +59,19 @@ describe("gittensory_get_fleet_analytics MCP tool", () => {
     expect(result.isError).toBeTruthy();
     expect(JSON.stringify(result.content)).toMatch(/operator authority/i);
   });
+
+  // Regression test for #2455: the shared, end-user-obtainable GITTENSORY_MCP_TOKEN must not read
+  // cross-instance operator-only fleet analytics by default. "" overrides createTestEnv's own
+  // MCP_READ_REPO_ALLOWLIST: "*" default back to unset, exercising the real deny-by-default behavior.
+  it("forbids the static mcp identity without an MCP_READ_REPO_ALLOWLIST wildcard opt-in (#2455)", async () => {
+    const result = await (await connect(createTestEnv({ MCP_READ_REPO_ALLOWLIST: "" }))).callTool({ name: "gittensory_get_fleet_analytics", arguments: {} });
+    expect(result.isError).toBeTruthy();
+    expect(JSON.stringify(result.content)).toMatch(/not authorized for operator-only fleet analytics/i);
+  });
+
+  it("forbids the static mcp identity when MCP_READ_REPO_ALLOWLIST is scoped to specific repos, not the wildcard (#2455)", async () => {
+    const result = await (await connect(createTestEnv({ MCP_READ_REPO_ALLOWLIST: "acme/widgets" }))).callTool({ name: "gittensory_get_fleet_analytics", arguments: {} });
+    expect(result.isError).toBeTruthy();
+    expect(JSON.stringify(result.content)).toMatch(/not authorized for operator-only fleet analytics/i);
+  });
 });

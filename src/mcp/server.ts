@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { ElicitResultSchema, type ServerNotification, type ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { authenticatePrivateToken, extractBearerToken, isMcpActuationRepoAllowed, type AuthIdentity } from "../auth/security";
+import { authenticatePrivateToken, extractBearerToken, isMcpActuationRepoAllowed, isMcpReadRepoAllowed, isMcpReadUnscoped, type AuthIdentity } from "../auth/security";
 import { canLoginAccessRepo, canWatchRepo, loadControlPanelAccessScope, loadControlPanelRoleSummary, type ControlPanelAccessScope } from "../services/control-panel-roles";
 import {
   countOpenIssues,
@@ -1770,6 +1770,13 @@ export class GittensoryMcp {
     if (this.identity.kind === "session" && this.identity.actor.toLowerCase() !== login.toLowerCase()) {
       throw new Error("Forbidden: session can only access the authenticated GitHub login.");
     }
+    // The static `mcp` identity must not read an ARBITRARY other contributor's private decision pack, profile,
+    // or notifications by default — GITTENSORY_MCP_TOKEN is a shared, end-user-obtainable CLI credential, not an
+    // operator-only secret (see requireRepoManageAccess). There is no per-login allowlist, so only the full
+    // MCP_READ_REPO_ALLOWLIST wildcard opt-in unlocks this, matching requireOperatorAccess below. (#2455)
+    if (this.identity.kind === "static" && this.identity.actor === "mcp" && !isMcpReadUnscoped(this.env.MCP_READ_REPO_ALLOWLIST)) {
+      throw new Error("Forbidden: this MCP token is not authorized to read another contributor's data.");
+    }
   }
 
   private async requireRepoAccess(repoFullName: string): Promise<void> {
@@ -1842,6 +1849,9 @@ export class GittensoryMcp {
   // Issue-watch gate (#699 path B). Sessions may only watch repos they can SEE: any gittensory-tracked PUBLIC
   // repo (the miner use case) or a PRIVATE repo they can access — never an arbitrary/private repo they cannot,
   // so private-repo issues never fan out to them. Non-session (private-token) identities are trusted.
+  // Its only caller (watchIssues) already gates the static `mcp` identity via requireContributorAccess's
+  // unscoped-MCP_READ_REPO_ALLOWLIST-wildcard-only check first, which is strictly stronger than any repo-scoped
+  // check this function could add — a static mcp caller can only ever reach here already fully trusted. (#2455)
   private async requireWatchableRepo(login: string, repoFullName: string): Promise<void> {
     if (this.identity.kind !== "session") return;
     if (await canWatchRepo(this.env, login, repoFullName)) return;
@@ -2031,8 +2041,15 @@ export class GittensoryMcp {
   }
 
   private async canAccessRepo(fullName: string): Promise<boolean> {
-    if (this.identity.kind !== "session") return true;
-    return canLoginAccessRepo(this.env, this.identity.actor, fullName);
+    if (this.identity.kind === "session") return canLoginAccessRepo(this.env, this.identity.actor, fullName);
+    // The static `mcp` identity is a shared, end-user-obtainable CLI credential — scope it to the operator's
+    // MCP_READ_REPO_ALLOWLIST instead of trusting it for every installed repo, mirroring requireRepoManageAccess's
+    // MCP_ACTUATION_REPO_ALLOWLIST scoping for writes. api/internal static identities remain trusted (operator-only
+    // Worker secrets, never handed to end users). (#2455)
+    if (this.identity.kind === "static" && this.identity.actor === "mcp") {
+      return isMcpReadRepoAllowed(this.env.MCP_READ_REPO_ALLOWLIST, fullName);
+    }
+    return true;
   }
 
   private async getRepoOutcomePatterns(input: { owner: string; repo: string }): Promise<ToolPayload> {
@@ -2065,12 +2082,19 @@ export class GittensoryMcp {
   }
 
   // Operator-only gate: the fleet view aggregates ALL self-hosters' calibration, so a session must be an
-  // operator; private-token / static identities are trusted (the same model as the other measurement tools).
+  // operator. api/internal static identities are trusted (operator-only Worker secrets). The static `mcp`
+  // identity is NOT trusted by default — it is a shared, end-user-obtainable CLI credential, and fleet analytics
+  // has no single repo to scope a MCP_READ_REPO_ALLOWLIST entry against, so only the full wildcard opt-in
+  // (mirroring requireContributorAccess) unlocks it. (#2455)
   private async requireOperatorAccess(): Promise<void> {
-    if (this.identity.kind !== "session") return;
-    const scope = await this.loadSessionAccessScope();
-    if (scope.operator) return;
-    throw new Error("Forbidden: operator authority is required for fleet analytics.");
+    if (this.identity.kind === "session") {
+      const scope = await this.loadSessionAccessScope();
+      if (scope.operator) return;
+      throw new Error("Forbidden: operator authority is required for fleet analytics.");
+    }
+    if (this.identity.kind === "static" && this.identity.actor === "mcp" && !isMcpReadUnscoped(this.env.MCP_READ_REPO_ALLOWLIST)) {
+      throw new Error("Forbidden: this MCP token is not authorized for operator-only fleet analytics.");
+    }
   }
 
   private async getFleetAnalytics(input: { windowDays?: number | undefined }): Promise<ToolPayload> {

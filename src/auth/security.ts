@@ -141,19 +141,51 @@ export function parseGitHubLoginList(value: string | undefined): Set<string> {
   );
 }
 
+/** Shared CSV/whitespace allowlist parse for the MCP repo-allowlist env vars — both the actuation (write) and
+ *  read allowlists use the identical fail-closed/wildcard parsing, just gate a different security boundary at
+ *  their respective call sites. */
+function parseMcpRepoAllowlistEntries(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(/[\s,]+/)
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/** Does an allowlist value grant `repoFullName`? Unset/empty ⇒ deny (fail closed). `*`/`all` ⇒ every repo, an
+ *  explicit escape hatch for an operator who wants unscoped trust. */
+function matchesMcpRepoAllowlist(value: string | undefined, repoFullName: string): boolean {
+  const entries = parseMcpRepoAllowlistEntries(value);
+  if (entries.length === 0) return false;
+  if (entries.includes("*") || entries.includes("all")) return true;
+  return entries.includes(repoFullName.toLowerCase());
+}
+
 /** Is `repoFullName` within the operator's MCP_ACTUATION_REPO_ALLOWLIST? The static `mcp` identity is minted from
  *  a single shared secret (GITTENSORY_MCP_TOKEN) that is documented as an ordinary end-user CLI credential — unlike
  *  `api`/`internal`, it is not operator-only, so unlike those it must NOT be unconditionally trusted for every
  *  installed repo. Unset/empty ⇒ deny (fail closed: an operator must explicitly opt a repo in). `*`/`all` ⇒ every
  *  repo, an explicit escape hatch for an operator who wants the old unscoped-trust behavior. (#2253) */
 export function isMcpActuationRepoAllowed(value: string | undefined, repoFullName: string): boolean {
-  const entries = (value ?? "")
-    .split(/[\s,]+/)
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
-  if (entries.length === 0) return false;
-  if (entries.includes("*") || entries.includes("all")) return true;
-  return entries.includes(repoFullName.toLowerCase());
+  return matchesMcpRepoAllowlist(value, repoFullName);
+}
+
+/** Is `repoFullName` within the operator's MCP_READ_REPO_ALLOWLIST? Same fail-closed/wildcard model as
+ *  isMcpActuationRepoAllowed, kept as a SEPARATE allowlist so an operator can grant broad read access without
+ *  also granting actuation (merge/close/approve) trust, or the reverse. Gates the static `mcp` identity's
+ *  read-only MCP tools: repo context, issue quality, watch subscriptions, and (via isMcpReadUnscoped below) the
+ *  non-repo-scoped contributor/operator tools. (#2455) */
+export function isMcpReadRepoAllowed(value: string | undefined, repoFullName: string): boolean {
+  return matchesMcpRepoAllowlist(value, repoFullName);
+}
+
+/** Is MCP_READ_REPO_ALLOWLIST set to the full `*`/`all` wildcard? Contributor-login-scoped tools (another
+ *  contributor's decision pack/profile/notifications) and operator-scoped tools (fleet analytics) have no single
+ *  repo to check a scoped allowlist entry against, so — unlike the repo-scoped read tools above — they only
+ *  unlock for the static `mcp` identity via the full wildcard opt-in: a repo-scoped allowlist does not imply a
+ *  right to read an ARBITRARY other contributor's private data or cross-instance operator-only analytics. (#2455) */
+export function isMcpReadUnscoped(value: string | undefined): boolean {
+  const entries = parseMcpRepoAllowlistEntries(value);
+  return entries.includes("*") || entries.includes("all");
 }
 
 type CookieOptions = {
