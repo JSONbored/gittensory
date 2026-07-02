@@ -1999,34 +1999,6 @@ async function runAgentMaintenancePlanAndExecute(
     }
   }
 
-  // #2552: force a fresh rebase + CI recheck when the base has advanced within the configured window,
-  // immediately before what would otherwise be an agent-driven merge — mergeable_state only detects
-  // git-level TEXTUAL conflicts, so a base that advanced with a new, non-conflicting sibling commit (e.g. a
-  // second PR's distinct-but-colliding migration file) still reads `clean`, on a decision that predates
-  // the base's latest commit. Only pays the extra live GitHub read when the repo opted in AND the PR is
-  // otherwise merge-mechanically-ready (mergeableClean) — nothing is gained checking a PR that isn't clean
-  // yet. A forced rebase's resulting `synchronize` webhook re-triggers a fresh evaluation on the new head,
-  // so this pass stops here rather than falling through to planAgentMaintenanceActions with stale inputs.
-  const requireFreshRebaseWindowMinutes = settings.requireFreshRebaseWindowMinutes;
-  if (
-    typeof requireFreshRebaseWindowMinutes === "number" &&
-    baseRef &&
-    (liveMergeState ?? pr.mergeableState) === "clean" &&
-    (await maybeForceFreshRebase(env, {
-      installationId,
-      repoFullName,
-      pr,
-      settings,
-      windowMinutes: requireFreshRebaseWindowMinutes,
-      baseRef,
-      token,
-      admissionKey,
-      deliveryId,
-    }))
-  ) {
-    return;
-  }
-
   const planned = planAgentMaintenanceActions({
     conclusion: gate.conclusion,
     blockerTitles: gate.blockers.map((blocker) => blocker.title),
@@ -2097,6 +2069,39 @@ async function runAgentMaintenancePlanAndExecute(
     await isCloseHoldOnly(env, repoFullName),
   );
   if (breakerOnPlan.length === 0) return;
+
+  // #2552 (gate review finding, round 2): force a fresh rebase + CI recheck when the base has advanced within
+  // the configured window, immediately before what would otherwise be an agent-driven merge — mergeable_state
+  // only detects git-level TEXTUAL conflicts, so a base that advanced with a new, non-conflicting sibling
+  // commit (e.g. a second PR's distinct-but-colliding migration file) still reads `clean`, on a decision that
+  // predates the base's latest commit. Deliberately placed AFTER the full plan (gate/CI/blockers/breakers) is
+  // resolved, not on the raw mergeableState alone: the original placement ran this unconditionally whenever
+  // mergeableState was clean, so a PR sitting on red CI or a gate blocker (still git-clean) could burn the
+  // bounded retry cap on rebases nobody was about to act on, exhausting it before the PR was ever actually
+  // merge-eligible. Only fires when the resolved plan contains a merge THAT WOULD EXECUTE NOW (requiresApproval
+  // stages for a human, not an immediate merge). A forced rebase's resulting `synchronize` webhook re-triggers
+  // a fresh evaluation on the new head, so this pass stops here rather than executing against stale inputs.
+  const requireFreshRebaseWindowMinutes = settings.requireFreshRebaseWindowMinutes;
+  const planHasImminentMerge = breakerOnPlan.some((action) => action.actionClass === "merge" && !action.requiresApproval);
+  if (
+    typeof requireFreshRebaseWindowMinutes === "number" &&
+    baseRef &&
+    planHasImminentMerge &&
+    (liveMergeState ?? pr.mergeableState) === "clean" &&
+    (await maybeForceFreshRebase(env, {
+      installationId,
+      repoFullName,
+      pr,
+      settings,
+      windowMinutes: requireFreshRebaseWindowMinutes,
+      baseRef,
+      token,
+      admissionKey,
+      deliveryId,
+    }))
+  ) {
+    return;
+  }
 
   const installation = await getInstallation(env, installationId);
   /* v8 ignore next -- an installed-App PR webhook always carries an installation record; the null is defensive. */

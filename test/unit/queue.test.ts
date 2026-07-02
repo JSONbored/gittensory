@@ -6236,7 +6236,7 @@ describe("queue processors", () => {
     it("falls through to a normal merge once the bounded-retry cap is reached, with a cap-exceeded audit event", async () => {
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
       await seedFreshRebaseRepo(env, 93, { requireFreshRebaseWindowMinutes: 10 });
-      // Seed the bounded-retry counter at the cap (3) for this exact head SHA, matching what 3 prior forced
+      // Seed the bounded-retry counter at the cap (3) for this repo+PR, matching what 3 prior forced
       // attempts would have left behind.
       await env.SELFHOST_TRANSIENT_CACHE?.set("fresh-rebase-forced:owner/repo#93", "3", 24 * 3600);
       const seen = { merged: false, updateBranchCalls: 0, baseCommitCalls: 0 };
