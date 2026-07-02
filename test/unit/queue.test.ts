@@ -15018,7 +15018,7 @@ describe("installation app_id capture + dual-app webhook filter (#selfhost-app-i
         await seedWarmPrStateCache(env, "JSONbored/gittensory", 200);
         vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
           const url = input.toString();
-          if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+          if (url.includes("/access_tokens")) return Response.json({ token: "tok" });
           return Response.json({});
         });
 
@@ -15050,7 +15050,7 @@ describe("installation app_id capture + dual-app webhook filter (#selfhost-app-i
       await seedWarmPrStateCache(env, "JSONbored/gittensory", 201);
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
         const url = input.toString();
-        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/access_tokens")) return Response.json({ token: "tok" });
         return Response.json({});
       });
 
@@ -15072,8 +15072,10 @@ describe("installation app_id capture + dual-app webhook filter (#selfhost-app-i
       });
     });
 
-    it("reconcileLiveDuplicateSiblings reuses the durable PR-state cache for a warm sibling instead of a live fetch", async () => {
+    it("REGRESSION (#2537, gate-flagged): reconcileLiveDuplicateSiblings must NOT serve a warm durable PR-state cache row — a cached 'open' read up to PR_STATE_CACHE_MAX_AGE_MS stale after a missed closed webhook would keep an already-closed sibling eligible as the duplicate-cluster winner, wrongly closing the CURRENT PR as the loser", async () => {
       const env = createTestEnv({ GITTENSORY_DUPLICATE_WINNER: "true" });
+      // Seed a WARM cache row claiming the sibling is still open, but the live GitHub state below says CLOSED —
+      // proving the cache is never consulted: only a genuine live read can discover this and correctly reconcile it.
       await seedWarmPrStateCache(env, "owner/repo", 5);
       let liveStateFetches = 0;
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -15081,7 +15083,7 @@ describe("installation app_id capture + dual-app webhook filter (#selfhost-app-i
         if (url.includes("/access_tokens")) return Response.json({ token: "tok" });
         if (/\/pulls\/5(?:\?|$)/.test(url)) {
           liveStateFetches += 1;
-          return Response.json({ number: 5, state: "open" });
+          return Response.json({ number: 5, state: "closed" });
         }
         return Response.json({});
       });
@@ -15090,9 +15092,10 @@ describe("installation app_id capture + dual-app webhook filter (#selfhost-app-i
       const sibling: Parameters<typeof reconcileLiveDuplicateSiblings>[3] = { repoFullName: "owner/repo", number: 5, title: "Sibling", state: "open", labels: [], linkedIssues: [1] };
       const result = await reconcileLiveDuplicateSiblings(env, null, "owner/repo", winner, [sibling]);
 
-      expect(result).toEqual([sibling]);
-      // The warm durable cache row served this read — no live /pulls/5 fetch was needed.
-      expect(liveStateFetches).toBe(0);
+      // The sibling is correctly dropped as stale-closed, proving a genuine live fetch happened rather than
+      // trusting the warm-but-wrong cached "open" value.
+      expect(result).toEqual([]);
+      expect(liveStateFetches).toBe(1);
     });
 
     it("REGRESSION (#2537): the per-PR sweep unit's live resync primes the durable PR-state cache for later readers", async () => {
@@ -15103,7 +15106,7 @@ describe("installation app_id capture + dual-app webhook filter (#selfhost-app-i
       await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 6, title: "Sweep target", state: "open", user: { login: "contributor" }, head: { sha: "a6" }, base: { ref: "main" }, labels: [], body: "" });
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
         const url = input.toString();
-        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/access_tokens")) return Response.json({ token: "tok" });
         if (/\/pulls\/6(?:\?|$)/.test(url)) return Response.json({ number: 6, state: "open", mergeable_state: "clean", head: { sha: "a6" } });
         if (url.includes("/pulls/6/files")) return Response.json([]);
         if (url.includes("/pulls/6/reviews")) return Response.json([]);

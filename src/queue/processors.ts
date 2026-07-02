@@ -77,7 +77,6 @@ import {
   backfillRegisteredRepositories,
   backfillRepositorySegment,
   cachedFetchLivePullRequestMergeState,
-  cachedFetchLivePullRequestState,
   enqueueRepositoryOpenDataBackfill,
   fetchAndStorePullRequestFilesForReview,
   fetchLinkedIssueFacts,
@@ -90,6 +89,7 @@ import {
   fetchLivePullRequestMergeState,
   fetchLivePullRequestReviewDecision,
   fetchLiveReviewThreadBlockers,
+  fetchLivePullRequestState,
   fetchOpenPullRequestNumbersForCommit,
   fetchRequiredStatusContexts,
   invalidatePrStateCache,
@@ -5664,9 +5664,13 @@ export async function reconcileLiveDuplicateSiblings(
   const staleClosed = new Set<number>();
   await Promise.all(
     lowerOverlapping.map(async (sibling) => {
-      // #2537: durable-cached — this is a non-authoritative reconcile read (not the act-boundary decision), so
-      // repeat calls across webhook deliveries for an unchanged sibling can reuse the cross-webhook cache.
-      const liveState = await cachedFetchLivePullRequestState(
+      // #2537: deliberately NOT durable-cached (flagged by the gate's own review) -- despite recomputing every
+      // delivery, this reconcile feeds duplicate-winner selection, which can auto-CLOSE the CURRENT PR when
+      // duplicateWinnerEnabled. A cached "open" read up to PR_STATE_CACHE_MAX_AGE_MS stale after a missed
+      // `closed` webhook would keep an already-closed sibling eligible as the winner, wrongly closing this PR
+      // as the loser. That is the same class of irreversible-actuation risk the merge/close decision and
+      // gate-override guard against, so this stays on the raw live fetch like they do.
+      const liveState = await fetchLivePullRequestState(
         env,
         repoFullName,
         sibling.number,
