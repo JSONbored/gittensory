@@ -1,7 +1,7 @@
 import { bumpPullRequestMergeAttempt, createPendingAgentActionIfAbsent, insertNotificationDeliveryIfAbsent, isGlobalAgentFrozen, markPullRequestApproved, markPullRequestMergeBlocked, recordAuditEvent } from "../db/repositories";
 import { classifyMergeFailure, MERGE_RETRY_CAP } from "./merge-failure";
 import { notifyActionToDiscord, notifyActionToSlack, type NotifyOutcome } from "./notify-discord";
-import { createInstallationToken, githubErrorStatus } from "../github/app";
+import { createInstallationToken, githubErrorStatus, isGitHubRateLimitedError } from "../github/app";
 import { fetchLiveCiAggregate, refreshInstallationHealthForInstallation } from "../github/backfill";
 import { githubRateLimitAdmissionKeyForToken } from "../github/client";
 import { ensurePullRequestLabel, removePullRequestLabel } from "../github/labels";
@@ -23,6 +23,18 @@ const AGENT_ACTOR = "gittensory";
 // agent-execution test can enforce the invariant that every member is also counted by agentRequiresPrWrite
 // (PR_WRITE_ACTION_CLASSES is a superset), so this runtime guard never disagrees with the readiness gate.
 export const PR_WRITE_CLASSES = new Set<AgentActionClass>(["request_changes", "approve", "merge", "close", "update_branch"]);
+
+const INSTALLATION_HEALTH_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
+const installationHealthRefreshAttempts = new Map<number, number>();
+
+function shouldRefreshInstallationHealthAfterPrWriteFailure(installationId: number, error: unknown, nowMs = Date.now()): boolean {
+  if (githubErrorStatus(error) !== 403 || isGitHubRateLimitedError(error)) return false;
+  if (!/resource not accessible by integration|not have permission/i.test(errorMessage(error))) return false;
+  const lastAttemptMs = installationHealthRefreshAttempts.get(installationId);
+  if (lastAttemptMs !== undefined && nowMs - lastAttemptMs < INSTALLATION_HEALTH_REFRESH_COOLDOWN_MS) return false;
+  installationHealthRefreshAttempts.set(installationId, nowMs);
+  return true;
+}
 
 export type AgentActionExecutionContext = {
   installationId: number;
@@ -181,14 +193,11 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
       if (action.actionClass === "merge" && ctx.headSha) {
         await handleMergeFailure(env, ctx, error);
       }
-      // #2265: a 403 on a PR-write mutation often means the LOCAL installations.permissions snapshot is stale —
-      // GitHub webhooks a consented permission UPGRADE but sends nothing for a maintainer-initiated downgrade, so
-      // the write-permission readiness gate (step 6 above) can keep reporting "ready" for up to the 30-minute
-      // health-refresh cron interval after a live downgrade. Opportunistically refresh now so the DB row (and
-      // therefore every later sweep/webhook read of it, for this or any other PR on the installation) self-heals
-      // immediately instead of waiting for the next cron tick. GitHub's own server-side enforcement (this very
-      // 403) is already the real backstop, so a failed refresh here is safe to swallow.
-      if (PR_WRITE_CLASSES.has(action.actionClass) && githubErrorStatus(error) === 403) {
+      // #2265: a permission-looking 403 on a PR-write mutation can mean the LOCAL installations.permissions
+      // snapshot is stale after a maintainer-initiated downgrade (GitHub sends no downgrade webhook). Rate-limit
+      // 403s and operation-specific forbidden states are not permission evidence, and this refresh scans broad
+      // installation state, so keep the hot error path narrowly filtered and per-installation cooled down.
+      if (PR_WRITE_CLASSES.has(action.actionClass) && shouldRefreshInstallationHealthAfterPrWriteFailure(ctx.installationId, error)) {
         await refreshInstallationHealthForInstallation(env, ctx.installationId).catch(() => undefined);
       }
     }

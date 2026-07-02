@@ -519,12 +519,44 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect(refreshInstallationHealthForInstallation).not.toHaveBeenCalled();
   });
 
+  it("does not refresh installation health for rate-limit or operation-specific forbidden 403s (#2265)", async () => {
+    const env = createTestEnv({});
+    vi.mocked(updatePullRequestBranch)
+      .mockRejectedValueOnce(Object.assign(new Error("secondary rate limit: please retry later"), { status: 403 }))
+      .mockRejectedValueOnce(Object.assign(new Error("Update branch is not allowed for this pull request"), { status: 403 }));
+
+    await executeAgentMaintenanceActions(env, ctx({ installationId: 124 }), [updateBranch, updateBranch]);
+
+    expect(refreshInstallationHealthForInstallation).not.toHaveBeenCalled();
+  });
+
+  it("debounces permission-looking installation health refreshes per installation (#2265)", async () => {
+    const env = createTestEnv({});
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-02T00:00:00Z"));
+    vi.mocked(closePullRequest).mockRejectedValue(Object.assign(new Error("Resource not accessible by integration"), { status: 403 }));
+
+    try {
+      await executeAgentMaintenanceActions(env, ctx({ installationId: 125 }), [close]);
+      await executeAgentMaintenanceActions(env, ctx({ installationId: 125 }), [close]);
+      vi.setSystemTime(new Date("2026-07-02T00:05:01Z"));
+      await executeAgentMaintenanceActions(env, ctx({ installationId: 125 }), [close]);
+
+      expect(refreshInstallationHealthForInstallation).toHaveBeenCalledTimes(2);
+      expect(refreshInstallationHealthForInstallation).toHaveBeenNthCalledWith(1, env, 125);
+      expect(refreshInstallationHealthForInstallation).toHaveBeenNthCalledWith(2, env, 125);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("swallows a failed installation-health refresh — best-effort, does not affect the recorded outcome (#2265)", async () => {
     const env = createTestEnv({});
     vi.mocked(closePullRequest).mockRejectedValueOnce(Object.assign(new Error("Resource not accessible by integration"), { status: 403 }));
     vi.mocked(refreshInstallationHealthForInstallation).mockRejectedValueOnce(new Error("refresh boom"));
-    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [close]);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ installationId: 126 }), [close]);
     expect(outcomes[0]?.outcome).toBe("error");
+    expect(refreshInstallationHealthForInstallation).toHaveBeenCalledWith(env, 126);
     expect((await auditFor(env, "close"))?.outcome).toBe("error");
   });
 });
