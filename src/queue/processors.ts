@@ -1578,10 +1578,13 @@ export function changedPathsForGuardrail(
  * Live premerge migrations/** collision recheck (#2550). `check-migrations.mjs` (CI) only validates against
  * THIS PR's own branch snapshot at the time CI ran — it can never see a sibling PR that merged a
  * same-numbered migration file to `baseRef` in the meantime. This does the live check right before the
- * merge-decision moment: fetch the base branch's CURRENT migration filenames, union them with THIS PR's own
- * new migration filenames (the live tree never contains this PR's own not-yet-merged files, so checking main
- * alone could never detect a collision from this PR's perspective — the union is load-bearing, not optional),
- * then run the SAME collision-detection function scripts/check-migrations.mjs uses.
+ * merge-decision moment: fetch the base branch's CURRENT migration filenames, drop any filename THIS PR's
+ * own diff removes from the base (an outright deletion, or a rename's pre-rename name — otherwise renaming
+ * an existing base migration self-collides with its own old name, which is still live on `baseRef` until
+ * this PR merges), union what's left with THIS PR's own new migration filenames (the live tree never
+ * contains this PR's own not-yet-merged files, so checking main alone could never detect a collision from
+ * this PR's perspective — the union is load-bearing, not optional), then run the SAME collision-detection
+ * function scripts/check-migrations.mjs uses.
  *
  * Deliberately scoped to a collision involving THIS PR's own migration number(s) only (via `prNumbers`) — a
  * pre-existing collision between two OTHER already-merged files (which would mean `main` itself is already
@@ -1605,12 +1608,15 @@ async function resolveLiveMigrationCollisionHold(
     token: string | undefined;
     admissionKey: GitHubRateLimitAdmissionKey | undefined;
     prMigrationFilenames: string[];
+    prRemovedMigrationFilenames: string[];
   },
 ): Promise<{ reason: string; comment: string } | undefined> {
   if (!args.baseRef) return undefined;
   const liveFilenames = await listMigrationFilenamesAtRef(args.repoFullName, args.baseRef, args.token, args.admissionKey);
   if (liveFilenames === null) return undefined;
-  const union = [...new Set([...liveFilenames, ...args.prMigrationFilenames])];
+  const removedFromBase = new Set(args.prRemovedMigrationFilenames);
+  const effectiveLiveFilenames = liveFilenames.filter((f) => !removedFromBase.has(f));
+  const union = [...new Set([...effectiveLiveFilenames, ...args.prMigrationFilenames])];
   const prNumbers = new Set(args.prMigrationFilenames.map((f) => extractMigrationNumber(f)).filter((n): n is number => n !== null));
   const collisions = detectMigrationCollisions(union, KNOWN_MIGRATION_DUPLICATES).filter((c) => prNumbers.has(c.number));
   if (collisions.length === 0) return undefined;
@@ -1888,9 +1894,32 @@ async function runAgentMaintenancePlanAndExecute(
   const prMigrationFilenames = changedFiles
     .filter((f) => f.status !== "removed" && f.path.startsWith("migrations/") && f.path.endsWith(".sql"))
     .map((f) => f.path.slice("migrations/".length));
+  // Base filenames this PR's diff removes from `migrations/**` — an outright deletion's own `.path`, or a
+  // rename's pre-rename `.previousFilename` — so a filename that won't exist once this PR merges isn't still
+  // counted from the live base fetch below. Without this, renaming an EXISTING base migration within the same
+  // number (e.g. `migrations/0099_old.sql` -> `migrations/0099_new.sql`, fixing a typo on an already-merged
+  // file) unions both the old (still live) and new (this PR's) name and self-collides, even though the merged
+  // tree would only ever contain the new file.
+  const prRemovedMigrationFilenames = changedFiles.flatMap((f) => {
+    const removed: string[] = [];
+    if (f.status === "removed" && f.path.startsWith("migrations/") && f.path.endsWith(".sql")) {
+      removed.push(f.path.slice("migrations/".length));
+    }
+    if (f.previousFilename && f.previousFilename.startsWith("migrations/") && f.previousFilename.endsWith(".sql")) {
+      removed.push(f.previousFilename.slice("migrations/".length));
+    }
+    return removed;
+  });
   const migrationCollisionHold =
     settings.premergeContentRecheck === true && prMigrationFilenames.length > 0
-      ? await resolveLiveMigrationCollisionHold({ repoFullName, baseRef, token, admissionKey, prMigrationFilenames })
+      ? await resolveLiveMigrationCollisionHold({
+          repoFullName,
+          baseRef,
+          token,
+          admissionKey,
+          prMigrationFilenames,
+          prRemovedMigrationFilenames,
+        })
       : undefined;
   const repoOwner = repoFullName.includes("/")
     ? repoFullName.slice(0, repoFullName.indexOf("/"))

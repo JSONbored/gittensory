@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx tsx
+#!/usr/bin/env -S npx --no-install tsx
 // Guards the D1 migration set against the silent failure modes that git can't catch:
 //   • two PRs that each grab the same next number (e.g. `0038_foo.sql` + `0038_bar.sql`) are DIFFERENT
 //     files, so git reports no conflict and both merge — then `wrangler d1 migrations apply` runs both

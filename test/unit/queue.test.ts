@@ -5979,6 +5979,55 @@ describe("queue processors", () => {
       expect(seen.labels).not.toContain("gittensory:migration-collision");
     });
 
+    it("REGRESSION: renaming an EXISTING base migration (same number) does NOT self-collide with its own old name still live on main", async () => {
+      // Before the fix, liveFilenames (fetched from main, which still has the pre-rename name until this PR
+      // merges) was unioned as-is with prMigrationFilenames (the new name only) — so a same-number typo-fix
+      // rename of an ALREADY-MERGED base migration counted as two distinct files at one number and
+      // self-collided, even though the merged tree would only ever contain the renamed file.
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedMigrationRecheckRepo(env, 73, { premergeContentRecheck: true });
+      const seen = { closed: false, merged: false, labels: [] as string[], comments: [] as string[], treeCalls: 0 };
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "https://api.gittensor.io/miners") return Response.json([]);
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/check-runs/") && method === "PATCH") return Response.json({ id: 901 });
+        if (url.includes("/git/trees/main")) {
+          seen.treeCalls += 1;
+          // main still has the PRE-rename name — this PR's rename hasn't merged yet.
+          return Response.json({ tree: [{ type: "blob", path: "migrations/0099_old.sql" }] });
+        }
+        if (/\/pulls\/\d+(?:\?|$)/.test(url) && method === "GET" && !url.includes("/pulls/73/")) {
+          return Response.json({ number: 73, state: "open", user: { login: "contributor" }, head: { sha: "sha1" }, base: { ref: "main", sha: "base" }, mergeable_state: "clean", labels: [] });
+        }
+        // Renames an EXISTING base migration (same number 0099), not a file this PR itself added.
+        if (url.includes("/pulls/73/files")) return Response.json([{ filename: "migrations/0099_new.sql", previous_filename: "migrations/0099_old.sql", status: "renamed", additions: 1, deletions: 1, changes: 2, patch: "@@\n rename" }]);
+        if (url.includes("/commits/sha1/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/commits/sha1/status")) return Response.json({ state: "success", statuses: [{ context: "ci/build", state: "success", description: "ok" }] });
+        if (url.includes("/commits/sha1/check-suites")) return Response.json({ check_suites: [] });
+        if (url.includes("/branches/")) return Response.json({ contexts: [] });
+        if (url === "https://api.github.com/graphql") return Response.json({ data: { repository: { pullRequest: { reviewDecision: "APPROVED" } } } });
+        if (url.includes("/pulls/73/merge") && method === "PUT") {
+          seen.merged = true;
+          return Response.json({ merged: true, sha: "merged-sha1" });
+        }
+        if (url.includes("/issues/73/labels") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/73/labels") && method === "POST") {
+          seen.labels.push(...((JSON.parse(String(init?.body ?? "{}")).labels ?? []) as string[]));
+          return Response.json([]);
+        }
+        if (url.endsWith("/labels") && method === "POST") return Response.json({ name: "x" }, { status: 201 });
+        if (url.includes("/issues/73/comments")) return Response.json([]);
+        return Response.json({});
+      });
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "migration-rename-existing-base", repoFullName: "owner/repo", prNumber: 73, installationId: 123 });
+
+      expect(seen.merged).toBe(true); // the pre-rename name still live on main must not count against this PR
+      expect(seen.labels).not.toContain("gittensory:migration-collision");
+    });
+
     it("REGRESSION: renumbering (renaming) this PR's migration to resolve a real collision does not leave a stale hold from the old filename", async () => {
       // Before the fix, the stale previousFilename (the OLD number) stayed in prMigrationFilenames forever,
       // colliding with an unrelated already-merged file at that old number and permanently re-holding a PR
