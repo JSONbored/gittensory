@@ -2361,9 +2361,17 @@ export async function releasePrActuationLock(
   }
 }
 
-class PrActuationLockContendedError extends Error {
+// A plain thrown Error still reaches the queue's retry path (this call site is deliberately uncaught, same as
+// maybeRecloseDisallowedReopen's other error paths), but it only gets the queue's generic default backoff — far
+// slower than the near-instant window a per-PR actuation lock is actually held for. Extending RetryableJobError
+// gives lock contention its own fast, deterministic retry plus a distinct retryKind for observability, without
+// changing the uncaught-and-propagate shape either call site already relies on (#2135/#2447).
+class PrActuationLockContendedError extends RetryableJobError {
   constructor(repoFullName: string, prNumber: number, policy: string) {
-    super(`pr actuation lock contended for ${repoFullName}#${prNumber} during ${policy}`);
+    super(`pr actuation lock contended for ${repoFullName}#${prNumber} during ${policy}`, {
+      retryAfterMs: 5_000,
+      retryKind: "pr_actuation_lock_contended",
+    });
     this.name = "PrActuationLockContendedError";
   }
 }

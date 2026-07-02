@@ -11889,22 +11889,27 @@ describe("one-shot reopen prevention", () => {
     // Simulates a DIFFERENT concurrent delivery for the same PR already in flight (e.g. the draft-dodge sibling
     // racing this reopen) — the lock key it would hold is pre-claimed here.
     await env.SELFHOST_TRANSIENT_CACHE?.set("pr-actuation-lock:jsonbored/gittensory#42", "1", 60);
-    // REGRESSION (#2135, review round 3): a contended lock previously returned `false`, which the caller's old
-    // boolean contract read as "not blocked, proceed to normal re-review" -- this spy proves that no longer
-    // happens; the webhook path must stop BEFORE resolveRepositorySettings, the first call the re-review makes.
+    // A contended lock must still stop before resolveRepositorySettings, the first call the normal re-review makes,
+    // but must NOT stamp this reopen delivery processed: the lock holder may be an unrelated same-PR guard that
+    // no-ops, so the queue needs to retry this reopen guard once the lock clears.
     const resolveSettingsSpy = vi.spyOn(repositorySettingsModule, "resolveRepositorySettings");
 
-    await expect(processJob(env, {
-      type: "github-webhook",
-      deliveryId: "reopen-lock-contended",
-      eventName: "pull_request",
-      payload: reopenedPayload("contributor"),
-    })).rejects.toThrow("pr actuation lock contended");
+    await expect(
+      processJob(env, {
+        type: "github-webhook",
+        deliveryId: "reopen-lock-contended",
+        eventName: "pull_request",
+        payload: reopenedPayload("contributor"),
+      }),
+    ).rejects.toMatchObject({ retryKind: "pr_actuation_lock_contended" });
 
     expect(calls.some((call) => call.method === "PATCH" && call.url.endsWith("/pulls/42"))).toBe(false);
     const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ n: number }>();
-    expect(audit?.n).toBe(0); // no decision recorded either way — the queue retry owns the deferred decision
+    expect(audit?.n).toBe(0); // no decision recorded either way — retry owns the eventual reopen decision
     expect(resolveSettingsSpy).not.toHaveBeenCalled(); // the normal re-review pass never started
+    const webhookRow = await env.DB.prepare("select status, error_summary from webhook_events where delivery_id = ?").bind("reopen-lock-contended").first<{ status: string; error_summary: string }>();
+    expect(webhookRow?.status).toBe("error");
+    expect(webhookRow?.error_summary).toContain("pr actuation lock contended");
   });
 
   it("does NOT re-close a disallowed reopen on an OBSERVE-only / un-opted-in repo (autonomy floor, #review-audit)", async () => {
