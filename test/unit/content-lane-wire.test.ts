@@ -434,4 +434,94 @@ describe("evaluateWithSurfaceLane (the processor seam helper)", () => {
     expect(out?.conclusion).toBe("failure"); // the same-PR url duplicate closes, exactly as the METAGRAPHED_LANE_SPEC regression test above proves
     expect(advisory.findings.map((f) => f.code)).toEqual(["surface_lane_reject"]);
   });
+
+  it("an UNREGISTERED contentLane.validatorId (operator typo) pushes a non-blocking diagnostic finding into advisory.findings, alongside the degraded structural-only verdict", async () => {
+    const OTHER_REPO = "SomeoneElse/other-registry";
+    const OTHER_ENTRY = "registry/items/foo.json";
+    const otherDoc = (items: unknown[]) => JSON.stringify({ items });
+    const bodies: Record<string, string> = {
+      [`HEAD:${OTHER_ENTRY}`]: otherDoc([{ url: "https://api.example.org/new" }]),
+      [`BASE:${OTHER_ENTRY}`]: otherDoc([]),
+    };
+    vi.stubGlobal("fetch", async (url: string | URL) => {
+      const m = /\/contents\/(.+)\?ref=(.+)$/.exec(String(url));
+      if (!m) return new Response("nope", { status: 404 });
+      const path = m[1]!.split("/").map(decodeURIComponent).join("/");
+      const body = bodies[`${decodeURIComponent(m[2]!)}:${path}`];
+      return body === undefined ? new Response("missing", { status: 404 }) : new Response(body);
+    });
+    const configuredEnv = { GITTENSORY_REVIEW_CONTENT_LANE: "true", GITTENSORY_REVIEW_REPOS: REPO } as unknown as Env;
+    const configuredManifest = (): Promise<FocusManifest> =>
+      Promise.resolve(
+        parseFocusManifest({
+          contentLane: { entryFileGlob: "registry/items/*.json", collectionField: "items", validatorId: "metagraph" }, // typo — should be "metagraphed"
+        }),
+      );
+    const advisory = { findings: [] as AdvisoryFinding[] };
+    const out = await evaluateWithSurfaceLane(
+      configuredEnv,
+      OTHER_REPO,
+      true,
+      undefined,
+      {
+        installationId: null,
+        pr: { headSha: "HEAD", baseRef: "BASE" },
+        repo: { defaultBranch: "main" },
+        advisory,
+        getChangedFiles: async () => [{ path: OTHER_ENTRY, status: "modified" }],
+      },
+      configuredManifest,
+    );
+    // Structural gating still runs in degraded (no-validator) mode — a clean, non-duplicate, in-scope append →
+    // manual (the same "no validator configured" degraded verdict an omitted validatorId gets), NOT a crash.
+    expect(out?.conclusion).toBe("neutral");
+    const codes = advisory.findings.map((f) => f.code);
+    expect(codes).toContain("surface_lane_unknown_validator_id");
+    const warning = advisory.findings.find((f) => f.code === "surface_lane_unknown_validator_id");
+    expect(warning?.severity).toBe("warning");
+    expect(warning?.detail).toContain('"metagraph"');
+    expect(warning?.detail).toContain("metagraphed"); // the known-id hint names the real registered id
+  });
+
+  it("a REGISTERED contentLane.validatorId pushes NO unknown-validator diagnostic", async () => {
+    const advisory = { findings: [] as AdvisoryFinding[] };
+    const registeredManifest = (): Promise<FocusManifest> =>
+      Promise.resolve(parseFocusManifest({ contentLane: { entryFileGlob: "registry/subnets/*.json", collectionField: "surfaces", validatorId: "metagraphed" } }));
+    const configuredEnv = { GITTENSORY_REVIEW_CONTENT_LANE: "true", GITTENSORY_REVIEW_REPOS: "Some/OtherRepo" } as unknown as Env;
+    await evaluateWithSurfaceLane(
+      configuredEnv,
+      REPO,
+      true,
+      generic,
+      {
+        installationId: null,
+        pr: { headSha: "HEAD", baseRef: "BASE" },
+        repo: { defaultBranch: "main" },
+        advisory,
+        getChangedFiles: async () => [{ path: "README.md", status: "modified" }], // not a submission → surface defers
+      },
+      registeredManifest,
+    );
+    expect(advisory.findings.map((f) => f.code)).not.toContain("surface_lane_unknown_validator_id");
+  });
+
+  it("an omitted validatorId (today's zero-config default) pushes NO unknown-validator diagnostic", async () => {
+    const advisory = { findings: [] as AdvisoryFinding[] };
+    const wiredEnv = { GITTENSORY_REVIEW_CONTENT_LANE: "true", GITTENSORY_REVIEW_REPOS: REPO } as unknown as Env;
+    await evaluateWithSurfaceLane(
+      wiredEnv,
+      REPO,
+      true,
+      generic,
+      {
+        installationId: null,
+        pr: { headSha: "HEAD", baseRef: "BASE" },
+        repo: { defaultBranch: "main" },
+        advisory,
+        getChangedFiles: async () => [{ path: "README.md", status: "modified" }],
+      },
+      noConfigManifest,
+    );
+    expect(advisory.findings).toEqual([]);
+  });
 });

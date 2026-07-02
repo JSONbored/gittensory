@@ -28,7 +28,7 @@ import { AI_JUDGMENT_BLOCKER_CODES, type GateCheckEvaluation, isAiJudgmentOnlyFa
 import { isContentLaneEnabled } from "./content-lane/flag";
 import { runSurfaceReview, type SurfaceReviewInput, type SurfaceReviewResult } from "./content-lane/orchestrator";
 import type { RegistryLaneSpec } from "./content-lane/registry-logic";
-import { resolveRegistryLaneSpec } from "./content-lane/spec-resolver";
+import { registeredValidatorIds, resolveRegistryLaneSpec, unregisteredValidatorId } from "./content-lane/spec-resolver";
 import { makeGithubFileFetcher } from "./grounding-wire";
 import type { FocusManifest } from "../signals/focus-manifest";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
@@ -38,10 +38,23 @@ import type { AdvisoryFinding, AdvisorySeverity } from "../types";
 // facts, and blocker findings must never be flipped to merge by green CI.
 const SURFACE_REJECT_CODE = "surface_lane_reject";
 const SURFACE_MANUAL_CODE = "surface_lane_manual";
+const SURFACE_UNKNOWN_VALIDATOR_CODE = "surface_lane_unknown_validator_id";
 const SURFACE_TITLE = "Registry surface review";
 
 function surfaceFinding(code: string, severity: AdvisorySeverity, summary: string): AdvisoryFinding {
   return { code, title: SURFACE_TITLE, severity, detail: summary, publicText: summary };
+}
+
+/** A diagnostic (non-blocking) finding for a `.gittensory.yml` `contentLane.validatorId` that doesn't match any
+ *  code-registered validator — most likely an operator typo. Without this, `buildRegistryLaneSpecFromConfig`
+ *  degrades silently to structural-only gating (a legitimate mode for a registry with no validator yet), which
+ *  makes a typo indistinguishable from a deliberate choice. Surfaced the SAME way a surface verdict is (pushed
+ *  onto `advisory.findings`) so it renders directly in the PR comment an operator is already reading, rather than
+ *  requiring a separate manifest-diagnostics lookup. */
+function unregisteredValidatorIdFinding(badId: string): AdvisoryFinding {
+  const knownText = registeredValidatorIds().join(", ");
+  const summary = `contentLane.validatorId "${badId}" is not a registered validator (known: ${knownText}); falling back to structural-only review with no domain validator.`;
+  return surfaceFinding(SURFACE_UNKNOWN_VALIDATOR_CODE, "warning", summary);
 }
 
 /** Convert the deterministic surface verdict into a gate evaluation. merge→success, manual→neutral
@@ -182,7 +195,11 @@ export function resolveSurfaceRefs(
  *  `loadManifestOverride` is injected by unit tests (mirrors `runRegistrySurfaceGate`'s `loadFileOverride`) so
  *  they never hit the real cached-manifest loader's D1/network I/O; production omits it and gets the real,
  *  cached `loadRepoFocusManifest`. A manifest-load failure degrades to null (the allowlist-default resolution
- *  path), never a thrown error. */
+ *  path), never a thrown error.
+ *
+ *  An unregistered `contentLane.validatorId` in the loaded manifest pushes a non-blocking diagnostic finding
+ *  (`unregisteredValidatorIdFinding`) onto `args.advisory.findings` so an operator typo (e.g. "metagraph" instead
+ *  of "metagraphed") is visible in the PR comment instead of silently degrading to structural-only review. */
 export async function evaluateWithSurfaceLane(
   env: Env,
   repoFullName: string,
@@ -200,6 +217,8 @@ export async function evaluateWithSurfaceLane(
   if (!gateEnabled || !isContentLaneEnabled(env)) return gateEvaluation;
   const loadManifest = loadManifestOverride ?? loadRepoFocusManifest;
   const manifest = await loadManifest(env, repoFullName).catch(() => null);
+  const badValidatorId = unregisteredValidatorId(manifest?.contentLane);
+  if (badValidatorId) args.advisory.findings.push(unregisteredValidatorIdFinding(badValidatorId));
   const spec = resolveRegistryLaneSpec(env, manifest, repoFullName);
   if (!spec) return gateEvaluation;
   const surfaceGate = await runRegistrySurfaceGate(env, spec, {

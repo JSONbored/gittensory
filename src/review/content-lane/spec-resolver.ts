@@ -35,7 +35,7 @@ const REGISTRY_VALIDATORS: Record<string, Pick<RegistryLaneSpec, "assessAppended
  */
 export function buildRegistryLaneSpecFromConfig(config: FocusManifestContentLaneConfig): RegistryLaneSpec | null {
   if (!config.present || !config.entryFileGlob || !config.collectionField) return null;
-  const validator = config.validatorId ? REGISTRY_VALIDATORS[config.validatorId] : undefined;
+  const validator = config.validatorId && Object.hasOwn(REGISTRY_VALIDATORS, config.validatorId) ? REGISTRY_VALIDATORS[config.validatorId] : undefined;
   return {
     entryFilePattern: globToRegExp(config.entryFileGlob),
     collectionField: config.collectionField,
@@ -45,6 +45,29 @@ export function buildRegistryLaneSpecFromConfig(config: FocusManifestContentLane
     ...(config.duplicateKeyFields.length > 0 ? { duplicateKeyFields: config.duplicateKeyFields } : {}),
     ...(validator ?? {}),
   };
+}
+
+/**
+ * True when `config.validatorId` is set but does not match any REGISTRY_VALIDATORS entry — most likely an
+ * operator typo in `.gittensory.yml`'s `contentLane.validatorId` (e.g. "metagraph" instead of "metagraphed").
+ * `buildRegistryLaneSpecFromConfig` above already degrades this to structural-only gating silently (never a
+ * crash — a brand-new registry with no validator contributed yet is a legitimate config), which makes a typo
+ * indistinguishable from a deliberate choice. Checked as a SEPARATE pure function so a caller (see
+ * `evaluateWithSurfaceLane` in `content-lane-wire.ts`) can surface it as an operator-visible advisory finding
+ * without changing `buildRegistryLaneSpecFromConfig`'s established `RegistryLaneSpec | null` return contract.
+ * Returns the offending id, or null when there is nothing to warn about (no validatorId configured, or it
+ * resolves). PURE.
+ */
+export function unregisteredValidatorId(config: FocusManifestContentLaneConfig | null | undefined): string | null {
+  if (!config?.validatorId) return null;
+  return Object.hasOwn(REGISTRY_VALIDATORS, config.validatorId) ? null : config.validatorId;
+}
+
+/** The validatorId strings a maintainer's `.gittensory.yml` `contentLane.validatorId` can currently reference —
+ *  exposed so a caller can render a helpful "known validators are: X, Y" hint alongside an
+ *  `unregisteredValidatorId` warning, without reaching into REGISTRY_VALIDATORS directly. */
+export function registeredValidatorIds(): string[] {
+  return Object.keys(REGISTRY_VALIDATORS);
 }
 
 /**

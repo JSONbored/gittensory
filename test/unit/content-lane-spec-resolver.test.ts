@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRegistryLaneSpecFromConfig, resolveRegistryLaneSpec } from "../../src/review/content-lane/spec-resolver";
+import { buildRegistryLaneSpecFromConfig, registeredValidatorIds, resolveRegistryLaneSpec, unregisteredValidatorId } from "../../src/review/content-lane/spec-resolver";
 import { METAGRAPHED_LANE_SPEC } from "../../src/review/content-lane/registry-logic";
 import { parseFocusManifest, type FocusManifestContentLaneConfig } from "../../src/signals/focus-manifest";
 
@@ -88,6 +88,38 @@ describe("buildRegistryLaneSpecFromConfig", () => {
     expect(spec).not.toBeNull();
     expect(spec?.assessAppendedEntry).toBeUndefined();
     expect(spec?.assessProviderEntry).toBeUndefined();
+  });
+});
+
+describe("registeredValidatorIds", () => {
+  it("lists the code-registered validator ids (currently just metagraphed)", () => {
+    expect(registeredValidatorIds()).toEqual(["metagraphed"]);
+  });
+});
+
+describe("unregisteredValidatorId (operator-typo diagnostic — separate from buildRegistryLaneSpecFromConfig's silent structural-only degrade)", () => {
+  it("is null when no validatorId is configured at all", () => {
+    expect(unregisteredValidatorId(EMPTY_CONFIG)).toBeNull();
+    expect(unregisteredValidatorId({ ...EMPTY_CONFIG, validatorId: null })).toBeNull();
+  });
+
+  it("is null for a registered validatorId", () => {
+    expect(unregisteredValidatorId({ ...EMPTY_CONFIG, validatorId: "metagraphed" })).toBeNull();
+  });
+
+  it("returns the offending id for an unregistered validatorId", () => {
+    expect(unregisteredValidatorId({ ...EMPTY_CONFIG, validatorId: "some-registry-nobody-registered-yet" })).toBe("some-registry-nobody-registered-yet");
+  });
+
+  it("degrades to null (not a crash) for a null/undefined config", () => {
+    expect(unregisteredValidatorId(null)).toBeNull();
+    expect(unregisteredValidatorId(undefined)).toBeNull();
+  });
+
+  it("SECURITY: a validatorId matching an inherited Object.prototype key is still reported as unregistered (Object.hasOwn, not `in`/bracket-truthiness)", () => {
+    expect(unregisteredValidatorId({ ...EMPTY_CONFIG, validatorId: "toString" })).toBe("toString");
+    expect(unregisteredValidatorId({ ...EMPTY_CONFIG, validatorId: "constructor" })).toBe("constructor");
+    expect(unregisteredValidatorId({ ...EMPTY_CONFIG, validatorId: "hasOwnProperty" })).toBe("hasOwnProperty");
   });
 });
 
