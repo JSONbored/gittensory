@@ -1984,17 +1984,15 @@ async function fetchAndStorePullRequestDetails(
   // instead of refetching when the last successful files sync already covered the PR's CURRENT head SHA —
   // only files are cached here; checks are more volatile at a fixed head and still refresh every call.
   //
-  // The lookup below is gated by `!options.forceFiles || !pr.headSha` rather than by the files-only
-  // `!options.forceFiles && pr.headSha` condition the ORIGINAL (files-only) cache used. Reviews caching
-  // (#2537) reuses this SAME row (rather than adding a second DB read) but does not depend on `headSha`
-  // at all and is never controlled by `forceFiles` (that flag only ever forces a FILES re-fetch — see its
-  // name and its only caller, refreshPullRequestDetails's manual "force" option). If the lookup stayed
-  // gated on `pr.headSha` being present, a PR with a momentarily-empty head SHA would silently lose review
-  // caching too, even though reviews never needed a head SHA to begin with. So: skip the read only in the
-  // one case where NEITHER cache can use it (forceFiles is set AND headSha is present, i.e. the files-only
-  // force path) — every other combination still fetches the row so reviewsUpToDate can be computed.
-  const existingState = options.forceFiles && pr.headSha ? null : await getPullRequestDetailSyncState(env, repoFullName, pr.number);
-  const filesUpToDate = Boolean(existingState?.headSha) && existingState?.headSha === pr.headSha && Boolean(existingState?.filesSyncedAt);
+  // The row is now fetched UNCONDITIONALLY (the original files-only cache gated this on `!options.forceFiles`,
+  // skipping the read entirely on a forced refresh) because reviews caching (#2537) reuses this SAME row and
+  // does not depend on `headSha` or `forceFiles` at all -- `forceFiles` only ever forces a FILES re-fetch (see
+  // its name and its only caller, refreshPullRequestDetails's manual "force" option), so a caller asking to
+  // force-refresh files must not ALSO force an unrelated reviews refetch (gate review finding: the previous
+  // version skipped the row entirely on `forceFiles && headSha`, which zeroed out `reviewsUpToDate` too).
+  // `forceFiles` is applied ONLY to `filesUpToDate` below, never to `reviewsUpToDate`.
+  const existingState = await getPullRequestDetailSyncState(env, repoFullName, pr.number);
+  const filesUpToDate = !options.forceFiles && Boolean(existingState?.headSha) && existingState?.headSha === pr.headSha && Boolean(existingState?.filesSyncedAt);
   // Reviews cache (#2537): independent of headSha — a new commit alone does not invalidate existing review
   // state, only an actual `pull_request_review` webhook (submitted/dismissed/edited) does, via
   // markPullRequestReviewsInvalidated. Up to date when a prior sync recorded reviewsSyncedAt and either no

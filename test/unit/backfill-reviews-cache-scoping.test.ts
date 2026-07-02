@@ -300,6 +300,58 @@ describe("GitHub PR reviews cache scoping (#2537)", () => {
     expect(await listPullRequestReviews(env, "JSONbored/gittensory", 64)).toEqual([expect.objectContaining({ reviewerLogin: "maintainer", state: "APPROVED" })]);
   });
 
+  it("REGRESSION (gate finding): a manual force-files refresh does not also force an unrelated reviews refetch", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    await seedRegisteredRepo(env);
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 67,
+      title: "Open PR, manual force-files refresh",
+      state: "open",
+      user: { login: "oktofeesh1" },
+      head: { sha: "head-67" },
+      labels: [],
+      body: "",
+    });
+    await upsertPullRequestReview(env, {
+      id: "JSONbored/gittensory#67#1",
+      repoFullName: "JSONbored/gittensory",
+      pullNumber: 67,
+      reviewerLogin: "maintainer",
+      state: "APPROVED",
+      authorAssociation: "OWNER",
+      submittedAt: "2026-05-19T00:00:00.000Z",
+      payload: { id: 1 },
+    });
+    // Same head SHA + a fresh reviewsSyncedAt — reviews ARE cache-current; `force: true` must only re-fetch
+    // files (its own documented purpose), never reviews (an earlier version of this cache accidentally
+    // skipped the whole sync-state row lookup whenever `forceFiles && headSha`, which zeroed out
+    // `reviewsUpToDate` too and forced an unrelated reviews refetch on every manual files-only force).
+    await upsertPullRequestDetailSyncState(env, {
+      repoFullName: "JSONbored/gittensory",
+      pullNumber: 67,
+      status: "complete",
+      headSha: "head-67",
+      filesSyncedAt: "2026-05-20T00:00:00.000Z",
+      reviewsSyncedAt: "2026-05-20T00:00:00.000Z",
+    });
+    const urls = stubFetchTracking((url) =>
+      url.includes("/pulls/67/files")
+        ? Response.json([{ filename: "src/refreshed.ts", status: "modified", additions: 1, deletions: 1, changes: 2 }])
+        : url.includes("/reviews")
+          ? new Response("must not be called", { status: 500 })
+          : Response.json([]),
+    );
+
+    const result = await refreshPullRequestDetails(env, "JSONbored/gittensory", 67, { force: true });
+
+    expect(result).toMatchObject({ status: "complete" });
+    // Files WERE refetched (force: true)...
+    expect(urls.some((url) => url.includes("/pulls/67/files"))).toBe(true);
+    // ...but reviews were NOT — forceFiles must never bleed into the (unrelated) reviews cache decision.
+    expect(urls.some((url) => url.includes("/pulls/67/reviews"))).toBe(false);
+    expect(await listPullRequestReviews(env, "JSONbored/gittensory", 67)).toEqual([expect.objectContaining({ reviewerLogin: "maintainer", state: "APPROVED" })]);
+  });
+
   describe("markPullRequestReviewsInvalidated", () => {
     it("creates a sync-state row if none exists yet", async () => {
       const env = createTestEnv();
