@@ -1,3 +1,7 @@
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getPullRequestDetailSyncState,
@@ -12,6 +16,8 @@ import { clearGitHubResponseCacheForTest } from "../../src/github/client";
 import { resetMetrics } from "../../src/selfhost/metrics";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
+import { createD1Adapter, nodeSqliteDriver } from "../../src/selfhost/d1-adapter";
+import { runSelfHostMigrations } from "../../src/selfhost/migrate";
 import { createTestEnv } from "../helpers/d1";
 
 describe("GitHub PR reviews cache scoping (#2537)", () => {
@@ -497,6 +503,67 @@ describe("GitHub PR reviews cache scoping (#2537)", () => {
       );
 
       await expect(markPullRequestReviewsInvalidated(env, "JSONbored/gittensory", 73)).rejects.toThrow();
+    });
+  });
+
+  describe("migration 0094 legacy-row cleanup (gate review finding)", () => {
+    it("clears reviews_synced_at ONLY for rows whose last sync was not 'complete', leaving genuinely-complete rows untouched", async () => {
+      // Applies the REAL migration 0094 SQL (read straight off disk, not a hand-copied duplicate) against a
+      // scratch table shaped like the pre-#2537 schema (reviews_synced_at has existed since migration 0006,
+      // long before it gained any cache-skip meaning), seeded with rows exactly as years of pre-#2537 code
+      // would have unconditionally stamped reviews_synced_at regardless of whether that sync actually
+      // succeeded -- this is what a real production database looks like on the day this migration runs.
+      const dir = mkdtempSync(join(tmpdir(), "gtmig-reviews-"));
+      writeFileSync(
+        join(dir, "0001_base.sql"),
+        `CREATE TABLE pull_request_detail_sync_state (
+          id TEXT PRIMARY KEY,
+          repo_full_name TEXT NOT NULL,
+          pull_number INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'never_synced',
+          files_synced_at TEXT,
+          reviews_synced_at TEXT,
+          checks_synced_at TEXT,
+          last_synced_at TEXT,
+          error_summary TEXT,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );`,
+      );
+      const db = createD1Adapter(nodeSqliteDriver(new DatabaseSync(":memory:") as never));
+      await runSelfHostMigrations(db, dir);
+
+      await db
+        .prepare(
+          "insert into pull_request_detail_sync_state (id, repo_full_name, pull_number, status, reviews_synced_at, error_summary, updated_at) values (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("owner/repo#1", "owner/repo", 1, "complete", "2026-05-20T00:00:00.000Z", null, "2026-05-20T00:00:00.000Z")
+        .run();
+      await db
+        .prepare(
+          "insert into pull_request_detail_sync_state (id, repo_full_name, pull_number, status, reviews_synced_at, error_summary, updated_at) values (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("owner/repo#2", "owner/repo", 2, "partial", "2026-05-20T00:00:00.000Z", "Review sync failed for #2: GitHub REST and GraphQL detail fetches failed.", "2026-05-20T00:00:00.000Z")
+        .run();
+      await db
+        .prepare(
+          "insert into pull_request_detail_sync_state (id, repo_full_name, pull_number, status, reviews_synced_at, error_summary, updated_at) values (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("owner/repo#3", "owner/repo", 3, "partial", "2026-05-20T00:00:00.000Z", "File sync failed for #3: GitHub REST and GraphQL detail fetches failed.", "2026-05-20T00:00:00.000Z")
+        .run();
+
+      writeFileSync(join(dir, "0002_reviews_invalidated.sql"), readFileSync("migrations/0094_pull_request_reviews_invalidated.sql", "utf8"));
+      await runSelfHostMigrations(db, dir);
+
+      const rows = (await db.prepare("select id, status, reviews_synced_at from pull_request_detail_sync_state order by pull_number").all()).results as Array<{
+        id: string;
+        status: string;
+        reviews_synced_at: string | null;
+      }>;
+      expect(rows).toEqual([
+        { id: "owner/repo#1", status: "complete", reviews_synced_at: "2026-05-20T00:00:00.000Z" }, // untouched
+        { id: "owner/repo#2", status: "partial", reviews_synced_at: null }, // reset — reviews specifically failed
+        { id: "owner/repo#3", status: "partial", reviews_synced_at: null }, // reset — ambiguous (files failed, reviews unverifiable)
+      ]);
     });
   });
 });
