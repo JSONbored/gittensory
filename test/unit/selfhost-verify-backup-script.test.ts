@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -112,7 +112,17 @@ function sanitizedUrl(url: string): string {
 
   const queryMatch = suffix.match(/^([^?#]*)(?:\?([^#]*))?(#.*)?$/);
   const [, path = "", query = "", frag = ""] = queryMatch ?? ["", "", "", ""];
-  const params = query.length > 0 ? query.split("&").filter((kv) => !kv.startsWith("password=")) : [];
+  // Mirrors the shell's url_decode of the KEY half only -- libpq percent-decodes query key names before
+  // matching them against connection keywords, so `pass%77ord=` is a password key too, not just a literal
+  // `password=`. An invalid percent-sequence is left as-is, same as the shell's awk decoder does.
+  const decodeKey = (raw: string): string => {
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  };
+  const params = query.length > 0 ? query.split("&").filter((kv) => decodeKey(kv.split("=")[0] ?? "") !== "password") : [];
   const cleanedSuffix = path + (params.length > 0 ? `?${params.join("&")}` : "") + frag;
 
   return `postgresql://${sanitizedAuthority}${cleanedSuffix}`;
@@ -388,6 +398,15 @@ describe("self-host verify-backup script", () => {
     // PGPASSFILE, since live's own URL has no password at all.
     expect(lines[2]).toContain("PGPASSFILE=");
     expect(lines[2]).not.toMatch(/PGPASSFILE=\/./);
+    // Every PGPASSFILE created during the run -- including the two from db_identity()'s command
+    // substitutions ($(db_identity ...) forks a subshell, so pg_connect_arg must be called by the caller
+    // in the PARENT shell for its PG_PASSFILES bookkeeping to survive) -- must be gone once the script has
+    // exited and its cleanup trap has run, not merely have kept the password out of argv.
+    for (const line of [lines[1] ?? "", lines[3] ?? "", lines[4] ?? ""]) {
+      const passfile = line.split("PGPASSFILE=")[1];
+      expect(passfile).toMatch(/^\/.+/);
+      expect(existsSync(passfile ?? "")).toBe(false);
+    }
   });
 
   it("strips EVERY occurrence of a repeated query-string password, not just the first", () => {

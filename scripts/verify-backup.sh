@@ -59,6 +59,10 @@ pgpass_escape() {
 # doesn't have one of its own. Sets $PG_SANITIZED_URL; exports PGPASSFILE (tracked in $PG_PASSFILES for
 # cleanup) if the given URL had a password.
 pg_connect_arg() {
+  # Cleared up front, not just when this URL turns out to have no password: any helper command invoked
+  # below (e.g. url_decode) would otherwise inherit a still-exported PGPASSFILE left over from a PREVIOUS
+  # call for a different URL, for the whole duration of this function's parsing work.
+  unset PGPASSFILE
   pg_rest=${1#postgres://}
   pg_rest=${pg_rest#postgresql://}
 
@@ -144,7 +148,6 @@ pg_connect_arg() {
   pg_suffix="$pg_suffix$pg_frag"
   PG_SANITIZED_URL="postgresql://$pg_sanitized_authority$pg_suffix"
 
-  unset PGPASSFILE
   if [ -n "$pg_password_value" ]; then
     # pgpass is a single-line-per-entry format; pgpass_escape only handles the two characters (':' and
     # '\') that format itself treats specially. A decoded password containing a raw newline or carriage
@@ -223,20 +226,27 @@ verify_postgres() {
   # the same cluster as distinct (a legitimate, common scratch-DB setup). No special privilege is required:
   # PUBLIC has EXECUTE on pg_control_system() by default. Any failure to fingerprint EITHER side aborts (fail
   # closed) rather than assuming the databases differ.
+  # Takes an ALREADY-sanitized URL, not the raw one -- pg_connect_arg must be called by the caller in the
+  # PARENT shell before invoking this via command substitution ($(db_identity ...)), never from inside
+  # this function's own body. Command substitution always forks a subshell, and pg_connect_arg's
+  # PG_PASSFILES-tracking side effect would be silently lost when that subshell exits (subshells get a
+  # copy of the parent's variables; changes never propagate back out), orphaning a real,
+  # credential-bearing 600-permission temp file on disk with no owner left to clean it up.
   db_identity() {
-    pg_connect_arg "$1"
-    psql "$PG_SANITIZED_URL" -X -q -t -A -v ON_ERROR_STOP=1 \
+    psql "$1" -X -q -t -A -v ON_ERROR_STOP=1 \
       -c "SELECT current_database() || '@' || (SELECT system_identifier FROM pg_control_system())::text" \
       2>/dev/null
   }
-  scratch_identity="$(db_identity "$scratch")" || scratch_identity=""
+  pg_connect_arg "$scratch"
+  scratch_identity="$(db_identity "$PG_SANITIZED_URL")" || scratch_identity=""
   if [ -z "$scratch_identity" ]; then
     echo "[verify] could not connect to the scratch database to verify its identity; refusing to proceed" >&2
     return 1
   fi
   case "$PG_DB" in
     postgres://* | postgresql://*)
-      live_identity="$(db_identity "$PG_DB")" || live_identity=""
+      pg_connect_arg "$PG_DB"
+      live_identity="$(db_identity "$PG_SANITIZED_URL")" || live_identity=""
       if [ -z "$live_identity" ]; then
         echo "[verify] could not connect to the live backup source to verify its identity; refusing to proceed" >&2
         return 1
