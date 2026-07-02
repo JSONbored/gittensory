@@ -28,6 +28,10 @@ describe("gittensory-mcp CLI — basics", () => {
     const generic = JSON.parse(run(["init-client", "--print", "mcp", "--json"])) as { snippet: string };
     expect(generic.snippet).toBe(claude.snippet);
 
+    // Windsurf consumes the same shared `mcpServers` JSON shape (~/.codeium/windsurf/mcp_config.json).
+    const windsurf = JSON.parse(run(["init-client", "--print", "windsurf", "--json"])) as { snippet: string };
+    expect(windsurf.snippet).toBe(claude.snippet);
+
     const vscode = JSON.parse(run(["init-client", "--print", "vscode", "--json"])) as { snippet: string };
     // VS Code uses a `servers` map with an explicit transport type, not the `mcpServers` shape.
     expect(vscode.snippet).toContain('"servers"');
