@@ -3071,8 +3071,15 @@ export async function upsertPullRequestFile(env: Env, file: PullRequestFileRecor
       payloadJson: jsonString(file.payload),
       updatedAt: nowIso(),
     })
+    // Target the PRIMARY KEY, not the (repoFullName, pullNumber, path) unique index it's derived from. `id`
+    // is a pure function of those same 3 fields, so under a single execution the two are always in lockstep —
+    // but on the self-host Postgres backend, ON CONFLICT only protects against a race on the SPECIFIED arbiter
+    // index; a genuinely concurrent second writer (e.g. two overlapping detail-sync passes for the same PR,
+    // both racing past the "no existing row yet" check) can still hit a raw duplicate-key error on `id` because
+    // that constraint isn't the one Postgres is arbitrating. Targeting `id` directly makes Postgres's upsert
+    // machinery cover the constraint that's actually racing.
     .onConflictDoUpdate({
-      target: [pullRequestFiles.repoFullName, pullRequestFiles.pullNumber, pullRequestFiles.path],
+      target: pullRequestFiles.id,
       set: {
         status: file.status,
         additions: file.additions,
