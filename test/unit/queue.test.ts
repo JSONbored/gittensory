@@ -11703,7 +11703,7 @@ describe("one-shot reopen prevention", () => {
     expect(webhookRow?.status).toBe("processed");
   });
 
-  it("skips the reopen-reclose when a concurrent delivery already holds the per-PR actuation lock (#2135)", async () => {
+  it("retries the reopen-reclose when a concurrent delivery already holds the per-PR actuation lock (#2447)", async () => {
     const calls: Array<{ url: string; method: string }> = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -11728,16 +11728,16 @@ describe("one-shot reopen prevention", () => {
     // happens; the webhook path must stop BEFORE resolveRepositorySettings, the first call the re-review makes.
     const resolveSettingsSpy = vi.spyOn(repositorySettingsModule, "resolveRepositorySettings");
 
-    await processJob(env, {
+    await expect(processJob(env, {
       type: "github-webhook",
       deliveryId: "reopen-lock-contended",
       eventName: "pull_request",
       payload: reopenedPayload("contributor"),
-    });
+    })).rejects.toThrow("pr actuation lock contended");
 
     expect(calls.some((call) => call.method === "PATCH" && call.url.endsWith("/pulls/42"))).toBe(false);
     const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ n: number }>();
-    expect(audit?.n).toBe(0); // no decision recorded either way — the in-flight delivery owns this pass
+    expect(audit?.n).toBe(0); // no decision recorded either way — the queue retry owns the deferred decision
     expect(resolveSettingsSpy).not.toHaveBeenCalled(); // the normal re-review pass never started
   });
 
@@ -12245,7 +12245,7 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
     expect(audit?.detail).toContain("dry-run: would close");
   });
 
-  it("skips the draft-dodge close when a concurrent delivery already holds the per-PR actuation lock (#2135)", async () => {
+  it("retries the draft-dodge close when a concurrent delivery already holds the per-PR actuation lock (#2447)", async () => {
     const calls: string[] = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -12263,11 +12263,11 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
     // racing this converted_to_draft event) — the lock key it would hold is pre-claimed here.
     await env.SELFHOST_TRANSIENT_CACHE?.set("pr-actuation-lock:jsonbored/gittensory#42", "1", 60);
 
-    await processJob(env, { type: "github-webhook", deliveryId: "draft-dodge-lock-contended", eventName: "pull_request", payload: draftPayload("contributor") });
+    await expect(processJob(env, { type: "github-webhook", deliveryId: "draft-dodge-lock-contended", eventName: "pull_request", payload: draftPayload("contributor") })).rejects.toThrow("pr actuation lock contended");
 
     expect(calls.some((c) => c.includes("PATCH") && c.includes("/pulls/42"))).toBe(false);
     const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.draft_dodge_closed").first<{ n: number }>();
-    expect(audit?.n).toBe(0); // no decision recorded either way — the in-flight delivery owns this pass
+    expect(audit?.n).toBe(0); // no decision recorded either way — the queue retry owns the deferred decision
   });
 
   it("REGRESSION: exactly ONE of two genuinely concurrent draft-dodge deliveries for the SAME PR wins the actuation lock (#2135)", async () => {
@@ -12290,10 +12290,12 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
     await setupRepo(env);
     await recordGateBlockOutcome(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", blockerCodes: ["missing_linked_issue"] });
 
-    await Promise.all([
+    const results = await Promise.allSettled([
       processJob(env, { type: "github-webhook", deliveryId: "draft-dodge-race-a", eventName: "pull_request", payload: draftPayload("contributor") }),
       processJob(env, { type: "github-webhook", deliveryId: "draft-dodge-race-b", eventName: "pull_request", payload: draftPayload("contributor") }),
     ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
 
     const patchCalls = calls.filter((c) => c.includes("PATCH") && c.includes("/pulls/42"));
     expect(patchCalls).toHaveLength(1); // exactly one delivery won the race and closed the PR
