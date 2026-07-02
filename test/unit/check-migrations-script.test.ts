@@ -40,6 +40,11 @@ describe("check-migrations script", () => {
     ["temp schema table", "CREATE TABLE temp.scratch AS SELECT 1;"],
     ["temp schema index", "CREATE INDEX IF NOT EXISTS temp.scratch_idx ON scratch(id);"],
     ["temp schema unique index", "CREATE UNIQUE INDEX temp.scratch_idx ON scratch(id);"],
+    ["double-quoted temp schema", 'CREATE TABLE "temp".scratch AS SELECT 1;'],
+    ["double-quoted temp schema, both sides quoted", 'CREATE TABLE "temp"."scratch" AS SELECT 1;'],
+    ["backtick-quoted temp schema", "CREATE TABLE `temp`.scratch AS SELECT 1;"],
+    ["bracket-quoted temp schema", "CREATE TABLE [temp].scratch AS SELECT 1;"],
+    ["single-quoted temp schema (SQLite's single-quote-as-identifier misfeature)", "CREATE TABLE 'temp'.scratch AS SELECT 1;"],
   ])("rejects a migration that creates a temporary object via %s (the D1 remote authorizer blocks it)", (_name, sql) => {
     const r = runCheck({ "0001_temp.sql": `${sql}\n` });
 
@@ -79,8 +84,31 @@ describe("check-migrations script", () => {
     expect(r.out).toContain("1 migrations OK");
   });
 
+  it("does not flag a single-quoted VALUE that literally contains the temp-schema pattern's text, since it is not schema-qualifying a dot", () => {
+    // The temp-schema alternative in D1_FORBIDDEN has no start-of-statement anchor (unlike attach/vacuum/
+    // pragma/etc.), so a single-quoted value's content can't be blanket-preserved just because SOME
+    // single-quoted tokens are legitimately identifiers (see the SQLite single-quote-misfeature test
+    // above) -- only a value immediately followed by a `.` is treated as an identifier.
+    const r = runCheck({
+      "0001_ok.sql": "INSERT INTO logs (msg) VALUES ('create temporary object warning');\n",
+    });
+
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("1 migrations OK");
+  });
+
   it("does not flag a CREATE UNIQUE INDEX that is not in the temp schema", () => {
     const r = runCheck({ "0001_ok.sql": "CREATE UNIQUE INDEX idx_t_id ON t(id);\n" });
+
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("1 migrations OK");
+  });
+
+  it("does not flag a quoted identifier that merely contains \"temp\" without a schema-qualifying dot", () => {
+    const r = runCheck({
+      "0001_ok.sql":
+        'CREATE TABLE "temp_settings" (id INTEGER PRIMARY KEY);\n' + "CREATE TABLE `temp_cache` (id INTEGER PRIMARY KEY);\n",
+    });
 
     expect(r.status).toBe(0);
     expect(r.out).toContain("1 migrations OK");
