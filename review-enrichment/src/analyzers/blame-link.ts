@@ -76,9 +76,10 @@ async function fetchGithubJson<T>(
   signal: AbortSignal | undefined,
   options: Pick<ScanOptions, "analysis" | "diagnostics">,
   subcall: string,
+  endpointCategory: string,
 ): Promise<T | null> {
   const fetchOptions = {
-    endpointCategory: "github-commits",
+    endpointCategory,
     headers,
     signal,
     fetchImpl: fetchFn,
@@ -110,7 +111,9 @@ export async function fetchLatestCommitSha(
   const url =
     `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits` +
     `?path=${encodeURIComponent(path)}&per_page=1${shaQuery}`;
-  const commits = await fetchGithubJson<CommitListItem[]>(url, headers, fetchFn, signal, options, "github-commits");
+  const commits = await fetchGithubJson<CommitListItem[]>(
+    url, headers, fetchFn, signal, options, "github-commits", "github-commits",
+  );
   const sha = Array.isArray(commits) ? commits[0]?.sha : undefined;
   return typeof sha === "string" && sha ? sha : null;
 }
@@ -126,7 +129,9 @@ export async function fetchPrForCommit(
   options: Pick<ScanOptions, "analysis" | "diagnostics">,
 ): Promise<number | null> {
   const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}/pulls`;
-  const pulls = await fetchGithubJson<AssociatedPr[]>(url, headers, fetchFn, signal, options, "github-commit-pulls");
+  const pulls = await fetchGithubJson<AssociatedPr[]>(
+    url, headers, fetchFn, signal, options, "github-commit-pulls", "github-commit-pulls",
+  );
   const number = Array.isArray(pulls) ? pulls[0]?.number : undefined;
   return typeof number === "number" ? number : null;
 }

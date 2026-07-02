@@ -100,14 +100,26 @@ test("scanBlameLink: pure-addition and added files are skipped (nothing to blame
   assert.deepEqual(findings, []);
 });
 
-test("scanBlameLink: caps the number of files probed", async () => {
+test("scanBlameLink: caps probed files and total lookups, leaving later files untouched", async () => {
   const files = Array.from({ length: 10 }, (_, i) => ({
     path: `src/f${i}.ts`,
     status: "modified",
     patch: modifyPatch(i + 1),
   }));
-  const findings = await scanBlameLink(req(files), routedFetch({ commitSha: "abcdef1234567890", prNumber: 9 }));
+  let calls = 0;
+  const probedPaths = new Set();
+  const countingFetch = async (url) => {
+    calls += 1;
+    const path = new URL(url).searchParams.get("path");
+    if (path) probedPaths.add(path);
+    if (url.includes("/pulls")) return jsonResponse([{ number: 9 }]);
+    if (url.includes("/commits?")) return jsonResponse([{ sha: "abcdef1234567890" }]);
+    return jsonResponse([], 404);
+  };
+  const findings = await scanBlameLink(req(files), countingFetch);
   assert.equal(findings.length, 6); // MAX_FILES_PROBED
+  assert.equal(calls, 12); // 6 files × (1 commit-list + 1 pulls) = MAX_LOOKUPS; not one more
+  assert.deepEqual([...probedPaths].sort(), ["src/f0.ts", "src/f1.ts", "src/f2.ts", "src/f3.ts", "src/f4.ts", "src/f5.ts"]); // f6..f9 never probed
 });
 
 test("scanBlameLink: no GitHub token → skipped (no finding, no throw)", async () => {
