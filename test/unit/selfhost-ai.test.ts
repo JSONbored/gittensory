@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertNoLegacySharedAiEnv, buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, extractCliUsage, isAiProviderHealthy, markAiProviderUnhealthyAtBoot, resetAiProviderHealthForTest, resolveAiReviewerPlan, resolveClaudeCliTimeoutMs, resolveCodexCliTimeoutMs, resolveCodexEffort, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, resolveSubscriptionCliPath, redactSecrets, routeProviders, subscriptionCliEnv } from "../../src/selfhost/ai";
+import { assertNoLegacySharedAiEnv, buildProvider, claudeErrorStatus, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, extractCliUsage, isAiProviderHealthy, markAiProviderUnhealthyAtBoot, resetAiProviderHealthForTest, resolveAiReviewerPlan, resolveClaudeCliTimeoutMs, resolveCodexCliTimeoutMs, resolveCodexEffort, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, resolveSubscriptionCliPath, redactSecrets, routeProviders, shouldMarkAiProviderUnhealthyAtBoot, subscriptionCliEnv } from "../../src/selfhost/ai";
 import { labelSelfHostReviewerModel } from "../../src/selfhost/ai-config";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 
@@ -241,6 +241,39 @@ describe("isAiProviderHealthy (readiness streak, #2497)", () => {
 
     await expect(createChainAi([working]).run("m", { prompt: "x" })).resolves.toEqual({ response: "ok" });
     expect(isAiProviderHealthy()).toBe(true);
+  });
+});
+
+describe("shouldMarkAiProviderUnhealthyAtBoot (#2497 follow-up)", () => {
+  it("returns false when nothing is missing", () => {
+    expect(shouldMarkAiProviderUnhealthyAtBoot(["claude-code"], [])).toBe(false);
+  });
+
+  it("returns false when no provider is configured at all", () => {
+    expect(shouldMarkAiProviderUnhealthyAtBoot([], [])).toBe(false);
+  });
+
+  it("returns true for a single configured CLI provider whose CLI is missing", () => {
+    expect(shouldMarkAiProviderUnhealthyAtBoot(["claude-code"], ["claude-code"])).toBe(true);
+  });
+
+  it("regression: returns false for a mixed chain where only ONE provider's CLI is missing and a fallback exists", () => {
+    // The bug the gate's review caught: an earlier version force-marked the whole ai_provider probe
+    // unhealthy for ANY missing CLI, even when AI_PROVIDER listed a working non-CLI (or another
+    // present-CLI) fallback that routeProviders would actually fall through to.
+    expect(shouldMarkAiProviderUnhealthyAtBoot(["claude-code", "anthropic"], ["claude-code"])).toBe(false);
+  });
+
+  it("returns false for a mixed chain of two CLI providers when only one is missing", () => {
+    expect(shouldMarkAiProviderUnhealthyAtBoot(["claude-code", "codex"], ["codex"])).toBe(false);
+  });
+
+  it("returns true when EVERY configured provider is a missing CLI (the whole chain has zero chance of working)", () => {
+    expect(shouldMarkAiProviderUnhealthyAtBoot(["claude-code", "codex"], ["claude-code", "codex"])).toBe(true);
+  });
+
+  it("returns false for an HTTP-only chain, since resolveRequiredCliProviders never reports one as missing", () => {
+    expect(shouldMarkAiProviderUnhealthyAtBoot(["anthropic"], [])).toBe(false);
   });
 });
 

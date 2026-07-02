@@ -604,11 +604,32 @@ export function resetAiProviderHealthForTest(): void {
   aiConsecutiveFailures = 0;
 }
 
+/** Whether a missing-CLI boot check should force /ready unhealthy: only when EVERY configured provider is
+ *  among the missing-CLI set, i.e. the whole AI_PROVIDER chain has zero chance of working -- not just one
+ *  provider within a chain that has a working fallback (another present CLI, or an HTTP-based provider,
+ *  unverifiable this cheaply at boot but not KNOWN-broken either). Flagged by the gate's own review: an
+ *  earlier version force-marked the whole probe unhealthy for ANY missing CLI, which was a false positive
+ *  for a chain like "claude-code,anthropic" where claude-code's CLI is missing but anthropic can still serve
+ *  every request via routeProviders' fallback (#2497 follow-up). Pure so the boundary is unit-testable
+ *  independent of server.ts, which has no test harness. */
+export function shouldMarkAiProviderUnhealthyAtBoot(
+  configuredProviders: readonly string[],
+  missingCliProviders: readonly string[],
+): boolean {
+  if (missingCliProviders.length === 0) return false;
+  const configured = new Set(configuredProviders);
+  if (configured.size === 0) return false;
+  const missing = new Set(missingCliProviders);
+  return [...configured].every((provider) => missing.has(provider));
+}
+
 /** Force the streak straight to the unhealthy threshold (#2497 follow-up): for a REQUIRED CLI-subscription
  *  provider's binary missing from PATH, caught at boot (server.ts's own fail-loud CLI-presence check) --
  *  a real, immediately-known misconfiguration that shouldn't need three real AI-call failures to surface in
  *  /ready, unlike a bad HTTP-provider API key or an unreachable endpoint, which can only be confirmed by a
- *  real call and so still rely on the historical streak above. */
+ *  real call and so still rely on the historical streak above. Callers should gate this with
+ *  shouldMarkAiProviderUnhealthyAtBoot so a chain with a working fallback provider isn't force-marked
+ *  unhealthy just because one sibling provider's CLI is missing. */
 export function markAiProviderUnhealthyAtBoot(): void {
   aiConsecutiveFailures = AI_UNHEALTHY_FAILURE_STREAK;
 }

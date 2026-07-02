@@ -20,8 +20,10 @@ import {
   isAiProviderHealthy,
   markAiProviderUnhealthyAtBoot,
   resolveAiReviewerPlan,
+  resolveProviderNames,
   resolveRequiredCliProviders,
   resolveSubscriptionCliPath,
+  shouldMarkAiProviderUnhealthyAtBoot,
 } from "./selfhost/ai";
 import {
   cookieValue,
@@ -377,8 +379,10 @@ async function main(): Promise<void> {
   // subprocess; if the binary is absent (image built without INSTALL_AI_CLIS=true) the spawn ENOENTs and EVERY AI
   // review silently degrades to "no usable output". Shout at boot so the misconfig is obvious, never invisible.
   const pathDirs = resolveSubscriptionCliPath(process.env).split(delimiter);
+  const missingCliProviders = new Set<string>();
   for (const { provider, cli } of resolveRequiredCliProviders(process.env)) {
     if (pathDirs.some((d) => d && existsSync(join(d, cli)))) continue;
+    missingCliProviders.add(provider);
     console.error(
       JSON.stringify({
         level: "error",
@@ -388,9 +392,11 @@ async function main(): Promise<void> {
         message: `AI_PROVIDER=${process.env.AI_PROVIDER} includes ${provider} but '${cli}' is not on PATH — every ${provider} AI review will produce NO output. Rebuild the image with --build-arg INSTALL_AI_CLIS=true (or use the published image) and authenticate the CLI.`,
       }),
     );
-    // Feed this into the ai_provider /ready probe (#2497): unlike an HTTP-provider bad API key, a missing
-    // required CLI binary is a real, immediately-known misconfiguration -- /ready should report it from the
-    // first check, not wait for three real webhook-triggered AI-call failures to exhaust the chain.
+  }
+  // Feed into the ai_provider /ready probe (#2497) -- see shouldMarkAiProviderUnhealthyAtBoot for why this is
+  // gated on the WHOLE chain being unavailable, not just one missing CLI within a chain that has a working
+  // fallback provider.
+  if (shouldMarkAiProviderUnhealthyAtBoot(resolveProviderNames(process.env), [...missingCliProviders])) {
     markAiProviderUnhealthyAtBoot();
   }
   // Dedicated RAG embed provider (keeps the review chain frontier-only): when AI_EMBED_BASE_URL is set, embeddings
