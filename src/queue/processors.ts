@@ -3865,6 +3865,10 @@ async function processGitHubWebhook(
         !settings.agentPaused &&
         !isProtectedAutomationAuthor(pr.authorLogin)
       ) {
+        // Deliberately UNCAUGHT here: closeDraftDodgeAttemptIfBlocked catches every operation that should
+        // fail safely, but leaves the write-permission-readiness getInstallation read (#2134) uncaught on
+        // purpose so a transient D1 failure propagates and the queue retries instead of misrecording a
+        // permission denial.
         await maybeCloseDraftDodgeAttempt(
           env,
           deliveryId,
@@ -3872,7 +3876,7 @@ async function processGitHubWebhook(
           repoFullName,
           pr,
           settings,
-        ).catch(() => undefined);
+        );
       }
       if (
         installationId &&
