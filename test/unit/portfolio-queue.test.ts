@@ -73,6 +73,14 @@ describe("portfolio queue primitives", () => {
     expect(dequeueItem(queue, "   ")).toBe(queue);
   });
 
+  it("dequeues a logical id from a prebuilt queue even when the stored id is untrimmed", () => {
+    const queue: PortfolioQueue = {
+      buckets: [{ repoFullName: "acme/alpha", items: [{ id: "  a-1  ", repoFullName: "acme/alpha", state: "queued" }] }],
+    };
+
+    expect(dequeueItem(queue, "a-1")).toEqual({ buckets: [] });
+  });
+
   it("returns no eligible items for an empty queue", () => {
     expect(nextEligibleItems({ buckets: [] }, { globalWipCap: 2, perRepoWipCap: 1 })).toEqual([]);
   });
@@ -92,6 +100,20 @@ describe("portfolio queue primitives", () => {
 
     expect(nextEligibleItems(queue, { globalWipCap: Number.POSITIVE_INFINITY, perRepoWipCap: 1 })).toEqual([]);
     expect(nextEligibleItems(queue, { globalWipCap: 2, perRepoWipCap: -1 })).toEqual([]);
+  });
+
+  it("truncates fractional caps and treats NaN as zero", () => {
+    const queue = queueOf(
+      item("a-queued-1", "acme/alpha"),
+      item("a-queued-2", "acme/alpha"),
+      item("b-queued-1", "acme/beta"),
+    );
+
+    expect(nextEligibleItems(queue, { globalWipCap: 2.9, perRepoWipCap: 1.8 }).map((entry) => entry.id)).toEqual([
+      "a-queued-1",
+      "b-queued-1",
+    ]);
+    expect(nextEligibleItems(queue, { globalWipCap: Number.NaN, perRepoWipCap: 2 })).toEqual([]);
   });
 
   it("diversifies multi-repo selection and prefers the least represented repos first", () => {

@@ -28,7 +28,6 @@ export type PortfolioCaps = {
 
 type QueueSelectionBucket = {
   repoFullName: string;
-  bucketIndex: number;
   activeCount: number;
   queuedItems: PortfolioQueueItem[];
   selectedCount: number;
@@ -117,7 +116,7 @@ export function dequeueItem(queue: PortfolioQueue, itemId: string): PortfolioQue
   let removed = false;
   const buckets = queue.buckets.flatMap((bucket) => {
     const items = bucket.items.filter((item) => {
-      const keep = item.id !== targetId;
+      const keep = cleanId(item.id) !== targetId;
       if (!keep) removed = true;
       return keep;
     });
@@ -140,13 +139,12 @@ export function nextEligibleItems(queue: PortfolioQueue, caps: PortfolioCaps): P
   const remainingGlobalSlots = normalizedCaps.globalWipCap - totalActiveCount;
   if (remainingGlobalSlots <= 0) return [];
 
-  const selectionBuckets = queue.buckets.map((bucket, bucketIndex) => {
+  const selectionBuckets = queue.buckets.map((bucket) => {
     const activeCount = bucket.items.filter(isActiveItem).length;
     const queuedItems = bucket.items.filter(isQueuedItem);
     const remainingPerRepoCapacity = normalizedCaps.perRepoWipCap - activeCount;
     return {
       repoFullName: bucket.repoFullName,
-      bucketIndex,
       activeCount,
       queuedItems: remainingPerRepoCapacity > 0 ? queuedItems.slice(0, remainingPerRepoCapacity) : [],
       selectedCount: 0,
