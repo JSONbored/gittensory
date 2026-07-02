@@ -1545,6 +1545,18 @@ describe("parseFocusManifest review config", () => {
     expect(parseFocusManifest({ review: reviewConfigToJson(chill.review) }).review).toEqual(chill.review);
   });
 
+  it("parses gate tri-state modes case-insensitively like review.profile", () => {
+    const manifest = parseFocusManifest({
+      gate: { linkedIssue: "BLOCK", duplicates: "Advisory", size: { mode: "OFF" } },
+      settings: { linkedIssueGateMode: "Block" },
+    });
+    expect(manifest.gate.linkedIssue).toBe("block");
+    expect(manifest.gate.duplicates).toBe("advisory");
+    expect(manifest.gate.sizeMode).toBe("off");
+    expect(manifest.settings.linkedIssueGateMode).toBe("block");
+    expect(resolveEffectiveSettings({ linkedIssueGateMode: "off" } as RepositorySettings, manifest).linkedIssueGateMode).toBe("block");
+  });
+
   it("ignores an invalid review.profile with a warning", () => {
     const m = parseFocusManifest({ review: { profile: "spicy" } });
     expect(m.review.profile).toBeNull();

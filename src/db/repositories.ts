@@ -1138,8 +1138,10 @@ export async function getRepoQueueTrendSnapshot(env: Env, repoFullName: string):
 // drizzle's `onConflictDoUpdate` strips `undefined` entries from the generated SQL `SET` clause rather than
 // writing NULL. Every "running" pre-fetch stamp (backfill.ts) relies on this to touch only `status` without
 // clearing the PREVIOUS `headSha`/`*SyncedAt` row — including the repo+PR+headSha file cache
-// (#audit-rate-headroom), which would silently stop hitting if a future edit here coalesced an omitted field to
-// `null` (e.g. `headSha: state.headSha ?? null`). Pass `null` explicitly to actually clear a column.
+// (#audit-rate-headroom) and the durable bare-PR-state cache (#2537), which would silently stop hitting if a
+// future edit here coalesced an omitted field to `null` (e.g. `headSha: state.headSha ?? null`). Pass `null`
+// explicitly to actually clear a column (this is exactly how webhook invalidation clears prMergeableState/prState
+// below).
 export async function upsertPullRequestDetailSyncState(env: Env, state: PullRequestDetailSyncStateRecord): Promise<void> {
   const db = getDb(env.DB);
   await db
@@ -1156,6 +1158,9 @@ export async function upsertPullRequestDetailSyncState(env: Env, state: PullRequ
       checksSyncedAt: state.checksSyncedAt,
       lastSyncedAt: state.lastSyncedAt,
       errorSummary: state.errorSummary,
+      prMergeableState: state.prMergeableState,
+      prState: state.prState,
+      prStateFetchedAt: state.prStateFetchedAt,
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -1169,6 +1174,9 @@ export async function upsertPullRequestDetailSyncState(env: Env, state: PullRequ
         checksSyncedAt: state.checksSyncedAt,
         lastSyncedAt: state.lastSyncedAt,
         errorSummary: state.errorSummary,
+        prMergeableState: state.prMergeableState,
+        prState: state.prState,
+        prStateFetchedAt: state.prStateFetchedAt,
         updatedAt: nowIso(),
       },
     });
@@ -2287,6 +2295,25 @@ export async function countRecentDeadLetters(env: Env, sinceIso: string): Promis
   /* v8 ignore next -- count(*) always returns exactly one row; the empty-array guard only satisfies the destructure type. */
   if (!row) return 0;
   return row.count;
+}
+
+/** Observability for the DLQ dashboard (#1208): recent dead letters grouped by job type, using the jobType stored
+ *  in each `github_app.dlq_dead_lettered` audit event's metadata. Missing/blank jobType falls back to `unknown`,
+ *  and the returned object's keys are sorted deterministically for stable consumers/tests. */
+export async function countRecentDeadLettersByType(env: Env, sinceIso: string): Promise<Record<string, number>> {
+  const db = getDb(env.DB);
+  const jobTypeExpr =
+    sql<string>`coalesce(nullif(trim(cast(json_extract(${auditEvents.metadataJson}, '$.jobType') as text)), ''), 'unknown')`;
+  const rows = await db
+    .select({
+      jobType: jobTypeExpr,
+      count: sql<number>`count(*)`,
+    })
+    .from(auditEvents)
+    .where(and(eq(auditEvents.eventType, "github_app.dlq_dead_lettered"), gte(auditEvents.createdAt, sinceIso)))
+    .groupBy(jobTypeExpr)
+    .orderBy(asc(jobTypeExpr));
+  return Object.fromEntries(rows.map((row) => [row.jobType, Number(row.count)]));
 }
 
 export type PrVisibilitySkipAuditEvent = {
@@ -4276,6 +4303,9 @@ function toPullRequestDetailSyncStateRecord(row: typeof pullRequestDetailSyncSta
     checksSyncedAt: row.checksSyncedAt,
     lastSyncedAt: row.lastSyncedAt,
     errorSummary: row.errorSummary,
+    prMergeableState: row.prMergeableState,
+    prState: row.prState,
+    prStateFetchedAt: row.prStateFetchedAt,
     updatedAt: row.updatedAt,
   };
 }

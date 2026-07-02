@@ -379,6 +379,8 @@ export function renderBrief(
     }
   }
 
+  lines.push(...renderDescriptorSection("blameLink", findings.blameLink));
+
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 
   const header =

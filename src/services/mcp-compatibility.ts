@@ -59,6 +59,9 @@ export function classifyMcpClientVersion(version: string | null | undefined): Mc
   const minimumComparison = compareMcpSemver(version, MINIMUM_SUPPORTED_MCP_VERSION);
   if (minimumComparison === null) return "unknown";
   if (minimumComparison < 0) return "incompatible";
+  // The client semver already parsed for the minimum check, so this comparison cannot return null.
+  const recommendedComparison = compareMcpSemver(version, LATEST_RECOMMENDED_MCP_VERSION)!;
+  if (recommendedComparison < 0) return "stale";
   return "current";
 }
 
