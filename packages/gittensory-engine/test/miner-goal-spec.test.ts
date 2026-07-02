@@ -21,6 +21,13 @@ test("DEFAULT_MINER_GOAL_SPEC carries the documented safe defaults", () => {
   });
 });
 
+test("DEFAULT_MINER_GOAL_SPEC is deep-frozen so the shared singleton can't be mutated", () => {
+  assert.ok(Object.isFrozen(DEFAULT_MINER_GOAL_SPEC));
+  assert.ok(Object.isFrozen(DEFAULT_MINER_GOAL_SPEC.wantedPaths));
+  assert.ok(Object.isFrozen(DEFAULT_MINER_GOAL_SPEC.blockedPaths));
+  assert.ok(Object.isFrozen(DEFAULT_MINER_GOAL_SPEC.preferredLabels));
+});
+
 test("DEFAULT_MINER_GOAL_SPEC exposes exactly the specified field surface", () => {
   assert.deepEqual(Object.keys(DEFAULT_MINER_GOAL_SPEC).sort(), [
     "blockedPaths",

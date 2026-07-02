@@ -23,20 +23,21 @@ export type MinerGoalSpec = {
    * Work areas the maintainer wants a miner to focus on; a candidate touching these is preferred. Glob list.
    * Default: [] (no preference).
    */
-  wantedPaths: string[];
+  wantedPaths: readonly string[];
   /**
    * Paths off-limits to a miner. A candidate touching one of these should be skipped. Glob list.
    * Default: [] (nothing blocked).
    */
-  blockedPaths: string[];
+  blockedPaths: readonly string[];
   /**
    * Issue/PR labels the maintainer prefers a miner to target; a candidate carrying one is favored. String list.
    * Default: [] (no preference).
    */
-  preferredLabels: string[];
+  preferredLabels: readonly string[];
   /**
    * Maximum number of issues a single miner may hold claimed on this repo at once, so one miner cannot monopolize
-   * a repo's queue. Default: 1.
+   * a repo's queue. A positive integer (`>= 1`); the parser is expected to floor/round and reject values below 1.
+   * Default: 1.
    */
   maxConcurrentClaims: number;
   /**
@@ -51,12 +52,15 @@ export type MinerGoalSpec = {
  * Every value here matches the "Default: X" documented on its field above. Analogous to the defaults constant that
  * accompanies `FocusManifest` in `src/signals/focus-manifest.ts` — a repo with no file behaves as if it declared
  * this: minable, with no path/label preferences, one concurrent claim, and neutral discovery.
+ *
+ * Deep-frozen: this is a shared singleton, so runtime code can read it freely but must not mutate it — clone before
+ * layering repo-specific overrides on top.
  */
-export const DEFAULT_MINER_GOAL_SPEC: MinerGoalSpec = {
+export const DEFAULT_MINER_GOAL_SPEC: MinerGoalSpec = Object.freeze({
   minerEnabled: true,
-  wantedPaths: [],
-  blockedPaths: [],
-  preferredLabels: [],
+  wantedPaths: Object.freeze([]),
+  blockedPaths: Object.freeze([]),
+  preferredLabels: Object.freeze([]),
   maxConcurrentClaims: 1,
   issueDiscoveryPolicy: "neutral",
-};
+});
