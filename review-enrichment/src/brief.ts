@@ -17,6 +17,7 @@ import type {
 import {
   recordAnalyzerCircuitFailure,
   recordAnalyzerCircuitSuccess,
+  releaseAnalyzerCircuitProbe,
 } from "./analyzer-circuit-breaker.js";
 import {
   createAnalysisContext,
@@ -262,6 +263,10 @@ export async function buildBrief(
       };
       partial = true;
       analysis.metrics.recordCappedWork("analyzer_budget", 1);
+      // #2541: budget exhaustion, not a dependency-health signal -- if this call had claimed the circuit
+      // breaker's half-open probe (isAnalyzerCircuitOpen), free it so a later request can still probe rather
+      // than leaving the slot claimed forever with no outcome ever recorded.
+      releaseAnalyzerCircuitProbe(name);
       return;
     }
     const timeoutMs = analyzerTimeoutMs(
@@ -283,6 +288,8 @@ export async function buildBrief(
       };
       partial = true;
       analysis.metrics.recordCappedWork(`analyzer_${item.descriptor.cost}`, 1);
+      // #2541: same as above -- release a claimed half-open probe without recording an outcome.
+      releaseAnalyzerCircuitProbe(name);
       return;
     }
     try {

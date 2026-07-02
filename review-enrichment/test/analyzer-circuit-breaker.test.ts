@@ -6,6 +6,7 @@ import {
   isAnalyzerCircuitOpen,
   recordAnalyzerCircuitFailure,
   recordAnalyzerCircuitSuccess,
+  releaseAnalyzerCircuitProbe,
   resetAnalyzerCircuitsForTest,
 } from "../dist/analyzer-circuit-breaker.js";
 
@@ -126,4 +127,122 @@ test("an EXPLICITLY requested analyzer (req.analyzers) is still skipped while it
 
   assert.equal(calls, 3);
   assert.equal(brief.analyzerStatus.history, "skipped");
+});
+
+// Half-open probing (#2624 review follow-up): once the cooldown expires, only ONE caller should get to
+// re-try the analyzer at a time — a burst of concurrent requests must not all hit the same still-unhealthy
+// dependency simultaneously just because the cooldown clock happened to expire.
+test("half-open: only the FIRST caller after cooldown expiry gets to probe — a second caller in the same instant is still blocked", async () => {
+  const realNow = Date.now();
+  let fakeNow = realNow;
+  const originalNow = Date.now;
+  try {
+    Date.now = () => fakeNow;
+    recordAnalyzerCircuitFailure("history");
+    recordAnalyzerCircuitFailure("history");
+    recordAnalyzerCircuitFailure("history");
+    fakeNow = realNow + 5 * 60_000 + 1; // past the cooldown window
+
+    assert.equal(isAnalyzerCircuitOpen("history"), false); // first caller claims the probe
+    assert.equal(isAnalyzerCircuitOpen("history"), true); // second caller, same instant — still blocked
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("half-open: a successful probe fully closes the circuit — a later caller is not treated as another probe", async () => {
+  const realNow = Date.now();
+  let fakeNow = realNow;
+  const originalNow = Date.now;
+  try {
+    Date.now = () => fakeNow;
+    recordAnalyzerCircuitFailure("history");
+    recordAnalyzerCircuitFailure("history");
+    recordAnalyzerCircuitFailure("history");
+    fakeNow = realNow + 5 * 60_000 + 1;
+
+    assert.equal(isAnalyzerCircuitOpen("history"), false); // claims the probe
+    recordAnalyzerCircuitSuccess("history");
+
+    assert.equal(isAnalyzerCircuitOpen("history"), false); // fully closed, not "another probe"
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("half-open: a failed probe re-extends the cooldown and immediately blocks new callers again", async () => {
+  const realNow = Date.now();
+  let fakeNow = realNow;
+  const originalNow = Date.now;
+  try {
+    Date.now = () => fakeNow;
+    recordAnalyzerCircuitFailure("history");
+    recordAnalyzerCircuitFailure("history");
+    recordAnalyzerCircuitFailure("history");
+    fakeNow = realNow + 5 * 60_000 + 1;
+
+    assert.equal(isAnalyzerCircuitOpen("history"), false); // claims the probe
+    recordAnalyzerCircuitFailure("history", fakeNow);
+
+    assert.equal(isAnalyzerCircuitOpen("history"), true); // re-tripped, new cooldown active
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("releaseAnalyzerCircuitProbe frees a claimed slot without recording an outcome, so a later caller can still probe immediately", async () => {
+  const realNow = Date.now();
+  let fakeNow = realNow;
+  const originalNow = Date.now;
+  try {
+    Date.now = () => fakeNow;
+    recordAnalyzerCircuitFailure("history");
+    recordAnalyzerCircuitFailure("history");
+    recordAnalyzerCircuitFailure("history");
+    fakeNow = realNow + 5 * 60_000 + 1;
+
+    assert.equal(isAnalyzerCircuitOpen("history"), false); // claims the probe
+    assert.equal(isAnalyzerCircuitOpen("history"), true); // second caller blocked
+
+    releaseAnalyzerCircuitProbe("history"); // e.g. the probing analyzer never ran (budget-capped)
+
+    assert.equal(isAnalyzerCircuitOpen("history"), false); // released — a fresh probe can be claimed
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("releaseAnalyzerCircuitProbe on an analyzer with no circuit state, or no claimed probe, is a safe no-op", () => {
+  assert.doesNotThrow(() => releaseAnalyzerCircuitProbe("secret"));
+  recordAnalyzerCircuitFailure("secret");
+  assert.doesNotThrow(() => releaseAnalyzerCircuitProbe("secret")); // tripped but cooling down, no probe claimed
+  assert.equal(isAnalyzerCircuitOpen("secret"), false); // below the streak threshold — unaffected either way
+});
+
+test("end-to-end: two concurrent buildBrief calls right after cooldown expiry — only the FIRST invokes the analyzer, the second is skipped as circuit_open", async () => {
+  const realNow = Date.now();
+  let fakeNow = realNow;
+  const originalNow = Date.now;
+  try {
+    Date.now = () => fakeNow;
+    recordAnalyzerCircuitFailure("secret");
+    recordAnalyzerCircuitFailure("secret");
+    recordAnalyzerCircuitFailure("secret");
+    fakeNow = realNow + 5 * 60_000 + 1;
+
+    let calls = 0;
+    const secretReq = { ...baseReq, analyzers: ["secret"] };
+    const ok = { secret: async () => { calls += 1; return []; } };
+    // Async functions run synchronously up to their first `await`, so both buildBrief() calls' planning
+    // phases (fully synchronous, including isAnalyzerCircuitOpen) resolve in call order BEFORE either
+    // promise is awaited — this deterministically reproduces the "burst right after cooldown expiry" race.
+    const [first, second] = await Promise.all([buildBrief(secretReq, ok), buildBrief(secretReq, ok)]);
+
+    assert.equal(calls, 1);
+    assert.notEqual(first.analyzerStatus.secret, "skipped");
+    assert.equal(second.analyzerStatus.secret, "skipped");
+    assert.equal(second.telemetry.analyzers.secret.skipReason, "circuit_open");
+  } finally {
+    Date.now = originalNow;
+  }
 });
