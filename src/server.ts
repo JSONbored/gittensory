@@ -525,7 +525,6 @@ async function main(): Promise<void> {
     "gittensory_jobs_dead_total",
     "gittensory_jobs_rate_limited_total",
     "gittensory_jobs_rate_limit_deferred_total",
-    "gittensory_jobs_deferred_total",
     "gittensory_jobs_coalesced_total",
     "gittensory_jobs_recovered_total",
   ]) {
