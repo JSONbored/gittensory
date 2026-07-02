@@ -86,6 +86,17 @@ services:
       qdrant:
         condition: service_healthy
         required: false
+      # Same pattern for --profile postgres / --profile pgbouncer: without this, compose starts gittensory
+      # in parallel with a cold Postgres initdb instead of waiting for it, and the app's own waitForPostgres()
+      # fallback (~30s hard cap) commonly loses that race on a slow disk/first pull, crash-looping the app via
+      # restart: unless-stopped before Postgres is reachable. required:false keeps the default SQLite path
+      # (no profile active) unaffected.
+      postgres:
+        condition: service_healthy
+        required: false
+      pgbouncer:
+        condition: service_healthy
+        required: false
     healthcheck:
       # Probe /ready (not /health): /health is a liveness stub that is 200 even when the DB is down,
       # whereas /ready returns 503 until the DB answers AND migrations are applied — so dependents that
@@ -161,6 +172,15 @@ services:
       MAX_CLIENT_CONN: "200"
       DEFAULT_POOL_SIZE: "20"
       AUTH_TYPE: md5
+    # The image ships the full postgresql-client toolchain (Alpine-based), so the same probe postgres itself
+    # uses works here: pg_isready only checks that the server accepts the startup packet, not that auth
+    # succeeds, so it reports "accepting connections" even before the upstream Postgres is reachable through
+    # the pooler — exactly the pooler-layer liveness signal gittensory's depends_on needs.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Postgres internals exporter. Starts with the Postgres profiles so Prometheus can scrape it when
   # observability is enabled, without starting against a missing DB on SQLite-only installs.
