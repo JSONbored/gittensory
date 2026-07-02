@@ -96,7 +96,7 @@ QDRANT_URL=http://qdrant:6333`}
       </p>
       <CodeBlock
         lang="bash"
-        code={`DATABASE_URL=postgres://gittensory:<password>@pgbouncer:5432/gittensory
+        code={`export DATABASE_URL=postgres://gittensory:<password>@pgbouncer:5432/gittensory
 npm run selfhost:postgres:migrate -- --sqlite /data/gittensory.sqlite
 npm run selfhost:postgres:migrate -- --sqlite /data/gittensory.sqlite --execute`}
       />
