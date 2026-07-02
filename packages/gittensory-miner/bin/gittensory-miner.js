@@ -12,7 +12,7 @@ const packageName = "@jsonbored/gittensory-miner";
 const packageVersion = require("../package.json").version;
 const upgradeCommand = resolveUpgradeCommand(packageName);
 
-const updateCheck = startUpdateCheck(cliArgs, {
+startUpdateCheck(cliArgs, {
   packageName,
   packageVersion,
   upgradeCommand,
@@ -38,5 +38,4 @@ if (
 }
 
 const exitCode = runCli(cliArgs, { packageName });
-await updateCheck;
 process.exit(exitCode);

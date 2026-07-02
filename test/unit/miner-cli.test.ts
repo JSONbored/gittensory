@@ -1,5 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  bin,
   closeFixtureServer,
   runCapture,
   startRegistryFixture,
@@ -277,5 +279,23 @@ describe("gittensory-miner startup update check (#2331)", () => {
     expect(output).not.toContain(
       "npm install -g @jsonbored/gittensory-miner@latest",
     );
+  });
+
+  it("returns unknown-command errors immediately without waiting for a slow registry check", async () => {
+    const registryUrl = await startRegistryFixture({
+      latestVersion: "9.9.9",
+      delayMs: 10_000,
+    });
+    const startedAt = Date.now();
+    const result = spawnSync("node", [bin, "mystery"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITTENSORY_NPM_REGISTRY_URL: registryUrl,
+      },
+    });
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Unknown command: mystery");
   });
 });
