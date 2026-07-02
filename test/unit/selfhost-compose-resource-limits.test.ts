@@ -33,7 +33,7 @@ describe("docker-compose.yml — per-service memory limits (#1828, #2495)", () =
     for (const [name, expected] of Object.entries(EXPECTED_LIMITS)) {
       const service = services[name];
       expect(service, name).toBeTruthy();
-      const deploy = service.deploy as { resources?: { limits?: { memory?: unknown } } } | undefined;
+      const deploy = service?.deploy as { resources?: { limits?: { memory?: unknown } } } | undefined;
       expect(deploy?.resources?.limits?.memory, name).toBe(expected);
     }
   });
