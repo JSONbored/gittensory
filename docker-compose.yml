@@ -222,6 +222,14 @@ services:
     profiles: ["ollama"]
     volumes:
       - ollama-models:/root/.ollama
+    # The image ships the ollama CLI but no curl/wget, so probe the daemon through it directly instead of a
+    # raw HTTP request: `ollama list` only succeeds once the server is accepting API calls.
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
 
   # ── Litestream (--profile litestream) ─────────────────────────────────────
   # Continuous WAL backup of the SQLite DB to S3/B2/R2. Copy litestream.yml.example
