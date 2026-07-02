@@ -2637,6 +2637,32 @@ export async function fetchLivePullRequestMergeState(
   return result?.data.mergeable_state ?? undefined;
 }
 
+/**
+ * The base branch's LIVE tip-commit timestamp via REST `GET /commits/{ref}`, for the force-fresh-rebase gate
+ * (#2552): `mergeable_state` only detects git-level TEXTUAL conflicts, so a base that advanced with a new,
+ * non-conflicting sibling commit (e.g. a second PR's distinct-but-colliding migration file) still reads
+ * `clean`, letting a merge proceed on a decision that is stale relative to what just landed on the base.
+ * Comparing this timestamp against "now" lets the caller force a fresh rebase + CI recheck instead of
+ * trusting a `clean` read that predates the base's latest commit. Best-effort: a fetch error returns
+ * undefined (caller fails open — no forced rebase, same as today).
+ */
+export async function fetchLiveBaseBranchAdvancedAt(
+  env: Env,
+  repoFullName: string,
+  baseRef: string,
+  token: string | undefined,
+  admissionKey?: GitHubRateLimitAdmissionKey,
+): Promise<string | undefined> {
+  const result = await githubJsonWithHeaders<{ commit?: { committer?: { date?: string | null } | null } | null }>(
+    env,
+    repoFullName,
+    `/commits/${encodeURIComponent(baseRef)}`,
+    token,
+    githubRateLimitOptions(admissionKey),
+  ).catch(() => undefined);
+  return result?.data.commit?.committer?.date ?? undefined;
+}
+
 /** The PR's LIVE state ("open" / "closed") via REST `GET /pulls/{n}`. The stored open-PR cache lags GitHub, so a
  *  sibling closed/merged on GitHub can still read `open` locally; the duplicate-winner election (#dup-winner /
  *  audit #15) confirms a lower sibling's live state before treating this PR as a cluster loser. Best-effort:

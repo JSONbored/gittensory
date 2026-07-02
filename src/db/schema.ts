@@ -99,6 +99,9 @@ export const repositorySettings = sqliteTable("repository_settings", {
   reviewNagLabel: text("review_nag_label").notNull().default("review-nag-cooldown"),
   // Shared repo-scoped exemption list (#2463): a JSON array of GitHub logins.
   autoCloseExemptLoginsJson: text("auto_close_exempt_logins_json").notNull().default("[]"),
+  // Force-rebase-before-merge window in minutes (#2552): null = never force (default). Enforcement lands in
+  // runAgentMaintenancePlanAndExecute, not here.
+  requireFreshRebaseWindowMinutes: integer("require_fresh_rebase_window_minutes"),
   createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
 });
