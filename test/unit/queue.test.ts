@@ -6183,6 +6183,7 @@ describe("queue processors", () => {
       const url = input.toString();
       const method = init?.method ?? "GET";
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if ((url.endsWith("/issues/60") || url.endsWith("/issues/61")) && method === "GET") return Response.json({ state: "open" });
       if (url.endsWith("/issues/62") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ state: "closed" }); }
       if (url.includes("/issues/62/labels") && method === "GET") return Response.json([]);
       if (url.includes("/issues/62/labels") && method === "POST") { seen.labels.push(...((JSON.parse(String(init?.body ?? "{}")).labels ?? []) as string[])); return Response.json([]); }
@@ -6250,10 +6251,13 @@ describe("queue processors", () => {
     expect(closeAudit?.n ?? 0).toBe(0);
   });
 
-  it("a live-check failure for a counted sibling fails OPEN (stays counted, same as the stored state) rather than silently excluding it", async () => {
-    // Mirrors reconcileLiveDuplicateSiblings' fail-open contract: an unreadable live fetch must never itself
-    // manufacture extra headroom under the cap. Sibling #60's live check errors (404); it stays counted, so the
-    // real over-cap disposition (3 issues against a cap of 2) is unchanged and #62 still closes.
+  it("REGRESSION (#2479 gate finding, second pass): a live-check failure for a counted sibling fails SAFE (excluded from the count) rather than counting it toward an irreversible close", async () => {
+    // Unlike reconcileLiveDuplicateSiblings' fail-open-to-stored contract (safe there because it only re-ranks a
+    // non-final duplicate-cluster winner recomputed every delivery), this count directly gates an IRREVERSIBLE
+    // close. An unreadable live fetch for sibling #60 (404) must NOT let it keep counting toward the cap --
+    // otherwise a transient fetch failure stacked on a stale "open" DB row would wrongly close a newly opened
+    // issue that is actually within the real cap. #60 unverifiable + #61 confirmed open + #62 incoming = 2,
+    // within the cap of 2, so #62 must NOT close.
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, {
       installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", issues: "write" }, events: ["issues"] },
@@ -6270,19 +6274,60 @@ describe("queue processors", () => {
       if (url.endsWith("/issues/60") && method === "GET") return new Response("not found", { status: 404 });
       if (url.endsWith("/issues/61") && method === "GET") return Response.json({ state: "open" });
       if (url.endsWith("/issues/62") && method === "PATCH") { seen.closed = true; return Response.json({ state: "closed" }); }
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "contributor-issue-cap-live-check-fails-safe",
+      eventName: "issues",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 62, title: "Farmer's issue, within the real cap", state: "open", user: { login: "farmer99" }, labels: [], body: "x" },
+      },
+    });
+
+    expect(seen.closed).toBe(false);
+    const closeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.close'").first<{ n: number }>();
+    expect(closeAudit?.n ?? 0).toBe(0);
+  });
+
+  it("a live-verified-open sibling still counts toward the cap and closes the incoming issue when genuinely over", async () => {
+    // Positive-confirmation path: both siblings live-verify as open, so the real count (60, 61, 62 = 3) against
+    // a cap of 2 is genuine, and #62 correctly closes.
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", issues: "write" }, events: ["issues"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 60, title: "Farmer issue one", state: "open", user: { login: "farmer99" }, labels: [], body: "x" });
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 61, title: "Farmer issue two", state: "open", user: { login: "farmer99" }, labels: [], body: "y" });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { close: "auto", label: "auto" }, contributorOpenIssueCap: 2 });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { contributorCapLabel: "spam-cap" } }, "repo_file");
+    const seen = { closed: false };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/issues/60") && method === "GET") return Response.json({ state: "open" });
+      if (url.endsWith("/issues/61") && method === "GET") return Response.json({ state: "open" });
+      if (url.endsWith("/issues/62") && method === "PATCH") { seen.closed = true; return Response.json({ state: "closed" }); }
+      if (url.includes("/issues/62/labels") && method === "GET") return Response.json([]);
       if (url.includes("/issues/62/labels") || url.includes("/issues/62/comments")) return Response.json([], { status: 201 });
       return Response.json({});
     });
 
     await processJob(env, {
       type: "github-webhook",
-      deliveryId: "contributor-issue-cap-live-check-fails-open",
+      deliveryId: "contributor-issue-cap-live-verified-genuine",
       eventName: "issues",
       payload: {
         action: "opened",
         installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
         repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
-        issue: { number: 62, title: "Farmer's 3rd issue", state: "open", user: { login: "farmer99" }, labels: [], body: "x" },
+        issue: { number: 62, title: "Farmer's genuinely 3rd issue", state: "open", user: { login: "farmer99" }, labels: [], body: "x" },
       },
     });
 
@@ -6488,6 +6533,7 @@ describe("queue processors", () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/issues/60") || url.endsWith("/issues/61")) return Response.json({ state: "open" });
       return Response.json({});
     });
 
@@ -6526,6 +6572,7 @@ describe("queue processors", () => {
       const url = input.toString();
       const method = init?.method ?? "GET";
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if ((url.endsWith("/issues/60") || url.endsWith("/issues/61")) && method === "GET") return Response.json({ state: "open" });
       if (url.endsWith("/issues/62") && method === "PATCH") { seen.closed = true; return Response.json({ state: "closed" }); }
       return Response.json({});
     });

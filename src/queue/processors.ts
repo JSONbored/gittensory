@@ -3596,11 +3596,13 @@ async function loadOpenQueueCounts(
  * re-check before acting), issues have no head SHA or CI to go stale, and there's no issue-side "regate" job
  * type to reuse — so that PARTICULAR staleness risk does not apply here.
  *
- * Stale-closed-sibling guard (#2479 gate finding, second pass): a DIFFERENT staleness risk DOES apply —
- * `listOpenIssues` reads the local DB cache, which can still say `open` for a sibling already closed on GitHub
- * (manually, by another automation, or by a webhook this instance hasn't processed yet). An inflated count from
- * such a stale row could wrongly put a newly opened issue over the REAL cap. Guarded by live-verifying each
- * counted sibling below before trusting it (fail-open to the stored state on an unreadable fetch).
+ * Stale-closed-sibling guard (#2479 gate finding): a DIFFERENT staleness risk DOES apply — `listOpenIssues`
+ * reads the local DB cache, which can still say `open` for a sibling already closed on GitHub (manually, by
+ * another automation, or by a webhook this instance hasn't processed yet). An inflated count from such a stale
+ * row could wrongly put a newly opened issue over the REAL cap. Guarded by live-verifying each counted sibling
+ * below before trusting it -- and unlike a non-final ranking signal, an inconclusive live check here is treated
+ * as NOT open (excluded from the count), never left as an unverified "counts toward the cap" default, because
+ * this count gates an irreversible close (#2479 gate finding, second pass).
  */
 async function maybeCloseIssueOverContributorCap(
   env: Env,
@@ -3627,21 +3629,29 @@ async function maybeCloseIssueOverContributorCap(
   // open-issue cache lags GitHub, so a sibling already closed elsewhere (manually, by another automation, or a
   // webhook this instance hasn't processed yet) can still read `open` here and inflate the count enough to close
   // a newly opened issue that is actually within the real cap. `issue` itself is trusted unverified -- it is the
-  // issue THIS webhook just delivered, so it is open by construction. Fail-open to the stored "open" state on an
-  // unreadable live fetch (mirrors reconcileLiveDuplicateSiblings above): only drop a sibling on a POSITIVE
-  // "not open" confirmation, never on a transient fetch failure.
+  // issue THIS webhook just delivered, so it is open by construction.
+  //
+  // Fail SAFE (not open, per gate finding on this exact block, second pass), NOT fail-open-to-stored like
+  // reconcileLiveDuplicateSiblings: that helper only re-ranks a duplicate-cluster WINNER (a non-final signal
+  // recomputed every delivery), so failing open there just risks a transient wrong ranking. Here the count
+  // directly gates an IRREVERSIBLE close, so an unreadable live check (a transient fetch failure) must NOT be
+  // allowed to compound with a stale "open" DB row and tip a within-cap issue into being wrongly closed --
+  // any sibling this delivery cannot POSITIVELY confirm is still open is excluded from the count. The cost is
+  // symmetric-but-safe: a transient miss can undercount and momentarily under-enforce the cap, but that is
+  // self-correcting (the delivery-order guard below already re-evaluates on every subsequent issue-open), while
+  // a wrongful close is not.
   const token = await createInstallationToken(env, installationId).catch(() => undefined);
   const liveToken = token ?? env.GITHUB_PUBLIC_TOKEN;
   const admissionKey = githubAdmissionKeyForToken(env, installationId, liveToken);
-  const staleClosed = new Set<number>();
+  const confirmedOpen = new Set<number>();
   await Promise.all(
     otherAuthorIssueNumbers.map(async (number) => {
       const liveState = await fetchLiveIssueState(env, repoFullName, number, liveToken, admissionKey).catch(() => undefined);
-      if (liveState !== undefined && liveState !== "open") staleClosed.add(number);
+      if (liveState === "open") confirmedOpen.add(number);
     }),
   );
   const authorOpenIssueNumbers = otherAuthorIssueNumbers
-    .filter((number) => !staleClosed.has(number))
+    .filter((number) => confirmedOpen.has(number))
     .concat(issue.number)
     .sort((a, b) => a - b);
   const overCapNumbers = new Set(authorOpenIssueNumbers.slice(cap));
