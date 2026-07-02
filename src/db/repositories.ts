@@ -2254,7 +2254,7 @@ export async function countRecentDeadLettersByType(env: Env, sinceIso: string): 
     .where(and(eq(auditEvents.eventType, "github_app.dlq_dead_lettered"), gte(auditEvents.createdAt, sinceIso)))
     .groupBy(jobTypeExpr)
     .orderBy(asc(jobTypeExpr));
-  return Object.fromEntries(rows.map((row) => [row.jobType, Number(row.count ?? 0)]));
+  return Object.fromEntries(rows.map((row) => [row.jobType, Number(row.count)]));
 }
 
 export type PrVisibilitySkipAuditEvent = {

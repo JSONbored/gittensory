@@ -436,6 +436,14 @@ describe("database row parser hardening", () => {
   it("countRecentDeadLettersByType returns an empty object when no recent dead letters exist", async () => {
     const env = createTestEnv();
     await recordAuditEvent(env, {
+      eventType: "github_app.dlq_dead_lettered",
+      actor: "gittensory",
+      targetKey: "dlq:github-webhook:stale",
+      outcome: "error",
+      createdAt: "2026-06-24T08:59:59.000Z",
+      metadata: { jobType: "github-webhook" },
+    });
+    await recordAuditEvent(env, {
       eventType: "agent.sweep.regate",
       actor: "gittensory",
       targetKey: "owner/repo",
