@@ -11688,7 +11688,9 @@ describe("one-shot reopen prevention", () => {
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.endsWith("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
       if (url.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" });
-      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "maintainer" } }]);
+      // "contributor" (the payload's reopener) must be the MOST RECENT "reopened" actor in the timeline, or the
+      // #2369 live-recheck #3 (reopenerSuperseded) denies before ever reaching the close attempt this test targets.
+      if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "maintainer" } }, { event: "reopened", actor: { login: "contributor" } }]);
       if (url.endsWith("/issues/42/comments")) return Response.json({ id: 99 }, { status: 201 }); // the courtesy comment succeeds
       if (url.endsWith("/pulls/42") && method === "PATCH") return new Response("forbidden", { status: 403 }); // the close itself fails
       return new Response("not found", { status: 404 });
