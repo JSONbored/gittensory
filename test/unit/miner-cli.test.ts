@@ -97,6 +97,42 @@ describe("gittensory-miner startup update check (#2331)", () => {
     );
   });
 
+  it("falls back to the default npm registry for unsafe or invalid registry URLs", () => {
+    expect(
+      resolveNpmRegistryUrl({
+        GITTENSORY_NPM_REGISTRY_URL: "file:///etc/passwd",
+      }),
+    ).toBe("https://registry.npmjs.org");
+    expect(
+      resolveNpmRegistryUrl({
+        GITTENSORY_NPM_REGISTRY_URL: "http://169.254.169.254/",
+      }),
+    ).toBe("https://registry.npmjs.org");
+    expect(
+      resolveNpmRegistryUrl({
+        GITTENSORY_NPM_REGISTRY_URL: "https://user:pass@registry.example.com/",
+      }),
+    ).toBe("https://registry.npmjs.org");
+    expect(
+      resolveNpmRegistryUrl({
+        GITTENSORY_NPM_REGISTRY_URL: "not-a-url",
+      }),
+    ).toBe("https://registry.npmjs.org");
+  });
+
+  it("allows http registry URLs only on local loopback hosts", () => {
+    expect(
+      resolveNpmRegistryUrl({
+        GITTENSORY_NPM_REGISTRY_URL: "http://127.0.0.1:4873/",
+      }),
+    ).toBe("http://127.0.0.1:4873");
+    expect(
+      resolveNpmRegistryUrl({
+        GITTENSORY_NPM_REGISTRY_URL: "http://localhost:4873/",
+      }),
+    ).toBe("http://localhost:4873");
+  });
+
   it("skips the check when --no-update-check or GITTENSORY_MINER_NO_UPDATE_CHECK=1 is set", () => {
     expect(shouldSkipUpdateCheck(["--version", "--no-update-check"])).toBe(
       true,

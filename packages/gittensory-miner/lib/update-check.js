@@ -1,7 +1,38 @@
 const defaultPackageName = "@jsonbored/gittensory-miner";
+const defaultNpmRegistryUrl = "https://registry.npmjs.org";
+
+function isLocalRegistryHost(hostname) {
+  const normalized = hostname.toLowerCase().replace(/\.$/, "");
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "[::1]"
+  );
+}
 
 export function resolveNpmRegistryUrl(env = process.env) {
-  return (env.GITTENSORY_NPM_REGISTRY_URL ?? "https://registry.npmjs.org").replace(/\/+$/, "");
+  const raw = env.GITTENSORY_NPM_REGISTRY_URL?.trim();
+  if (!raw) return defaultNpmRegistryUrl;
+
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return defaultNpmRegistryUrl;
+  }
+
+  if (url.username || url.password || url.search || url.hash || !url.hostname) {
+    return defaultNpmRegistryUrl;
+  }
+
+  const local = isLocalRegistryHost(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
+    return defaultNpmRegistryUrl;
+  }
+
+  const path = url.pathname === "/" ? "" : url.pathname.replace(/\/+$/, "");
+  return `${url.origin}${path}`;
 }
 
 export function resolveUpgradeCommand(packageName = defaultPackageName) {
@@ -9,14 +40,22 @@ export function resolveUpgradeCommand(packageName = defaultPackageName) {
 }
 
 export function shouldSkipUpdateCheck(cliArgs, env = process.env) {
-  if (/^(1|true|yes)$/i.test(env.GITTENSORY_MINER_NO_UPDATE_CHECK ?? "")) return true;
+  if (/^(1|true|yes)$/i.test(env.GITTENSORY_MINER_NO_UPDATE_CHECK ?? ""))
+    return true;
   return cliArgs.includes("--no-update-check");
 }
 
 function parseSemver(version) {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(String(version ?? "").trim());
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(
+    String(version ?? "").trim(),
+  );
   if (!match) return null;
-  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]), prerelease: match[4] ?? null };
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] ?? null,
+  };
 }
 
 function comparePrerelease(a, b) {
@@ -30,7 +69,8 @@ function comparePrerelease(a, b) {
     const leftNumeric = /^\d+$/.test(leftId);
     const rightNumeric = /^\d+$/.test(rightId);
     if (leftNumeric && rightNumeric) {
-      if (Number(leftId) !== Number(rightId)) return Number(leftId) < Number(rightId) ? -1 : 1;
+      if (Number(leftId) !== Number(rightId))
+        return Number(leftId) < Number(rightId) ? -1 : 1;
     } else if (leftNumeric !== rightNumeric) {
       return leftNumeric ? -1 : 1;
     } else if (leftId !== rightId) {
@@ -56,7 +96,9 @@ export function compareSemver(a, b) {
 export async function fetchLatestPackageVersion(input) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), input.timeoutMs ?? 5000);
-  const registrySlug = input.packageName.startsWith("@") ? input.packageName.replace("/", "%2F") : input.packageName;
+  const registrySlug = input.packageName.startsWith("@")
+    ? input.packageName.replace("/", "%2F")
+    : input.packageName;
   const registryPath = `${input.npmRegistryUrl}/${registrySlug}/latest`;
   try {
     const response = await fetch(registryPath, {
@@ -64,7 +106,8 @@ export async function fetchLatestPackageVersion(input) {
       headers: { accept: "application/json" },
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok || typeof payload.version !== "string") throw new Error("npm_latest_version_unavailable");
+    if (!response.ok || typeof payload.version !== "string")
+      throw new Error("npm_latest_version_unavailable");
     return payload.version;
   } finally {
     clearTimeout(timeout);
@@ -91,7 +134,8 @@ export function startUpdateCheck(cliArgs, input) {
     packageName: input.packageName,
     packageVersion: input.packageVersion,
     npmRegistryUrl: resolveNpmRegistryUrl(input.env),
-    upgradeCommand: input.upgradeCommand ?? resolveUpgradeCommand(input.packageName),
+    upgradeCommand:
+      input.upgradeCommand ?? resolveUpgradeCommand(input.packageName),
     timeoutMs: input.timeoutMs,
   });
 }
