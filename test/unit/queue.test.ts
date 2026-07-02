@@ -6107,6 +6107,63 @@ describe("queue processors", () => {
     expect(fanned).toEqual([]); // coalesced — no duplicate wake enqueued
   });
 
+  it("contributor open-PR cap (#2270): swallows a failed sibling-wake enqueue and does not claim the coalescing key (regression)", async () => {
+    // If env.JOBS.send() throws (queue backpressure/outage), the wake must be a best-effort fire-and-forget:
+    // log and move on WITHOUT claiming the coalescing key, so a later discovery can still retry the enqueue.
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 54, title: "Farmer PR zero", state: "open", user: { login: "farmer99" }, head: { sha: "f54" }, labels: [], body: "w" });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 56, title: "Farmer PR two (already over cap)", state: "open", user: { login: "farmer99" }, head: { sha: "f56" }, labels: [], body: "y" });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      aiReviewMode: "advisory",
+      autonomy: { close: "auto", label: "auto" },
+      contributorOpenPrCap: 2,
+    });
+    env.JOBS.send = (async () => {
+      throw new Error("queue send boom");
+    }) as typeof env.JOBS.send;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
+      if (url.includes("/pulls/55/reviews")) return Response.json([]);
+      if (url.includes("/pulls/55/commits")) return Response.json([]);
+      if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, mergeable_state: "clean" });
+      if (url.includes("/commits/f55/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/f55/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/55/labels")) return Response.json([]);
+      if (url.includes("/issues/55/comments")) return Response.json([]);
+      return Response.json({});
+    });
+
+    // PR55 arrives, discovers PR56 is over cap, and the wake enqueue itself fails — must not throw.
+    await expect(
+      processJob(env, {
+        type: "github-webhook",
+        deliveryId: "wake-enqueue-fails",
+        eventName: "pull_request",
+        payload: {
+          action: "opened",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: { number: 55, title: "Farmer PR one", state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, labels: [], body: "x", mergeable_state: "clean", reviewDecision: "APPROVED" },
+        },
+      }),
+    ).resolves.not.toThrow();
+
+    // The coalescing key was NOT claimed (enqueue failed), so a later discovery can still retry.
+    expect(await env.SELFHOST_TRANSIENT_CACHE?.get("contributor-cap-wake:jsonbored/gittensory#56")).toBeNull();
+  });
+
   it("contributor open-ISSUE cap (#2270): a contributor's 3rd open issue (over a cap of 2) is labeled + closed deterministically", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, {
