@@ -59,11 +59,17 @@ export function extractVersionPins(
     if (filesScanned >= MAX_EOL_FILES) break;
     filesScanned += 1;
     const base = file.path.split("/").pop() ?? file.path;
+    let inHunk = false;
     for (const raw of file.patch.split("\n")) {
       if (linesScanned >= MAX_EOL_PATCH_LINES || pins.length >= MAX_EOL_PINS)
         return pins;
       linesScanned += 1;
-      if (raw[0] !== "+" || raw.startsWith("+++")) continue;
+      if (raw.startsWith("@@")) {
+        inHunk = true;
+        continue;
+      }
+      // Only added content inside a hunk; the `+++ ` header precedes the first hunk.
+      if (!inHunk || raw[0] !== "+") continue;
       const line = raw.slice(1).trim();
       if (isDockerfile(file.path)) {
         const match =

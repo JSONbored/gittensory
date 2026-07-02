@@ -119,14 +119,17 @@ export function scanPatchForSecretLog(
   if (maxFindings <= 0) return [];
   const findings: SecretLogFinding[] = [];
   let newLine = 0;
+  let inHunk = false;
   for (const line of patchLines(patch)) {
     if (limits.signal?.aborted) throw new Error("analyzer_aborted");
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
     if (hunk) {
       newLine = Number(hunk[1]);
+      inHunk = true;
       continue;
     }
+    // Skip pre-hunk preamble; inside a hunk `+++x`/`+++ x` is added content, not a header.
+    if (!inHunk) continue;
     if (line.startsWith("+")) {
       const body = line.slice(1);
       if (body.length <= MAX_LINE_CHARS) {

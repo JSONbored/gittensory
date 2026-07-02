@@ -12,6 +12,7 @@
 import type { AnalyzerDiagnostics, EnrichRequest, HistoryFinding } from "../types.js";
 import type { AnalysisContext } from "../analysis-context.js";
 import { boundedFetchJson } from "../external-fetch.js";
+import { isDiffFileHeaderLine } from "./diff-lines.js";
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
@@ -225,7 +226,8 @@ function diffAddedText(req: EnrichRequest): string {
   const added: string[] = [];
   for (const src of sources) {
     for (const line of src.split("\n")) {
-      if (line.startsWith("+") && !line.startsWith("+++")) added.push(line.slice(1));
+      // Skip real file headers (`+++ b/…`) but keep added CONTENT that begins with `++` (rendered `+++x`/`+++ x`).
+      if (line.startsWith("+") && !isDiffFileHeaderLine(line)) added.push(line.slice(1));
     }
   }
   return added.join("\n");

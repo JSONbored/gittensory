@@ -75,10 +75,10 @@ export function scanPatchForIacMisconfig(
   let secureFalseLine = 0;
   let prodLine = 0;
   let debugLine = 0;
+  let inHunk = false;
 
   for (const line of patchLines(patch)) {
     if (limits.signal?.aborted) throw new Error("analyzer_aborted");
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
     if (hunk) {
       newLine = Number(hunk[1]);
@@ -88,8 +88,11 @@ export function scanPatchForIacMisconfig(
       secureFalseLine = 0;
       prodLine = 0;
       debugLine = 0;
+      inHunk = true;
       continue;
     }
+    // Skip pre-hunk preamble; inside a hunk `+++x`/`+++ x` is added content, not a header.
+    if (!inHunk) continue;
     if (!line.startsWith("+")) {
       if (!line.startsWith("-")) newLine++;
       continue;

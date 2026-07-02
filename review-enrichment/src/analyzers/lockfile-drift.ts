@@ -120,7 +120,7 @@ function* patchLines(
   for (const raw of patch.split("\n")) {
     seen += 1;
     if (seen > maxLines) break;
-    if (raw.startsWith("+++") || raw.startsWith("---")) continue;
+    if (raw.startsWith("+++ ") || raw.startsWith("---")) continue;
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
     if (hunk) {
       newLine = Number(hunk[1]);

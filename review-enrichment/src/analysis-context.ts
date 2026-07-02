@@ -309,14 +309,17 @@ export function collectAddedLines(
   for (const file of files) {
     if (!file.patch) continue;
     let newLine = 0;
+    let inHunk = false;
     for (const line of boundedPatchLines(file.patch, options.metrics, "added_lines_patch_bytes")) {
-      if (line.startsWith("+++") || line.startsWith("---")) continue;
-      if (line.startsWith("diff ") || line.startsWith("index ")) continue;
       const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
       if (hunk) {
         newLine = Number(hunk[1]);
+        inHunk = true;
         continue;
       }
+      // Skip the pre-hunk preamble (diff/index + the `+++ `/`--- ` file headers). INSIDE a hunk the first char
+      // is the +/-/space op, so `+++x`/`+++ x` added content is collected, not mistaken for a header.
+      if (!inHunk) continue;
       if (line.startsWith("+")) {
         if (addedLines.length >= MAX_CONTEXT_ADDED_LINES) {
           options.metrics?.recordCappedWork("added_lines", 1);
@@ -365,13 +368,19 @@ export function filesHaveAddedLines(
 ): boolean {
   for (const file of files) {
     if (!file.patch) continue;
+    let inHunk = false;
     for (const line of boundedPatchLines(
       file.patch,
       options.metrics,
       "has_added_lines_patch_bytes",
     )) {
-      if (line.startsWith("+++") || line.startsWith("---")) continue;
-      if (line.startsWith("+")) return true;
+      if (line.startsWith("@@")) {
+        inHunk = true;
+        continue;
+      }
+      // Inside a hunk every added line starts with `+` (including `+++x`/`+++ x` content); the `+++ `/`--- `
+      // headers only appear in the pre-hunk preamble.
+      if (inHunk && line.startsWith("+")) return true;
     }
     if (file.patch.length > MAX_CONTEXT_PATCH_BYTES) return true;
   }

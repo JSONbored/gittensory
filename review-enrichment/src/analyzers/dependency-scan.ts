@@ -109,7 +109,7 @@ export function extractDependencyChanges(
       const sign = line[0];
       if (
         (sign !== "+" && sign !== "-") ||
-        line.startsWith("+++") ||
+        line.startsWith("+++ ") ||
         line.startsWith("---")
       )
         continue;

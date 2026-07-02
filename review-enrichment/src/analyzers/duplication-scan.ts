@@ -184,7 +184,6 @@ export function extractAddedBlocks(patch: string | undefined): NormBlock[] {
       continue;
     }
     if (!inHunk) continue;
-    if (line.startsWith("+++")) continue; // file header inside the patch, not an added line
     if (line.startsWith("+")) {
       const norm = normalizeLine(line.slice(1));
       if (norm === null) {

@@ -103,3 +103,16 @@ test("scanPatch does not join two unrelated short literals into a false positive
   const findings = scanPatch("src/app.ts", hunk(['const a = "hello";', 'const b = "world";']));
   assert.equal(findings.length, 0);
 });
+
+// Regression: an added line whose content starts with `++` renders as `+++...` in the diff. A header-prefix
+// guard (even the anchored `+++ `) mistakes it for a `+++ b/file` header and skips it, so a secret on such a
+// line is never scanned. Both `++x` (-> `+++x`) and `++ x` (-> `+++ x`) content shapes must be scanned.
+for (const content of ['++const key = "AWS_KEY";', '++ const key = "AWS_KEY";']) {
+  test(`scanPatch scans an added line whose content starts with ++ (rendered +${content})`, () => {
+    const patch = `@@ -1,0 +1,1 @@\n+${content.replace("AWS_KEY", fakeAwsKey)}`;
+    const findings = scanPatch("src/config.ts", patch);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].kind, "aws_access_key_id");
+    assert.equal(findings[0].line, 1);
+  });
+}

@@ -251,13 +251,16 @@ export function scanPatchForRedos(
   if (maxFindings <= 0) return [];
   const findings: RedosFinding[] = [];
   let newLine = 0;
+  let inHunk = false;
   for (const line of patchLines(patch)) {
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
     if (hunk) {
       newLine = Number(hunk[1]);
+      inHunk = true;
       continue;
     }
+    // Skip pre-hunk preamble; inside a hunk `+++x`/`+++ x` is added content, not a header.
+    if (!inHunk) continue;
     if (line.startsWith("+")) {
       for (const source of extractRegexSources(line.slice(1))) {
         if (hasCatastrophicBacktracking(source)) {

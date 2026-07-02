@@ -16,13 +16,16 @@ export function scanWorkflowPins(
 ): ActionPinFinding[] {
   const findings: ActionPinFinding[] = [];
   let newLine = 0;
+  let inHunk = false;
   for (const line of patch.split("\n")) {
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
     if (hunk) {
       newLine = Number(hunk[1]);
+      inHunk = true;
       continue;
     }
+    // Skip pre-hunk preamble; inside a hunk `+++x`/`+++ x` is added content, not a header.
+    if (!inHunk) continue;
     if (line.startsWith("+")) {
       const match = USES_RE.exec(line.slice(1));
       if (match) {

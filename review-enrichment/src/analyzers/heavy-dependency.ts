@@ -8,6 +8,7 @@ import type {
 } from "../types.js";
 import type { AnalysisContext } from "../analysis-context.js";
 import { extractDependencyChanges } from "./dependency-scan.js";
+import { isDiffFileHeaderLine } from "./diff-lines.js";
 import { boundedFetchJson } from "../external-fetch.js";
 
 const MAX_WEIGHT_LOOKUPS = 20;
@@ -59,7 +60,8 @@ function addedPatchLines(
         continue;
       }
       if (raw.startsWith("\\ No newline")) continue;
-      if (raw.startsWith("+") && !raw.startsWith("+++")) {
+      // Skip real file headers (`+++ b/…`) but scan added CONTENT that begins with `++` (rendered `+++x`/`+++ x`).
+      if (raw.startsWith("+") && !isDiffFileHeaderLine(raw)) {
         lines.push({
           file: file.path,
           line: nextLine || 1,
@@ -68,7 +70,7 @@ function addedPatchLines(
         nextLine += 1;
         continue;
       }
-      if (raw.startsWith("-") && !raw.startsWith("---")) continue;
+      if (raw.startsWith("-") && !isDiffFileHeaderLine(raw)) continue;
       if (nextLine) nextLine += 1;
     }
   }

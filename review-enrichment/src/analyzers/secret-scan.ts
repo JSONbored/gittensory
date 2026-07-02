@@ -63,17 +63,22 @@ function extractStringLiteralContents(line: string): string[] {
 export function scanPatch(path: string, patch: string): SecretFinding[] {
   const findings: SecretFinding[] = [];
   let newLine = 0;
+  let inHunk = false;
   // Last added line's extracted string-literal contents, for the cross-line join check below. Reset whenever a
   // non-added line breaks the run — a secret is only plausibly split across CONSECUTIVE added lines.
   let previousLiterals: string[] = [];
   for (const line of patch.split("\n")) {
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
     if (hunk) {
       newLine = Number(hunk[1]);
+      inHunk = true;
       previousLiterals = [];
       continue;
     }
+    // Skip the pre-hunk preamble (diff/index + the `+++ `/`--- ` file headers). INSIDE a hunk the first char is
+    // the +/-/space op, so an added line whose content starts with `++` (rendered `+++x` or `+++ x`) is scanned,
+    // not mistaken for a header.
+    if (!inHunk) continue;
     if (line.startsWith("+")) {
       const content = line.slice(1);
       let matched = false;
