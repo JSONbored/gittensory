@@ -79,7 +79,7 @@ curl http://localhost:8787/ready`}
           {
             title: "/ready",
             description:
-              "Readiness. It returns 200 only after database access and migrations are healthy.",
+              "Readiness. It returns 200 only after database access, migrations, and every configured backend (Redis, GitHub App auth, the AI provider, and any of Qdrant/Postgres you've enabled) are healthy.",
           },
           {
             title: "/metrics",
