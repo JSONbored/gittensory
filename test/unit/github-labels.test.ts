@@ -10,6 +10,28 @@ describe("GitHub PR labels", () => {
 
   it("rejects invalid repository names before making GitHub calls", async () => {
     await expect(ensurePullRequestLabel(createTestEnv(), 123, "invalid", 4, "gittensor", { createMissingLabel: true })).rejects.toThrow(/Invalid repository full name/);
+    await expect(ensurePullRequestLabel(createTestEnv(), 123, "owner/repo/extra", 4, "gittensor", { createMissingLabel: true })).rejects.toThrow(
+      /Invalid repository full name/,
+    );
+    await expect(ensurePullRequestLabel(createTestEnv(), 123, " owner/repo ", 4, "gittensor", { createMissingLabel: true })).rejects.toThrow(
+      /Invalid repository full name/,
+    );
+    let called = false;
+    vi.stubGlobal("fetch", async () => {
+      called = true;
+      return Response.json({ token: "t" });
+    });
+    await expect(
+      ensurePullRequestLabel(
+        createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem() }),
+        123,
+        "owner/repo/extra",
+        4,
+        "gittensor",
+        { createMissingLabel: true },
+      ),
+    ).rejects.toThrow(/Invalid repository full name/);
+    expect(called).toBe(false);
   });
 
   it("does nothing when the label is already applied", async () => {
