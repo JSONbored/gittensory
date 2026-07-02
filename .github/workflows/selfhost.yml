@@ -38,6 +38,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Same push/pr split as ci.yml's group, and for the same reason: pull requests stay in one ref-scoped
+  # group so newer commits cancel superseded PR runs (this job boots a Postgres service container, does a
+  # full npm ci, builds the self-host bundle, and runs two docker buildx builds plus a boot smoke test --
+  # letting a superseded push run to completion wastes real minutes). github.sha for push runs keeps
+  # distinct main commits from cancelling each other's validation.
+  group: selfhost-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'pr' }}
+  # NB: keep this a literal boolean, not an expression — see ci.yml for why (startup_failure).
+  cancel-in-progress: true
+
 jobs:
   build-boot:
     name: build + boot smoke test

@@ -39,6 +39,20 @@ describe("workflow runner labels", () => {
     expect(workflow).toContain("runs-on: [self-hosted, gittensory]");
     expect(workflow).not.toContain("|| 'self-hosted'");
   });
+
+  it("cancels a superseded selfhost.yml run instead of letting it run to completion (#2496)", () => {
+    const workflow = read(".github/workflows/selfhost.yml");
+
+    // Same push/pr split as ci.yml's own group, for the same reason: distinct main-branch pushes must not
+    // cancel each other's validation, only a superseded run on the SAME ref/PR should be cancelled.
+    expect(workflow).toContain(
+      "group: selfhost-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'pr' }}",
+    );
+    expect(workflow).toContain("cancel-in-progress: true");
+    // Must be a literal boolean, not an expression -- ci.yml's own comment documents that an expression here
+    // causes GitHub to fail the workflow at startup (startup_failure).
+    expect(workflow).not.toMatch(/cancel-in-progress:\s*\$\{\{/);
+  });
 });
 
 function escapeRegExp(value: string): string {
