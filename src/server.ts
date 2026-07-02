@@ -455,22 +455,6 @@ async function main(): Promise<void> {
   const { createRedisTokenCache } = await import("./selfhost/redis-token-cache");
   const { createAppJwt, setInstallationTokenStore, setGitHubResponseCache } = await import("./github/app");
   setInstallationTokenStore(createRedisTokenCache(redisClient));
-  // GitHub App auth: a successful JWT mint proves GITHUB_APP_PRIVATE_KEY is set and parses as a valid signing
-  // key. Without this, an invalid/expired key leaves the review pipeline completely dead while /ready still
-  // reports 200 — detection otherwise requires SENTRY_DSN or grepping stdout for auth errors (#2497). The
-  // register/fail-closed decision lives in githubAppReadinessProbe (unit-tested there); withTimeout here is
-  // only the hung-mint guard shared with the other probes.
-  const githubAppProbe = githubAppReadinessProbe(
-    process.env.GITHUB_APP_ID,
-    process.env.GITHUB_APP_PRIVATE_KEY,
-    () => createAppJwt(env),
-  );
-  if (githubAppProbe) {
-    readinessProbes.push({
-      name: githubAppProbe.name,
-      check: () => withTimeout(githubAppProbe.check()),
-    });
-  }
   // Configured AI provider: gate on the chain's own consecutive-exhaustion streak (isAiProviderHealthy) rather
   // than a live reachability probe, which would cost a real API/CLI call on every health-check tick. Only
   // registered when a provider is actually configured -- without AI_PROVIDER reviews run deterministically,
@@ -558,6 +542,27 @@ async function main(): Promise<void> {
       ? { REVIEW_AUDIT: createFsBlobStore(process.env.REVIEW_AUDIT_DIR) }
       : {}),
   } as unknown as Env;
+
+  // GitHub App auth: a successful JWT mint proves GITHUB_APP_PRIVATE_KEY is set and parses as a valid signing
+  // key. Without this, an invalid/expired key leaves the review pipeline completely dead while /ready still
+  // reports 200 — detection otherwise requires SENTRY_DSN or grepping stdout for auth errors (#2497). The
+  // register/fail-closed decision lives in githubAppReadinessProbe (unit-tested there); withTimeout here is
+  // only the hung-mint guard shared with the other probes. Reads from `env` (not process.env) -- the SAME
+  // object createAppJwt(env) actually mints against below -- so the registration decision and the live mint
+  // can never diverge; registered here, after env is fully constructed, rather than off the raw process.env
+  // snapshot read earlier in this function (flagged by the gate's own review as a real risk: two different
+  // sources of truth for the same credential, even if they happen to agree today).
+  const githubAppProbe = githubAppReadinessProbe(
+    env.GITHUB_APP_ID,
+    env.GITHUB_APP_PRIVATE_KEY,
+    () => createAppJwt(env),
+  );
+  if (githubAppProbe) {
+    readinessProbes.push({
+      name: githubAppProbe.name,
+      check: () => withTimeout(githubAppProbe.check()),
+    });
+  }
 
   gauge("gittensory_queue_pending", () => backend.queue.size());
   gauge("gittensory_queue_dead", () => backend.queue.deadCount());

@@ -253,6 +253,14 @@ describe("shouldMarkAiProviderUnhealthyAtBoot (#2497 follow-up)", () => {
     expect(shouldMarkAiProviderUnhealthyAtBoot([], [])).toBe(false);
   });
 
+  it("returns false when missingCliProviders is nonempty but nothing is actually configured (defensive branch)", () => {
+    // Shouldn't happen by construction (resolveRequiredCliProviders is derived from resolveProviderNames), but
+    // the function must not treat "some missing set exists" as "the configured chain is broken" when there is
+    // no configured chain at all -- covers the configured.size === 0 branch independently of the earlier
+    // missingCliProviders.length === 0 short-circuit.
+    expect(shouldMarkAiProviderUnhealthyAtBoot([], ["claude-code"])).toBe(false);
+  });
+
   it("returns true for a single configured CLI provider whose CLI is missing", () => {
     expect(shouldMarkAiProviderUnhealthyAtBoot(["claude-code"], ["claude-code"])).toBe(true);
   });
