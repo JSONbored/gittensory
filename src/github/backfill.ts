@@ -613,7 +613,7 @@ export async function backfillOpenPullRequestDetails(
   await mapWithConcurrency(batch, 2, async (pr) => {
     await upsertPullRequestDetailSyncState(env, { repoFullName: repo.fullName, pullNumber: pr.number, status: "running" });
     const before = warnings.length;
-    await fetchAndStorePullRequestDetails(env, repo.fullName, pr, token, warnings, admissionKey, "backfill_open_pr_details");
+    const { reviewsSyncedAt } = await fetchAndStorePullRequestDetails(env, repo.fullName, pr, token, warnings, admissionKey, "backfill_open_pr_details");
     const syncedAt = nowIso();
     const newWarnings = warnings.slice(before);
     await upsertPullRequestDetailSyncState(env, {
@@ -622,7 +622,7 @@ export async function backfillOpenPullRequestDetails(
       status: newWarnings.length > 0 ? "partial" : "complete",
       headSha: pr.headSha,
       filesSyncedAt: syncedAt,
-      reviewsSyncedAt: syncedAt,
+      reviewsSyncedAt,
       checksSyncedAt: syncedAt,
       lastSyncedAt: syncedAt,
       errorSummary: newWarnings.at(-1),
@@ -689,7 +689,7 @@ export async function refreshPullRequestDetails(
   const admissionKey = repoAdmissionKeyForToken(env, repo, token);
   const warnings: string[] = [];
   await upsertPullRequestDetailSyncState(env, { repoFullName, pullNumber, status: "running" });
-  await fetchAndStorePullRequestDetails(env, repoFullName, pr, token, warnings, admissionKey, "live_review", { forceFiles: options.force });
+  const { reviewsSyncedAt } = await fetchAndStorePullRequestDetails(env, repoFullName, pr, token, warnings, admissionKey, "live_review", { forceFiles: options.force });
   const syncedAt = nowIso();
   const status: PullRequestDetailSyncStateRecord["status"] = warnings.length > 0 ? "partial" : "complete";
   await upsertPullRequestDetailSyncState(env, {
@@ -698,7 +698,7 @@ export async function refreshPullRequestDetails(
     status,
     headSha: pr.headSha,
     filesSyncedAt: syncedAt,
-    reviewsSyncedAt: syncedAt,
+    reviewsSyncedAt,
     checksSyncedAt: syncedAt,
     lastSyncedAt: syncedAt,
     errorSummary: warnings.at(-1),
@@ -1807,7 +1807,7 @@ async function backfillRepository(env: Env, repo: RepositoryRecord, limits: Back
     const detailWarningStart = warnings.length;
     await mapWithConcurrency(detailTargets, limits.detailConcurrency, async (pr) => {
       const before = warnings.length;
-      await fetchAndStorePullRequestDetails(env, repo.fullName, pr, token, warnings, admissionKey, "backfill_open_pr_details");
+      const { reviewsSyncedAt } = await fetchAndStorePullRequestDetails(env, repo.fullName, pr, token, warnings, admissionKey, "backfill_open_pr_details");
       // Persist the repo+PR+headSha snapshot marker (#audit-rate-headroom) so a later call through ANY
       // cache-aware path (open-PR convergence, live review) can skip refetching this PR's files while its
       // head is unchanged — without this write, fetchAndStorePullRequestDetails's cache check always misses
@@ -1820,7 +1820,7 @@ async function backfillRepository(env: Env, repo: RepositoryRecord, limits: Back
         status: newWarnings.length > 0 ? "partial" : "complete",
         headSha: pr.headSha,
         filesSyncedAt: syncedAt,
-        reviewsSyncedAt: syncedAt,
+        reviewsSyncedAt,
         checksSyncedAt: syncedAt,
         lastSyncedAt: syncedAt,
         errorSummary: newWarnings.at(-1),
@@ -1978,7 +1978,7 @@ async function fetchAndStorePullRequestDetails(
   admissionKey: GitHubRateLimitAdmissionKey | undefined,
   caller: PullRequestFilesFetchCaller,
   options: { forceFiles?: boolean | undefined } = {},
-): Promise<void> {
+): Promise<{ reviewsSyncedAt: string | null | undefined }> {
   // Durable repo+PR+headSha file snapshot (#audit-rate-headroom): a bare URL cache is insufficient because
   // `/pulls/{n}/files` has the SAME url across different heads. Reuse the stored `pull_request_files` rows
   // instead of refetching when the last successful files sync already covered the PR's CURRENT head SHA —
@@ -1996,22 +1996,22 @@ async function fetchAndStorePullRequestDetails(
   // Reviews cache (#2537): independent of headSha — a new commit alone does not invalidate existing review
   // state, only an actual `pull_request_review` webhook (submitted/dismissed/edited) does, via
   // markPullRequestReviewsInvalidated. Up to date when a prior sync recorded reviewsSyncedAt and either no
-  // invalidation has been recorded since, or the invalidation predates that sync.
-  //
-  // Every caller of this function stamps reviewsSyncedAt UNCONDITIONALLY once fetchAndStorePullRequestDetails
-  // returns, even when the reviews fetch itself failed (there is no per-segment success timestamp, only the
-  // aggregate PR-level errorSummary/status). Trusting a bare reviewsSyncedAt presence alone would let a
-  // transient review-fetch failure poison the cache forever, so this also excludes the case where the row's
-  // OWN errorSummary is the review-sync failure fetchPullRequestReviews just recorded for THIS PR (the same
-  // `Review sync failed for #<n>` message every caller already greps for — see the /Review sync failed/i
-  // filters in backfillRepositorySegment). A files/checks-only failure still leaves reviews cached, matching
-  // the reviews-are-independent-of-files intent; only a review-specific failure forces a retry.
-  const reviewsSyncedAt = existingState?.reviewsSyncedAt;
-  const reviewsFetchPreviouslyFailed = Boolean(existingState?.errorSummary?.startsWith(`Review sync failed for #${pr.number}:`));
+  // invalidation has been recorded since, or the invalidation predates that sync. STRICTLY greater-than (not
+  // >=): millisecond-resolution ISO timestamps can tie when a sync and a racing invalidation land in the same
+  // millisecond, and sub-millisecond ordering is unknowable from the stored strings — a tie must fail toward
+  // "still needs a refetch," never toward silently trusting a possibly-stale cache.
+  const reviewsSyncedAtBefore = existingState?.reviewsSyncedAt;
   const reviewsUpToDate =
-    Boolean(reviewsSyncedAt) &&
-    !reviewsFetchPreviouslyFailed &&
-    (!existingState?.reviewsInvalidatedAt || (reviewsSyncedAt ?? "") >= existingState.reviewsInvalidatedAt);
+    Boolean(reviewsSyncedAtBefore) &&
+    (!existingState?.reviewsInvalidatedAt || (reviewsSyncedAtBefore ?? "") > existingState.reviewsInvalidatedAt);
+  // Gate review finding (TOCTOU race): `existingState` above is a snapshot read at the TOP of this call. If a
+  // `pull_request_review` webhook races in AFTER that read but BEFORE this function returns, an unconditional
+  // "stamp reviewsSyncedAt to now" on the CALLER's side (the old design) would advance the timestamp PAST that
+  // webhook's invalidation without ever having fetched the reviews it invalidated -- the cache would then
+  // permanently believe it's fresh through an event it never actually observed. Captured HERE, before the
+  // fetch even starts, so it's safe: any invalidation racing in from this instant onward still leaves
+  // `reviewsInvalidatedAt` newer than whatever we return below, forcing a correct refetch on the NEXT pass.
+  const reviewFetchStartedAt = nowIso();
   const warningStart = warnings.length;
   const [files, reviews, checks] = await Promise.all([
     filesUpToDate ? Promise.resolve<GitHubFilePayload[]>([]) : fetchPullRequestFiles(env, repoFullName, pr.number, token, warnings, admissionKey, caller),
@@ -2019,6 +2019,13 @@ async function fetchAndStorePullRequestDetails(
     fetchPullRequestChecks(env, repoFullName, pr, token, warnings, admissionKey),
   ]);
   const fileSyncFailed = warnings.slice(warningStart).some((warning) => warning.startsWith(`File sync failed for #${pr.number}:`));
+  // reviewsSyncedAt only ever ADVANCES on a genuine success in THIS call -- never on a cache-hit skip, and
+  // never on a failed fetch attempt. This is what makes a stored reviewsSyncedAt a trustworthy "last confirmed
+  // successful sync" marker on its own (no separate errorSummary string-matching needed: a failed or skipped
+  // pass simply preserves whatever was already known, which -- being unchanged -- correctly keeps comparing as
+  // stale against reviewsInvalidatedAt on the next pass until a real fetch actually succeeds).
+  const reviewSyncFailedThisCall = !reviewsUpToDate && warnings.slice(warningStart).some((warning) => warning.startsWith(`Review sync failed for #${pr.number}:`));
+  const reviewsSyncedAtResult = !reviewsUpToDate && !reviewSyncFailedThisCall ? reviewFetchStartedAt : reviewsSyncedAtBefore;
 
   if (!filesUpToDate && !fileSyncFailed) {
     await deletePullRequestFiles(env, repoFullName, pr.number);
@@ -2063,6 +2070,7 @@ async function fetchAndStorePullRequestDetails(
       payload: check as unknown as Record<string, JsonValue>,
     });
   }
+  return { reviewsSyncedAt: reviewsSyncedAtResult };
 }
 
 // GitHub caps list endpoints at 100 items/page, so a single `per_page=100` fetch silently truncates a

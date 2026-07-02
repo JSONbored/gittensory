@@ -175,39 +175,104 @@ describe("GitHub PR reviews cache scoping (#2537)", () => {
     expect(await listPullRequestReviews(env, "JSONbored/gittensory", 63)).toEqual([expect.objectContaining({ reviewerLogin: "second-reviewer", state: "CHANGES_REQUESTED" })]);
   });
 
-  it("REGRESSION: a prior FAILED review fetch does not poison the cache — the next sync retries reviews even though reviewsSyncedAt is already set", async () => {
+  it("REGRESSION (gate finding): a FAILED review fetch never advances reviewsSyncedAt, so the next sync retries instead of trusting a false cache hit", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
     await seedRegisteredRepo(env);
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
       number: 65,
-      title: "Open PR, review fetch failed last time",
+      title: "Open PR, review fetch fails on first sync",
       state: "open",
       user: { login: "oktofeesh1" },
       head: { sha: "head-65" },
       labels: [],
       body: "",
     });
-    // Simulates the state left behind by a run whose review fetch failed: reviewsSyncedAt IS stamped (every
-    // caller stamps it unconditionally), but errorSummary records the review-specific failure.
-    await upsertPullRequestDetailSyncState(env, {
-      repoFullName: "JSONbored/gittensory",
-      pullNumber: 65,
-      status: "partial",
-      headSha: "head-65",
-      reviewsSyncedAt: "2026-05-20T00:00:00.000Z",
-      errorSummary: "Review sync failed for #65: GitHub REST and GraphQL detail fetches failed.",
-    });
-    const urls = stubFetchTracking((url) =>
+    // First pass: reviews REST + GraphQL fallback both fail (mirrors backfill.test.ts's "review failure, 503"
+    // stub — any unstubbed URL, including the GraphQL fallback, falls through to a 404).
+    const firstPassUrls = stubFetchTracking((url) => (url.includes("/pulls/65/reviews") ? new Response("review failure", { status: 503 }) : Response.json([])));
+
+    const firstResult = await refreshPullRequestDetails(env, "JSONbored/gittensory", 65);
+
+    expect(firstResult.status).toBe("partial");
+    expect(firstPassUrls.some((url) => url.includes("/pulls/65/reviews"))).toBe(true);
+    // The FAILED attempt must NOT advance reviewsSyncedAt — a stored value here (as the pre-fix code produced,
+    // stamping it unconditionally regardless of success) would let the next pass wrongly treat the failed
+    // fetch as a valid cache hit and never retry.
+    expect((await getPullRequestDetailSyncState(env, "JSONbored/gittensory", 65))?.reviewsSyncedAt).toBeFalsy();
+
+    // Second pass: reviews now succeed — since reviewsSyncedAt is still unset, this MUST be treated as a cache
+    // miss and genuinely refetched (not skipped).
+    const secondPassUrls = stubFetchTracking((url) =>
       url.includes("/pulls/65/reviews")
         ? Response.json([{ id: 3, user: { login: "late-reviewer" }, state: "APPROVED", author_association: "NONE", submitted_at: "2026-05-22T00:00:00.000Z" }])
         : Response.json([]),
     );
 
-    const result = await refreshPullRequestDetails(env, "JSONbored/gittensory", 65);
+    const secondResult = await refreshPullRequestDetails(env, "JSONbored/gittensory", 65);
 
-    expect(result).toMatchObject({ status: "complete" });
-    expect(urls.some((url) => url.includes("/pulls/65/reviews"))).toBe(true);
+    expect(secondResult.status).toBe("complete");
+    expect(secondPassUrls.some((url) => url.includes("/pulls/65/reviews"))).toBe(true);
     expect(await listPullRequestReviews(env, "JSONbored/gittensory", 65)).toEqual([expect.objectContaining({ reviewerLogin: "late-reviewer" })]);
+    // The now-successful sync DOES advance reviewsSyncedAt.
+    expect((await getPullRequestDetailSyncState(env, "JSONbored/gittensory", 65))?.reviewsSyncedAt).toBeTruthy();
+  });
+
+  it("REGRESSION (gate finding, TOCTOU race): a pull_request_review webhook racing in DURING a sync still forces a retry on the next pass", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    await seedRegisteredRepo(env);
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 68,
+      title: "Open PR, invalidation races in mid-sync",
+      state: "open",
+      user: { login: "oktofeesh1" },
+      head: { sha: "head-68" },
+      labels: [],
+      body: "",
+    });
+    // No existing sync state — first-ever sync, so a real reviews fetch happens. The /reviews handler itself
+    // calls markPullRequestReviewsInvalidated mid-flight, simulating a `pull_request_review` webhook landing
+    // AFTER fetchAndStorePullRequestDetails already read `existingState` but BEFORE it (and the caller's final
+    // write) complete — exactly the race the gate flagged: a naive "stamp reviewsSyncedAt to now, once the
+    // whole call finishes" would land AFTER this invalidation and wrongly look like it already covers it.
+    let racingInvalidationDone = false;
+    const urls = stubFetchTracking(async (url) => {
+      if (url.includes("/pulls/68/reviews")) {
+        await markPullRequestReviewsInvalidated(env, "JSONbored/gittensory", 68);
+        racingInvalidationDone = true;
+        return Response.json([{ id: 1, user: { login: "reviewer" }, state: "APPROVED", author_association: "NONE", submitted_at: "2026-05-22T00:00:00.000Z" }]);
+      }
+      return Response.json([]);
+    });
+
+    await refreshPullRequestDetails(env, "JSONbored/gittensory", 68);
+
+    expect(racingInvalidationDone).toBe(true);
+    expect(urls.some((url) => url.includes("/pulls/68/reviews"))).toBe(true);
+    const stateAfterRace = await getPullRequestDetailSyncState(env, "JSONbored/gittensory", 68);
+    expect(stateAfterRace?.reviewsSyncedAt).toBeTruthy();
+    expect(stateAfterRace?.reviewsInvalidatedAt).toBeTruthy();
+    // The stored reviewsSyncedAt was captured BEFORE the fetch started (and therefore no later than the
+    // race). Millisecond-resolution timestamps can tie in a fast test run, so allow equality here — the
+    // production `reviewsUpToDate` check uses a STRICT `>` specifically so a tie still forces a refetch.
+    expect(stateAfterRace!.reviewsSyncedAt! <= stateAfterRace!.reviewsInvalidatedAt!).toBe(true);
+
+    // A follow-up pass must therefore still see this as stale and genuinely refetch — not trust the sync that
+    // raced against (and missed) the invalidating event.
+    const followUpUrls = stubFetchTracking((url) =>
+      url.includes("/pulls/68/reviews")
+        ? Response.json([
+            { id: 1, user: { login: "reviewer" }, state: "APPROVED", author_association: "NONE", submitted_at: "2026-05-22T00:00:00.000Z" },
+            { id: 2, user: { login: "second-reviewer" }, state: "CHANGES_REQUESTED", author_association: "NONE", submitted_at: "2026-05-23T00:00:00.000Z" },
+          ])
+        : Response.json([]),
+    );
+
+    await refreshPullRequestDetails(env, "JSONbored/gittensory", 68);
+
+    expect(followUpUrls.some((url) => url.includes("/pulls/68/reviews"))).toBe(true);
+    expect(await listPullRequestReviews(env, "JSONbored/gittensory", 68)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ reviewerLogin: "second-reviewer", state: "CHANGES_REQUESTED" })]),
+    );
   });
 
   it("does not treat a FILES-only failure as a reason to re-fetch reviews (only a review-specific failure forces a retry)", async () => {
@@ -390,6 +455,48 @@ describe("GitHub PR reviews cache scoping (#2537)", () => {
       });
       expect(state?.reviewsInvalidatedAt).toBeTruthy();
       expect(state?.reviewsInvalidatedAt).not.toBe("2026-05-20T00:00:00.000Z");
+    });
+
+    it("REGRESSION (gate finding): retries a transient D1 write failure instead of losing the sole invalidation signal", async () => {
+      const env = createTestEnv();
+      const realPrepare = env.DB.prepare.bind(env.DB);
+      let calls = 0;
+      // Fail the first 2 attempts (a transient blip), succeed on the 3rd (within MAX_ATTEMPTS).
+      vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+        calls += 1;
+        if (calls <= 2) {
+          return {
+            bind: () => ({
+              run: () => Promise.reject(new Error("d1 transient error")),
+              all: () => Promise.reject(new Error("d1 transient error")),
+              first: () => Promise.reject(new Error("d1 transient error")),
+            }),
+          } as unknown as ReturnType<typeof env.DB.prepare>;
+        }
+        return realPrepare(sql);
+      });
+
+      await markPullRequestReviewsInvalidated(env, "JSONbored/gittensory", 72);
+
+      expect(calls).toBeGreaterThan(2);
+      const state = await getPullRequestDetailSyncState(env, "JSONbored/gittensory", 72);
+      expect(state?.reviewsInvalidatedAt).toBeTruthy();
+    });
+
+    it("REGRESSION (gate finding): still throws (bounded, not infinite) once every retry attempt fails", async () => {
+      const env = createTestEnv();
+      vi.spyOn(env.DB, "prepare").mockImplementation(
+        () =>
+          ({
+            bind: () => ({
+              run: () => Promise.reject(new Error("d1 permanently down")),
+              all: () => Promise.reject(new Error("d1 permanently down")),
+              first: () => Promise.reject(new Error("d1 permanently down")),
+            }),
+          }) as unknown as ReturnType<typeof env.DB.prepare>,
+      );
+
+      await expect(markPullRequestReviewsInvalidated(env, "JSONbored/gittensory", 73)).rejects.toThrow();
     });
   });
 });
