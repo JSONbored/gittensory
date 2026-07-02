@@ -44,6 +44,20 @@ describe("portfolio queue primitives", () => {
     expect(enqueueItem(queue, item("b-1", "   "))).toBe(queue);
   });
 
+  it("trims identifiers and preserves an in-progress state when enqueuing", () => {
+    expect(enqueueItem({ buckets: [] }, item("  a-1  ", "  acme/alpha  ", "in_progress"))).toEqual({
+      buckets: [{ repoFullName: "acme/alpha", items: [item("a-1", "acme/alpha", "in_progress")] }],
+    });
+  });
+
+  it("treats prebuilt queues with untrimmed ids as already containing the logical item", () => {
+    const queue: PortfolioQueue = {
+      buckets: [{ repoFullName: "acme/alpha", items: [{ id: "  a-1  ", repoFullName: "acme/alpha", state: "queued" }] }],
+    };
+
+    expect(enqueueItem(queue, item("a-1", "acme/alpha"))).toBe(queue);
+  });
+
   it("dequeues one item and drops an empty repo bucket", () => {
     const queue = queueOf(item("a-1", "acme/alpha"), item("b-1", "acme/beta"));
 
@@ -51,6 +65,12 @@ describe("portfolio queue primitives", () => {
       buckets: [{ repoFullName: "acme/alpha", items: [item("a-1", "acme/alpha")] }],
     });
     expect(dequeueItem(queue, "missing")).toBe(queue);
+  });
+
+  it("treats a blank dequeue target as a no-op", () => {
+    const queue = queueOf(item("a-1", "acme/alpha"));
+
+    expect(dequeueItem(queue, "   ")).toBe(queue);
   });
 
   it("returns no eligible items for an empty queue", () => {
@@ -65,6 +85,13 @@ describe("portfolio queue primitives", () => {
     );
 
     expect(nextEligibleItems(queue, { globalWipCap: 3, perRepoWipCap: 1 })).toEqual([]);
+  });
+
+  it("returns no eligible items when either cap normalizes to zero", () => {
+    const queue = queueOf(item("a-queued-1", "acme/alpha"));
+
+    expect(nextEligibleItems(queue, { globalWipCap: Number.POSITIVE_INFINITY, perRepoWipCap: 1 })).toEqual([]);
+    expect(nextEligibleItems(queue, { globalWipCap: 2, perRepoWipCap: -1 })).toEqual([]);
   });
 
   it("diversifies multi-repo selection and prefers the least represented repos first", () => {
@@ -94,6 +121,15 @@ describe("portfolio queue primitives", () => {
     expect(nextEligibleItems(queue, { globalWipCap: 3, perRepoWipCap: 3 }).map((entry) => entry.id)).toEqual([
       "a-queued-1",
       "b-queued-1",
+      "a-queued-2",
+    ]);
+  });
+
+  it("continues selecting from the same repo when no alternate repo is eligible", () => {
+    const queue = queueOf(item("a-queued-1", "acme/alpha"), item("a-queued-2", "acme/alpha"));
+
+    expect(nextEligibleItems(queue, { globalWipCap: 2, perRepoWipCap: 2 }).map((entry) => entry.id)).toEqual([
+      "a-queued-1",
       "a-queued-2",
     ]);
   });

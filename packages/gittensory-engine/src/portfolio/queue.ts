@@ -38,7 +38,7 @@ const QUEUED_STATE: PortfolioQueueItemState = "queued";
 const ACTIVE_STATE: PortfolioQueueItemState = "in_progress";
 
 function cleanId(value: string): string {
-  return typeof value === "string" ? value.trim() : "";
+  return value.trim();
 }
 
 function normalizeState(value: PortfolioQueueItemState): PortfolioQueueItemState {
@@ -78,15 +78,11 @@ function pickNextBucket(
   const alternates =
     lastRepoFullName === null ? eligible : eligible.filter((bucket) => bucket.repoFullName !== lastRepoFullName);
   const candidates = alternates.length > 0 ? alternates : eligible;
-  let winner = candidates[0] ?? null;
+  let winner = candidates[0]!;
   for (const candidate of candidates.slice(1)) {
-    if (winner === null) {
-      winner = candidate;
-      continue;
-    }
     const winnerLoad = projectedLoad(winner);
     const candidateLoad = projectedLoad(candidate);
-    if (candidateLoad < winnerLoad || (candidateLoad === winnerLoad && candidate.bucketIndex < winner.bucketIndex)) {
+    if (candidateLoad < winnerLoad) {
       winner = candidate;
     }
   }
@@ -94,7 +90,7 @@ function pickNextBucket(
 }
 
 function queueHasItem(queue: PortfolioQueue, itemId: string): boolean {
-  return queue.buckets.some((bucket) => bucket.items.some((item) => item.id === itemId));
+  return queue.buckets.some((bucket) => bucket.items.some((item) => cleanId(item.id) === itemId));
 }
 
 /** Append one item to the queue, creating its repo bucket if needed. Duplicate/blank ids are ignored. Pure. */
@@ -114,7 +110,7 @@ export function enqueueItem(queue: PortfolioQueue, item: PortfolioQueueItem): Po
   };
 }
 
-/** Remove one item by id; empty buckets disappear. Unknown/blank ids are a no-op. Pure. */
+/** Remove matching items by id; empty buckets disappear. Unknown/blank ids are a no-op. Pure. */
 export function dequeueItem(queue: PortfolioQueue, itemId: string): PortfolioQueue {
   const targetId = cleanId(itemId);
   if (!targetId) return queue;
@@ -162,8 +158,7 @@ export function nextEligibleItems(queue: PortfolioQueue, caps: PortfolioCaps): P
   while (selected.length < remainingGlobalSlots) {
     const nextBucket = pickNextBucket(selectionBuckets, lastRepoFullName);
     if (nextBucket === null) break;
-    const nextItem = nextBucket.queuedItems[nextBucket.selectedCount];
-    if (!nextItem) break;
+    const nextItem = nextBucket.queuedItems[nextBucket.selectedCount]!;
     selected.push(nextItem);
     nextBucket.selectedCount += 1;
     lastRepoFullName = nextBucket.repoFullName;
