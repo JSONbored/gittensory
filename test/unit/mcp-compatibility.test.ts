@@ -23,6 +23,14 @@ describe("MCP compatibility telemetry", () => {
     expect(classifyMcpClientVersion("0.6.0-rc.1")).toBe("stale");
   });
 
+  it("classifies the exact recommended version and newer releases as current", () => {
+    expect(classifyMcpClientVersion("0.6.0")).toBe("current");
+    expect(classifyMcpClientVersion("0.6.1")).toBe("current");
+    expect(classifyMcpClientVersion("1.0.0")).toBe("current");
+    expect(compareMcpSemver("0.6.0", "0.6.0")).toBe(0);
+    expect(compareMcpSemver("0.7.0", "0.6.0")).toBe(1);
+  });
+
   it("builds bounded telemetry from allowlisted MCP headers", () => {
     const telemetry = buildMcpClientTelemetry(
       new Headers({
