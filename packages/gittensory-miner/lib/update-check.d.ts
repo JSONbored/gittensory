@@ -1,6 +1,11 @@
-export function resolveNpmRegistryUrl(env?: Record<string, string | undefined>): string;
+export function resolveNpmRegistryUrl(
+  env?: Record<string, string | undefined>,
+): string;
 export function resolveUpgradeCommand(packageName?: string): string;
-export function shouldSkipUpdateCheck(cliArgs: string[], env?: Record<string, string | undefined>): boolean;
+export function shouldSkipUpdateCheck(
+  cliArgs: string[],
+  env?: Record<string, string | undefined>,
+): boolean;
 export function compareSemver(a: string, b: string): -1 | 0 | 1 | null;
 export function fetchLatestPackageVersion(input: {
   packageName: string;
@@ -23,4 +28,9 @@ export function startUpdateCheck(
     env?: Record<string, string | undefined>;
     timeoutMs?: number;
   },
+): Promise<void>;
+export const updateCheckExitGraceMs: number;
+export function awaitOpportunisticUpdateCheck(
+  updateCheck: Promise<void>,
+  graceMs?: number,
 ): Promise<void>;

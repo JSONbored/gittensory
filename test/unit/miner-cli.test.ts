@@ -21,6 +21,7 @@ let resolveNpmRegistryUrl: MinerUpdateCheck["resolveNpmRegistryUrl"];
 let resolveUpgradeCommand: MinerUpdateCheck["resolveUpgradeCommand"];
 let shouldSkipUpdateCheck: MinerUpdateCheck["shouldSkipUpdateCheck"];
 let startUpdateCheck: MinerUpdateCheck["startUpdateCheck"];
+let awaitOpportunisticUpdateCheck: MinerUpdateCheck["awaitOpportunisticUpdateCheck"];
 
 beforeAll(async () => {
   const cli = await import("../../packages/gittensory-miner/lib/cli.js");
@@ -35,6 +36,7 @@ beforeAll(async () => {
     resolveUpgradeCommand,
     shouldSkipUpdateCheck,
     startUpdateCheck,
+    awaitOpportunisticUpdateCheck,
   } = updateCheck);
 });
 
@@ -258,6 +260,35 @@ describe("gittensory-miner startup update check (#2331)", () => {
         env: { GITTENSORY_NPM_REGISTRY_URL: registryUrl },
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("awaitOpportunisticUpdateCheck waits for a fast update check but caps slow lookups", async () => {
+    let resolved = false;
+    const fastCheck = Promise.resolve().then(() => {
+      resolved = true;
+    });
+    await awaitOpportunisticUpdateCheck(fastCheck, 250);
+    expect(resolved).toBe(true);
+
+    const startedAt = Date.now();
+    await awaitOpportunisticUpdateCheck(new Promise(() => undefined), 50);
+    expect(Date.now() - startedAt).toBeLessThan(200);
+  });
+
+  it("awaitOpportunisticUpdateCheck lets a fast update check finish before exit", async () => {
+    const registryUrl = await startRegistryFixture({ latestVersion: "9.9.9" });
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    const updateCheck = startUpdateCheck(["mystery"], {
+      packageName: "@jsonbored/gittensory-miner",
+      packageVersion: "0.1.0",
+      env: { GITTENSORY_NPM_REGISTRY_URL: registryUrl },
+    });
+    await awaitOpportunisticUpdateCheck(updateCheck);
+    expect(stderr).toHaveBeenCalledWith(
+      "npm install -g @jsonbored/gittensory-miner@latest\n",
+    );
   });
 
   it("serves --version without blocking when update checks are disabled", () => {

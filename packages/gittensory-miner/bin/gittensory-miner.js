@@ -2,6 +2,7 @@
 import { createRequire } from "node:module";
 import { printHelp, printVersion, runCli } from "../lib/cli.js";
 import {
+  awaitOpportunisticUpdateCheck,
   resolveUpgradeCommand,
   startUpdateCheck,
 } from "../lib/update-check.js";
@@ -12,10 +13,11 @@ const packageName = "@jsonbored/gittensory-miner";
 const packageVersion = require("../package.json").version;
 const upgradeCommand = resolveUpgradeCommand(packageName);
 
-startUpdateCheck(cliArgs, {
+const updateCheck = startUpdateCheck(cliArgs, {
   packageName,
   packageVersion,
   upgradeCommand,
+  env: process.env,
 });
 
 if (
@@ -25,6 +27,7 @@ if (
   cliArgs[0] === "help"
 ) {
   printHelp({ packageName });
+  await awaitOpportunisticUpdateCheck(updateCheck);
   process.exit(0);
 }
 
@@ -34,8 +37,10 @@ if (
   cliArgs[0] === "version"
 ) {
   printVersion({ packageName, packageVersion });
+  await awaitOpportunisticUpdateCheck(updateCheck);
   process.exit(0);
 }
 
 const exitCode = runCli(cliArgs, { packageName });
+await awaitOpportunisticUpdateCheck(updateCheck);
 process.exit(exitCode);

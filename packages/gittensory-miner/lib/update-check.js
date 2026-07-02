@@ -139,3 +139,17 @@ export function startUpdateCheck(cliArgs, input) {
     timeoutMs: input.timeoutMs,
   });
 }
+
+export const updateCheckExitGraceMs = 250;
+
+// After command output is printed, give a fast registry response time to emit the nudge
+// without waiting for the full lookup timeout on slow/offline registries.
+export async function awaitOpportunisticUpdateCheck(
+  updateCheck,
+  graceMs = updateCheckExitGraceMs,
+) {
+  await Promise.race([
+    updateCheck.catch(() => undefined),
+    new Promise((resolve) => setTimeout(resolve, graceMs)),
+  ]);
+}
