@@ -724,6 +724,7 @@ describe("pullRelayPending", () => {
     expect((await pullRelayPending(e, 9705, { limit: 0 })).length).toBe(50); // non-positive limits fall back to batch default
     expect((await pullRelayPending(e, 9705, { limit: -1 })).length).toBe(50); // guards SQLite LIMIT -1 (unbounded)
     expect((await pullRelayPending(e, 9705, { limit: Number.NaN })).length).toBe(50); // non-integer / non-finite fallback
+    expect((await pullRelayPending(e, 9705, { limit: 1.5 })).length).toBe(50); // finite fractional limits fall back to batch default
   });
 
   it("PRUNES rows older than the TTL before returning the batch, and logs the drop at error level", async () => {
