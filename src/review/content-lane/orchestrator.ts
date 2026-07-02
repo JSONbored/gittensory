@@ -9,9 +9,10 @@
 //      assessProviderEntry validators (the orchestrator never hardcodes a domain-specific validator — a spec
 //      with no validator configured gets "manual") and returns one aggregate verdict: close if any entry is
 //      invalid, manual if any (remaining) needs manual review, merge only when every entry is clean, and
-//   6. for an entry submission riding alongside a genuine debut-provider companion file (an "entry + its first
-//      provider in the same PR" contribution), also validates that companion via assessProviderEntry and combines
-//      it with the entry's own result — merge only when BOTH sides are clean.
+//   6. for an entry submission riding alongside a path-shaped provider companion file, confirms the companion is
+//      actually a DEBUT (absent at base — an edit to an already-registered provider routes to manual instead),
+//      then validates it via assessProviderEntry and combines it with the entry's own result — merge only when
+//      BOTH sides are clean.
 // Pure + injectable: unit tests pass a loadFile stub, so no network. The live wiring (a per-repo,
 // flag-gated branch in the review body) is a separate follow-up.
 import {
@@ -98,12 +99,19 @@ function duplicateEntryCloseSummary(): string {
 // orchestrator can't itself judge the entry's content — route to manual review rather than merge or close.
 const NO_VALIDATOR_ENTRY_SUMMARY = "No validator is configured for this registry's surface entries — routing to review.";
 const NO_VALIDATOR_PROVIDER_SUMMARY = "No validator is configured for this registry's provider submissions — routing to review.";
+// classifyRegistryPrScope identifies a provider companion by FILE PATH alone (it does no I/O); that only proves
+// the file is shaped like a provider submission, not that it's a genuine DEBUT (a brand-new provider, not an edit
+// to one already in the registry). The orchestrator independently confirms debut-ness once it has the fetched
+// content — see the base-presence check in runSurfaceReview.
+const NON_DEBUT_COMPANION_SUMMARY =
+  "Registry submission's provider companion already exists in the registry — this isn't a debut provider, so it needs a human to review the edit alongside the entry.";
 
 /**
  * Combines an entry-submission's aggregate Assessment with its companion debut-provider file's ProviderAssessment
  * into ONE SurfaceReviewResult — the "entry + debut provider in the same PR" flow. `providerRaw` is already loaded
- * by the caller (in parallel with the entry's own head/base fetches — see runSurfaceReview) and `assessProvider`
- * already confirmed present, so this function does no I/O and can't itself punt to "no validator configured".
+ * by the caller (in parallel with the entry's own head/base fetches — see runSurfaceReview), `assessProvider`
+ * already confirmed present, and the companion already confirmed to actually BE a debut (absent at base) — so
+ * this function does no I/O and can't itself punt to "no validator configured" or "not actually a debut".
  * Reuses `fromProvider` for the provider's own ok/close mapping — the same conversion the standalone provider-
  * submission scope uses — so the two paths can never silently drift apart. Decisive: close if EITHER side is
  * invalid, manual if the entry needs manual review and the provider is clean (a provider assessment is itself
@@ -203,14 +211,23 @@ export async function runSurfaceReview(spec: RegistryLaneSpec, input: SurfaceRev
   if (companionProviderFile !== null && !spec.assessProviderEntry) {
     return { verdict: "manual", summary: NO_VALIDATOR_PROVIDER_SUMMARY };
   }
-  // The entry's head/base fetch and the companion provider's fetch (when present) are up to three independent
-  // GitHub-Contents reads with no data dependency on each other — resolve them concurrently rather than paying
-  // for three sequential round-trips.
-  const [headRaw, baseRaw, providerRaw] = await Promise.all([
+  // The entry's head/base fetch and the companion provider's head/base fetch (when present) are up to four
+  // independent GitHub-Contents reads with no data dependency on each other — resolve them concurrently rather
+  // than paying for sequential round-trips.
+  const [headRaw, baseRaw, providerHeadRaw, providerBaseRaw] = await Promise.all([
     input.loadFile(directFile, "head"),
     input.loadFile(directFile, "base"),
     companionProviderFile !== null ? input.loadFile(companionProviderFile, "head") : Promise.resolve(null),
+    companionProviderFile !== null ? input.loadFile(companionProviderFile, "base") : Promise.resolve(null),
   ]);
+  // A companion recognized by path alone (see classifyRegistryPrScope) is only a genuine DEBUT provider when it's
+  // absent at base — the same "null base ⇒ brand-new file" convention diffAppendedSurfaceEntries already applies
+  // to the entry file itself. A non-null base means this PR is editing an existing, already-registered provider
+  // record alongside an unrelated entry — a materially different, more sensitive shape that needs a human, not
+  // the automatic debut-provider merge/close flow below.
+  if (companionProviderFile !== null && providerBaseRaw !== null) {
+    return { verdict: "manual", summary: NON_DEBUT_COMPANION_SUMMARY };
+  }
   const appendedEntries = diffAppendedSurfaceEntries(headRaw, baseRaw, spec.collectionField);
   const maxAppendedEntries = spec.maxAppendedEntries ?? DEFAULT_MAX_APPENDED_ENTRIES;
   if (appendedEntries === null || appendedEntries.length === 0 || appendedEntries.length > maxAppendedEntries) {
@@ -232,7 +249,7 @@ export async function runSurfaceReview(spec: RegistryLaneSpec, input: SurfaceRev
   if (companionProviderFile !== null) {
     // Guaranteed non-null: the no-validator short-circuit above already returned when this spec lacks one.
     const assessProvider = spec.assessProviderEntry as NonNullable<RegistryLaneSpec["assessProviderEntry"]>;
-    return assessEntryWithProviderCompanion(assessProvider, assessment, providerRaw, input.opts);
+    return assessEntryWithProviderCompanion(assessProvider, assessment, providerHeadRaw, input.opts);
   }
   return { verdict: toCoreVerdict(assessment.verdict), summary: assessment.summary, reason: assessment.reason };
 }

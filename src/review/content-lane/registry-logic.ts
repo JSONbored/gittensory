@@ -702,12 +702,16 @@ export interface RegistryScopeResult {
   scope: RegistryPrScope;
   directFile: string | null;
   isProvider: boolean;
-  /** For an "entry-submission" scope only: a companion file that is a genuine DEBUT provider submission riding
-   *  along with the entry in the same PR (spec.providerFilePattern), set only when exactly one such companion is
-   *  present. An entry file always wins the scope classification over a provider file present in the same PR (so
-   *  "provider-submission scope with a companion entry file" cannot occur — the entry file becomes directFile and
-   *  the provider file becomes this field instead). Null when there is no provider companion, when there is more
-   *  than one (ambiguous — ordinary companion-file review still applies), or when the scope isn't entry-submission. */
+  /** For an "entry-submission" scope only: a companion file that is PATH-SHAPED like a provider submission
+   *  (matches spec.providerFilePattern) riding along with the entry in the same PR, set only when exactly one such
+   *  companion is present. This is classification only — a pure, I/O-free path match — and does NOT by itself
+   *  prove the companion is a genuine DEBUT (a brand-new provider, not an edit to one already in the registry);
+   *  the orchestrator independently confirms that once it has fetched content (see runSurfaceReview's base-
+   *  presence check) before treating it as the debut-provider companion flow. An entry file always wins the scope
+   *  classification over a provider file present in the same PR (so "provider-submission scope with a companion
+   *  entry file" cannot occur — the entry file becomes directFile and the provider file becomes this field
+   *  instead). Null when there is no provider companion, when there is more than one (ambiguous — ordinary
+   *  companion-file review still applies), or when the scope isn't entry-submission. */
   providerCompanionFile: string | null;
 }
 

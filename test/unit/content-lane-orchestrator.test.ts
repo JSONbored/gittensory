@@ -143,6 +143,38 @@ describe("runSurfaceReview (deterministic + decisive: merge/close, rarely manual
     expect(r?.verdict).toBe("close");
   });
 
+  // A companion file that MATCHES providerFilePattern is only trustworthy as "the debut provider" once the
+  // orchestrator itself confirms it's genuinely new (absent at base) — classifyRegistryPrScope's path match alone
+  // proves nothing about whether this provider already exists in the registry.
+  it("routes to MANUAL when the 'companion' provider file already exists at base (an edit, not a debut) — even though the entry itself is clean", async () => {
+    const calls: string[] = [];
+    const r = await runSurfaceReview(METAGRAPHED_LANE_SPEC, {
+      changedFiles: [SUBNET, PROVIDER],
+      loadFile: (path, ref) => {
+        calls.push(`${ref}:${path}`);
+        if (path === PROVIDER) return Promise.resolve(ref === "head" ? validProviderDoc : validProviderDoc); // present at BOTH refs — an edit
+        return Promise.resolve(ref === "head" ? doc([existing, newEntry]) : doc([existing]));
+      },
+    });
+    expect(r).toEqual({
+      verdict: "manual",
+      summary:
+        "Registry submission's provider companion already exists in the registry — this isn't a debut provider, so it needs a human to review the edit alongside the entry.",
+    });
+    // The entry's own content is never even assessed once the companion is confirmed non-debut (nothing else could
+    // change the outcome), but ALL FOUR fetches (entry head/base, provider head/base) already ran concurrently.
+    expect(calls.sort()).toEqual([`base:${PROVIDER}`, `base:${SUBNET}`, `head:${PROVIDER}`, `head:${SUBNET}`]);
+  });
+
+  it("still merges the SAME entry when its provider companion is genuinely new (absent at base) — the debut check does not false-positive on a clean debut", async () => {
+    const r = await runSurfaceReview(METAGRAPHED_LANE_SPEC, {
+      changedFiles: [SUBNET, PROVIDER],
+      loadFile: (path, ref) =>
+        Promise.resolve(path === PROVIDER ? (ref === "head" ? validProviderDoc : null) : ref === "head" ? doc([existing, newEntry]) : doc([existing])),
+    });
+    expect(r?.verdict).toBe("merge");
+  });
+
   it("[test 3] merges an entry submission accompanied ONLY by an artifactPattern companion, without validating it as a provider", async () => {
     const calls: string[] = [];
     const r = await runSurfaceReview(METAGRAPHED_LANE_SPEC, {
