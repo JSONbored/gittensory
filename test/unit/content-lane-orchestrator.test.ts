@@ -293,7 +293,7 @@ describe("runSurfaceReview (deterministic + decisive: merge/close, rarely manual
   });
 
   it("does not echo unvalidated duplicate URLs into public close summaries", async () => {
-    const unsafeUrl = "not-a-safe-url ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n### injected markdown";
+    const unsafeUrl = "not-a-safe-url <a-fake-token-that-should-never-leak>\n### injected markdown";
     const duplicate = { ...newEntry, id: "unsafe-duplicate", url: unsafeUrl };
     const copy = { ...duplicate, id: "unsafe-duplicate-copy" };
     const r = await review([SUBNET], { [`head:${SUBNET}`]: doc([existing, duplicate, copy]), [`base:${SUBNET}`]: doc([existing]) });
@@ -303,7 +303,7 @@ describe("runSurfaceReview (deterministic + decisive: merge/close, rarely manual
       summary: "A surface submission must not duplicate an entry already in this PR or already in the registry — resubmit without the duplicate.",
     });
     expect(r?.summary).not.toContain(unsafeUrl);
-    expect(r?.summary).not.toContain("ghp_");
+    expect(r?.summary).not.toContain("a-fake-token-that-should-never-leak");
     expect(r?.summary).not.toContain("### injected markdown");
   });
 
