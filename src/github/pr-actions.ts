@@ -200,8 +200,13 @@ export async function closePullRequest(env: Env, installationId: number, repoFul
 
 /** The last-closer lookup result. `coveredAllPages` is false when the bounded newest-events window did NOT reach
  *  back to page 1 (a very long timeline), so a `login: null` may mean "no close found" OR "a close exists beyond
- *  the inspected window". The reopen guard uses this to fail CLOSED rather than allow a window-evasion bypass. */
-export type LastCloserResult = { login: string | null; coveredAllPages: boolean };
+ *  the inspected window". The reopen guard uses this to fail CLOSED rather than allow a window-evasion bypass.
+ *  `errored` distinguishes a genuine read failure (network/auth/rate-limit — we learned NOTHING) from a bounded
+ *  scan that ran to completion and simply found no match in its window (we learned something, just not enough
+ *  to prove full coverage). Both leave `coveredAllPages: false`, but callers that treat "no match in a bounded
+ *  window" as evidence of timeline-padding (rather than proof of nothing) must NOT extend that trust to a scan
+ *  that never actually ran. */
+export type LastCloserResult = { login: string | null; coveredAllPages: boolean; errored: boolean };
 
 /** Event-agnostic alias for {@link LastCloserResult} — the shape is identical for any single timeline-event-type
  *  lookup (e.g. "closed" or "reopened"); kept as an alias rather than a rename so existing importers of
@@ -233,7 +238,7 @@ export async function getLastReopenerLogin(env: Env, installationId: number, rep
 async function getLastActorForEvent(env: Env, installationId: number, repoFullName: string, issueNumber: number, eventType: string): Promise<LastTimelineActorResult> {
   try {
     const { owner, repo } = splitRepo(repoFullName);
-    return await withInstallationTokenRetry(env, installationId, async (token) => {
+    const result = await withInstallationTokenRetry(env, installationId, async (token) => {
       const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
       const requestPage = (page: number) =>
         octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}/events", { owner, repo, issue_number: issueNumber, per_page: ISSUE_EVENTS_PAGE_SIZE, page });
@@ -275,9 +280,11 @@ async function getLastActorForEvent(env: Env, installationId: number, repoFullNa
       }
       return { login: coveredAllPages ? (latestActorInPage(firstEvents, eventType) ?? null) : null, coveredAllPages };
     });
+    return { ...result, errored: false };
   } catch {
-    // On error we cannot prove we read the whole timeline — report not-covered so the caller decides conservatively.
-    return { login: null, coveredAllPages: false };
+    // On error we learned NOTHING — unlike a bounded scan that ran to completion and found no match, this must
+    // not be treated as evidence of anything; report it distinctly so the caller can fail closed. (#2369)
+    return { login: null, coveredAllPages: false, errored: true };
   }
 }
 

@@ -11571,10 +11571,12 @@ describe("one-shot reopen prevention", () => {
     expect(audit?.detail).toContain("beyond the inspected event window");
   });
 
-  it("REGRESSION: re-closes when the reopener-timeline read errors (#2369)", async () => {
+  it("REGRESSION: fails CLOSED (denies the re-close) when the reopener-timeline read errors (#2369)", async () => {
     // The reopener-timeline lookup errors (network failure) → getLastReopenerLogin catches and returns
-    // { login: null, coveredAllPages: false }. The handler still enforces the one-shot close instead of
-    // treating that ambiguous shape as a superseding maintainer reopen.
+    // { login: null, coveredAllPages: false, errored: true } — DISTINCT from the padded-window case above
+    // (which has errored: false). The design explicitly fails CLOSED here (deny the close) rather than
+    // proceeding, since wrongly re-closing a maintainer-authorized PR is worse than leaving a disallowed
+    // reopen open for one more tick.
     const calls: Array<{ url: string; method: string }> = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -11591,10 +11593,11 @@ describe("one-shot reopen prevention", () => {
 
     await processJob(env, { type: "github-webhook", deliveryId: "reopen-timeline-error", eventName: "pull_request", payload: reopenedPayload("contributor") });
 
-    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(true);
-    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
-    const audit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string }>();
-    expect(audit?.outcome).toBe("error");
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(false);
+    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("denied");
+    expect(audit?.detail).toContain("could not confirm");
   });
 
   it("REGRESSION: denies with an 'unknown' current-reopener detail when the timeline genuinely has no reopen event at all (#2369)", async () => {

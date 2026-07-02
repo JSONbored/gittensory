@@ -8101,20 +8101,26 @@ async function recloseDisallowedReopenIfNeeded(
     pr.number,
   );
   const latestReopenerLogin = latestReopener.login?.toLowerCase() ?? null;
-  // A bounded scan that cannot see any reopened event must NOT deny the re-close: otherwise a contributor can
-  // pad the event timeline until their disallowed reopen falls outside the inspected window. Only a fully covered
-  // timeline with no reopen, or a visible different latest reopener, proves this webhook was superseded.
+  // A bounded scan that RAN TO COMPLETION and cannot see any reopened event must NOT deny the re-close: otherwise
+  // a contributor can pad the event timeline until their disallowed reopen falls outside the inspected window.
+  // Only a fully covered timeline with no reopen, or a visible different latest reopener, proves this webhook was
+  // superseded. A timeline read that ERRORED is different — it proves nothing — so it must still fail CLOSED, the
+  // opposite of the closer-lookup's fail-open bias above, because wrongly re-closing a maintainer-authorized PR
+  // is the worse failure mode than leaving a disallowed reopen unclosed for one more tick. (#2369)
   const reopenerSuperseded =
-    latestReopener.coveredAllPages
+    latestReopener.errored ||
+    (latestReopener.coveredAllPages
       ? latestReopenerLogin !== reopener
-      : latestReopenerLogin != null && latestReopenerLogin !== reopener;
+      : latestReopenerLogin != null && latestReopenerLogin !== reopener);
   if (reopenerSuperseded) {
     await recordAuditEvent(env, {
       eventType: "github_app.reopen_reclosed",
       actor: "gittensory",
       targetKey: `${repoFullName}#${pr.number}`,
       outcome: "denied",
-      detail: `the current reopener is now ${latestReopenerLogin ?? "unknown"}, not ${reopener} — reopen re-close not executed`,
+      detail: latestReopener.errored
+        ? `could not confirm ${reopener} is still the most recent reopener (timeline read failed) — reopen re-close not executed`
+        : `the current reopener is now ${latestReopenerLogin ?? "unknown"}, not ${reopener} — reopen re-close not executed`,
       metadata: { deliveryId, repoFullName },
     }).catch(() => undefined);
     return true; // handled (decision made); a confirmed superseding reopener still counts as handled

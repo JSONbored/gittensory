@@ -188,7 +188,7 @@ describe("GitHub PR action primitives (#778)", () => {
       return new Response("unexpected", { status: 500 });
     });
 
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 17)).resolves.toEqual({ login: "maintainer", coveredAllPages: true });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 17)).resolves.toEqual({ login: "maintainer", coveredAllPages: true, errored: false });
     expect(calls.some((url) => url.includes("per_page=100") && url.includes("page=1"))).toBe(true);
     expect(calls.some((url) => url.includes("per_page=100") && url.includes("page=2"))).toBe(true);
   });
@@ -198,7 +198,7 @@ describe("GitHub PR action primitives (#778)", () => {
       if (input.toString().includes("/access_tokens")) return Response.json({ token: "t" });
       throw new Error("network failure");
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 18)).resolves.toEqual({ login: null, coveredAllPages: false });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 18)).resolves.toEqual({ login: null, coveredAllPages: false, errored: true });
   });
 
   it("records null lastCloser when the closed event has a null actor", async () => {
@@ -207,7 +207,7 @@ describe("GitHub PR action primitives (#778)", () => {
       if (input.toString().includes("/issues/19/events")) return Response.json([{ event: "closed", actor: null }]);
       return new Response("not found", { status: 404 });
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 19)).resolves.toEqual({ login: null, coveredAllPages: true });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 19)).resolves.toEqual({ login: null, coveredAllPages: true, errored: false });
   });
 
   it("reads the newest bounded event pages instead of the oldest prefix", async () => {
@@ -230,7 +230,7 @@ describe("GitHub PR action primitives (#778)", () => {
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 20)).resolves.toEqual({ login: "maintainer", coveredAllPages: false });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 20)).resolves.toEqual({ login: "maintainer", coveredAllPages: false, errored: false });
     expect(fetchedPages).toEqual([1, 12, 11]);
     expect(fetchedPages).not.toContain(2);
   });
@@ -248,7 +248,7 @@ describe("GitHub PR action primitives (#778)", () => {
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 21)).resolves.toEqual({ login: null, coveredAllPages: false });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 21)).resolves.toEqual({ login: null, coveredAllPages: false, errored: false });
     expect(fetchedPages).toEqual([1, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
   });
 
@@ -266,7 +266,7 @@ describe("GitHub PR action primitives (#778)", () => {
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 22)).resolves.toEqual({ login: "page1-closer", coveredAllPages: true });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 22)).resolves.toEqual({ login: "page1-closer", coveredAllPages: true, errored: false });
   });
 
   it("follows rel=next forward when GitHub omits rel=last, finding the later maintainer close (#audit-rel-last)", async () => {
@@ -286,7 +286,7 @@ describe("GitHub PR action primitives (#778)", () => {
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 23)).resolves.toEqual({ login: "maintainer", coveredAllPages: true });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 23)).resolves.toEqual({ login: "maintainer", coveredAllPages: true, errored: false });
     expect(fetchedPages).toEqual([1, 2, 3]);
   });
 
@@ -304,7 +304,7 @@ describe("GitHub PR action primitives (#778)", () => {
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 25)).resolves.toEqual({ login: null, coveredAllPages: false });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 25)).resolves.toEqual({ login: null, coveredAllPages: false, errored: false });
     expect(fetchedPages).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]); // page 1 + the 10-page budget
   });
 
@@ -321,7 +321,7 @@ describe("GitHub PR action primitives (#778)", () => {
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 26)).resolves.toEqual({ login: null, coveredAllPages: true });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 26)).resolves.toEqual({ login: null, coveredAllPages: true, errored: false });
   });
 
   it("returns null when bounded window (firstPageToRead=2) AND page 1 also have no close event (?? null right branch)", async () => {
@@ -337,7 +337,7 @@ describe("GitHub PR action primitives (#778)", () => {
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 24)).resolves.toEqual({ login: null, coveredAllPages: true });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 24)).resolves.toEqual({ login: null, coveredAllPages: true, errored: false });
   });
 
   it("getLastReopenerLogin: walks paginated issue events to find the true most recent reopener (#2369)", async () => {
@@ -359,7 +359,7 @@ describe("GitHub PR action primitives (#778)", () => {
       return new Response("unexpected", { status: 500 });
     });
 
-    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 117)).resolves.toEqual({ login: "maintainer", coveredAllPages: true });
+    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 117)).resolves.toEqual({ login: "maintainer", coveredAllPages: true, errored: false });
     expect(calls.some((url) => url.includes("per_page=100") && url.includes("page=1"))).toBe(true);
     expect(calls.some((url) => url.includes("per_page=100") && url.includes("page=2"))).toBe(true);
   });
@@ -378,7 +378,7 @@ describe("GitHub PR action primitives (#778)", () => {
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 121)).resolves.toEqual({ login: "contributor", coveredAllPages: true });
+    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 121)).resolves.toEqual({ login: "contributor", coveredAllPages: true, errored: false });
   });
 
   it("getLastReopenerLogin: a single (lastPage<=1) page with no matching event falls back to null (#2369)", async () => {
@@ -392,7 +392,7 @@ describe("GitHub PR action primitives (#778)", () => {
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 122)).resolves.toEqual({ login: null, coveredAllPages: true });
+    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 122)).resolves.toEqual({ login: null, coveredAllPages: true, errored: false });
   });
 
   it("getLastReopenerLogin: returns null when the events API throws (catch path, #2369)", async () => {
@@ -400,7 +400,7 @@ describe("GitHub PR action primitives (#778)", () => {
       if (input.toString().includes("/access_tokens")) return Response.json({ token: "t" });
       throw new Error("network failure");
     });
-    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 118)).resolves.toEqual({ login: null, coveredAllPages: false });
+    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 118)).resolves.toEqual({ login: null, coveredAllPages: false, errored: true });
   });
 
   it("getLastReopenerLogin: reads the newest bounded event pages instead of the oldest prefix (#2369)", async () => {
@@ -423,7 +423,7 @@ describe("GitHub PR action primitives (#778)", () => {
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 119)).resolves.toEqual({ login: "maintainer", coveredAllPages: false });
+    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 119)).resolves.toEqual({ login: "maintainer", coveredAllPages: false, errored: false });
     expect(fetchedPages).toEqual([1, 12, 11]);
     expect(fetchedPages).not.toContain(2);
   });
@@ -434,7 +434,7 @@ describe("GitHub PR action primitives (#778)", () => {
       if (input.toString().includes("/issues/120/events")) return Response.json([{ event: "reopened", actor: null }]);
       return new Response("not found", { status: 404 });
     });
-    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 120)).resolves.toEqual({ login: null, coveredAllPages: true });
+    await expect(getLastReopenerLogin(envWithKey(), 123, "owner/repo", 120)).resolves.toEqual({ login: null, coveredAllPages: true, errored: false });
   });
 
   it("dismisses the bot's own LATEST approve review, ignoring other reviewers and earlier bot reviews (#2254)", async () => {
@@ -579,7 +579,7 @@ describe("GitHub PR action primitives (#778)", () => {
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 27)).resolves.toEqual({ login: "solo-page-closer", coveredAllPages: true });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 27)).resolves.toEqual({ login: "solo-page-closer", coveredAllPages: true, errored: false });
   });
 
   it("returns null when rel=last explicitly reports a single page with no close event (?? null right branch)", async () => {
@@ -593,7 +593,7 @@ describe("GitHub PR action primitives (#778)", () => {
       }
       return new Response("unexpected", { status: 500 });
     });
-    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 28)).resolves.toEqual({ login: null, coveredAllPages: true });
+    await expect(getLastCloserLogin(envWithKey(), 123, "owner/repo", 28)).resolves.toEqual({ login: null, coveredAllPages: true, errored: false });
   });
 });
 
