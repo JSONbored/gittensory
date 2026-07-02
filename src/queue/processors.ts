@@ -1704,7 +1704,7 @@ async function maybeRunAgentMaintenance(
   // critical section (extracted below so the try/finally doesn't force-reindent that whole block); a pass that
   // loses the race defers cleanly — the next webhook/sweep tick is the backstop. Lightweight stand-in for the
   // per-PR SubmissionLock Durable Object noted as a longer-term TODO in env.d.ts.
-  if (!(await claimAgentMaintenanceLock(env, repoFullName, pr.number))) return;
+  if (!(await claimPrActuationLock(env, repoFullName, pr.number))) return;
   try {
     await runAgentMaintenancePlanAndExecute(env, {
       installationId,
@@ -1718,7 +1718,7 @@ async function maybeRunAgentMaintenance(
       liveFacts: args.liveFacts,
     });
   } finally {
-    await releaseAgentMaintenanceLock(env, repoFullName, pr.number);
+    await releasePrActuationLock(env, repoFullName, pr.number);
   }
 }
 
@@ -2305,17 +2305,23 @@ async function putTransientKey(
   }
 }
 
-// Per-PR actuation mutex (#2135). Two DIFFERENT webhook deliveries for the same PR (e.g. a `reopened` event and
-// a concurrent `check_suite completed` event) can be dequeued by separate workers at nearly the same time; both
-// would read the same stale-but-still-"current" state, both pass their own freshness checks, and both
-// independently fire a mutating call. This is a lightweight interim mutex (a full per-PR Durable Object /
-// SubmissionLock is a separate, more-involved follow-up — see the TODO in env.d.ts) built on the SAME transient
-// cache used for CI-completion coalescing above, claimed ATOMICALLY (see claimTransientLock) so two racing
-// deliveries can never both win the claim — a short TTL, best-effort release. A lock-contended caller fails
-// OPEN (returns false / skips this pass) rather than blocking — the delivery holding the lock is evaluating
-// the SAME PR, and the periodic sweep is the backstop if this specific trigger is dropped. A cache adapter with
-// no claim() primitive gets NO exclusivity at all (every call proceeds) rather than a get-then-set pair that
-// only *looks* atomic — see claimTransientLock's doc comment for why that fallback was removed.
+// ONE shared per-PR actuation mutex (#2129/#2135) for every mutating PR pass: the sweep/webhook-driven
+// maintenance plan-and-execute, the draft-dodge close, and the reopen-reclose. These are three INDEPENDENTLY
+// triggered webhook/sweep paths for the SAME PR (e.g. a `reopened` event and a concurrent `check_suite
+// completed` event, or a sweep tick racing either) that can be dequeued by separate workers at nearly the same
+// time; each would read its own stale-but-still-"current" state, each would pass its own freshness checks, and
+// each could independently fire a mutating call for the same PR. A single lock namespace is deliberate: separate
+// per-path locks (the original design) do not exclude each other, so a maintenance pass and a draft-dodge close
+// could still race — the whole point of this mutex is to make "does something else already own this PR" one
+// question with one answer, not one question per code path (review round 4). This is a lightweight interim
+// mutex (a full per-PR Durable Object / SubmissionLock is a separate, more-involved follow-up — see the TODO in
+// env.d.ts) built on the SAME transient cache used for CI-completion coalescing above, claimed ATOMICALLY (see
+// claimTransientLock) so two racing deliveries can never both win the claim — a short TTL, best-effort release.
+// A lock-contended caller fails OPEN (returns false / skips this pass) rather than blocking — the delivery
+// holding the lock is evaluating the SAME PR, and the periodic sweep is the backstop if this specific trigger is
+// dropped. A cache adapter with no claim() primitive gets NO exclusivity at all (every call proceeds) rather
+// than a get-then-set pair that only *looks* atomic — see claimTransientLock's doc comment for why that fallback
+// was removed.
 //
 // KNOWN LIMITATION: the lock value is a constant, not a per-holder ownership token, so release does not verify
 // it still owns the key — if a holder ran past the TTL, a later claimer's live lock could be deleted by the
@@ -2323,7 +2329,8 @@ async function putTransientKey(
 // token + a conditional (check-then-delete) release would close this properly, but needs a new atomic
 // compare-and-delete primitive on the cache adapter — tracked alongside the Durable Object follow-up above. The
 // TTL is set generously long specifically so this window is practically unreachable: the guarded operations
-// (a handful of sequential GitHub API calls) should never legitimately run anywhere near this long.
+// (a handful of sequential GitHub API calls, or a maintenance pass's plan-and-execute) should never legitimately
+// run anywhere near this long.
 const PR_ACTUATION_LOCK_TTL_SECONDS = 600;
 function prActuationLockKey(repoFullName: string, prNumber: number): string {
   return `pr-actuation-lock:${repoFullName.toLowerCase()}#${prNumber}`;
@@ -2520,53 +2527,14 @@ async function claimTransientLock(
   }
 }
 
-// Per-PR advisory lock around maybeRunAgentMaintenance's plan-and-execute critical section (#2129). The TTL is a
-// crash-safety backstop only — the normal path releases explicitly in a finally block within a few seconds — so
-// it is sized well above any realistic pass duration (matches CI_COALESCE_WINDOW_SECONDS, an already-vetted
-// value for a comparable-scale operation in this file), not to bound throughput.
-const AGENT_MAINTENANCE_LOCK_TTL_SECONDS = 60;
-
-function agentMaintenanceLockKey(repoFullName: string, prNumber: number): string {
-  return `agent-maintenance-lock:${repoFullName.toLowerCase()}#${prNumber}`;
-}
-
-/**
- * Claim the per-PR advisory lock. Returns false when another pass already holds it (caller must skip this pass
- * — the next webhook/sweep tick is the backstop). A missing cache or cache hiccup fails OPEN (returns true —
- * the lock is a defense-in-depth serializer, not the primary safety gate, and must never itself block actuation).
- */
-export async function claimAgentMaintenanceLock(
-  env: Env,
-  repoFullName: string,
-  prNumber: number,
-): Promise<boolean> {
-  return claimTransientLock(
-    env,
-    agentMaintenanceLockKey(repoFullName, prNumber),
-    AGENT_MAINTENANCE_LOCK_TTL_SECONDS,
-  );
-}
-
-/** Best-effort release, called from a finally block so the lock frees promptly instead of waiting out the TTL. */
-export async function releaseAgentMaintenanceLock(
-  env: Env,
-  repoFullName: string,
-  prNumber: number,
-): Promise<void> {
-  try {
-    await env.SELFHOST_TRANSIENT_CACHE?.del?.(
-      agentMaintenanceLockKey(repoFullName, prNumber),
-    );
-  } catch {
-    // best-effort; the TTL is the backstop if release fails
-  }
-}
-
 // Per-(repo, PR, head SHA) advisory lock around runAiReviewForAdvisory's expensive grounding/RAG/enrichment/LLM
 // section (#confirmed-bug: a webhook pass and an agent-regate-pr sweep pass can independently reach this same
 // code for the SAME PR at the SAME head SHA, both miss the cache, and both fire a real LLM call — which can
 // return DIFFERENT verdicts). The TTL is a crash-safety backstop only (see AI_REVIEW_LOCK_TTL_SECONDS below), not
-// a throughput bound — same philosophy as AGENT_MAINTENANCE_LOCK_TTL_SECONDS (#2129/#2368).
+// a throughput bound — same philosophy as PR_ACTUATION_LOCK_TTL_SECONDS (#2129/#2368). Deliberately its OWN lock
+// namespace, not the shared pr-actuation-lock above: this guards an expensive read-and-cache (dedup a redundant
+// LLM call for the identical head+mode), not a GitHub-mutating actuation, so it has different scoping (keyed by
+// head SHA + mode, not just PR) and a much longer TTL (an LLM call legitimately runs far longer than a close).
 const AI_REVIEW_LOCK_TTL_SECONDS = 1_800; // 30 minutes — see justification below.
 
 function aiReviewLockKey(repoFullName: string, prNumber: number, headSha: string, mode: string): string {
@@ -4642,7 +4610,7 @@ export async function runAiReviewForAdvisory(
     }))
   )
     return undefined;
-  // Per-(repo, PR, head SHA, mode) advisory lock (#confirmed-bug, mirrors #2129/#2368's claimAgentMaintenanceLock):
+  // Per-(repo, PR, head SHA, mode) advisory lock (#confirmed-bug, mirrors #2129/#2368's claimPrActuationLock):
   // a webhook pass and an agent-regate-pr sweep pass can independently reach this point for the SAME PR at the
   // SAME head, both miss the cache (neither has written yet), and both fire a real, wasteful LLM call that can
   // return different verdicts. Claim before the expensive section below; a pass that loses the race returns the

@@ -45,7 +45,7 @@ import {
   upsertRepositoryFromGitHub,
   putCachedAiReview,
 } from "../../src/db/repositories";
-import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, claimAgentMaintenanceLock, claimAiReviewLock, claimPrActuationLock, contributorEvidenceBatchSize, processJob, releaseAgentMaintenanceLock, releaseAiReviewLock, releasePrActuationLock } from "../../src/queue/processors";
+import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, claimAiReviewLock, claimPrActuationLock, contributorEvidenceBatchSize, processJob, releaseAiReviewLock, releasePrActuationLock } from "../../src/queue/processors";
 import { aiReviewCacheInputFingerprint } from "../../src/review/ai-review-cache-input";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
@@ -3460,109 +3460,6 @@ describe("queue processors", () => {
     expect(denied?.n).toBe(1);
   });
 
-  it("claimAgentMaintenanceLock claims when free, denies when held (per-PR, not per-repo), and release frees it again (#2129)", async () => {
-    const env = createTestEnv({});
-    // First claim for this PR succeeds — no prior pass in-flight.
-    expect(await claimAgentMaintenanceLock(env, "owner/agent-repo", 7)).toBe(true);
-    // A second, concurrent pass for the SAME PR (regardless of what triggered it — webhook or sweep) is denied
-    // while the first is still in-flight — exactly the race #2129 describes, since job-coalesce keys never
-    // match across trigger shapes but this lock is keyed purely on repo+PR.
-    expect(await claimAgentMaintenanceLock(env, "owner/agent-repo", 7)).toBe(false);
-    // A DIFFERENT PR in the same repo is unaffected — the lock is per-PR, not a repo-wide serializer.
-    expect(await claimAgentMaintenanceLock(env, "owner/agent-repo", 8)).toBe(true);
-    // Release (the finally block's job) frees the PR — a subsequent pass can claim it again.
-    await releaseAgentMaintenanceLock(env, "owner/agent-repo", 7);
-    expect(await claimAgentMaintenanceLock(env, "owner/agent-repo", 7)).toBe(true);
-  });
-
-  it("claimAgentMaintenanceLock fails OPEN on a broken transient cache — never itself blocks actuation (#2129)", async () => {
-    const env = createTestEnv({
-      SELFHOST_TRANSIENT_CACHE: {
-        get: async () => { throw new Error("cache read error"); },
-        set: async () => { throw new Error("cache write error"); },
-        del: async () => { throw new Error("cache delete error"); },
-      },
-    });
-    expect(await claimAgentMaintenanceLock(env, "owner/agent-repo", 7)).toBe(true);
-    await expect(releaseAgentMaintenanceLock(env, "owner/agent-repo", 7)).resolves.toBeUndefined();
-  });
-
-  it("claimAgentMaintenanceLock fails OPEN when the atomic claim primitive itself throws (#2368)", async () => {
-    const env = createTestEnv({
-      SELFHOST_TRANSIENT_CACHE: {
-        get: async () => null,
-        set: async () => undefined,
-        claim: async () => { throw new Error("redis unavailable"); },
-      },
-    });
-    expect(await claimAgentMaintenanceLock(env, "owner/agent-repo", 7)).toBe(true);
-  });
-
-  it("REGRESSION (#2368): claimAgentMaintenanceLock uses an atomic check-and-set, so two genuinely concurrent claims for the SAME PR can never both succeed", async () => {
-    // #2368: a get-then-set pair has a window between the read and the write where two concurrent callers can
-    // both observe an absent key and both claim it — exactly what the per-PR lock exists to prevent. This test
-    // races two claims for the same PR via Promise.all (both kick off before either resolves) against the
-    // default test cache's claim(), which mirrors createRedisCache's atomic SET NX: the check-and-set happens
-    // with no `await` boundary in between, so it is impossible for both callers to see "unclaimed".
-    const env = createTestEnv({});
-    const [first, second] = await Promise.all([
-      claimAgentMaintenanceLock(env, "owner/agent-repo", 7),
-      claimAgentMaintenanceLock(env, "owner/agent-repo", 7),
-    ]);
-    expect([first, second].filter(Boolean)).toHaveLength(1);
-  });
-
-  it("REGRESSION (#2368): claimAgentMaintenanceLock calls the atomic claim primitive, not a separate get+set pair, when the cache supports it", async () => {
-    const calls: string[] = [];
-    const env = createTestEnv({
-      SELFHOST_TRANSIENT_CACHE: {
-        get: async () => { calls.push("get"); return null; },
-        set: async () => { calls.push("set"); },
-        claim: async () => { calls.push("claim"); return true; },
-      },
-    });
-    expect(await claimAgentMaintenanceLock(env, "owner/agent-repo", 7)).toBe(true);
-    expect(calls).toEqual(["claim"]); // never falls through to the racy get/set pair when claim is available
-  });
-
-  it("claimAgentMaintenanceLock returns true unconditionally when the cache has no claim() — no false exclusivity guarantee (#confirmed-bug, review round 2)", async () => {
-    // A prior version of this helper fell back to a get-then-set pair (even with an extra write-then-verify
-    // re-read) when claim() wasn't available. That is NOT a real exclusivity guarantee: caller A can write its
-    // own token, read it straight back, and return true entirely before caller B's later write/read also
-    // completes and also returns true -- both callers "win". Rather than pretend to serialize via a check that
-    // silently fails under exactly the concurrent load this lock exists to guard against, a cache without
-    // claim() now gets NO exclusivity at all -- every call proceeds, sequential or concurrent, even for a key a
-    // previous call already "set" via get/set.
-    const values = new Map<string, string>();
-    const env = createTestEnv({
-      SELFHOST_TRANSIENT_CACHE: {
-        get: async (key: string) => values.get(key) ?? null,
-        set: async (key: string, value: string) => { values.set(key, value); },
-      },
-    });
-    expect(await claimAgentMaintenanceLock(env, "owner/agent-repo", 7)).toBe(true);
-    expect(await claimAgentMaintenanceLock(env, "owner/agent-repo", 7)).toBe(true);
-  });
-
-  it("REGRESSION (#confirmed-bug, review round 2): claimAgentMaintenanceLock does not falsely deny — and does not falsely claim exclusivity for — two genuinely concurrent callers when the cache has no claim()", async () => {
-    // Documents the corrected, honest contract under the exact interleaving the gate flagged: with no atomic
-    // claim() primitive, BOTH concurrent callers proceed (true), because this helper no longer attempts a
-    // get/set-based serialization that can't actually provide exclusivity.
-    const values = new Map<string, string>();
-    const yieldThenRun = <T,>(fn: () => T): Promise<T> => new Promise((resolve) => queueMicrotask(() => resolve(fn())));
-    const env = createTestEnv({
-      SELFHOST_TRANSIENT_CACHE: {
-        get: (key: string) => yieldThenRun(() => values.get(key) ?? null),
-        set: (key: string, value: string) => yieldThenRun(() => { values.set(key, value); }),
-      },
-    });
-    const [first, second] = await Promise.all([
-      claimAgentMaintenanceLock(env, "owner/agent-repo", 7),
-      claimAgentMaintenanceLock(env, "owner/agent-repo", 7),
-    ]);
-    expect([first, second]).toEqual([true, true]);
-  });
-
   it("claimAiReviewLock claims when free, denies when held (per-PR+head+mode, not globally), and release frees it again (#confirmed-bug)", async () => {
     const env = createTestEnv({});
     // First claim for this exact (repo, PR, head, mode) succeeds — no prior pass in-flight.
@@ -3677,8 +3574,9 @@ describe("queue processors", () => {
     expect([first, second]).toEqual([true, true]);
   });
 
-  // claimPrActuationLock (#2135) mirrors claimAgentMaintenanceLock's atomic-claim design exactly — same test
-  // shapes, same reasoning, a different lock namespace.
+  // claimPrActuationLock (#2129/#2135) is the ONE shared per-PR actuation lock: maybeRunAgentMaintenance,
+  // maybeCloseDraftDodgeAttempt, and maybeRecloseDisallowedReopen all claim/release the SAME key so none of the
+  // three mutating PR paths can race any other (review round 4) — a single namespace, not one lock per path.
   it("claimPrActuationLock claims when free, denies when held (per-PR), and release frees it again (#2135)", async () => {
     const env = createTestEnv({});
     expect(await claimPrActuationLock(env, "owner/act-repo", 7)).toBe(true);
@@ -3734,9 +3632,8 @@ describe("queue processors", () => {
   });
 
   it("claimPrActuationLock returns true unconditionally when the cache has no claim() — no false exclusivity guarantee (#2135, review round 2)", async () => {
-    // Mirrors claimAgentMaintenanceLock's #confirmed-bug fix: a get-then-set pair (even with a re-read) is not
-    // a real exclusivity guarantee under concurrent load, so a cache without claim() now gets NO exclusivity at
-    // all rather than a fallback that only looks atomic.
+    // A get-then-set pair (even with a re-read) is not a real exclusivity guarantee under concurrent load, so a
+    // cache without claim() now gets NO exclusivity at all rather than a fallback that only looks atomic.
     const values = new Map<string, string>();
     const env = createTestEnv({
       SELFHOST_TRANSIENT_CACHE: {
@@ -3798,9 +3695,11 @@ describe("queue processors", () => {
     vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
 
     // Simulate a webhook pass already in-flight for this exact PR — a github-webhook:pr-refresh job's coalesce
-    // key never matches agent-regate-pr's, so the two would never dedup against each other pre-#2129; the new
-    // per-PR advisory lock is what makes a second, independently-triggered pass defer instead of racing it.
-    await env.SELFHOST_TRANSIENT_CACHE?.set("agent-maintenance-lock:owner/agent-repo#7", "1", 60);
+    // key never matches agent-regate-pr's, so the two would never dedup against each other pre-#2129; the
+    // shared per-PR actuation lock is what makes a second, independently-triggered pass defer instead of racing
+    // it. Pre-claims the SAME pr-actuation-lock key the draft-dodge/reopen-reclose paths use (#2129/#2135,
+    // review round 4) — one shared namespace, not a maintenance-only lock.
+    await env.SELFHOST_TRANSIENT_CACHE?.set("pr-actuation-lock:owner/agent-repo#7", "1", 60);
 
     await processJob(env, { type: "agent-regate-pr", deliveryId: "race-sweep", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
 
