@@ -125,6 +125,8 @@ export type FocusManifestSettings = Partial<
     | "commandAuthorization"
     | "contributorBlacklist"
     | "blacklistLabel"
+    | "contributorOpenPrCap"
+    | "contributorOpenIssueCap"
   >
 >;
 
@@ -792,6 +794,13 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
     warnings.push(...blacklistWarnings);
     if (entries.length > 0) out.contributorBlacklist = entries;
   }
+  // Per-contributor open PR/issue caps (#2270): discrete counts, not scores — reuse the same positive-integer
+  // normalizer as contentLane.maxAppendedEntries so a fractional/non-positive typo is dropped with a warning
+  // instead of configuring a nonsensical cap.
+  const contributorOpenPrCap = normalizeOptionalPositiveInteger(r.contributorOpenPrCap, "settings.contributorOpenPrCap", warnings);
+  if (contributorOpenPrCap !== null) out.contributorOpenPrCap = contributorOpenPrCap;
+  const contributorOpenIssueCap = normalizeOptionalPositiveInteger(r.contributorOpenIssueCap, "settings.contributorOpenIssueCap", warnings);
+  if (contributorOpenIssueCap !== null) out.contributorOpenIssueCap = contributorOpenIssueCap;
   return out;
 }
 
