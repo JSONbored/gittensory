@@ -93,7 +93,11 @@ export async function readiness(db: D1Database, probes: ReadinessProbe[] = []): 
  *  returned check() itself re-verifies both are present before minting, so a partial config fails closed
  *  (false) in EITHER direction — not just the one a JWT-mint helper's own internal validation happens to catch.
  *  Neither var set is the legitimate brokered-mode deployment (central Orb App, no own App credentials):
- *  correctly returns null (no probe registered, since there is nothing of this instance's own to check). */
+ *  correctly returns null (no probe registered, since there is nothing of this instance's own to check).
+ *  Scope: a successful mint only proves the private key is present and locally well-formed (importable +
+ *  signable) -- it does NOT call GitHub, so it can't catch a valid key paired with the wrong App ID, or a
+ *  key GitHub has since revoked. Those still surface (via the executor's own token mint) on the next real
+ *  write, just not here. */
 export function githubAppReadinessProbe(
   githubAppId: string | undefined,
   githubAppPrivateKey: string | undefined,

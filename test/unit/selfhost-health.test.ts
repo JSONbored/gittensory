@@ -92,13 +92,13 @@ describe("githubAppReadinessProbe (#2497)", () => {
   });
 
   it("fails closed when the private key is set but the App ID is not (the mirror partial config)", async () => {
-    const probe = githubAppReadinessProbe(undefined, "-----BEGIN PRIVATE KEY-----", async () => "jwt");
+    const probe = githubAppReadinessProbe(undefined, "test-configured-private-key", async () => "jwt");
     expect(probe).not.toBeNull();
     await expect(probe!.check()).resolves.toBe(false);
   });
 
   it("reports healthy when both are set and the mint succeeds", async () => {
-    const probe = githubAppReadinessProbe("app-123", "-----BEGIN PRIVATE KEY-----", async () => "jwt");
+    const probe = githubAppReadinessProbe("app-123", "test-configured-private-key", async () => "jwt");
     await expect(probe!.check()).resolves.toBe(true);
   });
 

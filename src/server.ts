@@ -463,7 +463,9 @@ async function main(): Promise<void> {
   // Configured AI provider: gate on the chain's own consecutive-exhaustion streak (isAiProviderHealthy) rather
   // than a live reachability probe, which would cost a real API/CLI call on every health-check tick. Only
   // registered when a provider is actually configured -- without AI_PROVIDER reviews run deterministically,
-  // which is not a degraded state (#2497).
+  // which is not a degraded state (#2497). Historical, not live: the streak only updates as real review
+  // traffic exercises the chain, so a freshly booted instance reports healthy before its first AI call, and
+  // a fix (credentials restored) only clears after a subsequent success, not instantly.
   if (ai) {
     readinessProbes.push({
       name: "ai_provider",
