@@ -329,6 +329,53 @@ describe("buildPredictedGateVerdict", () => {
     expect(result.conclusion).not.toBe("failure");
     expect([...result.blockers, ...result.warnings].some((f) => f.code === "manifest_off_focus")).toBe(false);
   });
+
+  // Regression tests for #2458: the predictor previously never threaded size/guardrail signals into
+  // evaluateGateCheck, so it always predicted "success" even when the live gate would hold the same PR for
+  // manual review (neutral → "manual").
+  it("REGRESSION (#2458): predicts a size HOLD (neutral) when changedPaths exceeds the file-count threshold and gate.size.mode is on", () => {
+    const manyFiles = Array.from({ length: 12 }, (_, i) => `src/file${i}.ts`); // 12 > SIZE_HOLD_DEFAULT_MAX_FILES (10)
+    const result = verdict({ gate: { size: { mode: "advisory" }, duplicates: "block" }, changedPaths: manyFiles });
+    expect(result.conclusion).toBe("neutral");
+    expect(result.warnings.some((w) => w.code === "oversized_pr")).toBe(true);
+    expect(result.blockers).toHaveLength(0); // a HOLD, never a hard failure
+  });
+
+  it("does NOT predict a size hold when gate.size.mode is unset (off by default), even with many changed files", () => {
+    const manyFiles = Array.from({ length: 12 }, (_, i) => `src/file${i}.ts`);
+    const result = verdict({ gate: { duplicates: "block" }, changedPaths: manyFiles });
+    expect(result.conclusion).toBe("success");
+    expect(result.warnings.some((w) => w.code === "oversized_pr")).toBe(false);
+  });
+
+  it("does NOT predict a size hold for a PR within the file-count threshold even when gate.size.mode is on", () => {
+    const result = verdict({ gate: { size: { mode: "advisory" }, duplicates: "block" }, changedPaths: ["src/upload/client.ts"] });
+    expect(result.conclusion).toBe("success");
+    expect(result.warnings.some((w) => w.code === "oversized_pr")).toBe(false);
+  });
+
+  it("REGRESSION (#2458): predicts a guardrail HOLD (neutral) when changedPaths hits a hard-guardrail path — always-on, no gate config needed", () => {
+    const result = verdict({ gate: { duplicates: "block" }, changedPaths: [".github/workflows/ci.yml"] });
+    expect(result.conclusion).toBe("neutral");
+    expect(result.warnings.some((w) => w.code === "guardrail_hold")).toBe(true);
+    expect(result.blockers).toHaveLength(0);
+  });
+
+  it("does NOT predict a guardrail hold for an ordinary changed path", () => {
+    const result = verdict({ gate: { duplicates: "block" }, changedPaths: ["src/upload/client.ts"] });
+    expect(result.conclusion).toBe("success");
+    expect(result.warnings.some((w) => w.code === "guardrail_hold")).toBe(false);
+  });
+
+  it("REGRESSION (#2458): the note discloses the file-count-only size caveat once changedPaths are supplied, replacing the no-paths disclaimer", () => {
+    const withoutPaths = verdict({ gate: {} });
+    expect(withoutPaths.note).toContain("Provide the PR's changed paths");
+    expect(withoutPaths.note).not.toContain("FILE count only");
+
+    const withPaths = verdict({ gate: {}, changedPaths: ["src/upload/client.ts"] });
+    expect(withPaths.note).not.toContain("Provide the PR's changed paths");
+    expect(withPaths.note).toContain("FILE count only");
+  });
 });
 
 describe("pack-aware prediction (#693)", () => {

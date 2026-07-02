@@ -7,9 +7,18 @@ import {
   type IssueQualityReport,
 } from "../signals/engine";
 import { buildFocusManifestGuidance, type FocusManifest } from "../signals/focus-manifest";
+import { isGuardrailHit } from "../signals/change-guardrail";
+import { CONFIG_AS_CODE_GUARDRAIL_GLOBS, DEFAULT_CRUCIAL_GUARDRAIL_GLOBS, ENGINE_DECISION_GUARDRAIL_GLOBS } from "../review/guardrail-config";
 import { sanitizePublicComment } from "../github/commands";
 import { GITTENSOR_HOME_URL } from "../github/footer";
 import type { BountyRecord, GatePolicyPack, IssueRecord, PullRequestRecord, RepositoryRecord } from "../types";
+
+// The live gate's hard-guardrail globs (src/review/guardrail-config.ts) are 100% hardcoded engine constants —
+// loadHardGuardrailGlobs there is only `async` for processor call-graph compatibility, its body just
+// concatenates these three exported arrays with no live fetch. Predicted-gate is metadata-only/synchronous by
+// design (its own docstring: sourced ONLY from the PUBLIC .gittensory.yml + safe defaults), so import the
+// constants directly rather than making this whole function async for a call that was never actually live.
+const PREDICTED_GATE_HARD_GUARDRAIL_GLOBS = [...DEFAULT_CRUCIAL_GUARDRAIL_GLOBS, ...CONFIG_AS_CODE_GUARDRAIL_GLOBS, ...ENGINE_DECISION_GUARDRAIL_GLOBS];
 
 // Opt-in funnel (#694): a non-Gittensor adopter running the `oss-anti-slop` pack learns that Gittensor pays
 // contributors for OSS work like this. Public-safe "earn" wording only (never reward/payout/score).
@@ -62,16 +71,28 @@ const PREDICTED_GATE_NOTE_BASE =
 const PREDICTED_GATE_NOTE_SLOP = "The slop score is NOT evaluated pre-submission (it needs the diff content) and may still fail the real gate. ";
 // Disclaimed only when the caller did NOT supply changed paths — then path-dependent gates can't be predicted.
 const PREDICTED_GATE_NOTE_NO_PATHS =
-  "Provide the PR's changed paths to also predict the focus-manifest path policy and any pre-merge check scoped " +
-  "to changed paths; without them only path-independent title/description/label pre-merge checks are predicted. ";
+  "Provide the PR's changed paths to also predict the focus-manifest path policy, the size/guardrail hold, and " +
+  "any pre-merge check scoped to changed paths; without them only path-independent title/description/label " +
+  "pre-merge checks are predicted. ";
+// Shown instead of NO_PATHS once changed paths ARE supplied (#2458): the size hold can now be predicted, but only
+// from file COUNT — line-diff stats are never sent to this metadata-only predictor, so a PR with many changed
+// LINES across few files can still under-predict the hold the live gate would actually apply.
+const PREDICTED_GATE_NOTE_SIZE_FILES_ONLY =
+  "The size-hold prediction uses changed FILE count only, not changed LINE count (line-diff stats are not " +
+  "available pre-submission), so it may under-predict a hold for a PR with many changed lines across few files. ";
 const PREDICTED_GATE_NOTE_GATE_EQUALITY =
   "Every author is gated the same: a configured hard blocker fails the gate regardless of confirmed-contributor " +
   "status (which affects only on-chain scoring).";
 
 /** Compose the predicted-gate note. Slop is always disclaimed; the path-policy/path-gated disclaimer drops once
- *  the caller supplies changed paths (#11-13/#18). */
+ *  the caller supplies changed paths (#11-13/#18), replaced by the size-prediction file-count-only caveat (#2458). */
 function predictedGateNote(hasChangedPaths: boolean): string {
-  return PREDICTED_GATE_NOTE_BASE + PREDICTED_GATE_NOTE_SLOP + (hasChangedPaths ? "" : PREDICTED_GATE_NOTE_NO_PATHS) + PREDICTED_GATE_NOTE_GATE_EQUALITY;
+  return (
+    PREDICTED_GATE_NOTE_BASE +
+    PREDICTED_GATE_NOTE_SLOP +
+    (hasChangedPaths ? PREDICTED_GATE_NOTE_SIZE_FILES_ONLY : PREDICTED_GATE_NOTE_NO_PATHS) +
+    PREDICTED_GATE_NOTE_GATE_EQUALITY
+  );
 }
 
 export type PredictedGateInput = {
@@ -245,6 +266,18 @@ export function buildPredictedGateVerdict(args: {
     firstTimeContributorGrace: gate.firstTimeContributorGrace ?? undefined,
     authorMergedPrCount: authorHistory.filter((pr) => pr.state === "merged" || pr.mergedAt).length,
     authorClosedUnmergedPrCount: authorHistory.filter((pr) => pr.state === "closed" && !pr.mergedAt).length,
+    // Size-hold + guardrail-hold parity (#2458): only meaningful when changed paths were supplied — changedPaths
+    // is the only size/guardrail input this metadata-only predictor ever receives, so without it neither can be
+    // evaluated (byte-identical to before). changedLineCount is deliberately left unset: line-diff stats are
+    // never sent to this predictor, so the size hold can only be predicted from file count (disclosed in the
+    // note above) — never claim a line count this function has no way to know.
+    sizeGateMode: gate.sizeMode ?? undefined,
+    ...(hasChangedPaths
+      ? {
+          changedFileCount: changedPaths.length,
+          guardrailHit: isGuardrailHit(changedPaths, PREDICTED_GATE_HARD_GUARDRAIL_GLOBS),
+        }
+      : {}),
   });
 
   return {
