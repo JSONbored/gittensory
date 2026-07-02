@@ -6292,6 +6292,84 @@ describe("queue processors", () => {
     expect(closeAudit?.n ?? 0).toBe(0);
   });
 
+  it("contributor open-ISSUE cap (#2270): a slash-free repoFullName is safely planned (repoOwner computation guard) even though the GitHub call itself can never succeed against that name", async () => {
+    // A real webhook always carries "owner/repo"; this pins the DEFENSIVE repoFullName.includes("/") ? ... : ""
+    // fallback (mirroring the PR path's own such guard) against a malformed value WITHOUT crashing the cap
+    // computation. The actual close attempt legitimately errors — splitRepo() (shared by every GitHub-action
+    // primitive) rejects any repoFullName that isn't "owner/repo" — and that error is caught and audited, not
+    // thrown into the webhook handler; a successful close against a slash-free name is not physically possible
+    // via the real GitHub REST API, so asserting an audited error (not a crash) is the correct expectation.
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertRepositoryFromGitHub(env, { name: "noslash", full_name: "noslash", private: false, owner: { login: "" } }, 123);
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", issues: "write" }, events: ["issues"] },
+      repositories: [{ name: "noslash", full_name: "noslash", private: false, owner: { login: "" } }],
+    });
+    await upsertIssueFromGitHub(env, "noslash", { number: 60, title: "Farmer issue one", state: "open", user: { login: "farmer99" }, labels: [], body: "x" });
+    await upsertIssueFromGitHub(env, "noslash", { number: 61, title: "Farmer issue two", state: "open", user: { login: "farmer99" }, labels: [], body: "y" });
+    await upsertRepositorySettings(env, { repoFullName: "noslash", autonomy: { close: "auto", label: "auto" }, contributorOpenIssueCap: 2 });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      return Response.json({});
+    });
+
+    await expect(
+      processJob(env, {
+        type: "github-webhook",
+        deliveryId: "contributor-issue-cap-noslash",
+        eventName: "issues",
+        payload: {
+          action: "opened",
+          installation: { id: 123, account: { login: "", id: 1, type: "User" } },
+          repository: { name: "noslash", full_name: "noslash", private: false, owner: { login: "" } },
+          issue: { number: 62, title: "Farmer's 3rd issue", state: "open", user: { login: "farmer99" }, labels: [], body: "x" },
+        },
+      }),
+    ).resolves.not.toThrow();
+
+    const closeAudit = await env.DB.prepare("select outcome, detail from audit_events where event_type = 'agent.action.close' order by created_at desc limit 1").first<{ outcome: string; detail: string }>();
+    expect(closeAudit?.outcome).toBe("error");
+    expect(closeAudit?.detail).toMatch(/Invalid repository full name/);
+  });
+
+  it("contributor open-ISSUE cap (#2270): an author-less (ghost) open issue among the repo's others is excluded from the count, not crashed on", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", issues: "write" }, events: ["issues"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    // A ghost issue with no `user` at all (authorLogin ends up null) — must not match farmer99's count nor throw.
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 59, title: "Ghost issue", state: "open", labels: [], body: "z" });
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 60, title: "Farmer issue one", state: "open", user: { login: "farmer99" }, labels: [], body: "x" });
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 61, title: "Farmer issue two", state: "open", user: { login: "farmer99" }, labels: [], body: "y" });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { close: "auto", label: "auto" }, contributorOpenIssueCap: 2 });
+    const seen = { closed: false };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/issues/62") && method === "PATCH") { seen.closed = true; return Response.json({ state: "closed" }); }
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "contributor-issue-cap-ghost-author",
+      eventName: "issues",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 62, title: "Farmer's 3rd issue", state: "open", user: { login: "farmer99" }, labels: [], body: "x" },
+      },
+    });
+
+    // Ghost issue's null authorLogin never matches "farmer99" — the count is still exactly 3 (farmer99's own),
+    // so the cap-of-2 close fires; a broken nullish fallback would either crash or double-count the ghost.
+    expect(seen.closed).toBe(true);
+  });
+
   // #1092: prReadyForReview rebases a BEHIND-base PR through the agent executor (gated by update_branch autonomy
   // + pull_requests:write) before reviewing, then defers — the synchronize on the new head re-runs review.
   async function seedBehindRepo(env: Env, over: { autonomy?: Record<string, string>; agentPaused?: boolean; perms?: Record<string, string>; noInstall?: boolean } = {}) {

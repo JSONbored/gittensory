@@ -3570,12 +3570,23 @@ async function loadOpenQueueCounts(
 /**
  * Per-contributor open-ISSUE cap (#2270, anti-abuse): the first `eventName === "issues"` actuation branch —
  * issues have no other auto-close path today. Mirrors the PR-path cap in runAgentMaintenancePlanAndExecute:
- * counts the author's OTHER currently-open issues on this repo plus this one, ranked by issue NUMBER (GitHub's
- * own creation order, not webhook-arrival order), and only matches when THIS issue's number is among the ones
- * over the cap. Reuses planAgentMaintenanceActions to build the SAME label+close plan the PR path uses
- * (identical closeKind/label/close-comment construction): passing `conclusion: "skipped"` and no
- * `blacklistMatch` guarantees the function returns at the contributor_cap short-circuit (the very next check in
- * the planner) before ever touching any PR/CI-specific field, so building a plan for an issue this way is safe.
+ * counts the author's currently-open issues on this repo (including this one), ranked by issue NUMBER
+ * (GitHub's own creation order, not webhook-arrival order). Reuses planAgentMaintenanceActions to build the
+ * SAME label+close plan the PR path uses (identical closeKind/label/close-comment construction): passing
+ * `conclusion: "skipped"` and no `blacklistMatch` guarantees the function returns at the contributor_cap
+ * short-circuit (the very next check in the planner) before ever touching any PR/CI-specific field, so
+ * building a plan for an issue this way is safe.
+ *
+ * Webhook-delivery-order guard (#2479 gate finding, mirrored here for issues): delivery order is not
+ * guaranteed to match issue creation order, so an OLDER sibling's own webhook can process before a NEWER
+ * sibling exists in the DB and wrongly conclude the author is within the cap — closing only "the incoming
+ * issue, if it's over cap" would let that stale verdict stand forever, since nothing else ever re-evaluates
+ * it. Closes EVERY number in the over-cap set discovered by THIS delivery, not just the incoming issue, so
+ * whichever delivery happens to see the complete picture corrects any sibling a prior delivery missed. Unlike
+ * the PR path (which enqueues a `agent-regate-pr` wake job so each sibling gets its own live-head/CI-freshness
+ * re-check before acting), issues have no such staleness risk to guard against — a plain issue has no head SHA
+ * or CI to go stale, and there's no issue-side "regate" job type to reuse — so acting directly on the
+ * already-fetched snapshot here is safe.
  */
 async function maybeCloseIssueOverContributorCap(
   env: Env,
@@ -3600,7 +3611,7 @@ async function maybeCloseIssueOverContributorCap(
     .concat(issue.number)
     .sort((a, b) => a - b);
   const overCapNumbers = new Set(authorOpenIssueNumbers.slice(cap));
-  if (!overCapNumbers.has(issue.number)) return;
+  if (overCapNumbers.size === 0) return;
 
   const planned = planAgentMaintenanceActions({
     conclusion: "skipped",
@@ -3618,11 +3629,13 @@ async function maybeCloseIssueOverContributorCap(
   });
   if (planned.length === 0) return;
 
-  await executeIssueMaintenanceActions(
-    env,
-    { installationId, repoFullName, issueNumber: issue.number, autonomy: settings.autonomy, agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun },
-    planned,
-  );
+  for (const overCapNumber of overCapNumbers) {
+    await executeIssueMaintenanceActions(
+      env,
+      { installationId, repoFullName, issueNumber: overCapNumber, autonomy: settings.autonomy, agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun },
+      planned,
+    );
+  }
 }
 
 async function processGitHubWebhook(

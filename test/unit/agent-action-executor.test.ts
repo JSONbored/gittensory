@@ -578,6 +578,13 @@ describe("executeIssueMaintenanceActions (#2270 issue-side actuation)", () => {
     expect(closeIssue).toHaveBeenCalledTimes(1);
   });
 
+  it("a label action with no label name falls back to an empty string (defensive — the contributor_cap planner always sets one)", async () => {
+    const env = createTestEnv({});
+    const { label: _label, ...labelWithoutName } = issueLabel;
+    await executeIssueMaintenanceActions(env, issueCtx(), [labelWithoutName]);
+    expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 42, "", { createMissingLabel: true });
+  });
+
   it("PAUSED (per-repo): mutates nothing and audits denied", async () => {
     const env = createTestEnv({});
     const outcomes = await executeIssueMaintenanceActions(env, issueCtx({ agentPaused: true }), [issueLabel, issueClose]);
