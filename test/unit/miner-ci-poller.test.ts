@@ -59,7 +59,7 @@ describe("miner CI check-run poller (#2323)", () => {
         },
       ],
     });
-    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(fetchFn).toHaveBeenCalledTimes(3);
     expect(fetchFn.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
     expect(
       fetchFn.mock.calls.every(
@@ -128,7 +128,7 @@ describe("miner CI check-run poller (#2323)", () => {
     expect(result.conclusion).toBe("failure");
     expect(result.checks).toHaveLength(101);
     expect(result.checks.at(-1)).toMatchObject({ name: "late-failure", conclusion: "failure" });
-    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(fetchFn).toHaveBeenCalledTimes(4);
   });
 
   it("normalizes failed terminal conclusions, including stale, to failure", async () => {
@@ -141,7 +141,8 @@ describe("miner CI check-run poller (#2323)", () => {
           checkRun("workers", "completed", "timed_out"),
           checkRun("expired", "completed", "stale"),
         ]),
-      );
+      )
+      .mockResolvedValueOnce(prResponse());
 
     await expect(
       pollCheckRuns("acme/widgets", 7, { apiBaseUrl: API, fetchFn }),
@@ -159,7 +160,8 @@ describe("miner CI check-run poller (#2323)", () => {
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(prResponse())
-      .mockResolvedValueOnce(checksResponse([checkRun("github-timeout", "completed", "stale")]));
+      .mockResolvedValueOnce(checksResponse([checkRun("github-timeout", "completed", "stale")]))
+      .mockResolvedValueOnce(prResponse());
 
     await expect(
       pollCheckRuns("acme/widgets", 7, {
@@ -202,7 +204,8 @@ describe("miner CI check-run poller (#2323)", () => {
           checkRun("validate", "completed", "success"),
           checkRun("docs", "completed", "neutral"),
         ]),
-      );
+      )
+      .mockResolvedValueOnce(prResponse());
 
     await expect(
       pollCheckRuns("acme/widgets", 9, { apiBaseUrl: API, fetchFn }),
@@ -215,8 +218,11 @@ describe("miner CI check-run poller (#2323)", () => {
       .fn()
       .mockResolvedValueOnce(prResponse("head-sha"))
       .mockResolvedValueOnce(checksResponse([checkRun("validate", "in_progress")]))
+      .mockResolvedValueOnce(prResponse("head-sha"))
       .mockResolvedValueOnce(checksResponse([checkRun("validate", "queued")]))
-      .mockResolvedValueOnce(checksResponse([checkRun("validate", "completed", "success")]));
+      .mockResolvedValueOnce(prResponse("head-sha"))
+      .mockResolvedValueOnce(checksResponse([checkRun("validate", "completed", "success")]))
+      .mockResolvedValueOnce(prResponse("head-sha"));
 
     const result = await pollCheckRuns("acme/widgets", 10, {
       apiBaseUrl: API,
@@ -231,7 +237,82 @@ describe("miner CI check-run poller (#2323)", () => {
 
     expect(result).toMatchObject({ conclusion: "success", attempts: 3 });
     expect(sleeps).toEqual([100, 150]);
-    expect(fetchFn).toHaveBeenCalledTimes(4);
+    expect(fetchFn).toHaveBeenCalledTimes(7);
+  });
+
+  it("re-resolves the PR head on every retry so a force-push during backoff polls the new commit", async () => {
+    const sleeps: number[] = [];
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/repos/acme/widgets/pulls/12")) {
+        const pollCount = fetchFn.mock.calls.filter(([request]) => String(request).endsWith("/repos/acme/widgets/pulls/12"))
+          .length;
+        return prResponse(pollCount === 1 ? "old-head" : "new-head");
+      }
+      if (url.endsWith("/repos/acme/widgets/commits/old-head/check-runs?per_page=100&page=1")) {
+        return checksResponse([checkRun("validate", "queued")]);
+      }
+      if (url.endsWith("/repos/acme/widgets/commits/new-head/check-runs?per_page=100&page=1")) {
+        return checksResponse([checkRun("validate", "completed", "success")]);
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await pollCheckRuns("acme/widgets", 12, {
+      apiBaseUrl: API,
+      fetchFn,
+      maxAttempts: 2,
+      minIntervalMs: 100,
+      maxIntervalMs: 100,
+      sleepFn: async (delayMs) => {
+        sleeps.push(delayMs);
+      },
+    });
+
+    expect(result).toMatchObject({
+      conclusion: "success",
+      headSha: "new-head",
+      attempts: 2,
+      checks: [{ name: "validate", conclusion: "success" }],
+    });
+    expect(sleeps).toEqual([100]);
+    expect(fetchFn).toHaveBeenCalledTimes(5);
+  });
+
+  it("re-checks the PR head before returning a terminal result and retries when it drifted", async () => {
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/repos/acme/widgets/pulls/13")) {
+        const pollCount = fetchFn.mock.calls.filter(([request]) => String(request).endsWith("/repos/acme/widgets/pulls/13"))
+          .length;
+        if (pollCount <= 2) return prResponse(pollCount === 1 ? "old-head" : "new-head");
+        return prResponse("new-head");
+      }
+      if (url.endsWith("/repos/acme/widgets/commits/old-head/check-runs?per_page=100&page=1")) {
+        return checksResponse([checkRun("validate", "completed", "success")]);
+      }
+      if (url.endsWith("/repos/acme/widgets/commits/new-head/check-runs?per_page=100&page=1")) {
+        return checksResponse([checkRun("validate", "completed", "failure")]);
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await pollCheckRuns("acme/widgets", 13, {
+      apiBaseUrl: API,
+      fetchFn,
+      maxAttempts: 2,
+      minIntervalMs: 100,
+      maxIntervalMs: 100,
+      sleepFn: vi.fn(),
+    });
+
+    expect(result).toMatchObject({
+      conclusion: "failure",
+      headSha: "new-head",
+      attempts: 2,
+      checks: [{ name: "validate", conclusion: "failure" }],
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(6);
   });
 
   it("validates repo and PR input before fetching", async () => {

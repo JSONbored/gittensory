@@ -195,10 +195,10 @@ export async function pollCheckRuns(repoFullName, prNumber, options = {}) {
   const target = parseRepoFullName(repoFullName);
   const normalizedPrNumber = normalizePullNumber(prNumber);
   const normalizedOptions = normalizeOptions(options);
-  const headSha = await fetchHeadSha(target, normalizedPrNumber, normalizedOptions);
 
-  let latest = { conclusion: "pending", checks: [], headSha, attempts: 0 };
+  let latest = { conclusion: "pending", checks: [], headSha: "", attempts: 0 };
   for (let attempt = 0; attempt < normalizedOptions.maxAttempts; attempt += 1) {
+    const headSha = await fetchHeadSha(target, normalizedPrNumber, normalizedOptions);
     const checks = await fetchCheckRuns(target, headSha, normalizedOptions);
     latest = {
       conclusion: aggregateConclusion(checks),
@@ -206,7 +206,19 @@ export async function pollCheckRuns(repoFullName, prNumber, options = {}) {
       headSha,
       attempts: attempt + 1,
     };
-    if (latest.conclusion !== "pending" || attempt === normalizedOptions.maxAttempts - 1) {
+    if (latest.conclusion !== "pending") {
+      const currentHeadSha = await fetchHeadSha(target, normalizedPrNumber, normalizedOptions);
+      if (currentHeadSha === headSha) {
+        return latest;
+      }
+      latest = {
+        conclusion: "pending",
+        checks: [],
+        headSha: currentHeadSha,
+        attempts: attempt + 1,
+      };
+    }
+    if (attempt === normalizedOptions.maxAttempts - 1) {
       return latest;
     }
     await normalizedOptions.sleepFn(backoffDelayMs(attempt, normalizedOptions));
