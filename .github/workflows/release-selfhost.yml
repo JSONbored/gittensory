@@ -167,6 +167,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
           sbom: true
+          # Matches selfhost.yml's CI build (same Dockerfile, same default GHA cache scope), so a release
+          # can inherit layers selfhost.yml already built and cached for the identical commit -- without
+          # this, every release rebuilt runtime-base from scratch under QEMU emulation for arm64, the most
+          # expensive leg (#2502).
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Finalize Sentry release
         if: steps.sentry.outputs.enabled == 'true'
