@@ -4,6 +4,7 @@ import {
   buildSelfHostQueueSnapshot,
   consumingRetryDelayMs,
   deterministicJitterMs,
+  errorMessageWithCause,
   githubRateLimitAdmissionDelayMs,
   githubRateLimitAdmissionKeyScope,
   githubRateLimitAdmissionKeyForJob,
@@ -1078,5 +1079,33 @@ describe("self-host queue common helpers", () => {
       if (old === undefined) delete process.env.SCHEDULED_ENQUEUE_JITTER_MS;
       else process.env.SCHEDULED_ENQUEUE_JITTER_MS = old;
     }
+  });
+
+  describe("errorMessageWithCause (#confirmed-bug: job_error/job_dead logs were undiagnosable)", () => {
+    it("returns the wrapper's own message when there is no cause", () => {
+      expect(errorMessageWithCause(new Error("Failed query: select 1"))).toBe("Failed query: select 1");
+    });
+
+    it("REGRESSION: appends the root-cause message and its error code — the exact DrizzleQueryError shape every failed query throws", () => {
+      const cause = new Error("deadlock detected");
+      (cause as { code?: string }).code = "40P01";
+      const wrapper = new Error("Failed query: insert into ...\nparams: 1,2,3", { cause });
+      expect(errorMessageWithCause(wrapper)).toBe("Failed query: insert into ...\nparams: 1,2,3 — caused by: deadlock detected [40P01]");
+    });
+
+    it("omits the code suffix when the cause has no `.code` (e.g. a plain network error)", () => {
+      const wrapper = new Error("Failed query: select 1", { cause: new Error("connection terminated unexpectedly") });
+      expect(errorMessageWithCause(wrapper)).toBe("Failed query: select 1 — caused by: connection terminated unexpectedly");
+    });
+
+    it("falls back to the wrapper's own message when `.cause` is not an Error (e.g. a string or undefined)", () => {
+      const wrapper = new Error("Failed query: select 1", { cause: "not an error object" });
+      expect(errorMessageWithCause(wrapper)).toBe("Failed query: select 1");
+    });
+
+    it("returns 'unknown error' for a non-Error thrown value", () => {
+      expect(errorMessageWithCause("a raw string throw")).toBe("unknown error");
+      expect(errorMessageWithCause(undefined)).toBe("unknown error");
+    });
   });
 });

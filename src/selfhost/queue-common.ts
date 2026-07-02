@@ -476,6 +476,23 @@ function githubWebhookPriority(payload: string): number {
   return 10;
 }
 
+/** A diagnosable message for a job failure, including the ROOT CAUSE — not just the wrapper's own text.
+ *  Drizzle's DrizzleQueryError (thrown on every failed query, both queue backends) sets its OWN `.message` to a
+ *  generic "Failed query: <sql>\nparams: <params>" and stashes the actual driver error — a Postgres SQLSTATE
+ *  deadlock/serialization failure, a SQLite busy/constraint code, a connection reset, etc. — on `.cause`.
+ *  Logging only `error.message` for a query failure is undiagnosable: every failure looks identical (the same
+ *  query + params) regardless of the actual reason, which is exactly the information needed to tell a transient
+ *  lock/connection blip apart from a genuine data or schema bug. Includes the cause's `.code` (Postgres SQLSTATE
+ *  / SQLite result code) when present, since that is the canonical, greppable identifier for the failure class. */
+export function errorMessageWithCause(error: unknown): string {
+  if (!(error instanceof Error)) return "unknown error";
+  const cause = error.cause;
+  if (!(cause instanceof Error)) return error.message;
+  const code = (cause as { code?: unknown }).code;
+  const codeSuffix = typeof code === "string" && code.length > 0 ? ` [${code}]` : "";
+  return `${error.message} — caused by: ${cause.message}${codeSuffix}`;
+}
+
 const DEFAULT_GITHUB_RATE_LIMIT_RETRY_MS = 5 * 60_000;
 const MAX_GITHUB_RATE_LIMIT_RETRY_MS = 65 * 60_000;
 
