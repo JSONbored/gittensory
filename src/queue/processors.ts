@@ -4334,8 +4334,7 @@ export async function resolveLinkedIssueAuthorLogins(
       login != null
         ? Promise.resolve(login)
         : fetchLinkedIssueFacts(env, repoFullName, linkedIssues[index]!, token, admissionKey)
-            .then((facts) => facts?.authorLogin ?? null)
-            .catch(() => null),
+            .then((result) => (result.status === "found" ? result.facts.authorLogin : null)),
     ),
   );
 }

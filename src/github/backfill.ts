@@ -2885,12 +2885,31 @@ export function isOwnReviewThreadAuthor(login: string | null | undefined): boole
 /** The deterministic linked-issue facts the hard-rule evaluator needs (labels / assignees / open-state). */
 export type LinkedIssueFactsResult = { number: number; labels: string[]; assignees: string[]; state: string; authorLogin: string | null };
 
+/** Tri-state outcome of fetching one linked issue's facts (#2136). `not_found` is a CONFIRMED 404 seen with a
+ *  genuine, repo-scoped token — GitHub told an authenticated caller this issue number does not exist. `fetch_error`
+ *  is everything else that prevented a read (network, 5xx, rate-limit, malformed body, or a 404 seen with only
+ *  the public/anonymous token, which GitHub also returns for a real-but-inaccessible private issue) — a genuine
+ *  outage or an unproven access gap, not confirmed evidence about the issue itself. Callers that treat an
+ *  ALL-not_found result as significant (the linked-issue hard rule) must never extend that same treatment to
+ *  fetch_error, or a GitHub outage would spuriously look like a fabricated reference. */
+export type LinkedIssueFactsFetch =
+  | { status: "found"; facts: LinkedIssueFactsResult }
+  | { status: "not_found" }
+  | { status: "fetch_error" };
+
 /**
- * FETCH the facts for one linked issue via the REST issues endpoint. FAIL-OPEN: any fetch/parse error returns
- * undefined so the caller skips that issue — a deterministic auto-close must NEVER fire (or be blocked) on a
- * transient fetch failure. Uses the same authenticated REST client + public-token 404-fallback as the other
- * live fetches. (Note: GitHub's issues endpoint also returns pull requests, which carry a `pull_request` field;
- * a PR number passed here would simply fail the rules — we only treat real issues' labels/assignees.)
+ * FETCH the facts for one linked issue via the REST issues endpoint. Distinguishes a CONFIRMED-nonexistent
+ * issue (404) from a transient fetch failure (#2136) — a deterministic auto-close must never fire on a
+ * transient failure, but a fabricated issue number is real, verifiable information the hard-rule evaluator
+ * needs. Uses the same authenticated REST client + public-token 404-fallback as the other live fetches. (Note:
+ * GitHub's issues endpoint also returns pull requests, which carry a `pull_request` field; a PR number passed
+ * here would simply fail the rules — we only treat real issues' labels/assignees.)
+ *
+ * GitHub returns 404 for BOTH a genuinely nonexistent issue and a real-but-inaccessible one (private repo, no
+ * grant) — it deliberately doesn't distinguish the two, to avoid leaking a private repo's existence to a caller
+ * without access. So a 404 is only trustworthy as CONFIRMED absence when `token` is a genuine, repo-scoped
+ * credential; the public/anonymous fallback token proves nothing about access. Without that, treat the 404 as
+ * `fetch_error` (fails open) rather than risk closing a PR over a real linked issue our token just can't see.
  */
 export async function fetchLinkedIssueFacts(
   env: Env,
@@ -2898,15 +2917,21 @@ export async function fetchLinkedIssueFacts(
   issueNumber: number,
   token: string | undefined,
   admissionKey?: GitHubRateLimitAdmissionKey,
-): Promise<LinkedIssueFactsResult | undefined> {
-  const result = await githubJsonWithHeaders<{
-    number?: number;
-    state?: string | null;
-    labels?: Array<{ name?: string | null } | string | null> | null;
-    assignees?: Array<{ login?: string | null } | null> | null;
-    user?: { login?: string | null } | null;
-  }>(env, repoFullName, `/issues/${issueNumber}`, token, githubRateLimitOptions(admissionKey)).catch(() => undefined);
-  if (!result) return undefined;
+): Promise<LinkedIssueFactsFetch> {
+  let result;
+  try {
+    result = await githubJsonWithHeaders<{
+      number?: number;
+      state?: string | null;
+      labels?: Array<{ name?: string | null } | string | null> | null;
+      assignees?: Array<{ login?: string | null } | null> | null;
+      user?: { login?: string | null } | null;
+    }>(env, repoFullName, `/issues/${issueNumber}`, token, githubRateLimitOptions(admissionKey));
+  } catch (error) {
+    if (!(error instanceof GitHubApiError) || error.statusCode !== 404) return { status: "fetch_error" };
+    const hasProvenAccess = Boolean(token) && token !== env.GITHUB_PUBLIC_TOKEN;
+    return { status: hasProvenAccess ? "not_found" : "fetch_error" };
+  }
   const data = result.data;
   const labels = (data.labels ?? []).flatMap((label) => {
     if (typeof label === "string") return label.length > 0 ? [label] : [];
@@ -2914,11 +2939,14 @@ export async function fetchLinkedIssueFacts(
   });
   const assignees = (data.assignees ?? []).flatMap((assignee) => (assignee?.login ? [assignee.login] : []));
   return {
-    number: data.number ?? issueNumber,
-    labels,
-    assignees,
-    state: String(data.state ?? "open").toLowerCase(),
-    authorLogin: data.user?.login ?? null,
+    status: "found",
+    facts: {
+      number: data.number ?? issueNumber,
+      labels,
+      assignees,
+      state: String(data.state ?? "open").toLowerCase(),
+      authorLogin: data.user?.login ?? null,
+    },
   };
 }
 
