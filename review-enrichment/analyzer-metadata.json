@@ -636,6 +636,32 @@
         "network": "Calls the GitHub commits API once per probed file. Requires GitHub token forwarding for private repos.",
         "notes": "Distinct from the history analyzer's author track record; this scores the change AREA's defect density."
       }
+    },
+    {
+      "name": "blameLink",
+      "title": "Blame → originating PR",
+      "category": "history",
+      "cost": "github-light",
+      "defaultEnabled": true,
+      "profiles": [
+        "balanced",
+        "deep"
+      ],
+      "requires": [
+        "files",
+        "github-token"
+      ],
+      "limits": {
+        "maxFilesProbed": 6,
+        "maxLookups": 12
+      },
+      "docs": {
+        "summary": "For files this PR modifies or deletes, links the region to the prior PR that most recently introduced it.",
+        "looksAt": "The first modified/deleted line of each changed file, then that path's most recent base-branch commit and its associated PR.",
+        "reports": "File, a representative old line, the originating PR number, and a short commit-SHA prefix — never file contents.",
+        "network": "Calls the GitHub commits API and the commit→PR association API, both bounded by a total lookup cap.",
+        "notes": "Not per-line blame: it attributes each touched file's most recent prior commit. Fail-safe and partial on cap."
+      }
     }
   ]
 }

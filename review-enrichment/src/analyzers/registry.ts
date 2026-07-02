@@ -1,6 +1,7 @@
 import { scanActionPins } from "./actions-pin.js";
 import { scanAssetWeight } from "./asset-weight.js";
 import { scanChurnHotspot } from "./churn-hotspot.js";
+import { scanBlameLink } from "./blame-link.js";
 import { scanCodeowners } from "./codeowners.js";
 import { scanCommitSignature } from "./commit-signature.js";
 import { dependencyAnalyzer } from "./dependency/descriptor.js";
@@ -439,6 +440,43 @@ export const ANALYZER_DESCRIPTORS = [
     },
     run: (req, { signal, analysis, diagnostics }) =>
       scanChurnHotspot(req, fetch, { signal, analysis, diagnostics }),
+  }),
+  descriptor({
+    name: "blameLink",
+    title: "Blame → originating PR",
+    category: "history",
+    cost: "github-light",
+    defaultEnabled: true,
+    requires: ["files", "github-token"],
+    limits: { maxFilesProbed: 6, maxLookups: 12 },
+    docs: {
+      summary:
+        "For files this PR modifies or deletes, links the region to the prior PR that most recently introduced it.",
+      looksAt:
+        "The first modified/deleted line of each changed file, then that path's most recent base-branch commit and its associated PR.",
+      reports: "File, a representative old line, the originating PR number, and a short commit-SHA prefix — never file contents.",
+      network: "Calls the GitHub commits API and the commit→PR association API, both bounded by a total lookup cap.",
+      notes:
+        "Not per-line blame: it attributes each touched file's most recent prior commit. Fail-safe and partial on cap.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### Prior PRs this change alters (blame → originating PR)"];
+      for (const item of findings) {
+        const origin =
+          item.introducedByPr !== undefined
+            ? `#${item.introducedByPr}`
+            : item.introducedByShaPrefix
+              ? `commit ${helpers.safeCodeSpan(item.introducedByShaPrefix)}`
+              : "an unknown prior change";
+        lines.push(
+          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} was most recently introduced by ${origin}`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanBlameLink(req, fetch, { signal, analysis, diagnostics }),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 
