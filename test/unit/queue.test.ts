@@ -5818,32 +5818,60 @@ describe("queue processors", () => {
       expect(seen.labels).not.toContain("gittensory:migration-collision");
     });
 
-    it("caches the live tree fetch across repeated maintenance passes on the same repo+baseRef — the second pass reuses the cached result", async () => {
+    it("REGRESSION: is deliberately UNCACHED — a live tree that changes between two consecutive maintenance passes is picked up fresh, never served stale", async () => {
+      // The exact race a caching layer would reintroduce: a sibling PR (not modeled directly here — simulated
+      // by the live tree response CHANGING between the two fetches, the same effect a sibling merge has) adds
+      // a colliding migration file in the window between two maintenance passes on the SAME PR. A cache keyed
+      // by repo+baseRef would serve the first (pre-collision) snapshot on the second pass and miss the
+      // collision entirely — this asserts both passes fetch fresh and the second one correctly detects it.
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
       await seedMigrationRecheckRepo(env, 66, { premergeContentRecheck: true });
       const seen = { closed: false, merged: false, labels: [] as string[], comments: [] as string[], treeCalls: 0 };
-      stubMigrationRecheckFetch(66, { filename: "migrations/0099_a.sql", status: "added" }, [{ type: "blob", path: "migrations/0099_b.sql" }], seen);
+      let liveTree: Array<{ type: string; path: string }> = []; // pass 1: main has nothing colliding yet
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "https://api.gittensor.io/miners") return Response.json([]);
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/check-runs/") && method === "PATCH") return Response.json({ id: 901 });
+        if (url.includes("/git/trees/main")) {
+          seen.treeCalls += 1;
+          return Response.json({ tree: liveTree });
+        }
+        if (/\/pulls\/\d+(?:\?|$)/.test(url) && method === "GET" && !url.includes("/pulls/66/")) {
+          return Response.json({ number: 66, state: "open", user: { login: "contributor" }, head: { sha: "sha1" }, base: { ref: "main", sha: "base" }, mergeable_state: "clean", labels: [] });
+        }
+        if (url.includes("/pulls/66/files")) return Response.json([{ filename: "migrations/0099_a.sql", status: "added", additions: 5, deletions: 0, changes: 5, patch: "@@\n+ALTER TABLE t ADD COLUMN c TEXT;" }]);
+        if (url.includes("/commits/sha1/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/commits/sha1/status")) return Response.json({ state: "success", statuses: [{ context: "ci/build", state: "success", description: "ok" }] });
+        if (url.includes("/commits/sha1/check-suites")) return Response.json({ check_suites: [] });
+        if (url.includes("/branches/")) return Response.json({ contexts: [] });
+        if (url === "https://api.github.com/graphql") return Response.json({ data: { repository: { pullRequest: { reviewDecision: "APPROVED" } } } });
+        if (url.includes("/pulls/66/merge") && method === "PUT") {
+          seen.merged = true;
+          return Response.json({ merged: true, sha: "merged-sha1" });
+        }
+        if (url.includes("/issues/66/labels") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/66/labels") && method === "POST") {
+          seen.labels.push(...((JSON.parse(String(init?.body ?? "{}")).labels ?? []) as string[]));
+          return Response.json([]);
+        }
+        if (url.endsWith("/labels") && method === "POST") return Response.json({ name: "x" }, { status: 201 });
+        if (url.includes("/issues/66/comments")) return Response.json([]);
+        return Response.json({});
+      });
 
-      await processJob(env, { type: "agent-regate-pr", deliveryId: "migration-cache-pass-1", repoFullName: "owner/repo", prNumber: 66, installationId: 123 });
-      await processJob(env, { type: "agent-regate-pr", deliveryId: "migration-cache-pass-2", repoFullName: "owner/repo", prNumber: 66, installationId: 123 });
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "migration-fresh-pass-1", repoFullName: "owner/repo", prNumber: 66, installationId: 123 });
+      expect(seen.merged).toBe(true); // pass 1: no collision yet — merges
 
-      expect(seen.treeCalls).toBe(1); // second pass served from the transient cache, not a fresh fetch
-      // The hold itself still applies correctly on the cache-served pass — caching the fetch doesn't skip the
-      // actual collision decision.
+      // Between passes, a sibling PR merges its own colliding 0099 file — main's live tree now has it.
+      liveTree = [{ type: "blob", path: "migrations/0099_b.sql" }];
+      seen.merged = false;
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "migration-fresh-pass-2", repoFullName: "owner/repo", prNumber: 66, installationId: 123 });
+
+      expect(seen.treeCalls).toBe(2); // every pass fetches fresh — no cache could ever mask the change
       expect(seen.labels).toContain("gittensory:migration-collision");
-    });
-
-    it("falls through to a fresh fetch when the cached entry is corrupt (not valid JSON, or not an array of strings)", async () => {
-      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
-      await seedMigrationRecheckRepo(env, 73, { premergeContentRecheck: true });
-      await env.SELFHOST_TRANSIENT_CACHE?.set("migration-tree:owner/repo#main", "not valid json{{{", 180);
-      const seen = { closed: false, merged: false, labels: [] as string[], comments: [] as string[], treeCalls: 0 };
-      stubMigrationRecheckFetch(73, { filename: "migrations/0099_a.sql", status: "added" }, [{ type: "blob", path: "migrations/0099_b.sql" }], seen);
-
-      await processJob(env, { type: "agent-regate-pr", deliveryId: "migration-cache-corrupt", repoFullName: "owner/repo", prNumber: 73, installationId: 123 });
-
-      expect(seen.treeCalls).toBe(1); // corrupt cache entry ignored — falls through to a real fetch
-      expect(seen.labels).toContain("gittensory:migration-collision"); // and the check still works correctly
+      expect(seen.merged).toBe(false); // pass 2 correctly catches the now-live collision, never stale-served
     });
 
     it("does NOT hold for a pre-existing collision between two OTHER files unrelated to this PR's own migration number", async () => {

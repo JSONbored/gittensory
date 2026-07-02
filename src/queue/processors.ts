@@ -1591,34 +1591,14 @@ export function changedPathsForGuardrail(
  * Fail-OPEN throughout: a missing baseRef or a failed live fetch returns undefined (no hold) rather than
  * risking a false hold on inconclusive data — this is a safety net, not a new way to get PRs stuck.
  */
-// The live tree listing is shared across EVERY migrations/**-touching PR on the same repo+baseRef, not
-// per-PR — main's migration-filename set doesn't depend on which PR is asking. Cached briefly so the
-// recurring maintenance sweep (every ~2 minutes, plus every webhook-driven re-review) doesn't re-issue the
-// full recursive Trees API call on every single pass for as long as a migrations-touching PR stays open; a
-// real base-branch change is picked up again within one TTL window. Only successful fetches are cached — a
-// transient failure must never get "stuck" as a cached miss, so the next call retries for real.
-const MIGRATION_TREE_CACHE_TTL_SECONDS = 180;
-
-async function cachedListMigrationFilenamesAtRef(env: Env, repoFullName: string, baseRef: string, token: string | undefined, admissionKey: GitHubRateLimitAdmissionKey | undefined): Promise<string[] | null> {
-  const cacheKey = `migration-tree:${repoFullName}#${baseRef}`;
-  const cached = await getTransientKey(env, cacheKey);
-  if (cached !== null) {
-    try {
-      const parsed = JSON.parse(cached) as unknown;
-      if (Array.isArray(parsed) && parsed.every((f) => typeof f === "string")) return parsed;
-    } catch {
-      // Corrupt cache entry — fall through to a fresh fetch below.
-    }
-  }
-  const filenames = await listMigrationFilenamesAtRef(repoFullName, baseRef, token, admissionKey);
-  if (filenames !== null) {
-    await putTransientKey(env, cacheKey, JSON.stringify(filenames), MIGRATION_TREE_CACHE_TTL_SECONDS);
-  }
-  return filenames;
-}
-
+// Deliberately UNCACHED: this is the safety check the whole feature exists to provide, so it must always
+// read the live tree fresh. A cache keyed by repo+baseRef (even a short-TTL one) can serve a snapshot taken
+// BEFORE a sibling PR merged its own colliding migration — defeating the exact race this function exists to
+// catch (PR A merges 0099, a still-cached pre-merge tree lets a later-processed PR B also merge its own 0099
+// within the cache window). The existing GitHub rate-limit admission/backoff mechanism (the same
+// `admissionKey` every other live call in this function already uses) already bounds the cost; correctness
+// here matters far more than shaving a redundant API call.
 async function resolveLiveMigrationCollisionHold(
-  env: Env,
   args: {
     repoFullName: string;
     baseRef: string | null | undefined;
@@ -1628,7 +1608,7 @@ async function resolveLiveMigrationCollisionHold(
   },
 ): Promise<{ reason: string; comment: string } | undefined> {
   if (!args.baseRef) return undefined;
-  const liveFilenames = await cachedListMigrationFilenamesAtRef(env, args.repoFullName, args.baseRef, args.token, args.admissionKey);
+  const liveFilenames = await listMigrationFilenamesAtRef(args.repoFullName, args.baseRef, args.token, args.admissionKey);
   if (liveFilenames === null) return undefined;
   const union = [...new Set([...liveFilenames, ...args.prMigrationFilenames])];
   const prNumbers = new Set(args.prMigrationFilenames.map((f) => extractMigrationNumber(f)).filter((n): n is number => n !== null));
@@ -1910,7 +1890,7 @@ async function runAgentMaintenancePlanAndExecute(
     .map((f) => f.path.slice("migrations/".length));
   const migrationCollisionHold =
     settings.premergeContentRecheck === true && prMigrationFilenames.length > 0
-      ? await resolveLiveMigrationCollisionHold(env, { repoFullName, baseRef, token, admissionKey, prMigrationFilenames })
+      ? await resolveLiveMigrationCollisionHold({ repoFullName, baseRef, token, admissionKey, prMigrationFilenames })
       : undefined;
   const repoOwner = repoFullName.includes("/")
     ? repoFullName.slice(0, repoFullName.indexOf("/"))
