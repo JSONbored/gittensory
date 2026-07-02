@@ -25,6 +25,7 @@ import { sanitizePublicComment } from "../queue-intelligence";
 import { defangReviewInput } from "../review/safety";
 import { convergedFeatureActive } from "../review/feature-activation";
 import { labelSelfHostReviewerModels, labelSelfHostReviewerNames, resolveConfiguredProviderNames } from "../selfhost/ai-config";
+import { incr } from "../selfhost/metrics";
 import { errorMessage } from "../utils/json";
 import type { ReviewProfile } from "../signals/focus-manifest";
 
@@ -1228,6 +1229,11 @@ export async function runGittensoryAiReview(
       reviewDiagnostics.some((diagnostic) => diagnostic.status === "unparseable_output"))
   )
     inconclusive = true;
+  // Observability (#2540): the single canonical point where `inconclusive` reaches its final value for this
+  // review call -- increment exactly once here, never at the downstream consumers in queue/processors.ts that
+  // push an `ai_review_inconclusive` advisory finding off this same already-computed result (incrementing there
+  // too would double/triple-count one review).
+  if (inconclusive) incr("gittensory_ai_review_inconclusive_total", { mode: input.mode });
   const advisoryNotes =
     reviewsForNotes.length > 0
       ? (composeAdvisoryNotes(reviewsForNotes) ?? composeFallbackAdvisoryNotes(fallbackNotes))

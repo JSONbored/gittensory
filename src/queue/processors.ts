@@ -78,6 +78,7 @@ import {
   enqueueRepositoryOpenDataBackfill,
   fetchAndStorePullRequestFilesForReview,
   fetchLinkedIssueFacts,
+  fetchLiveBaseBranchAdvancedAt,
   fetchLiveCiAggregatePreferGraphQl,
   type LiveCiAggregate,
   fetchLiveIssueState,
@@ -2069,6 +2070,39 @@ async function runAgentMaintenancePlanAndExecute(
   );
   if (breakerOnPlan.length === 0) return;
 
+  // #2552 (gate review finding, round 2): force a fresh rebase + CI recheck when the base has advanced within
+  // the configured window, immediately before what would otherwise be an agent-driven merge — mergeable_state
+  // only detects git-level TEXTUAL conflicts, so a base that advanced with a new, non-conflicting sibling
+  // commit (e.g. a second PR's distinct-but-colliding migration file) still reads `clean`, on a decision that
+  // predates the base's latest commit. Deliberately placed AFTER the full plan (gate/CI/blockers/breakers) is
+  // resolved, not on the raw mergeableState alone: the original placement ran this unconditionally whenever
+  // mergeableState was clean, so a PR sitting on red CI or a gate blocker (still git-clean) could burn the
+  // bounded retry cap on rebases nobody was about to act on, exhausting it before the PR was ever actually
+  // merge-eligible. Only fires when the resolved plan contains a merge THAT WOULD EXECUTE NOW (requiresApproval
+  // stages for a human, not an immediate merge). A forced rebase's resulting `synchronize` webhook re-triggers
+  // a fresh evaluation on the new head, so this pass stops here rather than executing against stale inputs.
+  const requireFreshRebaseWindowMinutes = settings.requireFreshRebaseWindowMinutes;
+  const planHasImminentMerge = breakerOnPlan.some((action) => action.actionClass === "merge" && !action.requiresApproval);
+  if (
+    typeof requireFreshRebaseWindowMinutes === "number" &&
+    baseRef &&
+    planHasImminentMerge &&
+    (liveMergeState ?? pr.mergeableState) === "clean" &&
+    (await maybeForceFreshRebase(env, {
+      installationId,
+      repoFullName,
+      pr,
+      settings,
+      windowMinutes: requireFreshRebaseWindowMinutes,
+      baseRef,
+      token,
+      admissionKey,
+      deliveryId,
+    }))
+  ) {
+    return;
+  }
+
   const installation = await getInstallation(env, installationId);
   /* v8 ignore next -- an installed-App PR webhook always carries an installation record; the null is defensive. */
   const installationPermissions = installation?.permissions ?? null;
@@ -2543,6 +2577,115 @@ async function ciPendingDeferStuck(
   } catch {
     return false;
   }
+}
+
+// #2552: bounded-retry cap for the force-fresh-rebase gate — without this, a fast-moving base could keep the
+// freshness window perpetually "hot" and never let the PR clear to a real merge. Past the cap, the gate falls
+// through to a normal merge decision (with an audit trail) rather than holding the PR hostage to base
+// velocity. Deliberately keyed by PR NUMBER ONLY, NOT head SHA (gate review finding on the first version of
+// this PR): a SUCCESSFUL forced update_branch itself produces a NEW head SHA, so a headSha-keyed counter would
+// mint a fresh key — and reset to attempt 0 — on every single successful force, making the cap unreachable via
+// the exact path it exists to bound. A 24h TTL on the stored counter still gives an eventual fresh start.
+const MAX_FRESH_REBASE_FORCES = 3;
+function freshRebaseForceCountKey(repoFullName: string, prNumber: number): string {
+  return `fresh-rebase-forced:${repoFullName.toLowerCase()}#${prNumber}`;
+}
+
+/**
+ * #2552: when the repo has opted into `gate.requireFreshRebaseWindow` and the base branch's live tip commit
+ * landed within that window of NOW, force an `update_branch` (merges base into head, re-triggering CI on the
+ * rebased result — the SAME action class/write-permission/dry-run/kill-switch stack `prReadyForReview`'s
+ * BEHIND-branch path already uses, not a new one) immediately before what would otherwise be a merge, instead
+ * of trusting a `mergeable_state: clean` read that predates the base's latest commit. Returns true when it
+ * forced the rebase (the caller stops this pass — the resulting `synchronize` webhook re-triggers a fresh
+ * evaluation on the new head); false when the freshness check doesn't apply, the cap was already reached, or
+ * the forced action itself couldn't complete (not authorized / dry-run / transient failure) — in every false
+ * case the caller falls through to the normal merge decision, so this gate fails open to today's behavior.
+ */
+async function maybeForceFreshRebase(
+  env: Env,
+  args: {
+    installationId: number;
+    repoFullName: string;
+    pr: PullRequestRecord;
+    settings: RepositorySettings;
+    // Narrowed by the caller (typeof settings.requireFreshRebaseWindowMinutes === "number") -- re-deriving and
+    // re-checking the same nullable field here would just be an unreachable duplicate of that guard.
+    windowMinutes: number;
+    baseRef: string;
+    token: string | undefined;
+    admissionKey: GitHubRateLimitAdmissionKey | undefined;
+    deliveryId: string;
+  },
+): Promise<boolean> {
+  const { installationId, repoFullName, pr, settings, windowMinutes, baseRef, token, admissionKey, deliveryId } = args;
+  /* v8 ignore next -- structurally unreachable: the caller only invokes this after confirming
+   * (liveMergeState ?? pr.mergeableState) === "clean", which GitHub can never compute for a PR with no
+   * head commit; the null check is belt-and-suspenders against the field's optional TS type. */
+  if (!pr.headSha) return false;
+  const advancedAt = await fetchLiveBaseBranchAdvancedAt(env, repoFullName, baseRef, token, admissionKey);
+  if (!advancedAt) return false; // fail-open: unreadable base commit -> no forced rebase
+  const advancedAtMs = Date.parse(advancedAt);
+  if (!Number.isFinite(advancedAtMs) || Date.now() - advancedAtMs >= windowMinutes * 60_000) return false;
+
+  const countKey = freshRebaseForceCountKey(repoFullName, pr.number);
+  const storedCount = Number(await getTransientKey(env, countKey));
+  const attempt = Number.isFinite(storedCount) && storedCount > 0 ? storedCount : 0;
+  if (attempt >= MAX_FRESH_REBASE_FORCES) {
+    await recordAuditEvent(env, {
+      eventType: "agent.action.fresh_rebase_window_cap_exceeded",
+      actor: "gittensory",
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "completed",
+      detail: `base advanced within the ${windowMinutes}m freshness window, but the ${MAX_FRESH_REBASE_FORCES}-attempt forced-rebase cap was already reached for this PR — falling through to a normal merge decision`,
+      metadata: { deliveryId, repoFullName, headSha: pr.headSha, windowMinutes },
+    }).catch(
+      /* v8 ignore next -- fail-safe: an audit write failure never blocks the caller's fallthrough */
+      () => undefined,
+    );
+    return false;
+  }
+
+  const autonomyLevel = resolveAutonomy(settings.autonomy, "update_branch");
+  const installation = await getInstallation(env, installationId);
+  const [outcome] = await executeAgentMaintenanceActions(
+    env,
+    {
+      installationId,
+      repoFullName,
+      pullNumber: pr.number,
+      headSha: pr.headSha,
+      autonomy: settings.autonomy,
+      agentPaused: settings.agentPaused,
+      agentDryRun: settings.agentDryRun,
+      /* v8 ignore next -- an installed-App PR webhook always carries an installation record; the null is defensive (mirrors runAgentMaintenancePlanAndExecute's own identical merge-time read). */
+      installationPermissions: installation?.permissions ?? null,
+      authorLogin: pr.authorLogin,
+    },
+    [
+      {
+        actionClass: "update_branch",
+        requiresApproval: autonomyRequiresApproval(autonomyLevel),
+        reason: `base branch advanced within the ${windowMinutes}m freshness window; forcing a fresh rebase + CI recheck before merge`,
+        expectedHeadSha: pr.headSha,
+      },
+    ],
+  );
+  if (outcome?.outcome !== "completed") return false;
+  const nextAttempt = attempt + 1;
+  await putTransientKey(env, countKey, String(nextAttempt), 24 * 3600);
+  await recordAuditEvent(env, {
+    eventType: "agent.action.forced_rebase_freshness",
+    actor: "gittensory",
+    targetKey: `${repoFullName}#${pr.number}`,
+    outcome: "completed",
+    detail: `forced update_branch (attempt ${nextAttempt}/${MAX_FRESH_REBASE_FORCES}) — base advanced within the ${windowMinutes}m freshness window`,
+    metadata: { deliveryId, repoFullName, headSha: pr.headSha, windowMinutes, attempt: nextAttempt },
+  }).catch(
+    /* v8 ignore next -- fail-safe: an audit write failure never blocks the caller */
+    () => undefined,
+  );
+  return true;
 }
 
 // One CI run fires MANY check_run (one per job) + check_suite completions. Re-reviewing on every one storms the

@@ -2637,6 +2637,32 @@ export async function fetchLivePullRequestMergeState(
   return result?.data.mergeable_state ?? undefined;
 }
 
+/**
+ * The base branch's LIVE tip-commit timestamp via REST `GET /commits/{ref}`, for the force-fresh-rebase gate
+ * (#2552): `mergeable_state` only detects git-level TEXTUAL conflicts, so a base that advanced with a new,
+ * non-conflicting sibling commit (e.g. a second PR's distinct-but-colliding migration file) still reads
+ * `clean`, letting a merge proceed on a decision that is stale relative to what just landed on the base.
+ * Comparing this timestamp against "now" lets the caller force a fresh rebase + CI recheck instead of
+ * trusting a `clean` read that predates the base's latest commit. Best-effort: a fetch error returns
+ * undefined (caller fails open — no forced rebase, same as today).
+ */
+export async function fetchLiveBaseBranchAdvancedAt(
+  env: Env,
+  repoFullName: string,
+  baseRef: string,
+  token: string | undefined,
+  admissionKey?: GitHubRateLimitAdmissionKey,
+): Promise<string | undefined> {
+  const result = await githubJsonWithHeaders<{ commit?: { committer?: { date?: string | null } | null } | null }>(
+    env,
+    repoFullName,
+    `/commits/${encodeURIComponent(baseRef)}`,
+    token,
+    githubRateLimitOptions(admissionKey),
+  ).catch(() => undefined);
+  return result?.data.commit?.committer?.date ?? undefined;
+}
+
 /** The PR's LIVE state ("open" / "closed") via REST `GET /pulls/{n}`. The stored open-PR cache lags GitHub, so a
  *  sibling closed/merged on GitHub can still read `open` locally; the duplicate-winner election (#dup-winner /
  *  audit #15) confirms a lower sibling's live state before treating this PR as a cluster loser. Best-effort:
@@ -3190,6 +3216,12 @@ async function syncLabels(
   }
 }
 
+/**
+ * `limit` is a page-boundary threshold, not a strict maximum: page consumption is atomic (see the loop body),
+ * so the crawl always finishes the page it's on once `items.length` reaches `limit`, which can return up to
+ * `perPage - 1` more items than requested. Callers that need an exact cap must trim the returned `items`
+ * themselves; `fetchedCount`/`items.length` always reflect the true (possibly over-`limit`) count.
+ */
 async function githubPaged<T>(
   env: Env,
   repo: RepositoryRecord,
@@ -3232,18 +3264,17 @@ async function githubPaged<T>(
       lastModified = result.lastModified ?? lastModified;
       lastCursor = String(page);
       pageCount += 1;
-      const remaining = limit - items.length;
-      // A page can only overrun `remaining` once we have already consumed at least one full page (so `page`
-      // has advanced past the crawl's start): resume from THIS page to pick up its unconsumed tail. On the
-      // first page `remaining >= perPage >= result.data.length`, so this is false and the cursor advances,
-      // which is why a small-`limit` (per_page = limit) crawl can never stall on its own start page.
-      const truncatedPage = result.data.length > remaining;
-      items.push(...result.data.slice(0, remaining));
+      // Resume cursors only have page precision, so keep page consumption atomic: once we request a
+      // page, process the whole response before advancing the cursor. Slicing a mid-page cap would make a
+      // later resume replay the already-consumed prefix of that same page and inflate fetched counts.
+      items.push(...result.data);
       const hasNext = hasNextPage(result.link);
-      if (items.length >= limit && (hasNext || truncatedPage)) {
-        nextCursor = String(truncatedPage ? page : page + 1);
+      if (items.length >= limit && hasNext) {
+        nextCursor = String(page + 1);
         status = "capped";
-        warnings.push(`GitHub sync reached local cap of ${limit} item(s) for ${path}; next page cursor is ${nextCursor}.`);
+        // `items.length` (not `limit`) is the actual count: page consumption is atomic, so a whole final page
+        // can overrun the requested `limit` — `limit` is a page-boundary threshold, not a strict maximum.
+        warnings.push(`GitHub sync reached local cap of ${limit} item(s) for ${path} (fetched ${items.length} after completing page ${page}); next page cursor is ${nextCursor}.`);
         break;
       }
       if (result.data.length < perPage || !hasNext) break;

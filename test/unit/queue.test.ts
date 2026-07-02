@@ -6124,6 +6124,198 @@ describe("queue processors", () => {
     });
   });
 
+  describe("force-fresh-rebase-before-merge gate (#2552)", () => {
+    // Full merge-eligible stub set (clean + green + approved), reused across scenarios — mirrors the #2550
+    // migration-recheck fixture above. `baseAdvancedAt` stubs the NEW /commits/{baseRef} freshness read;
+    // `null` simulates an unreadable base commit (404).
+    function stubFreshRebaseFetch(prNumber: number, opts: { baseAdvancedAt: string | null; mergeableState?: string; headSha?: string }, seen: { merged: boolean; updateBranchCalls: number; baseCommitCalls: number }) {
+      const headSha = opts.headSha ?? "sha1";
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "https://api.gittensor.io/miners") return Response.json([]);
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/check-runs/") && method === "PATCH") return Response.json({ id: 901 });
+        if (url.includes(`/pulls/${prNumber}/update-branch`) && method === "PUT") {
+          seen.updateBranchCalls += 1;
+          return Response.json({ message: "Updating pull request branch." }, { status: 202 });
+        }
+        if (url.endsWith("/commits/main")) {
+          seen.baseCommitCalls += 1;
+          if (opts.baseAdvancedAt === null) return new Response("not found", { status: 404 });
+          return Response.json({ commit: { committer: { date: opts.baseAdvancedAt } } });
+        }
+        if (/\/pulls\/\d+(?:\?|$)/.test(url) && method === "GET" && !url.includes(`/pulls/${prNumber}/`)) {
+          return Response.json({ number: prNumber, state: "open", user: { login: "contributor" }, head: { sha: headSha }, base: { ref: "main", sha: "base" }, mergeable_state: opts.mergeableState ?? "clean", labels: [] });
+        }
+        if (url.includes(`/pulls/${prNumber}/files`)) return Response.json([{ filename: "src/index.ts", status: "modified", additions: 5, deletions: 1, changes: 6, patch: "@@\n+export const x = 1;" }]);
+        if (url.includes(`/commits/${headSha}/check-runs`)) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes(`/commits/${headSha}/status`)) return Response.json({ state: "success", statuses: [{ context: "ci/build", state: "success", description: "ok" }] });
+        if (url.includes(`/commits/${headSha}/check-suites`)) return Response.json({ check_suites: [] });
+        if (url.includes("/branches/")) return Response.json({ contexts: [] });
+        if (url === "https://api.github.com/graphql") return Response.json({ data: { repository: { pullRequest: { reviewDecision: "APPROVED" } } } });
+        if (url.includes(`/pulls/${prNumber}/merge`) && method === "PUT") {
+          seen.merged = true;
+          return Response.json({ merged: true, sha: "merged-sha1" });
+        }
+        if (url.includes(`/issues/${prNumber}/labels`) && method === "GET") return Response.json([]);
+        if (url.includes(`/issues/${prNumber}/labels`) && method === "POST") return Response.json([]);
+        if (url.endsWith("/labels") && method === "POST") return Response.json({ name: "x" }, { status: 201 });
+        if (url.includes(`/issues/${prNumber}/comments`)) return Response.json([]);
+        if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 901 }, { status: 201 });
+        return Response.json({});
+      });
+    }
+
+    async function seedFreshRebaseRepo(env: Env, prNumber: number, opts: { requireFreshRebaseWindowMinutes?: number | null; autonomy?: Record<string, string> } = {}) {
+      await upsertInstallation(env, {
+        installation: { id: 123, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", issues: "write" }, events: [] },
+      });
+      await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 123);
+      await upsertRepositorySettings(env, {
+        repoFullName: "owner/repo",
+        autonomy: opts.autonomy ?? { merge: "auto", update_branch: "auto", label: "auto" },
+        autoMaintain: { requireApprovals: 0, mergeMethod: "squash" },
+        aiReviewMode: "off",
+        gatePack: "oss-anti-slop",
+        gateCheckMode: "enabled",
+        checkRunMode: "off",
+        commentMode: "off",
+        publicSurface: "off",
+        ...(opts.requireFreshRebaseWindowMinutes !== undefined ? { requireFreshRebaseWindowMinutes: opts.requireFreshRebaseWindowMinutes } : {}),
+      });
+      await upsertPullRequestFromGitHub(env, "owner/repo", { number: prNumber, title: "Fresh rebase PR", state: "open", user: { login: "contributor" }, head: { sha: "sha1" }, base: { ref: "main" }, labels: [], body: "" });
+    }
+
+    it("merges normally when the base has not advanced recently", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedFreshRebaseRepo(env, 90, { requireFreshRebaseWindowMinutes: 10 });
+      const seen = { merged: false, updateBranchCalls: 0, baseCommitCalls: 0 };
+      stubFreshRebaseFetch(90, { baseAdvancedAt: new Date(Date.now() - 60 * 60_000).toISOString() }, seen); // 1h ago, outside a 10m window
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "fresh-rebase-old-base", repoFullName: "owner/repo", prNumber: 90, installationId: 123 });
+
+      expect(seen.baseCommitCalls).toBe(1);
+      expect(seen.updateBranchCalls).toBe(0);
+      expect(seen.merged).toBe(true);
+      const merge = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("agent.action.merge").first<{ outcome: string }>();
+      expect(merge?.outcome).toBe("completed");
+    });
+
+    it("forces update_branch instead of merging when the base advanced within the freshness window", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedFreshRebaseRepo(env, 91, { requireFreshRebaseWindowMinutes: 10 });
+      const seen = { merged: false, updateBranchCalls: 0, baseCommitCalls: 0 };
+      stubFreshRebaseFetch(91, { baseAdvancedAt: new Date(Date.now() - 60_000).toISOString() }, seen); // 1 minute ago, within a 10m window
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "fresh-rebase-forced", repoFullName: "owner/repo", prNumber: 91, installationId: 123 });
+
+      expect(seen.updateBranchCalls).toBe(1);
+      expect(seen.merged).toBe(false);
+      const ub = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("agent.action.update_branch").first<{ outcome: string }>();
+      expect(ub?.outcome).toBe("completed");
+      const forced = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("agent.action.forced_rebase_freshness").first<{ outcome: string }>();
+      expect(forced?.outcome).toBe("completed");
+      const merge = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("agent.action.merge").first<{ n: number }>();
+      expect(merge?.n).toBe(0);
+    });
+
+    it("never fetches the base commit or forces a rebase when the setting is unset (off by default)", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedFreshRebaseRepo(env, 92); // requireFreshRebaseWindowMinutes left unset
+      const seen = { merged: false, updateBranchCalls: 0, baseCommitCalls: 0 };
+      stubFreshRebaseFetch(92, { baseAdvancedAt: new Date().toISOString() }, seen); // "now" — would force if the setting were on
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "fresh-rebase-off", repoFullName: "owner/repo", prNumber: 92, installationId: 123 });
+
+      expect(seen.baseCommitCalls).toBe(0);
+      expect(seen.updateBranchCalls).toBe(0);
+      expect(seen.merged).toBe(true);
+    });
+
+    it("falls through to a normal merge once the bounded-retry cap is reached, with a cap-exceeded audit event", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedFreshRebaseRepo(env, 93, { requireFreshRebaseWindowMinutes: 10 });
+      // Seed the bounded-retry counter at the cap (3) for this repo+PR, matching what 3 prior forced
+      // attempts would have left behind.
+      await env.SELFHOST_TRANSIENT_CACHE?.set("fresh-rebase-forced:owner/repo#93", "3", 24 * 3600);
+      const seen = { merged: false, updateBranchCalls: 0, baseCommitCalls: 0 };
+      stubFreshRebaseFetch(93, { baseAdvancedAt: new Date(Date.now() - 60_000).toISOString() }, seen); // still within window
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "fresh-rebase-capped", repoFullName: "owner/repo", prNumber: 93, installationId: 123 });
+
+      expect(seen.updateBranchCalls).toBe(0); // capped — never forces a 4th attempt
+      expect(seen.merged).toBe(true); // falls through to a normal merge instead
+      const capped = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("agent.action.fresh_rebase_window_cap_exceeded").first<{ outcome: string }>();
+      expect(capped?.outcome).toBe("completed");
+    });
+
+    it("fails open (merges normally) when the base commit is unreadable", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedFreshRebaseRepo(env, 94, { requireFreshRebaseWindowMinutes: 10 });
+      const seen = { merged: false, updateBranchCalls: 0, baseCommitCalls: 0 };
+      stubFreshRebaseFetch(94, { baseAdvancedAt: null }, seen); // 404 on the base commit fetch
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "fresh-rebase-unreadable", repoFullName: "owner/repo", prNumber: 94, installationId: 123 });
+
+      expect(seen.baseCommitCalls).toBe(1);
+      expect(seen.updateBranchCalls).toBe(0);
+      expect(seen.merged).toBe(true);
+    });
+
+    it("falls through to a normal merge when the forced update_branch action itself is not authorized", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      // update_branch is deliberately absent from autonomy (resolves to the deny-by-default "observe" level),
+      // while merge stays "auto" — proving the freshness gate fails open independently of the eventual merge
+      // action's own authorization.
+      await seedFreshRebaseRepo(env, 95, { requireFreshRebaseWindowMinutes: 10, autonomy: { merge: "auto", label: "auto" } });
+      const seen = { merged: false, updateBranchCalls: 0, baseCommitCalls: 0 };
+      stubFreshRebaseFetch(95, { baseAdvancedAt: new Date(Date.now() - 60_000).toISOString() }, seen); // within window
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "fresh-rebase-not-authorized", repoFullName: "owner/repo", prNumber: 95, installationId: 123 });
+
+      expect(seen.baseCommitCalls).toBe(1);
+      expect(seen.updateBranchCalls).toBe(0); // denied by autonomy before any GitHub mutation is attempted
+      expect(seen.merged).toBe(true); // falls through to the normal merge decision
+      const denied = await env.DB.prepare("select outcome from audit_events where event_type = ? order by created_at desc limit 1").bind("agent.action.update_branch").first<{ outcome: string }>();
+      expect(denied?.outcome).toBe("denied");
+    });
+
+    it("REGRESSION (gate finding): the bounded-retry counter accumulates across successful forces even though each one changes the head SHA", async () => {
+      // A successful update_branch itself produces a NEW head SHA (the merge-base-into-head commit). The
+      // counter must NOT reset just because ITS OWN action changed the head -- otherwise the cap could never
+      // be reached via the exact path it exists to bound, and a fast-moving base would force a rebase on
+      // EVERY pass forever. Simulates 3 rounds, each with a genuinely different head SHA (mirroring the
+      // synchronize webhook a real update_branch triggers), then a 4th round proving the cap holds.
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedFreshRebaseRepo(env, 96, { requireFreshRebaseWindowMinutes: 10 });
+      const shas = ["sha-r1", "sha-r2", "sha-r3", "sha-r4"];
+
+      for (const [round, sha] of shas.entries()) {
+        await upsertPullRequestFromGitHub(env, "owner/repo", { number: 96, title: "Fresh rebase PR", state: "open", user: { login: "contributor" }, head: { sha }, base: { ref: "main" }, labels: [], body: "" });
+        const seen = { merged: false, updateBranchCalls: 0, baseCommitCalls: 0 };
+        stubFreshRebaseFetch(96, { baseAdvancedAt: new Date(Date.now() - 60_000).toISOString(), headSha: sha }, seen); // always within window
+
+        await processJob(env, { type: "agent-regate-pr", deliveryId: `fresh-rebase-multi-round-${round}`, repoFullName: "owner/repo", prNumber: 96, installationId: 123 });
+
+        if (round < 3) {
+          // Rounds 0-2 (attempts 1-3): still under/at the cap -- forces update_branch, never merges.
+          expect(seen.updateBranchCalls).toBe(1);
+          expect(seen.merged).toBe(false);
+        } else {
+          // Round 3 (the 4th evaluation): the cap (3) was already reached by round 2 -- falls through to merge.
+          expect(seen.updateBranchCalls).toBe(0);
+          expect(seen.merged).toBe(true);
+        }
+      }
+
+      const forcedCount = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("agent.action.forced_rebase_freshness").first<{ n: number }>();
+      expect(forcedCount?.n).toBe(3); // exactly 3 successful forces, not 4
+      const capped = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("agent.action.fresh_rebase_window_cap_exceeded").first<{ outcome: string }>();
+      expect(capped?.outcome).toBe("completed");
+    });
+  });
+
   it("contributor open-PR cap (#2270): a contributor's 3rd open PR (over a cap of 2) is labeled + closed deterministically with no merit merge", async () => {
     let aiCalls = 0;
     const env = createTestEnv({

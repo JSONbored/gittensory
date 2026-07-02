@@ -510,6 +510,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       reviewNagCooldownDays: 5,
       reviewNagLabel: "review-nag-cooldown",
       autoCloseExemptLogins: [],
+      requireFreshRebaseWindowMinutes: null,
     };
   }
   return {
@@ -562,6 +563,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     reviewNagCooldownDays: normalizePositiveIntWithDefault(row.reviewNagCooldownDays, 5),
     reviewNagLabel: row.reviewNagLabel,
     autoCloseExemptLogins: parseAutoCloseExemptLogins(row.autoCloseExemptLoginsJson),
+    requireFreshRebaseWindowMinutes: normalizeOpenItemCap(row.requireFreshRebaseWindowMinutes),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -646,6 +648,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     reviewNagCooldownDays: normalizePositiveIntWithDefault(settings.reviewNagCooldownDays, 5),
     reviewNagLabel: settings.reviewNagLabel ?? "review-nag-cooldown",
     autoCloseExemptLogins: normalizeAutoCloseExemptLogins(settings.autoCloseExemptLogins).logins,
+    requireFreshRebaseWindowMinutes: normalizeOpenItemCap(settings.requireFreshRebaseWindowMinutes),
   };
   const db = getDb(env.DB);
   await db
@@ -700,6 +703,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       reviewNagCooldownDays: resolved.reviewNagCooldownDays,
       reviewNagLabel: resolved.reviewNagLabel,
       autoCloseExemptLoginsJson: jsonString(resolved.autoCloseExemptLogins),
+      requireFreshRebaseWindowMinutes: resolved.requireFreshRebaseWindowMinutes,
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -755,6 +759,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         reviewNagCooldownDays: resolved.reviewNagCooldownDays,
         reviewNagLabel: resolved.reviewNagLabel,
         autoCloseExemptLoginsJson: jsonString(resolved.autoCloseExemptLogins),
+        requireFreshRebaseWindowMinutes: resolved.requireFreshRebaseWindowMinutes,
         updatedAt: nowIso(),
       },
     });
