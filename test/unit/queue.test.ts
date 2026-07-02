@@ -14,6 +14,7 @@ import {
   getContributorEvidence,
   getAgentRun,
   getContributorScoringProfile,
+  upsertPullRequestDetailSyncState,
   getWebhookEvent,
   getInstallation,
   getLatestUpstreamRulesetSnapshot,
@@ -1003,6 +1004,9 @@ describe("queue processors", () => {
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto", update_branch: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+    // Seed an UP-TO-DATE reviews-cache marker so this dedup-focused call-count test stays isolated from the
+    // reviews-staleness self-heal (#2537 follow-up) — that behavior has its own dedicated coverage below.
+    await upsertPullRequestDetailSyncState(env, { repoFullName: "owner/agent-repo", pullNumber: 7, status: "complete", reviewsSyncedAt: new Date().toISOString() });
     let barePullGets = 0;
     let branchProtectionGets = 0;
     let liveCheckRunsGets = 0;
@@ -1072,6 +1076,87 @@ describe("queue processors", () => {
     expect(liveCheckRunsGets).toBe(2);
     expect(statusGets).toBe(2);
     expect(mergeAttempts).toBe(0);
+  });
+
+  it("REGRESSION (#2537 follow-up): the per-PR sweep unit force-refreshes a STALE reviews cache even when no OTHER reason (slop evidence, manifest gate, pre-merge check paths) would have triggered a refresh", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write" }, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto", update_branch: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+    // A sync that predates an invalidation (STALE) and no other refresh trigger in play (slop evidence off,
+    // manifest gate off, no pre-merge check paths configured) — proves the sweep's own visit, not some unrelated
+    // setting, is what converges the stale reviews cache.
+    await upsertPullRequestDetailSyncState(env, {
+      repoFullName: "owner/agent-repo",
+      pullNumber: 7,
+      status: "complete",
+      reviewsSyncedAt: "2026-05-01T00:00:00.000Z",
+      reviewsInvalidatedAt: "2026-05-02T00:00:00.000Z",
+    });
+    let reviewsGets = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") {
+        return Response.json({ number: 7, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+      }
+      if (url.includes("/pulls/7/files")) return Response.json([]);
+      if (url.includes("/pulls/7/reviews")) {
+        reviewsGets += 1;
+        return Response.json([]);
+      }
+      if (url.includes("/commits/a7/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a7/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "reviews-stale-selfheal", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+
+    expect(reviewsGets).toBeGreaterThan(0);
+  });
+
+  it("REGRESSION (#2537 follow-up): a failed read of the reviews-cache sync state fails OPEN — the sweep completes without crashing rather than propagating the D1 error", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write" }, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto", update_branch: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+    await upsertPullRequestDetailSyncState(env, { repoFullName: "owner/agent-repo", pullNumber: 7, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+    // mockRejectedValue (not -Once): an earlier getPullRequestDetailSyncState read inside the resync/readiness
+    // path runs before this function's own read, so a single -Once rejection could be consumed there instead.
+    const syncStateSpy = vi.spyOn(repositoriesModule, "getPullRequestDetailSyncState").mockRejectedValue(new Error("D1 read failed"));
+    let reviewsGets = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") {
+        return Response.json({ number: 7, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+      }
+      if (url.includes("/pulls/7/files")) return Response.json([]);
+      if (url.includes("/pulls/7/reviews")) {
+        reviewsGets += 1;
+        return Response.json([]);
+      }
+      if (url.includes("/commits/a7/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a7/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await expect(
+      processJob(env, { type: "agent-regate-pr", deliveryId: "reviews-syncstate-readfail", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 }),
+    ).resolves.toBeUndefined();
+
+    expect(syncStateSpy).toHaveBeenCalled();
+    syncStateSpy.mockRestore();
   });
 
   it("#audit-rate-headroom: auto-maintain falls back to the public token when a post-gate mint fails", async () => {

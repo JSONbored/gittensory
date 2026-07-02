@@ -6,6 +6,7 @@ import {
   getLatestRepoGithubTotalsSnapshot,
   getFreshOfficialMinerDetection,
   getPullRequest,
+  getPullRequestDetailSyncState,
   getRepoAuthorPullRequestHistory,
   getRepository,
   getDecryptedRepositoryAiKey,
@@ -93,6 +94,7 @@ import {
   fetchOpenPullRequestNumbersForCommit,
   fetchRequiredStatusContexts,
   invalidatePrStateCache,
+  isReviewsCacheUpToDate,
   primeDurablePrStateCache,
   refreshContributorActivity,
   refreshInstallationHealth,
@@ -2320,11 +2322,19 @@ async function reReviewStoredPullRequest(
     linkedIssueAuthorLogins,
   });
   await persistAdvisory(env, advisory);
-  if (
+  // #2537 follow-up (gate-flagged): the durable review cache's only invalidation path is markPullRequestReviewsInvalidated
+  // on a webhook (processors.ts). A "quiet" PR (no new pushes, slop evidence + manifest gate both off, no
+  // pre-merge check paths) never hits any of the three reasons below, so a DROPPED invalidation write could sit
+  // stale indefinitely even though this per-PR sweep unit visits every open PR on a bounded cadence.
+  // Short-circuit the extra read when another reason already forces the refresh.
+  const otherRefreshReasons =
     shouldCollectSlopEvidence(settings) ||
     settings.manifestPolicyGateMode !== "off" ||
-    (await shouldRefreshFilesForPreMergeChecks(env, repoFullName))
-  ) {
+    (await shouldRefreshFilesForPreMergeChecks(env, repoFullName));
+  const reviewsCacheStale =
+    !otherRefreshReasons &&
+    !isReviewsCacheUpToDate(await getPullRequestDetailSyncState(env, repoFullName, prNumber).catch(() => null));
+  if (otherRefreshReasons || reviewsCacheStale) {
     await refreshPullRequestDetails(env, repoFullName, prNumber).catch(
       () => undefined,
     );

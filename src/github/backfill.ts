@@ -1975,6 +1975,19 @@ async function backfillRepository(env: Env, repo: RepositoryRecord, limits: Back
   }
 }
 
+// #2537 follow-up (gate-flagged): a small, pure predicate mirroring fetchAndStorePullRequestDetails's own
+// reviewsUpToDate check below, exported so the periodic re-gate sweep (queue/processors.ts) can independently
+// decide whether a stale reviews cache is, on its own, a reason to force a refresh -- otherwise this row's
+// invalidation state only gets EVALUATED when something ELSE already calls refreshPullRequestDetails, which a
+// "quiet" PR (no new pushes, slop evidence + manifest gate both off, no pre-merge check paths) may never do. A
+// SINGLE authoritative definition (this function) rather than two independently-maintained copies that could drift.
+export function isReviewsCacheUpToDate(
+  syncState: Pick<PullRequestDetailSyncStateRecord, "reviewsSyncedAt" | "reviewsInvalidatedAt"> | null | undefined,
+): boolean {
+  const reviewsSyncedAt = syncState?.reviewsSyncedAt;
+  return Boolean(reviewsSyncedAt) && (!syncState?.reviewsInvalidatedAt || (reviewsSyncedAt ?? "") > syncState.reviewsInvalidatedAt);
+}
+
 async function fetchAndStorePullRequestDetails(
   env: Env,
   repoFullName: string,
@@ -2007,9 +2020,7 @@ async function fetchAndStorePullRequestDetails(
   // millisecond, and sub-millisecond ordering is unknowable from the stored strings — a tie must fail toward
   // "still needs a refetch," never toward silently trusting a possibly-stale cache.
   const reviewsSyncedAtBefore = existingState?.reviewsSyncedAt;
-  const reviewsUpToDate =
-    Boolean(reviewsSyncedAtBefore) &&
-    (!existingState?.reviewsInvalidatedAt || (reviewsSyncedAtBefore ?? "") > existingState.reviewsInvalidatedAt);
+  const reviewsUpToDate = isReviewsCacheUpToDate(existingState);
   // Gate review finding (TOCTOU race): `existingState` above is a snapshot read at the TOP of this call. If a
   // `pull_request_review` webhook races in AFTER that read but BEFORE this function returns, an unconditional
   // "stamp reviewsSyncedAt to now" on the CALLER's side (the old design) would advance the timestamp PAST that
