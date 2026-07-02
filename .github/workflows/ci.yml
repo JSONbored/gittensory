@@ -291,9 +291,15 @@ jobs:
       - name: UI tests
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
         run: npm run ui:test
+      # `npm run ui:build` also regenerates apps/gittensory-ui/public/openapi.json (needed for a
+      # standalone build), but this step's trigger condition is a strict subset of "OpenAPI drift
+      # check" above (push || ui==true, vs. push || ui==true || uiContract==true), so whenever this
+      # step runs, that check already ran and passed in this same job -- the committed spec is
+      # already byte-identical to what regenerating it here would produce. Run ui:build's other two
+      # steps directly instead of the aggregate script, skipping that redundant regen.
       - name: UI build
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
-        run: npm run ui:build
+        run: npm run extension:build && npm --workspace @jsonbored/gittensory-ui run build
 
   # Diff-scoped security gate: fails only on vulnerabilities this PR introduces.
   # Ambient advisories in untouched deps are handled by Renovate + the scheduled
