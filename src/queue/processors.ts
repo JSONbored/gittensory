@@ -1738,7 +1738,7 @@ async function runAgentMaintenancePlanAndExecute(
     liveFacts: LiveGithubFacts;
   },
 ): Promise<void> {
-  const { installationId, repoFullName, pr, settings, otherOpenPullRequests, gate } = args;
+  const { installationId, repoFullName, pr, settings, otherOpenPullRequests, deliveryId, gate } = args;
 
   // Convergence safety: feed the planner the PR's changed paths + the repo's hard-guardrail globs so guarded
   // paths force manual review, and flag owner-authored PRs so they are never auto-closed (standing rule).
@@ -1881,6 +1881,17 @@ async function runAgentMaintenancePlanAndExecute(
     const overCapNumbers = new Set(authorOpenPrNumbers.slice(contributorOpenPrCap));
     if (overCapNumbers.has(pr.number)) {
       contributorCapMatch = { matched: true, authorLogin: pr.authorLogin, openCount: authorOpenPrNumbers.length, cap: contributorOpenPrCap };
+    }
+    // Webhook-delivery-order guard (#2479 gate finding): delivery order is not guaranteed to match PR creation
+    // order, so a sibling PR's own webhook can process before THIS PR exists in the DB and wrongly conclude the
+    // author is within the cap — nothing else would ever re-evaluate it, permanently bypassing the cap for that
+    // sibling. Now that THIS delivery has the complete picture, wake any OTHER still-open sibling that's also
+    // in the over-cap set so its own next pass re-evaluates against the complete set and self-corrects.
+    const otherOverCapSiblingNumbers = otherOpenPullRequests
+      .filter((other) => (other.authorLogin ?? "").toLowerCase() === authorLoginLower && overCapNumbers.has(other.number))
+      .map((other) => other.number);
+    if (otherOverCapSiblingNumbers.length > 0) {
+      await wakeOverCapSiblingPullRequests(env, deliveryId, installationId, repoFullName, otherOverCapSiblingNumbers);
     }
   }
 
@@ -2523,6 +2534,51 @@ async function scheduleTrailingIssueLinkedReReview(
     return; // do NOT claim — a later coalesced event in this window should retry the enqueue
   }
   await putTransientKey(env, key, "1", CI_COALESCE_WINDOW_SECONDS);
+}
+
+/** Best-effort wake for sibling PRs discovered to be over the per-contributor cap by a LATER delivery (#2270,
+ *  #2479 gate finding): webhook delivery order isn't guaranteed to match PR creation order, so a sibling's own
+ *  webhook can fire before this one exists in the DB and wrongly conclude the author is within the cap — with
+ *  nothing else to ever re-evaluate it, that verdict would otherwise stand forever. Reuses the existing
+ *  agent-regate-pr sweep-unit job (already rate-limit-aware and retried) — the SAME "wake and fully
+ *  re-evaluate" entry point the linked-issue-wake feature (#2259) uses for an identical class of problem, so
+ *  the sibling gets its own live-head/CI-freshness re-check before anything acts on it, not a shortcut based
+ *  on this delivery's now-possibly-stale snapshot. Coalesced per sibling PR (mirrors
+ *  scheduleTrailingIssueLinkedReReview's check-then-claim-after-success shape) so a burst of N over-cap
+ *  siblings each discovering the same others doesn't fan out into an O(N^2) job storm. */
+async function wakeOverCapSiblingPullRequests(
+  env: Env,
+  deliveryId: string,
+  installationId: number,
+  repoFullName: string,
+  siblingPrNumbers: number[],
+): Promise<void> {
+  await Promise.all(
+    siblingPrNumbers.map(async (prNumber) => {
+      const key = `contributor-cap-wake:${repoFullName.toLowerCase()}#${prNumber}`;
+      if (await getTransientKey(env, key)) return;
+      try {
+        await env.JOBS.send({
+          type: "agent-regate-pr",
+          deliveryId,
+          repoFullName,
+          prNumber,
+          installationId,
+        });
+      } catch (error) {
+        console.log(
+          JSON.stringify({
+            ev: "contributor_cap_wake_enqueue_failed",
+            repoFullName,
+            pull: prNumber,
+            message: errorMessage(error).slice(0, 120),
+          }),
+        );
+        return; // do NOT claim — a later discovery should retry the enqueue
+      }
+      await putTransientKey(env, key, "1", CI_COALESCE_WINDOW_SECONDS);
+    }),
+  );
 }
 
 async function ciHeadShaResolutionCoalesced(

@@ -5905,6 +5905,208 @@ describe("queue processors", () => {
     expect(seen.closed).toBe(false);
   });
 
+  it("contributor open-PR cap (#2270): an author-less (ghost) open PR among the repo's others is excluded from the count and the sibling-wake scan, not crashed on", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    // A ghost PR with no `user` at all (authorLogin ends up null) — must not match farmer99's count, and must
+    // not crash the sibling-wake scan, which runs the identical (authorLogin ?? "") fallback.
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 50, title: "Ghost PR", state: "open", head: { sha: "ghost50" }, labels: [], body: "z" });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 53, title: "Farmer PR one", state: "open", user: { login: "farmer99" }, head: { sha: "f53" }, labels: [], body: "x" });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 54, title: "Farmer PR two", state: "open", user: { login: "farmer99" }, head: { sha: "f54" }, labels: [], body: "y" });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      aiReviewMode: "advisory",
+      autonomy: { close: "auto", label: "auto" },
+      contributorOpenPrCap: 2,
+    });
+    const seen = { closed: false };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
+      if (url.includes("/pulls/55/reviews")) return Response.json([]);
+      if (url.includes("/pulls/55/commits")) return Response.json([]);
+      if (url.endsWith("/pulls/55") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 55, state: "closed" }); }
+      if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, mergeable_state: "clean" });
+      if (url.includes("/commits/f55/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/f55/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/55/labels") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/55/labels") && method === "POST") return Response.json([]);
+      if (url.includes("/issues/55/comments") && method === "POST") return Response.json({ id: 1 }, { status: 201 });
+      if (url.includes("/issues/55/comments")) return Response.json([]);
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "contributor-cap-ghost-author",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 55, title: "Farmer's 3rd PR", state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, labels: [], body: "x", mergeable_state: "clean", reviewDecision: "APPROVED" },
+      },
+    });
+
+    // Ghost PR's null authorLogin never matches "farmer99" — the count is still exactly 3 (farmer99's own).
+    expect(seen.closed).toBe(true);
+  });
+
+  it("contributor open-PR cap (#2270): out-of-order webhook delivery wakes and self-corrects the missed sibling (regression, gate finding on #2479)", async () => {
+    // PR56 (the NEWER PR) is delivered BEFORE PR55 exists in the DB — a real possibility under concurrent/
+    // retried webhook delivery. At that moment PR56 only sees {54, 56} (2 total, AT the cap of 2, not over),
+    // so it correctly stays open — but a naive "only ever check myself" implementation would leave it open
+    // FOREVER, since nothing else ever re-evaluates PR56 again. This pins the fix: once PR55's delivery later
+    // sees the COMPLETE set {54, 55, 56}, it must wake PR56 (not just decide for itself) so PR56 gets a fresh,
+    // fully-gated re-evaluation and self-corrects.
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 54, title: "Farmer PR zero", state: "open", user: { login: "farmer99" }, head: { sha: "f54" }, labels: [], body: "w" });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      aiReviewMode: "advisory",
+      autonomy: { close: "auto", label: "auto" },
+      contributorOpenPrCap: 2,
+    });
+    const closedNumbers = new Set<number>();
+    const fanned: import("../../src/types").JobMessage[] = [];
+    const realSend = env.JOBS.send.bind(env.JOBS);
+    env.JOBS.send = (async (message: import("../../src/types").JobMessage, options?: QueueSendOptions) => {
+      if (message.type === "agent-regate-pr") fanned.push(message);
+      return realSend(message, options);
+    }) as typeof env.JOBS.send;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      for (const [n, sha] of [[55, "f55"], [56, "f56"]] as const) {
+        if (url.includes(`/pulls/${n}/files`)) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
+        if (url.includes(`/pulls/${n}/reviews`)) return Response.json([]);
+        if (url.includes(`/pulls/${n}/commits`)) return Response.json([]);
+        if (url.endsWith(`/pulls/${n}`) && method === "PATCH") { closedNumbers.add(n); return Response.json({ number: n, state: "closed" }); }
+        if (url.endsWith(`/pulls/${n}`)) return Response.json({ number: n, state: closedNumbers.has(n) ? "closed" : "open", user: { login: "farmer99" }, head: { sha }, mergeable_state: "clean" });
+        if (url.includes(`/commits/${sha}/check-runs`)) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes(`/commits/${sha}/status`)) return Response.json({ state: "success", statuses: [] });
+        if (url.includes(`/issues/${n}/labels`) && method === "GET") return Response.json([]);
+        if (url.includes(`/issues/${n}/labels`) && method === "POST") return Response.json([]);
+        if (url.includes(`/issues/${n}/comments`) && method === "POST") return Response.json({ id: 1 }, { status: 201 });
+        if (url.includes(`/issues/${n}/comments`)) return Response.json([]);
+      }
+      return Response.json({});
+    });
+
+    // PR56 arrives FIRST — PR55 does not exist yet, so PR56 sees only {54, 56}: at the cap, not over.
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "burst-pr56-first",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 56, title: "Farmer PR two (out of order)", state: "open", user: { login: "farmer99" }, head: { sha: "f56" }, labels: [], body: "y", mergeable_state: "clean", reviewDecision: "APPROVED" },
+      },
+    });
+    expect(closedNumbers.has(56)).toBe(false); // correctly not closed YET — the set looked complete at the time
+
+    // PR55 arrives SECOND — now the complete set {54, 55, 56} is visible. PR55 itself ranks within the cap
+    // (oldest 2 of 3), so it stays open — but PR56 is now discoverably over-cap and must be woken.
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "burst-pr55-second",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 55, title: "Farmer PR one", state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, labels: [], body: "x", mergeable_state: "clean", reviewDecision: "APPROVED" },
+      },
+    });
+    expect(closedNumbers.has(55)).toBe(false); // PR55 itself is within the cap
+    expect(fanned.some((job) => job.type === "agent-regate-pr" && job.prNumber === 56)).toBe(true); // sibling woken
+
+    // Drain the woken job — PR56's OWN fresh re-evaluation now sees the complete set and self-corrects.
+    env.JOBS.send = realSend;
+    for (const job of fanned) await processJob(env, job);
+    expect(closedNumbers.has(56)).toBe(true);
+  });
+
+  it("contributor open-PR cap (#2270): a re-delivered sibling-wake is coalesced — the second discovery does not re-enqueue", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    // Pre-seed the coalescing key for PR56 exactly as wakeOverCapSiblingPullRequests itself would after a
+    // first, already-successful enqueue — proving the SECOND discovery within the window skips re-enqueueing.
+    await env.SELFHOST_TRANSIENT_CACHE?.set("contributor-cap-wake:jsonbored/gittensory#56", "1", 60);
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 54, title: "Farmer PR zero", state: "open", user: { login: "farmer99" }, head: { sha: "f54" }, labels: [], body: "w" });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 56, title: "Farmer PR two (already over cap)", state: "open", user: { login: "farmer99" }, head: { sha: "f56" }, labels: [], body: "y" });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      aiReviewMode: "advisory",
+      autonomy: { close: "auto", label: "auto" },
+      contributorOpenPrCap: 2,
+    });
+    const fanned: import("../../src/types").JobMessage[] = [];
+    const realSend = env.JOBS.send.bind(env.JOBS);
+    env.JOBS.send = (async (message: import("../../src/types").JobMessage, options?: QueueSendOptions) => {
+      if (message.type === "agent-regate-pr") fanned.push(message);
+      return realSend(message, options);
+    }) as typeof env.JOBS.send;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
+      if (url.includes("/pulls/55/reviews")) return Response.json([]);
+      if (url.includes("/pulls/55/commits")) return Response.json([]);
+      if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, mergeable_state: "clean" });
+      if (url.includes("/commits/f55/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/f55/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/55/labels")) return Response.json([]);
+      if (url.includes("/issues/55/comments")) return Response.json([]);
+      return Response.json({});
+    });
+
+    // PR55 arrives and independently discovers PR56 is over cap — but the wake was already claimed.
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "wake-coalesce-second",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 55, title: "Farmer PR one", state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, labels: [], body: "x", mergeable_state: "clean", reviewDecision: "APPROVED" },
+      },
+    });
+
+    expect(fanned).toEqual([]); // coalesced — no duplicate wake enqueued
+  });
+
   // #1092: prReadyForReview rebases a BEHIND-base PR through the agent executor (gated by update_branch autonomy
   // + pull_requests:write) before reviewing, then defers — the synchronize on the new head re-runs review.
   async function seedBehindRepo(env: Env, over: { autonomy?: Record<string, string>; agentPaused?: boolean; perms?: Record<string, string>; noInstall?: boolean } = {}) {
