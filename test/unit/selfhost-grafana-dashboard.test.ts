@@ -146,6 +146,15 @@ describe("Gittensory Self-Host Grafana dashboard", () => {
     expect(alerts).toContain("alert: GittensoryBackupStale");
     expect(alerts).toContain('time() - gittensory_backup_latest_timestamp_seconds{target=~"postgres|sqlite"} > 93600');
   });
+
+  it("ships AI provider circuit-breaker and inconclusive-verdict alerts (#2540)", () => {
+    const alerts = readFileSync(selfhostAlertsPath, "utf8");
+
+    expect(alerts).toContain("alert: GittensoryAiProviderCircuitOpen");
+    expect(alerts).toContain('increase(gittensory_ai_provider_circuit_total{result="tripped"}[15m]) > 0');
+    expect(alerts).toContain("alert: GittensoryAiReviewInconclusiveSpike");
+    expect(alerts).toContain("sum(rate(gittensory_ai_review_inconclusive_total[15m]))");
+  });
 });
 
 describe("maintainer Reviews & PRs Grafana dashboard", () => {

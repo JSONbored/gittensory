@@ -25,6 +25,7 @@ import { sanitizePublicComment } from "../queue-intelligence";
 import { defangReviewInput } from "../review/safety";
 import { convergedFeatureActive } from "../review/feature-activation";
 import { labelSelfHostReviewerModels, labelSelfHostReviewerNames, resolveConfiguredProviderNames } from "../selfhost/ai-config";
+import { incr } from "../selfhost/metrics";
 import { errorMessage } from "../utils/json";
 import type { ReviewProfile } from "../signals/focus-manifest";
 
@@ -1228,6 +1229,10 @@ export async function runGittensoryAiReview(
       reviewDiagnostics.some((diagnostic) => diagnostic.status === "unparseable_output"))
   )
     inconclusive = true;
+  // #2540: observability for a fail-closed HOLD (no gate finding either way, but no usable AI output to certify
+  // clean) -- a correlated spike here alongside gittensory_ai_provider_circuit_total{result="tripped"} is the
+  // "dual-AI review is silently degrading" signal the alert rule watches for.
+  if (inconclusive) incr("gittensory_ai_review_inconclusive_total", { mode: input.mode, dual: String(dual) });
   const advisoryNotes =
     reviewsForNotes.length > 0
       ? (composeAdvisoryNotes(reviewsForNotes) ?? composeFallbackAdvisoryNotes(fallbackNotes))

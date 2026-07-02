@@ -369,3 +369,39 @@ groups:
           summary: "gittensory p95 request latency above 1s"
           description: "p95 HTTP request latency is {{ $value | printf \"%.2f\" }}s over the last 5m (sustained 10m), breaching the 1s SLO."
           runbook: "Check whether slowness is queue/DB/AI-bound: correlate with gittensory_queue_pending and Qdrant/AI latency. A rising p95 with flat error rate usually means a saturated dependency, not a bug."
+
+  # ── AI review provider health (#2540) ───────────────────────────────────────
+  - name: gittensory-ai
+    rules:
+      - alert: GittensoryAiProviderCircuitOpen
+        # A provider's per-provider circuit breaker (createChainAi) has been open (tripping repeated attempts,
+        # not just one) for a sustained window -- the provider is known-bad for this whole window, not a
+        # one-off blip. `increase(...) > 0` over the alert window plus `for: 15m` requires the breaker to
+        # still be actively tripping partway through, not a single trip that then recovered.
+        expr: increase(gittensory_ai_provider_circuit_total{result="tripped"}[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "gittensory AI provider {{ $labels.provider }} circuit breaker open"
+          description: "The {{ $labels.provider }} AI provider has tripped its circuit breaker and stayed open for over 15m -- reviews are falling through to the next configured provider (or failing if none remain)."
+          runbook: "Check the provider's credentials/quota/reachability (API key, CLI auth, network egress). gittensory_ai_provider_circuit_total{result=\"skipped\"} shows how many reviews are bypassing it. Clears automatically once a call succeeds."
+
+      - alert: GittensoryAiReviewInconclusiveSpike
+        # A HELD (fail-closed, no usable AI output) verdict is not itself an error -- it's the SAFE outcome
+        # when review output can't be trusted. But a SUSTAINED spike means dual-AI review is providing
+        # materially less signal than configured, often correlated with a provider circuit trip above.
+        # `> 0` denominator guard avoids 0/0 = NaN when no block-mode reviews ran in the window.
+        expr: |
+          (
+            sum(rate(gittensory_ai_review_inconclusive_total[15m]))
+            /
+            sum(rate(gittensory_ai_requests_total[15m])) > 0
+          ) > 0.25
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "gittensory AI review inconclusive-verdict ratio above 25%"
+          description: "{{ $value | humanizePercentage }} of AI review activity resulted in an inconclusive (held) verdict over the last 15m (sustained 15m)."
+          runbook: "Correlate with GittensoryAiProviderCircuitOpen and selfhost_ai_providers_exhausted logs. A spike usually means one or more configured reviewers are down; check credentials and provider status."

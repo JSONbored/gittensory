@@ -634,21 +634,70 @@ export function markAiProviderUnhealthyAtBoot(): void {
   aiConsecutiveFailures = AI_UNHEALTHY_FAILURE_STREAK;
 }
 
-/** Try each provider in order until one returns; if all throw, rethrow the last error so the caller degrades
- *  (AI summary → "unavailable"; the review still runs deterministically). The fallback chain is what makes a
- *  BYOK setup robust — e.g. AI_PROVIDER="anthropic,ollama" uses the API first and a local model if it's down. */
+// Per-provider circuit breaker (#2540): the readiness streak above only tracks "the WHOLE chain exhausted" --
+// it says nothing about ONE provider within a multi-provider chain (e.g. AI_PROVIDER="anthropic,ollama") being
+// known-bad, so every single PR review still pays that provider's full failure latency (a slow API timeout or
+// CLI hang) before falling through to the next, every time, for the whole outage. Trip a provider's breaker
+// after a short run of CONSECUTIVE failures and skip it (no network/CLI call at all) for a cooldown window,
+// falling straight through to the next provider in the chain -- degrading review latency/cost gracefully
+// instead of repeating a doomed attempt on every review. In-process only (no persistence layer), matching this
+// module's existing aiConsecutiveFailures streak.
+const AI_PROVIDER_CIRCUIT_FAILURE_STREAK = 3;
+const AI_PROVIDER_CIRCUIT_COOLDOWN_MS = 5 * 60_000;
+type ProviderCircuitState = { consecutiveFailures: number; cooldownUntilMs: number };
+const providerCircuits = new Map<string, ProviderCircuitState>();
+
+function isProviderCircuitOpen(providerName: string, nowMs = Date.now()): boolean {
+  const state = providerCircuits.get(providerName);
+  return state !== undefined && state.cooldownUntilMs > nowMs;
+}
+
+function recordProviderCircuitSuccess(providerName: string): void {
+  if (providerCircuits.delete(providerName)) {
+    incr("gittensory_ai_provider_circuit_total", { provider: providerName, result: "recovered" });
+  }
+}
+
+function recordProviderCircuitFailure(providerName: string, nowMs = Date.now()): void {
+  const state = providerCircuits.get(providerName) ?? { consecutiveFailures: 0, cooldownUntilMs: 0 };
+  state.consecutiveFailures += 1;
+  if (state.consecutiveFailures >= AI_PROVIDER_CIRCUIT_FAILURE_STREAK) {
+    state.cooldownUntilMs = nowMs + AI_PROVIDER_CIRCUIT_COOLDOWN_MS;
+    incr("gittensory_ai_provider_circuit_total", { provider: providerName, result: "tripped" });
+  }
+  providerCircuits.set(providerName, state);
+}
+
+/** Test-only reset so circuit-breaker state from one test can't leak into the next (module-level Map). */
+export function resetAiProviderCircuitsForTest(): void {
+  providerCircuits.clear();
+}
+
+/** Try each provider in order until one returns; if all throw (or are circuit-open), rethrow the last real error
+ *  so the caller degrades (AI summary → "unavailable"; the review still runs deterministically). The fallback
+ *  chain is what makes a BYOK setup robust — e.g. AI_PROVIDER="anthropic,ollama" uses the API first and a local
+ *  model if it's down. */
 export function createChainAi(providers: Array<{ name: string; ai: SelfHostAi }>): SelfHostAi {
   return {
     async run(model, options) {
       let lastError: unknown = new Error("no_ai_providers");
+      let attempted = false;
       const failures: Array<{ provider: string; error: string }> = [];
       for (const p of providers) {
+        if (isProviderCircuitOpen(p.name)) {
+          failures.push({ provider: p.name, error: "circuit_open: skipped after repeated recent failures" });
+          incr("gittensory_ai_provider_circuit_total", { provider: p.name, result: "skipped" });
+          continue;
+        }
+        attempted = true;
         try {
           const result = await runProviderWithOtel(p, model, options);
           aiConsecutiveFailures = 0;
+          recordProviderCircuitSuccess(p.name);
           return result;
         } catch (error) {
           lastError = error;
+          recordProviderCircuitFailure(p.name);
           failures.push({ provider: p.name, error: errorMessage(error) });
           console.error(JSON.stringify({ level: "warn", event: "selfhost_ai_provider_failed_in_chain", provider: p.name, error: errorMessage(error) }));
         }
@@ -665,6 +714,9 @@ export function createChainAi(providers: Array<{ name: string; ai: SelfHostAi }>
           error: errorMessage(lastError),
         }),
       );
+      // Every provider was circuit-open (a real attempt never ran) -- surface a distinct, actionable error
+      // instead of the generic "no_ai_providers" default, which would misleadingly imply NOTHING was configured.
+      if (!attempted && providers.length > 0) throw new Error("all_ai_providers_circuit_open");
       throw lastError instanceof Error ? lastError : new Error("all_ai_providers_failed");
     },
   };
@@ -798,6 +850,18 @@ export function resolveAiReviewerPlan(
   const names = resolveProviderNames(env);
   if (names.length === 0) return undefined;
   if (names.length === 1) return { reviewers: [{ model: names[0] as string }], combine: "single", onMerge: undefined };
+  // #2540: a duplicate AI_PROVIDER entry feeding BOTH dual-review slots (e.g. "claude-code,claude-code" -- a
+  // copy-paste config mistake) would otherwise silently collapse "two independent reviewers reaching consensus"
+  // into "the same provider called twice", defeating dual-AI review entirely AND meaning a single provider's
+  // outage/auth failure takes down both slots at once. Fail loud at boot, mirroring
+  // assertNoLegacySharedAiEnv's pattern for other misconfigured env combinations, rather than silently
+  // degrading review quality. Only the first two names feed the two slots, so only THOSE need to differ --
+  // a harmless third duplicate further down the fallback chain (unused here) is not this problem.
+  if (names[0] === names[1]) {
+    throw new Error(
+      `duplicate_ai_reviewer_provider: AI_PROVIDER lists "${names[0]}" for both dual-review slots -- configure two DISTINCT providers (e.g. AI_PROVIDER="claude-code,codex") or a single provider (dual review needs two).`,
+    );
+  }
   const rawCombine = (env.AI_COMBINE ?? "").trim().toLowerCase() as CombineStrategy;
   const combine: CombineStrategy = COMBINE_STRATEGIES.has(rawCombine) ? rawCombine : "synthesis";
   const rawOnMerge = (env.AI_ON_MERGE ?? "").trim().toLowerCase() as OnMerge;
