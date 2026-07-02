@@ -585,6 +585,25 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
   };
 }
 
+// Readiness tracking (#2497): /ready has no way to tell "every configured AI provider is unreachable" (bad
+// API key, CLI missing auth, provider outage) from healthy — a live per-request reachability check would cost
+// a real API/CLI call on every health-check tick, so instead track a consecutive-exhaustion streak here and
+// let /ready read it. A single threshold absorbs one-off transient failures (a bad request, a momentary
+// network blip) without flapping readiness; only a SUSTAINED run of total chain exhaustion degrades it.
+const AI_UNHEALTHY_FAILURE_STREAK = 3;
+let aiConsecutiveFailures = 0;
+
+/** False once the chain has exhausted every provider AI_UNHEALTHY_FAILURE_STREAK times in a row; true otherwise
+ *  (including when no AI call has happened yet, or the most recent one succeeded). */
+export function isAiProviderHealthy(): boolean {
+  return aiConsecutiveFailures < AI_UNHEALTHY_FAILURE_STREAK;
+}
+
+/** Test-only reset so streak state from one test can't leak into the next (module-level counter). */
+export function resetAiProviderHealthForTest(): void {
+  aiConsecutiveFailures = 0;
+}
+
 /** Try each provider in order until one returns; if all throw, rethrow the last error so the caller degrades
  *  (AI summary → "unavailable"; the review still runs deterministically). The fallback chain is what makes a
  *  BYOK setup robust — e.g. AI_PROVIDER="anthropic,ollama" uses the API first and a local model if it's down. */
@@ -595,13 +614,16 @@ export function createChainAi(providers: Array<{ name: string; ai: SelfHostAi }>
       const failures: Array<{ provider: string; error: string }> = [];
       for (const p of providers) {
         try {
-          return await runProviderWithOtel(p, model, options);
+          const result = await runProviderWithOtel(p, model, options);
+          aiConsecutiveFailures = 0;
+          return result;
         } catch (error) {
           lastError = error;
           failures.push({ provider: p.name, error: errorMessage(error) });
           console.error(JSON.stringify({ level: "warn", event: "selfhost_ai_provider_failed_in_chain", provider: p.name, error: errorMessage(error) }));
         }
       }
+      aiConsecutiveFailures += 1;
       console.error(
         JSON.stringify({
           level: "error",

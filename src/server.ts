@@ -17,6 +17,7 @@ import { processJob } from "./queue/processors";
 import {
   createOpenAiCompatibleAi,
   createSelfHostAi,
+  isAiProviderHealthy,
   resolveAiReviewerPlan,
   resolveRequiredCliProviders,
   resolveSubscriptionCliPath,
@@ -440,8 +441,30 @@ async function main(): Promise<void> {
   // Persist the installation-token cache in Redis so warm GitHub App tokens survive restarts/deploys and are
   // shared across replicas (the in-isolate Map otherwise re-mints — an Orb round-trip — per replica/cold start).
   const { createRedisTokenCache } = await import("./selfhost/redis-token-cache");
-  const { setInstallationTokenStore, setGitHubResponseCache } = await import("./github/app");
+  const { createAppJwt, setInstallationTokenStore, setGitHubResponseCache } = await import("./github/app");
   setInstallationTokenStore(createRedisTokenCache(redisClient));
+  // GitHub App auth: a successful JWT mint proves GITHUB_APP_PRIVATE_KEY is set and parses as a valid signing
+  // key. Without this, an invalid/expired key leaves the review pipeline completely dead while /ready still
+  // reports 200 — detection otherwise requires SENTRY_DSN or grepping stdout for auth errors (#2497).
+  if (process.env.GITHUB_APP_ID && process.env.GITHUB_APP_PRIVATE_KEY) {
+    readinessProbes.push({
+      name: "github_app",
+      check: () =>
+        withTimeout(
+          createAppJwt(env).then(() => true).catch(() => false),
+        ),
+    });
+  }
+  // Configured AI provider: gate on the chain's own consecutive-exhaustion streak (isAiProviderHealthy) rather
+  // than a live reachability probe, which would cost a real API/CLI call on every health-check tick. Only
+  // registered when a provider is actually configured -- without AI_PROVIDER reviews run deterministically,
+  // which is not a degraded state (#2497).
+  if (ai) {
+    readinessProbes.push({
+      name: "ai_provider",
+      check: () => Promise.resolve(isAiProviderHealthy()),
+    });
+  }
   // Enable/disable gate for the GitHub GET-response cache (dedups the ~24 reads per review); NOT a per-entry
   // TTL — each cached class (branch-protection/metadata/commit/GraphQL) resolves its own TTL env var, so the
   // value here only matters as >0 (enabled) vs 0 (disabled) (#2505).

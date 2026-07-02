@@ -422,7 +422,12 @@ function expireCachedAppJwt(appId: string): void {
   appJwtCache.delete(appId);
 }
 
-async function createAppJwt(env: Env): Promise<string> {
+/** Exported for the /ready GitHub App auth probe (#2497): a successful mint proves GITHUB_APP_PRIVATE_KEY is
+ *  set and parses as a valid signing key (importPkcs8PrivateKey/crypto.subtle.sign both throw on a malformed
+ *  key) without spending a live GitHub API call on every health-check tick. It can't detect a key that GitHub
+ *  has since revoked (only a real API call would), but it catches the common "unset/invalid key" failure mode
+ *  that otherwise leaves /ready reporting 200 while the review pipeline is completely dead. */
+export async function createAppJwt(env: Env): Promise<string> {
   if (!env.GITHUB_APP_PRIVATE_KEY) {
     throw new Error("GitHub App credentials are not configured.");
   }
