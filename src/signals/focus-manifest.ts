@@ -3,6 +3,7 @@ import type { GatePolicyPack, GateRuleMode, JsonValue, RepositorySettings } from
 import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy } from "../settings/autonomy";
 import { normalizeCommandAuthorizationPolicy } from "../settings/command-authorization";
 import { mergeContributorBlacklists, normalizeContributorBlacklist } from "../settings/contributor-blacklist";
+import { hasUnsafeWildcardCount } from "./change-guardrail";
 import { PUBLIC_LOCAL_PATH_INLINE } from "./redaction";
 
 export type FocusManifestSource = "repo_file" | "api_record" | "none";
@@ -618,20 +619,15 @@ function normalizeOptionalPositiveInteger(value: JsonValue | undefined, field: s
   return null;
 }
 
-// A glob compiled to RegExp (review/content-lane/spec-resolver.ts's globToRegExp reuse of the guardrail-path
-// compiler) chains a `[^/]*` per `*` — MULTIPLE chained wildcards separated by literal characters can
-// catastrophically backtrack on an adversarial near-miss input (verified empirically: 5 chained wildcards against
-// a maximally-adversarial 300-char input took ~19 SECONDS; 3 stays under 5ms even at that same length). No
-// legitimate single-purpose entry-file glob for this feature needs more than a couple of wildcards, so this caps
-// wildcard count at parse time — well before the string ever reaches RegExp compilation — rather than trying to
-// make the compiled pattern itself provably safe.
-const MAX_GLOB_WILDCARDS = 3;
-
-/** Normalize + bound a maintainer-supplied glob string: trims/length-caps like any other string field, AND caps
- *  the number of `*` wildcard characters (see MAX_GLOB_WILDCARDS) so it can never compile into a
- *  catastrophically-backtracking RegExp downstream. A glob over the cap is REJECTED (warns, returns null) rather
- *  than truncated — silently cutting wildcards out of a maintainer's pattern would silently change its meaning,
- *  which is worse than making them fix an over-complex glob. */
+/** Normalize + bound a maintainer-supplied glob string: trims/length-caps like any other string field, AND
+ *  rejects one globToRegExp (review/content-lane/spec-resolver.ts's reuse of the guardrail-path compiler) would
+ *  itself refuse to compile safely. Reuses `hasUnsafeWildcardCount` — globToRegExp's OWN safety predicate —
+ *  rather than a locally-counted threshold: a caller that counts wildcards differently (e.g. raw `*` characters,
+ *  which double-counts a `**` pair as 2 groups instead of 1) can accept a glob globToRegExp then silently
+ *  compiles to NEVER_MATCHES, configuring a lane that is "present" but can never activate on any changed file
+ *  (#confirmed-bug). A glob over the cap is REJECTED (warns, returns null) rather than truncated — silently
+ *  cutting wildcards out of a maintainer's pattern would silently change its meaning, which is worse than making
+ *  them fix an over-complex glob. */
 function normalizeOptionalGlob(value: JsonValue | undefined, field: string, warnings: string[]): string | null {
   const normalized = normalizeOptionalString(value, field, warnings);
   if (normalized === null) return null;
@@ -643,9 +639,8 @@ function normalizeOptionalGlob(value: JsonValue | undefined, field: string, warn
     warnings.push(`Manifest field "${field}" is an over-long glob (${normalized.length} > ${MAX_ITEM_LENGTH} chars); ignoring it.`);
     return null;
   }
-  const wildcardCount = (normalized.match(/\*/g) ?? []).length;
-  if (wildcardCount > MAX_GLOB_WILDCARDS) {
-    warnings.push(`Manifest field "${field}" has too many wildcards (${wildcardCount} > ${MAX_GLOB_WILDCARDS}); ignoring it.`);
+  if (hasUnsafeWildcardCount(normalized)) {
+    warnings.push(`Manifest field "${field}" has too many wildcards to compile safely; ignoring it.`);
     return null;
   }
   return normalized;

@@ -57,8 +57,11 @@ function countWildcardGroups(glob: string): number {
 }
 
 /** True if `glob` has more wildcard GROUPS than can be safely compiled to a RegExp without risking catastrophic
- *  backtracking (see the MAX_GLOB_WILDCARD_GROUPS rationale above). */
-function hasUnsafeWildcardCount(glob: string): boolean {
+ *  backtracking (see the MAX_GLOB_WILDCARD_GROUPS rationale above). Exported so any OTHER glob-accepting config
+ *  surface (e.g. focus-manifest.ts's contentLane.*Glob parsing) can reject an over-complex glob using the SAME
+ *  predicate globToRegExp itself enforces — a caller with its own, independently-counted threshold could accept
+ *  a glob globToRegExp then silently compiles to NEVER_MATCHES, configuring a lane that can never activate. */
+export function hasUnsafeWildcardCount(glob: string): boolean {
   return countWildcardGroups(glob) > MAX_GLOB_WILDCARD_GROUPS;
 }
 

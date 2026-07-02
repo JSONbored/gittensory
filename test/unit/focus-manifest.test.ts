@@ -1107,16 +1107,32 @@ describe("parseFocusManifest gate config", () => {
     expect(m.contentLane.entryFileGlob).toBeNull();
     expect(m.contentLane.present).toBe(false); // entryFileGlob is REQUIRED — a rejected glob degrades to absent
     expect(m.warnings.some((w) => /contentLane\.entryFileGlob.*too many wildcards/.test(w))).toBe(true);
-    // A glob AT the cap (3 wildcards) is accepted; the optional providerFileGlob/artifactGlob fields are dropped
-    // individually (with a warning) without invalidating the whole block, since only entryFileGlob/collectionField
-    // are required.
+    // A glob AT the cap (2 wildcard GROUPS — matches globToRegExp's own MAX_GLOB_WILDCARD_GROUPS) is accepted;
+    // the optional providerFileGlob/artifactGlob fields are dropped individually (with a warning) without
+    // invalidating the whole block, since only entryFileGlob/collectionField are required.
     const atCap = parseFocusManifest({
-      contentLane: { entryFileGlob: "registry/*/*/*.json", providerFileGlob: "providers/*-*-*-*-*.json", collectionField: "items" },
+      contentLane: { entryFileGlob: "registry/*/*.json", providerFileGlob: "providers/*-*-*-*-*.json", collectionField: "items" },
     });
     expect(atCap.contentLane.present).toBe(true);
-    expect(atCap.contentLane.entryFileGlob).toBe("registry/*/*/*.json");
+    expect(atCap.contentLane.entryFileGlob).toBe("registry/*/*.json");
     expect(atCap.contentLane.providerFileGlob).toBeNull();
     expect(atCap.warnings.some((w) => /contentLane\.providerFileGlob.*too many wildcards/.test(w))).toBe(true);
+  });
+
+  it("REGRESSION (#confirmed-bug): rejects a glob using the SAME wildcard-GROUP predicate globToRegExp itself enforces, not a raw `*`-character count", () => {
+    // The exact defect the gate flagged: a glob with 3 wildcard GROUPS (no `**` pairs to consolidate) was
+    // previously ACCEPTED here (a raw-character count topped out at 3) but compiles to NEVER_MATCHES in
+    // globToRegExp (whose group-count cap is 2) — configuring a lane that is "present" but can never activate.
+    const threeGroups = parseFocusManifest({ contentLane: { entryFileGlob: "a*b*c*.json", collectionField: "items" } });
+    expect(threeGroups.contentLane.entryFileGlob).toBeNull();
+    expect(threeGroups.contentLane.present).toBe(false);
+    expect(threeGroups.warnings.some((w) => /contentLane\.entryFileGlob.*too many wildcards/.test(w))).toBe(true);
+    // A `**` pair counts as ONE group (mirroring globToRegExp's own countWildcardGroups), so this 2-group glob —
+    // the exact shape spec-resolver.ts's own real METAGRAPHED_LANE_SPEC-adjacent globs use — is still accepted
+    // even though it has 3 raw `*` characters.
+    const globstarShape = parseFocusManifest({ contentLane: { entryFileGlob: "public/**/*.json", collectionField: "items" } });
+    expect(globstarShape.contentLane.entryFileGlob).toBe("public/**/*.json");
+    expect(globstarShape.contentLane.present).toBe(true);
   });
 
   it("contentLaneConfigToJson returns null for an absent config, and omits unset optional fields", () => {
