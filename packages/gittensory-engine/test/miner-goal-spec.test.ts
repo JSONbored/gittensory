@@ -40,6 +40,9 @@ test("DEFAULT_MINER_GOAL_SPEC exposes exactly the specified field surface", () =
 });
 
 test("every MinerGoalSpec field is documented with a JSDoc 'Default:' in the source", () => {
+  // The suite compiles to dist-test/ (tsconfig.test.json outDir), a sibling of src/, so ../src/ from this file's
+  // runtime location resolves to the TypeScript source. readFileSync throws loudly if that layout ever changes, so
+  // this test can't silently pass on a bad path.
   const source = readFileSync(new URL("../src/miner-goal-spec.ts", import.meta.url), "utf8");
   for (const field of Object.keys(DEFAULT_MINER_GOAL_SPEC)) {
     // Grab the JSDoc block immediately preceding the field declaration inside the type.

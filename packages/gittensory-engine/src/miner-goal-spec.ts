@@ -36,8 +36,8 @@ export type MinerGoalSpec = {
   preferredLabels: readonly string[];
   /**
    * Maximum number of issues a single miner may hold claimed on this repo at once, so one miner cannot monopolize
-   * a repo's queue. A positive integer (`>= 1`); the parser is expected to floor/round and reject values below 1.
-   * Default: 1.
+   * a repo's queue. A positive integer (`>= 1`); the parser is expected to floor a non-integer toward zero
+   * (`Math.floor`) and reject any value below 1. Default: 1.
    */
   maxConcurrentClaims: number;
   /**
