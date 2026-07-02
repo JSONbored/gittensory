@@ -9,3 +9,4 @@ export {
   rankOpportunities,
   type OpportunityRankInput,
 } from "./opportunity-ranker.js";
+export * from "./governor/rate-limit.js";

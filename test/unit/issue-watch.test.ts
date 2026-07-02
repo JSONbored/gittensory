@@ -216,4 +216,14 @@ describe("MCP gittensory_watch_issues", () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain("authenticated GitHub login");
   });
+
+  // Regression test for #2455: the shared, end-user-obtainable GITTENSORY_MCP_TOKEN must not manage an
+  // ARBITRARY login's watch subscriptions by default. "" overrides createTestEnv's own
+  // MCP_READ_REPO_ALLOWLIST: "*" default back to unset, exercising the real deny-by-default behavior.
+  it("forbids the static mcp identity without an MCP_READ_REPO_ALLOWLIST wildcard opt-in (#2455)", async () => {
+    const client = await connect(createTestEnv({ MCP_READ_REPO_ALLOWLIST: "" }));
+    const result = await client.callTool({ name: "gittensory_watch_issues", arguments: { login: "miner", action: "list" } });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/not authorized to read another contributor's data/i);
+  });
 });

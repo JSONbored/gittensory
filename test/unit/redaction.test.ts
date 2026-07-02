@@ -49,6 +49,7 @@ describe("isPublicSafeText (#542 shared public/private boundary)", () => {
     expect(isPublicSafeText("/var/log/app.log")).toBe(false);
     expect(isPublicSafeText("/var/folders/alice/work/private-repo/cache.ts")).toBe(false);
     expect(isPublicSafeText("/tmp/scratch")).toBe(false);
+    expect(isPublicSafeText("/private/tmp/gittensory/cache")).toBe(false);
     expect(isPublicSafeText("C:\\Users\\carol\\repo")).toBe(false);
     expect(isPublicSafeText("C:/Users/carol/repo")).toBe(false);
     expect(isPublicSafeText("/opt/homebrew/var/log")).toBe(false);
@@ -79,6 +80,7 @@ describe("shared local-path constants (#1418 drift fix)", () => {
     expect("log at /var/log/app.log done".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>")).toBe("log at <p> done");
     expect("brew at /opt/homebrew/var/log done".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>")).toBe("brew at <p> done");
     expect("tmp at /tmp/build done".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>")).toBe("tmp at <p> done");
+    expect("mac at /private/tmp/build done".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>")).toBe("mac at <p> done");
     expect("win at C:\\Users\\me\\repo done".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>")).toBe("win at <p> done");
     expect("win at C:/Users/me/repo done".replace(PUBLIC_LOCAL_PATH_SCRUB_PATTERN, "<p>")).toBe("win at <p> done");
     // Lower-case drive letter: the source matches it case-insensitively, so a consumer that omits the `i`

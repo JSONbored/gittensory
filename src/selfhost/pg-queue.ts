@@ -22,6 +22,7 @@ import {
   jobCoalesceKey,
   jobCoalesceSupersededKeyPrefix,
   jobPriority,
+  parsePositiveIntEnv,
   queueBackgroundConcurrency,
   queueProcessingTimeoutMs,
   queueRecoveryJitterMs,
@@ -102,7 +103,7 @@ export function createPgQueue(
     ((attempt: number) => Math.min(60_000, 1000 * 2 ** attempt));
   const concurrency =
     opts.concurrency ??
-    Math.max(1, Number(process.env.QUEUE_CONCURRENCY ?? "4"));
+    parsePositiveIntEnv("QUEUE_CONCURRENCY", { min: 1, fallback: 4 });
   const backgroundConcurrency = queueBackgroundConcurrency(
     concurrency,
     opts.backgroundConcurrency,

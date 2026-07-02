@@ -1382,7 +1382,7 @@ export function buildContributorOpportunities(
 ): ContributorOpportunity[] {
   const opportunities: ContributorOpportunity[] = [];
   const touchedRepos = new Set(profile.registeredRepoActivity.reposTouched.map((repoFullName) => repoFullName.toLowerCase()));
-  const labelHistory = new Set(profile.registeredRepoActivity.dominantLabels);
+  const labelHistory = new Set(profile.registeredRepoActivity.dominantLabels.map((label) => label.toLowerCase()));
   const bountyByIssue = indexBountiesByIssue(bounties);
   const qualityByKey = issueQualityByRepo
     ? new Map(Array.from(issueQualityByRepo.entries()).map(([key, value]) => [key.toLowerCase(), value]))
@@ -1413,7 +1413,7 @@ export function buildContributorOpportunities(
       // Never steer contributors toward completed, cancelled, or otherwise historical bounty work.
       if (bountyLifecycle && isHistoricalBountyLifecycle(bountyLifecycle)) continue;
       const bountyPenalty = bountyLifecycle === "stale" || bountyLifecycle === "ambiguous" ? 30 : 0;
-      const labelFit = issue.labels.filter((label) => labelHistory.has(label)).length;
+      const labelFit = issue.labels.filter((label) => labelHistory.has(label.toLowerCase())).length;
       const qualityAdjustment =
         quality?.status === "ready"
           ? 10
@@ -1460,7 +1460,7 @@ export function buildContributorOpportunities(
           lane.summary,
           ...(maintainerAuthored && !maintainerWip ? ["Maintainer-created issue — typically the highest contribution multiplier on Gittensor."] : []),
           ...(touchedRepos.has(repo.fullName.toLowerCase()) ? ["Contributor has prior activity in this registered repo."] : []),
-          ...(labelFit > 0 ? [`Issue labels overlap contributor history: ${issue.labels.filter((label) => labelHistory.has(label)).join(", ")}.`] : []),
+          ...(labelFit > 0 ? [`Issue labels overlap contributor history: ${issue.labels.filter((label) => labelHistory.has(label.toLowerCase())).join(", ")}.`] : []),
           ...(bountyLifecycle === "active" ? ["An active bounty is attached as contribution context (not guaranteed payout)."] : []),
           ...(quality?.status === "ready" ? ["Issue quality report rates this issue as ready."] : []),
         ],
@@ -4980,7 +4980,8 @@ export function hasClearNoIssueRationale(pr: Pick<PullRequestRecord, "title" | "
   // `tests?[\s-]+only` extends the same rule to test-only PRs (regression/coverage-only diffs) — parallel
   // to the docs-only hyphenation fix merged in #1905 and the test-only follow-up in #1993.
   // `ci[\s-]+only` covers CI/workflow-only PRs using the same Conventional Commits spelling.
-  return /\b(?:no issue\s*(?:because\b|:)|no linked issue\s*(?:because\b|:)|no ticket\s*(?:because\b|:)|(?:maintenance|docs?[\s-]+only|tests?[\s-]+only|ci[\s-]+only|typo|chore|cleanup)\b)/i.test([pr.title, pr.body ?? ""].join(" "));
+  // `refactor[\s-]+only` covers internal refactors with no behavior change using the same spelling.
+  return /\b(?:no issue\s*(?:because\b|:)|no linked issue\s*(?:because\b|:)|no ticket\s*(?:because\b|:)|(?:maintenance|docs?[\s-]+only|tests?[\s-]+only|ci[\s-]+only|refactor[\s-]+only|typo|chore|cleanup)\b)/i.test([pr.title, pr.body ?? ""].join(" "));
 }
 
 function hasValidationNote(value: string): boolean {

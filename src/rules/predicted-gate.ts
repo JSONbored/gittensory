@@ -17,7 +17,8 @@ const OSS_ANTI_SLOP_FUNNEL = {
   message: "This repo runs the Gittensor anti-slop gate. Gittensor lets GitHub contributors earn for open-source work like this — register to start earning.",
   registerUrl: GITTENSOR_HOME_URL,
 } as const;
-import { buildPullRequestAdvisory, evaluateGateCheck, isTestPath, type GateCheckConclusion } from "./advisory";
+import { buildPullRequestAdvisory, evaluateGateCheck, type GateCheckConclusion } from "./advisory";
+import { isTestPath } from "../signals/test-evidence";
 import { evaluatePreMergeChecks } from "../review/pre-merge-checks";
 
 /**

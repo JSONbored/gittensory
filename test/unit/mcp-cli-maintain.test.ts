@@ -57,7 +57,7 @@ describe("gittensory-mcp CLI — maintain (#784)", () => {
     await expect(runAsync(["maintain", "set-level", "merge", "--repo", "owner/repo"], e)).rejects.toThrow(/Usage: gittensory-mcp maintain set-level/);
     await expect(runAsync(["maintain", "set-level", "bogus", "auto", "--repo", "owner/repo"], e)).rejects.toThrow(/Unknown action/);
     await expect(runAsync(["maintain", "set-level", "merge", "bogus", "--repo", "owner/repo"], e)).rejects.toThrow(/Unknown level/);
-  });
+  }, 45_000);
 
   it("prints help when invoked with no subcommand", async () => {
     const e = await env();

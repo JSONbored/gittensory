@@ -116,6 +116,13 @@ describe("parseReviewSkill (#review-skills)", () => {
   it("treats a quotes-only/empty when as 'always'", () => {
     expect(parseReviewSkill("x.md", '---\nwhen: ""\n---\nbody').when).toBe("always");
   });
+  it("strips surrounding quotes from a quoted name, symmetric with when", () => {
+    // A quoted scalar is ordinary YAML frontmatter; the quotes must not survive into the skill label.
+    expect(parseReviewSkill("sql.md", '---\nname: "SQL Rubric"\nwhen: "**/*.sql"\n---\nBody.\n')).toEqual({ name: "SQL Rubric", when: "**/*.sql", body: "Body." });
+    // Single quotes strip too, and a quotes-only name falls back to the filename.
+    expect(parseReviewSkill("y.md", "---\nname: 'Voice Guide'\n---\nb").name).toBe("Voice Guide");
+    expect(parseReviewSkill("fallback.md", '---\nname: ""\n---\nb').name).toBe("fallback");
+  });
 });
 
 describe("makeLocalReviewContextReader (#review-skills)", () => {

@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import type { CollisionCluster, CollisionReport } from "../signals/engine";
 import { isDuplicateClusterWinnerByClaim } from "../signals/duplicate-winner";
+import { isTestPath } from "../signals/test-evidence";
 import { nowIso } from "../utils/json";
 import { GITTENSORY_GATE_CHECK_NAME } from "../review/check-names";
 import { REVIEW_THREAD_BLOCKER_CODE } from "../review/review-thread-findings";
@@ -250,14 +251,6 @@ function severityToAnnotationLevel(severity: AdvisorySeverity): CheckRunAnnotati
 
 function isCodePath(path: string): boolean {
   return /\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|cs|cpp|c|h|swift|kt|m|sql|yaml|yml|json|toml|md)$/i.test(path);
-}
-
-export function isTestPath(path: string): boolean {
-  return (
-    /(^|\/)(test|tests|spec|__tests__)\//i.test(path) ||
-    /\.(test|spec)\.(ts|tsx|js|jsx|py|go|rs)$/i.test(path) ||
-    /(^|\/)[^/]+_test\.go$/i.test(path)
-  );
 }
 
 function collisionClustersForPull(collisions: CollisionReport, pullNumber: number): CollisionCluster[] {

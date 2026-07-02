@@ -61,9 +61,13 @@ export function keepHighSignalHunks(patch: string, budget: number): string {
   const keep = new Set<number>();
   let used = 0;
   for (const r of ranked) {
-    if (used + r.len + 1 > budget) continue;
+    // Kept hunks are emitted with `.join("\n")` below — N hunks use N-1 separators — so charge the
+    // separator only for hunks AFTER the first. Charging `+ 1` for every hunk over-counted the output by
+    // one and dropped a hunk that fit exactly at the budget boundary.
+    const sep = keep.size > 0 ? 1 : 0;
+    if (used + r.len + sep > budget) continue;
     keep.add(r.i);
-    used += r.len + 1;
+    used += r.len + sep;
   }
   const top = ranked[0];
   if (keep.size === 0 && top) keep.add(top.i); // always keep the single highest-signal hunk

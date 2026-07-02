@@ -332,7 +332,10 @@ function buildAskPublicAnswerCard(args: {
   const findings = [
     `Question: ${questionText}`,
     ...(answerLines.length > 0 ? answerLines : ["No matching contribution-quality context is available in the current cached sources."]),
-    ...(citationLines.length > 0 ? citationLines : ["No concrete cached source reference is available for this response."]),
+    // Only the first 4 citations belong in Findings; citations 5+ overflow into safeDetails via
+    // `citationLines.slice(4)` below. Emitting the full list here duplicated those overflow citations in
+    // both sections of the same public comment when a run had 5+ contributing sources.
+    ...(citationLines.length > 0 ? citationLines.slice(0, 4) : ["No concrete cached source reference is available for this response."]),
   ];
   const sourceEvidence = contributingSources.slice(0, 3).map((source) => {
     const observed = source.generatedAt ? ` as of ${source.generatedAt}` : "";

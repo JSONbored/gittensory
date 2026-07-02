@@ -97,6 +97,7 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
     GITHUB_APP_PRIVATE_KEY: "test-private-key",
     ADMIN_GITHUB_LOGINS: "jsonbored",
     MCP_ACTUATION_REPO_ALLOWLIST: "*",
+    MCP_READ_REPO_ALLOWLIST: "*",
     SELFHOST_TRANSIENT_CACHE: {
       async get(key: string) {
         return transientCache.get(key) ?? null;

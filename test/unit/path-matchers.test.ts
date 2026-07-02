@@ -61,6 +61,7 @@ describe("isLockfile", () => {
       "pnpm-lock.yaml",
       "Cargo.lock",
       "go.sum",
+      "go.work.sum",
       "uv.lock",
       "poetry.lock",
       "bun.lock",
@@ -165,7 +166,16 @@ describe("isNonSubstantivePaddingFile", () => {
 
 describe("isConfigFile", () => {
   it("matches config files by exact basename (case-insensitive)", () => {
-    for (const path of ["Dockerfile", "frontend/Makefile", ".editorconfig", "ci/.nvmrc", ".npmrc"]) {
+    for (const path of [
+      "Dockerfile",
+      "frontend/Makefile",
+      ".editorconfig",
+      "ci/.nvmrc",
+      ".node-version",
+      ".npmrc",
+      ".python-version",
+      ".ruby-version",
+    ]) {
       expect(isConfigFile(path)).toBe(true);
     }
   });
@@ -175,6 +185,7 @@ describe("isConfigFile", () => {
       "turbo.json",
       "nx.json",
       "lerna.json",
+      "pnpm-workspace.yaml",
       "biome.json",
       "biome.jsonc",
       "packages/app/.gitignore",
