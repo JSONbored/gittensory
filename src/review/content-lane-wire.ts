@@ -137,7 +137,8 @@ export async function runMetagraphedSurfaceGate(
     // An unreadable HEAD — or a null BASE for a file GitHub reports as "modified" (whose base MUST exist, so a
     // null read is a transient fetch blip, NOT an absent base) — would make a valid submission read as empty/
     // invalid → a spurious one-shot close. Defer to the generic gate instead. A null base for an ADDED file is
-    // the expected brand-new-entry case and is left to the orchestrator (one new entry merges; many close).
+    // the expected brand-new-entry case and is left to the orchestrator, whose spec-driven entry-count policy
+    // decides the verdict (METAGRAPHED_LANE_SPEC allows any number of clean entries — see maxAppendedEntries).
     if (ref === "head" && content === null) deferUnreadable = true;
     if (ref === "base" && content === null && statusByPath.get(path) === "modified") deferUnreadable = true;
     return content;
