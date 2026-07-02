@@ -88,6 +88,16 @@ REDIS_URL=redis://redis:6379
 QDRANT_URL=http://qdrant:6333`}
       />
       <CodeBlock lang="bash" code={`docker compose --profile pgbouncer --profile qdrant up -d`} />
+      <p>
+        PgBouncer pools connections <em>between instances and Postgres</em>. Each app instance still
+        opens its own connection pool to whatever it's pointed at (PgBouncer or Postgres directly),
+        shared by every HTTP handler and queue worker in that instance — set <code>PGPOOL_MAX</code>{" "}
+        (default 10) if a single instance needs more headroom than that under real concurrency (many
+        registered repos, higher <code>QUEUE_CONCURRENCY</code>). Raise it gradually and watch for{" "}
+        <code>GittensoryPostgresConnectionPressure</code>: that alert means you're approaching
+        Postgres's own <code>max_connections</code>, a different ceiling than this per-instance pool
+        size.
+      </p>
 
       <h2>One-time SQLite to Postgres copy</h2>
       <p>

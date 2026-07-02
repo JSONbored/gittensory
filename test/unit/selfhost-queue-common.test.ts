@@ -30,6 +30,7 @@ import {
   queueSnapshotFromBinding,
   queueStartupJitterMinJobs,
   queueStartupJitterMs,
+  resolvePostgresPoolMax,
   scheduledEnqueueDelaySeconds,
   scheduledEnqueueJitterMs,
 } from "../../src/selfhost/queue-common";
@@ -1167,5 +1168,28 @@ describe("parsePositiveIntEnv", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(parsePositiveIntEnv(KNOB, { min: 0, fallback: 4 })).toBe(5000);
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolvePostgresPoolMax (#audit-rate-headroom)", () => {
+  afterEach(() => {
+    delete process.env.PGPOOL_MAX;
+  });
+
+  it("defaults to 10 (pg's own hardcoded default, made explicit) when PGPOOL_MAX is unset", () => {
+    delete process.env.PGPOOL_MAX;
+    expect(resolvePostgresPoolMax()).toBe(10);
+  });
+
+  it("honors a valid PGPOOL_MAX override", () => {
+    process.env.PGPOOL_MAX = "25";
+    expect(resolvePostgresPoolMax()).toBe(25);
+  });
+
+  it("falls back to the default for an invalid value, so a typo never disables pooling entirely", () => {
+    process.env.PGPOOL_MAX = "not-a-number";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(resolvePostgresPoolMax()).toBe(10);
+    expect(warn).toHaveBeenCalledOnce();
   });
 });

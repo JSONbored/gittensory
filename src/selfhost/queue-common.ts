@@ -568,6 +568,17 @@ export function queueStartupJitterMinJobs(): number {
   return parsePositiveIntEnv("QUEUE_STARTUP_JITTER_MIN_JOBS", { min: 0, fallback: DEFAULT_STARTUP_JITTER_MIN_JOBS });
 }
 
+// The Postgres pool (src/server.ts's buildPostgresBackend) is shared by every HTTP handler AND every queue
+// worker's own DB traffic, including jobs that fan out several concurrent writes (e.g.
+// hydrateMergedPullRequestFiles). 10 (pg's own hardcoded default, made explicit here rather than left
+// implicit) is fine for a small/idle instance but can bottleneck the app on its own connection pool --
+// well before Postgres's own max_connections or the GittensoryPostgresConnectionPressure alert would fire
+// -- once webhook bursts and fan-out jobs overlap at real volume. PGPOOL_MAX lets an operator raise this
+// without a code change (#audit-rate-headroom).
+export function resolvePostgresPoolMax(): number {
+  return parsePositiveIntEnv("PGPOOL_MAX", { min: 1, fallback: 10 });
+}
+
 export function deterministicJitterMs(seed: string, maxJitterMs: number): number {
   if (!Number.isFinite(maxJitterMs) || maxJitterMs <= 0) return 0;
   let h = 2166136261;

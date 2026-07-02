@@ -48,6 +48,7 @@ import { runSelfHostMigrations } from "./selfhost/migrate";
 import { createPgAdapter } from "./selfhost/pg-adapter";
 import { createPgQueue } from "./selfhost/pg-queue";
 import { createPgVectorize, initPgVectorize } from "./selfhost/pg-vectorize";
+import { resolvePostgresPoolMax } from "./selfhost/queue-common";
 import { createSqliteQueue } from "./selfhost/sqlite-queue";
 import { createSqliteVectorize } from "./selfhost/vectorize";
 import { createFsBlobStore } from "./selfhost/blob-store";
@@ -204,7 +205,7 @@ async function buildPostgresBackend(
   await waitForPostgres(url);
   const pg = (await import("pg")).default;
   pg.types.setTypeParser(20, (v: string) => Number.parseInt(v, 10)); // int8 (COUNT) → number, like D1
-  const pool = new pg.Pool({ connectionString: url });
+  const pool = new pg.Pool({ connectionString: url, max: resolvePostgresPoolMax() });
   const db = createPgAdapter(pool);
   const queue = createPgQueue(pool, consume);
   await queue.init();
