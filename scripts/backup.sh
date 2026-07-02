@@ -121,21 +121,33 @@ prepare_pg_env() {
       ;;
   esac
 
-  # A malformed (but not rejected by libpq's own parser) URL could repeat `password=` -- loop until none
-  # remain rather than stripping only the first, so a leftover second occurrence can never survive into
-  # $PG_SANITIZED_URL. Each iteration overwrites PGPASSWORD_VALUE, so the LAST occurrence wins; which one
-  # libpq itself would actually authenticate with is unspecified for a duplicate key, but every occurrence
-  # is a credential either way and none may reach argv.
-  pg_query_wrapped="&$pg_query&"
-  while case "$pg_query_wrapped" in *"&password="*"&"*) true ;; *) false ;; esac; do
-    pg_before_pw=${pg_query_wrapped%%&password=*}
-    pg_from_pw=${pg_query_wrapped#*&password=}
-    PGPASSWORD_VALUE=$(url_decode "${pg_from_pw%%&*}")
-    pg_after_pw=${pg_from_pw#*&}
-    pg_query_wrapped="${pg_before_pw}&${pg_after_pw}"
+  # libpq percent-decodes query KEY NAMES before matching them against connection keywords, so
+  # `pass%77ord=secret` (%77 = 'w') is just as much a password as a literal `password=secret` -- a literal
+  # string match against "&password=" (an earlier version of this loop) would miss it entirely, leaving a
+  # real credential in $PG_SANITIZED_URL. Walk each '&'-separated pair individually (a trailing '&' is
+  # appended so the last real pair is terminated the same as every other), decode ONLY the key half of
+  # each to compare it against "password", and rebuild the query from every pair whose decoded key isn't
+  # "password" -- in original order, values left percent-encoded exactly as given (they're not being
+  # re-parsed, just passed through to libpq, which decodes them itself). A malformed (but not rejected by
+  # libpq's own parser) URL repeating the key is handled naturally: each match overwrites PGPASSWORD_VALUE,
+  # so the LAST occurrence wins -- which one libpq itself would authenticate with is unspecified for a
+  # duplicate key, but every occurrence is a credential either way, so none may reach argv.
+  pg_remaining="$pg_query&"
+  pg_query=""
+  while [ -n "$pg_remaining" ]; do
+    pg_pair=${pg_remaining%%&*}
+    pg_remaining=${pg_remaining#*&}
+    if [ -z "$pg_pair" ]; then continue; fi
+    case "$pg_pair" in
+      *=*) pg_key_raw=${pg_pair%%=*}; pg_val_raw=${pg_pair#*=} ;;
+      *) pg_key_raw=$pg_pair; pg_val_raw="" ;;
+    esac
+    if [ "$(url_decode "$pg_key_raw")" = "password" ]; then
+      PGPASSWORD_VALUE=$(url_decode "$pg_val_raw")
+    else
+      if [ -n "$pg_query" ]; then pg_query="$pg_query&$pg_pair"; else pg_query=$pg_pair; fi
+    fi
   done
-  pg_query=${pg_query_wrapped#&}
-  pg_query=${pg_query%&}
 
   pg_suffix=$pg_path
   if [ -n "$pg_query" ]; then pg_suffix="$pg_suffix?$pg_query"; fi

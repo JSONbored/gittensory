@@ -215,6 +215,31 @@ describe("self-host backup script", () => {
     expect(args).toContain("postgresql://u@h/db?sslmode=require");
   });
 
+  it("strips a query-string password even when its KEY NAME is percent-encoded", () => {
+    const root = tmpRoot();
+    const pgBin = fakePgDump(root);
+    const argsFile = join(root, "pg-dump.args");
+    const envFile = join(root, "pg-dump.env");
+
+    // libpq percent-decodes query KEY NAMES before matching them against connection keywords, so
+    // pass%77ord (%77 = 'w') is just as much `password` as the literal spelling -- a literal string match
+    // against "password=" would miss it entirely, leaving a real credential in argv.
+    runBackup(root, {
+      DATABASE_URL: "postgresql://u@h/db?sslmode=require&pass%77ord=SuperSecret123%21&application_name=app",
+      PATH: `${pgBin}:${process.env.PATH ?? ""}`,
+      PG_DUMP_ARGS_FILE: argsFile,
+      PG_DUMP_ENV_FILE: envFile,
+    });
+
+    const args = execFileSync("cat", [argsFile], { encoding: "utf8" });
+    const [, passfileContent] = execFileSync("cat", [envFile], { encoding: "utf8" }).trim().split("|");
+    expect(args).not.toContain("SuperSecret123");
+    expect(args).not.toContain("pass%77ord");
+    expect(args).not.toContain("password=");
+    expect(args).toContain("postgresql://u@h/db?sslmode=require&application_name=app");
+    expect(passfileContent).toBe("*:*:*:*:SuperSecret123!");
+  });
+
   it("does not mistake a query value merely containing the substring 'password' for the password key", () => {
     const root = tmpRoot();
     const pgBin = fakePgDump(root);
