@@ -4,6 +4,7 @@ import {
   countRecentDeadLetters,
   countRecentDeadLettersByType,
   countRecentAuditEventsForActorAndTarget,
+  hasAuditEventForDelivery,
   getLatestScorePreview,
   getRepoAuthorPullRequestHistory,
   getLatestScoringModelSnapshot,
@@ -491,6 +492,26 @@ describe("database row parser hardening", () => {
     expect(await countRecentAuditEventsForActorAndTarget(env, "chatty", "github_app.review_nag_ping", "owner/repo#1", "2026-06-24T09:00:00.000Z")).toBe(2);
     expect(await countRecentAuditEventsForActorAndTarget(env, "chatty", "github_app.review_nag_ping", "owner/repo#1", "2026-06-24T11:00:00.000Z")).toBe(1); // only the 12:00 one
     expect(await countRecentAuditEventsForActorAndTarget(env, "chatty", "github_app.review_nag_ping", "owner/repo#1", "2026-06-24T13:00:00.000Z")).toBe(0); // none after the cutoff → count(*) returns 0
+  });
+
+  it("hasAuditEventForDelivery finds a matching deliveryId inside metadata_json, scoped to actor+eventType+targetKey (#2560)", async () => {
+    const env = createTestEnv();
+    await recordAuditEvent(env, {
+      eventType: "github_app.command_invocation",
+      actor: "maintainer",
+      targetKey: "owner/repo#1#help",
+      outcome: "completed",
+      createdAt: "2026-06-24T10:00:00.000Z",
+      metadata: { deliveryId: "delivery-a" },
+    });
+
+    expect(await hasAuditEventForDelivery(env, "maintainer", "github_app.command_invocation", "owner/repo#1#help", "delivery-a", "2026-06-24T09:00:00.000Z")).toBe(true);
+    // A different deliveryId on the SAME actor+eventType+targetKey must not match.
+    expect(await hasAuditEventForDelivery(env, "maintainer", "github_app.command_invocation", "owner/repo#1#help", "delivery-b", "2026-06-24T09:00:00.000Z")).toBe(false);
+    // The SAME deliveryId but for a DIFFERENT command's targetKey must not match (each command's own counter).
+    expect(await hasAuditEventForDelivery(env, "maintainer", "github_app.command_invocation", "owner/repo#1#ask", "delivery-a", "2026-06-24T09:00:00.000Z")).toBe(false);
+    // A cutoff AFTER the recorded event must not match (outside the recent window).
+    expect(await hasAuditEventForDelivery(env, "maintainer", "github_app.command_invocation", "owner/repo#1#help", "delivery-a", "2026-06-24T11:00:00.000Z")).toBe(false);
   });
 
   it("computes complete case-insensitive repo author PR history for gate grace", async () => {

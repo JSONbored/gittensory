@@ -12576,6 +12576,25 @@ describe("queue processors", () => {
       const applied = await env.DB.prepare("select outcome from audit_events where event_type = 'github_app.command_rate_limit_applied'").first<{ outcome: string }>();
       expect(applied?.outcome).toBe("denied");
     });
+
+    it("REGRESSION: a redelivered webhook (same deliveryId) does not double-count — the replay is a no-op, not a second invocation", async () => {
+      // GitHub can and does redeliver the same issue_comment event (timeout/retry). Before the fix, the
+      // second delivery would increment the counter again for what is really ONE real invocation, and could
+      // incorrectly cross the rate-limit threshold on a redelivery alone.
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commandRateLimitPolicy: "hold", commandRateLimitMaxPerWindow: 1, commandRateLimitWindowHours: 24 });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 306, title: "Rate limit target", state: "open", user: { login: "oktofeesh1" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[] };
+      stubCommandRateLimitFetch(306, seen);
+      // The SAME deliveryId, redelivered — GitHub's own retry behavior on a timeout/5xx.
+      await processJob(env, { type: "github-webhook", deliveryId: "rl-redelivered", eventName: "issue_comment", payload: mentionPayload(306, "@gittensory help") });
+      await processJob(env, { type: "github-webhook", deliveryId: "rl-redelivered", eventName: "issue_comment", payload: mentionPayload(306, "@gittensory help") });
+
+      const invocations = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.command_invocation'").first<{ n: number }>();
+      expect(invocations?.n).toBe(1); // only ONE invocation recorded despite two processing passes
+      expect(seen.comments).toHaveLength(2); // both deliveries got the normal answer card — neither was held
+      expect(seen.comments.every((c) => !c.includes("rate limit"))).toBe(true);
+    });
   });
 
   it("denies a maintainer Q&A command from an org member without real repo permission (#788)", async () => {

@@ -2313,6 +2313,21 @@ export async function countRecentAuditEventsForActorAndTarget(env: Env, actor: s
   return row.count;
 }
 
+/** Whether `deliveryId` has ALREADY been recorded for this (actor, eventType, targetKey) within `sinceIso` --
+ *  makes a counting/rate-limit check idempotent against a REDELIVERED or retried webhook event (GitHub can
+ *  and does redeliver the same issue_comment event), which would otherwise increment the counter twice for
+ *  one real invocation and can incorrectly rate-limit it (#2560). Scoped to a short recent window (bounded
+ *  row scan), not the full rate-limit window -- a genuine redelivery lands within seconds, not hours later. */
+export async function hasAuditEventForDelivery(env: Env, actor: string, eventType: string, targetKey: string, deliveryId: string, sinceIso: string): Promise<boolean> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select({ metadataJson: auditEvents.metadataJson })
+    .from(auditEvents)
+    .where(and(eq(auditEvents.actor, actor), eq(auditEvents.eventType, eventType), eq(auditEvents.targetKey, targetKey), gte(auditEvents.createdAt, sinceIso)))
+    .limit(50);
+  return rows.some((row) => parseJson<{ deliveryId?: unknown }>(row.metadataJson, {}).deliveryId === deliveryId);
+}
+
 /** Observability for the queue dead-letter rate (#1276): how many jobs (across BOTH the maintenance and webhook
  *  lanes) were dead-lettered since `sinceIso`. Reads the `github_app.dlq_dead_lettered` audit events written by
  *  processDlqBatch — NOT gated behind any review-ops flag, so the infra drop rate is always visible. */

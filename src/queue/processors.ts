@@ -51,6 +51,7 @@ import {
   recordAgentCommandFeedback,
   recordAuditEvent,
   countRecentAuditEventsForActorAndTarget,
+  hasAuditEventForDelivery,
   recordGateBlockOutcome,
   getGateBlockOutcome,
   isGlobalAgentFrozen,
@@ -8940,6 +8941,9 @@ async function maybeThrottleReviewNagPing(
 // Audit eventType for one recorded @gittensory command invocation (#2560). Shared between the recorder below
 // and the cooldown-window count query so a naming drift can't silently under/over-count.
 const COMMAND_RATE_LIMIT_EVENT_TYPE = "github_app.command_invocation";
+// How far back to look for a redelivered webhook's OWN prior invocation record. Deliberately much shorter
+// than the rate-limit window itself (hours) -- a genuine GitHub redelivery lands within seconds/minutes.
+const COMMAND_RATE_LIMIT_REDELIVERY_WINDOW_MS = 10 * 60_000;
 
 /**
  * Per-command @gittensory rate limit (#2560, anti-abuse): generalizes review-nag's audit-ledger counting
@@ -8968,6 +8972,15 @@ async function maybeThrottleGittensoryCommand(
   if (policy === "off") return false;
 
   const targetKey = `${args.repoFullName}#${args.issueNumber}#${args.command}`;
+
+  // Webhook redelivery guard: GitHub can and does redeliver the same issue_comment event (timeout/retry) --
+  // without this, a redelivered event would increment the counter a SECOND time for one real invocation and
+  // could incorrectly rate-limit it. Scoped to a short recent window (not the full rate-limit window) — a
+  // genuine redelivery lands within seconds/minutes, not hours later.
+  const redeliverySinceIso = new Date(Date.now() - COMMAND_RATE_LIMIT_REDELIVERY_WINDOW_MS).toISOString();
+  const alreadySeen = await hasAuditEventForDelivery(env, args.commenter, COMMAND_RATE_LIMIT_EVENT_TYPE, targetKey, args.deliveryId, redeliverySinceIso);
+  if (alreadySeen) return false; // redelivered event, already counted once — let it pass through unchanged
+
   const aiCostBearing = isAiCostBearingCommand(args.command);
   /* v8 ignore next -- resolveRepositorySettings always resolves a concrete positive integer; the undefined side is defensive against the field's optional TS type. */
   const maxPerWindow = aiCostBearing

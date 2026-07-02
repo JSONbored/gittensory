@@ -1402,6 +1402,32 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(invalid.warnings.some((w) => /settings\.accountAgeThresholdDays/.test(w))).toBe(true);
   });
 
+  it("parses + resolves the per-command rate limit settings from the settings: block, overlaying the DB (#2560)", () => {
+    const manifest = parseFocusManifest({ settings: { commandRateLimitPolicy: "hold", commandRateLimitMaxPerWindow: 10, commandRateLimitAiMaxPerWindow: 2, commandRateLimitWindowHours: 12 } });
+    expect(manifest.settings.commandRateLimitPolicy).toBe("hold");
+    expect(manifest.settings.commandRateLimitMaxPerWindow).toBe(10);
+    expect(manifest.settings.commandRateLimitAiMaxPerWindow).toBe(2);
+    expect(manifest.settings.commandRateLimitWindowHours).toBe(12);
+    // yml overlays a DB-configured policy.
+    const eff = resolveEffectiveSettings({ commandRateLimitPolicy: "off", commandRateLimitMaxPerWindow: 20, commandRateLimitAiMaxPerWindow: 5, commandRateLimitWindowHours: 24 } as unknown as RepositorySettings, manifest);
+    expect(eff.commandRateLimitPolicy).toBe("hold");
+    expect(eff.commandRateLimitMaxPerWindow).toBe(10);
+    // Omitted in yml ⇒ the DB-configured policy survives untouched.
+    const noOverride = resolveEffectiveSettings({ commandRateLimitPolicy: "hold", commandRateLimitAiMaxPerWindow: 3 } as unknown as RepositorySettings, parseFocusManifest({}));
+    expect(noOverride.commandRateLimitPolicy).toBe("hold");
+    expect(noOverride.commandRateLimitAiMaxPerWindow).toBe(3);
+    // An invalid policy enum / non-positive window value is dropped with a warning rather than silently coerced.
+    const invalid = parseFocusManifest({ settings: { commandRateLimitPolicy: "close" as never, commandRateLimitMaxPerWindow: 0, commandRateLimitAiMaxPerWindow: -1, commandRateLimitWindowHours: -5 } });
+    expect(invalid.settings.commandRateLimitPolicy).toBeUndefined();
+    expect(invalid.settings.commandRateLimitMaxPerWindow).toBeUndefined();
+    expect(invalid.settings.commandRateLimitAiMaxPerWindow).toBeUndefined();
+    expect(invalid.settings.commandRateLimitWindowHours).toBeUndefined();
+    expect(invalid.warnings.some((w) => /settings\.commandRateLimitPolicy/.test(w))).toBe(true);
+    expect(invalid.warnings.some((w) => /settings\.commandRateLimitMaxPerWindow/.test(w))).toBe(true);
+    expect(invalid.warnings.some((w) => /settings\.commandRateLimitAiMaxPerWindow/.test(w))).toBe(true);
+    expect(invalid.warnings.some((w) => /settings\.commandRateLimitWindowHours/.test(w))).toBe(true);
+  });
+
   it("parses + resolves autoCloseExemptLogins from the settings: block, overlaying the DB (#2463)", () => {
     const manifest = parseFocusManifest({ settings: { autoCloseExemptLogins: ["Trusted-Regular", "another-one", "-bad", 42 as never] } });
     expect(manifest.settings.autoCloseExemptLogins).toEqual(["Trusted-Regular", "another-one"]); // invalid entries dropped
