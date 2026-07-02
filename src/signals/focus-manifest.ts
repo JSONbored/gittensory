@@ -426,7 +426,10 @@ function normalizeSource(raw: FocusManifestSource | undefined, value: JsonValue 
 
 function normalizeOptionalGateMode(value: JsonValue | undefined, field: string, warnings: string[]): GateRuleMode | null {
   if (value === undefined || value === null) return null;
-  if (value === "off" || value === "advisory" || value === "block") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "off" || normalized === "advisory" || normalized === "block") return normalized;
+  }
   warnings.push(`Manifest gate field "${field}" must be one of off, advisory, block; ignoring "${String(value)}".`);
   return null;
 }

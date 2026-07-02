@@ -18,6 +18,8 @@ import {
   getInstallation,
   getLatestUpstreamRulesetSnapshot,
   getPullRequest,
+  getPullRequestDetailSyncState,
+  upsertPullRequestDetailSyncState,
   getRepository,
   listUpstreamDriftReports,
   listInstallationHealth,
@@ -45,7 +47,7 @@ import {
   upsertRepositoryFromGitHub,
   putCachedAiReview,
 } from "../../src/db/repositories";
-import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, claimAiReviewLock, claimPrActuationLock, contributorEvidenceBatchSize, processJob, releaseAiReviewLock, releasePrActuationLock } from "../../src/queue/processors";
+import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, claimAiReviewLock, claimPrActuationLock, contributorEvidenceBatchSize, processJob, reconcileLiveDuplicateSiblings, releaseAiReviewLock, releasePrActuationLock } from "../../src/queue/processors";
 import { aiReviewCacheInputFingerprint } from "../../src/review/ai-review-cache-input";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
@@ -12413,6 +12415,100 @@ describe("queue processors", () => {
     expect(permissionCalls).toEqual([]);
   });
 
+  it.each(["submitted", "dismissed", "edited"] as const)(
+    "bumps reviewsInvalidatedAt for the right repo+PR on a pull_request_review '%s' webhook (#2537)",
+    async (action) => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        JOBS: { async send() {} } as unknown as Queue,
+      });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        return new Response("not found", { status: 404 });
+      });
+      // Seed an existing sync-state row so the assertion can confirm ONLY reviewsInvalidatedAt moved.
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+        number: 42,
+        title: "Add feature",
+        state: "open",
+        user: { login: "contributor" },
+        head: { sha: "sha-42" },
+        labels: [],
+        body: "",
+      });
+
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: `review-invalidate-${action}`,
+        eventName: "pull_request_review",
+        payload: {
+          action,
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: {
+            number: 42,
+            title: "Add feature",
+            state: "open",
+            user: { login: "contributor", type: "User" },
+            html_url: "https://github.com/JSONbored/gittensory/pull/42",
+          },
+          review: {
+            state: action === "dismissed" ? "DISMISSED" : "APPROVED",
+            user: { login: "maintainer", type: "User" },
+            submitted_at: "2026-05-28T12:00:00.000Z",
+            html_url: "https://github.com/JSONbored/gittensory/pull/42#pullrequestreview-1",
+          },
+          sender: { login: "maintainer", type: "User" },
+        },
+      });
+
+      const state = await getPullRequestDetailSyncState(env, "JSONbored/gittensory", 42);
+      expect(state?.reviewsInvalidatedAt).toBeTruthy();
+    },
+  );
+
+  it("does not bump reviewsInvalidatedAt for a pull_request_review action outside submitted/dismissed/edited", async () => {
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      JOBS: { async send() {} } as unknown as Queue,
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "review-invalidate-unsupported-action",
+      eventName: "pull_request_review",
+      payload: {
+        // "submitted" | "dismissed" | "edited" are the only invalidating actions; GitHub also emits others
+        // (e.g. review comments carry their own event) that must NOT stamp the cache marker.
+        action: "unrecognized_action" as unknown as "submitted",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: {
+          number: 43,
+          title: "Add feature",
+          state: "open",
+          user: { login: "contributor", type: "User" },
+          html_url: "https://github.com/JSONbored/gittensory/pull/43",
+        },
+        review: {
+          state: "APPROVED",
+          user: { login: "maintainer", type: "User" },
+          submitted_at: "2026-05-28T12:00:00.000Z",
+          html_url: "https://github.com/JSONbored/gittensory/pull/43#pullrequestreview-1",
+        },
+        sender: { login: "maintainer", type: "User" },
+      },
+    });
+
+    expect(await getPullRequestDetailSyncState(env, "JSONbored/gittensory", 43)).toBeNull();
+  });
+
   it("notifies issue-watchers when a new grabbable maintainer-created issue opens (#699 path B)", async () => {
     const enqueued: Array<{ type: string; event?: { eventType: string; recipientLogin: string; pullNumber: number } }> = [];
     const env = createTestEnv({ JOBS: { async send(message: { type: string }) { enqueued.push(message); } } as unknown as Queue });
@@ -14897,5 +14993,135 @@ describe("installation app_id capture + dual-app webhook filter (#selfhost-app-i
     expect(pr?.n).toBe(1);
     const evt = await env.DB.prepare("select payload_hash from webhook_events where delivery_id = ?").bind("own-app-pr").first<{ payload_hash: string }>();
     expect(evt?.payload_hash).not.toBe("foreign_app");
+  });
+
+  // #2537: durable PR-state cache — webhook invalidation + the act-boundary regression.
+  describe("durable PR-state cache (#2537)", () => {
+    function seedWarmPrStateCache(env: Env, repoFullName: string, pullNumber: number): Promise<void> {
+      return upsertPullRequestDetailSyncState(env, {
+        repoFullName,
+        pullNumber,
+        status: "complete",
+        prMergeableState: "clean",
+        prState: "open",
+        prStateFetchedAt: new Date().toISOString(),
+      });
+    }
+
+    it.each(["synchronize", "closed", "reopened"] as const)(
+      "pull_request %s action invalidates the durable PR-state cache",
+      async (action) => {
+        const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+        await upsertInstallation(env, { action: "created", installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: {}, events: [] } });
+        await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+        await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+        await seedWarmPrStateCache(env, "JSONbored/gittensory", 200);
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/access_tokens")) return Response.json({ token: "tok" });
+          return Response.json({});
+        });
+
+        await processJob(env, {
+          type: "github-webhook",
+          deliveryId: `invalidate-pr-state-${action}`,
+          eventName: "pull_request",
+          payload: {
+            action,
+            installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+            repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+            pull_request: { number: 200, title: "PR", state: action === "closed" ? "closed" : "open", user: { login: "contributor" }, head: { sha: "a200" }, labels: [], body: "" },
+          },
+        });
+
+        expect(await getPullRequestDetailSyncState(env, "JSONbored/gittensory", 200)).toMatchObject({
+          prMergeableState: null,
+          prState: null,
+          prStateFetchedAt: null,
+        });
+      },
+    );
+
+    it("a non-invalidating pull_request action (labeled) leaves the durable PR-state cache UNCHANGED", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertInstallation(env, { action: "created", installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: {}, events: [] } });
+      await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+      await seedWarmPrStateCache(env, "JSONbored/gittensory", 201);
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "tok" });
+        return Response.json({});
+      });
+
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "invalidate-pr-state-labeled",
+        eventName: "pull_request",
+        payload: {
+          action: "labeled",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: { number: 201, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "a201" }, labels: [], body: "" },
+        },
+      });
+
+      expect(await getPullRequestDetailSyncState(env, "JSONbored/gittensory", 201)).toMatchObject({
+        prMergeableState: "clean",
+        prState: "open",
+      });
+    });
+
+    it("REGRESSION (#2537, gate-flagged): reconcileLiveDuplicateSiblings must NOT serve a warm durable PR-state cache row — a cached 'open' read up to PR_STATE_CACHE_MAX_AGE_MS stale after a missed closed webhook would keep an already-closed sibling eligible as the duplicate-cluster winner, wrongly closing the CURRENT PR as the loser", async () => {
+      const env = createTestEnv({ GITTENSORY_DUPLICATE_WINNER: "true" });
+      // Seed a WARM cache row claiming the sibling is still open, but the live GitHub state below says CLOSED —
+      // proving the cache is never consulted: only a genuine live read can discover this and correctly reconcile it.
+      await seedWarmPrStateCache(env, "owner/repo", 5);
+      let liveStateFetches = 0;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "tok" });
+        if (/\/pulls\/5(?:\?|$)/.test(url)) {
+          liveStateFetches += 1;
+          return Response.json({ number: 5, state: "closed" });
+        }
+        return Response.json({});
+      });
+
+      const winner: Parameters<typeof reconcileLiveDuplicateSiblings>[3] = { repoFullName: "owner/repo", number: 10, title: "Winner", state: "open", labels: [], linkedIssues: [1] };
+      const sibling: Parameters<typeof reconcileLiveDuplicateSiblings>[3] = { repoFullName: "owner/repo", number: 5, title: "Sibling", state: "open", labels: [], linkedIssues: [1] };
+      const result = await reconcileLiveDuplicateSiblings(env, null, "owner/repo", winner, [sibling]);
+
+      // The sibling is correctly dropped as stale-closed, proving a genuine live fetch happened rather than
+      // trusting the warm-but-wrong cached "open" value.
+      expect(result).toEqual([]);
+      expect(liveStateFetches).toBe(1);
+    });
+
+    it("REGRESSION (#2537): the per-PR sweep unit's live resync primes the durable PR-state cache for later readers", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write" }, events: [] } });
+      await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+      await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+      await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 6, title: "Sweep target", state: "open", user: { login: "contributor" }, head: { sha: "a6" }, base: { ref: "main" }, labels: [], body: "" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "tok" });
+        if (/\/pulls\/6(?:\?|$)/.test(url)) return Response.json({ number: 6, state: "open", mergeable_state: "clean", head: { sha: "a6" } });
+        if (url.includes("/pulls/6/files")) return Response.json([]);
+        if (url.includes("/pulls/6/reviews")) return Response.json([]);
+        if (url.includes("/commits/a6/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/commits/a6/status")) return Response.json({ state: "success", statuses: [] });
+        if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+        return Response.json({});
+      });
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "prime-pr-state-cache", repoFullName: "owner/agent-repo", prNumber: 6, installationId: 9001 });
+
+      expect(await getPullRequestDetailSyncState(env, "owner/agent-repo", 6)).toMatchObject({
+        prMergeableState: "clean",
+        prState: "open",
+      });
+    });
   });
 });

@@ -1,6 +1,7 @@
 import { scanActionPins } from "./actions-pin.js";
 import { scanAssetWeight } from "./asset-weight.js";
 import { scanChurnHotspot } from "./churn-hotspot.js";
+import { scanBlameLink } from "./blame-link.js";
 import { scanCodeowners } from "./codeowners.js";
 import { scanCommitSignature } from "./commit-signature.js";
 import { dependencyAnalyzer } from "./dependency/descriptor.js";
@@ -439,6 +440,43 @@ export const ANALYZER_DESCRIPTORS = [
     },
     run: (req, { signal, analysis, diagnostics }) =>
       scanChurnHotspot(req, fetch, { signal, analysis, diagnostics }),
+  }),
+  descriptor({
+    name: "blameLink",
+    title: "Recent file history (last PR to touch)",
+    category: "history",
+    cost: "github-light",
+    defaultEnabled: true,
+    requires: ["files", "github-token"],
+    limits: { maxFilesProbed: 6, maxLookups: 12 },
+    docs: {
+      summary:
+        "For files this PR modifies or deletes, surfaces the last PR to touch each file — file-level history context, not per-line blame.",
+      looksAt:
+        "Each changed file's most recent base-branch commit (bounded to the first few files) and that commit's associated PR.",
+      reports: "File, a pointer to where this PR changes it, the last-touching PR number, and a short commit-SHA prefix — never file contents.",
+      network: "Calls the GitHub commits API and the commit→PR association API, both bounded by a total lookup cap.",
+      notes:
+        "File-level, not per-line: it reports each file's most recent prior toucher, never claiming a specific line's origin. Fail-safe and partial on cap.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### Recent history of changed files (last PR to touch each, file-level)"];
+      for (const item of findings) {
+        const toucher =
+          item.lastTouchedByPr !== undefined
+            ? `#${item.lastTouchedByPr}`
+            : item.lastTouchedByShaPrefix
+              ? `commit ${helpers.safeCodeSpan(item.lastTouchedByShaPrefix)}`
+              : "an unknown prior change";
+        lines.push(
+          `- ${helpers.safeCodeSpan(item.file)} (this PR changes it around old line ${item.line}) was last touched by ${toucher}`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanBlameLink(req, fetch, { signal, analysis, diagnostics }),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 
