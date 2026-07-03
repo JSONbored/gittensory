@@ -9,6 +9,8 @@ import {
   type LinkedIssueFacts,
   type LinkedIssueHardRulesConfig,
 } from "../../src/review/linked-issue-hard-rules";
+import { parseFocusManifest, resolveEffectiveSettings } from "../../src/signals/focus-manifest";
+import type { RepositorySettings } from "../../src/types";
 
 function config(overrides: Partial<LinkedIssueHardRulesConfig> = {}): LinkedIssueHardRulesConfig {
   return {
@@ -340,5 +342,25 @@ describe("resolveLinkedIssueHardRule (#1144 — overflow + orchestration)", () =
     // finite installation id ⇒ the installation bucket, NOT undefined (which the metrics record as "unknown").
     expect(spy).toHaveBeenCalledWith(expect.anything(), "owner/repo", 7, "installation-token", "installation:143010787");
     spy.mockRestore();
+  });
+
+  it("REGRESSION: an ineligible (owner-assigned) linked issue still violates the hard rule regardless of linkedIssueGateMode -- the two are fully independent (#selfhost-linked-issue-gate-drift)", () => {
+    // evaluateLinkedIssueHardRules's own input type (`{ issues, config, repoOwner }`) has no linkedIssueGateMode
+    // field at all -- it structurally cannot read it. This test pins the END-TO-END behavior: fixing
+    // linkedIssueGateMode's default to "advisory" (missing-issue is non-blocking by default) must never soften
+    // or bypass the hard rule for a linked issue that DOES exist but is ineligible (owner-assigned here).
+    const result = evaluateLinkedIssueHardRules({
+      issues: [issue({ number: 9, assignees: ["jsonbored"] })],
+      config: config({ ownerAssignedClose: "block" }),
+      repoOwner: OWNER,
+    });
+    expect(result.violated).toBe(true);
+    expect(result.reason).toContain("#9");
+
+    // The gate-mode side, evaluated completely separately: a repo with no explicit override now resolves
+    // linkedIssueGateMode to "advisory" (the fixed default) -- confirming the fix under test is live -- while
+    // the hard-rule violation above is computed independently and is unaffected by it either way.
+    const db = { linkedIssueGateMode: "advisory", requireLinkedIssue: false } as unknown as RepositorySettings;
+    expect(resolveEffectiveSettings(db, parseFocusManifest(null)).linkedIssueGateMode).toBe("advisory");
   });
 });

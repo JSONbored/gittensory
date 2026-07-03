@@ -101,9 +101,13 @@ gate:
   # Default: gittensor.
   pack: gittensor
 
-  # Linked-issue gate. off | advisory | block. Default: advisory.
-  # (If the dashboard "Require linked issue" toggle is on but this is `off`,
-  #  it is auto-promoted to `block`.)
+  # Linked-issue gate — what happens when a PR has NO linked issue at all. off | advisory | block.
+  # Default: advisory (a missing issue is surfaced in the review panel but never blocks the gate; issues
+  # aren't always available, e.g. small/self-evident fixes). Set `block` here, or turn on the dashboard
+  # "Require linked issue" toggle, to make a missing issue an explicit opt-in blocker.
+  # (If the dashboard toggle is on but this is still `off`, it is auto-promoted to `block`.)
+  # This is UNRELATED to closing a PR that links an INELIGIBLE issue (owner-assigned, wrong label, etc.) —
+  # that is a separate, deterministic rule, not this gate.
   linkedIssue: advisory
 
   # Duplicate-PR gate — detects duplicate/superseding PRs.

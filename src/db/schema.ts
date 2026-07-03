@@ -52,7 +52,12 @@ export const repositorySettings = sqliteTable("repository_settings", {
   checkRunDetailLevel: text("check_run_detail_level").notNull().default("minimal"),
   gateCheckMode: text("gate_check_mode").notNull().default("off"),
   gatePack: text("gate_pack").notNull().default("gittensor"),
-  linkedIssueGateMode: text("linked_issue_gate_mode").notNull().default("block"),
+  // Missing a linked issue is advisory-only by default -- issues aren't always available, so it only
+  // blocks when a repo explicitly opts in (linkedIssueGateMode: "block" or the requireLinkedIssue toggle;
+  // see resolveEffectiveSettings in signals/focus-manifest.ts). This default was "block" until #selfhost-
+  // linked-issue-gate-drift, which also backfills any row an earlier migration (0023/0025) persisted as
+  // "block" without an explicit opt-in (migrations/0101_fix_linked_issue_gate_mode_default.sql).
+  linkedIssueGateMode: text("linked_issue_gate_mode").notNull().default("advisory"),
   duplicatePrGateMode: text("duplicate_pr_gate_mode").notNull().default("block"),
   qualityGateMode: text("quality_gate_mode").notNull().default("advisory"),
   qualityGateMinScore: integer("quality_gate_min_score"),
