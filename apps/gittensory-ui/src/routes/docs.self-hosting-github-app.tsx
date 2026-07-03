@@ -30,7 +30,7 @@ function SelfHostingGithubApp() {
     <DocsPage
       eyebrow="Self-hosting"
       title="GitHub App and Orb"
-      description="A self-host needs webhook delivery and installation tokens. Direct GitHub App is the default, recommended model — Orb broker mode is private / managed-beta only."
+      description="A self-host needs webhook delivery and installation tokens. Direct GitHub App is the default, recommended model — Orb broker mode is private/managed-beta only."
     >
       <h2>Choose a connection mode</h2>
       <FeatureRow
@@ -41,7 +41,7 @@ function SelfHostingGithubApp() {
               "Your self-host stores its own App id, slug, private key, and webhook secret, and mints installation tokens directly. No shared quota, no dependency on gittensory's own infrastructure to process a review.",
           },
           {
-            title: "Brokered Orb (private / managed-beta only)",
+            title: "Brokered Orb (private/managed-beta only)",
             description:
               "Your self-host uses ORB_ENROLLMENT_SECRET to request short-lived installation tokens from the central Orb broker instead of holding its own App key. Not open for general public use — see the operational risks below before considering it.",
           },
