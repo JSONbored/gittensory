@@ -5795,6 +5795,33 @@ export function reputationOutcomeFromTerminalState(
   return undefined;
 }
 
+/**
+ * Open-PR file-path collision (#2653): enrich `changedFiles` on the reviewed PR and its open siblings from the
+ * `pull_request_files` cache, so `buildCollisionReport`'s existing termOverlap heuristic (which already tokenizes
+ * `changedFiles` for merged PRs, see recentMergedItem) gets real path signal for open-vs-open pairs too — not
+ * just title/label/linked-issue text. A single bounded D1 read (no GitHub API calls): siblings are populated by
+ * the routine detail-sync backfill independent of this flag, so this is a cache read, not a live fetch. Only
+ * `PullRequestRecord`s already carrying no `changedFiles` are overwritten; entries missing from the cache (e.g. a
+ * brand-new PR reviewed before its first detail-sync) are left as-is and simply carry no path signal this pass —
+ * a fail-safe degrade, not an error, and the next scheduled re-gate sweep picks it up once synced.
+ */
+export async function enrichOpenPullRequestsWithChangedFiles(env: Env, repoFullName: string, pullRequests: PullRequestRecord[]): Promise<PullRequestRecord[]> {
+  const openPullNumbers = pullRequests.filter((candidate) => candidate.state === "open").map((candidate) => candidate.number);
+  if (openPullNumbers.length === 0) return pullRequests;
+  const filePaths = await listRepoPullRequestFilePaths(env, repoFullName, { pullNumbers: openPullNumbers });
+  if (filePaths.length === 0) return pullRequests;
+  const pathsByPullNumber = new Map<number, string[]>();
+  for (const row of filePaths) {
+    const paths = pathsByPullNumber.get(row.pullNumber) ?? [];
+    paths.push(row.path);
+    pathsByPullNumber.set(row.pullNumber, paths);
+  }
+  return pullRequests.map((candidate) => {
+    const paths = pathsByPullNumber.get(candidate.number);
+    return paths ? { ...candidate, changedFiles: paths } : candidate;
+  });
+}
+
 async function maybePublishPrPublicSurface(
   env: Env,
   installationId: number,
@@ -6180,15 +6207,22 @@ async function maybePublishPrPublicSurface(
       listPullRequests(env, repoFullName),
       listBountiesByRepo(env, repoFullName),
     ]);
+    // Open-PR file-path collision (#2653): flag-gated, byte-identical when OFF (see enrichOpenPullRequestsWithChangedFiles).
+    // Scoped to collision/preflight/queue-health inputs only — every OTHER use of repoPullRequests below (e.g. the
+    // duplicate-winner adjudication, which is same-linked-issue-based, not path-based) keeps reading the un-enriched array.
+    const collisionPullRequests =
+      env.GITTENSORY_OPEN_PR_FILE_COLLISION === "true"
+        ? await enrichOpenPullRequestsWithChangedFiles(env, repoFullName, repoPullRequests)
+        : repoPullRequests;
     collisions = buildCollisionReport(
       repoFullName,
       repoIssues,
-      repoPullRequests,
+      collisionPullRequests,
     );
     queueHealth = buildQueueHealth(
       repo,
       repoIssues,
-      repoPullRequests,
+      collisionPullRequests,
       collisions,
     );
     preflight = buildPreflightResult(
@@ -6203,7 +6237,7 @@ async function maybePublishPrPublicSurface(
       },
       repo,
       repoIssues,
-      repoPullRequests,
+      collisionPullRequests,
       repoBounties,
     );
     // Duplicate-winner adjudication (#dup-winner): compute the winner ONCE for this review run from the SAME

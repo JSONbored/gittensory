@@ -310,6 +310,13 @@ declare global {
      *  unchanged). Once a winner closes, the next-lowest OPEN sibling becomes the winner on re-eval. See
      *  src/signals/duplicate-winner.ts. */
     GITTENSORY_DUPLICATE_WINNER?: string;
+    /** Open-PR file-path collision (#2653): when truthy, a live PR review enriches its own and its open
+     *  siblings' `changedFiles` from the `pull_request_files` cache (a plain D1 read — no extra GitHub calls)
+     *  before building the collision report, so two independently-open PRs touching the same file are flagged
+     *  the same way two title-similar PRs already are. A contributor's own two PRs sharing a file are never
+     *  flagged (see the same-author guard in buildCollisionReport). Default OFF — unset/false leaves every
+     *  PullRequestRecord's changedFiles unset, byte-identical to today. See src/signals/engine.ts prItem. */
+    GITTENSORY_OPEN_PR_FILE_COLLISION?: string;
   }
 }
 

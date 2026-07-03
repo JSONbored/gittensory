@@ -47,7 +47,8 @@ import {
   upsertRepositoryFromGitHub,
   putCachedAiReview,
 } from "../../src/db/repositories";
-import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, claimAiReviewLock, claimPrActuationLock, contributorEvidenceBatchSize, processJob, reconcileLiveDuplicateSiblings, releaseAiReviewLock, releasePrActuationLock } from "../../src/queue/processors";
+import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, claimAiReviewLock, claimPrActuationLock, contributorEvidenceBatchSize, enrichOpenPullRequestsWithChangedFiles, processJob, reconcileLiveDuplicateSiblings, releaseAiReviewLock, releasePrActuationLock } from "../../src/queue/processors";
+import type { PullRequestRecord } from "../../src/types";
 import { aiReviewCacheInputFingerprint } from "../../src/review/ai-review-cache-input";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
@@ -2272,6 +2273,144 @@ describe("queue processors", () => {
     expect(stickyComment.current?.body).toContain(PR_PANEL_COMMENT_MARKER);
     expect(stickyComment.current?.body).toContain("Thanks for the contribution");
     expect(stickyComment.current?.body).not.toContain("is reviewing");
+  });
+
+  it("flags an open-PR file-path collision against a sibling PR when GITTENSORY_OPEN_PR_FILE_COLLISION is on (#2653)", async () => {
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      GITTENSORY_OPEN_PR_FILE_COLLISION: "true",
+    });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "off",
+      aiReviewMode: "off",
+    });
+    // A sibling PR (different author, unrelated title) already open and already detail-synced — its files are
+    // in the pull_request_files cache, the same way routine backfill would have populated them.
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 8,
+      title: "Document logging output",
+      state: "open",
+      user: { login: "other-author" },
+      head: { sha: "b8" },
+      labels: [],
+      body: "",
+    });
+    await upsertPullRequestFile(env, { repoFullName: "JSONbored/gittensory", pullNumber: 8, path: "src/shared/util.ts", additions: 1, deletions: 0, changes: 1, payload: {} });
+    // The PR under review (#7) was ALSO already detail-synced against the same file before this rerun.
+    await upsertPullRequestFile(env, { repoFullName: "JSONbored/gittensory", pullNumber: 7, path: "src/shared/util.ts", additions: 1, deletions: 0, changes: 1, payload: {} });
+    const stickyComment: { current: { id: number; body: string } | null } = { current: null };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([{ uid: 7, githubUsername: "contributor", githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1 }]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") return Response.json({ repositories: [] });
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/contributor")) return Response.json({ login: "contributor", public_repos: 2, followers: 1 });
+      if (url.includes("/users/contributor/repos")) return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/shared/util.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.endsWith("/pulls/7")) return Response.json({ number: 7, title: "Improve widget rendering", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "" });
+      if (url.includes("/commits/a7/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a7/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/7/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/7/comments") && method === "POST") {
+        const body = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        stickyComment.current = { id: 1, body };
+        return Response.json({ id: 1 }, { status: 201 });
+      }
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "open-pr-file-collision",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 7, title: "Improve widget rendering", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "" },
+      },
+    });
+
+    // The sibling PR #8 (different author, same file, unrelated title) surfaces in the related-work panel —
+    // proof the enriched changedFiles flowed through buildCollisionReport's existing termOverlap scoring.
+    expect(stickyComment.current?.body).toContain("#8");
+  });
+
+  it("does NOT flag an open-PR file-path collision when GITTENSORY_OPEN_PR_FILE_COLLISION is unset (byte-identical default)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "off",
+      aiReviewMode: "off",
+    });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 8,
+      title: "Document logging output",
+      state: "open",
+      user: { login: "other-author" },
+      head: { sha: "b8" },
+      labels: [],
+      body: "",
+    });
+    await upsertPullRequestFile(env, { repoFullName: "JSONbored/gittensory", pullNumber: 8, path: "src/shared/util.ts", additions: 1, deletions: 0, changes: 1, payload: {} });
+    await upsertPullRequestFile(env, { repoFullName: "JSONbored/gittensory", pullNumber: 7, path: "src/shared/util.ts", additions: 1, deletions: 0, changes: 1, payload: {} });
+    const stickyComment: { current: { id: number; body: string } | null } = { current: null };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([{ uid: 7, githubUsername: "contributor", githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1 }]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") return Response.json({ repositories: [] });
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/contributor")) return Response.json({ login: "contributor", public_repos: 2, followers: 1 });
+      if (url.includes("/users/contributor/repos")) return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/shared/util.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.endsWith("/pulls/7")) return Response.json({ number: 7, title: "Improve widget rendering", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "" });
+      if (url.includes("/commits/a7/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a7/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/7/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/7/comments") && method === "POST") {
+        const body = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        stickyComment.current = { id: 1, body };
+        return Response.json({ id: 1 }, { status: 201 });
+      }
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "open-pr-file-collision-flag-off",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 7, title: "Improve widget rendering", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "" },
+      },
+    });
+
+    expect(stickyComment.current?.body).not.toContain("#8");
   });
 
   it("computes the AI review cache fingerprint with a self-host reviewer plan and converged grounding/enrichment on (#2119)", async () => {
@@ -15386,5 +15525,56 @@ describe("installation app_id capture + dual-app webhook filter (#selfhost-app-i
         prState: "open",
       });
     });
+  });
+});
+
+describe("enrichOpenPullRequestsWithChangedFiles (#2653)", () => {
+  const pr = (number: number, overrides: Partial<PullRequestRecord> = {}): PullRequestRecord => ({
+    repoFullName: "owner/repo",
+    number,
+    title: `PR ${number}`,
+    state: "open",
+    labels: [],
+    linkedIssues: [],
+    ...overrides,
+  });
+
+  it("populates changedFiles for open PRs from the pull_request_files cache", async () => {
+    const env = createTestEnv();
+    await upsertPullRequestFile(env, { repoFullName: "owner/repo", pullNumber: 10, path: "src/a.ts", additions: 1, deletions: 0, changes: 1, payload: {} });
+    await upsertPullRequestFile(env, { repoFullName: "owner/repo", pullNumber: 10, path: "src/b.ts", additions: 1, deletions: 0, changes: 1, payload: {} });
+    await upsertPullRequestFile(env, { repoFullName: "owner/repo", pullNumber: 11, path: "src/c.ts", additions: 1, deletions: 0, changes: 1, payload: {} });
+
+    const result = await enrichOpenPullRequestsWithChangedFiles(env, "owner/repo", [pr(10), pr(11)]);
+
+    expect(result.find((candidate) => candidate.number === 10)?.changedFiles?.sort()).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(result.find((candidate) => candidate.number === 11)?.changedFiles).toEqual(["src/c.ts"]);
+  });
+
+  it("leaves a PR's changedFiles untouched when the cache has no rows for it (fail-safe degrade, not an error)", async () => {
+    const env = createTestEnv();
+    await upsertPullRequestFile(env, { repoFullName: "owner/repo", pullNumber: 10, path: "src/a.ts", additions: 1, deletions: 0, changes: 1, payload: {} });
+
+    const result = await enrichOpenPullRequestsWithChangedFiles(env, "owner/repo", [pr(10), pr(12)]);
+
+    expect(result.find((candidate) => candidate.number === 12)?.changedFiles).toBeUndefined();
+  });
+
+  it("does not query the cache and returns the same array reference when there are no open PRs", async () => {
+    const env = createTestEnv();
+    const input = [pr(20, { state: "closed" })];
+
+    const result = await enrichOpenPullRequestsWithChangedFiles(env, "owner/repo", input);
+
+    expect(result).toBe(input);
+  });
+
+  it("returns the same array reference when the cache has no rows for any open PR", async () => {
+    const env = createTestEnv();
+    const input = [pr(30)];
+
+    const result = await enrichOpenPullRequestsWithChangedFiles(env, "owner/repo", input);
+
+    expect(result).toBe(input);
   });
 });

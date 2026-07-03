@@ -137,6 +137,11 @@
     // #1695 both closed) — the opposite of "spare one good PR". With it ON, the earliest open PR in a cluster
     // is judged on its merits and only the true duplicates close.
     "GITTENSORY_DUPLICATE_WINNER": "true",
+    // Open-PR file-path collision (#2653): enrich changedFiles on the reviewed PR and its open siblings from
+    // the pull_request_files cache before building the collision report, so two independently-open PRs on the
+    // same file get flagged the way two title-similar PRs already are. Default OFF — unset/false leaves every
+    // PullRequestRecord's changedFiles unset (byte-identical to today, no extra D1 reads).
+    "GITTENSORY_OPEN_PR_FILE_COLLISION": "false",
   },
   "routes": [
     {

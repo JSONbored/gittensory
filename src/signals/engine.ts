@@ -862,6 +862,17 @@ export function buildCollisionReport(
       }
       const overlap = termOverlap(itemTerms.get(itemKey(left)) ?? collisionTerms(left), itemTerms.get(itemKey(right)) ?? collisionTerms(right));
       if (overlap.score < 0.58 || overlap.shared < 2) continue;
+      // A contributor iterating on their own work (e.g. a follow-up PR touching the same file as their still-open
+      // prior PR) is not duplicate effort. Title/label overlap between a contributor's own items is today's
+      // established behavior (unchanged, e.g. a self-filed issue and its own PR); what's new here is that
+      // `changedFiles` now also feeds this same heuristic, and two of a contributor's own PRs sharing a file is
+      // exactly the false-positive path-overlap creates. Re-score without paths: if the pair only clears the bar
+      // WITH file-path terms, paths alone drove the match — self-authored, so skip it. If title/label terms alone
+      // already clear the bar, this is pre-existing behavior and still clusters.
+      if (isPullRequestShapedItem(left) && isPullRequestShapedItem(right) && Boolean(left.authorLogin) && sameLogin(left.authorLogin, right.authorLogin ?? "")) {
+        const titleOnlyOverlap = termOverlap(collisionTerms(left, false), collisionTerms(right, false));
+        if (titleOnlyOverlap.score < 0.58 || titleOnlyOverlap.shared < 2) continue;
+      }
       const key = [itemKey(left), itemKey(right)].sort().join("--");
       if (clusters.has(key)) continue;
       clusters.set(key, {
@@ -5156,6 +5167,7 @@ function prItem(pr: PullRequestRecord): CollisionItem {
     labels: pr.labels,
     linkedIssues: pr.linkedIssues,
     linkedIssueClaimedAt: pr.linkedIssueClaimedAt,
+    changedFiles: pr.changedFiles,
     body: pr.body,
   };
 }
@@ -5217,8 +5229,8 @@ type CollisionTerms = {
 
 const collisionReportTermCache = new WeakMap<CollisionReport, Map<string, CollisionTerms>>();
 
-function collisionTerms(item: CollisionItem): CollisionTerms {
-  const terms = new Set(tokenize(collisionItemText(item)));
+function collisionTerms(item: CollisionItem, includePaths = true): CollisionTerms {
+  const terms = new Set(tokenize(collisionItemText(item, includePaths)));
   return { terms, size: terms.size };
 }
 
@@ -5251,11 +5263,11 @@ function termOverlap(left: CollisionTerms, right: CollisionTerms): { score: numb
   return { score: shared / Math.min(left.size, right.size), shared };
 }
 
-function collisionItemText(item: CollisionItem): string {
+function collisionItemText(item: CollisionItem, includePaths = true): string {
   return [
     truncateText(item.title, PREFLIGHT_LIMITS.titleChars),
     ...boundedTextItems(item.labels, PREFLIGHT_LIMITS.labels, PREFLIGHT_LIMITS.labelChars),
-    ...boundedTextItems(item.changedFiles, PREFLIGHT_LIMITS.changedFiles, PREFLIGHT_LIMITS.changedFileChars),
+    ...(includePaths ? boundedTextItems(item.changedFiles, PREFLIGHT_LIMITS.changedFiles, PREFLIGHT_LIMITS.changedFileChars) : []),
   ]
     .filter(Boolean)
     .join(" ");
@@ -5388,6 +5400,10 @@ function isMaintainerAssociation(value: string | null | undefined): boolean {
 
 function sameLogin(value: string | null | undefined, login: string): boolean {
   return value?.toLowerCase() === login.toLowerCase();
+}
+
+function isPullRequestShapedItem(item: CollisionItem): boolean {
+  return item.type === "pull_request" || item.type === "recent_merged_pull_request";
 }
 
 function sameRepo(left: string | null | undefined, right: string | null | undefined): boolean {

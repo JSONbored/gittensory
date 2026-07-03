@@ -147,6 +147,173 @@ describe("v2 signal builders", () => {
     expect(edges[0]).toMatchObject({ repoFullName: repo.fullName, risk: expect.any(String) });
   });
 
+  describe("open-PR file-path collision (#2653)", () => {
+    const findCluster = (report: ReturnType<typeof buildCollisionReport>, left: number, right: number) =>
+      report.clusters.find((cluster) => cluster.items.some((item) => item.number === left) && cluster.items.some((item) => item.number === right));
+
+    it("flags two open PRs from different authors that touch the same file, even with unrelated titles", () => {
+      const alicePr: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 201,
+        title: "Improve widget rendering",
+        state: "open",
+        authorLogin: "alice",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["src/queue/processors.ts"],
+      };
+      const bobPr: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 202,
+        title: "Document logging output",
+        state: "open",
+        authorLogin: "bob",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["src/queue/processors.ts"],
+      };
+      const report = buildCollisionReport(repo.fullName, [], [alicePr, bobPr]);
+      const cluster = findCluster(report, 201, 202);
+      expect(cluster).toBeDefined();
+      expect(cluster?.reason).toMatch(/meaningful terms/i);
+    });
+
+    it("does not flag two open PRs by the SAME author sharing only a file path (regression: self-supersession is not a collision)", () => {
+      const authorPr1: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 203,
+        title: "Improve widget rendering",
+        state: "open",
+        authorLogin: "carol",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["src/queue/processors.ts"],
+      };
+      const authorPr2: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 204,
+        title: "Document logging output",
+        state: "open",
+        authorLogin: "carol",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["src/queue/processors.ts"],
+      };
+      const report = buildCollisionReport(repo.fullName, [], [authorPr1, authorPr2]);
+      expect(findCluster(report, 203, 204)).toBeUndefined();
+    });
+
+    it("still flags two open PRs by the SAME author when their titles alone already overlap enough (pre-existing behavior preserved)", () => {
+      const authorPr1: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 205,
+        title: "Fix authentication retry backoff handler",
+        state: "open",
+        authorLogin: "dave",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+      };
+      const authorPr2: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 206,
+        title: "Fix authentication retry backoff logic",
+        state: "open",
+        authorLogin: "dave",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+      };
+      const report = buildCollisionReport(repo.fullName, [], [authorPr1, authorPr2]);
+      expect(findCluster(report, 205, 206)).toBeDefined();
+    });
+
+    it("still flags overlapping titles between an issue and a PR regardless of authorship (path-overlap guard is scoped to PR-shaped pairs only)", () => {
+      const websocketIssue: IssueRecord = {
+        repoFullName: repo.fullName,
+        number: 210,
+        title: "Websocket cache reconnect handler crashes",
+        state: "open",
+        authorLogin: "erin",
+        labels: [],
+        linkedPrs: [],
+      };
+      const websocketPr: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 211,
+        title: "Fix websocket cache reconnect crash handler",
+        state: "open",
+        authorLogin: "erin",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+      };
+      const report = buildCollisionReport(repo.fullName, [websocketIssue], [websocketPr]);
+      const cluster = report.clusters.find((c) => c.items.some((item) => item.type === "issue" && item.number === 210) && c.items.some((item) => item.number === 211));
+      expect(cluster).toBeDefined();
+    });
+
+    it("flags an open PR against a recently-merged PR from a different author sharing a file (extends to merged history)", () => {
+      const openPr: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 220,
+        title: "Improve widget rendering",
+        state: "open",
+        authorLogin: "frank",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["src/queue/processors.ts"],
+      };
+      const mergedPr: RecentMergedPullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 219,
+        title: "Document logging output",
+        authorLogin: "grace",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["src/queue/processors.ts"],
+        mergedAt: "2026-06-01T00:00:00.000Z",
+        payload: {},
+      };
+      const report = buildCollisionReport(repo.fullName, [], [openPr], [mergedPr]);
+      const cluster = report.clusters.find((c) => c.items.some((item) => item.number === 220) && c.items.some((item) => item.number === 219));
+      expect(cluster).toBeDefined();
+    });
+
+    it("does not flag an open PR against the SAME author's own recently-merged PR sharing only a file path", () => {
+      const openPr: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 221,
+        title: "Improve widget rendering",
+        state: "open",
+        authorLogin: "heidi",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["src/queue/processors.ts"],
+      };
+      const mergedPr: RecentMergedPullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 222,
+        title: "Document logging output",
+        authorLogin: "heidi",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["src/queue/processors.ts"],
+        mergedAt: "2026-06-01T00:00:00.000Z",
+        payload: {},
+      };
+      const report = buildCollisionReport(repo.fullName, [], [openPr], [mergedPr]);
+      const cluster = report.clusters.find((c) => c.items.some((item) => item.number === 221) && c.items.some((item) => item.number === 222));
+      expect(cluster).toBeUndefined();
+    });
+  });
+
   it("keeps collision radar bounded for huge issue queues while preserving queue totals", () => {
     const manyIssues = Array.from({ length: 1000 }, (_, index) => ({
       repoFullName: repo.fullName,

@@ -470,6 +470,11 @@ export type PullRequestRecord = {
    *  stale-surface diagnostics, not as a hard re-review skip: GitHub comments/checks can still be stale or partial
    *  while this marker matches headSha. Publish-written; read straight from the row. */
   lastPublishedSurfaceSha?: string | null | undefined;
+  /** File paths changed by this open PR, when the caller has already resolved them (e.g. from the
+   *  `pull_request_files` cache). Absent/undefined when not resolved — callers must not assume an empty array
+   *  means "no files changed". Mirrors {@link RecentMergedPullRequestRecord.changedFiles} so the same
+   *  collision/preflight path-overlap scoring works for open PRs, not just merged history. */
+  changedFiles?: string[] | undefined;
 };
 
 export type IssueRecord = {
