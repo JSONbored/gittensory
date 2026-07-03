@@ -74,6 +74,8 @@ fi
 
 # Extra env, one KEY=VALUE per line -- turned into repeated -e flags. Deliberately whitespace/newline
 # separated (not comma) so values containing commas (e.g. AI_PROVIDER=claude-code,codex) are unambiguous.
+# NOT for multiline secrets like a PEM private key -- a newline inside a value is indistinguishable from
+# an entry boundary here. Use SELFHOST_SMOKE_EXTRA_VOLUMES + a _FILE env var instead (see below).
 EXTRA_ENV_ARGS=()
 if [ -n "${SELFHOST_SMOKE_EXTRA_ENV:-}" ]; then
   while IFS= read -r line; do
@@ -82,11 +84,23 @@ if [ -n "${SELFHOST_SMOKE_EXTRA_ENV:-}" ]; then
   done <<<"$SELFHOST_SMOKE_EXTRA_ENV"
 fi
 
+# Extra volumes, one "host_path:container_path[:opts]" per line -- turned into repeated -v flags. This is
+# how a multiline secret (e.g. GITHUB_APP_PRIVATE_KEY_FILE) reaches the container safely: mount the file,
+# then set the *_FILE env var to its container path via SELFHOST_SMOKE_EXTRA_ENV (a single-line value).
+EXTRA_VOLUME_ARGS=()
+if [ -n "${SELFHOST_SMOKE_EXTRA_VOLUMES:-}" ]; then
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    EXTRA_VOLUME_ARGS+=(-v "$line")
+  done <<<"$SELFHOST_SMOKE_EXTRA_VOLUMES"
+fi
+
 docker run -d --name "$APP_NAME" --network "$NETWORK_NAME" -p "${PORT}:8787" \
   -e "REDIS_URL=redis://${REDIS_NAME}:6379" \
   -e "SELFHOST_SETUP_TOKEN=${SELFHOST_SMOKE_SETUP_TOKEN:-selfhost-smoke-setup-token}" \
   -e "PUBLIC_API_ORIGIN=${SELFHOST_SMOKE_PUBLIC_API_ORIGIN:-https://selfhost-smoke.example}" \
   "${EXTRA_ENV_ARGS[@]}" \
+  "${EXTRA_VOLUME_ARGS[@]}" \
   "$IMAGE" >/dev/null
 
 ok=0

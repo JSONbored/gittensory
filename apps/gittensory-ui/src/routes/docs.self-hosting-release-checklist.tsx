@@ -53,8 +53,12 @@ docker buildx build --load -t gittensory:rc-candidate .
       </p>
       <CodeBlock
         lang="bash"
-        code={`SELFHOST_SMOKE_EXTRA_ENV="GITHUB_APP_ID=123456
-GITHUB_APP_PRIVATE_KEY=\${TEST_APP_PRIVATE_KEY}" \\
+        code={`# A private key is multiline PEM -- mount it as a file instead of an env value (SELFHOST_SMOKE_EXTRA_ENV
+# is line-delimited and would truncate it). GITHUB_APP_PRIVATE_KEY_FILE is loaded into
+# GITHUB_APP_PRIVATE_KEY at startup, same as every other *_FILE variable.
+SELFHOST_SMOKE_EXTRA_VOLUMES="\${TEST_APP_PRIVATE_KEY_PATH}:/run/secrets/github-app-private-key.pem:ro" \\
+SELFHOST_SMOKE_EXTRA_ENV="GITHUB_APP_ID=123456
+GITHUB_APP_PRIVATE_KEY_FILE=/run/secrets/github-app-private-key.pem" \\
 SELFHOST_SMOKE_FORBID_EVENTS="selfhost_orb_export_error,selfhost_orb_relay_register" \\
 ./scripts/smoke-selfhost.sh gittensory:rc-candidate`}
       />
