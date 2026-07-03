@@ -28,6 +28,7 @@ const OSS_ANTI_SLOP_FUNNEL = {
 } as const;
 import { buildPullRequestAdvisory, evaluateGateCheck, type GateCheckConclusion } from "./advisory";
 import { isTestPath } from "../signals/test-evidence";
+import { evaluateClaCheck } from "../review/cla-check";
 import { evaluatePreMergeChecks } from "../review/pre-merge-checks";
 
 /**
@@ -222,6 +223,15 @@ export function buildPredictedGateVerdict(args: {
     ...evaluatePreMergeChecks(predictablePreMergeChecks, { title: syntheticPr.title, body: syntheticPr.body, labels: syntheticPr.labels, changedPaths, filesResolved: hasChangedPaths }),
   );
 
+  // CLA / license-compatibility gate parity (#2564): this metadata-only predictor never resolves a LIVE
+  // check-run (it runs before the PR exists), so only the phrase-match detection method is predictable —
+  // checkRunConclusion stays undefined, mirroring evaluateClaCheck's "not evaluated" contract for an
+  // unresolved check-run. A repo relying solely on checkRunName (no consentPhrase configured) therefore
+  // predicts no finding either way; the note below discloses this limitation.
+  if (gate.claMode !== null && gate.claMode !== "off") {
+    advisory.findings.push(...evaluateClaCheck({ consentPhrase: gate.claConsentPhrase, checkRunName: gate.claCheckRunName }, { body: syntheticPr.body, checkRunConclusion: undefined }));
+  }
+
   // Focus-manifest path policy parity (#12): the LIVE gate (manifestPolicyGateMode) pushes the three enforceable
   // policy findings over the PR's changed paths. Mirror it when the caller supplied paths and the PUBLIC config
   // opts in — recompute the guidance and append ONLY the policy codes, then thread manifestPolicyGateMode into
@@ -271,6 +281,8 @@ export function buildPredictedGateVerdict(args: {
     // absent paths ⇒ no manifest finding exists, so this mode has nothing to act on (byte-identical).
     manifestPolicyGateMode: gate.manifestPolicy ?? undefined,
     selfAuthoredLinkedIssueGateMode: gate.selfAuthoredLinkedIssue ?? undefined,
+    // #2564: only meaningful when the finding was pushed above (gate.claMode opted in); byte-identical otherwise.
+    claGateMode: gate.claMode ?? undefined,
     readinessScore: readiness.total,
     confirmedContributor: effectiveConfirmedContributor,
     firstTimeContributorGrace: gate.firstTimeContributorGrace ?? undefined,

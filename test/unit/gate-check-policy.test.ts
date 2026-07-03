@@ -201,6 +201,74 @@ describe("AI fail-closed hold (#ai-fail-closed)", () => {
   });
 });
 
+describe("CLA / license-compatibility gate (#2564)", () => {
+  function claAdvisory(): Advisory {
+    return {
+      ...missingIssueAdvisory(),
+      findings: [{ code: "cla_consent_missing", title: "CLA consent not confirmed", severity: "warning", detail: 'the PR description must contain "I agree to the CLA"', action: "add it" }],
+    };
+  }
+
+  it("blocks a confirmed contributor when claMode: block", () => {
+    const result = evaluateGateCheck(claAdvisory(), { claGateMode: "block", confirmedContributor: true });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((finding) => finding.code)).toContain("cla_consent_missing");
+  });
+
+  it("blocks a non-confirmed contributor under claMode: block, the same as a confirmed one (#gate-nonconfirmed)", () => {
+    const result = evaluateGateCheck(claAdvisory(), { claGateMode: "block", confirmedContributor: false });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((finding) => finding.code)).toContain("cla_consent_missing");
+  });
+
+  it("does not block when claMode: advisory (surfaces as a warning, never blocks)", () => {
+    const result = evaluateGateCheck(claAdvisory(), { claGateMode: "advisory", confirmedContributor: true });
+    expect(result.conclusion).toBe("success");
+    expect(result.blockers).toEqual([]);
+    expect(result.warnings.map((finding) => finding.code)).toContain("cla_consent_missing");
+  });
+
+  it("does not block when claMode is unset/off (default) — zero behavior change for a repo that has not opted in", () => {
+    expect(evaluateGateCheck(claAdvisory(), { confirmedContributor: true }).conclusion).toBe("success");
+    expect(evaluateGateCheck(claAdvisory(), { claGateMode: "off", confirmedContributor: true }).conclusion).toBe("success");
+  });
+
+  it("an UNRESOLVED CLA check-run (cla_check_unresolved) HOLDS the gate (neutral), never close or pass", () => {
+    const held: Advisory = {
+      ...missingIssueAdvisory(),
+      findings: [{ code: "cla_check_unresolved", title: 'CLA check held — "CLA Assistant Lite" not resolved', severity: "warning", detail: "could not resolve the check-run", action: "re-evaluates automatically" }],
+    };
+    const result = evaluateGateCheck(held, gateCheckPolicy(settings(), null, true));
+    expect(result.conclusion).toBe("neutral");
+    expect(result.blockers).toEqual([]);
+  });
+
+  it("gateCheckPolicy threads claGateMode into the policy", () => {
+    expect(gateCheckPolicy(settings({ claGateMode: "block" }), null, true).claGateMode).toBe("block");
+  });
+
+  it("resolveEffectiveSettings maps gate.claMode / gate.cla.{consentPhrase,checkRunName} onto the effective settings", () => {
+    const eff = resolveEffectiveSettings(settings({}), parseFocusManifest({ gate: { claMode: "block", cla: { consentPhrase: "I agree to the CLA", checkRunName: "CLA Assistant Lite" } } }));
+    expect(eff.claGateMode).toBe("block");
+    expect(eff.claConsentPhrase).toBe("I agree to the CLA");
+    expect(eff.claCheckRunName).toBe("CLA Assistant Lite");
+  });
+
+  it("resolveEffectiveSettings leaves claGateMode unset when the manifest has no gate.claMode (byte-identical default)", () => {
+    const eff = resolveEffectiveSettings(settings({}), parseFocusManifest(null));
+    expect(eff.claGateMode).toBeUndefined();
+    expect(eff.claConsentPhrase).toBeUndefined();
+    expect(eff.claCheckRunName).toBeUndefined();
+  });
+
+  it("end-to-end: a manifest gate.claMode: block + consentPhrase blocks a PR missing CLA consent (acceptance criterion)", () => {
+    const eff = resolveEffectiveSettings(settings({}), parseFocusManifest({ gate: { claMode: "block", cla: { consentPhrase: "I agree to the CLA" } } }));
+    const result = evaluateGateCheck(claAdvisory(), gateCheckPolicy(eff, null, true));
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((finding) => finding.code)).toContain("cla_consent_missing");
+  });
+});
+
 describe("policy pack (#692)", () => {
   it("gittensor pack hard-blocks every author the same — confirmed status no longer changes the verdict (#gate-nonconfirmed)", () => {
     const gittensor = settings({ gatePack: "gittensor", linkedIssueGateMode: "block" });

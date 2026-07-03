@@ -300,6 +300,42 @@ describe("buildPredictedGateVerdict", () => {
     expect(result.blockers.some((b) => b.code === "pre_merge_check_required")).toBe(false);
   });
 
+  it("predicts a BLOCK when gate.claMode: block + consentPhrase is configured and the PR body lacks it (#2564)", () => {
+    const result = verdict({ gate: { claMode: "block", cla: { consentPhrase: "I agree to the CLA" } } });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.some((b) => b.code === "cla_consent_missing")).toBe(true);
+  });
+
+  it("predicts a PASS once the CLA consent phrase is present in the PR body", () => {
+    const result = verdict({
+      gate: { claMode: "block", cla: { consentPhrase: "I agree to the CLA" } },
+      input: { body: "Closes #7\n\nI agree to the CLA." },
+    });
+    expect(result.conclusion).not.toBe("failure");
+    expect(result.blockers.some((b) => b.code === "cla_consent_missing")).toBe(false);
+  });
+
+  it("surfaces a missing CLA consent as a WARNING under claMode: advisory, never a blocker", () => {
+    const result = verdict({ gate: { claMode: "advisory", cla: { consentPhrase: "I agree to the CLA" } } });
+    expect(result.conclusion).not.toBe("failure");
+    expect(result.warnings.some((w) => w.code === "cla_consent_missing")).toBe(true);
+  });
+
+  it("does NOT predict a cla_consent_missing finding when claMode is off (default, no opt-in)", () => {
+    const result = verdict({ gate: {} });
+    expect(result.blockers.some((b) => b.code === "cla_consent_missing")).toBe(false);
+    expect(result.warnings.some((w) => w.code === "cla_consent_missing")).toBe(false);
+  });
+
+  it("a check-run-only CLA config (no consentPhrase) predicts a HOLD, never a false block, pre-submission (no live check-run data)", () => {
+    // The metadata-only predictor never resolves a live check-run, so checkRunConclusion stays undefined —
+    // and with no consentPhrase configured, evaluateClaCheck cannot confirm or deny consent, so it HOLDS
+    // (cla_check_unresolved) rather than manufacturing a false cla_consent_missing block.
+    const result = verdict({ gate: { claMode: "block", cla: { checkRunName: "CLA Assistant Lite" } } });
+    expect(result.blockers.some((b) => b.code === "cla_consent_missing")).toBe(false);
+    expect(result.conclusion).toBe("neutral");
+  });
+
   it("predicts a manifest path-policy HOLD when a changed path hits a blocked glob and manifestPolicy:block (#12)", () => {
     const result = verdict({
       gate: { manifestPolicy: "block" },

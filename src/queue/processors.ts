@@ -93,6 +93,7 @@ import {
   fetchLivePullRequestReviewDecision,
   fetchLiveReviewThreadBlockers,
   fetchLivePullRequestState,
+  fetchNamedCheckRunConclusion,
   fetchOpenPullRequestNumbersForCommit,
   fetchRequiredStatusContexts,
   invalidatePrStateCache,
@@ -352,6 +353,7 @@ import {
   maybePostInlineComments,
   shouldRequestInlineFindings,
 } from "../review/inline-comments";
+import { evaluateClaCheck } from "../review/cla-check";
 import { evaluatePreMergeChecks } from "../review/pre-merge-checks";
 import { secretLeakFinding } from "../review/safety";
 import { lockfileTamperRiskFinding } from "../review/lockfile-tamper";
@@ -4980,6 +4982,10 @@ export function gateCheckPolicy(
     changedFileCount: sizeContext?.changedFileCount ?? null,
     changedLineCount: sizeContext?.changedLineCount ?? null,
     guardrailHit: sizeContext?.guardrailHit ?? false,
+    // CLA / license-compatibility gate (#2564): the MODE comes from config; the `cla_consent_missing` finding
+    // itself (or its absence) is pushed into the advisory upstream by evaluateClaCheck, so this only decides
+    // whether isConfiguredGateBlocker escalates it to a hard blocker.
+    claGateMode: settings.claGateMode,
     // #gate-dryrun: render the would-be merge/close/manual verdict (advisory promoted to block) without enforcing.
     dryRun: settings.gateDryRun ?? false,
   };
@@ -6556,6 +6562,31 @@ async function maybePublishPrPublicSurface(
           changedPaths: checkFiles.map((file) => file.path),
           filesResolved: checkFiles.length > 0,
         }),
+      );
+    }
+    // CLA / license-compatibility gate (#2564, opt-in via .gittensory.yml gate.claMode). DETERMINISTIC — a PR-body
+    // consent-phrase match (mirrors pre_merge_checks' descriptionContains exactly) and/or a named CLA-bot
+    // check-run's conclusion; consent is satisfied when EITHER configured method holds. No AI judgment, so this
+    // can never cause an AI false-close. Off by default (claGateMode undefined/"off"), so a repo that has not
+    // opted in makes no extra GitHub call and pushes no finding — byte-identical to today.
+    if (settings.claGateMode && settings.claGateMode !== "off") {
+      const claCheckRunName = settings.claCheckRunName ?? null;
+      // Only resolve a live check-run when the maintainer actually configured that detection method — a
+      // phrase-only config must never spend an extra GitHub call.
+      const claCheckRunConclusion = claCheckRunName
+        ? await fetchNamedCheckRunConclusion(
+            env,
+            repoFullName,
+            advisory.headSha,
+            claCheckRunName,
+            await resolveReviewEnrichmentGithubToken(env, repoFullName),
+          )
+        : undefined;
+      advisory.findings.push(
+        ...evaluateClaCheck(
+          { consentPhrase: settings.claConsentPhrase ?? null, checkRunName: claCheckRunName },
+          { body: pr.body, checkRunConclusion: claCheckRunConclusion },
+        ),
       );
     }
 

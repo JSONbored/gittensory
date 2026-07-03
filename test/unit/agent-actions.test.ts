@@ -495,6 +495,19 @@ describe("planAgentMaintenanceActions (#778)", () => {
       const plan = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, blockerTitles: ["x"], authorIsOwner: false, authorIsAutomationBot: true, closeOwnerAuthors: true, ciState: "passed", pr: { labels: [], slopRisk: 95 } })));
       expect(plan).not.toContain("close");
     });
+
+    // #2564: a block-mode CLA finding (cla_consent_missing) reaches the disposition planner exactly like any
+    // other configured gate blocker (a conclusion: "failure" + the blocker's title) — it carries no special
+    // owner/admin handling of its own, so it inherits the SAME generic isContributor exemption every other
+    // blocker gets here. This is the concrete case the CLA gate's "owner/admin exemption" acceptance criterion
+    // exercises; it is not a new mechanism.
+    it("does NOT auto-close the repo owner's own PR over a CLA-consent-missing blocker; DOES close the same blocker for a contributor", () => {
+      const claBlockerTitles = ["CLA consent not confirmed"];
+      const ownerPlan = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, blockerTitles: claBlockerTitles, authorIsOwner: true, ciState: "passed", pr: { labels: [] } })));
+      expect(ownerPlan).not.toContain("close");
+      const contributorPlan = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, blockerTitles: claBlockerTitles, authorIsOwner: false, authorIsAutomationBot: false, ciState: "passed", pr: { labels: [] } })));
+      expect(contributorPlan).toContain("close");
+    });
   });
 
   describe("admin-login guard: ADMIN_GITHUB_LOGINS gets the same never-auto-close exemption as the owner (#2133)", () => {

@@ -496,7 +496,7 @@ describe("compileFocusManifestPolicy", () => {
       issueDiscoveryPolicy: "neutral",
       maintainerNotes: [],
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
-      gate: { present: false, enabled: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, lockfileIntegrityMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null },
+      gate: { present: false, enabled: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, lockfileIntegrityMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null, claMode: null, claConsentPhrase: null, claCheckRunName: null },
       settings: {},
       review: { present: false, footerText: null, note: null, fields: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
       features: { present: false, rag: null, reputation: null, unifiedComment: null, safety: null },
@@ -804,7 +804,8 @@ describe("parseFocusManifest gate config", () => {
     // the block→advisory deprecation-downgrade behavior itself is covered separately below.
     const m = parseFocusManifest({ gate: { linkedIssue: "block", duplicates: "advisory", readiness: { mode: "advisory", minScore: 70 } } });
     expect(m.present).toBe(true);
-    expect(m.gate).toEqual({ present: true, enabled: null, pack: null, linkedIssue: "block", duplicates: "advisory", readinessMode: "advisory", readinessMinScore: 70, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, lockfileIntegrityMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null });
+<<<<<<< HEAD
+    expect(m.gate).toEqual({ present: true, enabled: null, pack: null, linkedIssue: "block", duplicates: "advisory", readinessMode: "advisory", readinessMinScore: 70, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, lockfileIntegrityMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null, claMode: null, claConsentPhrase: null, claCheckRunName: null });
   });
 
   it("parses gate.mergeReadiness + gate.firstTimeContributorGrace, round-trips them, and warns on bad values (#822)", () => {
@@ -2064,5 +2065,66 @@ describe("gate.requireFreshRebaseWindow force-rebase-before-merge config (#2552)
     const db = { requireFreshRebaseWindowMinutes: 15 } as unknown as RepositorySettings;
     const eff = resolveEffectiveSettings(db, parseFocusManifest(null));
     expect(eff.requireFreshRebaseWindowMinutes).toBe(15);
+  });
+});
+
+describe("gate.claMode / gate.cla CLA / license-compatibility gate config (#2564)", () => {
+  it("parses gate.claMode, sets present, round-trips, and resolves into effective settings", () => {
+    const m = parseFocusManifest({ gate: { claMode: "block" } });
+    expect(m.gate.claMode).toBe("block");
+    expect(m.gate.present).toBe(true);
+    expect(gateConfigToJson(m.gate)).toMatchObject({ claMode: "block" });
+    const eff = resolveEffectiveSettings({} as unknown as RepositorySettings, m);
+    expect(eff.claGateMode).toBe("block");
+  });
+
+  it("defaults to unset/undefined when omitted — byte-identical to today (off by default)", () => {
+    const m = parseFocusManifest({});
+    expect(m.gate.claMode).toBeNull();
+    expect(m.gate.claConsentPhrase).toBeNull();
+    expect(m.gate.claCheckRunName).toBeNull();
+    const eff = resolveEffectiveSettings({} as unknown as RepositorySettings, m);
+    expect(eff.claGateMode).toBeUndefined();
+    expect(eff.claConsentPhrase).toBeUndefined();
+    expect(eff.claCheckRunName).toBeUndefined();
+  });
+
+  it("warns and drops an invalid claMode value rather than silently coercing it", () => {
+    const m = parseFocusManifest({ gate: { claMode: "sometimes" as never } });
+    expect(m.gate.claMode).toBeNull();
+    expect(m.warnings.some((w) => /gate\.claMode/i.test(w))).toBe(true);
+  });
+
+  it("parses the gate.cla block (consentPhrase + checkRunName), round-trips it, and warns on a non-mapping", () => {
+    const m = parseFocusManifest({ gate: { claMode: "block", cla: { consentPhrase: "I have read and agree to the CLA", checkRunName: "CLA Assistant Lite" } } });
+    expect(m.gate.claConsentPhrase).toBe("I have read and agree to the CLA");
+    expect(m.gate.claCheckRunName).toBe("CLA Assistant Lite");
+    expect(gateConfigToJson(m.gate)).toMatchObject({ cla: { consentPhrase: "I have read and agree to the CLA", checkRunName: "CLA Assistant Lite" } });
+
+    const bad = parseFocusManifest({ gate: { cla: "block" as never } });
+    expect(bad.gate.claConsentPhrase).toBeNull();
+    expect(bad.gate.claCheckRunName).toBeNull();
+    expect(bad.warnings.some((w) => /gate\.cla/.test(w))).toBe(true);
+  });
+
+  it("drops a consentPhrase/checkRunName that is not public-safe, with a warning (mirrors pre_merge_checks.titleContains)", () => {
+    const m = parseFocusManifest({ gate: { cla: { consentPhrase: "please share your wallet hotkey to agree", checkRunName: "leak reward payout check" } } });
+    expect(m.gate.claConsentPhrase).toBeNull();
+    expect(m.gate.claCheckRunName).toBeNull();
+    expect(m.warnings.some((w) => /gate\.cla\.consentPhrase/i.test(w))).toBe(true);
+    expect(m.warnings.some((w) => /gate\.cla\.checkRunName/i.test(w))).toBe(true);
+  });
+
+  it("round-trips a full gate.claMode + gate.cla config through gateConfigToJson + parse (the cache path)", () => {
+    const original = parseFocusManifest({ gate: { claMode: "advisory", cla: { consentPhrase: "agree to the CLA" } } });
+    const reparsed = parseFocusManifest({ gate: gateConfigToJson(original.gate) });
+    expect(reparsed.gate).toEqual(original.gate);
+  });
+
+  it("lets the DB value pass through when the manifest doesn't override it", () => {
+    const db = { claGateMode: "advisory", claConsentPhrase: "agree to the CLA" } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest(null));
+    expect(eff.claGateMode).toBe("advisory");
+    expect(eff.claConsentPhrase).toBe("agree to the CLA");
   });
 });

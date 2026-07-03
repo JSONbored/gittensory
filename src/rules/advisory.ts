@@ -14,6 +14,7 @@ import { isDuplicateClusterWinnerByClaim } from "../signals/duplicate-winner";
 import { isTestPath } from "../signals/test-evidence";
 import { nowIso } from "../utils/json";
 import { GITTENSORY_GATE_CHECK_NAME } from "../review/check-names";
+import { CLA_CHECK_UNRESOLVED_CODE, CLA_CONSENT_MISSING_CODE } from "../review/cla-check";
 import { REVIEW_THREAD_BLOCKER_CODE } from "../review/review-thread-findings";
 import { labelMatchesPattern } from "../scoring/preview";
 
@@ -52,6 +53,11 @@ export type GateCheckPolicy = {
    *  the PR author also filed the linked issue — becomes a hard blocker. Defaults to `advisory` — the
    *  finding is surfaced but never blocks unless the maintainer opts in. */
   selfAuthoredLinkedIssueGateMode?: GateRuleMode | undefined;
+  /** CLA / license-compatibility gate (#2564). When `block`, a `cla_consent_missing` finding — raised when
+   *  neither configured detection method (a consent phrase in the PR body, or a named CLA-bot check-run
+   *  conclusion) confirms consent — becomes a hard blocker. `off` (default) = no finding at all; `advisory` =
+   *  the finding surfaces but never blocks. Independent of every other gate dimension, like manifestPolicy. */
+  claGateMode?: GateRuleMode | undefined;
   /** First-time-contributor grace (#552). RESERVED / currently INERT (#2266): threaded through from config,
    *  but evaluateGateCheckCore never reads it (see the removal note below) — a would-be blocker gates a
    *  genuine newcomer exactly like a repeat contributor. Kept for potential future use. */
@@ -836,7 +842,9 @@ function isEvaluationBlocker(code: string): boolean {
   // pre_merge_check_unresolved: an enforced path-gated pre-merge check whose changed-file set could not be
   // resolved — gittensory cannot evaluate it yet, so the gate is NEUTRAL (held) and re-evaluates on the next
   // sync, rather than auto-merging past the unverified requirement or hard-closing on a transient miss. (#review-audit)
-  return code === "repo_not_registered" || code === "repo_not_seen" || code === "pr_not_cached" || code === "pre_merge_check_unresolved";
+  // cla_check_unresolved (#2564): the CLA-bot check-run's conclusion could not be resolved for a check-run-only
+  // config — same HOLD treatment, for the same reason.
+  return code === "repo_not_registered" || code === "repo_not_seen" || code === "pr_not_cached" || code === "pre_merge_check_unresolved" || code === CLA_CHECK_UNRESOLVED_CODE;
 }
 
 // Default configured close-confidence floor (#7) retained for settings compatibility and public calibration text.
@@ -883,6 +891,9 @@ function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPoli
   // (the finding is never even produced — see maybeAddLockfileTamperFinding's mode gate in queue/processors.ts),
   // so this branch only matters once a repo has explicitly turned the scan on.
   if (code === "lockfile_tamper_risk") return gateMode(policy.lockfileIntegrityGateMode ?? "off") === "block";
+  // CLA / license-compatibility gate (#2564): blocks only when the maintainer opts into claMode: block.
+  // Defaults to off (evaluateClaCheck never even runs for an off repo, so the finding does not exist).
+  if (code === CLA_CONSENT_MISSING_CODE) return gateMode(policy.claGateMode ?? "off") === "block";
   return false;
 }
 

@@ -152,6 +152,22 @@ gate:
   # or dashboard toggle; this can only be set here.
   lockfileIntegrity: off
 
+  # CLA / license-compatibility gate (#2564). Confirms contributor license-agreement consent before a PR
+  # can auto-merge — the gittensory analog of a "CLA assistant" bot. off | advisory | block. Default: off.
+  #   advisory — surfaces a cla_consent_missing finding but never blocks.
+  #   block    — also hard-blocks (one-shot close for a contributor) when neither detection method
+  #              below confirms consent.
+  # Config-as-code only — no DB column or dashboard toggle; this can only be set here.
+  claMode: off
+  cla:
+    # A phrase gittensory looks for in the PR description (case-insensitive substring match), mirroring
+    # review.pre_merge_checks' descriptionContains. String or null. Default: null (not configured).
+    consentPhrase: "I have read and agree to the CLA"
+    # Name of a separate CLA-bot check-run this repo also runs (e.g. a CLA Assistant GitHub Action). A
+    # success/neutral conclusion for a check-run with this exact name also satisfies consent. Either
+    # method configured is enough; both may be set. String or null. Default: null (not configured).
+    checkRunName: null
+
   # Composite merge-readiness gate (no min score).
   # off | advisory | block. Default: off.
   mergeReadiness: off

@@ -82,6 +82,15 @@ export type FocusManifestGateConfig = {
    *  (byte-identical to today) — a discrete positive-minutes count, not a score, so it is neither clamped
    *  nor rounded; an invalid value (fractional, non-positive, non-finite) is dropped with a warning. */
   requireFreshRebaseWindowMinutes: number | null;
+  /** `gate.claMode` (#2564): off/advisory/block. null (unset) ⇒ off (byte-identical to today) — a repo must
+   *  explicitly opt in before any CLA consent check runs. */
+  claMode: GateRuleMode | null;
+  /** `gate.cla.consentPhrase` (#2564): the required PR-body consent phrase. null (unset) ⇒ phrase-match
+   *  detection is not configured. */
+  claConsentPhrase: string | null;
+  /** `gate.cla.checkRunName` (#2564): the CLA-bot check-run name to trust. null (unset) ⇒ check-run
+   *  detection is not configured. */
+  claCheckRunName: string | null;
 };
 
 // The converged per-PR review features a self-host operator toggles PER-REPO under `features:` in the private
@@ -348,6 +357,9 @@ const EMPTY_GATE_CONFIG: FocusManifestGateConfig = {
   firstTimeContributorGrace: null,
   premergeContentRecheck: null,
   requireFreshRebaseWindowMinutes: null,
+  claMode: null,
+  claConsentPhrase: null,
+  claCheckRunName: null,
 };
 
 const EMPTY_FEATURES_CONFIG: FocusManifestFeaturesConfig = {
@@ -589,6 +601,11 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
   if (size !== undefined && size !== null && sizeRecord === undefined) {
     warnings.push(`Manifest gate field "gate.size" must be a mapping; ignoring it.`);
   }
+  const cla = record.cla;
+  const claRecord = cla !== null && typeof cla === "object" && !Array.isArray(cla) ? (cla as Record<string, JsonValue>) : undefined;
+  if (cla !== undefined && cla !== null && claRecord === undefined) {
+    warnings.push(`Manifest gate field "gate.cla" must be a mapping; ignoring it.`);
+  }
   const gate: FocusManifestGateConfig = {
     present: false,
     enabled: normalizeOptionalBoolean(record.enabled, "gate.enabled", warnings),
@@ -618,6 +635,9 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     firstTimeContributorGrace: normalizeOptionalBoolean(record.firstTimeContributorGrace, "gate.firstTimeContributorGrace", warnings),
     premergeContentRecheck: normalizeOptionalBoolean(record.premergeContentRecheck, "gate.premergeContentRecheck", warnings),
     requireFreshRebaseWindowMinutes: normalizeOptionalPositiveInteger(record.requireFreshRebaseWindow, "gate.requireFreshRebaseWindow", warnings),
+    claMode: normalizeOptionalGateMode(record.claMode, "gate.claMode", warnings),
+    claConsentPhrase: parsePublicSafeText(claRecord?.consentPhrase, "gate.cla.consentPhrase", warnings),
+    claCheckRunName: parsePublicSafeText(claRecord?.checkRunName, "gate.cla.checkRunName", warnings),
   };
   // #2266: the flag is parsed, clamped, and threaded end-to-end, but the gate evaluator never reads it — a
   // maintainer who sets it to true believing it softens a blocker for newcomers gets no such effect. Surface
@@ -653,7 +673,10 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     gate.dryRun !== null ||
     gate.firstTimeContributorGrace !== null ||
     gate.premergeContentRecheck !== null ||
-    gate.requireFreshRebaseWindowMinutes !== null;
+    gate.requireFreshRebaseWindowMinutes !== null ||
+    gate.claMode !== null ||
+    gate.claConsentPhrase !== null ||
+    gate.claCheckRunName !== null;
   return gate;
 }
 
@@ -717,6 +740,13 @@ export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
   if (gate.firstTimeContributorGrace !== null) out.firstTimeContributorGrace = gate.firstTimeContributorGrace;
   if (gate.premergeContentRecheck !== null) out.premergeContentRecheck = gate.premergeContentRecheck;
   if (gate.requireFreshRebaseWindowMinutes !== null) out.requireFreshRebaseWindow = gate.requireFreshRebaseWindowMinutes;
+  if (gate.claMode !== null) out.claMode = gate.claMode;
+  if (gate.claConsentPhrase !== null || gate.claCheckRunName !== null) {
+    const cla: Record<string, JsonValue> = {};
+    if (gate.claConsentPhrase !== null) cla.consentPhrase = gate.claConsentPhrase;
+    if (gate.claCheckRunName !== null) cla.checkRunName = gate.claCheckRunName;
+    out.cla = cla;
+  }
   return out;
 }
 
@@ -1383,6 +1413,9 @@ export function resolveEffectiveSettings(
   if (gate.firstTimeContributorGrace !== null) effective.firstTimeContributorGrace = gate.firstTimeContributorGrace;
   if (gate.premergeContentRecheck !== null) effective.premergeContentRecheck = gate.premergeContentRecheck;
   if (gate.requireFreshRebaseWindowMinutes !== null) effective.requireFreshRebaseWindowMinutes = gate.requireFreshRebaseWindowMinutes;
+  if (gate.claMode !== null) effective.claGateMode = gate.claMode;
+  if (gate.claConsentPhrase !== null) effective.claConsentPhrase = gate.claConsentPhrase;
+  if (gate.claCheckRunName !== null) effective.claCheckRunName = gate.claCheckRunName;
   // The dashboard "Require linked issue" toggle must not silently diverge from gate blocking: when the
   // boolean is on but linkedIssueGateMode is still off, treat it as a block requirement (#797).
   if (effective.requireLinkedIssue && effective.linkedIssueGateMode === "off") {

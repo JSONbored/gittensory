@@ -2350,6 +2350,41 @@ export async function fetchRequiredStatusContexts(
   return names;
 }
 
+/**
+ * Best-effort fetch of ONE named check-run's conclusion on a head SHA (#2564, the CLA-bot check-run detection
+ * mode of `gate.claMode`). Returns the conclusion string (lowercased; `"neutral"`/`"success"`/… or `""` when
+ * concluded with no conclusion field, which should not normally happen) when a check-run with that exact name
+ * (case-insensitive) is found; `null` when the head SHA has no such check-run (a resolved "not found," distinct
+ * from "could not resolve"); `undefined` when the check-runs themselves could not be read at all (network/auth
+ * error, or no headSha) — the caller must treat `undefined` as "not evaluated," never as "missing," so a
+ * transient fetch failure can never manufacture a false CLA-missing blocker. Scans only the FIRST page (100
+ * check-runs) — a CLA bot posts exactly one check-run, so a repo with >100 check-runs on a single commit (very
+ * unusual) risks missing it only in that pathological case, and still degrades to `undefined` (not evaluated)
+ * rather than a false negative.
+ */
+export async function fetchNamedCheckRunConclusion(
+  env: Env,
+  repoFullName: string,
+  headSha: string | null | undefined,
+  checkRunName: string,
+  token: string | undefined,
+  admissionKey?: GitHubRateLimitAdmissionKey,
+): Promise<string | null | undefined> {
+  if (!headSha) return undefined;
+  const result = await githubJsonWithHeaders<{ check_runs?: GitHubCheckRunPayload[] }>(
+    env,
+    repoFullName,
+    `/commits/${headSha}/check-runs?per_page=100&page=1`,
+    token,
+    githubRateLimitOptions(admissionKey),
+  ).catch(() => undefined);
+  if (!result) return undefined; // fetch failed → not evaluated, never a false "missing".
+  const nameLc = checkRunName.trim().toLowerCase();
+  const run = (result.data.check_runs ?? []).find((candidate) => candidate.name.trim().toLowerCase() === nameLc);
+  if (!run) return null; // resolved: no check-run with this name exists on this commit.
+  return (run.conclusion ?? "").toLowerCase();
+}
+
 // Minimal structural shape the CI reducer needs from a check-run — a superset of the REST GitHubCheckRunPayload
 // (so REST payloads assign directly) AND buildable from the GraphQL CheckRun node (which has no `id`).
 type LiveCiCheckRun = {

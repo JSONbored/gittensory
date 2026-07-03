@@ -567,6 +567,20 @@ export type RepositorySettings = {
    *  in review-enrichment — this is a tamper/integrity-substitution check, not a known-CVE check. Config-as-code
    *  only — no DB column or dashboard toggle; set via `.gittensory.yml gate.lockfileIntegrity`. */
   lockfileIntegrityGateMode?: GateRuleMode | undefined;
+  /** CLA / license-compatibility gate (#2564). `off` (default/absent) = no CLA check at all; `advisory`/`block` =
+   *  evaluate the configured detection method(s) (`claConsentPhrase` and/or `claCheckRunName`) and raise a
+   *  `cla_consent_missing` finding when neither confirms consent — `block` also hard-blocks the gate. Config-as-code
+   *  only (no DB column, mirrors sizeGateMode) — set via `.gittensory.yml gate.claMode`. */
+  claGateMode?: GateRuleMode | undefined;
+  /** `gate.cla.consentPhrase`: a public-safe-filtered phrase a maintainer requires somewhere in the PR body (e.g.
+   *  "I have read and agree to the CLA"), matched case-insensitively. `null`/absent ⇒ phrase-match detection is not
+   *  configured. Config-as-code only, alongside {@link claGateMode}. */
+  claConsentPhrase?: string | null | undefined;
+  /** `gate.cla.checkRunName`: the name of a separate CLA-bot check-run this repo also runs (e.g. "CLA Assistant
+   *  Lite"). A `success`/`neutral` conclusion for a check-run with this exact name (case-insensitive) also
+   *  satisfies consent. `null`/absent ⇒ check-run detection is not configured. Config-as-code only, alongside
+   *  {@link claGateMode}. */
+  claCheckRunName?: string | null | undefined;
   /** Dry-run disposition (#gate-dryrun). When true, the gate renders the would-be merge/close/manual verdict (every
    *  advisory sub-gate promoted to block) WITHOUT enforcing — the posted check stays non-blocking. Lets advisory mode
    *  preview exactly what it would do before the maintainer flips to real enforcement. Default off. */
