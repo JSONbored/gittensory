@@ -112,8 +112,12 @@ export function renderBrief(
     lines.push("### End-of-life runtimes (upgrade before merging)");
     for (const item of eol) {
       const label = item.status === "eol" ? "END-OF-LIFE" : "EOL soon";
+      // `item.file` is an attacker-controlled PR path (a filename/dir may contain a backtick), so it must go
+      // through safeCodeSpan like every other renderer here — a raw code span lets it break out and inject
+      // markdown/instructions into the shared review brief (an LLM prompt). product/version are constrained
+      // (a fixed product table / a `\d+(.\d+)*` version) and eol comes from the trusted release catalog.
       lines.push(
-        `- \`${item.file}\` pins ${item.product} ${item.version} — **${label}** (EOL ${item.eol})`,
+        `- ${safeCodeSpan(item.file)} pins ${item.product} ${item.version} — **${label}** (EOL ${item.eol})`,
       );
     }
   }
