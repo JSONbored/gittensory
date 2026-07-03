@@ -625,7 +625,7 @@ export const RepositorySettingsSchema = z
     closeOwnerAuthors: z.boolean(),
     autoLabelEnabled: z.boolean(),
     gittensorLabel: z.string(),
-    blacklistLabel: z.string(),
+    blacklistLabel: z.string().nullable(),
     createMissingLabel: z.boolean(),
     publicSurface: z.enum(["off", "comment_and_label", "comment_only", "label_only"]),
     includeMaintainerAuthors: z.boolean(),
@@ -648,19 +648,20 @@ export const RepositorySettingsSchema = z
       )
       .optional(),
     autonomy: z
-      .record(z.enum(["review", "request_changes", "approve", "merge", "close", "label"]), z.enum(["observe", "suggest", "propose", "auto_with_approval", "auto"]))
+      .record(z.enum(["review", "request_changes", "approve", "merge", "close", "label", "review_state_label"]), z.enum(["observe", "suggest", "propose", "auto_with_approval", "auto"]))
       .optional(),
     autoMaintain: z.object({ requireApprovals: z.number().int(), mergeMethod: z.enum(["merge", "squash", "rebase"]) }).optional(),
     agentPaused: z.boolean().optional(),
     agentDryRun: z.boolean().optional(),
     contributorOpenPrCap: z.number().int().positive().nullable().optional(),
     contributorOpenIssueCap: z.number().int().positive().nullable().optional(),
-    contributorCapLabel: z.string().optional(),
+    contributorCapLabel: z.string().nullable().optional(),
     contributorCapCancelCi: z.boolean().nullable().optional(),
     reviewNagPolicy: z.enum(["off", "hold", "close"]).optional(),
     reviewNagMaxPings: z.number().int().positive().optional(),
     reviewNagCooldownDays: z.number().int().positive().max(MAX_REVIEW_NAG_COOLDOWN_DAYS).optional(),
-    reviewNagLabel: z.string().optional(),
+    reviewNagLabel: z.string().nullable().optional(),
+    reviewNagMonitoredMentions: z.array(z.string()).optional(),
     autoCloseExemptLogins: z.array(z.string()).optional(),
     accountAgeThresholdDays: z.number().int().positive().nullable().optional(),
     newAccountLabel: z.string().optional(),

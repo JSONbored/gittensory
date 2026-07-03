@@ -366,7 +366,7 @@ const proposeActionShape = {
   owner: z.string().min(1),
   repo: z.string().min(1),
   pullNumber: z.number().int().positive(),
-  actionClass: z.enum(["review", "request_changes", "approve", "merge", "close", "label"]),
+  actionClass: z.enum(["review", "request_changes", "approve", "merge", "close", "label", "review_state_label"]),
   reason: z.string().max(500).optional(),
   label: z.string().min(1).max(100).optional(),
   reviewBody: z.string().max(60000).optional(),

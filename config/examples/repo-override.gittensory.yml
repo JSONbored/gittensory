@@ -25,3 +25,9 @@ settings:
   # for a small, high-trust repo where the instance-wide cap doesn't make sense. Omit this key
   # entirely (rather than setting it to `null`) to just inherit the global cap instead.
   contributorOpenPrCap: null
+
+  # #label-scoping: an explicit `null` also works for the enforcement LABEL names (blacklistLabel/
+  # contributorCapLabel/reviewNagLabel) — this repo still closes over-cap PRs (via the global
+  # `autonomy.close: auto`) but applies no label when doing so, e.g. because this repo's own
+  # `gittensor:*` label taxonomy already covers it. Omit to inherit the global/default label name.
+  contributorCapLabel: null

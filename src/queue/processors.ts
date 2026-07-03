@@ -2002,9 +2002,10 @@ async function runAgentMaintenancePlanAndExecute(
   // Fires for a CONTRIBUTOR only — same standing owner/admin/automation-bot exemption as every other
   // anti-abuse mechanism above. The label is applied directly (fire-and-forget, matching mode gating) rather
   // than threaded through the planner: this is advisory/visibility only, independent of the merit/CI/AI
-  // disposition the planner computes below. Gate finding: a direct label mutation still needs the SAME
-  // label-autonomy opt-in every other label write goes through (resolveAutonomy(..., "label") === "auto") —
-  // a repo that has not opted into automatic label actions must not have this throttle silently write labels.
+  // disposition the planner computes below. #label-scoping: gated on the DEDICATED `review_state_label` class
+  // (the same family as the planner's own disposition-communication labels — this is a visibility signal about
+  // the bot's own read on the PR, never an enforcement action), NOT the generic `label` — a repo that has not
+  // opted into `review_state_label` must not have this throttle silently write labels.
   let isNewAccount = false;
   const accountAgeThresholdDays = settings.accountAgeThresholdDays;
   if (typeof accountAgeThresholdDays === "number" && pr.authorLogin && !authorIsOwner && !authorIsAdmin && !authorIsAutomationBot) {
@@ -2013,7 +2014,7 @@ async function runAgentMaintenancePlanAndExecute(
       const ageDays = (Date.now() - Date.parse(createdAt)) / (24 * 60 * 60 * 1000);
       isNewAccount = ageDays < accountAgeThresholdDays;
     }
-    if (isNewAccount && resolveAutonomy(settings.autonomy, "label") === "auto") {
+    if (isNewAccount && resolveAutonomy(settings.autonomy, "review_state_label") === "auto") {
       const newAccountMode = resolveAgentActionMode({
         globalPaused: isGlobalAgentPause(env) || (await isGlobalAgentFrozen(env)),
         agentPaused: settings.agentPaused,
@@ -4374,6 +4375,25 @@ async function processGitHubWebhook(
     if (
       eventName === "issue_comment" &&
       (await maybeThrottleReviewNagPing(env, deliveryId, payload))
+    ) {
+      await recordWebhookEvent(env, {
+        deliveryId,
+        eventName,
+        action: payload.action,
+        installationId: payload.installation?.id,
+        repositoryFullName: payload.repository?.full_name,
+        payloadHash: "processed",
+        status: "processed",
+      });
+      return;
+    }
+
+    // Maintainer-mention nag moderation (#label-scoping): independent of the @gittensory ping above — a
+    // mention of a configured maintainer login is never a bot command, so this must run regardless of whether
+    // the comment also contains an @gittensory mention/command.
+    if (
+      eventName === "issue_comment" &&
+      (await maybeThrottleMonitoredMentions(env, deliveryId, payload))
     ) {
       await recordWebhookEvent(env, {
         deliveryId,
@@ -9361,6 +9381,170 @@ async function maybeThrottleReviewNagPing(
       outcome: "denied",
       detail: `close policy engaged but autonomy is not acting for label/close: ${commenter} pinged ${pingCount} times (limit ${maxPings})`,
       metadata: { deliveryId, repoFullName, mode, policy },
+    }).catch(
+      /* v8 ignore next -- fail-safe: an audit write failure never blocks the handler */
+      () => undefined,
+    );
+    return true;
+  }
+
+  const installation = await getInstallation(env, installationId);
+  await executeAgentMaintenanceActions(
+    env,
+    {
+      installationId,
+      repoFullName,
+      pullNumber: pr.number,
+      headSha: pr.headSha,
+      autonomy: settings.autonomy,
+      agentPaused: settings.agentPaused,
+      agentDryRun: settings.agentDryRun,
+      installationPermissions: installation?.permissions ?? null,
+      authorLogin: pr.authorLogin,
+    },
+    planned,
+  );
+  return true;
+}
+
+// Audit eventType for one recorded monitored-mention ping (#label-scoping). Shared between the recorder below
+// and the cooldown-window count query so a naming drift can't silently under/over-count.
+const MONITORED_MENTION_PING_EVENT_TYPE = "github_app.monitored_mention_ping";
+
+/** Word-boundary, case-insensitive check for `@login` in a comment body — the SAME precision level as
+ *  `parseGittensoryMentionCommand`'s own `@gittensory` detection (a literal match, not an intent classifier):
+ *  conservative and testable, per the feature's design goal. `login` is only ever a value that already survived
+ *  `normalizeAutoCloseExemptLogins`'s GitHub-login-format validation (alphanumeric + internal hyphens), so it
+ *  is safe to embed directly in a RegExp without escaping. */
+function bodyMentionsLogin(body: string, login: string): boolean {
+  return new RegExp(`(?:^|\\s)@${login}(?:\\s|$|[^\\w-])`, "i").test(body);
+}
+
+/**
+ * Maintainer-mention nag moderation (#label-scoping): extends the review-nag cooldown above to ALSO throttle a
+ * thread's OWN author repeatedly @-mentioning a CONFIGURED maintainer login (`settings.reviewNagMonitoredMentions`)
+ * — e.g. a contributor who keeps tagging a specific maintainer for review/status instead of (or in addition to)
+ * pinging `@gittensory`. Reuses the exact same policy/threshold/cooldown/label settings as
+ * {@link maybeThrottleReviewNagPing} (one cooldown policy, multiple watched mention targets) and the same
+ * thread-author-only scoping + owner/admin/bot/autoCloseExemptLogins exemptions, but counts EACH mentioned login
+ * independently (and independently of the `@gittensory` counter) so pinging the bot and pinging a maintainer
+ * don't share one budget. Runs regardless of whether the comment also contains an `@gittensory` mention/command
+ * — mentioning a maintainer is never a bot command, so this must not gate or interact with command dispatch.
+ * Off (`reviewNagMonitoredMentions` empty/absent, the default) is a complete no-op — no extra reads at all.
+ */
+async function maybeThrottleMonitoredMentions(
+  env: Env,
+  deliveryId: string,
+  payload: GitHubWebhookPayload,
+): Promise<boolean> {
+  if (payload.action !== "created") return false;
+  const body = payload.comment?.body;
+  const repoFullName = payload.repository?.full_name;
+  const issue = payload.issue;
+  const installationId = getInstallationId(payload);
+  const commenter = payload.comment?.user?.login;
+  if (!body || !repoFullName || !issue || !installationId || !commenter) return false;
+  if (payload.comment?.user?.type === "Bot" || /\[bot\]$/i.test(commenter)) return false;
+
+  const settings = await resolveRepositorySettings(env, repoFullName);
+  const monitoredLogins = settings.reviewNagMonitoredMentions ?? [];
+  if (monitoredLogins.length === 0) return false;
+  /* v8 ignore next -- resolveRepositorySettings always resolves a concrete "off"/"hold"/"close" (NOT NULL DEFAULT 'off'); the undefined side is defensive against the field's optional TS type. */
+  const policy = settings.reviewNagPolicy ?? "off";
+  if (policy === "off") return false;
+
+  const threadAuthor = issue.user?.login;
+  if (!threadAuthor || commenter.toLowerCase() !== threadAuthor.toLowerCase()) return false;
+
+  const repoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")) : "";
+  if (commenter.toLowerCase() === repoOwner.toLowerCase()) return false;
+  if (parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(commenter.toLowerCase())) return false;
+  if (isAutoCloseExempt(commenter, settings.autoCloseExemptLogins)) return false;
+
+  const mentionedLogin = monitoredLogins.find((login) => bodyMentionsLogin(body, login));
+  if (!mentionedLogin) return false;
+
+  const targetKey = `${repoFullName}#${issue.number}#mention:${mentionedLogin.toLowerCase()}`;
+  /* v8 ignore next -- resolveRepositorySettings always resolves a concrete positive integer (NOT NULL DEFAULT 3); the undefined side is defensive against the field's optional TS type. */
+  const maxPings = settings.reviewNagMaxPings ?? 3;
+  /* v8 ignore next -- resolveRepositorySettings always resolves a concrete positive integer (NOT NULL DEFAULT 5); the undefined side is defensive against the field's optional TS type. */
+  const cooldownDays = Math.min(settings.reviewNagCooldownDays ?? 5, MAX_REVIEW_NAG_COOLDOWN_DAYS);
+  const sinceIso = new Date(Date.now() - cooldownDays * 24 * 60 * 60 * 1000).toISOString();
+  const priorPings = await countRecentAuditEventsForActorAndTarget(env, commenter, MONITORED_MENTION_PING_EVENT_TYPE, targetKey, sinceIso);
+  const pingCount = priorPings + 1;
+
+  await recordAuditEvent(env, {
+    eventType: MONITORED_MENTION_PING_EVENT_TYPE,
+    actor: commenter,
+    targetKey,
+    outcome: "completed",
+    detail: `ping ${pingCount}/${maxPings} within ${cooldownDays}d window (mentioned @${mentionedLogin})`,
+    metadata: { deliveryId, repoFullName, mentionedLogin },
+  }).catch(
+    /* v8 ignore next -- fail-safe: an audit write failure never blocks the mention-command fallthrough */
+    () => undefined,
+  );
+
+  if (pingCount <= maxPings) return false;
+
+  const mode = resolveAgentActionMode({
+    globalPaused: isGlobalAgentPause(env) || (await isGlobalAgentFrozen(env)),
+    agentPaused: settings.agentPaused,
+    agentDryRun: settings.agentDryRun,
+  });
+
+  if (policy === "hold" || !issue.pull_request) {
+    if (mode === "live") {
+      await createIssueComment(
+        env,
+        installationId,
+        repoFullName,
+        issue.number,
+        `@${commenter} this thread has reached the review-request cooldown limit for @${mentionedLogin} (${maxPings} pings within ${cooldownDays} days). Please wait for the cooldown window to pass before pinging @${mentionedLogin} again. This is an automated maintenance action.`,
+      ).catch(
+        /* v8 ignore next -- fail-safe: a comment-post failure must not crash the throttle decision itself */
+        () => undefined,
+      );
+    }
+    await recordAuditEvent(env, {
+      eventType: "github_app.review_nag_cooldown_applied",
+      actor: "gittensory",
+      targetKey,
+      outcome: mode === "live" ? "completed" : "denied",
+      detail: `hold applied: ${commenter} pinged @${mentionedLogin} ${pingCount} times (limit ${maxPings})`,
+      metadata: { deliveryId, repoFullName, mode, policy, mentionedLogin },
+    }).catch(
+      /* v8 ignore next -- fail-safe: an audit write failure never blocks the handler */
+      () => undefined,
+    );
+    return true;
+  }
+
+  const pr = await getPullRequest(env, repoFullName, issue.number);
+  if (!pr || pr.state !== "open") return false;
+
+  const planned = planAgentMaintenanceActions({
+    conclusion: "skipped",
+    blockerTitles: [],
+    autonomy: settings.autonomy,
+    changedPaths: [],
+    hardGuardrailGlobs: [],
+    authorIsOwner: false,
+    authorIsAdmin: false,
+    authorIsAutomationBot: false,
+    ciState: "unverified",
+    reviewNagMatch: { matched: true, authorLogin: commenter, pingCount, maxPings },
+    reviewNagLabel: settings.reviewNagLabel,
+    pr: { labels: pr.labels, headSha: pr.headSha },
+  });
+  if (planned.length === 0) {
+    await recordAuditEvent(env, {
+      eventType: "github_app.review_nag_cooldown_applied",
+      actor: "gittensory",
+      targetKey,
+      outcome: "denied",
+      detail: `close policy engaged but autonomy is not acting for label/close: ${commenter} pinged @${mentionedLogin} ${pingCount} times (limit ${maxPings})`,
+      metadata: { deliveryId, repoFullName, mode, policy, mentionedLogin },
     }).catch(
       /* v8 ignore next -- fail-safe: an audit write failure never blocks the handler */
       () => undefined,

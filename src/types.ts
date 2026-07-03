@@ -688,9 +688,11 @@ export type RepositorySettings = {
   contributorBlacklist?: ContributorBlacklistEntry[] | undefined;
   /** The label applied to a blacklisted contributor's PR (#1425). Configurable per-repo (dashboard/DB +
    *  `.gittensory.yml` `settings.blacklistLabel`); defaults to `"slop"` so the disposition works regardless of
-   *  the label a repo sets. Always populated by the DB layer (default `"slop"`); optional so existing settings
-   *  fixtures/callers need not be touched (mirrors the sibling `contributorBlacklist`). */
-  blacklistLabel?: string | undefined;
+   *  the label a repo sets. Explicit `null` closes WITHOUT applying any label (the same load-bearing-null idiom
+   *  as {@link contributorOpenPrCap}) -- distinct from omitted/undefined, which uses the default. Always
+   *  populated by the DB layer (default `"slop"`); optional so existing settings fixtures/callers need not be
+   *  touched (mirrors the sibling `contributorBlacklist`). */
+  blacklistLabel?: string | null | undefined;
   /** Per-contributor open-PR cap (#2270, anti-abuse): the max PRs a single non-owner/admin/bot contributor may
    *  have open on this repo at once. `null`/absent (default) = no cap, byte-identical to today. Layered like
    *  every other settings field (`.gittensory.yml` `settings.contributorOpenPrCap` > DB > `null`). Enforcement
@@ -700,10 +702,11 @@ export type RepositorySettings = {
    *  applied to open issues instead of open PRs. `null`/absent (default) = no cap. */
   contributorOpenIssueCap?: number | null | undefined;
   /** The label applied to a PR/issue closed for exceeding a per-contributor open-item cap (#2270). Same
-   *  configurable-with-fallback shape as {@link blacklistLabel}; defaults to `"over-contributor-limit"` so the
-   *  disposition works regardless of the label a repo sets. Always populated by the DB layer; optional so
-   *  existing settings fixtures/callers need not be touched. */
-  contributorCapLabel?: string | undefined;
+   *  configurable-with-fallback shape as {@link blacklistLabel} (including the explicit-`null`-closes-without-a-
+   *  label idiom); defaults to `"over-contributor-limit"` so the disposition works regardless of the label a
+   *  repo sets. Always populated by the DB layer; optional so existing settings fixtures/callers need not be
+   *  touched. */
+  contributorCapLabel?: string | null | undefined;
   /** Cancel in-flight CI runs on a contributor_cap close (#2462, anti-abuse): when true, after a PR is
    *  auto-closed for exceeding {@link contributorOpenPrCap}, gittensory lists and cancels that PR's
    *  in-progress/queued Actions runs at its head SHA. Requires the App installation to have granted
@@ -729,9 +732,19 @@ export type RepositorySettings = {
    *  touched. */
   reviewNagCooldownDays?: number | undefined;
   /** The label applied to a thread closed for review-nag cooldown (#2463), mirroring {@link blacklistLabel}'s
-   *  configurable-with-fallback shape. Always populated by the DB layer (default `"review-nag-cooldown"`);
-   *  optional so existing settings fixtures/callers need not be touched. */
-  reviewNagLabel?: string | undefined;
+   *  configurable-with-fallback shape (including the explicit-`null`-closes-without-a-label idiom). Always
+   *  populated by the DB layer (default `"review-nag-cooldown"`); optional so existing settings
+   *  fixtures/callers need not be touched. */
+  reviewNagLabel?: string | null | undefined;
+  /** Maintainer-mention nag moderation: GitHub logins to ALSO throttle under the review-nag cooldown when the
+   *  thread author repeatedly @-mentions them (on top of the bot's own `@gittensory` handle) -- e.g. a
+   *  maintainer login instead of the bot, for a contributor who keeps tagging a specific person for review.
+   *  Counted independently per mentioned login and independently of the `@gittensory` counter, but reuses the
+   *  SAME {@link reviewNagPolicy}/{@link reviewNagMaxPings}/{@link reviewNagCooldownDays}/{@link reviewNagLabel}
+   *  thresholds/action/label -- one cooldown policy, multiple watched mention targets. `[]`/undefined (default)
+   *  = no logins watched, zero behavior change. Never fires for the repo owner, admin logins, automation bots,
+   *  or a login on {@link autoCloseExemptLogins}. */
+  reviewNagMonitoredMentions?: string[] | undefined;
   /** Shared repo-scoped exemption list (#2463, anti-abuse): GitHub logins that are NEVER throttled or closed by
    *  gittensory's deterministic anti-abuse mechanisms (review-nag and the per-contributor open-item cap above),
    *  on top of the standing owner/admin/automation-bot exemption. Always populated by the DB layer (default
@@ -818,8 +831,15 @@ export type ContributorBlacklistEntry = {
  *  executing; `auto_with_approval` executes behind a human approval gate (#779); `auto` executes directly. */
 export type AutonomyLevel = "observe" | "suggest" | "propose" | "auto_with_approval" | "auto";
 
-/** The write-action classes the maintainer auto-maintain layer (#778) can take on a PR. */
-export type AgentActionClass = "review" | "request_changes" | "approve" | "merge" | "close" | "label" | "update_branch";
+/** The write-action classes the maintainer auto-maintain layer (#778) can take on a PR. `label` gates the
+ *  anti-abuse enforcement labels tied 1:1 to a `close` in the same disposition (blacklist/contributor-cap/
+ *  review-nag) -- those additionally require `close` to be acting, so `label` alone can't apply them without a
+ *  close. `review_state_label` is a SEPARATE, independent gate for the planner's own disposition-communication
+ *  labels (ready-to-merge / changes-requested / needs-human-review / migration-collision / the linked-issue
+ *  pending-closure flag / the account-age new-account label) -- these are advisory signals about the bot's own
+ *  verdict, not enforcement actions, and default OFF (`observe`) like every other class so a one-shot-mode repo
+ *  never sees them without an explicit opt-in. */
+export type AgentActionClass = "review" | "request_changes" | "approve" | "merge" | "close" | "label" | "review_state_label" | "update_branch";
 
 /** Per-action-class autonomy. An unset class resolves to `observe` (deny-by-default). */
 export type AutonomyPolicy = Partial<Record<AgentActionClass, AutonomyLevel>>;

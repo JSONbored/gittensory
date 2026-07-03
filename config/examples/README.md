@@ -57,9 +57,10 @@ per-repo file overlaid onto the global default:
   **replace wholesale** — a per-repo array is never concatenated with the global one.
 - An **explicit `null`** at a key in the per-repo file always overrides the global value there.
   This clears a setting wherever the manifest parser already treats an explicit `null` as
-  "off"/"clear" — e.g. `settings.contributorOpenPrCap`, `settings.contributorOpenIssueCap`, and
-  `settings.accountAgeThresholdDays` — and is a harmless no-op (equivalent to omitting the key)
-  everywhere else.
+  "off"/"clear" — e.g. `settings.contributorOpenPrCap`, `settings.contributorOpenIssueCap`,
+  `settings.accountAgeThresholdDays`, and the enforcement label names
+  (`settings.blacklistLabel`/`contributorCapLabel`/`reviewNagLabel`, see below) — and is a harmless
+  no-op (equivalent to omitting the key) everywhere else.
 - If either file fails to parse (or is malformed/oversized), the merge is skipped and the
   still-valid file is used alone; a still-good sibling's policy is never silently discarded just
   because the other file is broken.
@@ -111,6 +112,52 @@ settings:
   autoCloseExemptLogins:
     - your-trusted-regular
 ```
+
+## Label autonomy scoping for one-shot review mode
+
+Two `autonomy` classes govern every label the bot can apply, and they are **independent**:
+
+- **`close`** authorizes the terminal merge/close/hold disposition **and** the anti-abuse
+  enforcement labels tied to it (blacklist/contributor-cap/review-nag) — a label like
+  `over-contributor-limit` is inseparable metadata on its close, so it never needs a separate grant.
+  Set `settings.contributorCapLabel`/`blacklistLabel`/`reviewNagLabel` to explicit `null` (not just
+  omitted) to close/hold **without** applying any label at all.
+- **`review_state_label`** authorizes the bot's own disposition-communication labels only —
+  `gittensory:ready-to-merge` / `changes-requested` / `needs-human-review` /
+  `migration-collision`. These are advisory commentary about the bot's own verdict, not
+  enforcement, and default OFF like every autonomy class. **For a one-shot review model, leave this
+  at the default** so a PR merges, closes, or holds through the required gate check alone — set it
+  to `auto` only if you specifically want that commentary as GitHub labels too.
+
+```yaml
+# .gittensory.yml (global default) — recommended one-shot baseline
+settings:
+  autonomy:
+    close: auto
+    # review_state_label intentionally omitted (defaults to observe)
+```
+
+The broad `autonomy.label` class still exists but no longer gates any of the above — it is not
+required for either family and applies to nothing on its own.
+
+## Maintainer-mention nag moderation
+
+`settings.reviewNagMonitoredMentions` extends the `@gittensory`-ping review-nag cooldown
+(`reviewNagPolicy`/`reviewNagMaxPings`/`reviewNagCooldownDays`/`reviewNagLabel` — same settings,
+one shared policy) to **also** throttle a thread's own author repeatedly @-mentioning a configured
+maintainer login, counted independently per login and independently of the `@gittensory` counter:
+
+```yaml
+# .gittensory.yml (global default)
+settings:
+  reviewNagPolicy: hold
+  reviewNagMonitoredMentions:
+    - your-maintainer-login
+```
+
+Owner/admin/automation-bot logins and anyone on `autoCloseExemptLogins` are always exempt, and only
+the thread's own author is ever throttled — a third party mentioning the login on someone else's
+PR/issue never counts.
 
 ## What belongs here vs. in the public `.gittensory.yml`
 

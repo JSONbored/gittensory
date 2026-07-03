@@ -1452,6 +1452,38 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(tooLarge.warnings.some((w) => /settings\.reviewNagCooldownDays/.test(w) && /365/.test(w))).toBe(true);
   });
 
+  it("#label-scoping: an explicit yml null clears blacklistLabel/contributorCapLabel/reviewNagLabel back to 'no label' (load-bearing null)", () => {
+    const cleared = parseFocusManifest({ settings: { blacklistLabel: null, contributorCapLabel: null, reviewNagLabel: null } });
+    expect(cleared.settings.blacklistLabel).toBeNull();
+    expect(cleared.settings.contributorCapLabel).toBeNull();
+    expect(cleared.settings.reviewNagLabel).toBeNull();
+    // Overlays (clears) a DB-configured label name.
+    const eff = resolveEffectiveSettings({ blacklistLabel: "slop", contributorCapLabel: "over-contributor-limit", reviewNagLabel: "review-nag-cooldown" } as unknown as RepositorySettings, cleared);
+    expect(eff.blacklistLabel).toBeNull();
+    expect(eff.contributorCapLabel).toBeNull();
+    expect(eff.reviewNagLabel).toBeNull();
+    // Omitted in yml ⇒ the DB-configured label survives untouched (distinct from explicit null).
+    const noOverride = resolveEffectiveSettings({ blacklistLabel: "slop" } as unknown as RepositorySettings, parseFocusManifest({}));
+    expect(noOverride.blacklistLabel).toBe("slop");
+    // A configured (non-null) string still overrides the DB normally.
+    const customized = parseFocusManifest({ settings: { blacklistLabel: "abuse" } });
+    expect(customized.settings.blacklistLabel).toBe("abuse");
+  });
+
+  it("#label-scoping: parses + resolves reviewNagMonitoredMentions from the settings: block, overlaying the DB", () => {
+    const manifest = parseFocusManifest({ settings: { reviewNagMonitoredMentions: ["JSONbored", "Some-Maintainer"] } });
+    expect(manifest.settings.reviewNagMonitoredMentions).toEqual(["JSONbored", "Some-Maintainer"]);
+    // yml overlays (replaces) a DB-configured list.
+    const eff = resolveEffectiveSettings({ reviewNagMonitoredMentions: ["db-only"] } as unknown as RepositorySettings, manifest);
+    expect(eff.reviewNagMonitoredMentions).toEqual(["JSONbored", "Some-Maintainer"]);
+    // Omitted in yml ⇒ the DB-configured list survives untouched.
+    const noOverride = resolveEffectiveSettings({ reviewNagMonitoredMentions: ["keep-me"] } as unknown as RepositorySettings, parseFocusManifest({}));
+    expect(noOverride.reviewNagMonitoredMentions).toEqual(["keep-me"]);
+    // Invalid entries are dropped; an all-invalid list leaves the field unset (never blanks the DB list).
+    const invalid = parseFocusManifest({ settings: { reviewNagMonitoredMentions: ["-bad", 42 as never] } });
+    expect(invalid.settings.reviewNagMonitoredMentions).toBeUndefined();
+  });
+
   it("parses + resolves the account-age throttle settings from the settings: block, overlaying the DB (#2561)", () => {
     const manifest = parseFocusManifest({ settings: { accountAgeThresholdDays: 14, newAccountLabel: "fresh-account" } });
     expect(manifest.settings.accountAgeThresholdDays).toBe(14);

@@ -8664,7 +8664,8 @@
             "type": "string"
           },
           "blacklistLabel": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "createMissingLabel": {
             "type": "boolean"
@@ -8817,6 +8818,16 @@
                   "auto_with_approval",
                   "auto"
                 ]
+              },
+              "review_state_label": {
+                "type": "string",
+                "enum": [
+                  "observe",
+                  "suggest",
+                  "propose",
+                  "auto_with_approval",
+                  "auto"
+                ]
               }
             }
           },
@@ -8859,7 +8870,8 @@
             "exclusiveMinimum": true
           },
           "contributorCapLabel": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "reviewNagPolicy": {
             "type": "string",
@@ -8881,7 +8893,8 @@
             "maximum": 365
           },
           "reviewNagLabel": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "autoCloseExemptLogins": {
             "type": "array",
@@ -8928,9 +8941,11 @@
             "type": "string",
             "nullable": true
           },
-          "contributorCapCancelCi": {
-            "type": "boolean",
-            "nullable": true
+          "reviewNagMonitoredMentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "claGateMode": {
             "type": "string",
@@ -8946,6 +8961,10 @@
           },
           "claCheckRunName": {
             "type": "string",
+            "nullable": true
+          },
+          "contributorCapCancelCi": {
+            "type": "boolean",
             "nullable": true
           }
         },

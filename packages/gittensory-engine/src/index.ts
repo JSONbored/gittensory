@@ -28,3 +28,7 @@ export {
   type MinerIssueDiscoveryPolicy,
   type ParsedMinerGoalSpec,
 } from "./miner-goal-spec.js";
+export {
+  computeMinerGoalLaneFit,
+  isMinerRepoTargetable,
+} from "./miner-goal-lane-fit.js";
