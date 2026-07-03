@@ -25,6 +25,7 @@ describe("GitHub PR reviews cache scoping (#2537)", () => {
     clearGitHubResponseCacheForTest();
     resetMetrics();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   async function seedRegisteredRepo(env: Env) {
@@ -76,6 +77,10 @@ describe("GitHub PR reviews cache scoping (#2537)", () => {
 
   it("does not re-fetch reviews when reviewsSyncedAt is set and no invalidation has been recorded (cache hit), and leaves stored rows untouched", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    // Pin "now" shortly after the seeded reviewsSyncedAt -- within the new bounded-age backstop's
+    // 48h window, so this test's cache-hit assertion isn't defeated by real wall-clock time.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-20T01:00:00.000Z"));
     await seedRegisteredRepo(env);
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
       number: 61,
@@ -115,6 +120,10 @@ describe("GitHub PR reviews cache scoping (#2537)", () => {
 
   it("does not re-fetch reviews when reviewsInvalidatedAt predates reviewsSyncedAt (stale invalidation, still a cache hit)", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    // Pin "now" shortly after the seeded reviewsSyncedAt -- within the new bounded-age backstop's
+    // 48h window, so this test's cache-hit assertion isn't defeated by real wall-clock time.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-20T01:00:00.000Z"));
     await seedRegisteredRepo(env);
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
       number: 62,
@@ -139,6 +148,37 @@ describe("GitHub PR reviews cache scoping (#2537)", () => {
 
     expect(result).toMatchObject({ status: "complete" });
     expect(urls.some((url) => url.includes("/pulls/62/reviews"))).toBe(false);
+  });
+
+  it("REGRESSION (bounded-age backstop): an unparseable reviewsSyncedAt is treated as stale (NaN branch, miss) rather than throwing", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    await seedRegisteredRepo(env);
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 68,
+      title: "Open PR, unparseable review marker",
+      state: "open",
+      user: { login: "oktofeesh1" },
+      head: { sha: "head-68" },
+      labels: [],
+      body: "",
+    });
+    await upsertPullRequestDetailSyncState(env, {
+      repoFullName: "JSONbored/gittensory",
+      pullNumber: 68,
+      status: "complete",
+      headSha: "head-68",
+      reviewsSyncedAt: "not-a-date",
+    });
+    const urls = stubFetchTracking((url) =>
+      url.includes("/pulls/68/reviews")
+        ? Response.json([{ id: 9, user: { login: "reviewer9" }, state: "APPROVED", submitted_at: "2026-05-19T00:00:00.000Z" }])
+        : Response.json([]),
+    );
+
+    const result = await refreshPullRequestDetails(env, "JSONbored/gittensory", 68);
+
+    expect(result).toMatchObject({ status: "complete" });
+    expect(urls.some((url) => url.includes("/pulls/68/reviews"))).toBe(true);
   });
 
   it("re-fetches reviews on the next sync after markPullRequestReviewsInvalidated bumps reviewsInvalidatedAt past reviewsSyncedAt (cache invalidation)", async () => {
@@ -283,6 +323,10 @@ describe("GitHub PR reviews cache scoping (#2537)", () => {
 
   it("does not treat a FILES-only failure as a reason to re-fetch reviews (only a review-specific failure forces a retry)", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    // Pin "now" shortly after the seeded reviewsSyncedAt -- within the new bounded-age backstop's
+    // 48h window, so this test's cache-hit assertion isn't defeated by real wall-clock time.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-20T01:00:00.000Z"));
     await seedRegisteredRepo(env);
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
       number: 66,
@@ -323,6 +367,10 @@ describe("GitHub PR reviews cache scoping (#2537)", () => {
 
   it("REGRESSION: a head SHA change alone does not invalidate cached reviews (reviews are independent of the head, unlike files)", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    // Pin "now" shortly after the seeded reviewsSyncedAt -- within the new bounded-age backstop's
+    // 48h window, so this test's cache-hit assertion isn't defeated by real wall-clock time.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-20T01:00:00.000Z"));
     await seedRegisteredRepo(env);
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
       number: 64,
@@ -373,6 +421,10 @@ describe("GitHub PR reviews cache scoping (#2537)", () => {
 
   it("REGRESSION (gate finding): a manual force-files refresh does not also force an unrelated reviews refetch", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    // Pin "now" shortly after the seeded reviewsSyncedAt -- within the new bounded-age backstop's
+    // 48h window, so this test's cache-hit assertion isn't defeated by real wall-clock time.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-20T01:00:00.000Z"));
     await seedRegisteredRepo(env);
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
       number: 67,

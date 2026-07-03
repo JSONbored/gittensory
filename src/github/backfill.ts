@@ -1975,17 +1975,33 @@ async function backfillRepository(env: Env, repo: RepositoryRecord, limits: Back
   }
 }
 
+// Bounded-age backstop (#2537 second gate pass): the reviewsInvalidatedAt comparison below is EXACT when the
+// invalidation write actually happens, but a silently DROPPED markPullRequestReviewsInvalidated write leaves
+// reviewsInvalidatedAt null forever -- there is then no marker at all to compare against, so the exact
+// comparison alone would read "up to date" indefinitely no matter how long ago reviewsSyncedAt was. This is the
+// only backstop for a signal that was never recorded in the first place; deliberately long so a
+// normally-behaving PR (invalidation writes succeeding) never hits it in practice.
+const REVIEWS_CACHE_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+
 // #2537 follow-up (gate-flagged): a small, pure predicate mirroring fetchAndStorePullRequestDetails's own
 // reviewsUpToDate check below, exported so the periodic re-gate sweep (queue/processors.ts) can independently
 // decide whether a stale reviews cache is, on its own, a reason to force a refresh -- otherwise this row's
 // invalidation state only gets EVALUATED when something ELSE already calls refreshPullRequestDetails, which a
 // "quiet" PR (no new pushes, slop evidence + manifest gate both off, no pre-merge check paths) may never do. A
-// SINGLE authoritative definition (this function) rather than two independently-maintained copies that could drift.
+// SINGLE authoritative definition (this function) rather than two independently-maintained copies that could
+// drift -- both the exact invalidation-marker comparison AND the bounded-age fallback live here, so a caller
+// that only checks THIS predicate (e.g. the sweep, before deciding whether to even call refreshPullRequestDetails)
+// agrees with fetchAndStorePullRequestDetails's own internal check once that call actually happens.
 export function isReviewsCacheUpToDate(
   syncState: Pick<PullRequestDetailSyncStateRecord, "reviewsSyncedAt" | "reviewsInvalidatedAt"> | null | undefined,
 ): boolean {
   const reviewsSyncedAt = syncState?.reviewsSyncedAt;
-  return Boolean(reviewsSyncedAt) && (!syncState?.reviewsInvalidatedAt || (reviewsSyncedAt ?? "") > syncState.reviewsInvalidatedAt);
+  if (!reviewsSyncedAt) return false;
+  const invalidationCleared = !syncState?.reviewsInvalidatedAt || reviewsSyncedAt > syncState.reviewsInvalidatedAt;
+  if (!invalidationCleared) return false;
+  const reviewsSyncedAtMs = Date.parse(reviewsSyncedAt);
+  if (!Number.isFinite(reviewsSyncedAtMs)) return false;
+  return Date.now() - reviewsSyncedAtMs < REVIEWS_CACHE_MAX_AGE_MS;
 }
 
 async function fetchAndStorePullRequestDetails(

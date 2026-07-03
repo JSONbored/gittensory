@@ -1119,6 +1119,50 @@ describe("queue processors", () => {
     expect(reviewsGets).toBeGreaterThan(0);
   });
 
+  it("REGRESSION (#2537 second pass): a SILENTLY DROPPED invalidation write (reviewsInvalidatedAt stays null forever) still self-heals via the bounded-age backstop", async () => {
+    // The invalidation-marker comparison alone (isReviewsCacheUpToDate) reads "up to date" forever when
+    // markPullRequestReviewsInvalidated's write is dropped -- there is no marker to compare a sync timestamp
+    // against. Only a bounded-age fallback, independent of the marker, can catch this: an old enough
+    // reviewsSyncedAt with NO invalidation recorded at all must still be treated as stale.
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write" }, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto", update_branch: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 8, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a8" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+    // No reviewsInvalidatedAt at all -- the marker comparison alone would read this as permanently up to date.
+    await upsertPullRequestDetailSyncState(env, {
+      repoFullName: "owner/agent-repo",
+      pullNumber: 8,
+      status: "complete",
+      reviewsSyncedAt: "2026-05-01T00:00:00.000Z",
+    });
+    let reviewsGets = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+      if (/\/pulls\/8(?:\?|$)/.test(url) && method === "GET") {
+        return Response.json({ number: 8, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a8" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+      }
+      if (url.includes("/pulls/8/files")) return Response.json([]);
+      if (url.includes("/pulls/8/reviews")) {
+        reviewsGets += 1;
+        return Response.json([]);
+      }
+      if (url.includes("/commits/a8/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a8/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+    // Far past the 48h bounded-age backstop, well past the 2026-05-01 sync stamp.
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "reviews-dropped-invalidation-selfheal", repoFullName: "owner/agent-repo", prNumber: 8, installationId: 9001 });
+
+    expect(reviewsGets).toBeGreaterThan(0);
+  });
+
   it("REGRESSION (#2537 follow-up): a failed read of the reviews-cache sync state fails OPEN — the sweep completes without crashing rather than propagating the D1 error", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write" }, events: [] } });
