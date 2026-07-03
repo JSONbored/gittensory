@@ -3,7 +3,7 @@ import { getRepositorySettings, upsertRepositorySettings } from "../../src/db/re
 import { createTestEnv } from "../helpers/d1";
 
 // #selfhost-linked-issue-gate-drift: repository_settings.linked_issue_gate_mode was persisted as 'block' in
-// production for repos that never explicitly opted into it (migrations/0101_fix_linked_issue_gate_mode_default.sql
+// production for repos that never explicitly opted into it (migrations/0102_fix_linked_issue_gate_mode_default.sql
 // backfills the historically-drifted rows). These regression tests pin the two paths that must default to
 // 'advisory' going forward: a brand-new row (no DB row yet) and an explicit upsert that omits the field.
 describe("repository_settings: linked-issue gate defaults to advisory, not block (#selfhost-linked-issue-gate-drift)", () => {
