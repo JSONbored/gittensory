@@ -91,7 +91,6 @@ type MutableCandidate = LockfileTamperCandidate & {
  *  reconciliation package.json dependency-range diffing used (before this fix, that was the ONLY signal this
  *  module had) — applied here to the lockfile entry's own version field instead. */
 function versionChanged(removed: string | undefined, added: string | undefined): boolean {
-  if (removed === undefined && added === undefined) return false;
   return removed !== added;
 }
 
