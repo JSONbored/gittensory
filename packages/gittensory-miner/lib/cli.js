@@ -15,6 +15,8 @@ export function printHelp(input) {
       "  gittensory-miner help",
       "  gittensory-miner version",
       "  gittensory-miner hooks check --tool <name> --input <json> [--json]",
+      "  gittensory-miner state get <owner/repo> [--json]",
+      "  gittensory-miner state set <owner/repo> <idle|discovering|planning|preparing> [--json]",
       "",
       "Options:",
       "  --no-update-check  Skip the npm registry version nudge (also GITTENSORY_MINER_NO_UPDATE_CHECK=1)",
