@@ -101,13 +101,16 @@ describe("evaluateClaCheck (#2564)", () => {
       expect(out[0]?.detail).toContain('the "CLA Assistant Lite" check must pass');
     });
 
-    it("both fail with the check-run UNRESOLVED → still cla_consent_missing (phrase gives a deterministic answer; never held)", () => {
+    // #2564 gate-review finding: an unresolved check-run must HOLD even when consentPhrase is ALSO configured
+    // but not (yet) satisfied — the check-run might still satisfy consent, so a transient GitHub read failure
+    // must never hard-fail a PR the check-run method could have saved.
+    it("phrase missing, check-run UNRESOLVED → held (cla_check_unresolved), NOT hard-failed — the check-run might still satisfy consent", () => {
       const out = evaluateClaCheck(config({ consentPhrase: "agree to the CLA", checkRunName: "CLA Assistant Lite" }), {
         body: "no phrase here",
         checkRunConclusion: undefined,
       });
       expect(out).toHaveLength(1);
-      expect(out[0]?.code).toBe(CLA_CONSENT_MISSING_CODE);
+      expect(out[0]?.code).toBe(CLA_CHECK_UNRESOLVED_CODE);
     });
   });
 });

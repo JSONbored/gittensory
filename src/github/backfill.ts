@@ -2382,6 +2382,12 @@ export async function fetchNamedCheckRunConclusion(
   const nameLc = checkRunName.trim().toLowerCase();
   const run = (result.data.check_runs ?? []).find((candidate) => candidate.name.trim().toLowerCase() === nameLc);
   if (!run) return null; // resolved: no check-run with this name exists on this commit.
+  // A matching check-run that has NOT finished yet (status !== "completed") has conclusion: null by GitHub's
+  // own contract — that is "not yet resolved," not "resolved with an empty conclusion." Returning `undefined`
+  // here (rather than coercing to "") keeps this indistinguishable from a fetch failure to the caller, so
+  // `claMode: block` HOLDS instead of hard-failing a PR before the named check has actually finished running
+  // (#2564 gate-review finding).
+  if (run.status !== "completed") return undefined;
   return (run.conclusion ?? "").toLowerCase();
 }
 

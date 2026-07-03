@@ -511,7 +511,7 @@ function evaluateGateCheckCore(advisoryResult: Advisory, policy: GateCheckPolicy
   // App/infra state (repo not synced yet, PR not cached): gittensory cannot evaluate this PR yet, so the
   // gate is NEUTRAL (non-blocking) and re-evaluates automatically on the next sync/webhook. Never block a
   // contributor on the app's OWN state.
-  if (advisoryResult.findings.some((finding) => isEvaluationBlocker(finding.code))) {
+  if (advisoryResult.findings.some((finding) => isEvaluationBlocker(finding.code, policy))) {
     return {
       enabled: true,
       conclusion: "neutral",
@@ -838,13 +838,19 @@ function conclusionForSeverity(severity: AdvisorySeverity, findings: AdvisoryFin
   return "success";
 }
 
-function isEvaluationBlocker(code: string): boolean {
+function isEvaluationBlocker(code: string, policy: GateCheckPolicy): boolean {
   // pre_merge_check_unresolved: an enforced path-gated pre-merge check whose changed-file set could not be
   // resolved — gittensory cannot evaluate it yet, so the gate is NEUTRAL (held) and re-evaluates on the next
   // sync, rather than auto-merging past the unverified requirement or hard-closing on a transient miss. (#review-audit)
-  // cla_check_unresolved (#2564): the CLA-bot check-run's conclusion could not be resolved for a check-run-only
-  // config — same HOLD treatment, for the same reason.
-  return code === "repo_not_registered" || code === "repo_not_seen" || code === "pr_not_cached" || code === "pre_merge_check_unresolved" || code === CLA_CHECK_UNRESOLVED_CODE;
+  if (code === "repo_not_registered" || code === "repo_not_seen" || code === "pr_not_cached" || code === "pre_merge_check_unresolved") return true;
+  // cla_check_unresolved (#2564): the CLA-bot check-run's conclusion could not be resolved. Unlike the codes
+  // above (which are never mode-gated), evaluateClaCheck runs for BOTH claGateMode "advisory" and "block" (so
+  // the finding surfaces either way) — only "block" should ever HOLD the gate on an unresolved check-run.
+  // "advisory" mode's whole contract is "surface findings, never affect the verdict"; unconditionally holding
+  // here would violate that for any advisory-mode repo using check-run-only detection (#2564 gate-review
+  // finding). advisory mode still gets the finding in the panel via the normal warnings path below.
+  if (code === CLA_CHECK_UNRESOLVED_CODE) return policy.claGateMode === "block";
+  return false;
 }
 
 // Default configured close-confidence floor (#7) retained for settings compatibility and public calibration text.

@@ -5082,9 +5082,19 @@ describe("GitHub backfill", () => {
       expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "public-token")).toBeNull();
     });
 
-    it("returns an empty string for a matching but still-in-progress check-run (null conclusion)", async () => {
+    // #2564 gate-review finding: a matching check-run that has NOT finished yet must resolve to undefined
+    // (unresolved), not "" — an in-progress run's conclusion:null means "not decided yet," not "resolved with
+    // an empty conclusion." Coercing it to "" made claMode: block hard-fail a PR before the named check had
+    // actually finished running.
+    it("returns undefined (unresolved) for a matching but still-in-progress check-run (status !== completed, conclusion: null)", async () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       vi.stubGlobal("fetch", async () => Response.json({ total_count: 1, check_runs: [{ id: 1, name: "CLA Assistant Lite", status: "in_progress", conclusion: null }] }));
+      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "public-token")).toBeUndefined();
+    });
+
+    it("returns an empty string for a matching, COMPLETED check-run with an unexpected empty conclusion (genuine edge case, not the in-progress case)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async () => Response.json({ total_count: 1, check_runs: [{ id: 1, name: "CLA Assistant Lite", status: "completed", conclusion: null }] }));
       expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "public-token")).toBe("");
     });
 

@@ -36,13 +36,15 @@ export type ClaCheckConfig = {
  * `checkRunConclusion` is `undefined` when the caller could not resolve check-run data at all (a transient
  * fetch failure, or the predicted-gate metadata-only path, which never sees live check-runs) — that is NOT the
  * same as a resolved-but-absent check-run (`null`, "no check-run with this name exists"). When check-run
- * detection is the ONLY configured method (no `consentPhrase`) and its conclusion is unresolved, this HOLDS
- * (`cla_check_unresolved`) instead of failing closed — exactly like an unresolved changed-file set HOLDS a
- * path-gated pre-merge check rather than silently skipping (auto-merge bypass) or hard-closing on a transient
- * miss. When `consentPhrase` is ALSO configured, the phrase result alone decides it (an unresolved check-run
- * can never override a satisfied phrase, and a failed phrase still fails deterministically without waiting on
- * a flaky fetch). Pure + side-effect-free; the caller pushes the finding into the advisory before the gate
- * evaluates.
+ * detection is configured and its conclusion is unresolved (a transient fetch failure, or "not yet run"), this
+ * HOLDS (`cla_check_unresolved`) instead of failing closed — exactly like an unresolved changed-file set HOLDS
+ * a path-gated pre-merge check rather than silently skipping (auto-merge bypass) or hard-closing on a
+ * transient miss. This applies EVEN WHEN `consentPhrase` is ALSO configured but not (yet) satisfied: per the
+ * "either method holds ⇒ satisfied" contract above, an unresolved check-run might still satisfy consent, so
+ * deciding purely from a not-yet-satisfied phrase would hard-fail a PR the check-run could have saved (#2564
+ * gate-review finding). A hold only degrades to a hard `cla_consent_missing` once EVERY configured method has
+ * been definitively resolved and none of them is satisfied. Pure + side-effect-free; the caller pushes the
+ * finding into the advisory before the gate evaluates.
  */
 export function evaluateClaCheck(
   config: ClaCheckConfig,
@@ -52,9 +54,10 @@ export function evaluateClaCheck(
   const phraseSatisfied = config.consentPhrase !== null && (ctx.body ?? "").toLowerCase().includes(config.consentPhrase.toLowerCase());
   const checkRunSatisfied = config.checkRunName !== null && (ctx.checkRunConclusion === "success" || ctx.checkRunConclusion === "neutral");
   if (phraseSatisfied || checkRunSatisfied) return [];
-  // Check-run-only config with an unresolved conclusion: cannot confirm OR deny consent, so HOLD rather than
-  // fail closed. Irrelevant once a consentPhrase is also configured (that gives a deterministic answer already).
-  if (config.consentPhrase === null && config.checkRunName !== null && ctx.checkRunConclusion === undefined) {
+  // A configured check-run whose conclusion is unresolved: cannot confirm OR deny consent via that method, so
+  // HOLD rather than fail closed — regardless of whether consentPhrase is ALSO configured (a not-yet-satisfied
+  // phrase does not mean consent is definitively absent while the check-run could still satisfy it).
+  if (config.checkRunName !== null && ctx.checkRunConclusion === undefined) {
     return [
       {
         code: CLA_CHECK_UNRESOLVED_CODE,

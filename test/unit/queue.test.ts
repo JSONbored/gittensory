@@ -6210,7 +6210,7 @@ describe("queue processors", () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       if (url === "https://api.gittensor.io/miners") return Response.json([]);
-      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
       if (url.includes("/commits/") && url.includes("/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
       if (url.includes("/commits/") && url.includes("/status")) return Response.json({ statuses: [] });
       if (url.includes("/check-runs")) {
@@ -6281,7 +6281,7 @@ describe("queue processors", () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       if (url === "https://api.gittensor.io/miners") return Response.json([]);
-      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
       if (url.includes("/commits/") && url.includes("/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
       if (url.includes("/commits/") && url.includes("/status")) return Response.json({ statuses: [] });
       if (url.includes("/check-runs")) {
@@ -6354,7 +6354,7 @@ describe("queue processors", () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       if (url === "https://api.gittensor.io/miners") return Response.json([]);
-      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
       if (url.includes("/commits/") && url.includes("/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
       if (url.includes("/commits/") && url.includes("/status")) return Response.json({ statuses: [] });
       if (url.includes("/check-runs")) {
@@ -6431,7 +6431,7 @@ describe("queue processors", () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       if (url === "https://api.gittensor.io/miners") return Response.json([]);
-      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
       if (url.includes("/commits/gate129/check-runs")) {
         return Response.json({ total_count: 1, check_runs: [{ id: 1, name: "CLA Assistant Lite", status: "completed", conclusion: "success" }] });
       }
@@ -6507,7 +6507,7 @@ describe("queue processors", () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       if (url === "https://api.gittensor.io/miners") return Response.json([]);
-      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
       if (url.includes("/commits/gate130/check-runs")) {
         return Response.json({ total_count: 1, check_runs: [{ id: 2, name: "CLA Assistant Lite", status: "completed", conclusion: "failure" }] });
       }

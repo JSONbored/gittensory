@@ -233,14 +233,27 @@ describe("CLA / license-compatibility gate (#2564)", () => {
     expect(evaluateGateCheck(claAdvisory(), { claGateMode: "off", confirmedContributor: true }).conclusion).toBe("success");
   });
 
-  it("an UNRESOLVED CLA check-run (cla_check_unresolved) HOLDS the gate (neutral), never close or pass", () => {
+  it("an UNRESOLVED CLA check-run (cla_check_unresolved) HOLDS the gate (neutral) under claMode: block, never close or pass", () => {
     const held: Advisory = {
       ...missingIssueAdvisory(),
       findings: [{ code: "cla_check_unresolved", title: 'CLA check held — "CLA Assistant Lite" not resolved', severity: "warning", detail: "could not resolve the check-run", action: "re-evaluates automatically" }],
     };
-    const result = evaluateGateCheck(held, gateCheckPolicy(settings(), null, true));
+    const result = evaluateGateCheck(held, { claGateMode: "block", confirmedContributor: true });
     expect(result.conclusion).toBe("neutral");
     expect(result.blockers).toEqual([]);
+  });
+
+  // #2564 gate-review finding: advisory mode's whole contract is "surface findings, never affect the verdict"
+  // — an unresolved check-run must NOT hold the gate under claMode: advisory, unlike claMode: block above.
+  it("an UNRESOLVED CLA check-run does NOT hold the gate under claMode: advisory — surfaces as a warning only", () => {
+    const held: Advisory = {
+      ...missingIssueAdvisory(),
+      findings: [{ code: "cla_check_unresolved", title: 'CLA check held — "CLA Assistant Lite" not resolved', severity: "warning", detail: "could not resolve the check-run", action: "re-evaluates automatically" }],
+    };
+    const result = evaluateGateCheck(held, { claGateMode: "advisory", confirmedContributor: true });
+    expect(result.conclusion).toBe("success");
+    expect(result.blockers).toEqual([]);
+    expect(result.warnings.map((finding) => finding.code)).toContain("cla_check_unresolved");
   });
 
   it("gateCheckPolicy threads claGateMode into the policy", () => {
