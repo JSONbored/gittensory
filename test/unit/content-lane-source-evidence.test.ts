@@ -300,6 +300,15 @@ describe("extractSubmittedSourceUrls — frontmatter parsing edge cases", () => 
       const urls = extractSubmittedSourceUrls(src);
       expect(urls.some((u) => u.url === indicator)).toBe(false);
     }
+    // A block-scalar header may carry a trailing inline comment (`|- # sources below`) — still a header, not a URL.
+    for (const indicator of ["|-", ">", "|2-"]) {
+      const src = ["---", `retrievalSources: ${indicator} # sources below`, "  https://a.example/1", "---", "", "body"].join("\n");
+      const urls = extractSubmittedSourceUrls(src);
+      expect(urls.some((u) => u.url === indicator || u.url.includes("#"))).toBe(false);
+    }
+    // A real URL carrying a trailing inline comment is still read (the comment is stripped, the fragment kept).
+    const commented = extractSubmittedSourceUrls(["---", "retrievalSources: https://a.example/p#frag # note", "---", "", "body"].join("\n"));
+    expect(commented.map((u) => u.url)).toContain("https://a.example/p#frag");
   });
 
   it("reads an INLINE bracketed list on a retrievalSources key line", () => {

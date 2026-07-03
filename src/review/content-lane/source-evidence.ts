@@ -119,6 +119,13 @@ function unquoteYamlScalar(value: string): string {
 // list frontmatter readers agree on what is a block-scalar header (and neither reads one as a value/URL).
 const BLOCK_SCALAR_INDICATOR = /^[|>](?:[+-]?\d?|\d[+-]?)$/;
 
+// True when a raw frontmatter value is a block-scalar header. Comment-tolerant: a header may carry a trailing inline
+// comment (`| # sources below`), which normalizes away (like every scalar here) before the indicator is matched — so
+// the header is recognized and never surfaced as a value/URL.
+function isBlockScalarHeader(raw: string): boolean {
+  return BLOCK_SCALAR_INDICATOR.test(stripYamlComment(raw));
+}
+
 // Local frontmatter parser (scalar source-field reader; block-scalar aware so a URL written as a
 // block scalar is still SEEN by the source-reachability gate).
 function parseSimpleFrontmatter(source: string): Record<string, string> {
@@ -145,7 +152,7 @@ function parseSimpleFrontmatter(source: string): Record<string, string> {
     /* v8 ignore next */
     const inline = (head[2] ?? "").trim();
     i += 1;
-    if (BLOCK_SCALAR_INDICATOR.test(inline)) {
+    if (isBlockScalarHeader(inline)) {
       const block: string[] = [];
       while (i < lines.length && ((lines[i] ?? "").trim() === "" || /^\s/.test(lines[i] ?? ""))) {
         // `lines[i]` is bounded by the `i < lines.length` loop guard; `?? ""` cannot fire
@@ -185,10 +192,10 @@ function listSourceUrlValues(source: string, spec: ContentRepoSpec): SubmittedSo
       const key = topLevel[1] as string;
       const value = topLevel[2] as string;
       activeField = spec.sourceUrlListFields.has(key) ? key : "";
-      // Skip a YAML block-scalar header (`|`, `>`, `|-`, `>2`, `|2-`, …) so it is not read as a URL — the old
-      // `!== "|" && !== ">"` check let every non-bare form through, surfacing the indicator string itself as a bogus
-      // URL. Shares BLOCK_SCALAR_INDICATOR with the scalar reader so both agree on the full indicator grammar.
-      if (activeField && value && !BLOCK_SCALAR_INDICATOR.test(value)) {
+      // Skip a YAML block-scalar header (`|`, `>`, `|-`, `>2`, `|2-`, `| # note`, …) so it is not read as a URL — the
+      // old `!== "|" && !== ">"` check let every other form through, surfacing the indicator string itself as a bogus
+      // URL. Shares isBlockScalarHeader with the scalar reader so both agree on the full, comment-tolerant grammar.
+      if (activeField && value && !isBlockScalarHeader(value)) {
         for (const url of scalarSourceUrlValues(value)) {
           values.push({ field: activeField, url });
         }
