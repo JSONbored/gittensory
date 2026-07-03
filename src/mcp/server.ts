@@ -2115,6 +2115,7 @@ export class GittensoryMcp {
     }> = [];
     for (const target of repos.slice(0, 20)) {
       const fullName = `${target.owner}/${target.repo}`;
+      if (!(await this.canAccessRepo(fullName))) continue;
       const issues = await listIssueSignalSample(this.env, fullName);
       const pullRequests = await listOpenPullRequests(this.env, fullName);
       const claimedIssueNumbers = new Set(pullRequests.flatMap((pr) => pr.linkedIssues ?? []));
