@@ -8243,6 +8243,71 @@ describe("queue processors", () => {
     expect(seen.comments.some((c) => c.includes("@spammer") && c.includes("2 open pull requests") && c.includes("limit of 1"))).toBe(true);
   });
 
+  it("REGRESSION (security review finding): the per-repo cap's sibling live-check bounds concurrency instead of firing one request per open PR at once", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    // 30 OTHER open PRs from the SAME author — well beyond CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY (10), so an
+    // unbounded Promise.all would fire all 30 live-state GETs at once.
+    const SIBLING_COUNT = 30;
+    for (let number = 1; number <= SIBLING_COUNT; number += 1) {
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number, title: `Prolific PR ${number}`, state: "open", user: { login: "prolific" }, head: { sha: `p${number}` }, labels: [], body: "x" });
+    }
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      autonomy: { close: "auto", label: "auto" },
+      contributorOpenPrCap: 100, // above SIBLING_COUNT + 1 — this test only cares about concurrency, not closing.
+    });
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const siblingCheckPattern = new RegExp(`/pulls/(?:${Array.from({ length: SIBLING_COUNT }, (_, i) => i + 1).join("|")})$`);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (siblingCheckPattern.test(url) && method === "GET") {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        // A tiny real delay forces genuine overlap between concurrently-dispatched sibling checks — without
+        // it, each mock resolves synchronously and never actually overlaps another in-flight call.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+        return Response.json({ state: "open" });
+      }
+      if (url.includes(`/pulls/${SIBLING_COUNT + 1}/files`)) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
+      if (url.includes(`/pulls/${SIBLING_COUNT + 1}/reviews`)) return Response.json([]);
+      if (url.includes(`/pulls/${SIBLING_COUNT + 1}/commits`)) return Response.json([]);
+      if (url.endsWith(`/pulls/${SIBLING_COUNT + 1}`)) return Response.json({ number: SIBLING_COUNT + 1, state: "open", user: { login: "prolific" }, head: { sha: `p${SIBLING_COUNT + 1}` }, mergeable_state: "clean" });
+      if (url.includes(`/commits/p${SIBLING_COUNT + 1}/check-runs`)) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes(`/commits/p${SIBLING_COUNT + 1}/status`)) return Response.json({ state: "success", statuses: [] });
+      if (url.includes(`/issues/${SIBLING_COUNT + 1}/labels`)) return Response.json([]);
+      if (url.includes(`/issues/${SIBLING_COUNT + 1}/comments`)) return Response.json([]);
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "contributor-cap-bounded-concurrency",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: SIBLING_COUNT + 1, title: "Prolific author's newest PR", state: "open", user: { login: "prolific" }, head: { sha: `p${SIBLING_COUNT + 1}` }, labels: [], body: "x", mergeable_state: "clean" },
+      },
+    });
+
+    expect(maxInFlight).toBeGreaterThan(1); // proves the check is genuinely concurrent, not accidentally serial
+    expect(maxInFlight).toBeLessThanOrEqual(10); // CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY
+  });
+
   it("contributor open-PR cap (#2270): disabled (no cap configured, the default) never closes an over-threshold contributor", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, {

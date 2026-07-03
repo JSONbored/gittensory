@@ -2194,12 +2194,17 @@ async function runAgentMaintenancePlanAndExecute(
     // (already resolved above for the live-CI recheck) rather than minting a second one.
     const otherAuthorOpenPullRequests = await listOtherOpenPullRequestsForAuthor(env, repoFullName, pr.number, pr.authorLogin);
     const confirmedOpen = new Set<number>();
-    await Promise.all(
-      otherAuthorOpenPullRequests.map(async (other) => {
-        const liveState = await fetchLivePullRequestState(env, repoFullName, other.number, token, admissionKey).catch(() => undefined);
-        if (liveState === "open") confirmedOpen.add(other.number);
-      }),
-    );
+    // Bounded concurrency (security review finding): an unbounded Promise.all here scales with the author's
+    // OWN open-PR count, not a fixed small number -- an author with dozens of open PRs would fire that many
+    // concurrent GitHub calls from a single webhook, and the delivery-order-guard wake below re-triggers this
+    // same block for every over-cap sibling, compounding into near-quadratic API growth that can exhaust the
+    // installation's rate-limit budget. Every entry must still be verified (the exact over-cap PR numbers
+    // below depend on the complete confirmed-open set, not just "is the count over cap"), so this bounds
+    // concurrency rather than stopping early, mirroring mapWithConcurrency's other callers in this file.
+    await mapWithConcurrency(otherAuthorOpenPullRequests, CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY, async (other) => {
+      const liveState = await fetchLivePullRequestState(env, repoFullName, other.number, token, admissionKey).catch(() => undefined);
+      if (liveState === "open") confirmedOpen.add(other.number);
+    });
     const authorOpenPrNumbers = otherAuthorOpenPullRequests
       .filter((other) => confirmedOpen.has(other.number))
       .map((other) => other.number)
@@ -4152,6 +4157,15 @@ async function countLiveOpenWithConcurrencyUntil(
 // backgroundConcurrency cap (which defaults to 1) entirely from inside one job's execution. Bounded worker-pool
 // fan-out, same shape as GLOBAL_OPEN_ITEM_LIVE_CHECK_CONCURRENCY above.
 const NOTIFY_EVALUATE_EVENT_CONCURRENCY = 5;
+
+// The per-repo contributor-cap live-verification (#2270 busy-repo bypass fix) walks the author's COMPLETE
+// open-PR set on this repo, not a fixed small number -- an author with dozens of open PRs would otherwise fire
+// that many concurrent fetchLivePullRequestState calls from a single webhook, and the delivery-order-guard
+// wake below re-triggers this same check for every over-cap sibling, compounding into near-quadratic API
+// growth across one busy author's siblings (security review finding). Every entry must still be verified (the
+// exact over-cap PR numbers depend on the complete confirmed-open set, not just whether the count is over
+// cap), so this bounds concurrency via mapWithConcurrency rather than stopping early.
+const CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY = 10;
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
