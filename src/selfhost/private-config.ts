@@ -115,7 +115,9 @@ export function parseReviewSkill(filename: string, text: string): RepoReviewSkil
  *  OFF without deleting the file. Truthy vocabulary matches the codebase flag convention. (#review-skills) */
 export function isReviewSkillEnabled(text: string): boolean {
   const head = /^---\s*\n([\s\S]*?)\n---\s*\n?/.exec(text)?.[1] ?? "";
-  const raw = /(?:^|\n)enabled:\s*(.+)/.exec(head)?.[1]?.trim().replace(/^["']|["']$/g, "");
+  // Drop a YAML inline comment (` # …`) before matching, so `enabled: true  # explicit` reads as `true`, not
+  // `true # explicit` (which would fail the truthy test and wrongly disable the skill).
+  const raw = /(?:^|\n)enabled:\s*(.+)/.exec(head)?.[1]?.replace(/\s+#.*$/, "").trim().replace(/^["']|["']$/g, "");
   return raw === undefined ? true : /^(1|true|yes|on)$/i.test(raw);
 }
 

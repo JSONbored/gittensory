@@ -135,6 +135,12 @@ describe("isReviewSkillEnabled (#review-skills)", () => {
     expect(isReviewSkillEnabled("---\nname: x\nenabled: no\n---\nbody")).toBe(false);
     expect(isReviewSkillEnabled("---\nenabled: 0\n---\nbody")).toBe(false); // any non-truthy value disables
   });
+  it("ignores a YAML inline comment on the enabled directive", () => {
+    // A trailing ` # …` is a YAML comment, not part of the value — it must not flip a truthy directive to disabled.
+    expect(isReviewSkillEnabled("---\nenabled: true # temporarily explicit\n---\nbody")).toBe(true);
+    expect(isReviewSkillEnabled('---\nenabled: "on"  # keep the rubric on\n---\nbody')).toBe(true); // comment after quoted value
+    expect(isReviewSkillEnabled("---\nenabled: false # parked for now\n---\nbody")).toBe(false); // still disables
+  });
 });
 
 describe("makeLocalReviewContextReader (#review-skills)", () => {
