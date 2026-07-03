@@ -134,6 +134,16 @@ test("scanUndocumentedExport: preserves the { file, line, symbol } contract thro
   assert.match(brief, /\bundoc\b/); // symbol preserved
 });
 
+test("scanUndocumentedExport: a rejected fetch or a non-OK (404) response yields no finding (fail-safe)", async () => {
+  const files = [{ path: "src/index.ts", status: "modified", patch: PATCH }];
+  const rejecting = async () => {
+    throw new Error("network down");
+  };
+  assert.deepEqual(await scanUndocumentedExport(req(files), rejecting), []); // fetch throws → caught → no finding
+  const notOk = async () => new Response("nope", { status: 404 });
+  assert.deepEqual(await scanUndocumentedExport(req(files), notOk), []); // resp.ok false → content skipped
+});
+
 test("scanUndocumentedExport: no token or no headSha → skipped (no finding, no throw)", async () => {
   const files = [{ path: "src/index.ts", status: "modified", patch: PATCH }];
   assert.deepEqual(await scanUndocumentedExport(req(files, { githubToken: undefined }), headFetch(HEAD)), []);
