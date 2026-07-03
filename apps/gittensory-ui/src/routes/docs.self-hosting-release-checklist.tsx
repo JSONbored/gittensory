@@ -167,7 +167,7 @@ docker rm -f gt-pg && docker network rm gt-pg-smoke`}
 
 # With Qdrant RAG:
 docker network create gt-rag-smoke
-docker run -d --name gt-qdrant --network gt-rag-smoke qdrant/qdrant:latest
+docker run -d --name gt-qdrant --network gt-rag-smoke qdrant/qdrant:v1.18.2
 SELFHOST_SMOKE_NETWORK=gt-rag-smoke \\
 SELFHOST_SMOKE_EXTRA_ENV="QDRANT_URL=http://gt-qdrant:6333" \\
 SELFHOST_SMOKE_EXPECT_EVENTS="selfhost_vectorize" \\

@@ -18,7 +18,16 @@
 set -euo pipefail
 
 IMAGE="${1:?usage: smoke-selfhost.sh <image>}"
-NETWORK_NAME="${SELFHOST_SMOKE_NETWORK:-gt-smoke-$$}"
+# A caller-supplied network (e.g. one already holding a Postgres or Qdrant container for a cross-service
+# scenario) is joined, not owned -- this script neither creates nor removes it. Only the default
+# self-generated network is created/removed here.
+NETWORK_OWNED=1
+if [ -n "${SELFHOST_SMOKE_NETWORK:-}" ]; then
+  NETWORK_NAME="$SELFHOST_SMOKE_NETWORK"
+  NETWORK_OWNED=0
+else
+  NETWORK_NAME="gt-smoke-$$"
+fi
 REDIS_NAME="${SELFHOST_SMOKE_REDIS_NAME:-gt-smoke-redis-$$}"
 APP_NAME="${SELFHOST_SMOKE_APP_NAME:-gt-smoke-app-$$}"
 PORT="${SELFHOST_SMOKE_PORT:-8787}"
@@ -36,17 +45,32 @@ require_cmd curl
 
 cleanup() {
   docker rm -f "$APP_NAME" "$REDIS_NAME" >/dev/null 2>&1 || true
-  docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
+  if [ "$NETWORK_OWNED" = "1" ]; then
+    docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 
-echo "smoke-selfhost: booting Redis + $IMAGE on an isolated network"
-docker network create "$NETWORK_NAME" >/dev/null
+if [ "$NETWORK_OWNED" = "1" ]; then
+  echo "smoke-selfhost: booting Redis + $IMAGE on an isolated network ($NETWORK_NAME)"
+  docker network create "$NETWORK_NAME" >/dev/null
+else
+  echo "smoke-selfhost: booting Redis + $IMAGE on caller-supplied network ($NETWORK_NAME)"
+fi
 docker run -d --name "$REDIS_NAME" --network "$NETWORK_NAME" redis:7-alpine >/dev/null
+redis_ok=0
 for _ in $(seq 1 30); do
-  if docker exec "$REDIS_NAME" redis-cli ping | grep -q PONG; then break; fi
+  if docker exec "$REDIS_NAME" redis-cli ping | grep -q PONG; then
+    redis_ok=1
+    break
+  fi
   sleep 1
 done
+if [ "$redis_ok" != "1" ]; then
+  echo "::error::$REDIS_NAME never responded to PING" >&2
+  docker logs "$REDIS_NAME" >&2 || true
+  exit 1
+fi
 
 # Extra env, one KEY=VALUE per line -- turned into repeated -e flags. Deliberately whitespace/newline
 # separated (not comma) so values containing commas (e.g. AI_PROVIDER=claude-code,codex) are unambiguous.
