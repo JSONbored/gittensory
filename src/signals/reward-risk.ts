@@ -362,9 +362,6 @@ export function buildContributorRewardRiskStrategy(args: {
     ],
     registeredRepoNames,
   );
-  // Bucket cached records by normalized repoFullName once (O(items)) so the per-repo loop below
-  // reads each repo's slice via O(1) map lookups instead of re-scanning the full arrays on every
-  // repo (was O(repos × items) before #2112).
   const issuesByRepo = groupByRepo(args.allIssues);
   const pullRequestsByRepo = groupByRepo(args.allPullRequests);
   const recentMergedPullRequestsByRepo = groupByRepo(args.recentMergedPullRequests ?? []);

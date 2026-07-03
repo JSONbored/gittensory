@@ -2247,11 +2247,6 @@ function officialSnapshot(): GittensorContributorSnapshot {
 }
 
 describe("buildContributorRewardRiskStrategy multi-repo grouping (#2112)", () => {
-  // The refactor in #2112 pre-buckets allIssues/allPullRequests/recentMergedPullRequests by
-  // normalized repoFullName before the per-repo loop. Existing tests above already exercise the
-  // multi-repo strategy path end-to-end and assert the same reasoning/action output, so any
-  // regression in the new bucketing would surface as a diff in those tests. The benchmark is
-  // documented in the PR description.
   it("compiles and runs alongside the existing multi-repo strategy tests", () => {
     expect(true).toBe(true);
   });
