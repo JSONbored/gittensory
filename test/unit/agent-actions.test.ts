@@ -880,13 +880,15 @@ describe("contributor blacklist short-circuit (#1425)", () => {
     // #label-scoping: the blacklist label rides on `close` autonomy, not `label` — no `label: "auto"` needed.
     input({ conclusion: "success", autonomy: { close: "auto", approve: "auto", merge: "auto" }, blacklistMatch: { matched: true, reason: "plagiarism" }, ...extra });
 
-  it("labels + closes a blacklisted contributor's PR, winning over a passing gate (no merit review / merge)", () => {
+  it("closes + labels a blacklisted contributor's PR, winning over a passing gate (no merit review / merge)", () => {
     const plan = planAgentMaintenanceActions(blacklisted());
-    expect(classes(plan)).toEqual(["label", "close"]); // short-circuit: no approve/merge despite a SUCCESS gate
-    expect(plan[0]).toMatchObject({ actionClass: "label", label: DEFAULT_BLACKLIST_LABEL, labelOp: "add" });
-    expect(plan[1]).toMatchObject({ actionClass: "close", closeKind: "blacklist" });
-    expect(plan[1]?.closeComment).not.toContain("plagiarism");
-    expect(plan[1]?.closeComment).toContain("blocked from contributing");
+    // close is pushed BEFORE its coupled label (#label-close-split-brain) so the executor's outcome-correlation
+    // guard always has the close's outcome already recorded by the time it evaluates the label.
+    expect(classes(plan)).toEqual(["close", "label"]); // short-circuit: no approve/merge despite a SUCCESS gate
+    expect(plan[0]).toMatchObject({ actionClass: "close", closeKind: "blacklist" });
+    expect(plan[1]).toMatchObject({ actionClass: "label", label: DEFAULT_BLACKLIST_LABEL, labelOp: "add", closeKind: "blacklist" });
+    expect(plan[0]?.closeComment).not.toContain("plagiarism");
+    expect(plan[0]?.closeComment).toContain("blocked from contributing");
   });
 
   it("pins the blacklist close to the reviewed head, mirroring merge/approve (#2452)", () => {
@@ -900,15 +902,15 @@ describe("contributor blacklist short-circuit (#1425)", () => {
   });
 
   it("uses the repo-configured blacklistLabel, defaulting to 'slop' when unset", () => {
-    expect(planAgentMaintenanceActions(blacklisted({ blacklistLabel: "abuse" }))[0]).toMatchObject({ label: "abuse" });
+    expect(planAgentMaintenanceActions(blacklisted({ blacklistLabel: "abuse" }))[1]).toMatchObject({ label: "abuse" });
     expect(DEFAULT_BLACKLIST_LABEL).toBe("slop");
-    expect(planAgentMaintenanceActions(blacklisted())[0]).toMatchObject({ label: "slop" });
+    expect(planAgentMaintenanceActions(blacklisted())[1]).toMatchObject({ label: "slop" });
   });
 
   it("#label-scoping: an explicit null blacklistLabel closes WITHOUT any label; the label action carries autonomyClass: close", () => {
     const withLabel = planAgentMaintenanceActions(blacklisted());
-    expect(classes(withLabel)).toEqual(["label", "close"]);
-    expect(withLabel[0]).toMatchObject({ actionClass: "label", autonomyClass: "close" });
+    expect(classes(withLabel)).toEqual(["close", "label"]);
+    expect(withLabel[1]).toMatchObject({ actionClass: "label", autonomyClass: "close" });
     const withoutLabel = planAgentMaintenanceActions(blacklisted({ blacklistLabel: null }));
     expect(classes(withoutLabel)).toEqual(["close"]);
   });
@@ -916,12 +918,12 @@ describe("contributor blacklist short-circuit (#1425)", () => {
   it("uses the same static public close comment when the entry has no reason", () => {
     const withReason = planAgentMaintenanceActions(blacklisted());
     const withoutReason = planAgentMaintenanceActions(blacklisted({ blacklistMatch: { matched: true, reason: null } }));
-    expect(withoutReason[1]?.closeComment).toBe(withReason[1]?.closeComment);
-    expect(withoutReason[1]?.closeComment).toContain("blocked from contributing");
+    expect(withoutReason[0]?.closeComment).toBe(withReason[0]?.closeComment);
+    expect(withoutReason[0]?.closeComment).toContain("blocked from contributing");
   });
 
   it("fires AHEAD of CI — closes even while CI is still pending (not the pending early-return)", () => {
-    expect(classes(planAgentMaintenanceActions(blacklisted({ ciState: "pending" })))).toEqual(["label", "close"]);
+    expect(classes(planAgentMaintenanceActions(blacklisted({ ciState: "pending" })))).toEqual(["close", "label"]);
   });
 
   it("NEVER fires for the owner, an admin login, or an automation bot (standing rule) — the PR falls through to normal disposition", () => {
@@ -941,14 +943,14 @@ describe("contributor blacklist short-circuit (#1425)", () => {
     // `label: auto` alone (no `close`) is no longer sufficient — the enforcement label is inseparable from its close.
     expect(planAgentMaintenanceActions(blacklisted({ autonomy: { label: "auto" } }))).toEqual([]);
     // `close: auto` alone (no `label`) is now sufficient for BOTH the close and its label.
-    expect(classes(planAgentMaintenanceActions(blacklisted({ autonomy: { close: "auto" } })))).toEqual(["label", "close"]);
+    expect(classes(planAgentMaintenanceActions(blacklisted({ autonomy: { close: "auto" } })))).toEqual(["close", "label"]);
   });
 
   it("never publishes blacklist reason text in the public close comment", () => {
     const privateReason = "internal-case-7421-do-not-publish";
     const plan = planAgentMaintenanceActions(blacklisted({ blacklistMatch: { matched: true, reason: privateReason } }));
-    expect(plan[1]?.closeComment).not.toContain(privateReason);
-    expect(plan[1]?.closeComment).toContain("blocked from contributing");
+    expect(plan[0]?.closeComment).not.toContain(privateReason);
+    expect(plan[0]?.closeComment).toContain("blocked from contributing");
   });
 });
 
@@ -962,61 +964,62 @@ describe("per-contributor open-item cap short-circuit (#2270)", () => {
       ...extra,
     });
 
-  it("labels + closes an over-cap contributor's PR, winning over a passing gate (no merit review / merge)", () => {
+  it("closes + labels an over-cap contributor's PR, winning over a passing gate (no merit review / merge)", () => {
     const plan = planAgentMaintenanceActions(overCap());
-    expect(classes(plan)).toEqual(["label", "close"]); // short-circuit: no approve/merge despite a SUCCESS gate
-    expect(plan[0]).toMatchObject({ actionClass: "label", label: DEFAULT_CONTRIBUTOR_CAP_LABEL, labelOp: "add" });
-    expect(plan[1]).toMatchObject({ actionClass: "close", closeKind: "contributor_cap" });
+    // close is pushed BEFORE its coupled label (#label-close-split-brain) — see the blacklist section above.
+    expect(classes(plan)).toEqual(["close", "label"]); // short-circuit: no approve/merge despite a SUCCESS gate
+    expect(plan[0]).toMatchObject({ actionClass: "close", closeKind: "contributor_cap" });
+    expect(plan[1]).toMatchObject({ actionClass: "label", label: DEFAULT_CONTRIBUTOR_CAP_LABEL, labelOp: "add", closeKind: "contributor_cap" });
   });
 
   it("interpolates the (public) login/count/cap into the close comment — unlike blacklist's static-only comment", () => {
     const plan = planAgentMaintenanceActions(overCap());
-    expect(plan[1]?.closeComment).toContain("@farmer99");
-    expect(plan[1]?.closeComment).toContain("3 open pull requests");
-    expect(plan[1]?.closeComment).toContain("limit of 2");
+    expect(plan[0]?.closeComment).toContain("@farmer99");
+    expect(plan[0]?.closeComment).toContain("3 open pull requests");
+    expect(plan[0]?.closeComment).toContain("limit of 2");
   });
 
   it("itemKind selects the close-comment noun — 'issues' for the issue-path caller, not hardcoded to PRs (regression, gate finding on #2467/#2479)", () => {
     const plan = planAgentMaintenanceActions(
       overCap({ contributorCapMatch: { matched: true, authorLogin: "farmer99", openCount: 3, cap: 2, itemKind: "issues" } }),
     );
-    expect(plan[1]?.closeComment).toContain("3 open issues");
-    expect(plan[1]?.closeComment).not.toContain("pull requests");
+    expect(plan[0]?.closeComment).toContain("3 open issues");
+    expect(plan[0]?.closeComment).not.toContain("pull requests");
   });
 
   it("scope 'install' (#2562) describes the cap as install-wide, not this-repository's — same closeKind/label shape", () => {
     const plan = planAgentMaintenanceActions(
       overCap({ contributorCapMatch: { matched: true, authorLogin: "farmer99", openCount: 5, cap: 4, itemKind: "pull requests", scope: "install" } }),
     );
-    expect(plan[1]).toMatchObject({ actionClass: "close", closeKind: "contributor_cap" });
-    expect(plan[1]?.closeComment).toContain("@farmer99");
-    expect(plan[1]?.closeComment).toContain("5 open pull requests");
-    expect(plan[1]?.closeComment).toContain("across every repository it gates, combined) of 4");
-    expect(plan[1]?.closeComment).not.toContain("this repository's configured limit");
+    expect(plan[0]).toMatchObject({ actionClass: "close", closeKind: "contributor_cap" });
+    expect(plan[0]?.closeComment).toContain("@farmer99");
+    expect(plan[0]?.closeComment).toContain("5 open pull requests");
+    expect(plan[0]?.closeComment).toContain("across every repository it gates, combined) of 4");
+    expect(plan[0]?.closeComment).not.toContain("this repository's configured limit");
   });
 
   it("scope 'repository' (default, absent) keeps the original this-repository close-comment wording — back-compat", () => {
     const plan = planAgentMaintenanceActions(overCap()); // overCap's base contributorCapMatch omits `scope`
-    expect(plan[1]?.closeComment).toContain("this repository's configured limit");
-    expect(plan[1]?.closeComment).not.toContain("across every repository it gates");
+    expect(plan[0]?.closeComment).toContain("this repository's configured limit");
+    expect(plan[0]?.closeComment).not.toContain("across every repository it gates");
   });
 
   it("uses the repo-configured contributorCapLabel, defaulting to 'over-contributor-limit' when unset", () => {
-    expect(planAgentMaintenanceActions(overCap({ contributorCapLabel: "spam-cap" }))[0]).toMatchObject({ label: "spam-cap" });
+    expect(planAgentMaintenanceActions(overCap({ contributorCapLabel: "spam-cap" }))[1]).toMatchObject({ label: "spam-cap" });
     expect(DEFAULT_CONTRIBUTOR_CAP_LABEL).toBe("over-contributor-limit");
-    expect(planAgentMaintenanceActions(overCap())[0]).toMatchObject({ label: "over-contributor-limit" });
+    expect(planAgentMaintenanceActions(overCap())[1]).toMatchObject({ label: "over-contributor-limit" });
   });
 
   it("#label-scoping: an explicit null contributorCapLabel closes WITHOUT any label; the label action carries autonomyClass: close", () => {
     const withLabel = planAgentMaintenanceActions(overCap());
-    expect(classes(withLabel)).toEqual(["label", "close"]);
-    expect(withLabel[0]).toMatchObject({ actionClass: "label", autonomyClass: "close" });
+    expect(classes(withLabel)).toEqual(["close", "label"]);
+    expect(withLabel[1]).toMatchObject({ actionClass: "label", autonomyClass: "close" });
     const withoutLabel = planAgentMaintenanceActions(overCap({ contributorCapLabel: null }));
     expect(classes(withoutLabel)).toEqual(["close"]);
   });
 
   it("fires AHEAD of CI — closes even while CI is still pending (not the pending early-return)", () => {
-    expect(classes(planAgentMaintenanceActions(overCap({ ciState: "pending" })))).toEqual(["label", "close"]);
+    expect(classes(planAgentMaintenanceActions(overCap({ ciState: "pending" })))).toEqual(["close", "label"]);
   });
 
   it("NEVER fires for the owner, an admin login, or an automation bot (standing rule) — the PR falls through to normal disposition", () => {
@@ -1032,7 +1035,7 @@ describe("per-contributor open-item cap short-circuit (#2270)", () => {
   it("#label-scoping: the label rides on `close` autonomy, not `label` — `label` alone plans nothing, `close` alone plans both", () => {
     expect(planAgentMaintenanceActions(overCap({ autonomy: {} }))).toEqual([]);
     expect(planAgentMaintenanceActions(overCap({ autonomy: { label: "auto" } }))).toEqual([]);
-    expect(classes(planAgentMaintenanceActions(overCap({ autonomy: { close: "auto" } })))).toEqual(["label", "close"]);
+    expect(classes(planAgentMaintenanceActions(overCap({ autonomy: { close: "auto" } })))).toEqual(["close", "label"]);
   });
 
   it("is independent of the blacklist short-circuit — a matched blacklist entry still wins when both are present", () => {
@@ -1041,7 +1044,7 @@ describe("per-contributor open-item cap short-circuit (#2270)", () => {
     const plan = planAgentMaintenanceActions(
       overCap({ blacklistMatch: { matched: true, reason: "plagiarism" } }),
     );
-    expect(plan[1]).toMatchObject({ closeKind: "blacklist" });
+    expect(plan[0]).toMatchObject({ closeKind: "blacklist" });
   });
 });
 
@@ -1055,14 +1058,15 @@ describe("review-nag cooldown short-circuit (#2463)", () => {
       ...extra,
     });
 
-  it("labels + closes a nagging contributor's PR, winning over a passing gate (no merit review / merge)", () => {
+  it("closes + labels a nagging contributor's PR, winning over a passing gate (no merit review / merge)", () => {
     const plan = planAgentMaintenanceActions(nagged());
-    expect(classes(plan)).toEqual(["label", "close"]); // short-circuit: no approve/merge despite a SUCCESS gate
-    expect(plan[0]).toMatchObject({ actionClass: "label", label: DEFAULT_REVIEW_NAG_LABEL, labelOp: "add" });
-    expect(plan[1]).toMatchObject({ actionClass: "close", closeKind: "review_nag" });
-    expect(plan[1]?.closeComment).toContain("chatty-contributor");
-    expect(plan[1]?.closeComment).toContain("4");
-    expect(plan[1]?.closeComment).toContain("3");
+    // close is pushed BEFORE its coupled label (#label-close-split-brain) — see the blacklist section above.
+    expect(classes(plan)).toEqual(["close", "label"]); // short-circuit: no approve/merge despite a SUCCESS gate
+    expect(plan[0]).toMatchObject({ actionClass: "close", closeKind: "review_nag" });
+    expect(plan[1]).toMatchObject({ actionClass: "label", label: DEFAULT_REVIEW_NAG_LABEL, labelOp: "add", closeKind: "review_nag" });
+    expect(plan[0]?.closeComment).toContain("chatty-contributor");
+    expect(plan[0]?.closeComment).toContain("4");
+    expect(plan[0]?.closeComment).toContain("3");
   });
 
   it("pins the review-nag close to the reviewed head, mirroring blacklist/merge/approve", () => {
@@ -1076,21 +1080,21 @@ describe("review-nag cooldown short-circuit (#2463)", () => {
   });
 
   it("uses the repo-configured reviewNagLabel, defaulting to 'review-nag-cooldown' when unset", () => {
-    expect(planAgentMaintenanceActions(nagged({ reviewNagLabel: "cooldown-hit" }))[0]).toMatchObject({ label: "cooldown-hit" });
+    expect(planAgentMaintenanceActions(nagged({ reviewNagLabel: "cooldown-hit" }))[1]).toMatchObject({ label: "cooldown-hit" });
     expect(DEFAULT_REVIEW_NAG_LABEL).toBe("review-nag-cooldown");
-    expect(planAgentMaintenanceActions(nagged())[0]).toMatchObject({ label: "review-nag-cooldown" });
+    expect(planAgentMaintenanceActions(nagged())[1]).toMatchObject({ label: "review-nag-cooldown" });
   });
 
   it("#label-scoping: an explicit null reviewNagLabel closes WITHOUT any label; the label action carries autonomyClass: close", () => {
     const withLabel = planAgentMaintenanceActions(nagged());
-    expect(classes(withLabel)).toEqual(["label", "close"]);
-    expect(withLabel[0]).toMatchObject({ actionClass: "label", autonomyClass: "close" });
+    expect(classes(withLabel)).toEqual(["close", "label"]);
+    expect(withLabel[1]).toMatchObject({ actionClass: "label", autonomyClass: "close" });
     const withoutLabel = planAgentMaintenanceActions(nagged({ reviewNagLabel: null }));
     expect(classes(withoutLabel)).toEqual(["close"]);
   });
 
   it("fires AHEAD of CI — closes even while CI is still pending (not the pending early-return)", () => {
-    expect(classes(planAgentMaintenanceActions(nagged({ ciState: "pending" })))).toEqual(["label", "close"]);
+    expect(classes(planAgentMaintenanceActions(nagged({ ciState: "pending" })))).toEqual(["close", "label"]);
   });
 
   it("NEVER fires for the owner, an admin login, or an automation bot (standing rule) — the PR falls through to normal disposition", () => {
@@ -1106,6 +1110,6 @@ describe("review-nag cooldown short-circuit (#2463)", () => {
   it("#label-scoping: the label rides on `close` autonomy, not `label` — `label` alone plans nothing, `close` alone plans both", () => {
     expect(planAgentMaintenanceActions(nagged({ autonomy: {} }))).toEqual([]);
     expect(planAgentMaintenanceActions(nagged({ autonomy: { label: "auto" } }))).toEqual([]);
-    expect(classes(planAgentMaintenanceActions(nagged({ autonomy: { close: "auto" } })))).toEqual(["label", "close"]);
+    expect(classes(planAgentMaintenanceActions(nagged({ autonomy: { close: "auto" } })))).toEqual(["close", "label"]);
   });
 });

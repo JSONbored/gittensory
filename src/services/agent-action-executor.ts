@@ -67,6 +67,18 @@ export function pendingClosureLabelApplied(plan: PlannedAgentAction[], outcomes:
   return plan.some((action, index) => action.actionClass === "label" && action.label === AGENT_LABEL_PENDING_CLOSURE && action.labelOp === "add" && outcomes[index]?.outcome === "completed");
 }
 
+// #label-close-split-brain: the outcome of the `close` action tagged with `closeKind`, among the actions ALREADY
+// processed in this batch (outcomes[i] is 1:1 with planned[i], same order — see pendingClosureLabelApplied above).
+// The planner emits a coupled anti-abuse label+close pair (blacklist/contributor_cap/review_nag) with close pushed
+// FIRST, so by the time the executor reaches the label, the close's real outcome is already recorded here.
+// Undefined when no such close exists in this batch (e.g. a plain review_state_label with no closeKind at all).
+function coupledCloseOutcome(planned: PlannedAgentAction[], outcomes: AgentActionOutcome[], closeKind: PlannedAgentAction["closeKind"]): AgentActionOutcome["outcome"] | undefined {
+  for (let i = 0; i < outcomes.length; i++) {
+    if (planned[i]?.actionClass === "close" && planned[i]?.closeKind === closeKind) return outcomes[i]?.outcome;
+  }
+  return undefined;
+}
+
 /**
  * Execute (or dry-run, or stage for approval) a planned auto-maintain action set on one PR. Each action runs
  * through the SAME deny-toward-safety gate stack before any GitHub call:
@@ -121,7 +133,20 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
       await audit("queued", `awaiting maintainer approval — ${action.reason}`);
       continue;
     }
-    // 5) Freshness guard: every supported live action mutates PR state or PR-visible output, so it must still
+    // 5) #label-close-split-brain: a `label` coupled to a same-batch anti-abuse close (closeKind set) must not
+    //    post if that close already denied/errored THIS pass — `label` mutates via the Issues API and is exempt
+    //    from the write-permission gate below (step 8) that `close` is not, so without this correlation a
+    //    transient `pull_requests: write` denial could leave a PR mislabeled "closed for X" while still open.
+    //    A coupled close that is still "queued" (awaiting the SAME approval) or "completed" lets the label through
+    //    unchanged; a close with no `closeKind` match (e.g. a plain review_state_label) is unaffected.
+    if (action.actionClass === "label" && action.closeKind) {
+      const closeOutcome = coupledCloseOutcome(planned, outcomes, action.closeKind);
+      if (closeOutcome === "denied" || closeOutcome === "error") {
+        await audit("denied", `paired ${action.closeKind} close did not complete (${closeOutcome}) — skipping the companion label so the PR isn't mislabeled while still open`);
+        continue;
+      }
+    }
+    // 6) Freshness guard: every supported live action mutates PR state or PR-visible output, so it must still
     //    target the reviewed, open head. This protects approval-queue replays and slow webhook jobs from
     //    force-pushes or manual closes that happen after the review was planned.
     const expectedHeadSha = action.expectedHeadSha ?? ctx.headSha ?? null;
@@ -139,7 +164,7 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
       await audit("denied", `${pullRequestFreshnessDetail(freshness)} — action not executed`);
       continue;
     }
-    // 6) Live CI re-verification for a merge or a CI-driven heuristic close (#2128): the CI aggregate that drove
+    // 7) Live CI re-verification for a merge or a CI-driven heuristic close (#2128): the CI aggregate that drove
     //    either decision was read seconds-to-tens-of-seconds earlier, in the planning pass, and the freshness
     //    guard above only re-checks head SHA/state, not CI. GitHub's own merge endpoint enforces
     //    branch-protection REQUIRED checks server-side, but only as a backstop when a repo actually configures
@@ -178,12 +203,12 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
         continue;
       }
     }
-    // 7) Write-permission readiness: a PR-write action needs `pull_requests: write` granted.
+    // 8) Write-permission readiness: a PR-write action needs `pull_requests: write` granted.
     if (PR_WRITE_CLASSES.has(action.actionClass) && resolveAgentPermissionReadiness({ autonomy: ctx.autonomy, installationPermissions: ctx.installationPermissions }) !== "ready") {
       await audit("denied", "pull_requests: write not granted — maintainer must re-consent");
       continue;
     }
-    // 8) live — perform the real mutation, recording success or the error.
+    // 9) live — perform the real mutation, recording success or the error.
     try {
       await performAction(env, ctx, action);
       await audit("completed", action.reason);

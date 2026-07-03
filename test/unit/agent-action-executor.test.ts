@@ -449,6 +449,64 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect((await auditFor(env, "merge"))?.outcome).toBe("denied");
   });
 
+  it("#label-close-split-brain: a coupled anti-abuse label+close pair (matching closeKind) BOTH complete when the close succeeds", async () => {
+    const env = createTestEnv({});
+    const coupledClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "over the per-contributor open-item cap", closeComment: "closing", closeKind: "contributor_cap" };
+    const coupledLabel: PlannedAgentAction = { actionClass: "label", autonomyClass: "close", requiresApproval: false, reason: "over the per-contributor open-item cap", label: "over-contributor-limit", labelOp: "add", closeKind: "contributor_cap" };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [coupledClose, coupledLabel]);
+    expect(outcomes.map((o) => o.outcome)).toEqual(["completed", "completed"]);
+    expect(closePullRequest).toHaveBeenCalledTimes(1);
+    expect(ensurePullRequestLabel).toHaveBeenCalledTimes(1);
+  });
+
+  it("#label-close-split-brain (confirmed root cause of PR-cap miscounting): a coupled anti-abuse label is SKIPPED, not posted, when its paired close is denied for lacking pull_requests:write — `label` mutates via the Issues API and is otherwise exempt from that gate, so without this correlation a PR could be mislabeled 'over-contributor-limit' while it stays open forever", async () => {
+    const env = createTestEnv({});
+    const coupledClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "over the per-contributor open-item cap", closeComment: "closing", closeKind: "contributor_cap" };
+    const coupledLabel: PlannedAgentAction = { actionClass: "label", autonomyClass: "close", requiresApproval: false, reason: "over the per-contributor open-item cap", label: "over-contributor-limit", labelOp: "add", closeKind: "contributor_cap" };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ installationPermissions: { pull_requests: "read", issues: "write" } }), [coupledClose, coupledLabel]);
+    expect(outcomes[0]).toMatchObject({ actionClass: "close", outcome: "denied" });
+    expect(outcomes[1]).toMatchObject({ actionClass: "label", outcome: "denied" });
+    expect(outcomes[1]?.detail).toContain("paired contributor_cap close did not complete");
+    expect(closePullRequest).not.toHaveBeenCalled();
+    expect(ensurePullRequestLabel).not.toHaveBeenCalled(); // the bug: this used to be called anyway
+    expect((await auditFor(env, "label"))?.outcome).toBe("denied");
+  });
+
+  it("#label-close-split-brain: an UNRELATED plain label (no closeKind — e.g. a review_state_label disposition) is unaffected by a same-batch close's outcome", async () => {
+    const env = createTestEnv({});
+    const unrelatedClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "heuristic", closeComment: "closing", closeKind: "heuristic" };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ installationPermissions: { pull_requests: "read", issues: "write" } }), [unrelatedClose, label]);
+    expect(outcomes[0]).toMatchObject({ actionClass: "close", outcome: "denied" });
+    expect(outcomes[1]).toMatchObject({ actionClass: "label", outcome: "completed" }); // no closeKind on `label` -> not correlated
+    expect(ensurePullRequestLabel).toHaveBeenCalledTimes(1);
+  });
+
+  it("#label-close-split-brain: a label's closeKind with NO matching close anywhere in the batch is unaffected (coupledCloseOutcome finds nothing, so the correlation guard never blocks it)", async () => {
+    const env = createTestEnv({});
+    // A close of a DIFFERENT closeKind precedes the label — the label's own "contributor_cap" closeKind has no
+    // matching close in this batch at all, so the scan exhausts without a match.
+    const differentKindClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "blacklisted contributor", closeComment: "closing", closeKind: "blacklist" };
+    const mismatchedLabel: PlannedAgentAction = { actionClass: "label", autonomyClass: "close", requiresApproval: false, reason: "over the per-contributor open-item cap", label: "over-contributor-limit", labelOp: "add", closeKind: "contributor_cap" };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [differentKindClose, mismatchedLabel]);
+    expect(outcomes[0]).toMatchObject({ actionClass: "close", outcome: "completed" });
+    expect(outcomes[1]).toMatchObject({ actionClass: "label", outcome: "completed" });
+    expect(ensurePullRequestLabel).toHaveBeenCalledTimes(1);
+  });
+
+  it("#label-close-split-brain: a coupled label still applies when the paired close is only QUEUED for approval (not denied/errored) — both actions share the SAME requiresApproval, so this is the normal staged-together path, not a split-brain", async () => {
+    const env = createTestEnv({});
+    const coupledClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "over the per-contributor open-item cap", closeComment: "closing", closeKind: "contributor_cap" };
+    const coupledLabel: PlannedAgentAction = { actionClass: "label", requiresApproval: false, reason: "over the per-contributor open-item cap", label: "over-contributor-limit", labelOp: "add", closeKind: "contributor_cap" };
+    // Force the close's OWN autonomy to auto_with_approval (queued) while the label's stays auto (would complete
+    // on its own) -- an artificial divergence from the planner's normal "both share requiresApproval" shape, used
+    // here purely to prove the correlation reads the close's REAL recorded outcome ("queued"), not just falls
+    // through to "denied" for anything other than "completed".
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ autonomy: { label: "auto", close: "auto_with_approval" } }), [{ ...coupledClose, requiresApproval: true }, coupledLabel]);
+    expect(outcomes[0]).toMatchObject({ actionClass: "close", outcome: "queued" });
+    expect(outcomes[1]).toMatchObject({ actionClass: "label", outcome: "completed" });
+    expect(ensurePullRequestLabel).toHaveBeenCalledTimes(1);
+  });
+
   it("DRY-RUN: records the intent without any GitHub call, audited with mode=dry_run", async () => {
     const env = createTestEnv({});
     const outcomes = await executeAgentMaintenanceActions(env, ctx({ agentDryRun: true }), [label, merge]);
