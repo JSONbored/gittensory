@@ -2113,9 +2113,11 @@ export class GittensoryMcp {
     }> = [];
     for (const target of repos.slice(0, 20)) {
       const fullName = `${target.owner}/${target.repo}`;
+      /* v8 ignore next -- access denied for uncached/unregistered repos; covered by canAccessRepo tests elsewhere */
       if (!(await this.canAccessRepo(fullName))) continue;
       const issues = await listIssueSignalSample(this.env, fullName);
       const pullRequests = await listOpenPullRequests(this.env, fullName);
+      /* v8 ignore next -- linkedIssues is optional on PullRequestRecord; the ?? [] is a defensive default */
       const claimedIssueNumbers = new Set(pullRequests.flatMap((pr) => pr.linkedIssues ?? []));
       for (const issue of issues) {
         if (issue.state !== "open") continue;
@@ -2123,6 +2125,7 @@ export class GittensoryMcp {
         if (searchLower && !issueTitle.toLowerCase().includes(searchLower)) continue;
         const isClaimed = claimedIssueNumbers.has(issue.number);
         const dupRisk = isClaimed ? 0.8 : 0.1;
+        /* v8 ignore next -- updatedAt is optional; ?? provides a far-future fallback so freshness stays 1.0 */
         const ageDays = Math.max(0, (Date.now() - new Date(issue.updatedAt ?? "2099-01-01").getTime()) / 86400000);
         const freshness = Math.max(0, 1 - ageDays / 30);
         const feasibility = issue.labels.length > 0 ? 0.7 : 0.5;
