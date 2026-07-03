@@ -101,7 +101,7 @@ function createHarness() {
 function runBackup(
   h: ReturnType<typeof createHarness>,
   mode: "ok" | "corrupt",
-  options: { databaseUrl?: string; qdrant?: boolean } = {},
+  options: { databaseUrl?: string; qdrant?: boolean; retain?: string } = {},
 ) {
   // Absolute /bin/sh so the command itself never depends on PATH; the script's own
   // sqlite3/gzip/date lookups use the PATH we inject (stub bin first, real tools after).
@@ -112,7 +112,7 @@ function runBackup(
       PATH: `${h.binDir}:${process.env.PATH ?? ""}`,
       BACKUP_OUT_DIR: h.outDir,
       DATABASE_PATH: h.dbPath,
-      BACKUP_RETAIN: "1",
+      BACKUP_RETAIN: options.retain ?? "1",
       STUB_SQLITE_MODE: mode,
       // Keep ambient test env from selecting a different backup branch or Qdrant target.
       DATABASE_URL: options.databaseUrl ?? "",
@@ -187,6 +187,18 @@ describe("scripts/backup.sh sqlite online-backup verification (#2084)", () => {
     expect(readFileSync(join(harness.outDir, manifest.qdrant.file!), "utf8")).toBe(
       "stub-qdrant-snapshot-bytes",
     );
+  });
+
+  it("keeps the current artifact when BACKUP_RETAIN is zero", () => {
+    const res = runBackup(harness, "ok", { retain: "0" });
+
+    expect(res.status).toBe(0);
+    expect(res.stderr).toContain("BACKUP_RETAIN=0");
+    const manifest = readManifest(harness);
+    expect(manifest.retain).toBe(1);
+    expect(manifest.sqlite?.file).toMatch(/^sqlite\/gittensory-\d{8}T\d{6}Z\.sqlite\.gz$/);
+    expect(existsSync(join(harness.outDir, manifest.sqlite!.file))).toBe(true);
+    expect(readdirSync(join(harness.outDir, "sqlite"))).toHaveLength(1);
   });
 
   it("writes no sqlite artifact entry when the database is missing", () => {

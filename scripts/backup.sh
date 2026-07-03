@@ -5,8 +5,30 @@
 # Backups land in the `gittensory-backups` volume at /backups/{postgres,sqlite,qdrant}.
 set -eu
 
+normalize_backup_retain() {
+  retain_value=$1
+  case "$retain_value" in
+    ''|*[!0-9]*)
+      echo "[backup] invalid BACKUP_RETAIN=$retain_value; using 7" >&2
+      printf '%s\n' 7
+      return
+      ;;
+  esac
+
+  while [ "${retain_value#0}" != "$retain_value" ]; do
+    retain_value=${retain_value#0}
+  done
+  if [ -z "$retain_value" ] || [ "$retain_value" = 0 ]; then
+    echo "[backup] BACKUP_RETAIN=0 would remove the current backup; using 1" >&2
+    printf '%s\n' 1
+    return
+  fi
+
+  printf '%s\n' "$retain_value"
+}
+
 TS=$(date -u +%Y%m%dT%H%M%SZ)
-RETAIN=${BACKUP_RETAIN:-7}
+RETAIN=$(normalize_backup_retain "${BACKUP_RETAIN:-7}")
 DB=${DATABASE_PATH:-/data/gittensory.sqlite}
 PG_DB="${GITTENSORY_BACKUP_SOURCE_DATABASE_URL:-${DATABASE_URL:-}}"
 OUT=${BACKUP_OUT_DIR:-/backups}
