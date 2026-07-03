@@ -63,4 +63,21 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
     expect(result).toEqual(["gittensor:priority"]);
     spy.mockRestore();
   });
+
+  it("caps the number of linked issues fetched at 50, ignoring any beyond the cap (defense in depth against an unbounded parallel fan-out)", async () => {
+    let issueFetchCount = 0;
+    stubFetch((url) => {
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (/\/issues\/\d+$/.test(url)) {
+        issueFetchCount += 1;
+        return Response.json({ number: 1, state: "open", labels: ["gittensor:priority"] });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({});
+    const manyIssues = Array.from({ length: 75 }, (_, i) => i + 1);
+    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: manyIssues, installationId: 123 });
+    expect(issueFetchCount).toBe(50);
+    expect(result).toEqual(Array(50).fill("gittensor:priority"));
+  });
 });
