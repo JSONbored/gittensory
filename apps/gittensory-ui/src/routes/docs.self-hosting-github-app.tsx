@@ -115,10 +115,10 @@ GITHUB_WEBHOOK_SECRET=<same-secret-configured-on-the-app>`}
       <h2>Telemetry is separate from token brokerage</h2>
       <p>
         These are two independent things people conflate because they're both "Orb": anonymized
-        fleet-calibration <strong>telemetry export</strong> (always on, works in either connection
-        mode) and <strong>token brokerage</strong> (optional, private/managed-beta only, lets your
-        self-host get installation tokens from gittensory instead of holding its own App key).
-        Choosing Direct App mode does not opt you out of telemetry, and it's what makes{" "}
+        fleet-calibration <strong>telemetry export</strong> (enabled by default, works in either
+        connection mode) and <strong>token brokerage</strong> (optional, private/managed-beta only,
+        lets your self-host get installation tokens from gittensory instead of holding its own App
+        key). Choosing Direct App mode does not opt you out of telemetry, and it's what makes{" "}
         <Link to="/">the homepage counters</Link> and cross-fleet gate calibration reflect direct
         installs, not just brokered ones.
       </p>
