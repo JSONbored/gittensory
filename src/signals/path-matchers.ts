@@ -143,6 +143,19 @@ const DEPENDENCY_MANIFEST_NAMES: ReadonlySet<string> = new Set([
   // manifests they resolve belong in the same dependency-manifest category.
   "package.swift",
   "podfile",
+  // Conan (C/C++) manifests — conan.lock is already recognized above, so the
+  // manifests it resolves belong here for the same reason as the Swift/CocoaPods
+  // pair. Conan accepts either the classic .txt or the Python-based recipe.
+  "conanfile.txt",
+  "conanfile.py",
+  // sbt (Scala/JVM) build definition — the JVM ecosystem is already represented
+  // by build.gradle(.kts) and pom.xml; build.sbt is sbt's dependency manifest.
+  "build.sbt",
+  // setuptools (Python) manifests — the Python ecosystem is already represented
+  // by requirements.txt/pyproject.toml/pipfile; setup.py/setup.cfg are the
+  // classic setuptools packaging manifests.
+  "setup.py",
+  "setup.cfg",
 ]);
 
 const DOCS_EXTENSIONS: ReadonlySet<string> = new Set(["md", "mdx", "markdown", "rst", "adoc", "asciidoc"]);

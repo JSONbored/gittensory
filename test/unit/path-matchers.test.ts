@@ -146,6 +146,11 @@ describe("isDependencyManifestFile", () => {
       "pubspec.yaml",
       "backend/mix.exs",
       "go.work",
+      "conanfile.txt",
+      "libs/native/conanfile.py",
+      "build.sbt",
+      "setup.py",
+      "packages/py/setup.cfg",
     ]) {
       expect(isDependencyManifestFile(path)).toBe(true);
     }
