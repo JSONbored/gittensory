@@ -310,8 +310,13 @@ function blacklistCloseMessage(): string {
 // DOES interpolate authorLogin/openCount/cap — none of that is private (the author's own login and their own
 // open-item count on a public repo are already public/derivable from GitHub itself), and stating the exact
 // numbers is the point: a deterministic, contributor-visible cap, not a silent quality-based hold.
+// Gate finding (#2562): "pull requests and issues" is unique to the install-wide GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP
+// check (the per-repo caller always passes exactly "pull requests" or "issues") -- reused here as the signal to
+// say "this install's configured limit" rather than "this repository's", since a global-cap close is genuinely
+// NOT scoped to the one repo the count was evaluated from.
 function contributorCapCloseMessage(authorLogin: string, openCount: number, cap: number, itemNoun: "pull requests" | "issues" | "pull requests and issues"): string {
-  return `Gittensory closed this because @${authorLogin} has ${openCount} open ${itemNoun}, above this repository's configured limit of ${cap}. Close or merge an existing one to open a new one. This is an automated maintenance action.`;
+  const scope = itemNoun === "pull requests and issues" ? "this install's" : "this repository's";
+  return `Gittensory closed this because @${authorLogin} has ${openCount} open ${itemNoun}, above ${scope} configured limit of ${cap}. Close or merge an existing one to open a new one. This is an automated maintenance action.`;
 }
 
 // The close comment for review-nag cooldown (#2463). DOES interpolate authorLogin/pingCount/maxPings — none of

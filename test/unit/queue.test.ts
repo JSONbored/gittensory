@@ -6656,6 +6656,8 @@ describe("queue processors", () => {
     expect(mergeAudit?.n).toBe(0);
     // The close comment states the cap + current count (public, unlike the blacklist's static-only comment).
     expect(seen.comments.some((c) => c.includes("@farmer99") && c.includes("3 open pull requests") && c.includes("limit of 2"))).toBe(true);
+    // A PER-REPO cap close says "this repository's", not "this install's" (#2562 gate finding, other side).
+    expect(seen.comments.some((c) => c.includes("this repository's configured limit"))).toBe(true);
   });
 
   it("contributor open-PR cap (#2270): disabled (no cap configured, the default) never closes an over-threshold contributor", async () => {
@@ -7836,6 +7838,10 @@ describe("queue processors", () => {
 
     expect(seen.closed).toBe(true);
     expect(seen.comments.some((c) => c.includes("@farmer99") && c.includes("limit of 3"))).toBe(true);
+    // Gate finding (#2562): a global-cap close must say "this install's", not "this repository's" -- the
+    // count spans multiple repos, so claiming it's scoped to the one repo being evaluated is misleading.
+    expect(seen.comments.some((c) => c.includes("this install's configured limit"))).toBe(true);
+    expect(seen.comments.some((c) => c.includes("this repository's configured limit"))).toBe(false);
     const closeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.close'").first<{ n: number }>();
     expect(closeAudit?.n).toBeGreaterThanOrEqual(1);
   });
