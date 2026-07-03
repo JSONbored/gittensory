@@ -6375,9 +6375,18 @@ async function maybePublishPrPublicSurface(
     }
     return undefined;
   }
+  // `typeLabelsEnabled` is optional only for RepositorySettings-fixture-construction backward compat (see
+  // its doc comment in types.ts); getRepositorySettings always resolves it to a concrete boolean, so the
+  // `?? true` fallback is unreachable on this webhook-integration path (unlike a pure function such as
+  // buildRepoSettingsPreview, which a unit test can call with a hand-built, genuinely-undefined settings object).
+  /* v8 ignore next -- see the comment above */
+  const typeLabelsEnabled = settings.typeLabelsEnabled ?? true;
+  const needsTypeLabelMinerCheck =
+    settings.publicAudienceMode === "gittensor_only" && typeLabelsEnabled;
   const prelimHasPublicOutput =
     !publicSurfaceSkipped &&
     (needsMinerCheckForDetectedComment ||
+      needsTypeLabelMinerCheck ||
       prelim.actions.some(
         (action) =>
           action === "comment" || action === "label" || action === "check_run",
@@ -6443,13 +6452,9 @@ async function maybePublishPrPublicSurface(
   // `publicAudienceMode: "gittensor_only"`'s stricter promise to stay entirely quiet for a
   // non-confirmed-miner author (`not_official_gittensor_miner` / `miner_detection_unavailable`) --
   // that mode's whole point is total silence for that audience, not merely suppressing the context
-  // label, so a type label would violate it same as a comment would.
-  // `typeLabelsEnabled` is optional only for RepositorySettings-fixture-construction backward compat (see
-  // its doc comment in types.ts); getRepositorySettings always resolves it to a concrete boolean, so the
-  // `?? true` fallback is unreachable on this webhook-integration path (unlike a pure function such as
-  // buildRepoSettingsPreview, which a unit test can call with a hand-built, genuinely-undefined settings object).
-  /* v8 ignore next -- see the comment above */
-  const typeLabelsEnabled = settings.typeLabelsEnabled ?? true;
+  // label, so a type label would violate it same as a comment would. `typeLabelsEnabled` itself is
+  // computed earlier (see its declaration above prelimHasPublicOutput) so gittensor_only's silence
+  // promise can gate the public-surface computation too, not just this label decision (#gate-only-type-labels).
   if (
     typeLabelsEnabled &&
     !settings.agentPaused &&

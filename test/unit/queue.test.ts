@@ -16552,6 +16552,67 @@ describe("queue processors", () => {
       expect(seen.removed.sort()).toEqual(["gittensor:feature", "gittensor:priority"]);
     });
 
+    it("keeps gate-only gittensor_only type labels silent until miner confirmation", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+      await upsertRepositorySettings(env, {
+        repoFullName: "JSONbored/gittensory",
+        commentMode: "off",
+        publicSurface: "off",
+        publicAudienceMode: "gittensor_only",
+        autoLabelEnabled: false,
+        createMissingLabel: false,
+        checkRunMode: "off",
+        gateCheckMode: "enabled",
+        linkedIssueGateMode: "off",
+        aiReviewMode: "off",
+      });
+      const seen = { posted: [] as string[], removed: [] as string[], checkRunCreated: false, minerList: 0 };
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url === "https://api.gittensor.io/miners") {
+          seen.minerList += 1;
+          return Response.json([]);
+        }
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes(`/commits/`) && url.includes("/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/check-runs") && method === "POST") {
+          seen.checkRunCreated = true;
+          return Response.json({ id: 9002 }, { status: 201 });
+        }
+        if (url.includes("/check-runs/") && method === "PATCH") return Response.json({ id: 9002 });
+        if (url.includes(`/issues/218/labels`) && method === "GET") return Response.json([]);
+        if (url.includes(`/issues/218/labels`) && method === "POST") {
+          seen.posted.push(...((JSON.parse(String(init?.body ?? "{}")).labels ?? []) as string[]));
+          return Response.json([]);
+        }
+        if (url.includes(`/issues/218/labels/`) && method === "DELETE") {
+          seen.removed.push(decodeURIComponent(url.split(`/issues/218/labels/`)[1] ?? ""));
+          return new Response(null, { status: 204 });
+        }
+        if (url.endsWith("/labels") && method === "POST") return Response.json({ name: JSON.parse(String(init?.body ?? "{}")).name }, { status: 201 });
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "type-label-gittensor-only-gate-only-muted",
+        eventName: "pull_request",
+        payload: {
+          action: "opened",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: { number: 218, title: "fix: gate-only silence", state: "open", user: { login: "contributor" }, author_association: "NONE", head: { sha: "sha218" }, labels: [], body: "Fixes #1" },
+        },
+      });
+
+      expect(seen.minerList).toBe(1);
+      expect(seen.checkRunCreated).toBe(true);
+      expect(seen.posted).toEqual([]);
+      expect(seen.removed).toEqual([]);
+    });
+
     it("still mutes the type label when gittensor_only mode's non-confirmed-miner silence applies, even with the gate enabled", async () => {
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
       await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
