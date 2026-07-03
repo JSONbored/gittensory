@@ -830,13 +830,13 @@ async function main(): Promise<void> {
         );
       },
       port,
+    },
     () => {
       console.log(JSON.stringify({ event: "selfhost_listening", port }));
       // Probe REES shared secret at startup so mismatches appear in logs/Sentry before
       // any PR triggers a review (fire-and-forget; never blocks server startup).
       probeReesSecretAtStartup(env);
     },
-    () => console.log(JSON.stringify({ event: "selfhost_listening", port })),
   );
 
   backend.queue.start();

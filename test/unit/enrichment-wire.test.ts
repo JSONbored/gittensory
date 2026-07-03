@@ -3,6 +3,7 @@ import {
   isEnrichmentEnabled,
   buildReviewEnrichment,
   isReesGithubTokenForwardingEnabled,
+  probeReesSecretAtStartup,
   resolveReesAnalyzers,
   resolveReesAnalyzerBudgetMs,
   resolveReesProfile,
@@ -54,6 +55,104 @@ describe("isEnrichmentEnabled", () => {
       ),
     ).toBe(false);
     expect(isEnrichmentEnabled(env({}))).toBe(false);
+  });
+});
+
+describe("probeReesSecretAtStartup", () => {
+  let realFetch: typeof fetch;
+  beforeEach(() => {
+    realFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("does nothing when REES_URL is unset — nothing to probe", async () => {
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    probeReesSecretAtStartup(env({ REES_SHARED_SECRET: "s" }));
+    await flush();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("logs rees_secret_missing and never probes when REES_SHARED_SECRET is missing or blank", async () => {
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    probeReesSecretAtStartup(env({ REES_URL: "https://rees.example" }));
+    await flush();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(errSpy.mock.calls.some((c) => JSON.parse(c[0] as string).event === "rees_secret_missing")).toBe(true);
+    errSpy.mockRestore();
+  });
+
+  it("warns rees_secret_normalized when the raw secret needed quote/whitespace stripping, then still probes", async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: true }) as Response);
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    probeReesSecretAtStartup(
+      env({ REES_URL: "https://rees.example", REES_SHARED_SECRET: '  "s3cret"  ' }),
+    );
+    await flush();
+    expect(warnSpy.mock.calls.some((c) => JSON.parse(c[0] as string).event === "rees_secret_normalized")).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://rees.example/v1/ping",
+      expect.objectContaining({ method: "POST", headers: expect.objectContaining({ authorization: "Bearer s3cret" }) }),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("logs rees_ping_ok on a successful probe (bare secret, no normalization warning)", async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: true }) as Response);
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    probeReesSecretAtStartup(env({ REES_URL: "https://rees.example/", REES_SHARED_SECRET: "s3cret" }));
+    await flush();
+    expect(logSpy.mock.calls.some((c) => JSON.parse(c[0] as string).event === "rees_ping_ok")).toBe(true);
+    expect(warnSpy).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("logs rees_secret_mismatch when the probe is rejected as unauthorized (401/403)", async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: false, status: 401 }) as Response);
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    probeReesSecretAtStartup(env({ REES_URL: "https://rees.example", REES_SHARED_SECRET: "s3cret" }));
+    await flush();
+    const parsed = errSpy.mock.calls.map((c) => JSON.parse(c[0] as string));
+    expect(parsed.some((p) => p.event === "rees_secret_mismatch" && p.status === 401)).toBe(true);
+    errSpy.mockRestore();
+  });
+
+  it("logs rees_ping_error (not a secret mismatch) on a non-auth non-ok status", async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: false, status: 500 }) as Response);
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    probeReesSecretAtStartup(env({ REES_URL: "https://rees.example", REES_SHARED_SECRET: "s3cret" }));
+    await flush();
+    const parsed = errSpy.mock.calls.map((c) => JSON.parse(c[0] as string));
+    expect(parsed.some((p) => p.event === "rees_ping_error" && p.status === 500)).toBe(true);
+    errSpy.mockRestore();
+  });
+
+  it("warns rees_ping_error (not throw) when the fetch itself rejects — REES may not be up yet", async () => {
+    const fetchSpy = vi.fn(async () => {
+      throw new Error("connect ECONNREFUSED");
+    });
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    probeReesSecretAtStartup(env({ REES_URL: "https://rees.example", REES_SHARED_SECRET: "s3cret" }));
+    await flush();
+    expect(
+      warnSpy.mock.calls.some(
+        (c) => JSON.parse(c[0] as string).event === "rees_ping_error" && JSON.parse(c[0] as string).message.includes("ECONNREFUSED"),
+      ),
+    ).toBe(true);
+    warnSpy.mockRestore();
   });
 });
 
