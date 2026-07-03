@@ -42,6 +42,7 @@ import {
   fetchRequiredStatusContexts,
   isOwnReviewThreadAuthor,
   isRateLimitedGitHubFailure,
+  mergeRequiredCiContexts,
   refreshContributorActivity,
   refreshInstallationHealth,
   refreshPullRequestDetails,
@@ -4334,6 +4335,74 @@ describe("GitHub backfill", () => {
       expect(aggregate.failingDetails).toEqual([expect.objectContaining({ name: "ci/overflow" })]);
     });
 
+    describe("expectedCiContexts fallback (#selfhost-ci-verification)", () => {
+      it("passes with no completeness warning when branch protection is unreadable but an expected context settles clean", async () => {
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "build", status: "completed", conclusion: "success" }] });
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const requiredContexts = mergeRequiredCiContexts(null, ["build"]);
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", requiredContexts);
+
+        // The key regression: an expectedCiContexts fallback (used when branch protection can't be read)
+        // resolves to enforce-required mode, so a clean settle is "passed" with NO completeness warning —
+        // unlike the fold-all path, which would warn (#2137).
+        expect(aggregate.ciState).toBe("passed");
+        expect(aggregate.ciCompletenessWarning).toBeNull();
+      });
+
+      it("stays pending when branch protection is unreadable and the expected context never appears on the commit", async () => {
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) return Response.json({ check_runs: [] });
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const requiredContexts = mergeRequiredCiContexts(null, ["build"]);
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", requiredContexts);
+
+        expect(aggregate.ciState).toBe("pending");
+      });
+
+      it("fails when branch protection is unreadable and the expected context completes red", async () => {
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "build", status: "completed", conclusion: "failure" }] });
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const requiredContexts = mergeRequiredCiContexts(null, ["build"]);
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", requiredContexts);
+
+        expect(aggregate.ciState).toBe("failed");
+        expect(aggregate.failingDetails).toEqual([expect.objectContaining({ name: "build" })]);
+      });
+
+      it("does not regress the no-config case: no branch protection and no expected contexts still fold-all warns on pass", async () => {
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) return Response.json({ check_runs: [{ name: "test", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const requiredContexts = mergeRequiredCiContexts(null, undefined);
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", requiredContexts);
+
+        expect(aggregate.ciState).toBe("passed");
+        expect(aggregate.ciCompletenessWarning).toMatch(/branch-protection required checks/i);
+      });
+    });
   });
 
   describe("fetchLiveReviewThreadBlockers", () => {
@@ -5015,6 +5084,61 @@ describe("GitHub backfill", () => {
       expect(fetchSpy).not.toHaveBeenCalled();
       await expect(fetchLiveReviewThreadBlockers(env, "JSONbored/gittensory", 1, "public-token")).resolves.toEqual([]);
       expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("mergeRequiredCiContexts", () => {
+    it("unions branch-protection contexts with expectedCiContexts when both have entries", () => {
+      const merged = mergeRequiredCiContexts(new Set(["build"]), ["test", "lint"]);
+      expect([...(merged as Set<string>)].sort()).toEqual(["build", "lint", "test"]);
+    });
+
+    it("returns branch-protection contexts unchanged when expectedCiContexts is undefined", () => {
+      const merged = mergeRequiredCiContexts(new Set(["build", "test"]), undefined);
+      expect(merged).toBeInstanceOf(Set);
+      expect([...(merged as Set<string>)].sort()).toEqual(["build", "test"]);
+    });
+
+    it("returns branch-protection contexts unchanged when expectedCiContexts is an empty array", () => {
+      const merged = mergeRequiredCiContexts(new Set(["build", "test"]), []);
+      expect([...(merged as Set<string>)].sort()).toEqual(["build", "test"]);
+    });
+
+    it("returns branch-protection contexts unchanged when expectedCiContexts is null", () => {
+      const merged = mergeRequiredCiContexts(new Set(["build", "test"]), null);
+      expect([...(merged as Set<string>)].sort()).toEqual(["build", "test"]);
+    });
+
+    it("returns just the expected set when branch protection is null and expectedCiContexts has entries", () => {
+      const merged = mergeRequiredCiContexts(null, ["build"]);
+      expect([...(merged as Set<string>)]).toEqual(["build"]);
+    });
+
+    it("returns null when branch protection is null and expectedCiContexts is undefined", () => {
+      expect(mergeRequiredCiContexts(null, undefined)).toBeNull();
+    });
+
+    it("returns null when branch protection is null and expectedCiContexts is null", () => {
+      expect(mergeRequiredCiContexts(null, null)).toBeNull();
+    });
+
+    it("returns null when branch protection is null and expectedCiContexts is an empty array", () => {
+      expect(mergeRequiredCiContexts(null, [])).toBeNull();
+    });
+
+    it("returns just the expected set when branch protection is an empty (non-null) Set and expectedCiContexts has entries", () => {
+      const merged = mergeRequiredCiContexts(new Set(), ["build"]);
+      expect([...(merged as Set<string>)]).toEqual(["build"]);
+    });
+
+    it("drops blank/whitespace-only expectedCiContexts entries while keeping real entries", () => {
+      const merged = mergeRequiredCiContexts(null, ["  ", "", "build"]);
+      expect([...(merged as Set<string>)]).toEqual(["build"]);
+    });
+
+    it("trims leading/trailing whitespace from expectedCiContexts entries in the result", () => {
+      const merged = mergeRequiredCiContexts(null, [" build "]);
+      expect([...(merged as Set<string>)]).toEqual(["build"]);
     });
   });
 

@@ -14,6 +14,8 @@ import {
 const CLEAR_SIGNALS: MaintenancePressureSignals = {
   livePendingCount: 0,
   oldestLivePendingAgeMs: null,
+  liveRunnableNowCount: 0,
+  oldestLiveRunnableAgeMs: null,
   maintenancePendingCount: 0,
   oldestMaintenancePendingAgeMs: null,
   hostLoadAvg1PerCore: null,

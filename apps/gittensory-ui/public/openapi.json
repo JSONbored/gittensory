@@ -9058,6 +9058,12 @@
           "claCheckRunAppSlug": {
             "type": "string",
             "nullable": true
+          },
+          "expectedCiContexts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [

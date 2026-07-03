@@ -71,6 +71,17 @@ export function isMaintenanceJobType(type: string): boolean {
 export interface MaintenancePressureSignals {
   livePendingCount: number;
   oldestLivePendingAgeMs: number | null;
+  /** Foreground-priority pending jobs that are RUNNABLE right now (run_after<=now), i.e. not currently
+   *  deferred by any mechanism -- distinct from livePendingCount, which also includes deferred/processing
+   *  work. #selfhost-queue-liveness's own diagnostic: "queue large but intentionally deferred" (this count can
+   *  be 0 with livePendingCount > 0, transiently, and that is fine) vs. "queue stuck" (this count stays 0
+   *  while oldestLiveRunnableAgeMs -- once something IS runnable -- climbs, or while releaseStaleForegroundDeferrals
+   *  keeps finding stale work every sweep). */
+  liveRunnableNowCount: number;
+  /** Age in ms of the oldest RUNNABLE (run_after<=now) foreground pending job -- null when none is runnable
+   *  right now. Distinct from oldestLivePendingAgeMs, which is dominated by a job intentionally scheduled far
+   *  in the future and says nothing about how long already-due work has sat unclaimed. */
+  oldestLiveRunnableAgeMs: number | null;
   maintenancePendingCount: number;
   oldestMaintenancePendingAgeMs: number | null;
   /** Null when unavailable (see host-pressure.ts) -- a caller must treat null as "skip this check". */

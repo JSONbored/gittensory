@@ -56,6 +56,11 @@ import {
   pickBacklogRepo,
   type ForegroundLane,
 } from "./queue-fairness";
+import {
+  isForegroundDeferralStale,
+  resolveForegroundLivenessConfig,
+  type ForegroundLivenessConfig,
+} from "./foreground-liveness";
 import type { JobMessage } from "../types";
 
 const TABLE = "_selfhost_jobs";
@@ -104,6 +109,9 @@ export interface DurableQueue {
   drain(): Promise<void>;
   size(): number;
   deadCount(): number;
+  /** Jobs currently claimed and mid-flight (status='processing') -- distinct from size(), which also
+   *  includes still-pending work. See #selfhost-queue-liveness's own observability additions. */
+  processingCount(): number;
   stats(): Record<string, number>;
   snapshot(): SelfHostQueueSnapshot;
   /** Live-vs-maintenance queue pressure, for the /metrics gauges (see server.ts) -- the SAME signals the
@@ -113,6 +121,11 @@ export interface DurableQueue {
    *  running (see start()), and exposed directly so tests and an operator-triggered repair path don't have
    *  to wait for the real interval. Returns the number of jobs revived. */
   reviveDeadLetterJobs(): number;
+  /** Foreground-liveness invariant (#selfhost-queue-liveness): pulls back any FOREGROUND-priority pending job
+   *  whose deferral has gone stale (see foreground-liveness.ts) regardless of what deferred it. Called once at
+   *  boot and on a timer while running (see the module-init block/start()), and exposed directly so tests and
+   *  an operator-triggered repair path don't have to wait for the real interval. Returns the number released. */
+  releaseStaleForegroundDeferrals(): number;
 }
 
 interface JobRow {
@@ -220,6 +233,7 @@ export function createSqliteQueue(
       }),
     );
   const maintenanceAdmissionConfig: MaintenanceAdmissionConfig = resolveMaintenanceAdmissionConfig();
+  const foregroundLivenessConfig: ForegroundLivenessConfig = resolveForegroundLivenessConfig();
   // Recover jobs a crashed previous run left mid-flight → make them claimable again.
   const recovered = recoverProcessingJobs(driver);
   if (recovered) {
@@ -237,13 +251,21 @@ export function createSqliteQueue(
         jitter_ms: queueStartupJitterMs(),
       }),
     );
-
   let running = false;
   let active = 0; // number of concurrent pump() loops currently draining jobs
   let activeBackground = 0;
   const activeJobIds = new Set<number>();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let deadLetterReviveTimer: ReturnType<typeof setInterval> | null = null;
+  let foregroundLivenessTimer: ReturnType<typeof setInterval> | null = null;
+
+  // Self-heal on boot (#selfhost-queue-liveness): a deploy/restart inherits whatever run_after values were
+  // already written before it, so a foreground lane over-deferred before the restart must not require manual
+  // intervention to unstick. releaseStaleForegroundDeferrals is declared below (function-hoisted, see
+  // foreground-liveness.ts) and logs + records its own metric when it finds work. MUST run after `active`/
+  // `activeBackground` above are initialized -- a release calls kickAll(), which reads them, and both are
+  // still in the temporal dead zone before this point (#selfhost-queue-liveness-tdz).
+  releaseStaleForegroundDeferrals();
 
   function reviveDeadLetterJobs(): number {
     const revived = reviveEligibleDeadJobs(driver, maxRetries);
@@ -272,6 +294,90 @@ export function createSqliteQueue(
         }),
       );
       captureError(error, { kind: "queue_dead_letter_revive_crashed" });
+    }
+  }
+
+  /** #selfhost-queue-liveness: re-evaluate rate-limit admission for an already-deferred foreground candidate
+   *  against CURRENT observations, independent of how long ago it was deferred. Returns true when it would be
+   *  admitted right now (no longer blocked); false when still blocked OR the payload is unparseable (best-
+   *  effort -- an unparseable payload is left for the normal dead-letter path, never force-released here). */
+  function isRateLimitAdmissionNowClear(payload: string): boolean {
+    let message: JobMessage;
+    try {
+      message = JSON.parse(payload) as JobMessage;
+    } catch {
+      return false;
+    }
+    return rateLimitAdmissionDelayMs(driver, message) === null;
+  }
+
+  /** See foreground-liveness.ts for the full rationale. A bounded candidate SELECT (foreground-priority, pending,
+   *  not currently due) then a per-row conditional UPDATE, mirroring reviveEligibleDeadJobs' shape. Each
+   *  candidate is released on EITHER of two independent conditions: it has genuinely been waiting past the
+   *  age-based trickle ceiling (isForegroundDeferralStale, unconditional backstop), OR -- CONDITION-BASED
+   *  recovery (#selfhost-queue-liveness VPS incident) -- re-evaluating rate-limit admission against CURRENT
+   *  observations right now says it would be admitted immediately. The age floor alone can leave a job pinned
+   *  to a stale reset timestamp for up to its full original delay (observed up to ~15m) even when a fresher,
+   *  healthier observation arrived moments after it was deferred; the condition check recovers it on the NEXT
+   *  sweep tick instead (bounded by FOREGROUND_LIVENESS_CHECK_INTERVAL_MS, default 60s) whenever the underlying
+   *  rate-limit pressure has actually cleared, regardless of job age. Logs + records a metric ONCE per sweep
+   *  (aggregate count), not per row, so a large release batch cannot spam the log. */
+  function releaseStaleForegroundDeferrals(): number {
+    if (!foregroundLivenessConfig.enabled) return 0;
+    const now = Date.now();
+    const { rows } = driver.query(
+      `SELECT id, payload, created_at FROM ${TABLE} WHERE status='pending' AND priority>=? AND run_after>?`,
+      [FOREGROUND_QUEUE_PRIORITY_FLOOR, now],
+    );
+    let released = 0;
+    let releasedByAge = 0;
+    let releasedByRateLimitClear = 0;
+    for (const row of rows as Array<{ id: number; payload: string; created_at: number }>) {
+      const ageStale = isForegroundDeferralStale(foregroundLivenessConfig, row.created_at, now);
+      if (!ageStale && !isRateLimitAdmissionNowClear(row.payload)) continue;
+      const { changes } = driver.query(
+        `UPDATE ${TABLE} SET run_after=? WHERE id=? AND status='pending' AND run_after>?`,
+        [now, row.id, now],
+      );
+      released += changes;
+      if (ageStale) releasedByAge += changes;
+      else releasedByRateLimitClear += changes;
+    }
+    if (released) {
+      recordQueueMetric(driver, "gittensory_jobs_foreground_liveness_released_total", released);
+      if (releasedByAge) incr("gittensory_jobs_foreground_liveness_released_by_reason_total", { reason: "age" }, releasedByAge);
+      if (releasedByRateLimitClear) incr("gittensory_jobs_foreground_liveness_released_by_reason_total", { reason: "rate_limit_cleared" }, releasedByRateLimitClear);
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          event: "selfhost_queue_foreground_liveness_released",
+          count: released,
+          released_by_age: releasedByAge,
+          released_by_rate_limit_cleared: releasedByRateLimitClear,
+          max_defer_ms: foregroundLivenessConfig.maxDeferMs,
+        }),
+      );
+      kickAll();
+    }
+    return released;
+  }
+
+  /** Wraps releaseStaleForegroundDeferrals() for the setInterval callback below, mirroring
+   *  reviveDeadLetterJobsSafely's own rationale: an uncaught exception here would surface as an unhandled
+   *  exception and can terminate the process when SENTRY_DSN is unset. A failed sweep just waits for the next
+   *  interval, same as a failed poll tick waits for the next poll. */
+  function releaseStaleForegroundDeferralsSafely(): void {
+    try {
+      releaseStaleForegroundDeferrals();
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "selfhost_queue_foreground_liveness_release_crashed",
+          error: errorMessageWithCause(error),
+        }),
+      );
+      captureError(error, { kind: "queue_foreground_liveness_release_crashed" });
     }
   }
 
@@ -829,11 +935,15 @@ export function createSqliteQueue(
       // recreate the retry storm this feature exists to bound. The interval itself is the cooldown between
       // auto-retry rounds for any one job.
       deadLetterReviveTimer = setInterval(reviveDeadLetterJobsSafely, queueDeadLetterReviveIntervalMs());
+      // Foreground-liveness sweep (#selfhost-queue-liveness): also a separate, slow interval -- see
+      // foreground-liveness.ts for why a per-tick check would busy-loop under sustained rate-limit pressure.
+      foregroundLivenessTimer = setInterval(releaseStaleForegroundDeferralsSafely, foregroundLivenessConfig.checkIntervalMs);
     },
     async stop() {
       running = false;
       if (timer) clearTimeout(timer);
       if (deadLetterReviveTimer) clearInterval(deadLetterReviveTimer);
+      if (foregroundLivenessTimer) clearInterval(foregroundLivenessTimer);
       while (active > 0) await new Promise((r) => setTimeout(r, 10)); // let in-flight pumps finish
     },
     async drain() {
@@ -861,11 +971,22 @@ export function createSqliteQueue(
         ).c,
       );
     },
+    processingCount() {
+      return Number(
+        (
+          driver.query(
+            `SELECT COUNT(*) AS c FROM ${TABLE} WHERE status='processing'`,
+            [],
+          ).rows[0] as { c: number }
+        ).c,
+      );
+    },
     stats() {
       return readQueueStats(driver);
     },
     snapshot: binding.snapshot,
     reviveDeadLetterJobs,
+    releaseStaleForegroundDeferrals,
     pressureSignals() {
       return maintenancePressureSignals(driver, Date.now());
     },
@@ -937,14 +1058,20 @@ function backfillJobForegroundLanes(driver: SqliteDriver): number {
 }
 
 /** Cheap aggregate reads behind the maintenance-admission policy (and the observability gauges in server.ts):
- *  how much LIVE (foreground) work is queued and how old the oldest of it is, and the same for the
+ *  how much LIVE (foreground) work is queued and how old the oldest of it is -- both overall
+ *  (pending+processing) and RUNNABLE right now (pending, due) -- and the same PENDING/oldest pair for the
  *  MAINTENANCE lane specifically (not "all background" -- targeted jobs like backfill-repo-segment don't
- *  count, see maintenance-admission.ts). Host load is an independent, optional signal (see host-pressure.ts). */
+ *  count, see maintenance-admission.ts). The runnable-now split is the #selfhost-queue-liveness diagnostic:
+ *  distinguishes "queue large but intentionally deferred" from "queue stuck, nothing runnable" without manual
+ *  SQL. Host load is an independent, optional signal (see host-pressure.ts). */
 function maintenancePressureSignals(driver: SqliteDriver, now: number): MaintenancePressureSignals {
   const live = driver.query(
-    `SELECT COUNT(*) as cnt, MIN(created_at) as oldest FROM ${TABLE} WHERE status IN ('pending','processing') AND priority>=?`,
-    [FOREGROUND_QUEUE_PRIORITY_FLOOR],
-  ).rows[0] as { cnt: number; oldest: number | null };
+    `SELECT COUNT(*) as cnt, MIN(created_at) as oldest,
+            SUM(CASE WHEN status='pending' AND run_after<=? THEN 1 ELSE 0 END) as runnable_cnt,
+            MIN(CASE WHEN status='pending' AND run_after<=? THEN created_at ELSE NULL END) as oldest_runnable
+       FROM ${TABLE} WHERE status IN ('pending','processing') AND priority>=?`,
+    [now, now, FOREGROUND_QUEUE_PRIORITY_FLOOR],
+  ).rows[0] as { cnt: number; oldest: number | null; runnable_cnt: number | null; oldest_runnable: number | null };
   const maintenance = driver.query(
     `SELECT COUNT(*) as cnt, MIN(created_at) as oldest FROM ${TABLE} WHERE status IN ('pending','processing') AND is_maintenance=1`,
     [],
@@ -952,6 +1079,8 @@ function maintenancePressureSignals(driver: SqliteDriver, now: number): Maintena
   return {
     livePendingCount: Number(live.cnt),
     oldestLivePendingAgeMs: live.oldest != null ? now - Number(live.oldest) : null,
+    liveRunnableNowCount: Number(live.runnable_cnt ?? 0),
+    oldestLiveRunnableAgeMs: live.oldest_runnable != null ? now - Number(live.oldest_runnable) : null,
     maintenancePendingCount: Number(maintenance.cnt),
     oldestMaintenancePendingAgeMs: maintenance.oldest != null ? now - Number(maintenance.oldest) : null,
     hostLoadAvg1PerCore: hostLoadAvg1PerCore(),

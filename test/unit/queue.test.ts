@@ -1579,6 +1579,112 @@ describe("queue processors", () => {
     }
   });
 
+  // #selfhost-ci-verification: settings.expectedCiContexts must actually change the live-CI disposition, not just
+  // get threaded through as an inert parameter. Branch protection is unreadable (empty) on BOTH calls, so without
+  // expectedCiContexts folded into mergeRequiredCiContexts every check-run folds to "passed" (fold-all); WITH
+  // expectedCiContexts naming a context that never appears in check-runs, mergeRequiredCiContexts makes it the
+  // SOLE required context and reduceLiveCiAggregate's "a required context that never appeared is not safe to
+  // treat as passed" rule (backfill.ts) forces ciState to "pending" — deferring the review before auto-maintain
+  // ever runs. Two full processJob passes (each gets its own request-scoped LiveGithubFacts, so this is a
+  // same-repo/baseRef/headSha comparison of the MERGED outcome, not a same-cache-hit test) prove the config is
+  // live, not stale/ignored.
+  it("REGRESSION (#selfhost-ci-verification): expectedCiContexts turns an otherwise-passing fold-all CI aggregate into a deferred pending review", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", checks: "write" }, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto", update_branch: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Fold-all vs configured", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+    let branchProtectionGets = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") return Response.json({ number: 7, title: "Fold-all vs configured", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      // Neither call's check-runs/status ever mentions "required-build" — only expectedCiContexts makes that matter.
+      if (url.includes("/commits/a7/check-runs")) return Response.json({ total_count: 1, check_runs: [{ name: "lint", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+      if (url.includes("/commits/a7/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      // Branch protection unreadable on both calls — expectedCiContexts is the ONLY source of a required context.
+      if (url.includes("/branches/")) {
+        branchProtectionGets += 1;
+        return new Response("forbidden", { status: 403 });
+      }
+      return Response.json({});
+    });
+
+    // Call A: no expectedCiContexts configured — fold-all mode, nothing pending, review proceeds normally.
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "no-expected-contexts", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+    const deferredBefore = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and metadata_json like ?")
+      .bind("github_app.review_deferred_ci_pending", '%"no-expected-contexts"%')
+      .first<{ n: number }>();
+    expect(deferredBefore?.n).toBe(0);
+    expect(branchProtectionGets).toBe(1);
+
+    // Config change: gate.expectedCiContexts now names a context absent from every check-run/status above.
+    await upsertRepoFocusManifest(env, "owner/agent-repo", { gate: { expectedCiContexts: ["required-build"] } });
+
+    // Call B: SAME repo/baseRef/headSha/check-run state — only settings.expectedCiContexts changed.
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "with-expected-contexts", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+
+    // The branch-protection endpoint was fetched again for call B (a fresh per-job LiveGithubFacts always misses),
+    // proving the merged result was actually RE-DERIVED against the new config rather than reused from call A.
+    expect(branchProtectionGets).toBe(2);
+    const deferredAfter = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and metadata_json like ?")
+      .bind("github_app.review_deferred_ci_pending", '%"with-expected-contexts"%')
+      .first<{ n: number }>();
+    // "required-build" never appears in check-runs/status ⇒ mergeRequiredCiContexts(null, ["required-build"]) makes
+    // it the sole required context ⇒ reduceLiveCiAggregate treats the unseen required context as pending ⇒
+    // prReadyForReview defers BEFORE auto-maintain runs — the opposite disposition of call A on identical CI data.
+    expect(deferredAfter?.n).toBe(1);
+  });
+
+  // #selfhost-ci-verification: within a SINGLE processJob pass, cachedRequiredStatusContexts is reached from THREE
+  // call sites sharing one request-scoped LiveGithubFacts — prReadyForReview (via cachedLiveCiAggregate),
+  // maybePublishPrPublicSurface (via refreshLiveCiAggregate), and runAgentMaintenancePlanAndExecute (directly, and
+  // again via refreshLiveCiAggregate). All three now fold expectedCiContextsKeyPart(settings.expectedCiContexts)
+  // into their cache key. Since settings is resolved ONCE per job, expectedCiContexts is constant across the three
+  // call sites within this one pass — this proves folding it into the key did NOT reintroduce a redundant fetch:
+  // the branch-protection endpoint is still hit exactly once for the whole job, exactly like before expectedCiContexts
+  // existed (see the sibling "#audit-rate-headroom: the per-PR re-review refreshes..." dedup test above).
+  it("REGRESSION (#selfhost-ci-verification): expectedCiContexts in the cache key does not defeat within-job required-contexts memoization", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", checks: "write" }, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto", update_branch: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Configured + clean", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+    await upsertPullRequestDetailSyncState(env, { repoFullName: "owner/agent-repo", pullNumber: 7, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+    // gate.expectedCiContexts is satisfied by a real, passing check-run — so CI resolves cleanly and the pass
+    // proceeds all the way through readiness, public-surface publish, AND auto-maintain (unlike the deferred-pending
+    // test above, which deliberately stops at readiness to prove the disposition changes).
+    await upsertRepoFocusManifest(env, "owner/agent-repo", { gate: { expectedCiContexts: ["required-build"] } });
+    let branchProtectionGets = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") return Response.json({ number: 7, title: "Configured + clean", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.includes("/commits/a7/check-runs")) return Response.json({ total_count: 1, check_runs: [{ name: "required-build", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+      if (url.includes("/commits/a7/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/branches/")) {
+        branchProtectionGets += 1;
+        return new Response("forbidden", { status: 403 });
+      }
+      return Response.json({});
+    });
+
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "configured-memoized", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+
+    // One fetch for the whole job despite three internal call sites sharing the config-aware cache key.
+    expect(branchProtectionGets).toBe(1);
+    const deferred = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?")
+      .bind("github_app.review_deferred_ci_pending")
+      .first<{ n: number }>();
+    expect(deferred?.n).toBe(0);
+  });
+
   it("#sweep-resync: a failing resync upsert is swallowed (fail-open) — the sweep never throws", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
@@ -4073,6 +4179,53 @@ describe("queue processors", () => {
     expect(fanned.map((job) => job.prNumber)).toEqual([1]); // only the priority repair, not PRs 2-5
   });
 
+  it("REGRESSION: the sweep tags a priority-repair fan-out with 'regate-repair:' and an ordinary candidate with 'regate-sweep:' (#selfhost-queue-liveness)", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
+    await upsertInstallation(env, { action: "created", installation: { id: 9404, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9404);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    // PR 1: missing its current Gate check for its current head -- surfaceRepairPriorityPullNumbers flags this as
+    // outage-repair priority (no completed Gittensory Gate check run at the live head SHA).
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 1, title: "Repair 1", state: "open", user: { login: "c" }, head: { sha: "repair-1" }, labels: [], body: "" });
+    await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 1, "repair-1");
+    // PR 2: ordinary PR with a completed current-head Gate check -- NOT priority.
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 2, title: "Ordinary 2", state: "open", user: { login: "c" }, head: { sha: "ordinary-2" }, labels: [], body: "" });
+    await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 2, "ordinary-2");
+    await upsertCheckSummary(env, {
+      id: "gate-current-2",
+      repoFullName: "owner/agent-repo",
+      pullNumber: 2,
+      headSha: "ordinary-2",
+      name: "Gittensory Orb Review Agent",
+      status: "completed",
+      conclusion: "success",
+      payload: {},
+    });
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+
+    const fanned = sent.filter((job): job is Extract<import("../../src/types").JobMessage, { type: "agent-regate-pr" }> => job.type === "agent-regate-pr");
+    expect(fanned).toHaveLength(2);
+    const repairJob = fanned.find((job) => job.prNumber === 1);
+    const ordinaryJob = fanned.find((job) => job.prNumber === 2);
+    expect(repairJob).toMatchObject({
+      type: "agent-regate-pr",
+      deliveryId: "regate-repair:owner/agent-repo#1",
+      repoFullName: "owner/agent-repo",
+      prNumber: 1,
+      installationId: 9404,
+    });
+    expect(ordinaryJob).toMatchObject({
+      type: "agent-regate-pr",
+      deliveryId: "regate-sweep:owner/agent-repo#2",
+      repoFullName: "owner/agent-repo",
+      prNumber: 2,
+      installationId: 9404,
+    });
+  });
+
   it("agent re-gate sweep fail-opens when current Gate check reads fail during repair priority selection", async () => {
     const sent: import("../../src/types").JobMessage[] = [];
     const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
@@ -4854,6 +5007,9 @@ describe("queue processors", () => {
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9203);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" } });
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 9, title: "PR9", state: "open", user: { login: "c" }, head: { sha: "a9" }, labels: [], body: "" });
+    // Published at the current head so this is an ORDINARY (non-priority-repair) candidate -- this test is about
+    // backlog-row-type filtering, not the priority-repair "regate-repair:" tagging (covered separately above).
+    await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 9, "a9");
     vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
 
     await processJob(env, { type: "agent-regate-sweep", requestedBy: "schedule", repoFullName: "owner/agent-repo" });
@@ -4885,6 +5041,9 @@ describe("queue processors", () => {
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9202);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" } });
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 8, title: "PR8", state: "open", user: { login: "c" }, head: { sha: "a8" }, labels: [], body: "" });
+    // Published at the current head so this is an ORDINARY (non-priority-repair) candidate -- this test is about
+    // queue-introspection independence, not the priority-repair "regate-repair:" tagging (covered separately above).
+    await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 8, "a8");
     vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
 
     await processJob(env, { type: "agent-regate-sweep", requestedBy: "schedule", repoFullName: "owner/agent-repo" });
@@ -4912,6 +5071,40 @@ describe("queue processors", () => {
     expect(sent.filter((m) => m.type === "agent-regate-pr")).toHaveLength(1); // re-queued for after the reset
     expect(stamp).not.toHaveBeenCalled(); // the per-PR job NEVER stamps the convergence marker — the sweep already did, at dispatch
     stamp.mockRestore();
+  });
+
+  it("REGRESSION: a 'regate-sweep:' per-PR job DEFERS at the maintenance floor even with headroom above the lower live floor (#selfhost-queue-liveness)", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+    // 100 remaining sits BELOW the 150 maintenance floor but ABOVE the 75 live floor -- isScheduledRegateSweepJob
+    // must route this "regate-sweep:"-prefixed job to the higher (150) floor, so it still defers here.
+    await repositoriesModule.recordGitHubRateLimitObservation(env, { repoFullName: "owner/agent-repo", resource: "rest", path: "/x", statusCode: 200, limitValue: 5000, remaining: 100, resetAt: "2026-05-28T02:30:00.000Z", observedAt: "2026-05-28T02:00:00.000Z" });
+    const stamp = vi.spyOn(repositoriesModule, "markPullRequestsRegated");
+
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "regate-sweep:owner/agent-repo#7", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9200 });
+
+    expect(sent.filter((m) => m.type === "agent-regate-pr")).toHaveLength(1); // re-queued for after the reset
+    expect(stamp).not.toHaveBeenCalled();
+    stamp.mockRestore();
+  });
+
+  it("REGRESSION: a non-'regate-sweep:' per-PR job (current-head trigger) does NOT defer at the maintenance floor, only at the lower live floor (#selfhost-queue-liveness)", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+    // Same 100-remaining observation as the sibling "regate-sweep:" test above, but this deliveryId does NOT carry
+    // the "regate-sweep:" prefix (e.g. a repair-priority fan-out, or a real webhook-triggered re-review), so
+    // isScheduledRegateSweepJob is false and shouldWaitForGitHubRateLimit is called with the lower 75 floor:
+    // 100 > 75, so this job proceeds instead of deferring.
+    await repositoriesModule.recordGitHubRateLimitObservation(env, { repoFullName: "owner/agent-repo", resource: "rest", path: "/x", statusCode: 200, limitValue: 5000, remaining: 100, resetAt: "2026-05-28T02:30:00.000Z", observedAt: "2026-05-28T02:00:00.000Z" });
+
+    // No stored PR row for prNumber 7 -- reReviewStoredPullRequest reaches its `getPullRequest` read (proving the
+    // rate-limit gate did not short-circuit it) and then returns immediately with no re-enqueue, since there is
+    // nothing to review. A deferral would instead re-enqueue this exact job (asserted absent below).
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "regate-repair:owner/agent-repo#7", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9200 });
+
+    expect(sent.filter((m) => m.type === "agent-regate-pr")).toEqual([]); // proceeded — no rate-limit re-enqueue
   });
 
   it("routes repo-scoped backfill jobs into resumable segment and detail processors", async () => {

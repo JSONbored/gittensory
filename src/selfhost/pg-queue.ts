@@ -140,6 +140,11 @@ import {
   pickBacklogRepo,
   type ForegroundLane,
 } from "./queue-fairness";
+import {
+  isForegroundDeferralStale,
+  resolveForegroundLivenessConfig,
+  type ForegroundLivenessConfig,
+} from "./foreground-liveness";
 import type { JobMessage } from "../types";
 
 const TABLE = "_selfhost_jobs";
@@ -187,6 +192,9 @@ export interface PgDurableQueue {
   drain(): Promise<void>;
   size(): Promise<number>;
   deadCount(): Promise<number>;
+  /** Jobs currently claimed and mid-flight (status='processing') -- distinct from size(), which also
+   *  includes still-pending work. See #selfhost-queue-liveness's own observability additions. */
+  processingCount(): Promise<number>;
   stats(): Promise<Record<string, number>>;
   snapshot(): Promise<SelfHostQueueSnapshot>;
   /** Live-vs-maintenance queue pressure, for the /metrics gauges (see server.ts) -- the SAME signals the
@@ -196,6 +204,11 @@ export interface PgDurableQueue {
    *  running (see start()), and exposed directly so tests and an operator-triggered repair path don't have
    *  to wait for the real interval. Returns the number of jobs revived. */
   reviveDeadLetterJobs(): Promise<number>;
+  /** Foreground-liveness invariant (#selfhost-queue-liveness): pulls back any FOREGROUND-priority pending job
+   *  whose deferral has gone stale (see foreground-liveness.ts) regardless of what deferred it. Called once at
+   *  boot and on a timer while running (see init()/start()), and exposed directly so tests and an
+   *  operator-triggered repair path don't have to wait for the real interval. Returns the number released. */
+  releaseStaleForegroundDeferrals(): Promise<number>;
 }
 
 interface JobRow {
@@ -245,7 +258,9 @@ export function createPgQueue(
   const activeJobIds = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let deadLetterReviveTimer: ReturnType<typeof setInterval> | null = null;
+  let foregroundLivenessTimer: ReturnType<typeof setInterval> | null = null;
   const maintenanceAdmissionConfig: MaintenanceAdmissionConfig = resolveMaintenanceAdmissionConfig();
+  const foregroundLivenessConfig: ForegroundLivenessConfig = resolveForegroundLivenessConfig();
 
   async function init(): Promise<void> {
     await pool.query(DDL);
@@ -300,6 +315,10 @@ export function createPgQueue(
           jitter_ms: queueStartupJitterMs(),
         }),
       );
+    // Self-heal on boot (#selfhost-queue-liveness): a deploy/restart inherits whatever run_after values were
+    // already written before it, so a foreground lane over-deferred before the restart must not require manual
+    // intervention to unstick -- releaseStaleForegroundDeferrals logs + records its own metric when it finds work.
+    await releaseStaleForegroundDeferrals();
   }
 
   async function backfillJobPriorities(): Promise<number> {
@@ -366,22 +385,35 @@ export function createPgQueue(
   }
 
   /** Cheap aggregate reads behind the maintenance-admission policy (and the observability gauges in
-   *  server.ts): how much LIVE (foreground) work is queued and how old the oldest of it is, and the same for
-   *  the MAINTENANCE lane specifically (not "all background" -- targeted jobs like backfill-repo-segment
-   *  don't count, see maintenance-admission.ts). Host load is an independent, optional signal. */
+   *  server.ts): how much LIVE (foreground) work is queued and how old the oldest of it is -- both overall
+   *  (pending+processing) and RUNNABLE right now (pending, due) -- and the same PENDING/oldest pair for the
+   *  MAINTENANCE lane specifically (not "all background" -- targeted jobs like backfill-repo-segment don't
+   *  count, see maintenance-admission.ts). The runnable-now split is the #selfhost-queue-liveness diagnostic:
+   *  distinguishes "queue large but intentionally deferred" from "queue stuck, nothing runnable" without
+   *  manual SQL. Host load is an independent, optional signal. */
   async function maintenancePressureSignals(now: number): Promise<MaintenancePressureSignals> {
     const liveRes = await pool.query(
-      `SELECT COUNT(*) AS cnt, MIN(created_at) AS oldest FROM ${TABLE} WHERE status IN ('pending','processing') AND priority>=$1`,
-      [FOREGROUND_QUEUE_PRIORITY_FLOOR],
+      `SELECT COUNT(*) AS cnt, MIN(created_at) AS oldest,
+              COUNT(*) FILTER (WHERE status='pending' AND run_after<=$2) AS runnable_cnt,
+              MIN(created_at) FILTER (WHERE status='pending' AND run_after<=$2) AS oldest_runnable
+         FROM ${TABLE} WHERE status IN ('pending','processing') AND priority>=$1`,
+      [FOREGROUND_QUEUE_PRIORITY_FLOOR, now],
     );
     const maintenanceRes = await pool.query(
       `SELECT COUNT(*) AS cnt, MIN(created_at) AS oldest FROM ${TABLE} WHERE status IN ('pending','processing') AND is_maintenance=1`,
     );
-    const live = liveRes.rows[0] as { cnt: string | number; oldest: string | number | null };
+    const live = liveRes.rows[0] as {
+      cnt: string | number;
+      oldest: string | number | null;
+      runnable_cnt: string | number;
+      oldest_runnable: string | number | null;
+    };
     const maintenance = maintenanceRes.rows[0] as { cnt: string | number; oldest: string | number | null };
     return {
       livePendingCount: Number(live.cnt),
       oldestLivePendingAgeMs: live.oldest != null ? now - Number(live.oldest) : null,
+      liveRunnableNowCount: Number(live.runnable_cnt),
+      oldestLiveRunnableAgeMs: live.oldest_runnable != null ? now - Number(live.oldest_runnable) : null,
       maintenancePendingCount: Number(maintenance.cnt),
       oldestMaintenancePendingAgeMs: maintenance.oldest != null ? now - Number(maintenance.oldest) : null,
       hostLoadAvg1PerCore: hostLoadAvg1PerCore(),
@@ -466,6 +498,91 @@ export function createPgQueue(
         }),
       );
       captureError(error, { kind: "queue_dead_letter_revive_crashed" });
+    }
+  }
+
+  /** #selfhost-queue-liveness: re-evaluate rate-limit admission for an already-deferred foreground candidate
+   *  against CURRENT observations, independent of how long ago it was deferred. Returns true when it would be
+   *  admitted right now (no longer blocked); false when still blocked OR the payload is unparseable (best-
+   *  effort -- an unparseable payload is left for the normal dead-letter path, never force-released here). */
+  async function isRateLimitAdmissionNowClear(payload: string): Promise<boolean> {
+    let message: JobMessage;
+    try {
+      message = JSON.parse(payload) as JobMessage;
+    } catch {
+      return false;
+    }
+    return (await rateLimitAdmissionDelayMs(message)) === null;
+  }
+
+  /** See foreground-liveness.ts for the full rationale. A bounded candidate SELECT (foreground-priority, pending,
+   *  not currently due) then a per-row conditional UPDATE, mirroring reviveEligibleDeadJobs' shape. Each
+   *  candidate is released on EITHER of two independent conditions: it has genuinely been waiting past the
+   *  age-based trickle ceiling (isForegroundDeferralStale, unconditional backstop), OR -- CONDITION-BASED
+   *  recovery (#selfhost-queue-liveness VPS incident) -- re-evaluating rateLimitAdmissionDelayMs against
+   *  CURRENT observations right now says it would be admitted immediately. The age floor alone can leave a job
+   *  pinned to a stale reset timestamp for up to its full original delay (observed up to ~15m) even when a
+   *  fresher, healthier observation arrived moments after it was deferred; the condition check recovers it on
+   *  the NEXT sweep tick instead (bounded by FOREGROUND_LIVENESS_CHECK_INTERVAL_MS, default 60s) whenever the
+   *  underlying rate-limit pressure has actually cleared, regardless of job age. Logs + records a metric ONCE
+   *  per sweep (aggregate count), not per row, so a large release batch cannot spam the log. */
+  async function releaseStaleForegroundDeferrals(): Promise<number> {
+    if (!foregroundLivenessConfig.enabled) return 0;
+    const now = Date.now();
+    const res = await pool.query(
+      `SELECT id, payload, created_at FROM ${TABLE} WHERE status='pending' AND priority>=$1 AND run_after>$2`,
+      [FOREGROUND_QUEUE_PRIORITY_FLOOR, now],
+    );
+    let released = 0;
+    let releasedByAge = 0;
+    let releasedByRateLimitClear = 0;
+    for (const row of res.rows as Array<{ id: string; payload: string; created_at: number | string }>) {
+      const ageStale = isForegroundDeferralStale(foregroundLivenessConfig, Number(row.created_at), now);
+      if (!ageStale && !(await isRateLimitAdmissionNowClear(row.payload))) continue;
+      const update = await pool.query(
+        `UPDATE ${TABLE} SET run_after=$1 WHERE id=$2 AND status='pending' AND run_after>$1`,
+        [now, row.id],
+      );
+      const rowsChanged = update.rowCount ?? 0;
+      released += rowsChanged;
+      if (ageStale) releasedByAge += rowsChanged;
+      else releasedByRateLimitClear += rowsChanged;
+    }
+    if (released) {
+      await recordQueueMetric("gittensory_jobs_foreground_liveness_released_total", released);
+      if (releasedByAge) incr("gittensory_jobs_foreground_liveness_released_by_reason_total", { reason: "age" }, releasedByAge);
+      if (releasedByRateLimitClear) incr("gittensory_jobs_foreground_liveness_released_by_reason_total", { reason: "rate_limit_cleared" }, releasedByRateLimitClear);
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          event: "selfhost_queue_foreground_liveness_released",
+          count: released,
+          released_by_age: releasedByAge,
+          released_by_rate_limit_cleared: releasedByRateLimitClear,
+          max_defer_ms: foregroundLivenessConfig.maxDeferMs,
+        }),
+      );
+      kickAll();
+    }
+    return released;
+  }
+
+  /** Wraps releaseStaleForegroundDeferrals() for the setInterval callback below, mirroring
+   *  reviveDeadLetterJobsSafely's own rationale: an uncaught rejection here would surface as an unhandled
+   *  promise rejection and can terminate the process when SENTRY_DSN is unset. A failed sweep just waits for
+   *  the next interval, same as a failed poll tick waits for the next poll. */
+  async function releaseStaleForegroundDeferralsSafely(): Promise<void> {
+    try {
+      await releaseStaleForegroundDeferrals();
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "selfhost_queue_foreground_liveness_release_crashed",
+          error: errorMessageWithCause(error),
+        }),
+      );
+      captureError(error, { kind: "queue_foreground_liveness_release_crashed" });
     }
   }
 
@@ -1101,11 +1218,18 @@ export function createPgQueue(
       // recreate the retry storm this feature exists to bound. The interval itself is the cooldown between
       // auto-retry rounds for any one job.
       deadLetterReviveTimer = setInterval(() => void reviveDeadLetterJobsSafely(), queueDeadLetterReviveIntervalMs());
+      // Foreground-liveness sweep (#selfhost-queue-liveness): also a separate, slow interval -- see
+      // foreground-liveness.ts for why a per-tick check would busy-loop under sustained rate-limit pressure.
+      foregroundLivenessTimer = setInterval(
+        () => void releaseStaleForegroundDeferralsSafely(),
+        foregroundLivenessConfig.checkIntervalMs,
+      );
     },
     async stop() {
       running = false;
       if (timer) clearTimeout(timer);
       if (deadLetterReviveTimer) clearInterval(deadLetterReviveTimer);
+      if (foregroundLivenessTimer) clearInterval(foregroundLivenessTimer);
       while (active > 0) await new Promise((r) => setTimeout(r, 10));
     },
     async drain() {
@@ -1130,11 +1254,21 @@ export function createPgQueue(
         ).rows[0].c,
       );
     },
+    async processingCount() {
+      return Number(
+        (
+          await pool.query(
+            `SELECT COUNT(*) AS c FROM ${TABLE} WHERE status='processing'`,
+          )
+        ).rows[0].c,
+      );
+    },
     async stats() {
       return readQueueStats();
     },
     snapshot: binding.snapshot,
     reviveDeadLetterJobs,
+    releaseStaleForegroundDeferrals,
     pressureSignals() {
       return maintenancePressureSignals(Date.now());
     },

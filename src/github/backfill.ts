@@ -2373,6 +2373,30 @@ export async function fetchRequiredStatusContexts(
   return names;
 }
 
+/**
+ * Merge a maintainer-configured `expectedCiContexts` allowlist (`settings.expectedCiContexts` /
+ * `.gittensory.yml` `gate.expectedCiContexts`) with the live branch-protection required-status-check
+ * contexts from {@link fetchRequiredStatusContexts}. Branch protection stays authoritative when
+ * readable; `expectedCiContexts` is UNIONED into it when both exist, and becomes the SOLE required-context
+ * source when branch protection is null/empty (unreadable, or simply not configured) — the generic config
+ * path the #2137 `ciCompletenessWarning` has always nudged a maintainer toward. A repo with neither
+ * configured returns null, preserving today's fold-all fail-closed `reduceLiveCiAggregate` behavior
+ * unchanged. Entries are trimmed and blanks dropped defensively (the focus-manifest parser already
+ * normalizes `expectedCiContexts`, but this is the single point every caller funnels through).
+ */
+export function mergeRequiredCiContexts(
+  branchProtectionContexts: ReadonlySet<string> | null,
+  expectedCiContexts: ReadonlyArray<string> | null | undefined,
+): Set<string> | null {
+  const expected = (expectedCiContexts ?? [])
+    .map((context) => context.trim())
+    .filter((context) => context.length > 0);
+  if (branchProtectionContexts && branchProtectionContexts.size > 0) {
+    return expected.length > 0 ? new Set([...branchProtectionContexts, ...expected]) : new Set(branchProtectionContexts);
+  }
+  return expected.length > 0 ? new Set(expected) : null;
+}
+
 // A GitHubApiError's own `.rateLimited` flag (set at construction from status/retry-after/remaining/body, see
 // GitHubApiError below) is ALREADY the correct rate-limit-vs-permission classification -- this just labels the
 // permission case with its own metric instead of the fetch's `.catch` silently discarding that information.

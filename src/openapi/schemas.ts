@@ -602,6 +602,7 @@ export const RepositorySettingsSchema = z
     claConsentPhrase: z.string().nullable().optional(),
     claCheckRunName: z.string().nullable().optional(),
     claCheckRunAppSlug: z.string().nullable().optional(),
+    expectedCiContexts: z.array(z.string()).optional(),
     gateDryRun: z.boolean().optional(),
     premergeContentRecheck: z.boolean().optional(),
     requireFreshRebaseWindowMinutes: z.number().int().positive().nullable().optional(),

@@ -99,6 +99,7 @@ import {
   fetchRequiredStatusContexts,
   invalidatePrStateCache,
   isReviewsCacheUpToDate,
+  mergeRequiredCiContexts,
   primeDurablePrStateCache,
   refreshContributorActivity,
   refreshInstallationHealth,
@@ -232,11 +233,13 @@ import {
 } from "../settings/agent-sweep";
 import { selectBacklogConvergenceCandidates } from "../selfhost/backlog-convergence";
 import {
+  LOW_REST_RATE_LIMIT_REMAINING,
   MAINTENANCE_RESERVED_HEADROOM,
   delayUntil,
   shouldWaitForGitHubRateLimit,
 } from "../github/rate-limit";
 import {
+  isScheduledRegateSweepJob,
   queueSnapshotBacklog,
   queueSnapshotFromBinding,
 } from "../selfhost/queue-common";
@@ -516,21 +519,37 @@ function primeLiveMergeState(
   );
 }
 
+// Stable, order-independent cache-key fragment for settings.expectedCiContexts (#selfhost-ci-verification):
+// a config change must never reuse a stale required-contexts/live-CI cache entry from before the change, and
+// two equal sets in different orders must hit the SAME cache entry rather than needlessly duplicating fetches.
+function expectedCiContextsKeyPart(expectedCiContexts: ReadonlyArray<string> | null | undefined): string {
+  if (!expectedCiContexts || expectedCiContexts.length === 0) return "";
+  return [...expectedCiContexts].sort().join(" ");
+}
+
+// RC2 + #selfhost-ci-verification: the EFFECTIVE required-status-check contexts for this repo/baseRef, merging
+// live branch-protection required contexts with the maintainer-configured settings.expectedCiContexts fallback
+// (mergeRequiredCiContexts — branch protection stays authoritative when readable; expectedCiContexts is the
+// SOLE source when it is null/empty). Downstream callers (fetchLiveCiAggregate et al.) never distinguish the
+// two sources — they only see one effective required-contexts set, same as before this field existed.
 function cachedRequiredStatusContexts(
   env: Env,
   repoFullName: string,
   facts: LiveGithubFacts,
   baseRef: string | null | undefined,
   token: string | undefined,
+  expectedCiContexts: ReadonlyArray<string> | null | undefined,
   admissionKey?: GitHubRateLimitAdmissionKey,
 ): Promise<Set<string> | null> {
-  const key = liveFactKey(repoFullName, baseRef, liveFactTokenPart(token));
+  const key = liveFactKey(repoFullName, baseRef, liveFactTokenPart(token), expectedCiContextsKeyPart(expectedCiContexts));
   const cached = facts.requiredContexts.get(key);
   if (cached) return cached;
   const next = evictLiveFactOnReject(
     facts.requiredContexts,
     key,
-    fetchRequiredStatusContexts(env, repoFullName, baseRef, token, admissionKey),
+    fetchRequiredStatusContexts(env, repoFullName, baseRef, token, admissionKey).then((branchProtectionContexts) =>
+      mergeRequiredCiContexts(branchProtectionContexts, expectedCiContexts),
+    ),
   );
   facts.requiredContexts.set(key, next);
   return next;
@@ -554,12 +573,13 @@ function fetchLiveCiAggregateWithRequiredContexts(
   headSha: string | null | undefined,
   baseRef: string | null | undefined,
   token: string | undefined,
+  expectedCiContexts: ReadonlyArray<string> | null | undefined,
   admissionKey?: GitHubRateLimitAdmissionKey,
 ): Promise<LiveCiAggregate> {
   // CI refresh callers need fresh check/status state; branch protection contexts move slowly enough to stay
   // request-cached. When the #1941 flag is on, fetchLiveCiAggregatePreferGraphQl collapses the check/status reads
   // into one GraphQL rollup (reusing these requiredContexts), else it uses the proven REST aggregate.
-  return cachedRequiredStatusContexts(env, repoFullName, facts, baseRef, token, admissionKey)
+  return cachedRequiredStatusContexts(env, repoFullName, facts, baseRef, token, expectedCiContexts, admissionKey)
     .catch(() => null)
     .then((requiredContexts) =>
       fetchLiveCiAggregatePreferGraphQl(env, repoFullName, headSha, token, requiredContexts, admissionKey),
@@ -573,9 +593,10 @@ function cachedLiveCiAggregate(
   headSha: string | null | undefined,
   baseRef: string | null | undefined,
   token: string | undefined,
+  expectedCiContexts: ReadonlyArray<string> | null | undefined,
   admissionKey?: GitHubRateLimitAdmissionKey,
 ): Promise<LiveCiAggregate> {
-  const key = liveFactKey(repoFullName, headSha, baseRef, liveFactTokenPart(token));
+  const key = liveFactKey(repoFullName, headSha, baseRef, liveFactTokenPart(token), expectedCiContextsKeyPart(expectedCiContexts));
   const cached = facts.ciAggregates.get(key);
   if (cached) return cached;
   const next = evictLiveFactOnReject(
@@ -588,6 +609,7 @@ function cachedLiveCiAggregate(
       headSha,
       baseRef,
       token,
+      expectedCiContexts,
       admissionKey,
     ),
   );
@@ -602,9 +624,10 @@ function refreshLiveCiAggregate(
   headSha: string | null | undefined,
   baseRef: string | null | undefined,
   token: string | undefined,
+  expectedCiContexts: ReadonlyArray<string> | null | undefined,
   admissionKey?: GitHubRateLimitAdmissionKey,
 ): Promise<LiveCiAggregate> {
-  const key = liveFactKey(repoFullName, headSha, baseRef, liveFactTokenPart(token));
+  const key = liveFactKey(repoFullName, headSha, baseRef, liveFactTokenPart(token), expectedCiContextsKeyPart(expectedCiContexts));
   const next = evictLiveFactOnReject(
     facts.ciAggregates,
     key,
@@ -615,6 +638,7 @@ function refreshLiveCiAggregate(
       headSha,
       baseRef,
       token,
+      expectedCiContexts,
       admissionKey,
     ),
   );
@@ -1477,6 +1501,13 @@ async function sweepRepoRegate(
   const flaggedPulls: number[] = [];
   const sweepInstallationId = repo?.installationId ?? null;
   const duplicateWinnerEnabled = env.GITTENSORY_DUPLICATE_WINNER === "true";
+  // #selfhost-queue-liveness: priorityPullNumbers (surfaceRepairPriorityPullNumbers, above) are OUTAGE REPAIR --
+  // a PR with no current-head Gate check or an unpublished current-head surface -- not routine staleness. A
+  // repair candidate's fanned-out job must NOT carry the "regate-sweep:" deliveryId prefix, or
+  // isScheduledRegateSweepJob (queue-common.ts) misclassifies it as background maintenance and it inherits the
+  // exact starvation this priority mechanism exists to avoid. Ordinary stale candidates keep the sweep prefix
+  // unchanged.
+  const priorityPullNumberSet = new Set(priorityPullNumbers);
   for (const [index, pr] of candidates.entries()) {
     const others = openPullRequests.filter(
       (other) => other.number !== pr.number,
@@ -1512,7 +1543,9 @@ async function sweepRepoRegate(
     if (sweepInstallationId != null) {
       const job: JobMessage = {
         type: "agent-regate-pr",
-        deliveryId: `regate-sweep:${repoFullName}#${pr.number}`,
+        deliveryId: priorityPullNumberSet.has(pr.number)
+          ? `regate-repair:${repoFullName}#${pr.number}`
+          : `regate-sweep:${repoFullName}#${pr.number}`,
         repoFullName,
         prNumber: pr.number,
         installationId: sweepInstallationId,
@@ -1673,13 +1706,18 @@ async function regatePullRequest(
   deliveryId: string,
   force?: boolean,
 ): Promise<void> {
-  // Reserve installation rate-limit headroom for real webhooks (#audit-rate-headroom): all repos share ONE GitHub
-  // App installation = ONE REST bucket, so when the shared budget is at/below the maintenance floor, DEFER this
-  // re-review until the reset instead of burning budget a webhook's re-review needs. Re-enqueue with the reset
-  // delay so the PR is still eventually re-reviewed.
+  // Reserve installation rate-limit headroom (#audit-rate-headroom): all repos share ONE GitHub App installation
+  // = ONE REST bucket, so when the shared budget is low, DEFER this re-review until the reset instead of
+  // burning budget other work needs. #selfhost-queue-liveness: the FLOOR depends on WHY this job exists — the
+  // scheduled sweep's own stale-PR fan-out (isScheduledRegateSweepJob) can wait behind the conservative
+  // maintenance floor same as any other periodic sweep, but every other trigger (a real webhook event: a
+  // trailing coalesced re-review, an over-cap sibling wake, a linked-issue-change re-review, a reconciliation-
+  // repair enqueue) is current-HEAD contributor-PR-review work and gets the SAME low floor a fresh webhook
+  // gets — it must never be treated as background maintenance and parked behind it. Mirrors the SAME
+  // reclassification githubRateLimitAdmissionTargetForJob applies at the queue-admission layer.
   const rateResetAt = await shouldWaitForGitHubRateLimit(
     env,
-    MAINTENANCE_RESERVED_HEADROOM,
+    isScheduledRegateSweepJob(deliveryId) ? MAINTENANCE_RESERVED_HEADROOM : LOW_REST_RATE_LIMIT_REMAINING,
   );
   if (rateResetAt) {
     await env.JOBS.send(
@@ -2001,6 +2039,7 @@ async function runAgentMaintenancePlanAndExecute(
       args.liveFacts,
       baseRef,
       token,
+      settings.expectedCiContexts,
       admissionKey,
     ),
     // Live mergeable_state after the gate's own publish/review/check mutations. Readiness may have seen the PR as
@@ -2019,6 +2058,7 @@ async function runAgentMaintenancePlanAndExecute(
     pr.headSha,
     baseRef,
     token,
+    settings.expectedCiContexts,
     admissionKey,
   );
   // #2137: informational-only nudge for the operator — never affects the disposition below (ciState is
@@ -2695,7 +2735,7 @@ async function prReadyForReview(
   }
   // 2) wait for CI to finish before running the Gittensory review. Required contexts still define which failures
   // block/close, but hasPending tracks any visible non-bot CI that is not settled yet.
-  const ci = await cachedLiveCiAggregate(env, repoFullName, liveFacts, pr.headSha, pr.baseRef, token, admissionKey).catch(() => undefined);
+  const ci = await cachedLiveCiAggregate(env, repoFullName, liveFacts, pr.headSha, pr.baseRef, token, settings.expectedCiContexts, admissionKey).catch(() => undefined);
   if (ci?.hasPending) {
     // Staleness cap: inferred or unreadable pending CI can otherwise defer FOREVER (orphaned required context,
     // transiently unreadable pages, fork check that never reports). Past STUCK_CI_DEFER_MS we stop deferring and
@@ -7907,7 +7947,7 @@ async function maybePublishPrPublicSurface(
       const baseRef = pr.baseRef ?? repo?.defaultBranch;
       // Required contexts still detect missing/pending required CI, but every visible completed red check/status is
       // adverse and blocks the PR.
-      const liveCi = await refreshLiveCiAggregate(env, repoFullName, webhook.liveFacts, pr.headSha, baseRef, token, admissionKey);
+      const liveCi = await refreshLiveCiAggregate(env, repoFullName, webhook.liveFacts, pr.headSha, baseRef, token, settings.expectedCiContexts, admissionKey);
       // Live merge-state too — the SAME source the disposition uses (planAgentMaintenanceActions reads liveMergeState).
       // The stored pr.mergeableState lags GitHub's async recompute, and the gate's own check/review publication can
       // also advance mergeability after readiness ran, so refresh at this post-publish boundary.
