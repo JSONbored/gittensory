@@ -8931,6 +8931,22 @@
           "contributorCapCancelCi": {
             "type": "boolean",
             "nullable": true
+          },
+          "claGateMode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "advisory",
+              "block"
+            ]
+          },
+          "claConsentPhrase": {
+            "type": "string",
+            "nullable": true
+          },
+          "claCheckRunName": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
