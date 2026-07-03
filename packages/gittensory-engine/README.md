@@ -89,6 +89,12 @@ injected-clock semantics for local miners.
 They only deny on small, explicit AI-contribution ban phrases in `AI-USAGE.md` or `CONTRIBUTING.md`; ambiguous,
 missing, or empty policy text stays allowed so discovery does not invent a ban.
 
+## Governor ledger
+
+`normalizeGovernorLedgerEvent` validates append-only governor decision rows before the local miner persists them.
+The vocabulary is fixed (`allowed`, `denied`, `throttled`, `kill_switch`) and unknown event types fail closed. This
+module defines the storage contract only — it does not wire into live governor enforcement yet. (#2328)
+
 ## MinerGoalSpec
 
 `MinerGoalSpec` is the type surface for a repo's `.gittensory-miner.yml` (miner-side analogue of `.gittensory.yml`).

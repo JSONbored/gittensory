@@ -9058,6 +9058,12 @@
           "claCheckRunAppSlug": {
             "type": "string",
             "nullable": true
+          },
+          "expectedCiContexts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -9473,6 +9479,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "authMode": {
+            "type": "string",
+            "enum": [
+              "local",
+              "broker"
+            ]
           }
         },
         "required": [
@@ -9485,7 +9498,8 @@
           "missingEvents",
           "permissions",
           "events",
-          "checkedAt"
+          "checkedAt",
+          "authMode"
         ]
       },
       "RepoSettingsPreview": {

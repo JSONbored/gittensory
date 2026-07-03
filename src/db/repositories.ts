@@ -3433,6 +3433,16 @@ export async function listOtherOpenPullRequests(env: Env, fullName: string, numb
   return rows.map(toPullRequestRecordFromRow);
 }
 
+export async function listOtherOpenPullRequestsForAuthor(env: Env, fullName: string, number: number, authorLogin: string): Promise<PullRequestRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select()
+    .from(pullRequests)
+    .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.state, "open"), not(eq(pullRequests.number, number)), sql`lower(${pullRequests.authorLogin}) = lower(${authorLogin})`))
+    .orderBy(asc(pullRequests.number));
+  return rows.map(toPullRequestRecordFromRow);
+}
+
 export async function getRepoAuthorPullRequestHistory(env: Env, fullName: string, login: string, excludeNumber?: number): Promise<{ mergedPrCount: number; closedUnmergedPrCount: number }> {
   const db = getDb(env.DB);
   const [row] = await db
@@ -4452,6 +4462,7 @@ export async function upsertInstallationHealth(env: Env, health: InstallationHea
       eventsJson: jsonString(health.events),
       checkedAt: health.checkedAt,
       errorSummary: health.errorSummary ?? null,
+      authMode: health.authMode,
     })
     .onConflictDoUpdate({
       target: installationHealth.installationId,
@@ -4467,6 +4478,7 @@ export async function upsertInstallationHealth(env: Env, health: InstallationHea
         eventsJson: jsonString(health.events),
         checkedAt: health.checkedAt,
         errorSummary: health.errorSummary ?? null,
+        authMode: health.authMode,
       },
     });
 }
@@ -5206,6 +5218,7 @@ function toInstallationHealthRecord(row: typeof installationHealth.$inferSelect)
     events: parseJson<string[]>(row.eventsJson, []),
     checkedAt: row.checkedAt,
     errorSummary: row.errorSummary,
+    authMode: parseInstallationHealthAuthMode(row.authMode),
   };
 }
 
@@ -6268,6 +6281,10 @@ function parseCollisionRisk(value: string): CollisionEdgeRecord["risk"] {
 function parseInstallationHealthStatus(value: string): InstallationHealthRecord["status"] {
   if (value === "healthy" || value === "broken") return value;
   return "needs_attention";
+}
+
+function parseInstallationHealthAuthMode(value: string): InstallationHealthRecord["authMode"] {
+  return value === "broker" ? "broker" : "local";
 }
 
 function parseScoringSourceKind(value: string): ScoringModelSnapshotRecord["sourceKind"] {

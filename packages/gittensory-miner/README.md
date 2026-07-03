@@ -24,6 +24,10 @@ The package also includes a metadata-only ranker: `rankCandidateIssues` composes
 (potential, feasibility, lane fit, freshness, dup risk) and returns fan-out candidates sorted by `rankScore`.
 It never clones source and never writes to GitHub.
 
+The package also includes an append-only governor decision ledger: `initGovernorLedger` / `appendGovernorEvent`
+persist structured allow/deny/throttle/kill-switch outcomes in local SQLite for contributor audit. Insert-only —
+no enforcement wiring yet. (#2328)
+
 ## Install
 
 From a local checkout:

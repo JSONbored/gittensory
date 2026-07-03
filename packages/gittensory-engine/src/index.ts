@@ -10,6 +10,13 @@ export {
   type OpportunityRankInput,
 } from "./opportunity-ranker.js";
 export * from "./governor/rate-limit.js";
+export {
+  GOVERNOR_LEDGER_EVENT_TYPES,
+  normalizeGovernorLedgerEvent,
+  type GovernorLedgerEvent,
+  type GovernorLedgerEventType,
+  type NormalizedGovernorLedgerEvent,
+} from "./governor-ledger.js";
 export * from "./plan-export.js";
 export * from "./plan-templates.js";
 export * from "./portfolio/queue.js";

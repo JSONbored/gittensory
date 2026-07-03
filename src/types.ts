@@ -25,9 +25,16 @@ export type JobMessage =
       attempt: number;
     }
   | {
-      // One bounded re-gate unit fanned out by the scheduled sweep (#audit-sweep-fanout): re-review + stamp a
-      // single PR. Each candidate becomes its own individually-retryable, rate-limited queue message so the heavy
-      // re-review work interleaves with other jobs instead of monopolizing the consumer for all 25 at once.
+      // One bounded re-gate unit: re-review + stamp a single PR. Each candidate becomes its own individually-
+      // retryable, rate-limited queue message so the heavy re-review work interleaves with other jobs instead
+      // of monopolizing the consumer. Producers: the scheduled sweep's stale-candidate fan-out
+      // (#audit-sweep-fanout, deliveryId prefixed "regate-sweep:" — genuinely deferrable maintenance) and the
+      // sweep's own outage-repair fan-out (deliveryId prefixed "regate-repair:" — a PR missing a current-head
+      // Gate check or public-surface publish); a trailing coalesced re-review after a webhook burst; an
+      // over-cap sibling wake; a linked-issue-change re-review. EXCEPT for the "regate-sweep:" prefix, every
+      // producer carries the real webhook/event deliveryId that caused it — current-HEAD contributor-PR-review
+      // work, never background maintenance (isScheduledRegateSweepJob / githubRateLimitAdmissionTargetForJob in
+      // ../selfhost/queue-common.ts, #selfhost-queue-liveness).
       type: "agent-regate-pr";
       deliveryId: string;
       repoFullName: string;
@@ -160,9 +167,13 @@ export type JobMessage =
       runId: string;
     }
   | {
+      // Batched (#selfhost-maintenance-self-pin): every notification event detected from ONE webhook delivery
+      // (a review event plus any issue-watch matches) rides in a single job, instead of one job per event --
+      // that was flooding the maintenance lane with a job per watcher on a popular newly-opened issue. Always
+      // non-empty at enqueue time (see processors.ts); the processor evaluates every event in the batch.
       type: "notify-evaluate";
       requestedBy: "webhook" | "test";
-      event: DetectedNotificationEvent;
+      events: DetectedNotificationEvent[];
     }
   | {
       type: "notify-deliver";
@@ -595,6 +606,15 @@ export type RepositorySettings = {
   /** `gate.cla.checkRunAppSlug`: the trusted GitHub App slug that must have produced `claCheckRunName`. Required
    *  for check-run detection so contributor-controlled same-name runs cannot satisfy a blocking CLA gate. */
   claCheckRunAppSlug?: string | null | undefined;
+  /** `gate.expectedCiContexts` (#selfhost-ci-verification): maintainer-declared CI check/status context names to
+   *  treat as required when GitHub branch protection returns no readable required-status-checks (unconfigured,
+   *  or a 403 from a token lacking `administration:read` — common for GitHub App installations). Merged with any
+   *  branch-protection required contexts when both exist; used ALONE when branch protection is null/empty; a
+   *  repo with neither configured keeps the existing fold-all fail-closed behavior. A context missing from the
+   *  commit ⇒ pending; a completed red check for a listed context ⇒ failed; every listed context settled clean
+   *  ⇒ verified passed (no `ciCompletenessWarning`). Config-as-code only — no DB column; set via
+   *  `.gittensory.yml gate.expectedCiContexts`. */
+  expectedCiContexts?: ReadonlyArray<string> | null | undefined;
   /** Dry-run disposition (#gate-dryrun). When true, the gate renders the would-be merge/close/manual verdict (every
    *  advisory sub-gate promoted to block) WITHOUT enforcing — the posted check stays non-blocking. Lets advisory mode
    *  preview exactly what it would do before the maintainer flips to real enforcement. Default off. */
@@ -1457,6 +1477,11 @@ export type InstallationHealthRecord = {
   events: string[];
   checkedAt: string;
   errorSummary?: string | null | undefined;
+  // "broker" = a brokered self-host (ORB_ENROLLMENT_SECRET set, no local GitHub App private key by design).
+  // Permission/event introspection is not available through the token broker today, so missingPermissions /
+  // missingEvents are always [] in broker mode -- an EMPTY array there means "unchecked", not "all satisfied"
+  // the way it does for "local" mode. Consumers must branch on authMode, not infer it from empty arrays alone.
+  authMode: "local" | "broker";
 };
 
 export type ScoringModelSnapshotRecord = {
