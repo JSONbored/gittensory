@@ -8035,6 +8035,62 @@ describe("queue processors", () => {
     expect(closeAudit?.n).toBeGreaterThanOrEqual(1);
   });
 
+  it("install-wide contributor open-item cap (#2562): falls back to GITHUB_PUBLIC_TOKEN for the cross-repo live-check when the installation token mint fails", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP: "3", GITHUB_PUBLIC_TOKEN: "public-fallback-token" });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", issues: "write" }, events: ["issues"] },
+      repositories: [
+        { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } },
+      ],
+    });
+    await upsertRepositoryFromGitHub(env, { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 60, title: "Farmer issue one", state: "open", user: { login: "farmer99" }, labels: [], body: "x" });
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 61, title: "Farmer issue two", state: "open", user: { login: "farmer99" }, labels: [], body: "y" });
+    // Stored as open, but actually closed on GitHub already -- live-verified via the public-token fallback below.
+    await upsertIssueFromGitHub(env, "JSONbored/metagraphed", { number: 20, title: "Farmer issue on another repo (stale-open)", state: "open", user: { login: "farmer99" }, labels: [], body: "z" });
+    // No contributorOpenIssueCap on this repo -- the per-repo path never runs, so verifiedGlobalOpenItemCount's
+    // own token mint is the ONLY mint attempt in this job, making it safe to fail unconditionally.
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      autonomy: { close: "auto", label: "auto" },
+    });
+    const seen = { closed: false, sawPublicToken: false };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      // The installation token mint fails, forcing verifiedGlobalOpenItemCount's live-check to fall back to
+      // env.GITHUB_PUBLIC_TOKEN (the branch this test targets).
+      if (url.includes("/access_tokens")) return new Response("suspended", { status: 401 });
+      if ((url.endsWith("/issues/60") || url.endsWith("/issues/61")) && method === "GET") {
+        seen.sawPublicToken = seen.sawPublicToken || (new Headers(init?.headers).get("authorization")?.includes("public-fallback-token") ?? false);
+        return Response.json({ state: "open" });
+      }
+      if (url.endsWith("/metagraphed/issues/20") && method === "GET") {
+        seen.sawPublicToken = seen.sawPublicToken || (new Headers(init?.headers).get("authorization")?.includes("public-fallback-token") ?? false);
+        return Response.json({ state: "closed" });
+      }
+      if (url.endsWith("/issues/62") && method === "PATCH") { seen.closed = true; return Response.json({ state: "closed" }); }
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "global-contributor-issue-cap-public-token-fallback",
+      eventName: "issues",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 62, title: "Farmer's 4th issue across the install (actually within cap)", state: "open", user: { login: "farmer99" }, labels: [], body: "x" },
+      },
+    });
+
+    expect(seen.sawPublicToken).toBe(true);
+    // #20 was live-verified CLOSED via the public-token fallback, so the real count (60, 61, 62) is within cap.
+    expect(seen.closed).toBe(false);
+  });
+
   it("install-wide contributor open-item cap (#2562): when the per-repo cap already matches, the global check is skipped — the close reports the PER-REPO cap, not the (also-tripped) global one", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP: "1" });
     await upsertInstallation(env, {
