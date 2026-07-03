@@ -26,10 +26,16 @@ function pickTimestamp(issue: FreshnessIssue): string | null {
   return null;
 }
 
+// No usable timestamp survived pickTimestamp's updatedAt->createdAt fallback -- an unknown age must never
+// register as "just updated" (age 0, the freshest possible score). Floor it to a large sentinel so
+// computeOpportunityFreshness's exponential decay clamps straight to the 0.05 floor, matching how a genuinely
+// stale issue scores, not a fresh one.
+const UNKNOWN_AGE_DAYS = 9999;
+
 function issueAgeDays(value: string | null, nowMs: number): number {
-  if (!value) return 0;
+  if (!value) return UNKNOWN_AGE_DAYS;
   const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return 0;
+  if (!Number.isFinite(parsed)) return UNKNOWN_AGE_DAYS;
   return Math.floor((nowMs - parsed) / 86_400_000);
 }
 

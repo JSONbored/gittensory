@@ -1,5 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
-
 /** Immutable governor decision vocabulary — unknown values fail closed before insert. */
 export const GOVERNOR_LEDGER_EVENT_TYPES = Object.freeze([
   "allowed",
@@ -31,6 +29,24 @@ export type NormalizedGovernorLedgerEvent = {
 const governorEventTypeSet = new Set<string>(GOVERNOR_LEDGER_EVENT_TYPES);
 
 /* v8 ignore start -- Normalization helpers are covered through normalizeGovernorLedgerEvent export tests. */
+// Self-contained structural-equality check (no node:util) so this package stays runtime-portable across the
+// Worker backend and the Node-only miner CLI. Scoped to serializePayload's own round-trip-fidelity use: both
+// sides here are always plain objects/arrays/primitives (one is a fresh JSON.parse result), so this never needs
+// to handle Maps, Dates, RegExps, or prototypes the way a general-purpose deep-equal would.
+function deepStrictEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const aRecord = a as Record<string, unknown>;
+  const bRecord = b as Record<string, unknown>;
+  const aKeys = Object.keys(aRecord);
+  const bKeys = Object.keys(bRecord);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every(
+    (key) => Object.prototype.hasOwnProperty.call(bRecord, key) && deepStrictEqual(aRecord[key], bRecord[key]),
+  );
+}
+
 function normalizeRequiredString(value: unknown, code: string): string {
   if (typeof value !== "string") throw new Error(code);
   const trimmed = value.trim();
@@ -57,7 +73,7 @@ function serializePayload(payload: unknown): string {
   } catch {
     throw new Error("invalid_payload");
   }
-  if (!isDeepStrictEqual(JSON.parse(json), payload)) {
+  if (!deepStrictEqual(JSON.parse(json), payload)) {
     throw new Error("invalid_payload");
   }
   return json;
