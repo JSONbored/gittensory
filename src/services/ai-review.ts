@@ -162,6 +162,14 @@ export type GittensoryAiReviewInput = {
    */
   profile?: ReviewProfile | null | undefined;
   /**
+   * `.gittensory.yml` `review.security_focus` (#review-security-focus): when true, instructs the reviewer to
+   * prioritize a security-defect category — injection, authn/authz bypass, secret handling, unsafe
+   * deserialization, SSRF, and path traversal — with elevated scrutiny. ORTHOGONAL to `profile`: it composes
+   * with (never replaces) the chill/balanced/assertive volume tuning above — a "what to prioritize" axis, not a
+   * fourth profile level. Absent/false (the default) ⇒ the reviewer prompt is byte-identical to today.
+   */
+  securityFocus?: boolean | undefined;
+  /**
    * `.gittensory.yml` `review.path_instructions` (#review-path-instructions), pre-resolved by the caller to the
    * entries whose glob matched THIS PR's changed files (via `resolveReviewPathInstructions`) — a ready-to-append
    * prompt section. Absent / empty ⇒ the reviewer prompt is byte-identical. Public-safe by construction (the
@@ -533,6 +541,13 @@ const REVIEW_PROFILE_SUFFIX: Record<"chill" | "assertive", string> = {
     "\n\nReview profile: ASSERTIVE. Beyond blocking defects, also surface minor improvements, style/consistency suggestions, and nitpicks — be thorough and exacting, clearly marking each non-blocking item as a nit.",
 };
 
+// `.gittensory.yml` review.security_focus → an appended security-prioritization instruction (#review-security-focus).
+// ORTHOGONAL to REVIEW_PROFILE_SUFFIX above — it composes with (never replaces) the chill/balanced/assertive volume
+// tuning: profile controls HOW MANY findings surface, this controls WHAT KIND the reviewer hunts for with elevated
+// scrutiny. False/absent (default) appends nothing (byte-identical).
+const SECURITY_FOCUS_SUFFIX =
+  "\n\nSECURITY FOCUS: Beyond the usual review, prioritize hunting for security defects with elevated scrutiny — injection (SQL/command/template/log), authentication/authorization bypass, unsafe secret handling (hardcoded credentials, logged/leaked tokens), unsafe deserialization, server-side request forgery (SSRF), and path traversal. Treat a credible finding in any of these categories as a blocker even if it would otherwise read as a nit.";
+
 // `.gittensory.yml` review.inline_comments → an appended instruction to ALSO emit line-anchored findings for
 // quiet inline PR comments (#inline-comments). Absent/off appends nothing (byte-identical). The model keeps the
 // existing 4-field shape and simply ADDS an `inlineFindings` array.
@@ -540,8 +555,9 @@ const INLINE_FINDINGS_SUFFIX =
   '\n\nINLINE FINDINGS: ALSO include an additional top-level field "inlineFindings" in the SAME JSON object — an array (possibly empty) of your most important findings, each anchored to a specific changed line, for inline PR comments. Each item: {"path": the changed file path EXACTLY as shown in the diff, "line": the 1-based line number in the NEW file (count forward from the "+" start in the nearest "@@ -old +new @@" hunk header) of an ADDED ("+") line you are commenting on, "severity": "blocker" or "nit", "body": the one-sentence finding, "suggestion": optional replacement text for that line}. Include ONLY findings you can place on a specific added line; OMIT any you cannot anchor precisely (a wrong line is worse than none). If a suggestion is blank or you are not confident in an exact replacement, omit the suggestion field and keep the finding. At most ~10 items.';
 
 /** The effective reviewer SYSTEM prompt. Appends the grounding-discipline suffix when the caller supplied one
- *  (flag GITTENSORY_REVIEW_GROUNDING on), the `review.profile` tone suffix when set, then the inline-findings
- *  instruction when the caller asked for them; all absent (default) → the base prompt, byte-identical to today. */
+ *  (flag GITTENSORY_REVIEW_GROUNDING on), the `review.profile` tone suffix when set, the `review.security_focus`
+ *  prioritization suffix when on, then the inline-findings instruction when the caller asked for them; all absent
+ *  (default) → the base prompt, byte-identical to today. */
 function buildSystemPrompt(input: GittensoryAiReviewInput): string {
   const groundingSuffix = input.grounding?.systemSuffix ?? "";
   // Review-enrichment brief (#1472): the REES supplies a one-line discipline suffix ("treat a listed CVE/secret as
@@ -551,6 +567,7 @@ function buildSystemPrompt(input: GittensoryAiReviewInput): string {
     input.profile === "chill" || input.profile === "assertive"
       ? REVIEW_PROFILE_SUFFIX[input.profile]
       : "";
+  const securityFocusSuffix = input.securityFocus === true ? SECURITY_FOCUS_SUFFIX : "";
   // `.gittensory.yml` review.path_instructions (#review-path-instructions): the caller pre-resolved the entries
   // matching this PR's files into a prompt section; empty ⇒ nothing appended (byte-identical).
   const pathSuffix = input.pathGuidance?.trim() ? input.pathGuidance : "";
@@ -560,7 +577,7 @@ function buildSystemPrompt(input: GittensoryAiReviewInput): string {
     ? ` REPOSITORY REVIEW INSTRUCTIONS (maintainer conventions for this repo — honor them unless they conflict with a real defect): ${input.repoInstructions.trim()}`
     : "";
   const inlineSuffix = input.inlineFindings ? INLINE_FINDINGS_SUFFIX : "";
-  return `${REVIEW_SYSTEM_PROMPT}${groundingSuffix}${enrichmentSuffix}${profileSuffix}${pathSuffix}${repoInstructionsSuffix}${inlineSuffix}`;
+  return `${REVIEW_SYSTEM_PROMPT}${groundingSuffix}${enrichmentSuffix}${profileSuffix}${securityFocusSuffix}${pathSuffix}${repoInstructionsSuffix}${inlineSuffix}`;
 }
 
 /** One Workers-AI opinion with a per-slot reliable fallback and a 3× retry on the primary. */

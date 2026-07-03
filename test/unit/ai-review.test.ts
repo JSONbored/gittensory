@@ -389,6 +389,60 @@ describe("review.profile shapes the reviewer system prompt (#review-profile)", (
   });
 });
 
+describe("review.security_focus shapes the reviewer system prompt (#review-security-focus)", () => {
+  const systemPromptOf = (run: ReturnType<typeof vi.fn>): string =>
+    (run.mock.calls[0]?.[1] as { messages?: Array<{ content?: string }> })
+      ?.messages?.[0]?.content ?? "";
+  const runSecurityFocus = async (
+    securityFocus: GittensoryAiReviewInput["securityFocus"],
+    profile?: GittensoryAiReviewInput["profile"],
+  ) => {
+    const run = vi.fn(async () => ({ response: reviewJson() }));
+    const env = createTestEnv({
+      AI: { run } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    await runGittensoryAiReview(env, { ...baseInput, securityFocus, profile });
+    return systemPromptOf(run);
+  };
+
+  it("true appends the SECURITY FOCUS instruction naming the prioritized defect categories", async () => {
+    const system = await runSecurityFocus(true);
+    expect(system).toContain("SECURITY FOCUS");
+    expect(system).toContain("injection");
+    expect(system).toContain("authentication/authorization bypass");
+    expect(system).toContain("secret handling");
+    expect(system).toContain("unsafe deserialization");
+    expect(system).toContain("SSRF");
+    expect(system).toContain("path traversal");
+  });
+
+  it("absent / false leaves the prompt byte-identical (no security-focus suffix)", async () => {
+    const withFalse = await runSecurityFocus(false);
+    const withUndefined = await runSecurityFocus(undefined);
+    expect(withFalse).not.toContain("SECURITY FOCUS");
+    expect(withUndefined).not.toContain("SECURITY FOCUS");
+    expect(withFalse).toBe(withUndefined);
+  });
+
+  it("composes with (does not replace) the chill/assertive profile suffix — both appear together", async () => {
+    const chillPlusSecurity = await runSecurityFocus(true, "chill");
+    expect(chillPlusSecurity).toContain("CHILL");
+    expect(chillPlusSecurity).toContain("SECURITY FOCUS");
+
+    const assertivePlusSecurity = await runSecurityFocus(true, "assertive");
+    expect(assertivePlusSecurity).toContain("ASSERTIVE");
+    expect(assertivePlusSecurity).toContain("SECURITY FOCUS");
+
+    // security_focus alone (no profile) still appends only its own suffix.
+    const securityOnly = await runSecurityFocus(true, null);
+    expect(securityOnly).toContain("SECURITY FOCUS");
+    expect(securityOnly).not.toMatch(/CHILL|ASSERTIVE/);
+  });
+});
+
 describe("runGittensoryAiReview block mode (consensus)", () => {
   function envWith(run: (model: string) => Promise<unknown>) {
     return createTestEnv({

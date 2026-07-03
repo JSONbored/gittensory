@@ -184,6 +184,11 @@ export type FocusManifestReviewConfig = {
   fields: Partial<Record<ReviewFieldKey, boolean>>;
   /** `review.profile`: chill / balanced / assertive. null (absent) = balanced = byte-identical reviewer prompt. */
   profile: ReviewProfile | null;
+  /** `review.security_focus`: when true, the AI reviewer is told to prioritize a security-defect category
+   *  (injection, authn/authz bypass, secret handling, unsafe deserialization, SSRF, path traversal) with
+   *  elevated scrutiny, ON TOP OF whatever `profile` volume is set — an orthogonal "what to prioritize" axis,
+   *  not a fourth profile level. null/false (default, absent) = byte-identical reviewer prompt. (#review-security-focus) */
+  securityFocus: boolean | null;
   /** `review.inline_comments`: when true, the AI reviewer ALSO leaves quiet, non-blocking inline PR comments on
    *  specific changed lines (in addition to the decision summary). null/false (default, absent) = no inline
    *  comments = byte-identical behavior. Operator-gated too (GITTENSORY_REVIEW_INLINE_COMMENTS + allowlist).
@@ -350,7 +355,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicNotes: [],
   gate: { ...EMPTY_GATE_CONFIG },
   settings: {},
-  review: { present: false, footerText: null, note: null, fields: {}, profile: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
+  review: { present: false, footerText: null, note: null, fields: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
   features: { ...EMPTY_FEATURES_CONFIG },
   contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
   warnings: [],
@@ -379,7 +384,7 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     warnings,
     gate: { ...EMPTY_GATE_CONFIG },
     settings: {},
-    review: { present: false, footerText: null, note: null, fields: {}, profile: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
+    review: { present: false, footerText: null, note: null, fields: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
     features: { ...EMPTY_FEATURES_CONFIG },
     contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
   };
@@ -929,7 +934,7 @@ function parsePublicSafeText(value: JsonValue | undefined, field: string, warnin
  * throws; invalid/unsafe values are dropped with warnings.
  */
 function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestReviewConfig {
-  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, profile: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] };
+  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] };
   if (value === undefined || value === null) return empty;
   if (typeof value !== "object" || Array.isArray(value)) {
     warnings.push(`Manifest field "review" must be a mapping; ignoring it.`);
@@ -950,6 +955,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
   const footerText = footerRecord ? parsePublicSafeText(footerRecord.text, "review.footer.text", warnings) : null;
   const note = parsePublicSafeText(r.note, "review.note", warnings);
   const profile = parseReviewProfile(r.profile, warnings);
+  const securityFocus = normalizeOptionalBoolean(r.security_focus, "review.security_focus", warnings);
   const inlineComments = normalizeOptionalBoolean(r.inline_comments, "review.inline_comments", warnings);
   const pathInstructions = parseReviewPathInstructions(r.path_instructions, warnings);
   const instructions = parsePublicSafeText(r.instructions, "review.instructions", warnings);
@@ -960,6 +966,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
       footerText !== null ||
       note !== null ||
       profile !== null ||
+      securityFocus !== null ||
       inlineComments !== null ||
       pathInstructions.length > 0 ||
       instructions !== null ||
@@ -970,6 +977,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
     note,
     fields,
     profile,
+    securityFocus,
     inlineComments,
     pathInstructions,
     instructions,
@@ -1116,6 +1124,7 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
   if (review.footerText !== null) out.footer = { text: review.footerText };
   if (review.note !== null) out.note = review.note;
   if (review.profile !== null) out.profile = review.profile;
+  if (review.securityFocus !== null) out.security_focus = review.securityFocus;
   if (review.inlineComments !== null) out.inline_comments = review.inlineComments;
   if (review.instructions !== null) out.instructions = review.instructions;
   if (review.pathInstructions.length > 0) out.path_instructions = review.pathInstructions.map((entry) => ({ path: entry.path, instructions: entry.instructions }));
@@ -1149,14 +1158,16 @@ export function resolveReviewPathInstructions(pathInstructions: ReviewPathInstru
   return `\n\nPath-specific review instructions from the maintainer — apply these to the changed files that match each glob:\n${lines.join("\n")}`;
 }
 
-/** Resolve the AI-reviewer overrides (`review.profile` + `review.path_instructions` + `review.exclude_paths`) from
- *  a possibly-null manifest (null = load failure). A null manifest yields the byte-identical defaults. Centralized
- *  so the AI-review caller threads them in one place with the null-manifest branch covered here (unit-tested)
- *  rather than inline in the processor. (#review-profile / #review-path-instructions / #review-exclude-paths) */
-export function resolveReviewPromptOverrides(manifest: FocusManifest | null): { profile: ReviewProfile | null; inlineComments: boolean; pathInstructions: ReviewPathInstruction[]; instructions: string | null; excludePaths: string[] } {
+/** Resolve the AI-reviewer overrides (`review.profile` + `review.security_focus` + `review.path_instructions` +
+ *  `review.exclude_paths`) from a possibly-null manifest (null = load failure). A null manifest yields the
+ *  byte-identical defaults. Centralized so the AI-review caller threads them in one place with the null-manifest
+ *  branch covered here (unit-tested) rather than inline in the processor.
+ *  (#review-profile / #review-security-focus / #review-path-instructions / #review-exclude-paths) */
+export function resolveReviewPromptOverrides(manifest: FocusManifest | null): { profile: ReviewProfile | null; securityFocus: boolean; inlineComments: boolean; pathInstructions: ReviewPathInstruction[]; instructions: string | null; excludePaths: string[] } {
   // inlineComments resolves to a strict boolean — true ONLY when the manifest explicitly set review.inline_comments:
   // true; null/false/absent ⇒ false. The caller ANDs this per-repo toggle with the operator flag + cutover allowlist.
-  return { profile: manifest?.review.profile ?? null, inlineComments: manifest?.review.inlineComments === true, pathInstructions: manifest?.review.pathInstructions ?? [], instructions: manifest?.review.instructions ?? null, excludePaths: manifest?.review.excludePaths ?? [] };
+  // securityFocus resolves the same way — true ONLY when the manifest explicitly set review.security_focus: true.
+  return { profile: manifest?.review.profile ?? null, securityFocus: manifest?.review.securityFocus === true, inlineComments: manifest?.review.inlineComments === true, pathInstructions: manifest?.review.pathInstructions ?? [], instructions: manifest?.review.instructions ?? null, excludePaths: manifest?.review.excludePaths ?? [] };
 }
 
 /** Resolve `review.pre_merge_checks` from a possibly-null manifest (null = load failure ⇒ no checks). Centralized

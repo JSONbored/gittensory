@@ -17,6 +17,7 @@ const baseFingerprintInput = (): AiReviewCacheInput => ({
   baseSha: null,
   reviewFiles: [],
   profile: null,
+  securityFocus: false,
   inlineComments: false,
   pathInstructions: [],
   pathGuidance: "",

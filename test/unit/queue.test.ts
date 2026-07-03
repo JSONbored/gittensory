@@ -2276,6 +2276,7 @@ describe("queue processors", () => {
       baseSha: null,
       reviewFiles: [{ path: "src/a.ts", status: "modified", patch: "@@\n+export const ok = value.length;", additions: 1, deletions: 0 }],
       profile: null,
+      securityFocus: false,
       inlineComments: false,
       pathInstructions: [],
       pathGuidance: "",
