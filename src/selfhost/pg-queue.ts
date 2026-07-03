@@ -600,15 +600,18 @@ export function createPgQueue(
    *  ONE lane-scoped claim before falling back to the plain unscoped foreground claim (claimNext() falls back to
    *  claimNextWhere(now, "priority >= $2") when this returns null) -- a null here just means "no work to prefer
    *  this cycle," never "no foreground work at all." The fairness singleton's claim_sequence always advances
-   *  (best-effort, hit or miss) so the ratio cycle keeps progressing even through empty cycles. */
+   *  (best-effort, hit or miss) so the ratio cycle keeps progressing even through empty cycles. Sequence
+   *  allocation is a single atomic UPDATE ... RETURNING (not a separate SELECT-then-UPDATE): this backend is
+   *  the multi-instance one (multiple app instances can share one Postgres, see the file header), so two
+   *  concurrent callers reading the same pre-increment value would both compute the SAME lane and defeat the
+   *  bounded-ratio guarantee -- the row's own lock serializes concurrent allocations instead. */
   async function claimNextForegroundLane(now: number): Promise<JobRow | null> {
     const fairnessRes = await pool.query(
-      `SELECT claim_sequence, last_backlog_repo FROM ${FAIRNESS_TABLE} WHERE id='singleton'`,
+      `UPDATE ${FAIRNESS_TABLE} SET claim_sequence=claim_sequence+1 WHERE id='singleton' RETURNING claim_sequence, last_backlog_repo`,
     );
     const fairness = fairnessRes.rows[0] as { claim_sequence: number | string; last_backlog_repo: string | null } | undefined;
     const sequence = fairness ? Number(fairness.claim_sequence) : 0;
     const lane: ForegroundLane = nextForegroundLane(sequence);
-    await pool.query(`UPDATE ${FAIRNESS_TABLE} SET claim_sequence=claim_sequence+1 WHERE id='singleton'`);
     if (lane === "fresh") {
       return claimNextWhere(now, "priority >= $2", { sql: "foreground_lane='fresh'", params: [] });
     }
