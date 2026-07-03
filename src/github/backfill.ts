@@ -2800,7 +2800,7 @@ export async function fetchLiveBaseBranchAdvancedAt(
     repoFullName,
     `/commits/${encodeURIComponent(baseRef)}`,
     token,
-    githubRateLimitOptions(admissionKey),
+    { ...githubRateLimitOptions(admissionKey), bypassResponseCache: true },
   ).catch(() => undefined);
   return result?.data.commit?.committer?.date ?? undefined;
 }
@@ -3646,6 +3646,7 @@ async function githubJson<T>(
 type GitHubJsonRequestOptions = {
   validators?: GitHubConditionalValidators;
   rateLimitAdmissionKey?: GitHubRateLimitAdmissionKey;
+  bypassResponseCache?: boolean;
 };
 type GitHubJsonStandardOptions = GitHubJsonRequestOptions & { allowNotModified?: false };
 type GitHubJsonConditionalOptions = GitHubJsonRequestOptions & { allowNotModified: true };
@@ -3682,8 +3683,12 @@ async function githubJsonWithHeaders<T>(
   let response = await timeoutFetch(url, {
     headers: githubRestHeaders(token, options?.validators),
     ...(options?.rateLimitAdmissionKey ? { githubRateLimitAdmission: true, githubRateLimitAdmissionKey: options.rateLimitAdmissionKey } : {}),
+    ...(options?.bypassResponseCache ? { githubBypassResponseCache: true } : {}),
   });
-  if (!isGitHubResponseCacheReplay(response)) {
+  // A bypass request is a live-freshness read (e.g. the fresh-rebase gate's base-tip check): it must neither
+  // replay nor be recorded into the persistent response/rate-limit-observation state, mirroring the
+  // isGitHubResponseCacheReplay guard immediately below for the same reason.
+  if (!isGitHubResponseCacheReplay(response) && !options?.bypassResponseCache) {
     await recordGitHubResponse(env, repoFullName, path, response, "rest", options?.rateLimitAdmissionKey);
   }
   if (response.status === 304 && options?.allowNotModified) return notModifiedResponse(response);

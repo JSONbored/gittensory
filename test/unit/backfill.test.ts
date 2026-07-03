@@ -35,6 +35,7 @@ import {
   enrichInstallationHealth,
   fetchAndStorePullRequestFilesForReview,
   fetchLinkedIssueFacts,
+  fetchLiveBaseBranchAdvancedAt,
   fetchLiveCiAggregate,
   fetchLiveReviewThreadBlockers,
   fetchNamedCheckRunConclusion,
@@ -62,6 +63,34 @@ describe("GitHub backfill", () => {
     vi.useRealTimers();
     clearGitHubResponseCacheForTest();
     vi.unstubAllGlobals();
+  });
+
+  it("fetches the fresh base branch tip timestamp without replaying the commit response cache", async () => {
+    const env = createTestEnv();
+    const cacheGet = vi.fn(async () => ({
+      status: 200,
+      body: JSON.stringify({ commit: { committer: { date: "2024-01-01T00:00:00Z" } } }),
+      contentType: "application/json",
+    }));
+    const cacheSet = vi.fn(async () => undefined);
+    setGitHubResponseCache({ get: cacheGet, set: cacheSet });
+    let getFetches = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      getFetches += 1;
+      expect(String(input)).toBe("https://api.github.com/repos/JSONbored/gittensory/commits/main");
+      return Response.json({ commit: { committer: { date: "2026-07-02T23:32:36.181Z" } } });
+    });
+
+    await expect(
+      fetchLiveBaseBranchAdvancedAt(env, "JSONbored/gittensory", "main", "tok", githubRateLimitAdmissionKeyForInstallation(123)),
+    ).resolves.toBe("2026-07-02T23:32:36.181Z");
+
+    expect(getFetches).toBe(1);
+    expect(cacheGet).not.toHaveBeenCalled();
+    expect(cacheSet).not.toHaveBeenCalled();
+    // The bypass contract is neither READ nor WRITE: a live-freshness read must not land in the
+    // persistent rate-limit-observation state either (#2762 gate finding).
+    expect(await listLatestGitHubRateLimitObservations(env)).toEqual([]);
   });
 
   it("stores bounded repo metadata, labels, issues, PR details, recent merges, and contributor stats", async () => {
