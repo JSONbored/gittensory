@@ -8036,7 +8036,7 @@ describe("queue processors", () => {
   });
 
   it("install-wide contributor open-item cap (#2562): falls back to GITHUB_PUBLIC_TOKEN for the cross-repo live-check when the installation token mint fails", async () => {
-    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP: "3", GITHUB_PUBLIC_TOKEN: "public-fallback-token" });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP: "3", GITHUB_PUBLIC_TOKEN: "public-token" });
     await upsertInstallation(env, {
       installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", issues: "write" }, events: ["issues"] },
       repositories: [
@@ -8063,11 +8063,11 @@ describe("queue processors", () => {
       // env.GITHUB_PUBLIC_TOKEN (the branch this test targets).
       if (url.includes("/access_tokens")) return new Response("suspended", { status: 401 });
       if ((url.endsWith("/issues/60") || url.endsWith("/issues/61")) && method === "GET") {
-        seen.sawPublicToken = seen.sawPublicToken || (new Headers(init?.headers).get("authorization")?.includes("public-fallback-token") ?? false);
+        seen.sawPublicToken = seen.sawPublicToken || (new Headers(init?.headers).get("authorization")?.includes("public-token") ?? false);
         return Response.json({ state: "open" });
       }
       if (url.endsWith("/metagraphed/issues/20") && method === "GET") {
-        seen.sawPublicToken = seen.sawPublicToken || (new Headers(init?.headers).get("authorization")?.includes("public-fallback-token") ?? false);
+        seen.sawPublicToken = seen.sawPublicToken || (new Headers(init?.headers).get("authorization")?.includes("public-token") ?? false);
         return Response.json({ state: "closed" });
       }
       if (url.endsWith("/issues/62") && method === "PATCH") { seen.closed = true; return Response.json({ state: "closed" }); }
