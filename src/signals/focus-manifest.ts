@@ -1,11 +1,11 @@
 import { parse as parseYaml } from "yaml";
-import type { GatePolicyPack, GateRuleMode, JsonValue, RepositorySettings } from "../types";
+import type { GatePolicyPack, GateRuleMode, JsonValue, LinkedIssueLabelPropagationConfig, PrTypeLabelSet, RepositorySettings } from "../types";
 import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy } from "../settings/autonomy";
 import { normalizeCommandAuthorizationPolicy } from "../settings/command-authorization";
 import { mergeContributorBlacklists, normalizeContributorBlacklist } from "../settings/contributor-blacklist";
 import { normalizeAutoCloseExemptLogins } from "../settings/auto-close-exempt";
-import { normalizeTypeLabelSet } from "../settings/pr-type-label";
-import { normalizeLinkedIssueLabelPropagationConfig } from "../review/linked-issue-label-propagation";
+import { DEFAULT_TYPE_LABELS, normalizeTypeLabelSet } from "../settings/pr-type-label";
+import { DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, normalizeLinkedIssueLabelPropagationConfig } from "../review/linked-issue-label-propagation";
 import { hasUnsafeWildcardCount } from "./change-guardrail";
 import { PUBLIC_LOCAL_PATH_INLINE } from "./redaction";
 
@@ -161,8 +161,6 @@ export type FocusManifestSettings = Partial<
     | "closeOwnerAuthors"
     | "autoLabelEnabled"
     | "typeLabelsEnabled"
-    | "typeLabels"
-    | "linkedIssueLabelPropagation"
     | "badgeEnabled"
     | "gittensorLabel"
     | "createMissingLabel"
@@ -195,7 +193,17 @@ export type FocusManifestSettings = Partial<
     | "commandRateLimitAiMaxPerWindow"
     | "commandRateLimitWindowHours"
   >
->;
+> & {
+  // `typeLabels`/`linkedIssueLabelPropagation` are declared PARTIAL here (not via the `Pick<RepositorySettings,
+  // ...>` above, which would force a complete, defaults-filled object) so `resolveEffectiveSettings` can merge
+  // them field-by-field against the DB value — a `.gittensory.yml` override naming only one key (e.g. just
+  // `typeLabels.priority`) must inherit the OTHER keys from the DB-persisted value, not silently reset them to
+  // the built-in default (#priority-linked-issue-gate). `mappings` is still a complete replacement when
+  // present (arrays don't have per-item precedence semantics, matching the private-config layer's own
+  // documented array-replace-wholesale overlay behavior).
+  typeLabels?: Partial<PrTypeLabelSet> | undefined;
+  linkedIssueLabelPropagation?: Partial<LinkedIssueLabelPropagationConfig> | undefined;
+};
 
 /** Field keys for the public review-panel rows a maintainer can show/hide via `review.fields`. */
 export const REVIEW_FIELD_KEYS = ["linkedIssue", "relatedWork", "reviewLoad", "validationEvidence", "openPrQueue", "contributorContext", "gateResult"] as const;
@@ -977,20 +985,40 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   } else if (r.commandAuthorization !== undefined) {
     warnings.push(`Manifest "settings.commandAuthorization" must be an object; ignoring it and keeping any existing policy.`);
   }
-  // TYPE label NAME overrides (#priority-linked-issue-gate): same defaults-fill-then-overlay shape as
-  // commandAuthorization above -- only apply when the raw value is actually a mapping, so a typo'd config
-  // never silently blanks a DB-persisted override back to the built-in gittensor:* names.
+  // TYPE label NAME overrides (#priority-linked-issue-gate): unlike commandAuthorization/autoMaintain
+  // above, this is deliberately kept SPARSE -- only the keys actually present in the raw YAML are copied
+  // onto `out.typeLabels`, each individually validated via `normalizeTypeLabelSet` (which still fills in
+  // the OTHER keys to run its own shape checks, but those defaults-filled values are discarded here). A
+  // manifest naming only `typeLabels.priority` must inherit `bug`/`feature` from the DB-persisted value in
+  // `resolveEffectiveSettings`, not have them silently reset to the built-in gittensor:* names -- assigning
+  // the normalizer's complete object here would do exactly that via the resolver's wholesale
+  // `{...dbSettings, ...manifest.settings}` spread.
   if (typeof r.typeLabels === "object" && r.typeLabels !== null && !Array.isArray(r.typeLabels)) {
-    out.typeLabels = normalizeTypeLabelSet(r.typeLabels, warnings);
+    const rawTypeLabels = r.typeLabels as Record<string, unknown>;
+    const validated = normalizeTypeLabelSet(rawTypeLabels, warnings);
+    const sparseTypeLabels: Partial<PrTypeLabelSet> = {};
+    if (rawTypeLabels.bug !== undefined) sparseTypeLabels.bug = validated.bug;
+    if (rawTypeLabels.feature !== undefined) sparseTypeLabels.feature = validated.feature;
+    if (rawTypeLabels.priority !== undefined) sparseTypeLabels.priority = validated.priority;
+    out.typeLabels = sparseTypeLabels;
   } else if (r.typeLabels !== undefined) {
     warnings.push(`Manifest "settings.typeLabels" must be an object; ignoring it and keeping any existing label names.`);
   }
-  // Linked-issue label propagation (#priority-linked-issue-gate): same shape again. This is the ONLY
-  // mechanism that can ever select a maintainer-reward label like gittensor:priority -- never inferred
-  // from title/files/AI/PR-labels -- so a malformed config must fail closed (leave DB state alone), not
-  // silently reset to the safe-but-surprising built-in default.
+  // Linked-issue label propagation (#priority-linked-issue-gate): same sparse-partial shape as typeLabels
+  // above, for the same reason -- this is the ONLY mechanism that can ever select a maintainer-reward
+  // label like gittensor:priority (never inferred from title/files/AI/PR-labels), so a manifest overriding
+  // just one field (e.g. `enabled`) must not silently reset `mappings` back to the built-in empty default
+  // and discard a DB-configured mapping list. `mappings` itself is still a complete replacement when
+  // present (arrays have no per-item precedence semantics here), matching the array-replace-wholesale
+  // overlay behavior documented for the private-config layer.
   if (typeof r.linkedIssueLabelPropagation === "object" && r.linkedIssueLabelPropagation !== null && !Array.isArray(r.linkedIssueLabelPropagation)) {
-    out.linkedIssueLabelPropagation = normalizeLinkedIssueLabelPropagationConfig(r.linkedIssueLabelPropagation, warnings);
+    const rawPropagation = r.linkedIssueLabelPropagation as Record<string, unknown>;
+    const validated = normalizeLinkedIssueLabelPropagationConfig(rawPropagation, warnings);
+    const sparsePropagation: Partial<LinkedIssueLabelPropagationConfig> = {};
+    if (rawPropagation.enabled !== undefined) sparsePropagation.enabled = validated.enabled;
+    if (rawPropagation.mode !== undefined) sparsePropagation.mode = validated.mode;
+    if (rawPropagation.mappings !== undefined) sparsePropagation.mappings = validated.mappings;
+    out.linkedIssueLabelPropagation = sparsePropagation;
   } else if (r.linkedIssueLabelPropagation !== undefined) {
     warnings.push(`Manifest "settings.linkedIssueLabelPropagation" must be an object; ignoring it and keeping any existing policy.`);
   }
@@ -1428,7 +1456,26 @@ export function resolveEffectiveSettings(
   manifest: FocusManifest,
   sharedContributorBlacklist: RepositorySettings["contributorBlacklist"] = [],
 ): RepositorySettings {
-  const effective: RepositorySettings = { ...dbSettings, ...manifest.settings };
+  // `typeLabels`/`linkedIssueLabelPropagation` are parsed as SPARSE partials (see parseFocusManifest above),
+  // unlike every other `manifest.settings` field, which is always a complete value ready to overlay the DB
+  // value wholesale via the spread below. Pull them out of the spread and merge each field individually,
+  // manifest override > DB value > built-in default, so a `.gittensory.yml` naming only one key (e.g.
+  // `typeLabels.priority`) can never silently reset the others back to the built-in default and discard a
+  // DB-customized value (#priority-linked-issue-gate).
+  const { typeLabels: typeLabelsOverride, linkedIssueLabelPropagation: linkedIssueLabelPropagationOverride, ...restManifestSettings } = manifest.settings;
+  const effective: RepositorySettings = { ...dbSettings, ...restManifestSettings };
+  if (typeLabelsOverride !== undefined) {
+    const base = dbSettings.typeLabels ?? DEFAULT_TYPE_LABELS;
+    effective.typeLabels = { bug: typeLabelsOverride.bug ?? base.bug, feature: typeLabelsOverride.feature ?? base.feature, priority: typeLabelsOverride.priority ?? base.priority };
+  }
+  if (linkedIssueLabelPropagationOverride !== undefined) {
+    const base = dbSettings.linkedIssueLabelPropagation ?? DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION;
+    effective.linkedIssueLabelPropagation = {
+      enabled: linkedIssueLabelPropagationOverride.enabled ?? base.enabled,
+      mode: linkedIssueLabelPropagationOverride.mode ?? base.mode,
+      mappings: linkedIssueLabelPropagationOverride.mappings ?? base.mappings,
+    };
+  }
   const gate = manifest.gate;
   if (gate.enabled !== null) effective.gateCheckMode = gate.enabled ? "enabled" : "off";
   if (gate.pack !== null) effective.gatePack = gate.pack;

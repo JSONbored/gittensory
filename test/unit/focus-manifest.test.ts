@@ -1631,14 +1631,36 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(eff.typeLabelsEnabled).toBe(false); // settings: override wins over the DB/global-default value
   });
 
-  it("wires settings.typeLabels into the manifest parser, allowing a partial override (#priority-linked-issue-gate)", () => {
+  it("wires settings.typeLabels into the manifest parser, keeping only the keys present in a partial override (#priority-linked-issue-gate)", () => {
     const parsed = parseFocusManifest({ settings: { typeLabels: { priority: "custom:priority" } } });
-    expect(parsed.settings.typeLabels).toEqual({ bug: "gittensor:bug", feature: "gittensor:feature", priority: "custom:priority" });
+    expect(parsed.settings.typeLabels).toEqual({ priority: "custom:priority" }); // sparse: bug/feature were never named, so they're absent, not defaults-filled
     expect(parsed.warnings).toEqual([]);
 
+    const full = parseFocusManifest({ settings: { typeLabels: { bug: "kind:bug", feature: "kind:feature", priority: "kind:priority" } } });
+    expect(full.settings.typeLabels).toEqual({ bug: "kind:bug", feature: "kind:feature", priority: "kind:priority" });
+  });
+
+  it("resolveEffectiveSettings merges a partial settings.typeLabels override field-by-field, preserving DB values for the keys it doesn't name (#priority-linked-issue-gate)", () => {
     const db = { typeLabels: { bug: "kind:bug", feature: "kind:feature", priority: "kind:priority" } } as unknown as RepositorySettings;
     const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { typeLabels: { priority: "custom:priority" } } }));
-    expect(eff.typeLabels).toEqual({ bug: "gittensor:bug", feature: "gittensor:feature", priority: "custom:priority" }); // settings: override wins wholesale
+    // bug/feature must come from the DB-persisted value, NOT be reset to the built-in gittensor:* defaults —
+    // this is the regression this test guards: a `.gittensory.yml` naming only `priority` must never silently
+    // discard a DB-customized bug/feature label.
+    expect(eff.typeLabels).toEqual({ bug: "kind:bug", feature: "kind:feature", priority: "custom:priority" });
+  });
+
+  it("resolveEffectiveSettings falls back to the built-in defaults for a partial settings.typeLabels override when the DB has no typeLabels at all", () => {
+    const db = {} as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { typeLabels: { priority: "custom:priority" } } }));
+    expect(eff.typeLabels).toEqual({ bug: "gittensor:bug", feature: "gittensor:feature", priority: "custom:priority" });
+  });
+
+  it("resolveEffectiveSettings preserves the DB priority label when a partial settings.typeLabels override only names bug/feature", () => {
+    const db = { typeLabels: { bug: "kind:bug", feature: "kind:feature", priority: "kind:priority" } } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { typeLabels: { bug: "custom:bug", feature: "custom:feature" } } }));
+    // Exercises the complementary branch pair from the two tests above: here bug/feature take the override
+    // path and priority falls through to the DB value, instead of the reverse.
+    expect(eff.typeLabels).toEqual({ bug: "custom:bug", feature: "custom:feature", priority: "kind:priority" });
   });
 
   it("warns and preserves the existing DB value when settings.typeLabels is not an object", () => {
@@ -1663,6 +1685,39 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     const db = { linkedIssueLabelPropagation: { enabled: false, mode: "exclusive_type_label", mappings: [] } } as unknown as RepositorySettings;
     const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { linkedIssueLabelPropagation: config } }));
     expect(eff.linkedIssueLabelPropagation).toEqual(config); // settings: override wins over the DB-stored (disabled) value
+  });
+
+  it("keeps only the keys present in a partial settings.linkedIssueLabelPropagation override, sparse (#priority-linked-issue-gate)", () => {
+    const parsed = parseFocusManifest({ settings: { linkedIssueLabelPropagation: { enabled: true } } });
+    expect(parsed.settings.linkedIssueLabelPropagation).toEqual({ enabled: true }); // sparse: mode/mappings were never named
+  });
+
+  it("resolveEffectiveSettings merges a partial settings.linkedIssueLabelPropagation override field-by-field, preserving the DB-configured mappings it doesn't name (#priority-linked-issue-gate)", () => {
+    const db = {
+      linkedIssueLabelPropagation: {
+        enabled: false,
+        mode: "exclusive_type_label" as const,
+        mappings: [{ issueLabel: "gittensor:priority", prLabel: "gittensor:priority", removeOtherTypeLabels: true }],
+      },
+    } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { linkedIssueLabelPropagation: { enabled: true } } }));
+    // The DB-configured mappings must survive a manifest override that only names `enabled` — this is the
+    // regression this test guards: a `.gittensory.yml` flipping the feature on must never silently discard a
+    // DB-persisted mapping list back to the built-in empty default.
+    expect(eff.linkedIssueLabelPropagation).toEqual({
+      enabled: true,
+      mode: "exclusive_type_label",
+      mappings: [{ issueLabel: "gittensor:priority", prLabel: "gittensor:priority", removeOtherTypeLabels: true }],
+    });
+  });
+
+  it("resolveEffectiveSettings preserves the DB enabled flag when a partial settings.linkedIssueLabelPropagation override only names mappings", () => {
+    const db = { linkedIssueLabelPropagation: { enabled: true, mode: "exclusive_type_label", mappings: [] } } as unknown as RepositorySettings;
+    const override = { mappings: [{ issueLabel: "customer:vip", prLabel: "triage:vip", removeOtherTypeLabels: false }] };
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { linkedIssueLabelPropagation: override } }));
+    // Exercises the complementary branch pair from the test above: here `mappings` takes the override path
+    // and `enabled`/`mode` fall through to the DB value, instead of the reverse.
+    expect(eff.linkedIssueLabelPropagation).toEqual({ enabled: true, mode: "exclusive_type_label", mappings: override.mappings });
   });
 
   it("warns and preserves the existing DB value when settings.linkedIssueLabelPropagation is not an object", () => {
