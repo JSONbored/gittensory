@@ -73,3 +73,8 @@ explicit opt-out), no path/label preferences, one concurrent claim, `neutral` di
 `parseMinerGoalSpec(raw)` and `parseMinerGoalSpecContent(content)` are the tolerant parser pair for that file. They
 never throw on malformed JSON/YAML; instead they return `{ present, spec, warnings }`, where `spec` is normalized to
 safe defaults and `warnings` explains any dropped or invalid fields.
+
+`discoverMinerGoalSpecPath(exists)` returns the first present file in the documented order (`MINER_GOAL_SPEC_FILENAMES`:
+`.gittensory-miner.yml` → `.github/gittensory-miner.yml` → the `.json` variants). It is IO-free — the caller injects
+the existence check — so a caller reads the returned path and feeds its content to `parseMinerGoalSpecContent`. See
+`.gittensory-miner.yml.example` for the documented fields.

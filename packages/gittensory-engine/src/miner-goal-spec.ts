@@ -246,3 +246,24 @@ export function parseMinerGoalSpecContent(content: string | null | undefined): P
   }
   return parseMinerGoalSpec(parsed);
 }
+
+/**
+ * The documented `.gittensory-miner` file-discovery order (first match wins), mirroring how `.gittensory.yml` is
+ * discovered: repo-root YAML, then `.github/` YAML, then the JSON variants.
+ */
+export const MINER_GOAL_SPEC_FILENAMES = [
+  ".gittensory-miner.yml",
+  ".github/gittensory-miner.yml",
+  ".gittensory-miner.json",
+  ".github/gittensory-miner.json",
+] as const;
+
+/**
+ * The first {@link MINER_GOAL_SPEC_FILENAMES} candidate that exists, or null. Pure: the caller injects the existence
+ * check (e.g. `fs.existsSync`) so this module stays IO-free and unit-testable. A caller reads the returned path and
+ * feeds its content to {@link parseMinerGoalSpecContent}.
+ */
+export function discoverMinerGoalSpecPath(exists: (path: string) => boolean): string | null {
+  for (const name of MINER_GOAL_SPEC_FILENAMES) if (exists(name)) return name;
+  return null;
+}

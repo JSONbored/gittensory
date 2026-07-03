@@ -22,6 +22,8 @@ export {
   DEFAULT_MINER_GOAL_SPEC,
   parseMinerGoalSpec,
   parseMinerGoalSpecContent,
+  discoverMinerGoalSpecPath,
+  MINER_GOAL_SPEC_FILENAMES,
   type MinerGoalSpec,
   type MinerIssueDiscoveryPolicy,
   type ParsedMinerGoalSpec,
