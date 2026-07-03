@@ -29,6 +29,7 @@ import {
   listSignalSnapshots,
   listRepoGithubTotalsSnapshotHistory,
   listOtherOpenPullRequests,
+  listOtherOpenPullRequestsForAuthor,
   listOpenIssues,
   listOpenPullRequests,
   listPullRequests,
@@ -2185,44 +2186,35 @@ async function runAgentMaintenancePlanAndExecute(
   // way to opt out of the PER-REPO cap specifically, even though `.gittensory.yml`'s own doc comment already
   // promised this reuse (auto-close-exempt.ts).
   if (typeof contributorOpenPrCap === "number" && pr.authorLogin && !isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)) {
-    const authorLoginLower = pr.authorLogin.toLowerCase();
-    let otherAuthorOpenPrNumbers = otherOpenPullRequests
-      .filter((other) => (other.authorLogin ?? "").toLowerCase() === authorLoginLower)
-      .map((other) => other.number);
-    if (isNewAccount) {
-      const token = await createInstallationToken(env, installationId).catch(() => undefined);
-      // isNewAccount is only ever true after getGithubUserCreatedAt's OWN createInstallationToken call already
-      // succeeded for this exact installationId (it fails open to null/false otherwise) -- and that mint is
-      // cached (see app.ts's installationTokenCache), so THIS call almost always serves the cached token rather
-      // than re-hitting a failure. The `?? env.GITHUB_PUBLIC_TOKEN` fallback arm is exercised only in the rare
-      // window where the cached token expires between those two calls; not practically reachable from a unit
-      // test without reaching into that unrelated cache's internals. The fallback pattern itself is proven
-      // correct by the analogous, reachable contributor-issue-cap test ("falls back to GITHUB_PUBLIC_TOKEN for
-      // the sibling live-check when the installation token mint fails").
-      /* v8 ignore next -- see the comment above */
-      const liveToken = token ?? env.GITHUB_PUBLIC_TOKEN;
-      const admissionKey = githubAdmissionKeyForToken(env, installationId, liveToken);
-      const confirmedOpen = new Set<number>();
-      await Promise.all(
-        otherAuthorOpenPrNumbers.map(async (number) => {
-          const liveState = await fetchLivePullRequestState(env, repoFullName, number, liveToken, admissionKey).catch(() => undefined);
-          if (liveState === "open") confirmedOpen.add(number);
-        }),
-      );
-      otherAuthorOpenPrNumbers = otherAuthorOpenPrNumbers.filter((number) => confirmedOpen.has(number));
-    }
-    const authorOpenPrNumbers = otherAuthorOpenPrNumbers.concat(pr.number).sort((a, b) => a - b);
+    // Complete author-scoped set (not the duplicate-analysis 100-row sample), with every counted sibling
+    // positively LIVE-confirmed still open before it counts toward an irreversible close decision (#2270
+    // busy-repo bypass fix). Runs unconditionally now -- not just for isNewAccount -- since a stale-DB-row
+    // false positive is exactly as wrong for an established contributor as for a new one; this supersedes the
+    // narrower new-account-only live-verify this block used to have. Reuses the function-scoped token/admissionKey
+    // (already resolved above for the live-CI recheck) rather than minting a second one.
+    const otherAuthorOpenPullRequests = await listOtherOpenPullRequestsForAuthor(env, repoFullName, pr.number, pr.authorLogin);
+    const confirmedOpen = new Set<number>();
+    await Promise.all(
+      otherAuthorOpenPullRequests.map(async (other) => {
+        const liveState = await fetchLivePullRequestState(env, repoFullName, other.number, token, admissionKey).catch(() => undefined);
+        if (liveState === "open") confirmedOpen.add(other.number);
+      }),
+    );
+    const authorOpenPrNumbers = otherAuthorOpenPullRequests
+      .filter((other) => confirmedOpen.has(other.number))
+      .map((other) => other.number)
+      .concat(pr.number)
+      .sort((a, b) => a - b);
     const overCapNumbers = new Set(authorOpenPrNumbers.slice(contributorOpenPrCap));
     if (overCapNumbers.has(pr.number)) {
       contributorCapMatch = { matched: true, authorLogin: pr.authorLogin, openCount: authorOpenPrNumbers.length, cap: contributorOpenPrCap, itemKind: "pull requests" };
     }
     // Webhook-delivery-order guard (#2479 gate finding): delivery order is not guaranteed to match PR creation
     // order, so a sibling PR's own webhook can process before THIS PR exists in the DB and wrongly conclude the
-    // author is within the cap — nothing else would ever re-evaluate it, permanently bypassing the cap for that
-    // sibling. Now that THIS delivery has the complete picture, wake any OTHER still-open sibling that's also
-    // in the over-cap set so its own next pass re-evaluates against the complete set and self-corrects.
-    const otherOverCapSiblingNumbers = otherOpenPullRequests
-      .filter((other) => (other.authorLogin ?? "").toLowerCase() === authorLoginLower && overCapNumbers.has(other.number))
+    // author is within the cap. Use the complete author-scoped set (not the duplicate-analysis 100-row sample)
+    // and only siblings positively confirmed open, matching the issue-cap fail-safe close contract.
+    const otherOverCapSiblingNumbers = otherAuthorOpenPullRequests
+      .filter((other) => confirmedOpen.has(other.number) && overCapNumbers.has(other.number))
       .map((other) => other.number);
     if (otherOverCapSiblingNumbers.length > 0) {
       await wakeOverCapSiblingPullRequests(env, deliveryId, installationId, repoFullName, otherOverCapSiblingNumbers);

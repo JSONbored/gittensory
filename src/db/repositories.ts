@@ -3433,6 +3433,16 @@ export async function listOtherOpenPullRequests(env: Env, fullName: string, numb
   return rows.map(toPullRequestRecordFromRow);
 }
 
+export async function listOtherOpenPullRequestsForAuthor(env: Env, fullName: string, number: number, authorLogin: string): Promise<PullRequestRecord[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select()
+    .from(pullRequests)
+    .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.state, "open"), not(eq(pullRequests.number, number)), sql`lower(${pullRequests.authorLogin}) = lower(${authorLogin})`))
+    .orderBy(asc(pullRequests.number));
+  return rows.map(toPullRequestRecordFromRow);
+}
+
 export async function getRepoAuthorPullRequestHistory(env: Env, fullName: string, login: string, excludeNumber?: number): Promise<{ mergedPrCount: number; closedUnmergedPrCount: number }> {
   const db = getDb(env.DB);
   const [row] = await db
