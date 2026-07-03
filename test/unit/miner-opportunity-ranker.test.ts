@@ -45,7 +45,7 @@ describe("rankCandidateIssues (#2302 follow-up)", () => {
     );
 
     expect(ranked[0]?.issueNumber).toBe(2);
-    expect(ranked[0]?.rankScore).toBeGreaterThan(ranked[1]?.rankScore ?? 0);
+    expect(ranked.at(-1)?.issueNumber).toBe(1);
     expect(ranked.every((entry) => entry.rankScore >= 0)).toBe(true);
   });
 

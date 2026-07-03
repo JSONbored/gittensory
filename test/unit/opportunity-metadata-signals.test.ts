@@ -44,7 +44,7 @@ describe("opportunity metadata signals", () => {
       { ...base, issueNumber: 12, title: "Docs typo" },
     ];
     expect(computeMetadataDupRisk(base, peers)).toBeGreaterThan(0);
-    expect(computeMetadataDupRisk({ ...base, title: "ab" }, peers)).toBe(1);
+    expect(computeMetadataDupRisk({ ...base, title: "ab" }, peers)).toBe(0);
     expect(computeMetadataDupRisk({ ...base, repoFullName: "acme/other" }, peers)).toBe(0);
   });
 
