@@ -26,6 +26,7 @@ import {
   upsertContributor,
   upsertContributorRepoStat,
   upsertInstallationHealth,
+  getInstallationHealth,
   upsertIssueFromGitHub,
   upsertPullRequestFile,
   upsertPullRequestDetailSyncState,
@@ -1119,7 +1120,16 @@ async function refreshInstallationHealthRecords(env: Env, installations: Install
     // (never-refreshed) permissions/events happen to be stored would fabricate a gap. Health instead reflects
     // whether the broker itself is reachable and minting tokens; see enrichInstallationHealth's broker branch for
     // the honest "introspection unavailable" remediation surfaced to callers.
+    //
+    // Persistence (#selfhost-runtime-drift follow-up): writing missingPermissions/missingEvents as [] here reads,
+    // to any OTHER consumer of InstallationHealthRecord that predates broker mode and doesn't branch on authMode
+    // (e.g. registration-readiness / settings-preview warnings), as "verified, nothing missing" -- indistinguishable
+    // from a real local-mode clean bill of health. "No data to compute a diff from" is not the same claim as
+    // "confirmed zero missing", so carry forward whatever was last persisted (from an earlier local-mode refresh,
+    // or an earlier broker probe) instead of stomping it with a fabricated-clean []. A row with no prior record at
+    // all has never been verified either way, so [] is the only honest starting point.
     if (authMode === "broker") {
+      const previous = await getInstallationHealth(env, currentInstallation.id);
       const record = {
         installationId: currentInstallation.id,
         accountLogin: currentInstallation.accountLogin,
@@ -1127,8 +1137,8 @@ async function refreshInstallationHealthRecords(env: Env, installations: Install
         installedReposCount: installedRepos.length,
         registeredInstalledCount: registeredInstalled.length,
         status: errorSummary ? ("needs_attention" as const) : ("healthy" as const),
-        missingPermissions: [] as string[],
-        missingEvents: [] as string[],
+        missingPermissions: previous?.missingPermissions ?? ([] as string[]),
+        missingEvents: previous?.missingEvents ?? ([] as string[]),
         permissions: currentInstallation.permissions,
         events: currentInstallation.events,
         checkedAt: nowIso(),
@@ -1188,7 +1198,21 @@ async function refreshStoredInstallation(
 ): Promise<{ installation: InstallationRecord; errorSummary?: string; authMode: InstallationHealthRecord["authMode"] }> {
   if (isOrbBrokerMode(env)) {
     try {
-      await fetchBrokeredInstallationToken(env);
+      const minted = await fetchBrokeredInstallationToken(env);
+      // A brokered self-host is bound to exactly ONE real installation, but the local DB can carry
+      // multiple installation rows (e.g. a stale row left over from a prior re-registration). The mint
+      // call takes no installationId -- it always returns "the" broker-bound token -- so a successful
+      // mint here only proves the broker is reachable, never that it is bound to THIS row. Compare the
+      // minted token's own installationId (parsed from the broker's response payload) against the row
+      // being probed; a mismatch (or a missing/zero id from an older broker) must not be reported healthy.
+      if (minted.installationId === 0 || minted.installationId !== installation.id) {
+        incr("gittensory_installation_health_broker_probe_total", { result: "mismatched_installation" });
+        return {
+          installation,
+          errorSummary: `Token broker minted a token for installation ${minted.installationId || "unknown"}, not ${installation.id}.`,
+          authMode: "broker",
+        };
+      }
       incr("gittensory_installation_health_broker_probe_total", { result: "ok" });
       return { installation, authMode: "broker" };
     } catch (error) {

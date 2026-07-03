@@ -18,6 +18,7 @@ import {
   persistRepoGithubTotalsSnapshot,
   recordGitHubRateLimitObservation,
   upsertInstallation,
+  upsertInstallationHealth,
   upsertRepoSyncSegment,
   upsertRepoSyncState,
   upsertPullRequestFile,
@@ -497,6 +498,65 @@ describe("GitHub backfill", () => {
       // The persisted authMode round-trips as "broker" through the repository read path (getInstallationHealth),
       // not just the in-memory refresh result — mirrors the "local" round-trip check above.
       expect(await getInstallationHealth(env, 900)).toMatchObject({ authMode: "broker" });
+    });
+
+    it("REGRESSION (gate finding): never reports healthy when the broker mints a token for a DIFFERENT installation than the one being refreshed", async () => {
+      const env = createTestEnv({ ORB_ENROLLMENT_SECRET: "orbsec_test" });
+      // Two local rows exist (e.g. a stale row left over from a prior re-registration), but a brokered
+      // self-host is bound to exactly ONE real installation — the broker always mints for that ONE install
+      // regardless of which local row's refresh triggered the call.
+      await upsertInstallation(env, {
+        installation: { id: 910, account: { login: "brokered-owner", id: 9, type: "User" }, repository_selection: "selected" },
+      });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.endsWith("/v1/orb/token")) return Response.json({ token: "ghs_brokered", installationId: 999 }); // NOT 910
+        return new Response("not found", { status: 404 });
+      });
+
+      const result = await refreshInstallationHealth(env);
+
+      expect(result.installations[0]?.status).toBe("needs_attention");
+      expect(result.installations[0]?.authMode).toBe("broker");
+      expect(result.installations[0]?.errorSummary).toMatch(/910/);
+      expect(await renderMetrics()).toContain('gittensory_installation_health_broker_probe_total{result="mismatched_installation"} 1');
+    });
+
+    it("REGRESSION (gate finding): a broker-mode refresh preserves the previously-persisted missingPermissions/missingEvents instead of fabricating a clean []", async () => {
+      const env = createTestEnv({ ORB_ENROLLMENT_SECRET: "orbsec_test" });
+      await upsertInstallation(env, {
+        installation: { id: 911, account: { login: "brokered-owner", id: 9, type: "User" }, repository_selection: "selected" },
+      });
+      // A prior refresh (e.g. before this install switched into broker mode, or an earlier probe) left a
+      // REAL, non-empty missing-permissions/events record — that's genuine last-known information, not a
+      // fabricated broker-mode guess, so a later broker-mode refresh must not silently erase it back to [].
+      await upsertInstallationHealth(env, {
+        installationId: 911,
+        accountLogin: "brokered-owner",
+        repositorySelection: "selected",
+        installedReposCount: 1,
+        registeredInstalledCount: 1,
+        status: "needs_attention",
+        missingPermissions: ["pull_requests"],
+        missingEvents: ["issues"],
+        permissions: {},
+        events: [],
+        checkedAt: "2026-07-01T00:00:00.000Z",
+        authMode: "local",
+      });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.endsWith("/v1/orb/token")) return Response.json({ token: "ghs_brokered", installationId: 911 });
+        return new Response("not found", { status: 404 });
+      });
+
+      const result = await refreshInstallationHealth(env);
+
+      expect(result.installations[0]).toMatchObject({
+        authMode: "broker",
+        missingPermissions: ["pull_requests"],
+        missingEvents: ["issues"],
+      });
     });
 
     it("reports needs_attention with a broker-specific errorSummary (not the local App-key message) when the token broker fails to mint", async () => {
