@@ -58,7 +58,9 @@ export function hasPrecedingDocComment(lines: string[], lineIndex: number): bool
   while (i >= 0 && lines[i]!.trim() === "") i -= 1; // skip blank lines between the doc and the export
   if (i < 0) return false;
   const above = lines[i]!.trim();
-  return above.startsWith("//") || above.endsWith("*/");
+  // Require a COMMENT-ONLY line: a `//` line comment or a block-comment opener/body/terminator (starts with `/*`
+  // or `*`). A code line with a TRAILING block comment starts with code, so it is not treated as documentation.
+  return above.startsWith("//") || above.startsWith("/*") || above.startsWith("*");
 }
 
 async function readBoundedText(resp: Response, signal?: AbortSignal): Promise<string | null> {
@@ -102,6 +104,8 @@ export async function scanUndocumentedExport(
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${githubToken}`,
+    // `vnd.github.raw` returns the file's raw bytes from the Contents API — the same media type the sibling
+    // github-light analyzer doc-comment-drift.ts uses to fetch a file at headSha.
     Accept: "application/vnd.github.raw",
     "X-GitHub-Api-Version": "2022-11-28",
   };

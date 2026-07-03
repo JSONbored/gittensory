@@ -40,6 +40,9 @@ test("hasPrecedingDocComment: a `//` line or block-comment end above (through bl
   assert.equal(hasPrecedingDocComment(["// note", "", "export const x = 1;"], 2), true);
   assert.equal(hasPrecedingDocComment(["export const prev = 0;", "export const x = 1;"], 1), false);
   assert.equal(hasPrecedingDocComment(["export const x = 1;"], 0), false); // nothing above
+  // a CODE line with a trailing block comment ends in `*/` but is not documentation
+  assert.equal(hasPrecedingDocComment(["const c = 1; /* trailing */", "export const x = 1;"], 1), false);
+  assert.equal(hasPrecedingDocComment([" * jsdoc body", "export const x = 1;"], 1), true); // block-comment body line
 });
 
 test("scanUndocumentedExport: flags the undocumented export, not the documented one, and renders it", async () => {
@@ -66,6 +69,18 @@ test("scanUndocumentedExport: an export whose head line no longer declares it is
     headFetch(shifted),
   );
   assert.deepEqual(findings, []);
+});
+
+test("scanUndocumentedExport: an oversized response (content-length over the cap) is not read → no finding", async () => {
+  const oversized = async (url) =>
+    url.includes("/contents/")
+      ? new Response(HEAD, { status: 200, headers: { "content-length": "2000000" } }) // > MAX_FETCH_BYTES (1 MB)
+      : new Response("", { status: 404 });
+  const findings = await scanUndocumentedExport(
+    req([{ path: "src/index.ts", status: "modified", patch: PATCH }]),
+    oversized,
+  );
+  assert.deepEqual(findings, []); // the bounded-read guard bails before parsing content
 });
 
 test("scanUndocumentedExport: no token or no headSha → skipped (no finding, no throw)", async () => {
