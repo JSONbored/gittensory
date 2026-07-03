@@ -8,8 +8,10 @@ vi.mock("@jsonbored/gittensory-engine", async () => {
 });
 
 import {
+  appendGovernorEvent,
   closeDefaultGovernorLedger,
   initGovernorLedger,
+  readGovernorEvents,
   resolveGovernorLedgerDbPath,
 } from "../../packages/gittensory-miner/lib/governor-ledger.js";
 
@@ -93,6 +95,11 @@ describe("gittensory-miner governor ledger (#2328)", () => {
     expect(ledger.readGovernorEvents()).toHaveLength(1);
   });
 
+  it("rejects invalid repo filter types before querying SQLite", () => {
+    const ledger = tempLedger();
+    expect(() => ledger.readGovernorEvents({ repoFullName: 42 })).toThrow(/invalid_repo_full_name/);
+  });
+
   it("records throttled and kill_switch outcomes for later audit", () => {
     const ledger = tempLedger();
     const throttled = ledger.appendGovernorEvent({
@@ -112,5 +119,21 @@ describe("gittensory-miner governor ledger (#2328)", () => {
     expect(ledger.readGovernorEvents().map((row) => row.eventType)).toEqual(["throttled", "kill_switch"]);
     expect(throttled.payload).toEqual({ retryAfterMs: 5000 });
     expect(killSwitch.repoFullName).toBeNull();
+  });
+
+  it("uses the default singleton ledger helpers and closes cleanly", () => {
+    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-default-"));
+    roots.push(root);
+    process.env.GITTENSORY_MINER_CONFIG_DIR = root;
+    const entry = appendGovernorEvent({
+      eventType: "allowed",
+      actionClass: "analyze",
+      decision: "allow",
+      reason: "within budget",
+    });
+    expect(readGovernorEvents()).toEqual([entry]);
+    closeDefaultGovernorLedger();
+    closeDefaultGovernorLedger();
+    delete process.env.GITTENSORY_MINER_CONFIG_DIR;
   });
 });

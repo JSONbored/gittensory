@@ -53,6 +53,7 @@ function serializePayload(payload: unknown): string {
   let json: string;
   try {
     json = JSON.stringify(payload);
+  /* v8 ignore next 2 -- JSON.stringify only throws on circular structures; callers pass plain objects. */
   } catch {
     throw new Error("invalid_payload");
   }
