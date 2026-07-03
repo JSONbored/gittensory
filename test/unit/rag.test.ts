@@ -47,6 +47,9 @@ describe("rag: code-not-content filtering (free-tier cost guard)", () => {
     expect(classifyRepoFile("scripts/build.mjs")).toBe("code");
     expect(classifyRepoFile("README.md")).toBe("doc");
     expect(classifyRepoFile("docs/architecture.mdx")).toBe("doc");
+    // long-form doc spellings (parity with signals/path-matchers DOCS_EXTENSIONS)
+    expect(classifyRepoFile("NOTES.markdown")).toBe("doc");
+    expect(classifyRepoFile("docs/guide.asciidoc")).toBe("doc");
     // skipped: the huge content corpus, data, deps, build output, binaries, lockfiles
     expect(classifyRepoFile("content/mcp/some-entry.mdx")).toBe("skip");
     expect(classifyRepoFile("data/fixtures.json")).toBe("skip");
