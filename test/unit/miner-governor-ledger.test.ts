@@ -97,7 +97,9 @@ describe("gittensory-miner governor ledger (#2328)", () => {
 
   it("rejects invalid repo filter types before querying SQLite", () => {
     const ledger = tempLedger();
-    expect(() => ledger.readGovernorEvents({ repoFullName: 42 })).toThrow(/invalid_repo_full_name/);
+    expect(() => ledger.readGovernorEvents({ repoFullName: 42 as unknown as string })).toThrow(
+      /invalid_repo_full_name/,
+    );
   });
 
   it("records throttled and kill_switch outcomes for later audit", () => {

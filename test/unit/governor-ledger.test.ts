@@ -70,17 +70,25 @@ describe("governor ledger normalization (#2328)", () => {
     expect(() => normalizeGovernorLedgerEvent({ ...base, repoFullName: "bad" })).toThrow(
       /invalid_repo_full_name/,
     );
-    expect(() => normalizeGovernorLedgerEvent({ ...base, repoFullName: 42 })).toThrow(
+    expect(() => normalizeGovernorLedgerEvent({ ...base, repoFullName: 42 } as unknown)).toThrow(
       /invalid_repo_full_name/,
     );
-    expect(() => normalizeGovernorLedgerEvent({ ...base, actionClass: 0 })).toThrow(
+    expect(() => normalizeGovernorLedgerEvent({ ...base, actionClass: 0 } as unknown)).toThrow(
       /invalid_action_class/,
     );
-    expect(() => normalizeGovernorLedgerEvent({ ...base, decision: false })).toThrow(/invalid_decision/);
-    expect(() => normalizeGovernorLedgerEvent({ ...base, eventType: 1 })).toThrow(/invalid_event_type/);
+    expect(() => normalizeGovernorLedgerEvent({ ...base, decision: false } as unknown)).toThrow(
+      /invalid_decision/,
+    );
+    expect(() => normalizeGovernorLedgerEvent({ ...base, eventType: 1 } as unknown)).toThrow(
+      /invalid_event_type/,
+    );
     expect(() => normalizeGovernorLedgerEvent({ ...base, reason: "  " })).toThrow(/invalid_reason/);
-    expect(() => normalizeGovernorLedgerEvent({ ...base, payload: null })).toThrow(/invalid_payload/);
-    expect(() => normalizeGovernorLedgerEvent({ ...base, payload: ["bad"] })).toThrow(/invalid_payload/);
+    expect(() => normalizeGovernorLedgerEvent({ ...base, payload: null } as unknown)).toThrow(
+      /invalid_payload/,
+    );
+    expect(() => normalizeGovernorLedgerEvent({ ...base, payload: ["bad"] } as unknown)).toThrow(
+      /invalid_payload/,
+    );
     expect(() =>
       normalizeGovernorLedgerEvent({ ...base, payload: { value: undefined } }),
     ).toThrow(/invalid_payload/);
