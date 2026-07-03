@@ -2,7 +2,7 @@
 
 Foundation CLI for the local Gittensory miner runtime.
 
-This package is the future home of the autonomous discover → analyze → plan → prepare → create → manage miner workflow. In this foundation phase it provides the package scaffold, a minimal CLI surface for `--help` and `--version`, and a non-blocking npm registry version nudge on startup.
+This package is the future home of the autonomous discover → analyze → plan → prepare → create → manage miner workflow. In this foundation phase it provides the package scaffold, a local laptop-mode bootstrap (`init` + `doctor`), and a non-blocking npm registry version nudge on startup.
 
 ## Status
 
@@ -10,6 +10,7 @@ Current scope is intentionally small:
 
 - workspace package wiring
 - CLI entry point
+- laptop-mode bootstrap for a zero-infra local config dir + SQLite state file
 - `--help` and `version` commands
 - startup npm version nudge (override with `--no-update-check` or `GITTENSORY_MINER_NO_UPDATE_CHECK=1`)
 
@@ -37,6 +38,18 @@ npm install
 npm --workspace @jsonbored/gittensory-miner run build
 ```
 
+Laptop mode from npm:
+
+```sh
+npm install -g @jsonbored/gittensory-miner
+gittensory-miner init
+gittensory-miner doctor
+```
+
+`init` bootstraps the local config directory and the SQLite-backed `run-state.sqlite3` file. Path
+resolution mirrors the package's other local stores: `GITTENSORY_MINER_CONFIG_DIR`, then
+`XDG_CONFIG_HOME`, then `~/.config/gittensory-miner/`.
+
 ## Commands
 
 ```sh
@@ -44,7 +57,12 @@ gittensory-miner --help
 gittensory-miner help
 gittensory-miner --version
 gittensory-miner version
+gittensory-miner init
+gittensory-miner doctor
 ```
+
+`doctor` always reports Docker as informational only. Laptop mode never requires Docker, Redis, or
+Postgres to initialize.
 
 ## Version check
 

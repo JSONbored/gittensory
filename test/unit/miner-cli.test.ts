@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
+import { delimiter, dirname } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   bin,
   closeFixtureServer,
   runCapture,
   startRegistryFixture,
+  tempEnvPrefix,
 } from "./support/miner-cli-harness";
 
 type MinerCli = typeof import("../../packages/gittensory-miner/lib/cli.js");
@@ -64,6 +66,8 @@ describe("gittensory-miner CLI helpers", () => {
     const text = log.mock.calls[0]?.[0];
     expect(text).toContain("gittensory-miner --help");
     expect(text).toContain("gittensory-miner version");
+    expect(text).toContain("gittensory-miner init");
+    expect(text).toContain("gittensory-miner doctor");
     expect(text).toContain("--no-update-check");
   });
 
@@ -294,6 +298,32 @@ describe("gittensory-miner startup update check (#2331)", () => {
   it("serves --version without blocking when update checks are disabled", () => {
     const output = runCapture(["--version", "--no-update-check"]);
     expect(output).toContain("@jsonbored/gittensory-miner/0.1.0");
+  });
+
+  it("bootstraps laptop mode from the bin entry and reports the resolved paths", () => {
+    const configDir = tempEnvPrefix();
+    const output = runCapture(["init", "--no-update-check"], {
+      GITTENSORY_MINER_CONFIG_DIR: configDir,
+    });
+    expect(output).toContain("Gittensory miner laptop mode is ready.");
+    expect(output).toContain(`Config dir: ${configDir}`);
+    expect(output).toContain(`State DB: ${configDir}/run-state.sqlite3`);
+  });
+
+  it("reports absent Docker from the doctor command without treating it as an error", () => {
+    const configDir = tempEnvPrefix();
+    const pathDir = tempEnvPrefix();
+    const nodePathDir = dirname(process.execPath);
+    runCapture(["init", "--no-update-check"], {
+      GITTENSORY_MINER_CONFIG_DIR: configDir,
+    });
+    const output = runCapture(["doctor", "--no-update-check"], {
+      GITTENSORY_MINER_CONFIG_DIR: configDir,
+      PATH: [pathDir, nodePathDir].join(delimiter),
+    });
+    expect(output).toContain("Gittensory miner doctor");
+    expect(output).toContain("Docker: unavailable (docker not found on PATH; informational only)");
+    expect(output).toContain("miner_run_state ready");
   });
 
   it("serves --help immediately without waiting for a slow registry check", async () => {
