@@ -122,6 +122,10 @@ describe("isCodeFile", () => {
       "Api/Controllers/UserController.cs",
       "Sources/App/Router.swift",
       "src/main/groovy/Pipeline.groovy",
+      // PHP source — isTestPath already recognizes PHPUnit/PHPSpec `SomethingTest`/`Spec`
+      // files, so PHP source must count as code too (else it is neither test nor code).
+      "app/Http/Controllers/UserController.php",
+      "src/Service/PaymentGateway.php",
     ]) {
       expect(isCodeFile(path)).toBe(true);
     }
@@ -141,6 +145,8 @@ describe("isCodeFile", () => {
       // C#/Swift test files carry a code extension but are tests, not code.
       "Services/AccountTests.cs",
       "AppTests/LoginTests.swift",
+      // PHP class-suffix test file (PHPUnit) — code extension, but a test, not code.
+      "app/Service/PaymentTest.php",
     ]) {
       expect(isCodeFile(path)).toBe(false);
     }
