@@ -26,10 +26,18 @@ function pickTimestamp(issue: FreshnessIssue): string | null {
   return null;
 }
 
+// An open issue whose timestamp is missing or unparseable is treated as maximally STALE, not fresh: a
+// malformed row must not rank ahead of genuinely fresh opportunities in the metadata ranker. This restores
+// the flooring introduced with this scorer (#2806, "invalid or missing issue timestamps floor freshness
+// instead of ranking malformed metadata first"). exp(-STALE_AGE_DAYS / 20) underflows to ~0, which the
+// clamp raises to the 0.05 freshness floor.
+const STALE_AGE_DAYS = 9999;
+
 function issueAgeDays(value: string | null, nowMs: number): number {
-  if (!value) return 0;
+  if (!value) return STALE_AGE_DAYS;
   const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return 0;
+  /* v8 ignore next -- pickTimestamp only ever yields a parseable string or null; kept as a defensive floor. */
+  if (!Number.isFinite(parsed)) return STALE_AGE_DAYS;
   return Math.floor((nowMs - parsed) / 86_400_000);
 }
 
