@@ -20,6 +20,7 @@ import { scanRedos } from "./redos.js";
 import { secretAnalyzer } from "./secret/descriptor.js";
 import { scanSecretLog } from "./secret-log.js";
 import { scanTyposquat } from "./typosquat.js";
+import { scanWorkflowPermissions } from "./workflow-permissions.js";
 import type {
   AnalyzerDescriptor,
   AnalyzerFn,
@@ -477,6 +478,26 @@ export const ANALYZER_DESCRIPTORS = [
     },
     run: (req, { signal, analysis, diagnostics }) =>
       scanBlameLink(req, fetch, { signal, analysis, diagnostics }),
+  }),
+  descriptor({
+    name: "workflowPermissions",
+    title: "Risky workflow permissions / triggers",
+    category: "security",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: 25, maxLineChars: 2000 },
+    docs: {
+      summary:
+        "Flags workflow changes that grant broad/sensitive permissions or add high-risk event triggers.",
+      looksAt:
+        "Added lines in .github/workflows/* — permissions: write-all, id-token: write, secrets: inherit, sensitive per-scope writes, and pull_request_target / workflow_run triggers.",
+      reports: "File, line, and the risky-permission/trigger kind (plus the scope for a sensitive-scope write).",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Matches the fixed GitHub Actions workflow schema (a bounded enum of scopes and event names), not arbitrary code; YAML comments are stripped before matching.",
+    },
+    run: (req, { signal }) => scanWorkflowPermissions(req, signal),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 

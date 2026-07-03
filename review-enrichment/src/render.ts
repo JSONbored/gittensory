@@ -379,6 +379,37 @@ export function renderBrief(
     }
   }
 
+  const workflowPermissions = findings.workflowPermissions ?? [];
+  if (workflowPermissions.length) {
+    const explain = (
+      item: (typeof workflowPermissions)[number],
+    ): string => {
+      switch (item.kind) {
+        case "write-all-permission":
+          return "grants `permissions: write-all`; scope the token to only the permissions the job needs";
+        case "oidc-token-write":
+          return "grants `id-token: write` (OIDC cloud-credential exchange); confirm this job must mint cloud credentials";
+        case "secrets-inherit":
+          return "forwards all caller secrets via `secrets: inherit`; pass only the specific secrets the called workflow needs";
+        case "sensitive-scope-write":
+          return `grants \`${item.detail ?? "a sensitive scope"}: write\`; confirm this job needs write access to that scope`;
+        case "pull-request-target-trigger":
+          return "adds a `pull_request_target` trigger, which runs with the base repo's secrets on untrusted fork code — a common privilege-escalation vector; avoid checking out or executing PR head code";
+        case "workflow-run-trigger":
+          return "adds a `workflow_run` trigger, which runs in an elevated context; treat any PR-derived inputs as untrusted";
+      }
+    };
+
+    lines.push(
+      "### Risky workflow permissions / triggers (supply-chain — review before merging)",
+    );
+    for (const item of workflowPermissions) {
+      lines.push(
+        `- ${safeCodeSpan(`${item.file}:${item.line}`)} — ${explain(item)}`,
+      );
+    }
+  }
+
   lines.push(...renderDescriptorSection("blameLink", findings.blameLink));
 
   if (!lines.length) return { promptSection: "", systemSuffix: "" };

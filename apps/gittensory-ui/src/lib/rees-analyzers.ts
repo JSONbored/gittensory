@@ -584,6 +584,30 @@ export const REES_ANALYZERS = [
         "File-level, not per-line: it reports each file's most recent prior toucher, never claiming a specific line's origin. Fail-safe and partial on cap.",
     },
   },
+  {
+    name: "workflowPermissions",
+    title: "Risky workflow permissions / triggers",
+    category: "security",
+    cost: "local",
+    defaultEnabled: true,
+    profiles: ["fast", "balanced", "deep"],
+    requires: ["files"],
+    limits: {
+      maxFindings: 25,
+      maxLineChars: 2000,
+    },
+    docs: {
+      summary:
+        "Flags workflow changes that grant broad/sensitive permissions or add high-risk event triggers.",
+      looksAt:
+        "Added lines in .github/workflows/* — permissions: write-all, id-token: write, secrets: inherit, sensitive per-scope writes, and pull_request_target / workflow_run triggers.",
+      reports:
+        "File, line, and the risky-permission/trigger kind (plus the scope for a sensitive-scope write).",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Matches the fixed GitHub Actions workflow schema (a bounded enum of scopes and event names), not arbitrary code; YAML comments are stripped before matching.",
+    },
+  },
 ] as const satisfies readonly ReesAnalyzerDoc[];
 
 export const REES_ANALYZER_NAMES = REES_ANALYZERS.map((analyzer) => analyzer.name);

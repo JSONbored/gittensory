@@ -224,6 +224,24 @@ export interface IacMisconfigFinding {
     | "hardcoded-service-url";
 }
 
+/** An added GitHub Actions workflow line that grants a broad/sensitive permission or adds a high-risk event
+ *  trigger — the `pull_request_target` + write-token supply-chain class, where untrusted fork code runs with the
+ *  base repo's secrets and a write token. Reports the location + kind (+ the scope for a sensitive-scope write)
+ *  only; never any secret value. */
+export interface WorkflowPermissionFinding {
+  file: string;
+  line: number;
+  kind:
+    | "write-all-permission"
+    | "oidc-token-write"
+    | "secrets-inherit"
+    | "sensitive-scope-write"
+    | "pull-request-target-trigger"
+    | "workflow-run-trigger";
+  /** The permission scope for a `sensitive-scope-write` finding (e.g. "contents"). */
+  detail?: string;
+}
+
 /** A newly-added dependency whose install compiles native code (npm node-gyp addon) or has no prebuilt wheel
  *  (PyPI sdist-only) — a hidden CI cold-start/install cost and a frequent cross-platform breakage source. Reports
  *  package@version + the factual build property only. (#1512) */
@@ -325,6 +343,7 @@ export interface BriefFindings {
   duplication?: DuplicationFinding[];
   churnHotspot?: ChurnHotspotFinding[];
   blameLink?: BlameLinkFinding[];
+  workflowPermissions?: WorkflowPermissionFinding[];
 }
 
 /** A JSDoc/TSDoc block whose `@param` tags name parameters the adjacent function no longer declares — a
