@@ -34,6 +34,7 @@ jobs:
       mcp: ${{ steps.filter.outputs.mcp }}
       mcpCliHarness: ${{ steps.filter.outputs.mcpCliHarness }}
       rees: ${{ steps.filter.outputs.rees }}
+      observability: ${{ steps.filter.outputs.observability }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -58,6 +59,9 @@ jobs:
               - '.github/workflows/**'
               - 'wrangler.jsonc'
               - 'worker-configuration.d.ts'
+            observability:
+              - 'grafana/dashboards/**'
+              - 'prometheus/rules/**'
             # The UI's own app/extension code -- triggers the FULL toolchain (lint/typecheck/test/build).
             # A dependency bump (package.json/package-lock.json) stays here too since it can break the UI
             # build or types in ways only that full toolchain would catch.
@@ -121,7 +125,7 @@ jobs:
   validate-code:
     name: validate-code
     needs: changes
-    if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.rees == 'true' || needs.changes.outputs.ui == 'true' }}
+    if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.rees == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.observability == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -199,6 +203,9 @@ jobs:
       - name: cf-typegen drift check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
         run: npm run cf-typegen:check
+      - name: Validate observability configs
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.observability == 'true' }}
+        run: npm run selfhost:validate-observability
       - name: Typecheck
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
         run: npm run typecheck
