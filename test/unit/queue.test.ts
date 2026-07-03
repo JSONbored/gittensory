@@ -18957,3 +18957,274 @@ describe("backlog-convergence sweep (#selfhost-backlog-convergence)", () => {
     expect(meta.candidatePulls.sort()).toEqual([7, 8]);
   });
 });
+
+// #selfhost-auto-action-convergence: end-to-end regression coverage for the GENERAL heuristic plan+execute path
+// (runAgentMaintenancePlanAndExecute -> planAgentMaintenanceActions -> executeAgentMaintenanceActions), via real
+// webhook -> processJob -> mocked-GitHub-API assertions. The specialized short-circuit mechanisms (blacklist,
+// contributor-cap, review-nag, converted_to_draft gate-close) already have deep end-to-end coverage elsewhere in
+// this file; planAgentMaintenanceActions itself is exhaustively unit-tested in agent-actions.test.ts; and
+// executeAgentMaintenanceActions's own gate stack is exhaustively unit-tested in agent-action-executor.test.ts.
+// What was missing was END-TO-END proof, for the plain gate-verdict path specifically, that the two connect: a
+// plan computed from REAL PR/settings state actually reaches a REAL (mocked) GitHub mutation.
+describe("auto-action convergence: end-to-end plan+execute for the general heuristic path (#selfhost-auto-action-convergence)", () => {
+  const REPO = "JSONbored/gittensory";
+  const INSTALLATION_ID = 9600;
+
+  beforeEach(() => clearInstallationTokenCacheForTest());
+  afterEach(() => {
+    clearInstallationTokenCacheForTest();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function setupAutoActionRepo(env: ReturnType<typeof createTestEnv>, settingsOverrides: Record<string, unknown> = {}): Promise<void> {
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: REPO, private: false, owner: { login: "JSONbored" } }, INSTALLATION_ID);
+    await upsertInstallation(env, {
+      installation: {
+        id: INSTALLATION_ID,
+        account: { login: "JSONbored", id: 1, type: "User" },
+        repository_selection: "selected",
+        permissions: { metadata: "read", pull_requests: "write", issues: "write" },
+        events: ["pull_request"],
+      },
+      repositories: [{ name: "gittensory", full_name: REPO, private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertRepositorySettings(env, {
+      repoFullName: REPO,
+      commentMode: "off",
+      publicSurface: "off",
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "block", // the default blocker mechanism for these tests: missing linked issue -> gate failure
+      ...settingsOverrides,
+    });
+    // Without a registry snapshot the gate reports a "repo_unregistered" warning finding, which keeps the
+    // conclusion at "neutral" instead of "success"/"failure" -- register the repo so the tests below exercise
+    // real merge/close dispositions rather than the not-evaluated-yet state.
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload({ [REPO]: { emission_share: 0.01, issue_discovery_share: 0 } }, { kind: "raw-github", url: "https://example.test" }, "2026-05-23T00:00:00.000Z"),
+    );
+  }
+
+  function prPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      action: "opened",
+      installation: { id: INSTALLATION_ID, account: { login: "JSONbored", id: 1, type: "User" } },
+      repository: { name: "gittensory", full_name: REPO, private: false, owner: { login: "JSONbored" } },
+      pull_request: {
+        number: 60,
+        title: "A PR",
+        state: "open",
+        user: { login: "contributor" },
+        head: { sha: "conv60" },
+        labels: [],
+        body: "no linked issue here", // missing-linked-issue -> gate conclusion=failure under linkedIssueGateMode:block
+        mergeable_state: "clean",
+        reviewDecision: "APPROVED",
+        ...overrides,
+      },
+    };
+  }
+
+  /** A fetch stub for one PR (number/head parametrized) with a controllable CI state, capturing whether a real
+   *  merge (PUT .../pulls/N/merge) or close (PATCH .../pulls/N with state:"closed") mutation actually fired. */
+  function stubPrFetch(
+    prNumber: number,
+    headSha: string,
+    seen: { closed: boolean; merged: boolean },
+    ciState: "clear" | "pending" | "passed" = "clear",
+  ): void {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url === "https://api.github.com/graphql") {
+        return Response.json({ data: { repository: { pullRequest: { reviewDecision: "APPROVED" } } } });
+      }
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes(`/pulls/${prNumber}/files`)) return Response.json([]);
+      if (url.includes(`/pulls/${prNumber}/reviews`)) return Response.json([]);
+      if (url.includes(`/pulls/${prNumber}/commits`)) return Response.json([]);
+      if (url.endsWith(`/pulls/${prNumber}/merge`) && method === "PUT") {
+        seen.merged = true;
+        return Response.json({ merged: true });
+      }
+      if (url.endsWith(`/pulls/${prNumber}`) && method === "PATCH") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        if (body.state === "closed") seen.closed = true;
+        return Response.json({ number: prNumber, state: body.state ?? "open" });
+      }
+      if (url.endsWith(`/pulls/${prNumber}`)) {
+        return Response.json({ number: prNumber, state: "open", user: { login: "contributor" }, head: { sha: headSha }, mergeable_state: "clean" });
+      }
+      if (url.includes(`/commits/${headSha}/check-runs`)) {
+        if (ciState === "pending") return Response.json({ total_count: 1, check_runs: [{ name: "CI", status: "in_progress", conclusion: null, app: { slug: "github-actions" } }] });
+        if (ciState === "passed") return Response.json({ total_count: 1, check_runs: [{ name: "CI", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+        return Response.json({ total_count: 0, check_runs: [] });
+      }
+      if (url.includes(`/commits/${headSha}/status`)) {
+        return Response.json({ state: ciState === "pending" ? "pending" : "success", statuses: [] });
+      }
+      if (url.includes(`/issues/${prNumber}/labels`)) return Response.json([]);
+      if (url.includes(`/issues/${prNumber}/comments`)) return Response.json([]);
+      return Response.json({});
+    });
+  }
+
+  it("REGRESSION: a blocked contributor PR (plain gate failure) with close=auto is actually closed via the general heuristic-close path", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await setupAutoActionRepo(env, { autonomy: { close: "auto" } });
+    const seen = { closed: false, merged: false };
+    stubPrFetch(60, "conv60", seen);
+
+    await processJob(env, { type: "github-webhook", deliveryId: "conv-close", eventName: "pull_request", payload: prPayload() });
+
+    expect(seen.closed).toBe(true);
+    const closeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.close'").first<{ n: number }>();
+    expect(closeAudit?.n).toBeGreaterThanOrEqual(1);
+  });
+
+  it("REGRESSION: a green-verdict PR with CI still pending is NOT merged (merge withheld until CI/mergeability settle)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await setupAutoActionRepo(env, { autonomy: { merge: "auto", approve: "auto" }, linkedIssueGateMode: "off" });
+    await upsertOfficialMinerDetection(env, "contributor", { status: "confirmed", snapshot: queueMinerSnapshot("contributor") }, 60_000);
+    const seen = { closed: false, merged: false };
+    stubPrFetch(61, "conv61", seen, "pending");
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "conv-ci-pending",
+      eventName: "pull_request",
+      payload: prPayload({ number: 61, head: { sha: "conv61" }, body: "Closes #1" }),
+    });
+
+    expect(seen.merged).toBe(false);
+    const mergeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.merge'").first<{ n: number }>();
+    expect(mergeAudit?.n).toBe(0);
+  });
+
+  it("REGRESSION (#selfhost-backlog-convergence): a CI-pending PR defers, then merges once check_suite.completed reports CI green (convergence chain)", async () => {
+    // maybeReReviewOnCiCompletion (processors.ts) gates its ENTIRE re-review loop on isConvergenceRepoAllowed
+    // (the GITTENSORY_REVIEW_REPOS cutover allowlist), independent of autonomy -- the check_suite/check_run
+    // "THE auto-merge trigger" path only fires for an allowlisted repo.
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_REPOS: REPO });
+    await setupAutoActionRepo(env, { autonomy: { merge: "auto", approve: "auto" }, linkedIssueGateMode: "off" });
+    await upsertOfficialMinerDetection(env, "contributor", { status: "confirmed", snapshot: queueMinerSnapshot("contributor") }, 60_000);
+    const seen = { closed: false, merged: false };
+    let ciState: "pending" | "passed" = "pending";
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      // Delegate to a fresh stub per call so the closure sees the CURRENT ciState -- stubPrFetch captures ciState
+      // by value at call time, so re-invoke its logic inline against the live ciState variable instead.
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url === "https://api.github.com/graphql") {
+        return Response.json({ data: { repository: { pullRequest: { reviewDecision: "APPROVED" } } } });
+      }
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      // A non-empty, non-guardrail file: an EMPTY files list is treated as "unresolved" and fails CLOSED into a
+      // guardrail hold (isGuardrailHit short-circuits true on changedPaths.length === 0) -- so this must return a
+      // real file for the merge disposition below to ever reach a genuine "success" gate conclusion.
+      if (url.includes("/pulls/62/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.includes("/pulls/62/reviews")) return Response.json([]);
+      if (url.includes("/pulls/62/commits")) return Response.json([]);
+      if (url.endsWith("/pulls/62/merge") && method === "PUT") {
+        seen.merged = true;
+        return Response.json({ merged: true });
+      }
+      if (url.endsWith("/pulls/62")) {
+        return Response.json({ number: 62, state: "open", user: { login: "contributor" }, head: { sha: "conv62" }, mergeable_state: "clean" });
+      }
+      if (url.includes("/commits/conv62/check-runs")) {
+        return ciState === "pending"
+          ? Response.json({ total_count: 1, check_runs: [{ name: "CI", status: "in_progress", conclusion: null, app: { slug: "github-actions" } }] })
+          : Response.json({ total_count: 1, check_runs: [{ name: "CI", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+      }
+      if (url.includes("/commits/conv62/status")) return Response.json({ state: ciState === "pending" ? "pending" : "success", statuses: [] });
+      if (url.includes("/issues/62/labels")) return Response.json([]);
+      if (url.includes("/issues/62/comments")) return Response.json([]);
+      return Response.json({});
+    });
+
+    // Step 1: a synchronize webhook while CI is still running -> merge withheld.
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "conv-chain-1",
+      eventName: "pull_request",
+      payload: prPayload({ number: 62, head: { sha: "conv62" }, body: "Closes #1", action: "synchronize" }),
+    });
+    expect(seen.merged).toBe(false);
+
+    // Step 2: CI finishes; a check_suite.completed webhook for the SAME head re-triggers the pipeline, which now
+    // sees a passing CI aggregate and merges.
+    ciState = "passed";
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "conv-chain-2",
+      eventName: "check_suite",
+      payload: {
+        action: "completed",
+        installation: { id: INSTALLATION_ID, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: REPO, private: false, owner: { login: "JSONbored" } },
+        check_suite: { head_sha: "conv62", conclusion: "success", pull_requests: [{ number: 62 }] },
+      } as never,
+    });
+
+    expect(seen.merged).toBe(true);
+    const mergeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.merge'").first<{ n: number }>();
+    expect(mergeAudit?.n).toBeGreaterThanOrEqual(1);
+  });
+
+  it("REGRESSION: closeOwnerAuthors=false (default) protects an owner-authored blocked PR from the general heuristic-close path", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await setupAutoActionRepo(env, { autonomy: { close: "auto" } }); // closeOwnerAuthors defaults false
+    const seen = { closed: false, merged: false };
+    stubPrFetch(63, "conv63", seen);
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "conv-owner-protected",
+      eventName: "pull_request",
+      payload: prPayload({ number: 63, head: { sha: "conv63" }, user: { login: "JSONbored" } }), // author = repo owner
+    });
+
+    expect(seen.closed).toBe(false);
+    const closeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.close'").first<{ n: number }>();
+    expect(closeAudit?.n).toBe(0);
+  });
+
+  it("REGRESSION: closeOwnerAuthors=true allows the general heuristic-close path to close a blocked owner-authored PR", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await setupAutoActionRepo(env, { autonomy: { close: "auto" }, closeOwnerAuthors: true });
+    const seen = { closed: false, merged: false };
+    stubPrFetch(64, "conv64", seen);
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "conv-owner-allowed",
+      eventName: "pull_request",
+      payload: prPayload({ number: 64, head: { sha: "conv64" }, user: { login: "JSONbored" } }),
+    });
+
+    expect(seen.closed).toBe(true);
+  });
+
+  it("REGRESSION (#2133): an ADMIN_GITHUB_LOGINS fleet-operator author is exempt from the general heuristic-close path, same as the literal repo owner", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), ADMIN_GITHUB_LOGINS: "admin-user" });
+    await setupAutoActionRepo(env, { autonomy: { close: "auto" } }); // closeOwnerAuthors defaults false
+    const seen = { closed: false, merged: false };
+    stubPrFetch(65, "conv65", seen);
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "conv-admin-protected",
+      eventName: "pull_request",
+      payload: prPayload({ number: 65, head: { sha: "conv65" }, user: { login: "admin-user" } }),
+    });
+
+    expect(seen.closed).toBe(false);
+    const closeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.close'").first<{ n: number }>();
+    expect(closeAudit?.n).toBe(0);
+  });
+});
