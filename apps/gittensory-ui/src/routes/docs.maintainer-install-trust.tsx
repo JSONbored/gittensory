@@ -10,7 +10,7 @@ export const Route = createFileRoute("/docs/maintainer-install-trust")({
       {
         name: "description",
         content:
-          "Install Gittensory as a maintainer, verify trust boundaries, preview public output, and decide when GitHub App checks are safe to enable.",
+          "Self-host and install a Gittensory GitHub App as a maintainer, verify trust boundaries, preview public output, and decide when GitHub App checks are safe to enable. Self-hosting is the recommended default path; the shared App is private managed-beta only.",
       },
       {
         property: "og:title",
@@ -19,7 +19,7 @@ export const Route = createFileRoute("/docs/maintainer-install-trust")({
       {
         property: "og:description",
         content:
-          "Install Gittensory as a maintainer, verify trust boundaries, preview public output, and decide when GitHub App checks are safe to enable.",
+          "Self-host and install a Gittensory GitHub App as a maintainer, verify trust boundaries, preview public output, and decide when GitHub App checks are safe to enable. Self-hosting is the recommended default path; the shared App is private managed-beta only.",
       },
       { property: "og:url", content: "/docs/maintainer-install-trust" },
     ],

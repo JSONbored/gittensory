@@ -112,10 +112,12 @@ gittensory-mcp preflight --login your-login --json`}
       </p>
       <ol>
         <li>
-          <strong>Self-host, then install the GitHub App.</strong> Choose repositories and approve
+          <strong>Self-host, then install your own App.</strong> Choose repositories and approve
           permissions — default posture is silence. Start with{" "}
-          <Link to="/docs/maintainer-self-hosting">self-hosting setup</Link>, then the{" "}
-          <Link to="/docs/github-app">GitHub App first-10-minutes checklist</Link>.
+          <Link to="/docs/maintainer-self-hosting">self-hosting setup</Link>, which covers the
+          direct App's install checklist, then{" "}
+          <Link to="/docs/github-app">GitHub App configuration</Link> for the review behavior (PR
+          panel, checks, gate modes).
         </li>
         <li>
           <strong>Configure settings.</strong> Opt in to at most one configured label and one sticky
