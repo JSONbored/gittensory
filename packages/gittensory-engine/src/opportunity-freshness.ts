@@ -12,6 +12,8 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+const STALE_AGE_DAYS = 9999;
+
 function pickTimestamp(issue: FreshnessIssue): string | null {
   const updated = typeof issue.updatedAt === "string" ? issue.updatedAt.trim() : "";
   if (updated) return updated;
@@ -19,14 +21,18 @@ function pickTimestamp(issue: FreshnessIssue): string | null {
   return created || null;
 }
 
-const STALE_AGE_DAYS = 9999;
-
 function issueAgeDays(value: string | null, nowMs: number): number {
   if (!value) return STALE_AGE_DAYS;
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) return STALE_AGE_DAYS;
   return Math.floor((nowMs - parsed) / 86_400_000);
 }
+
+/** Branch coverage helpers for unit tests. */
+export const opportunityFreshnessInternals = {
+  pickTimestamp,
+  issueAgeDays,
+};
 
 /**
  * Compute a [0.05, 1] freshness factor from open issue timestamps, mirroring
