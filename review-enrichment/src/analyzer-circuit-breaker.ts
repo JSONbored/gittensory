@@ -4,8 +4,9 @@
 // identical call just timed out or errored. Trip a short, in-process cooldown after a run of CONSECUTIVE
 // thrown failures (a timeout counts -- runWithTimeout's rejection is a thrown failure) and skip that analyzer
 // entirely -- no network/CLI call at all -- for the cooldown window, falling through the SAME plan.skipped
-// path any other skip reason already uses. In-process only (no persistence layer): review-enrichment is a
-// single long-lived process (Railway), matching the main app's equivalent per-provider AI circuit breaker
+// path any other skip reason already uses. In-process only (no persistence layer), but scoped by repository
+// so one PR cannot suppress security analysis for unrelated repositories sharing the same long-lived process,
+// matching the main app's equivalent per-provider AI circuit breaker
 // (src/selfhost/ai.ts's createChainAi).
 //
 // Half-open probing: review-enrichment serves CONCURRENT requests (one per in-flight PR review), so once the
@@ -26,7 +27,16 @@ interface AnalyzerCircuitState {
   probeClaimed: boolean;
 }
 
-const analyzerCircuits = new Map<AnalyzerName, AnalyzerCircuitState>();
+/** Scope the in-memory breaker to the repository whose request produced the failures. */
+export interface AnalyzerCircuitScope {
+  repoFullName: string;
+}
+
+const analyzerCircuits = new Map<string, AnalyzerCircuitState>();
+
+function analyzerCircuitKey(name: AnalyzerName, scope: AnalyzerCircuitScope): string {
+  return `${scope.repoFullName}\0${name}`;
+}
 
 /** True while `name`'s breaker should skip the caller: either still within the full cooldown window, or past
  *  it but another caller already claimed this cycle's single half-open probe. The FIRST caller to observe an
@@ -38,8 +48,13 @@ const analyzerCircuits = new Map<AnalyzerName, AnalyzerCircuitState>();
  *  threshold, so this is a reliable "never opened" check. Without it, a caller after just 1-2 failures would
  *  claim the half-open probe slot too, spuriously skipping a concurrent second caller as circuit_open even
  *  though the breaker was never actually open. */
-export function isAnalyzerCircuitOpen(name: AnalyzerName, nowMs = Date.now()): boolean {
-  const state = analyzerCircuits.get(name);
+export function isAnalyzerCircuitOpen(
+  name: AnalyzerName,
+  scope: AnalyzerCircuitScope,
+  nowMs = Date.now(),
+): boolean {
+  const key = analyzerCircuitKey(name, scope);
+  const state = analyzerCircuits.get(key);
   if (state === undefined || state.cooldownUntilMs === 0) return false;
   if (state.cooldownUntilMs > nowMs) return true;
   if (state.probeClaimed) return true;
@@ -49,8 +64,8 @@ export function isAnalyzerCircuitOpen(name: AnalyzerName, nowMs = Date.now()): b
 
 /** A completed run (whether a clean "ok" or a non-throwing "degraded"/"capped" partial result) resets the
  *  streak -- the dependency responded, so it is not the failure mode this breaker guards against. */
-export function recordAnalyzerCircuitSuccess(name: AnalyzerName): void {
-  analyzerCircuits.delete(name);
+export function recordAnalyzerCircuitSuccess(name: AnalyzerName, scope: AnalyzerCircuitScope): void {
+  analyzerCircuits.delete(analyzerCircuitKey(name, scope));
 }
 
 /** A THROWN failure (including the analyzer_timeout rejection) is the signal this breaker tracks. Trips the
@@ -58,22 +73,27 @@ export function recordAnalyzerCircuitSuccess(name: AnalyzerName): void {
  *  the analyzer is simply skipped while open, so no additional failures accrue until it is tried again). A
  *  half-open probe's failure re-extends the cooldown via this same threshold check, since consecutiveFailures
  *  is already at/above it by the time a probe can be claimed -- no separate re-trip path needed. */
-export function recordAnalyzerCircuitFailure(name: AnalyzerName, nowMs = Date.now()): void {
-  const state = analyzerCircuits.get(name) ?? { consecutiveFailures: 0, cooldownUntilMs: 0, probeClaimed: false };
+export function recordAnalyzerCircuitFailure(
+  name: AnalyzerName,
+  scope: AnalyzerCircuitScope,
+  nowMs = Date.now(),
+): void {
+  const key = analyzerCircuitKey(name, scope);
+  const state = analyzerCircuits.get(key) ?? { consecutiveFailures: 0, cooldownUntilMs: 0, probeClaimed: false };
   state.consecutiveFailures += 1;
   state.probeClaimed = false;
   if (state.consecutiveFailures >= ANALYZER_CIRCUIT_FAILURE_STREAK) {
     state.cooldownUntilMs = nowMs + ANALYZER_CIRCUIT_COOLDOWN_MS;
   }
-  analyzerCircuits.set(name, state);
+  analyzerCircuits.set(key, state);
 }
 
 /** Frees a claimed half-open probe WITHOUT recording success or failure -- for when the probing attempt never
  *  actually reached the analyzer call (capped by budget/timeout in brief.ts first). Safe no-op when `name` has
  *  no circuit state or no claimed probe, so callers can call this unconditionally on every capped early-return
  *  without needing to know whether this particular call was the one that claimed the probe. */
-export function releaseAnalyzerCircuitProbe(name: AnalyzerName): void {
-  const state = analyzerCircuits.get(name);
+export function releaseAnalyzerCircuitProbe(name: AnalyzerName, scope: AnalyzerCircuitScope): void {
+  const state = analyzerCircuits.get(analyzerCircuitKey(name, scope));
   if (state !== undefined) state.probeClaimed = false;
 }
 
