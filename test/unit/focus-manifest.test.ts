@@ -1631,6 +1631,49 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(eff.typeLabelsEnabled).toBe(false); // settings: override wins over the DB/global-default value
   });
 
+  it("wires settings.typeLabels into the manifest parser, allowing a partial override (#priority-linked-issue-gate)", () => {
+    const parsed = parseFocusManifest({ settings: { typeLabels: { priority: "custom:priority" } } });
+    expect(parsed.settings.typeLabels).toEqual({ bug: "gittensor:bug", feature: "gittensor:feature", priority: "custom:priority" });
+    expect(parsed.warnings).toEqual([]);
+
+    const db = { typeLabels: { bug: "kind:bug", feature: "kind:feature", priority: "kind:priority" } } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { typeLabels: { priority: "custom:priority" } } }));
+    expect(eff.typeLabels).toEqual({ bug: "gittensor:bug", feature: "gittensor:feature", priority: "custom:priority" }); // settings: override wins wholesale
+  });
+
+  it("warns and preserves the existing DB value when settings.typeLabels is not an object", () => {
+    const parsed = parseFocusManifest({ settings: { typeLabels: "gittensor:bug" } });
+    expect(parsed.settings.typeLabels).toBeUndefined();
+    expect(parsed.warnings.some((w) => w.includes("settings.typeLabels"))).toBe(true);
+    const db = { typeLabels: { bug: "kind:bug", feature: "kind:feature", priority: "kind:priority" } } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parsed);
+    expect(eff.typeLabels).toEqual(db.typeLabels); // malformed manifest value never blanks the DB-persisted override
+  });
+
+  it("wires settings.linkedIssueLabelPropagation into the manifest parser and lets a per-repo override win over the DB value (#priority-linked-issue-gate)", () => {
+    const config = {
+      enabled: true,
+      mode: "exclusive_type_label" as const,
+      mappings: [{ issueLabel: "gittensor:priority", prLabel: "gittensor:priority", removeOtherTypeLabels: true }],
+    };
+    const parsed = parseFocusManifest({ settings: { linkedIssueLabelPropagation: config } });
+    expect(parsed.settings.linkedIssueLabelPropagation).toEqual(config);
+    expect(parsed.warnings).toEqual([]);
+
+    const db = { linkedIssueLabelPropagation: { enabled: false, mode: "exclusive_type_label", mappings: [] } } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { linkedIssueLabelPropagation: config } }));
+    expect(eff.linkedIssueLabelPropagation).toEqual(config); // settings: override wins over the DB-stored (disabled) value
+  });
+
+  it("warns and preserves the existing DB value when settings.linkedIssueLabelPropagation is not an object", () => {
+    const parsed = parseFocusManifest({ settings: { linkedIssueLabelPropagation: ["nope"] } });
+    expect(parsed.settings.linkedIssueLabelPropagation).toBeUndefined();
+    expect(parsed.warnings.some((w) => w.includes("settings.linkedIssueLabelPropagation"))).toBe(true);
+    const db = { linkedIssueLabelPropagation: { enabled: true, mode: "exclusive_type_label", mappings: [] } } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parsed);
+    expect(eff.linkedIssueLabelPropagation).toEqual(db.linkedIssueLabelPropagation);
+  });
+
   it("parses aiReview from settings: and lets gate.aiReview win in resolveEffectiveSettings", () => {
     const parsed = parseFocusManifest({ settings: { aiReviewMode: "advisory", aiReviewByok: true } });
     expect(parsed.settings.aiReviewMode).toBe("advisory");

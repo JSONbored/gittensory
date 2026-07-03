@@ -4,6 +4,8 @@ import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy } from "../setting
 import { normalizeCommandAuthorizationPolicy } from "../settings/command-authorization";
 import { mergeContributorBlacklists, normalizeContributorBlacklist } from "../settings/contributor-blacklist";
 import { normalizeAutoCloseExemptLogins } from "../settings/auto-close-exempt";
+import { normalizeTypeLabelSet } from "../settings/pr-type-label";
+import { normalizeLinkedIssueLabelPropagationConfig } from "../review/linked-issue-label-propagation";
 import { hasUnsafeWildcardCount } from "./change-guardrail";
 import { PUBLIC_LOCAL_PATH_INLINE } from "./redaction";
 
@@ -159,6 +161,8 @@ export type FocusManifestSettings = Partial<
     | "closeOwnerAuthors"
     | "autoLabelEnabled"
     | "typeLabelsEnabled"
+    | "typeLabels"
+    | "linkedIssueLabelPropagation"
     | "badgeEnabled"
     | "gittensorLabel"
     | "createMissingLabel"
@@ -972,6 +976,23 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
     out.commandAuthorization = policy;
   } else if (r.commandAuthorization !== undefined) {
     warnings.push(`Manifest "settings.commandAuthorization" must be an object; ignoring it and keeping any existing policy.`);
+  }
+  // TYPE label NAME overrides (#priority-linked-issue-gate): same defaults-fill-then-overlay shape as
+  // commandAuthorization above -- only apply when the raw value is actually a mapping, so a typo'd config
+  // never silently blanks a DB-persisted override back to the built-in gittensor:* names.
+  if (typeof r.typeLabels === "object" && r.typeLabels !== null && !Array.isArray(r.typeLabels)) {
+    out.typeLabels = normalizeTypeLabelSet(r.typeLabels, warnings);
+  } else if (r.typeLabels !== undefined) {
+    warnings.push(`Manifest "settings.typeLabels" must be an object; ignoring it and keeping any existing label names.`);
+  }
+  // Linked-issue label propagation (#priority-linked-issue-gate): same shape again. This is the ONLY
+  // mechanism that can ever select a maintainer-reward label like gittensor:priority -- never inferred
+  // from title/files/AI/PR-labels -- so a malformed config must fail closed (leave DB state alone), not
+  // silently reset to the safe-but-surprising built-in default.
+  if (typeof r.linkedIssueLabelPropagation === "object" && r.linkedIssueLabelPropagation !== null && !Array.isArray(r.linkedIssueLabelPropagation)) {
+    out.linkedIssueLabelPropagation = normalizeLinkedIssueLabelPropagationConfig(r.linkedIssueLabelPropagation, warnings);
+  } else if (r.linkedIssueLabelPropagation !== undefined) {
+    warnings.push(`Manifest "settings.linkedIssueLabelPropagation" must be an object; ignoring it and keeping any existing policy.`);
   }
   // Contributor blacklist (#1425): `settings.contributorBlacklist` is a list of banned-login entries. Only set it
   // when at least one VALID entry survives normalization, so a malformed block never blanks the DB-configured
