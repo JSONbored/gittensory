@@ -508,10 +508,6 @@ async function createUserForkContentPr(params: {
 // HTTP handlers (Hono-agnostic — return a plain Response).
 // ---------------------------------------------------------------------------
 
-function clientIp(request: Request): string {
-  return request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown-ip";
-}
-
 function json(data: unknown, status: number, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", ...headers } });
 }
@@ -574,9 +570,6 @@ export async function handleDraftCreate(request: Request, env: Env): Promise<Res
   )
     .bind(id, target.category, target.slug, target.targetPath, target.branchName, config.baseRef, JSON.stringify(fields), await sha256Hex(state))
     .run();
-
-  // Audit a draft start without leaking the submitter — the IP is hashed-equivalent only via the rate limiter upstream.
-  void clientIp(request);
 
   const origin = new URL(request.url).origin;
   const authUrl = new URL("https://github.com/login/oauth/authorize");
