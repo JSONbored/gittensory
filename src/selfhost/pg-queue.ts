@@ -130,10 +130,23 @@ import {
   type MaintenanceAdmissionConfig,
   type MaintenancePressureSignals,
 } from "./maintenance-admission";
+import {
+  backlogRepoCandidatesFromJobKeys,
+  foregroundLaneForJob,
+  nextForegroundLane,
+  pickBacklogRepo,
+  type ForegroundLane,
+} from "./queue-fairness";
 import type { JobMessage } from "../types";
 
 const TABLE = "_selfhost_jobs";
 const STATS_TABLE = "_selfhost_job_stats";
+// Claim-time backlog-vs-fresh-intake fairness state (#selfhost-backlog-convergence, see queue-fairness.ts). A
+// SEPARATE singleton table -- NOT the app DB's `global_agent_controls` -- because this queue backend never
+// touches the app D1/Postgres database (it owns its own storage, same as _selfhost_jobs/_selfhost_job_stats
+// above); reusing global_agent_controls would require a cross-database dependency this queue deliberately has
+// never had.
+const FAIRNESS_TABLE = "_selfhost_queue_fairness";
 const DDL = `
 CREATE TABLE IF NOT EXISTS ${TABLE} (
   id BIGSERIAL PRIMARY KEY,
@@ -149,11 +162,18 @@ CREATE TABLE IF NOT EXISTS ${TABLE} (
 ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS job_key TEXT;
 ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS is_maintenance INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS foreground_lane TEXT;
 CREATE INDEX IF NOT EXISTS ${TABLE}_claim ON ${TABLE}(status, run_after, priority);
 CREATE INDEX IF NOT EXISTS ${TABLE}_pending_job_key ON ${TABLE}(job_key, status);
+CREATE INDEX IF NOT EXISTS ${TABLE}_lane_claim ON ${TABLE}(status, foreground_lane, run_after);
 CREATE TABLE IF NOT EXISTS ${STATS_TABLE} (
   name TEXT PRIMARY KEY,
   value BIGINT NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS ${FAIRNESS_TABLE} (
+  id TEXT PRIMARY KEY,
+  claim_sequence BIGINT NOT NULL DEFAULT 0,
+  last_backlog_repo TEXT
 );`;
 
 export interface PgDurableQueue {
@@ -226,6 +246,9 @@ export function createPgQueue(
 
   async function init(): Promise<void> {
     await pool.query(DDL);
+    await pool.query(
+      `INSERT INTO ${FAIRNESS_TABLE} (id, claim_sequence) VALUES ('singleton', 0) ON CONFLICT (id) DO NOTHING`,
+    );
     const priorityBackfilled = await backfillJobPriorities();
     if (priorityBackfilled)
       console.log(
@@ -248,6 +271,14 @@ export function createPgQueue(
         JSON.stringify({
           event: "selfhost_queue_maintenance_flags_backfilled",
           count: maintenanceFlagsBackfilled,
+        }),
+      );
+    const lanesBackfilled = await backfillJobForegroundLanes();
+    if (lanesBackfilled)
+      console.log(
+        JSON.stringify({
+          event: "selfhost_queue_foreground_lanes_backfilled",
+          count: lanesBackfilled,
         }),
       );
     const recovered = await recoverProcessingJobs();
@@ -311,6 +342,21 @@ export function createPgQueue(
       const isMaintenance = isMaintenanceJobType(extractPayloadType(row.payload) ?? "") ? 1 : 0;
       if (Number(row.is_maintenance ?? 0) === isMaintenance) continue;
       await pool.query(`UPDATE ${TABLE} SET is_maintenance=$1 WHERE id=$2`, [isMaintenance, row.id]);
+      changed += 1;
+    }
+    return changed;
+  }
+
+  async function backfillJobForegroundLanes(): Promise<number> {
+    const res = await pool.query(
+      `SELECT id, payload, foreground_lane FROM ${TABLE} WHERE status IN ('pending', 'processing')`,
+    );
+    let changed = 0;
+    for (const row of res.rows as Array<{ id: string; payload: string; foreground_lane: string | null }>) {
+      const type = extractPayloadType(row.payload) ?? "";
+      const lane = foregroundLaneForJob(type, row.payload);
+      if ((row.foreground_lane ?? null) === lane) continue;
+      await pool.query(`UPDATE ${TABLE} SET foreground_lane=$1 WHERE id=$2`, [lane, row.id]);
       changed += 1;
     }
     return changed;
@@ -448,6 +494,7 @@ export function createPgQueue(
     const payload = JSON.stringify(message);
     const priority = jobPriority(payload);
     const key = jobCoalesceKey(payload);
+    const lane = foregroundLaneForJob(message.type, payload);
     const runAfter = now + delaySeconds * 1000;
     const absorbedByKey = jobCoalesceAbsorbedByKey(payload);
     if (absorbedByKey) {
@@ -481,9 +528,9 @@ export function createPgQueue(
         // (4h default) can keep re-arming the clock forever, and sustained pressure defers the job indefinitely.
         await pool.query(
           `UPDATE ${TABLE}
-             SET payload=$1, run_after=GREATEST(run_after, $2), priority=GREATEST(priority, $3), job_key=$4, last_error=NULL
-           WHERE id=$5`,
-          [payload, runAfter, priority, key, existing.id],
+             SET payload=$1, run_after=GREATEST(run_after, $2), priority=GREATEST(priority, $3), job_key=$4, foreground_lane=$5, last_error=NULL
+           WHERE id=$6`,
+          [payload, runAfter, priority, key, lane, existing.id],
         );
         await pool.query(
           `DELETE FROM ${TABLE}
@@ -507,9 +554,9 @@ export function createPgQueue(
         // maintenance trickle clock reflects genuine wait time, not the most recent re-request.
         await pool.query(
           `UPDATE ${TABLE}
-             SET payload=$1, run_after=GREATEST(run_after, $2), priority=GREATEST(priority, $3), last_error=NULL
-           WHERE id=$4`,
-          [payload, runAfter, priority, existing.id],
+             SET payload=$1, run_after=GREATEST(run_after, $2), priority=GREATEST(priority, $3), foreground_lane=$4, last_error=NULL
+           WHERE id=$5`,
+          [payload, runAfter, priority, lane, existing.id],
         );
         await recordQueueMetric("gittensory_jobs_coalesced_total");
         kickOne();
@@ -517,8 +564,8 @@ export function createPgQueue(
       }
     }
     await pool.query(
-      `INSERT INTO ${TABLE} (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance) VALUES ($1,'pending',0,$2,$3,$4,$5,$6)`,
-      [payload, runAfter, now, priority, key, isMaintenanceJobType(message.type) ? 1 : 0],
+      `INSERT INTO ${TABLE} (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance, foreground_lane) VALUES ($1,'pending',0,$2,$3,$4,$5,$6,$7)`,
+      [payload, runAfter, now, priority, key, isMaintenanceJobType(message.type) ? 1 : 0, lane],
     );
     await recordQueueMetric("gittensory_jobs_enqueued_total");
     kickOne();
@@ -526,7 +573,7 @@ export function createPgQueue(
 
   async function claimNext(): Promise<JobRow | null> {
     const now = Date.now();
-    const foreground = await claimNextWhere(now, "priority >= $2");
+    const foreground = (await claimNextForegroundLane(now)) ?? (await claimNextWhere(now, "priority >= $2"));
     if (foreground) return foreground;
     if (activeBackground >= backgroundConcurrency) return null;
     activeBackground++;
@@ -549,23 +596,64 @@ export function createPgQueue(
     return { ...background, backgroundSlotReserved: true };
   }
 
+  /** Claim-time backlog-vs-fresh-intake fairness (#selfhost-backlog-convergence, see queue-fairness.ts). Tries
+   *  ONE lane-scoped claim before falling back to the plain unscoped foreground claim (claimNext() falls back to
+   *  claimNextWhere(now, "priority >= $2") when this returns null) -- a null here just means "no work to prefer
+   *  this cycle," never "no foreground work at all." The fairness singleton's claim_sequence always advances
+   *  (best-effort, hit or miss) so the ratio cycle keeps progressing even through empty cycles. */
+  async function claimNextForegroundLane(now: number): Promise<JobRow | null> {
+    const fairnessRes = await pool.query(
+      `SELECT claim_sequence, last_backlog_repo FROM ${FAIRNESS_TABLE} WHERE id='singleton'`,
+    );
+    const fairness = fairnessRes.rows[0] as { claim_sequence: number | string; last_backlog_repo: string | null } | undefined;
+    const sequence = fairness ? Number(fairness.claim_sequence) : 0;
+    const lane: ForegroundLane = nextForegroundLane(sequence);
+    await pool.query(`UPDATE ${FAIRNESS_TABLE} SET claim_sequence=claim_sequence+1 WHERE id='singleton'`);
+    if (lane === "fresh") {
+      return claimNextWhere(now, "priority >= $2", { sql: "foreground_lane='fresh'", params: [] });
+    }
+    const backlogRes = await pool.query(
+      `SELECT job_key, created_at FROM ${TABLE} WHERE status='pending' AND run_after<=$1 AND foreground_lane='backlog'`,
+      [now],
+    );
+    const candidates = backlogRepoCandidatesFromJobKeys(
+      (backlogRes.rows as Array<{ job_key: string | null; created_at: number | string }>).map((row) => ({
+        jobKey: row.job_key,
+        createdAtMs: Number(row.created_at),
+      })),
+      now,
+    );
+    const repo = pickBacklogRepo(candidates, fairness?.last_backlog_repo ?? null);
+    if (!repo) return null;
+    const row = await claimNextWhere(now, "priority >= $2", {
+      sql: "foreground_lane='backlog' AND job_key LIKE $3",
+      params: [`agent-regate-pr:${repo}#%`],
+    });
+    if (row) {
+      await pool.query(`UPDATE ${FAIRNESS_TABLE} SET last_backlog_repo=$1 WHERE id='singleton'`, [repo]);
+    }
+    return row;
+  }
+
   async function claimNextWhere(
     now: number,
     priorityPredicate: string,
+    extra?: { sql: string; params: readonly unknown[] },
   ): Promise<JobRow | null> {
+    const extraSql = extra ? ` AND ${extra.sql}` : "";
     // Atomic, multi-instance-safe: lock + claim one due job, skipping rows another instance already locked.
     const res = await pool.query(
       `UPDATE ${TABLE} SET status='processing', run_after=$1
        WHERE id = (
          SELECT id
            FROM ${TABLE}
-          WHERE status='pending' AND run_after<=$1 AND ${priorityPredicate}
+          WHERE status='pending' AND run_after<=$1 AND ${priorityPredicate}${extraSql}
           ORDER BY priority DESC, run_after, id
           FOR UPDATE SKIP LOCKED
           LIMIT 1
        )
        RETURNING id, payload, attempts, job_key, priority, created_at`,
-      [now, FOREGROUND_QUEUE_PRIORITY_FLOOR],
+      [now, FOREGROUND_QUEUE_PRIORITY_FLOOR, ...(extra?.params ?? [])],
     );
     return (res.rows[0] as JobRow | undefined) ?? null;
   }

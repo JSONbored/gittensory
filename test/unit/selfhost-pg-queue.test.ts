@@ -182,6 +182,7 @@ describe("createPgQueue (durable #977)", () => {
   it("init() backfills event-aware priorities with the shared classifier", async () => {
     const m = makePool();
     m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // DDL
+    m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // fairness singleton INSERT
     m.fn.mockResolvedValueOnce({
       rows: [
         { id: "a", payload: JSON.stringify(msg("agent-regate-pr")), priority: 0 },
@@ -728,6 +729,122 @@ describe("createPgQueue (durable #977)", () => {
       expect.stringContaining("DELETE FROM _selfhost_jobs WHERE id=$1"),
       ["background"],
     );
+  });
+
+  describe("claim-time backlog-vs-fresh-intake fairness (#selfhost-backlog-convergence)", () => {
+    const backlogJob = (repo: string, prNumber: number): JobMessage =>
+      ({
+        type: "agent-regate-pr",
+        deliveryId: `backlog-convergence:${repo}#${prNumber}`,
+        repoFullName: repo,
+        prNumber,
+        installationId: 1,
+      }) as unknown as JobMessage;
+
+    it("prefers a pending backlog-lane candidate at sequence 0 (default ratio) and records it as the last-served repo", async () => {
+      const claimSql: string[] = [];
+      let sequenceBumped = false;
+      let repoRecorded: string | null = null;
+      let claimed = false; // one-shot: the row is only claimable until the first successful claim
+      const fn = vi.fn().mockImplementation(async (sql: unknown, params?: unknown[]) => {
+        const q = String(sql);
+        if (q.includes("SELECT claim_sequence, last_backlog_repo")) {
+          return { rows: [{ claim_sequence: 0, last_backlog_repo: null }], rowCount: 1 };
+        }
+        if (q.includes("UPDATE _selfhost_queue_fairness SET claim_sequence=claim_sequence+1")) {
+          sequenceBumped = true;
+          return { rows: [], rowCount: 1 };
+        }
+        if (q.includes("UPDATE _selfhost_queue_fairness SET last_backlog_repo")) {
+          repoRecorded = (params as [string])[0];
+          return { rows: [], rowCount: 1 };
+        }
+        if (q.includes("SELECT job_key, created_at") && q.includes("foreground_lane='backlog'")) {
+          return claimed ? { rows: [], rowCount: 0 } : { rows: [{ job_key: "agent-regate-pr:owner/repo#1", created_at: 1000 }], rowCount: 1 };
+        }
+        if (q.includes("UPDATE _selfhost_jobs SET status='processing'")) {
+          claimSql.push(q);
+          if (!claimed && q.includes("foreground_lane='backlog'")) {
+            expect((params as unknown[])[2]).toBe("agent-regate-pr:owner/repo#%");
+            claimed = true;
+            return {
+              rows: [{ id: "backlog-1", payload: JSON.stringify(backlogJob("owner/repo", 1)), attempts: 0, job_key: "agent-regate-pr:owner/repo#1", priority: 9, created_at: 1000 }],
+              rowCount: 1,
+            };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+        return { rows: [], rowCount: 0 };
+      });
+      const seen: string[] = [];
+      const q = createPgQueue({ query: fn } as unknown as Pool, async (m) => void seen.push(typeOf(m)));
+
+      await q.init();
+      await q.drain();
+
+      expect(seen).toEqual(["agent-regate-pr"]);
+      expect(claimSql[0]).toContain("foreground_lane='backlog'");
+      expect(sequenceBumped).toBe(true);
+      expect(repoRecorded).toBe("owner/repo");
+    });
+
+    it("falls through to the plain unscoped foreground claim when the backlog lane has no pending candidates", async () => {
+      const claimSql: string[] = [];
+      let claimed = false; // one-shot: the row is only claimable until the first successful claim
+      const fn = vi.fn().mockImplementation(async (sql: unknown) => {
+        const q = String(sql);
+        if (q.includes("SELECT claim_sequence, last_backlog_repo")) {
+          return { rows: [{ claim_sequence: 0, last_backlog_repo: null }], rowCount: 1 };
+        }
+        if (q.includes("UPDATE _selfhost_queue_fairness")) return { rows: [], rowCount: 1 };
+        if (q.includes("SELECT job_key, created_at") && q.includes("foreground_lane='backlog'")) {
+          return { rows: [], rowCount: 0 }; // no backlog work pending
+        }
+        if (q.includes("UPDATE _selfhost_jobs SET status='processing'")) {
+          claimSql.push(q);
+          if (!claimed && !q.includes("foreground_lane")) {
+            claimed = true;
+            return {
+              rows: [{ id: "fresh-1", payload: JSON.stringify(msg("recapture-preview")), attempts: 0, job_key: "recapture-preview:owner/repo#1:0", priority: 9, created_at: 1000 }],
+              rowCount: 1,
+            };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+        return { rows: [], rowCount: 0 };
+      });
+      const seen: string[] = [];
+      const q = createPgQueue({ query: fn } as unknown as Pool, async (m) => void seen.push(typeOf(m)));
+
+      await q.init();
+      await q.drain();
+
+      // The backlog-scoped claim yields nothing (no candidates) -- falls through to the unscoped foreground
+      // query, which still finds the untagged foreground row rather than stalling.
+      expect(seen).toEqual(["recapture-preview"]);
+      expect(claimSql[0]).not.toContain("foreground_lane");
+    });
+
+    it("backfills the foreground_lane column on startup for jobs enqueued by an older version", async () => {
+      const m = makePool();
+      m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // DDL
+      m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // fairness singleton INSERT
+      m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // priority backfill SELECT
+      m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // job-key backfill SELECT
+      m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // maintenance-flags backfill SELECT
+      m.fn.mockResolvedValueOnce({
+        rows: [{ id: "legacy", payload: JSON.stringify({ type: "agent-regate-pr", deliveryId: "backlog-convergence:owner/repo#1" }), foreground_lane: null }],
+        rowCount: 1,
+      }); // foreground-lane backfill SELECT
+      m.fn.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // the backfill UPDATE for the legacy row
+      m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // recovery UPDATE
+      const q = createPgQueue(m.pool, async () => undefined);
+      await q.init();
+      expect(m.pool.query).toHaveBeenCalledWith(
+        expect.stringContaining("UPDATE _selfhost_jobs SET foreground_lane=$1"),
+        ["backlog", "legacy"],
+      );
+    });
   });
 
   it("REGRESSION: releases the reserved background slot when a background claim query rejects (#selfhost-bg-slot-leak)", async () => {

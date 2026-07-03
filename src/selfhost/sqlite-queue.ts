@@ -46,10 +46,23 @@ import {
   type MaintenanceAdmissionConfig,
   type MaintenancePressureSignals,
 } from "./maintenance-admission";
+import {
+  backlogRepoCandidatesFromJobKeys,
+  foregroundLaneForJob,
+  nextForegroundLane,
+  pickBacklogRepo,
+  type ForegroundLane,
+} from "./queue-fairness";
 import type { JobMessage } from "../types";
 
 const TABLE = "_selfhost_jobs";
 const STATS_TABLE = "_selfhost_job_stats";
+// Claim-time backlog-vs-fresh-intake fairness state (#selfhost-backlog-convergence, see queue-fairness.ts). A
+// SEPARATE singleton table -- NOT the app DB's `global_agent_controls` -- because this queue backend never
+// touches the app D1/Postgres database (it owns its own storage, same as _selfhost_jobs/_selfhost_job_stats
+// above); reusing global_agent_controls would require a cross-database dependency this queue deliberately has
+// never had.
+const FAIRNESS_TABLE = "_selfhost_queue_fairness";
 const DDL = `
 CREATE TABLE IF NOT EXISTS ${TABLE} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,11 +80,19 @@ CREATE TABLE IF NOT EXISTS ${STATS_TABLE} (
   name TEXT PRIMARY KEY,
   value INTEGER NOT NULL DEFAULT 0
 );`;
+const FAIRNESS_DDL = `
+CREATE TABLE IF NOT EXISTS ${FAIRNESS_TABLE} (
+  id TEXT PRIMARY KEY,
+  claim_sequence INTEGER NOT NULL DEFAULT 0,
+  last_backlog_repo TEXT
+);`;
 const CLAIM_INDEX_DDL = `
 DROP INDEX IF EXISTS ${TABLE}_claim;
 CREATE INDEX ${TABLE}_claim ON ${TABLE}(status, run_after, priority);`;
 const JOB_KEY_INDEX_DDL = `
 CREATE INDEX IF NOT EXISTS ${TABLE}_pending_job_key ON ${TABLE}(job_key, status);`;
+const LANE_INDEX_DDL = `
+CREATE INDEX IF NOT EXISTS ${TABLE}_lane_claim ON ${TABLE}(status, foreground_lane, run_after);`;
 
 export interface DurableQueue {
   binding: Queue;
@@ -153,8 +174,16 @@ export function createSqliteQueue(
   } catch {
     /* column already present */
   }
+  try {
+    driver.exec(`ALTER TABLE ${TABLE} ADD COLUMN foreground_lane TEXT`);
+  } catch {
+    /* column already present */
+  }
   driver.exec(CLAIM_INDEX_DDL);
   driver.exec(JOB_KEY_INDEX_DDL);
+  driver.exec(LANE_INDEX_DDL);
+  driver.exec(FAIRNESS_DDL);
+  driver.exec(`INSERT OR IGNORE INTO ${FAIRNESS_TABLE} (id, claim_sequence) VALUES ('singleton', 0)`);
   const priorityBackfilled = backfillJobPriorities(driver);
   if (priorityBackfilled)
     console.log(
@@ -177,6 +206,14 @@ export function createSqliteQueue(
       JSON.stringify({
         event: "selfhost_queue_maintenance_flags_backfilled",
         count: maintenanceFlagsBackfilled,
+      }),
+    );
+  const lanesBackfilled = backfillJobForegroundLanes(driver);
+  if (lanesBackfilled)
+    console.log(
+      JSON.stringify({
+        event: "selfhost_queue_foreground_lanes_backfilled",
+        count: lanesBackfilled,
       }),
     );
   const maintenanceAdmissionConfig: MaintenanceAdmissionConfig = resolveMaintenanceAdmissionConfig();
@@ -240,6 +277,7 @@ export function createSqliteQueue(
     const payload = JSON.stringify(message);
     const priority = jobPriority(payload);
     const key = jobCoalesceKey(payload);
+    const lane = foregroundLaneForJob(message.type, payload);
     const runAfter = now + delaySeconds * 1000;
     const absorbedByKey = jobCoalesceAbsorbedByKey(payload);
     if (absorbedByKey) {
@@ -270,9 +308,9 @@ export function createSqliteQueue(
         // (4h default) can keep re-arming the clock forever, and sustained pressure defers the job indefinitely.
         driver.query(
           `UPDATE ${TABLE}
-             SET payload=?, run_after=max(run_after, ?), priority=max(priority, ?), job_key=?, last_error=NULL
+             SET payload=?, run_after=max(run_after, ?), priority=max(priority, ?), job_key=?, foreground_lane=?, last_error=NULL
            WHERE id=?`,
-          [payload, runAfter, priority, key, existing.id],
+          [payload, runAfter, priority, key, lane, existing.id],
         );
         driver.query(
           `DELETE FROM ${TABLE}
@@ -294,9 +332,9 @@ export function createSqliteQueue(
         // maintenance trickle clock reflects genuine wait time, not the most recent re-request.
         driver.query(
           `UPDATE ${TABLE}
-             SET payload=?, run_after=max(run_after, ?), priority=max(priority, ?), last_error=NULL
+             SET payload=?, run_after=max(run_after, ?), priority=max(priority, ?), foreground_lane=?, last_error=NULL
            WHERE id=?`,
-          [payload, runAfter, priority, existing.id],
+          [payload, runAfter, priority, lane, existing.id],
         );
         recordQueueMetric(driver, "gittensory_jobs_coalesced_total");
         kickOne();
@@ -304,8 +342,8 @@ export function createSqliteQueue(
       }
     }
     driver.query(
-      `INSERT INTO ${TABLE} (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance) VALUES (?, 'pending', 0, ?, ?, ?, ?, ?)`,
-      [payload, runAfter, now, priority, key, isMaintenanceJobType(message.type) ? 1 : 0],
+      `INSERT INTO ${TABLE} (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance, foreground_lane) VALUES (?, 'pending', 0, ?, ?, ?, ?, ?, ?)`,
+      [payload, runAfter, now, priority, key, isMaintenanceJobType(message.type) ? 1 : 0, lane],
     );
     recordQueueMetric(driver, "gittensory_jobs_enqueued_total");
     kickOne();
@@ -313,7 +351,7 @@ export function createSqliteQueue(
 
   function claimNext(): JobRow | null {
     const now = Date.now();
-    const foreground = claimNextWhere(now, "priority>=?");
+    const foreground = claimNextForegroundLane(now) ?? claimNextWhere(now, "priority>=?");
     if (foreground) return foreground;
     if (activeBackground >= backgroundConcurrency) return null;
     activeBackground++;
@@ -335,14 +373,58 @@ export function createSqliteQueue(
     return { ...background, backgroundSlotReserved: true };
   }
 
-  function claimNextWhere(now: number, priorityPredicate: string): JobRow | null {
+  /** Claim-time backlog-vs-fresh-intake fairness (#selfhost-backlog-convergence, see queue-fairness.ts). Tries
+   *  ONE lane-scoped claim before falling back to the plain unscoped foreground claim (claimNext() OR's this
+   *  return value with claimNextWhere(now, "priority>=?")) -- a null here just means "no work to prefer this
+   *  cycle," never "no foreground work at all." The fairness singleton's claim_sequence always advances (best-
+   *  effort, hit or miss) so the ratio cycle keeps progressing even through empty cycles. */
+  function claimNextForegroundLane(now: number): JobRow | null {
+    const fairness = driver.query(
+      `SELECT claim_sequence, last_backlog_repo FROM ${FAIRNESS_TABLE} WHERE id='singleton'`,
+      [],
+    ).rows[0] as { claim_sequence: number; last_backlog_repo: string | null } | undefined;
+    const sequence = fairness?.claim_sequence ?? 0;
+    const lane: ForegroundLane = nextForegroundLane(sequence);
+    driver.query(`UPDATE ${FAIRNESS_TABLE} SET claim_sequence=claim_sequence+1 WHERE id='singleton'`, []);
+    if (lane === "fresh") {
+      return claimNextWhere(now, "priority>=?", { sql: "foreground_lane='fresh'", params: [] });
+    }
+    const { rows: backlogRows } = driver.query(
+      `SELECT job_key, created_at FROM ${TABLE} WHERE status='pending' AND run_after<=? AND foreground_lane='backlog'`,
+      [now],
+    );
+    const candidates = backlogRepoCandidatesFromJobKeys(
+      (backlogRows as Array<{ job_key: string | null; created_at: number }>).map((row) => ({
+        jobKey: row.job_key,
+        createdAtMs: Number(row.created_at),
+      })),
+      now,
+    );
+    const repo = pickBacklogRepo(candidates, fairness?.last_backlog_repo ?? null);
+    if (!repo) return null;
+    const row = claimNextWhere(now, "priority>=?", {
+      sql: "foreground_lane='backlog' AND job_key LIKE ?",
+      params: [`agent-regate-pr:${repo}#%`],
+    });
+    if (row) {
+      driver.query(`UPDATE ${FAIRNESS_TABLE} SET last_backlog_repo=? WHERE id='singleton'`, [repo]);
+    }
+    return row;
+  }
+
+  function claimNextWhere(
+    now: number,
+    priorityPredicate: string,
+    extra?: { sql: string; params: readonly unknown[] },
+  ): JobRow | null {
+    const extraSql = extra ? ` AND ${extra.sql}` : "";
     const { rows } = driver.query(
       `SELECT id, payload, attempts, job_key, priority, created_at
          FROM ${TABLE}
-        WHERE status='pending' AND run_after<=? AND ${priorityPredicate}
+        WHERE status='pending' AND run_after<=? AND ${priorityPredicate}${extraSql}
         ORDER BY priority DESC, run_after, id
         LIMIT 1`,
-      [now, FOREGROUND_QUEUE_PRIORITY_FLOOR],
+      [now, FOREGROUND_QUEUE_PRIORITY_FLOOR, ...(extra?.params ?? [])],
     );
     const row = rows[0] as JobRow | undefined;
     if (!row) return null;
@@ -788,6 +870,22 @@ function backfillJobMaintenanceFlags(driver: SqliteDriver): number {
     const isMaintenance = isMaintenanceJobType(extractPayloadType(row.payload) ?? "") ? 1 : 0;
     if (Number(row.is_maintenance) === isMaintenance) continue;
     driver.query(`UPDATE ${TABLE} SET is_maintenance=? WHERE id=?`, [isMaintenance, row.id]);
+    changed += 1;
+  }
+  return changed;
+}
+
+function backfillJobForegroundLanes(driver: SqliteDriver): number {
+  const { rows } = driver.query(
+    `SELECT id, payload, foreground_lane FROM ${TABLE} WHERE status IN ('pending', 'processing')`,
+    [],
+  );
+  let changed = 0;
+  for (const row of rows as Array<{ id: number; payload: string; foreground_lane: string | null }>) {
+    const type = extractPayloadType(row.payload) ?? "";
+    const lane = foregroundLaneForJob(type, row.payload);
+    if ((row.foreground_lane ?? null) === lane) continue;
+    driver.query(`UPDATE ${TABLE} SET foreground_lane=? WHERE id=?`, [lane, row.id]);
     changed += 1;
   }
   return changed;

@@ -1249,6 +1249,145 @@ describe("createSqliteQueue (durable #980)", () => {
     expect(seen).toEqual(["github-webhook", "agent-regate-pr", "agent-regate-sweep", "rag-index-repo", "github-webhook"]);
   });
 
+  describe("claim-time backlog-vs-fresh-intake fairness (#selfhost-backlog-convergence)", () => {
+    const backlogJob = (repo: string, prNumber: number): JobMessage =>
+      ({
+        type: "agent-regate-pr",
+        deliveryId: `backlog-convergence:${repo}#${prNumber}`,
+        repoFullName: repo,
+        prNumber,
+        installationId: 1,
+      }) as unknown as JobMessage;
+
+    it("prefers 3 backlog-lane claims for every 1 fresh-intake claim (default ratio), deterministically", async () => {
+      const driver = makeDriver();
+      const seen: string[] = [];
+      const q = createSqliteQueue(driver, async (m) => void seen.push((m as unknown as { deliveryId: string }).deliveryId), { concurrency: 1 });
+      await q.binding.send(backlogJob("owner/repo", 1));
+      await q.binding.send(backlogJob("owner/repo", 2));
+      await q.binding.send(backlogJob("owner/repo", 3));
+      await q.binding.send(prWebhook("fresh-1"));
+      await q.drain();
+      expect(seen).toEqual([
+        "backlog-convergence:owner/repo#1",
+        "backlog-convergence:owner/repo#2",
+        "backlog-convergence:owner/repo#3",
+        "fresh-1",
+      ]);
+    });
+
+    it("repeats the ratio cycle across a longer run (6 backlog : 2 fresh -> B,B,B,F,B,B,B,F)", async () => {
+      const driver = makeDriver();
+      const seen: string[] = [];
+      const q = createSqliteQueue(driver, async (m) => void seen.push((m as unknown as { deliveryId: string }).deliveryId), { concurrency: 1 });
+      for (let i = 1; i <= 6; i++) await q.binding.send(backlogJob("owner/repo", i));
+      // Distinct head SHAs -- prWebhook's coalesce key is repo#pr@headSha, so two same-PR events with the
+      // SAME default sha would coalesce into one row instead of two.
+      await q.binding.send(prWebhook("fresh-1", "synchronize", "a".repeat(40)));
+      await q.binding.send(prWebhook("fresh-2", "synchronize", "b".repeat(40)));
+      await q.drain();
+      expect(seen).toEqual([
+        "backlog-convergence:owner/repo#1",
+        "backlog-convergence:owner/repo#2",
+        "backlog-convergence:owner/repo#3",
+        "fresh-1",
+        "backlog-convergence:owner/repo#4",
+        "backlog-convergence:owner/repo#5",
+        "backlog-convergence:owner/repo#6",
+        "fresh-2",
+      ]);
+    });
+
+    it("falls through to the plain unscoped foreground claim when the preferred lane has nothing pending", async () => {
+      const driver = makeDriver();
+      const seen: string[] = [];
+      const q = createSqliteQueue(driver, async (m) => void seen.push((m as unknown as { deliveryId?: string; type: string }).deliveryId ?? typeOf(m)), { concurrency: 1 });
+      // Sequence 0 prefers "backlog", but only a "fresh" row is pending — must not stall behind an empty lane.
+      await q.binding.send(prWebhook("fresh-only"));
+      await q.drain();
+      expect(seen).toEqual(["fresh-only"]);
+    });
+
+    it("rotates the backlog lane across repos so one repo's deep backlog cannot starve another's (per-repo fairness)", async () => {
+      const driver = makeDriver();
+      const seen: string[] = [];
+      const q = createSqliteQueue(driver, async (m) => void seen.push((m as unknown as { deliveryId?: string; type: string }).deliveryId ?? typeOf(m)), { concurrency: 1 });
+      // owner/a has 3 pending backlog rows, all older than owner/b's 1 row -- owner/a would win on pure
+      // staleness EVERY time if rotation didn't exclude the just-served repo.
+      const rows: Array<{ repo: string; prNumber: number; createdAt: number }> = [
+        { repo: "owner/a", prNumber: 1, createdAt: 1000 },
+        { repo: "owner/a", prNumber: 2, createdAt: 1500 },
+        { repo: "owner/a", prNumber: 3, createdAt: 2000 },
+        { repo: "owner/b", prNumber: 1, createdAt: 5000 },
+      ];
+      for (const { repo, prNumber, createdAt } of rows) {
+        driver.query(
+          "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, foreground_lane) VALUES (?, 'pending', 0, 0, ?, 9, ?, 'backlog')",
+          [JSON.stringify(backlogJob(repo, prNumber)), createdAt, `agent-regate-pr:${repo}#${prNumber}`],
+        );
+      }
+      await q.drain();
+      // owner/a (stalest) claimed first; rotation then forces owner/b even though owner/a is STILL stalest;
+      // owner/b then has nothing left, so the round-robin falls back to owner/a (the only remaining candidate).
+      expect(seen).toEqual([
+        "backlog-convergence:owner/a#1",
+        "backlog-convergence:owner/b#1",
+        "backlog-convergence:owner/a#2",
+        "backlog-convergence:owner/a#3",
+      ]);
+    });
+
+    it("defaults the claim sequence to 0 when the fairness singleton row is missing (defensive, never crashes)", async () => {
+      const driver = makeDriver();
+      const seen: string[] = [];
+      const q = createSqliteQueue(driver, async (m) => void seen.push((m as unknown as { deliveryId: string }).deliveryId), { concurrency: 1 });
+      driver.query("DELETE FROM _selfhost_queue_fairness WHERE id='singleton'", []);
+      await q.binding.send(backlogJob("owner/repo", 1));
+      await q.drain();
+      expect(seen).toEqual(["backlog-convergence:owner/repo#1"]);
+    });
+
+    it("falls through gracefully when the picked repo's candidate row can't actually be claimed (defensive)", async () => {
+      const driver = makeDriver();
+      const seen: string[] = [];
+      const q = createSqliteQueue(driver, async (m) => void seen.push((m as unknown as { deliveryId: string }).deliveryId), { concurrency: 1 });
+      // A malformed/legacy row: tagged foreground_lane='backlog' (so it shows up as a fairness candidate) but
+      // its priority sits BELOW the foreground floor -- the fairness-scoped claim's priority filter excludes
+      // it, so pickBacklogRepo's chosen repo yields no row. Falls through to the background lane instead of
+      // stalling foreground claims.
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, foreground_lane) VALUES (?, 'pending', 0, 0, 1000, 0, ?, 'backlog')",
+        [JSON.stringify(backlogJob("owner/repo", 1)), "agent-regate-pr:owner/repo#1"],
+      );
+      await q.drain();
+      expect(seen).toEqual(["backlog-convergence:owner/repo#1"]);
+    });
+
+    it("backfills the foreground_lane column on startup for jobs enqueued by an older version", async () => {
+      const driver = nodeSqliteDriver(new DatabaseSync(":memory:") as never);
+      driver.exec(`
+        CREATE TABLE _selfhost_jobs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          payload TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          attempts INTEGER NOT NULL DEFAULT 0,
+          run_after INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          last_error TEXT,
+          priority INTEGER NOT NULL DEFAULT 0,
+          job_key TEXT
+        );
+      `);
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 10)",
+        [JSON.stringify(prWebhook("legacy-fresh"))],
+      );
+      createSqliteQueue(driver, async () => undefined);
+      const row = driver.query("SELECT foreground_lane FROM _selfhost_jobs", []).rows[0] as { foreground_lane: string | null };
+      expect(row.foreground_lane).toBe("fresh");
+    });
+  });
+
   it("retries then dead-letters after maxRetries", async () => {
     const driver = makeDriver();
     let calls = 0;
