@@ -28,11 +28,12 @@ function issueAgeDays(value: string | null, nowMs: number): number {
   return Math.floor((nowMs - parsed) / 86_400_000);
 }
 
-/** Branch coverage helpers for unit tests. */
+/* v8 ignore start -- Test-only export surface for branch coverage. */
 export const opportunityFreshnessInternals = {
   pickTimestamp,
   issueAgeDays,
 };
+/* v8 ignore stop */
 
 /**
  * Compute a [0.05, 1] freshness factor from open issue timestamps, mirroring

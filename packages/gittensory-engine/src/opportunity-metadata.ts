@@ -127,12 +127,13 @@ function titlesOverlap(left: string, right: string): boolean {
   return longer.includes(shorter) && shorter.length >= 12;
 }
 
-/** Branch coverage helpers for unit tests. */
+/* v8 ignore start -- Test-only export surface for branch coverage. */
 export const opportunityMetadataInternals = {
   titlesOverlap,
   normalizeLabels,
   resolveGoalSpec,
 };
+/* v8 ignore stop */
 
 /**
  * Estimate duplicate-work risk inside a metadata-only candidate batch by looking for overlapping titles in the
