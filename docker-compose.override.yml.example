@@ -34,6 +34,16 @@
 # The RECOMMENDED alternative to all of this: don't co-locate runners with the review stack at all -- use
 # GitHub-hosted CI, or a separate dedicated runner host (see the runner service's comment in
 # docker-compose.yml).
+#
+# SCALING TO MULTIPLE RUNNERS: adding a second/third runner service here (e.g. to raise CI throughput)?
+# Each one MUST set the same TMPDIR/TMP/TEMP env (pointed at its own mounted runner-work-style volume,
+# never left at the container's plain /tmp) and mount its own named volume at /tmp/runner -- otherwise its
+# CI job temp writes fall back to the container's overlay storage (the exact growth/disk-pressure problem
+# this repo's runner service is set up to avoid). YAML anchors don't cross separate compose files, so you
+# cannot reference docker-compose.yml's `x-runner-tmp-env` anchor from this file directly -- either repeat
+# the three env vars literally, or redeclare the SAME `x-runner-tmp-env: &runner-tmp-env` extension block
+# at the top of your own override file and merge it with `<<: *runner-tmp-env`. See the self-hosting
+# operations docs for a complete, copy-pasteable multi-runner service snippet.
 
 services:
   gittensory:

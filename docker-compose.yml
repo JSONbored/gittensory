@@ -41,6 +41,23 @@ x-logging: &default-logging
       max-size: "10m"
       max-file: "3"
 
+# Self-hosted GitHub Actions runner temp env (#selfhost-runner-tmp): a container's plain /tmp lives in
+# Docker's overlay/containerd snapshot storage, NOT any mounted volume -- high-volume CI scratch writes
+# there (language toolchains, build caches, ad hoc `mktemp` calls) grow the HOST's Docker root storage
+# directly and are invisible to volume-scoped cleanup (confirmed in production: unbounded overlay growth,
+# disk pressure, and `docker system df` races against disappearing temp files). Every self-hosted-runner
+# service -- the `runner` service below, merged in via `<<: *runner-tmp-env`, AND any additional runner
+# service you add for a multi-runner deployment -- must point TMPDIR/TMP/TEMP at its own mounted
+# runner-work-style volume the same way, so job temp writes always land on mounted storage instead of the
+# container's writable layer. A second compose file (e.g. docker-compose.override.yml) CANNOT reference
+# this anchor directly -- YAML anchors don't cross files -- so an override adding another runner service
+# must redeclare this same x-runner-tmp-env block in its own file before merging it. See
+# docker-compose.override.yml.example and the self-hosting operations docs for the full pattern.
+x-runner-tmp-env: &runner-tmp-env
+  TMPDIR: /tmp/runner/tmp
+  TMP: /tmp/runner/tmp
+  TEMP: /tmp/runner/tmp
+
 services:
   # ── Core app (always runs) ─────────────────────────────────────────────────
   gittensory:
@@ -620,6 +637,20 @@ services:
   # containers on an 8-vCPU box left the app starved under load. See docker-compose.override.yml.example
   # for a proven CPU-priority pattern (relative cpu_shares + a per-container cpus ceiling) before scaling
   # this up, and ./scripts/docker-prune.sh for reclaiming the disk space CI builds accumulate.
+  # One-shot bootstrap for the runner's TMPDIR (below): guarantees /tmp/runner/tmp exists (and is
+  # world-writable, matching real /tmp's mode -- the runner image's runtime user isn't guaranteed to be
+  # root) on the runner-work volume BEFORE the runner container starts. A fresh named volume has nothing
+  # at that path otherwise, and pointing TMPDIR at a directory that doesn't exist yet would break every
+  # job step that shells out expecting $TMPDIR to be usable. `mkdir -p` is idempotent, so this safely
+  # no-ops on every subsequent `docker compose up`; it never touches the runner image's own entrypoint.
+  runner-tmp-init:
+    image: alpine:3.20
+    <<: *default-logging
+    profiles: ["runners"]
+    volumes:
+      - runner-work:/tmp/runner
+    command: ["sh", "-c", "mkdir -p /tmp/runner/tmp && chmod 1777 /tmp/runner/tmp"]
+
   runner:
     # Pin to a specific version tag — `latest` is mutable. Find a digest via:
     # docker pull myoung34/github-runner:ubuntu-jammy && docker inspect --format='{{index .RepoDigests 0}}' myoung34/github-runner:ubuntu-jammy
@@ -627,7 +658,11 @@ services:
     restart: unless-stopped
     <<: *default-logging
     profiles: ["runners"]
+    depends_on:
+      runner-tmp-init:
+        condition: service_completed_successfully
     environment:
+      <<: *runner-tmp-env
       RUNNER_SCOPE: ${RUNNER_SCOPE:-repo}
       REPO_URL: ${RUNNER_REPO_URL:-}
       RUNNER_TOKEN: ${RUNNER_TOKEN:-}

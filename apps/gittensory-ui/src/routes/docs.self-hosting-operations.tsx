@@ -154,6 +154,70 @@ sudo systemctl enable --now gittensory-docker-prune.timer`}
         Run it manually at any time with <code>docker system df</code> before and after to see what
         it reclaimed: <code>sh scripts/selfhost-docker-prune.sh</code>.
       </p>
+      <p>
+        This should always prune <strong>containers, images, and build cache</strong> — never
+        volumes. Pruning a volume deletes real application state (the database, backups, vector
+        index, or a runner&apos;s registration and job data), not disposable build output, so it is
+        never part of routine cleanup unless you intentionally want to delete that state.
+      </p>
+
+      <h2>Self-hosted runner temp storage</h2>
+      <p>
+        If you run <code>--profile runners</code>, keep every runner job&apos;s scratch/temp writes
+        on the mounted <code>runner-work</code> volume, never the container&apos;s plain{" "}
+        <code>/tmp</code>. A container&apos;s own <code>/tmp</code> lives in Docker&apos;s
+        overlay/containerd snapshot storage — a CI job that writes high-volume temp data there
+        (language toolchain caches, build artifacts, ad hoc <code>mktemp</code> calls) grows the
+        host&apos;s Docker root storage directly, not the volume, so it is invisible to
+        volume-scoped cleanup and can fill the disk out from under the whole stack. The shipped{" "}
+        <code>runner</code> service points <code>TMPDIR</code>, <code>TMP</code>, and{" "}
+        <code>TEMP</code> at <code>/tmp/runner/tmp</code> (a subdirectory of the mounted{" "}
+        <code>runner-work</code> volume) and keeps <code>RUNNER_WORKDIR</code> at{" "}
+        <code>/tmp/runner</code> on the same volume. A one-shot <code>runner-tmp-init</code> service
+        creates that directory on the volume (and makes it world-writable, matching real{" "}
+        <code>/tmp</code> permissions) before the runner container starts, so this works out of the
+        box on a fresh volume with no manual steps.
+      </p>
+      <p>
+        Adding a second or third runner service in <code>docker-compose.override.yml</code> for
+        higher CI throughput? Each one needs its own <code>runner-work</code>-style volume, its own
+        init step, and the same temp env — YAML anchors don&apos;t cross separate compose files, so
+        repeat the extension block in your override file:
+      </p>
+      <CodeBlock
+        lang="yaml"
+        code={`x-runner-tmp-env: &runner-tmp-env
+  TMPDIR: /tmp/runner/tmp
+  TMP: /tmp/runner/tmp
+  TEMP: /tmp/runner/tmp
+
+services:
+  runner-2-tmp-init:
+    image: alpine:3.20
+    profiles: ["runners"]
+    volumes:
+      - runner-work-2:/tmp/runner
+    command: ["sh", "-c", "mkdir -p /tmp/runner/tmp && chmod 1777 /tmp/runner/tmp"]
+
+  runner-2:
+    image: myoung34/github-runner:ubuntu-jammy
+    profiles: ["runners"]
+    depends_on:
+      runner-2-tmp-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *runner-tmp-env
+      RUNNER_NAME: gittensory-runner-2
+      RUNNER_SCOPE: \${RUNNER_SCOPE:-repo}
+      REPO_URL: \${RUNNER_REPO_URL:-}
+      RUNNER_TOKEN: \${RUNNER_TOKEN:-}
+      RUNNER_WORKDIR: /tmp/runner
+    volumes:
+      - runner-work-2:/tmp/runner
+
+volumes:
+  runner-work-2:`}
+      />
 
       <h2>Sentry tracing</h2>
       <p>
