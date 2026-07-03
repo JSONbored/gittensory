@@ -3562,7 +3562,14 @@ export async function persistAdvisory(env: Env, advisory: Advisory): Promise<voi
 
 /** #1 self-host AI-review cache. Returns the cached AI review for this exact (repo, pull, head SHA) ONLY when the
  *  stored review mode matches — the LLM output changes only with the code (head SHA) or the review mode, so a re-run
- *  at the same SHA+mode reuses it instead of re-spending the call. A nullish head SHA (no commit to key on) is a miss. */
+ *  at the same SHA+mode reuses it instead of re-spending the call. A nullish head SHA (no commit to key on) is a miss.
+ *
+ *  #regate-churn: a stored row can be non-cacheable (`cacheable = 0` — a consensus defect / inconclusive / lock-
+ *  contention outcome that must never be trusted as a durable, indefinitely-reusable verdict). By default such a
+ *  row is a miss here, same as before this column existed. Pass `options.allowNonCacheable` (with a bounded
+ *  `options.maxAgeMs`) to ALSO accept a non-cacheable row when it is recent enough — this lets a scheduled re-gate
+ *  reuse the last known (even disputed) verdict for a bounded cooldown instead of re-spending an LLM call on every
+ *  sweep tick, while a stale non-cacheable row still correctly falls through to a fresh call. */
 export async function getCachedAiReview(
   env: Env,
   repoFullName: string,
@@ -3570,13 +3577,19 @@ export async function getCachedAiReview(
   headSha: string | null | undefined,
   mode: string,
   expectedInputFingerprint?: string | undefined,
+  options?: { allowNonCacheable?: boolean; maxAgeMs?: number } | undefined,
 ): Promise<{ notes: string; reviewerCount: number; findings: AdvisoryFinding[]; metadata?: Record<string, unknown> | undefined } | null> {
   if (!headSha) return null;
   const row = await env.DB
-    .prepare("SELECT notes, reviewer_count AS reviewerCount, ai_review_mode AS mode, findings_json AS findingsJson, metadata_json AS metadataJson FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?")
+    .prepare("SELECT notes, reviewer_count AS reviewerCount, ai_review_mode AS mode, findings_json AS findingsJson, metadata_json AS metadataJson, cacheable, created_at AS createdAt FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?")
     .bind(repoFullName, pullNumber, headSha)
-    .first<{ notes: string; reviewerCount: number; mode: string; findingsJson: string | null; metadataJson: string | null }>();
+    .first<{ notes: string; reviewerCount: number; mode: string; findingsJson: string | null; metadataJson: string | null; cacheable: number; createdAt: string }>();
   if (!row || row.mode !== mode) return null;
+  if (row.cacheable !== 1) {
+    if (!options?.allowNonCacheable) return null;
+    const ageMs = Date.now() - Date.parse(row.createdAt);
+    if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > (options.maxAgeMs ?? 0)) return null;
+  }
   const metadata = parseJson<Record<string, unknown>>(row.metadataJson, {});
   if (
     expectedInputFingerprint !== undefined &&
@@ -3591,25 +3604,29 @@ export async function getCachedAiReview(
   };
 }
 
-/** Upsert the AI review for (repo, pull, head SHA). A nullish head SHA is a no-op. */
+/** Upsert the AI review for (repo, pull, head SHA). A nullish head SHA is a no-op.
+ *  #regate-churn: `review.cacheable === false` still PERSISTS the attempt (so a repeated scheduled sweep pass at
+ *  the identical head+fingerprint can find it via getCachedAiReview's bounded allowNonCacheable lookup) but marks
+ *  it non-durable — omitted or any other value defaults to cacheable (1), the pre-existing behavior. */
 export async function putCachedAiReview(
   env: Env,
   repoFullName: string,
   pullNumber: number,
   headSha: string | null | undefined,
   mode: string,
-  review: { notes: string; reviewerCount: number; findings?: AdvisoryFinding[]; metadata?: Record<string, unknown> | undefined },
+  review: { notes: string; reviewerCount: number; findings?: AdvisoryFinding[]; metadata?: Record<string, unknown> | undefined; cacheable?: boolean | undefined },
 ): Promise<void> {
   if (!headSha) return;
   const createdAt = nowIso();
+  const cacheable = review.cacheable === false ? 0 : 1;
   await env.DB
     .prepare(
-      `INSERT INTO ai_review_cache (repo_full_name, pull_number, head_sha, ai_review_mode, notes, reviewer_count, findings_json, metadata_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO ai_review_cache (repo_full_name, pull_number, head_sha, ai_review_mode, notes, reviewer_count, findings_json, metadata_json, cacheable, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(repo_full_name, pull_number, head_sha) DO UPDATE SET
-         ai_review_mode = excluded.ai_review_mode, notes = excluded.notes, reviewer_count = excluded.reviewer_count, findings_json = excluded.findings_json, metadata_json = excluded.metadata_json, created_at = excluded.created_at`,
+         ai_review_mode = excluded.ai_review_mode, notes = excluded.notes, reviewer_count = excluded.reviewer_count, findings_json = excluded.findings_json, metadata_json = excluded.metadata_json, cacheable = excluded.cacheable, created_at = excluded.created_at`,
     )
-    .bind(repoFullName, pullNumber, headSha, mode, review.notes, review.reviewerCount, jsonString(review.findings ?? []), jsonString(review.metadata ?? {}), createdAt)
+    .bind(repoFullName, pullNumber, headSha, mode, review.notes, review.reviewerCount, jsonString(review.findings ?? []), jsonString(review.metadata ?? {}), cacheable, createdAt)
     .run();
 }
 

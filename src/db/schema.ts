@@ -1193,6 +1193,11 @@ export const aiReviewCache = sqliteTable(
     reviewerCount: integer("reviewer_count").notNull(),
     findingsJson: text("findings_json").notNull().default("[]"),
     metadataJson: text("metadata_json").notNull().default("{}"),
+    // #regate-churn: 1 (default) = a genuine, indefinitely-reusable review; 0 = a non-cacheable outcome
+    // (consensus defect / inconclusive / lock-contention placeholder) that is still PERSISTED so a repeated
+    // scheduled sweep pass at the identical head+fingerprint can reuse it for a bounded cooldown instead of
+    // re-spending an LLM call on every tick, without ever being treated as a durable, indefinitely-trustworthy hit.
+    cacheable: integer("cacheable").notNull().default(1),
     createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
   },
   (table) => ({

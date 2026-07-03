@@ -867,6 +867,7 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
         message.prNumber,
         message.installationId,
         message.deliveryId,
+        message.force,
       );
       return;
     case "run-agent":
@@ -1530,6 +1531,7 @@ async function regatePullRequest(
   prNumber: number,
   installationId: number,
   deliveryId: string,
+  force?: boolean,
 ): Promise<void> {
   // Reserve installation rate-limit headroom for real webhooks (#audit-rate-headroom): all repos share ONE GitHub
   // App installation = ONE REST bucket, so when the shared budget is at/below the maintenance floor, DEFER this
@@ -1547,6 +1549,7 @@ async function regatePullRequest(
         repoFullName,
         prNumber,
         installationId,
+        ...(force ? { force: true } : {}),
       },
       { delaySeconds: delayUntil(rateResetAt) },
     );
@@ -1562,9 +1565,11 @@ async function regatePullRequest(
     undefined,
     // Run the AI review on the sweep for BOTH advisory and block modes (#sweep-all-modes) — only skip when AI is
     // OFF. The #1462 per-(repo,pr,headSha,mode) cache bounds the cost: an unchanged PR re-gates from cache with no
-    // re-spend, so an advisory PR gets a posted review without burning a token every sweep tick.
+    // re-spend, so an advisory PR gets a posted review without burning a token every sweep tick. `force` (#regate-
+    // churn req 8) bypasses that cache/cooldown reuse entirely for an explicit manual re-gate request.
     {
       skipAiReview: settings.aiReviewMode === "off",
+      ...(force ? { force: true } : {}),
     },
   ).catch((error) => {
     /* v8 ignore next -- retryable/rate-limit propagation is exercised by queue retry tests; this catch only preserves that contract. */
@@ -2218,7 +2223,7 @@ async function reReviewStoredPullRequest(
   repoFullName: string,
   prNumber: number,
   previewPollAttempt?: number,
-  options: { skipAiReview?: boolean } = {},
+  options: { skipAiReview?: boolean; force?: boolean } = {},
 ): Promise<void> {
   const [repo, settings] = await Promise.all([
     getRepository(env, repoFullName),
@@ -2365,6 +2370,8 @@ async function reReviewStoredPullRequest(
           liveFacts,
           ...(previewPollAttempt !== undefined ? { previewPollAttempt } : {}),
           ...(options.skipAiReview ? { skipAiReview: true } : {}),
+          ...(options.force ? { forceAiReview: true } : {}),
+          hasPendingRefreshSignal: otherRefreshReasons || reviewsCacheStale,
         },
       ),
   ).catch((error) => {
@@ -2953,6 +2960,21 @@ async function claimTransientLock(
 // LLM call for the identical head+mode), not a GitHub-mutating actuation, so it has different scoping (keyed by
 // head SHA + mode, not just PR) and a much longer TTL (an LLM call legitimately runs far longer than a close).
 const AI_REVIEW_LOCK_TTL_SECONDS = 1_800; // 30 minutes — see justification below.
+
+// #regate-churn: how long a non-durably-cacheable AI review outcome may be reused by a scheduled re-gate at the
+// IDENTICAL head+fingerprint+mode before a fresh LLM call is paid for again. Covers TWO distinct non-cacheable
+// sources, both of which used to have NO retry bound at all: (1) a genuine non-cacheable verdict (consensus
+// defect / inconclusive / lock-contention placeholder) that the durable cache (see #1 above) correctly never
+// stores as a reusable result, and (2) a dynamic-context repo (grounding/RAG/enrichment/reputation), which
+// previously bypassed the cache unconditionally on every single call. Root-caused in production: a single PR
+// with RAG enabled generated 259 of 281 AI review calls in 24h via (2) at an UNCHANGED head, plus another 24 via
+// (1) — 281 calls total, ~1 every 5 minutes, forever, with nothing ever throttling the retry. This bounds that
+// retry cadence without ever treating either outcome as a durable, indefinitely-trustworthy result — it still
+// expires and retries periodically (the LLM's own non-determinism may resolve a dispute; dynamic external
+// context may genuinely have drifted), and any REAL state change (a new head, a changed review-input
+// fingerprint) bypasses this bound immediately regardless of age. Matches AI_REVIEW_LOCK_TTL_SECONDS's
+// 30-minute order of magnitude — same "crash/dispute backstop, not a throughput bound" philosophy.
+const AI_REVIEW_NON_CACHEABLE_RETRY_COOLDOWN_MS = 30 * 60 * 1000;
 
 function aiReviewLockKey(repoFullName: string, prNumber: number, headSha: string, mode: string): string {
   return `ai-review-lock:${repoFullName.toLowerCase()}#${prNumber}@${headSha.toLowerCase()}:${mode}`;
@@ -5149,6 +5171,13 @@ export async function runAiReviewForAdvisory(
       findings: AdvisoryFinding[];
       metadata?: Record<string, unknown> | undefined;
       cacheable?: boolean | undefined;
+      // #regate-churn: distinct from `cacheable` — false ONLY for the lock-contention placeholder below (another
+      // pass is concurrently reviewing this exact head RIGHT NOW). That placeholder describes a transient
+      // scheduling race, not a real AI opinion, and the concurrent pass it deferred to will itself persist the
+      // real result within seconds — so it must never be written at all (not even non-durably), or a later read
+      // within the bounded cooldown could replay "another pass is running" long after that pass finished.
+      // Defaults to true (persistable) for every other outcome, cacheable or not.
+      persistable?: boolean | undefined;
     }
   | undefined
 > {
@@ -5241,6 +5270,7 @@ export async function runAiReviewForAdvisory(
       inlineFindings: [],
       findings,
       cacheable: false,
+      persistable: false,
     };
   }
   try {
@@ -5850,6 +5880,17 @@ async function maybePublishPrPublicSurface(
     baseSha?: string | null | undefined;
     previewPollAttempt?: number | undefined;
     skipAiReview?: boolean | undefined;
+    // #regate-churn (req 8): an explicit manual re-gate can force a fresh AI opinion, bypassing BOTH the durable
+    // cache and the bounded non-cacheable-reuse cooldown. No current caller sets this — it exists so a future
+    // manual-trigger path (or a caller that already knows something changed) has a supported way to opt out of
+    // the reuse guards below rather than fighting them.
+    forceAiReview?: boolean | undefined;
+    // #regate-churn (req 6/7): true when the caller ALREADY determined something besides the AI review itself
+    // may need a fresh look this pass (slop evidence collection, the manifest gate, a pre-merge-check refresh, or
+    // a stale reviews-data cache — see reReviewStoredPullRequest's otherRefreshReasons/reviewsCacheStale). The
+    // public-surface no-op guard below only fires when this is false — any of those signals means something
+    // besides the head SHA could make the published output differ from what is already live.
+    hasPendingRefreshSignal?: boolean | undefined;
     liveFacts: LiveGithubFacts;
   },
 ): Promise<ReturnType<typeof evaluateGateCheck> | undefined> {
@@ -6044,10 +6085,12 @@ async function maybePublishPrPublicSurface(
         findings?: AdvisoryFinding[];
         metadata?: Record<string, unknown> | undefined;
         cacheable?: boolean | undefined;
+        persistable?: boolean | undefined;
       }
     | undefined;
   let inlineCommentsEnabledForReview = false;
   let aiReviewExpected = false;
+  let aiReviewWasReused = false;
   let gateFinalized = false;
   const publishedOutputs: PublicSurfaceOutput[] = [];
   const failedOutputs: PublicSurfaceOutputFailure[] = [];
@@ -6588,10 +6631,24 @@ async function maybePublishPrPublicSurface(
           // mode, reviewer plan, feature activation, or prompt-shaping inputs change. A re-delivered webhook or the
           // block-mode re-gate sweep can reuse that exact review; stale same-head reviews from older private review
           // instructions or feature config are intentionally treated as misses. The deterministic gate still runs.
-          // A repo with an active dynamic-context feature (grounding/RAG/enrichment/reputation) bypasses the
-          // cache entirely — see dynamicReviewContextActive above — since a cache hit there could replay a
-          // review built against now-stale external context for an otherwise-unchanged head.
-          const cachedReview = dynamicReviewContextActive
+          // `webhook.forceAiReview` (a manual re-gate, if the caller opts in) bypasses the cache entirely: the
+          // caller is explicitly asking for a fresh opinion, not a replayed one.
+          //
+          // #regate-churn (root cause, confirmed in production): a repo with an active dynamic-context feature
+          // (grounding/RAG/enrichment/reputation) used to bypass the cache UNCONDITIONALLY on every single call,
+          // on the theory that TIME-VARYING external context (the vector index, REES/CVE data, evolving
+          // reputation) can drift for the SAME head SHA without any of these booleans flipping, and fingerprinting
+          // only "is the feature on" can't detect that drift without fetching the content itself. That reasoning
+          // is right for a genuinely time-sensitive re-check, but a live incident showed it also means a
+          // dynamic-context repo re-spends an LLM call on EVERY scheduled sweep tick forever, with no bound at
+          // all: one PR with RAG enabled generated 259 of 281 AI review calls in 24h this way, at an UNCHANGED
+          // head. A dynamic-context result is therefore now always written non-durably (cacheable=false, same as
+          // a consensus-defect/inconclusive outcome below) rather than not written at all, so it can ALSO be
+          // reused for a bounded cooldown (AI_REVIEW_NON_CACHEABLE_RETRY_COOLDOWN_MS) — long enough to collapse a
+          // sweep tick's worth of redundant calls into one, short enough that genuinely drifted external context
+          // is still picked up well within the hour. A genuinely cacheable, non-dynamic-context row is unaffected
+          // (unbounded reuse, exactly as before this fix).
+          const cachedReview = webhook.forceAiReview === true
             ? null
             : await getCachedAiReview(
                 env,
@@ -6600,11 +6657,40 @@ async function maybePublishPrPublicSurface(
                 advisory.headSha,
                 settings.aiReviewMode,
                 inputFingerprint,
+                { allowNonCacheable: true, maxAgeMs: AI_REVIEW_NON_CACHEABLE_RETRY_COOLDOWN_MS },
               ).catch(() => null);
           if (cachedReview && hasPublicReviewAssessment(cachedReview.notes)) {
             advisory.findings.push(...cachedReview.findings);
             aiReview = cachedReview;
+            aiReviewWasReused = true;
+            incr("gittensory_ai_review_cache_hit_total");
+            await recordAuditEvent(env, {
+              eventType: "github_app.ai_review_cache_hit",
+              actor: author,
+              targetKey: `${repoFullName}#${pr.number}`,
+              outcome: "completed",
+              detail: "reused a stored AI review instead of re-spending an LLM call",
+              metadata: { deliveryId: webhook.deliveryId, repoFullName, /* v8 ignore next -- reached only inside aiReviewWillRun (which requires a truthy advisory.headSha) or the publish-skip guard's own `advisory.headSha &&` check; the `?? null` is a type-level fallback for an unreachable branch. */ headSha: advisory.headSha ?? null },
+            }).catch(() => undefined);
+            await recordAuditEvent(env, {
+              eventType: "agent.sweep.regate_ai_skipped_current",
+              actor: author,
+              targetKey: `${repoFullName}#${pr.number}`,
+              outcome: "completed",
+              detail: "AI review already current for this head+fingerprint; skipped re-review",
+              metadata: { deliveryId: webhook.deliveryId, repoFullName, /* v8 ignore next -- reached only inside aiReviewWillRun (which requires a truthy advisory.headSha) or the publish-skip guard's own `advisory.headSha &&` check; the `?? null` is a type-level fallback for an unreachable branch. */ headSha: advisory.headSha ?? null },
+            }).catch(() => undefined);
+            incr("gittensory_regate_ai_skipped_current_total");
           } else {
+            incr("gittensory_ai_review_cache_miss_total");
+            await recordAuditEvent(env, {
+              eventType: "github_app.ai_review_cache_miss",
+              actor: author,
+              targetKey: `${repoFullName}#${pr.number}`,
+              outcome: "completed",
+              detail: "no reusable stored AI review for this head+fingerprint; running a fresh review",
+              metadata: { deliveryId: webhook.deliveryId, repoFullName, /* v8 ignore next -- reached only inside aiReviewWillRun (which requires a truthy advisory.headSha) or the publish-skip guard's own `advisory.headSha &&` check; the `?? null` is a type-level fallback for an unreachable branch. */ headSha: advisory.headSha ?? null },
+            }).catch(() => undefined);
             aiReview = await runAiReviewForAdvisory(env, {
               settings,
               advisory,
@@ -6620,7 +6706,26 @@ async function maybePublishPrPublicSurface(
               reviewExcludePaths,
               reviewInlineComments,
             });
-            if (aiReview && aiReview.cacheable !== false && !dynamicReviewContextActive)
+            // `persistable === false` (only the lock-contention placeholder — see runAiReviewForAdvisory's return
+            // type doc comment) is excluded from EVERY write, not just the durable one: it describes a transient
+            // scheduling race, not a real AI opinion, and the concurrent pass it deferred to persists the real
+            // result within seconds — writing this placeholder (even non-durably) could replay a stale "another
+            // pass is running" message for the rest of the cooldown window, well after that race resolved.
+            if (aiReview && aiReview.persistable !== false) {
+              // A dynamic-context result is never durably cacheable (see the comment above); otherwise defer to
+              // the review's own verdict (consensus defect / inconclusive → false).
+              const cacheableForStorage = !dynamicReviewContextActive && aiReview.cacheable !== false;
+              if (!cacheableForStorage) {
+                incr("gittensory_ai_review_non_cacheable_total");
+                await recordAuditEvent(env, {
+                  eventType: "github_app.ai_review_non_cacheable",
+                  actor: author,
+                  targetKey: `${repoFullName}#${pr.number}`,
+                  outcome: "completed",
+                  detail: "AI review outcome is not durably cacheable; persisted for bounded-cooldown reuse only",
+                  metadata: { deliveryId: webhook.deliveryId, repoFullName, /* v8 ignore next -- reached only inside aiReviewWillRun (which requires a truthy advisory.headSha) or the publish-skip guard's own `advisory.headSha &&` check; the `?? null` is a type-level fallback for an unreachable branch. */ headSha: advisory.headSha ?? null },
+                }).catch(() => undefined);
+              }
               await putCachedAiReview(
                 env,
                 repoFullName,
@@ -6629,13 +6734,27 @@ async function maybePublishPrPublicSurface(
                 settings.aiReviewMode,
                 {
                   ...aiReview,
+                  cacheable: cacheableForStorage,
                   metadata: {
                     /* v8 ignore next -- runAiReviewForAdvisory (the sole path reaching here) always sets metadata on its "ok" returns; the nullish fallback is a type-level (optional field) safeguard, not a reachable runtime path. */
                     ...(aiReview.metadata ?? {}),
                     inputFingerprint,
                   },
                 },
-              ).catch(() => undefined);
+              ).catch((error) => {
+                // #regate-churn (req 3/9): a swallowed write failure here is exactly how the cache goes silently
+                // stale in production — make it observable instead of a bare no-op catch.
+                incr("gittensory_ai_review_cache_write_error_total");
+                return recordAuditEvent(env, {
+                  eventType: "github_app.ai_review_cache_write_error",
+                  actor: author,
+                  targetKey: `${repoFullName}#${pr.number}`,
+                  outcome: "error",
+                  detail: errorMessage(error),
+                  metadata: { deliveryId: webhook.deliveryId, repoFullName, /* v8 ignore next -- reached only inside aiReviewWillRun (which requires a truthy advisory.headSha) or the publish-skip guard's own `advisory.headSha &&` check; the `?? null` is a type-level fallback for an unreachable branch. */ headSha: advisory.headSha ?? null },
+                }).catch(() => undefined);
+              });
+            }
           }
         },
       );
@@ -6805,6 +6924,44 @@ async function maybePublishPrPublicSurface(
         conclusion: gateEvaluation.conclusion,
         reasonCode,
       });
+    }
+    // #regate-churn (req 6/7): a public-surface no-op guard, deliberately narrow. markPullRequestSurfacePublished's
+    // own doc comment warns lastPublishedSurfaceSha is "reporting/diagnostic state, not a hard scheduled-sweep
+    // skip" because a comment can be stale or partial even when the head marker matches — so this ONLY applies to
+    // a check-run-only repo (publicSurface "off": no comment, no label ever published, nothing else that marker
+    // can't prove current) with an independently-verified COMPLETED check run at the exact current head, no
+    // pending refresh signal (slop evidence / manifest gate / pre-merge-check / reviews-cache staleness — see
+    // hasPendingRefreshSignal), and an AI review dimension that is either not in play or was itself reused rather
+    // than freshly computed. Any doubt on any of these falls through to the full, unconditional publish below —
+    // this guard is only ever allowed to skip a PROVABLE no-op, never to guess one.
+    if (
+      gateEnabled &&
+      settings.publicSurface === "off" &&
+      !webhook.hasPendingRefreshSignal &&
+      !webhook.forceAiReview &&
+      (!aiReviewWillRun || aiReviewWasReused) &&
+      advisory.headSha &&
+      advisory.headSha === pr.lastPublishedSurfaceSha
+    ) {
+      const existingChecks = await listCheckSummaries(env, repoFullName, pr.number).catch(() => []);
+      const currentGateCheck = existingChecks.find(
+        (check) =>
+          check.name === GITTENSORY_GATE_CHECK_NAME &&
+          check.headSha === advisory.headSha &&
+          check.status === "completed",
+      );
+      if (currentGateCheck) {
+        incr("gittensory_public_surface_publish_skipped_current_total");
+        await recordAuditEvent(env, {
+          eventType: "github_app.public_surface_publish_skipped_current",
+          actor: author,
+          targetKey: `${repoFullName}#${pr.number}`,
+          outcome: "completed",
+          detail: "public surface already current for this head; skipped republish",
+          metadata: { deliveryId: webhook.deliveryId, repoFullName, /* v8 ignore next -- reached only inside aiReviewWillRun (which requires a truthy advisory.headSha) or the publish-skip guard's own `advisory.headSha &&` check; the `?? null` is a type-level fallback for an unreachable branch. */ headSha: advisory.headSha ?? null },
+        }).catch(() => undefined);
+        return gateEvaluation;
+      }
     }
     const finalFreshness = await freshnessForReviewOutput("final_publish");
     if (await skipStaleReviewOutput(finalFreshness)) {
