@@ -49,7 +49,7 @@ if (cliArgs[0] === "hooks" && cliArgs[1] === "check") {
   process.exit(exitCode);
 }
 
-if (cliArgs[0] === "state" && (cliArgs[1] === "get" || cliArgs[1] === "set")) {
+if (cliArgs[0] === "state") {
   const exitCode = runStateCli(cliArgs[1], cliArgs.slice(2));
   await awaitOpportunisticUpdateCheck(updateCheck);
   process.exit(exitCode);

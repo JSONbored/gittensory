@@ -17,6 +17,7 @@ const {
 } = await import("../../packages/gittensory-miner/lib/run-state-cli.js");
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
@@ -67,5 +68,14 @@ describe("gittensory-miner state CLI", () => {
     expect(runStateSet(["not-a-repo", "idle"])).toBe(2);
     expect(error).toHaveBeenCalledWith("Repository must be in owner/repo form.");
     expect(setRunState).not.toHaveBeenCalled();
+  });
+
+  it("runStateGet returns exit code 2 when the store read fails", () => {
+    getRunState.mockImplementation(() => {
+      throw new Error("invalid_repo_full_name");
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(runStateGet(["acme/widgets"])).toBe(2);
+    expect(error).toHaveBeenCalledWith("invalid_repo_full_name");
   });
 });

@@ -80,13 +80,18 @@ export function runStateGet(args) {
     return 2;
   }
 
-  const state = getRunState(parsed.repoFullName);
-  if (parsed.json) {
-    console.log(JSON.stringify({ repoFullName: parsed.repoFullName, state }));
-  } else {
-    console.log(state ?? "none");
+  try {
+    const state = getRunState(parsed.repoFullName);
+    if (parsed.json) {
+      console.log(JSON.stringify({ repoFullName: parsed.repoFullName, state }));
+    } else {
+      console.log(state ?? "none");
+    }
+    return 0;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 2;
   }
-  return 0;
 }
 
 export function runStateSet(args) {
