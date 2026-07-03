@@ -403,11 +403,36 @@ export function claudeErrorStatus(stdout: string): string | null {
   return null;
 }
 
+/** Extract a diagnostic error string from Codex's JSONL stdout on a non-zero exit. Codex writes its actual
+ *  error (auth failure, unknown model, API error) into the JSON stream rather than stderr — stderr typically
+ *  contains only the startup status "Reading prompt from stdin..." which is uninformative. Scans lines in
+ *  reverse (the error object is usually last) and returns the first human-readable detail found, or null. */
+export function codexErrorFromStdout(stdout: string): string | null {
+  const lines = stdout.trim().split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (!line?.trim()) continue;
+    try {
+      const o = JSON.parse(line) as Record<string, unknown>;
+      const detail =
+        (typeof o.error === "string" && o.error) ||
+        (typeof o.message === "string" && o.message) ||
+        (typeof o.msg === "string" && o.msg) ||
+        (o.error && typeof (o.error as Record<string, unknown>).message === "string" && (o.error as Record<string, unknown>).message as string) ||
+        null;
+      if (detail) return detail.slice(0, 500);
+    } catch {
+      /* not JSON — skip */
+    }
+  }
+  return null;
+}
+
 type SpawnFn = (
   cmd: string,
   args: string[],
   opts: { env: Record<string, string | undefined>; input?: string; timeoutMs: number; cwd?: string },
-) => Promise<{ stdout: string; code: number | null; stderr?: string }>;
+) => Promise<{ stdout: string; code: number | null; stderr?: string; timedOut?: boolean }>;
 
 async function defaultSpawn(): Promise<SpawnFn> {
   const cp = await import("node:child_process");
@@ -422,7 +447,9 @@ async function defaultSpawn(): Promise<SpawnFn> {
       /* v8 ignore start */ // a 120s subprocess timeout is not unit-testable without a 2-minute wait
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
-        reject(new Error("subscription_cli_timeout"));
+        // Resolve (not reject) so callers receive whatever stdout/stderr was accumulated before the kill —
+        // that partial output may contain the real error detail (e.g. codex JSONL error lines).
+        resolve({ stdout, code: null, stderr, timedOut: true });
       }, o.timeoutMs);
       /* v8 ignore stop */
       child.stdout?.on("data", (d: Buffer) => (stdout += d.toString("utf8")));
@@ -512,12 +539,13 @@ export function createClaudeCodeAi(parentEnv: Record<string, string | undefined>
         const prompt = toMessages(options).map((m) => m.content).join("\n\n");
         const spawn = spawnImpl ?? (await defaultSpawn());
         attempted = true;
-        const { stdout, code, stderr } = await spawn(
+        const { stdout, code, stderr, timedOut } = await spawn(
           "claude",
           ["--print", "--output-format", "json", "--model", claudeModel, "--permission-mode", "plan", "--effort", effort, "--disallowedTools", "Bash,Edit,Write,WebFetch,WebSearch"],
           { env, input: prompt, timeoutMs, cwd: await isolatedCliCwd() },
         );
         stdoutForMetrics = stdout;
+        if (timedOut) throw new Error("subscription_cli_timeout");
         // Surface the STRUCTURED error envelope FIRST. `claude --output-format json` reports API/auth/model errors in its
         // stdout JSON ({is_error,api_error_status}) on a NON-ZERO exit too — e.g. an unknown model exits 1 with the 404
         // envelope in stdout and EMPTY stderr. Checking it before the exit code turns an opaque `claude_code_exit_1: `
@@ -563,7 +591,7 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
         if (codexModel) args.push("--model", codexModel);
         args.push("-c", `model_reasoning_effort="${effort}"`);
         attempted = true;
-        const { stdout, code, stderr } = await spawn("codex", args, {
+        const { stdout, code, stderr, timedOut } = await spawn("codex", args, {
           env,
           // `codex exec` reads stdin when no prompt argv is provided; keep PR prompts/diffs out of process listings.
           input: prompt,
@@ -571,7 +599,18 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
           cwd: await isolatedCliCwd(),
         });
         stdoutForMetrics = stdout;
-        if (code !== 0) throw new Error(`codex_exit_${code ?? "null"}: ${redactSecrets(stderr ?? "").slice(0, 500)}`);
+        if (timedOut) {
+          // Include whatever the JSONL stream captured before the kill — codex writes errors there, not to stderr.
+          const detail = codexErrorFromStdout(stdout) ?? redactSecrets(stderr ?? "").slice(0, 200) || "no output";
+          throw new Error(`codex_timeout: ${detail}`);
+        }
+        if (code !== 0) {
+          // Prefer the structured error from codex's JSONL stdout over the uninformative stderr startup message
+          // ("Reading prompt from stdin..."). Codex reports auth/model/API failures in its JSON stream; stderr
+          // at exit time usually only contains that startup status line and nothing actionable.
+          const detail = codexErrorFromStdout(stdout) ?? redactSecrets(stderr ?? "").slice(0, 500);
+          throw new Error(`codex_exit_${code}: ${detail}`);
+        }
         const text = extractCliText(stdout);
         if (!text) throw new Error("codex_empty_output");
         return { response: text };
