@@ -56,7 +56,11 @@ export const repositorySettings = sqliteTable("repository_settings", {
   // blocks when a repo explicitly opts in (linkedIssueGateMode: "block" or the requireLinkedIssue toggle;
   // see resolveEffectiveSettings in signals/focus-manifest.ts). This default was "block" until #selfhost-
   // linked-issue-gate-drift, which also backfills any row an earlier migration (0023/0025) persisted as
-  // "block" without an explicit opt-in (migrations/0102_fix_linked_issue_gate_mode_default.sql).
+  // "block" without an explicit opt-in (migrations/0102_fix_linked_issue_gate_mode_default.sql). The raw
+  // SQLite column still has a DEFAULT 'block' from migration 0023 -- SQLite has no ALTER COLUMN SET DEFAULT,
+  // so fixing that requires a full table rebuild, not done here since no write path ever omits this field
+  // (see test/unit/schema-timestamp-defaults.test.ts). This .default("advisory") is what actually applies,
+  // client-side, on any insert that omits the field.
   linkedIssueGateMode: text("linked_issue_gate_mode").notNull().default("advisory"),
   duplicatePrGateMode: text("duplicate_pr_gate_mode").notNull().default("block"),
   qualityGateMode: text("quality_gate_mode").notNull().default("advisory"),

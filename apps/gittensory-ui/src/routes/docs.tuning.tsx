@@ -221,7 +221,7 @@ function Tuning() {
         </li>
         <li>
           <code>gate.linkedIssue</code> — what happens when a PR has <em>no linked issue at all</em>
-          . Default <code>advisory</code> (surfaced in the review panel, never blocks — issues
+          {". "}Default <code>advisory</code> (surfaced in the review panel, never blocks — issues
           aren&apos;t always available). Set <code>block</code>, or turn on the dashboard "Require
           linked issue" toggle, to make a missing issue an explicit opt-in blocker (if the toggle is
           on but this is still <code>off</code>, it is auto-promoted to <code>block</code>). This is
