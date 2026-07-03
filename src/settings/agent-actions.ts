@@ -169,7 +169,9 @@ export type AgentActionPlanInput = {
   // so — unlike the blacklist's private-reason close — they ARE interpolated into the public close comment.
   // `itemKind` selects the close-comment noun ("pull requests" for the PR-path caller, "issues" for the
   // issue-path caller, #2270) — REQUIRED (not defaulted) so a caller can't silently mislabel the other kind.
-  contributorCapMatch?: { matched: boolean; authorLogin: string; openCount: number; cap: number; itemKind: "pull requests" | "issues" } | undefined;
+  // "pull requests and issues" (#2562) is for the install-wide global cap, whose count sums BOTH tables across
+  // every repo — reporting it as just "pull requests" or just "issues" would misstate a mixed total.
+  contributorCapMatch?: { matched: boolean; authorLogin: string; openCount: number; cap: number; itemKind: "pull requests" | "issues" | "pull requests and issues" } | undefined;
   // The repo-configured label applied to an over-cap author's PR/issue (#2270), resolved from `.gittensory.yml`.
   // Absent ⇒ the default (`DEFAULT_CONTRIBUTOR_CAP_LABEL` = "over-contributor-limit").
   contributorCapLabel?: string | undefined;
@@ -308,7 +310,7 @@ function blacklistCloseMessage(): string {
 // DOES interpolate authorLogin/openCount/cap — none of that is private (the author's own login and their own
 // open-item count on a public repo are already public/derivable from GitHub itself), and stating the exact
 // numbers is the point: a deterministic, contributor-visible cap, not a silent quality-based hold.
-function contributorCapCloseMessage(authorLogin: string, openCount: number, cap: number, itemNoun: "pull requests" | "issues"): string {
+function contributorCapCloseMessage(authorLogin: string, openCount: number, cap: number, itemNoun: "pull requests" | "issues" | "pull requests and issues"): string {
   return `Gittensory closed this because @${authorLogin} has ${openCount} open ${itemNoun}, above this repository's configured limit of ${cap}. Close or merge an existing one to open a new one. This is an automated maintenance action.`;
 }
 

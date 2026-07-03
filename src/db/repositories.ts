@@ -3104,25 +3104,35 @@ export async function countOpenPullRequests(env: Env, fullName: string): Promise
   return Number(row?.count ?? 0);
 }
 
+export type OpenItemAcrossInstallRow = { repoFullName: string; number: number; kind: "pull_request" | "issue" };
+
 /**
- * Install-wide contributor open-item count (#2562, anti-abuse): sums this author's open PRs + open issues
+ * Install-wide contributor open-item ROWS (#2562, anti-abuse): every open PR + open issue by this author
  * across EVERY repo this install/instance tracks in the SAME D1 database -- no cross-instance networking, no
  * join through `repositories` (every row in `pullRequests`/`issues` already belongs to a repo this install
- * gates). Only called when GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP is configured; the existing per-repo
- * countOpenPullRequests/countOpenIssues stay scoped to one repo and are unaffected by this addition.
+ * gates). Only called when GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP is configured. Returns the actual rows (not just a
+ * count) so the caller can live-verify each one before trusting the aggregate toward an irreversible close --
+ * gate finding: the stored DB cache can lag GitHub for a repo OTHER than the one this webhook is for, and an
+ * inflated stale count must never itself trigger a close (mirrors the existing per-repo issue-cap's own
+ * sibling live-verification, #2479). The existing per-repo countOpenPullRequests/countOpenIssues stay scoped
+ * to one repo and are unaffected by this addition.
  */
-export async function countOpenItemsByAuthorAcrossInstall(env: Env, authorLogin: string): Promise<number> {
+export async function listOpenItemsByAuthorAcrossInstall(env: Env, authorLogin: string): Promise<OpenItemAcrossInstallRow[]> {
   const db = getDb(env.DB);
-  const [prRow] = await db
-    .select({ count: sql<number>`count(*)` })
+  const prRows = await db
+    .select({ repoFullName: pullRequests.repoFullName, number: pullRequests.number })
     .from(pullRequests)
-    .where(and(eq(pullRequests.state, "open"), loginMatches(pullRequests.authorLogin, authorLogin)));
-  const [issueRow] = await db
-    .select({ count: sql<number>`count(*)` })
+    .where(and(eq(pullRequests.state, "open"), loginMatches(pullRequests.authorLogin, authorLogin)))
+    .limit(2000);
+  const issueRows = await db
+    .select({ repoFullName: issues.repoFullName, number: issues.number })
     .from(issues)
-    .where(and(eq(issues.state, "open"), loginMatches(issues.authorLogin, authorLogin)));
-  /* v8 ignore next 2 -- SQL aggregate count always returns one row; fallback protects D1 driver anomalies. */
-  return Number(prRow?.count ?? 0) + Number(issueRow?.count ?? 0);
+    .where(and(eq(issues.state, "open"), loginMatches(issues.authorLogin, authorLogin)))
+    .limit(2000);
+  return [
+    ...prRows.map((row) => ({ repoFullName: row.repoFullName, number: row.number, kind: "pull_request" as const })),
+    ...issueRows.map((row) => ({ repoFullName: row.repoFullName, number: row.number, kind: "issue" as const })),
+  ];
 }
 
 // Anti-farming (#anti-gaming-flood): how many PRs this author has SUBMITTED to this repo since `sinceIso` (ANY

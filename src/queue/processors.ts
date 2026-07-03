@@ -1,7 +1,8 @@
 import {
   countOpenIssues,
   countOpenPullRequests,
-  countOpenItemsByAuthorAcrossInstall,
+  listOpenItemsByAuthorAcrossInstall,
+  type OpenItemAcrossInstallRow,
   getAgentCommandAnswer,
   getInstallation,
   getLatestRepoGithubTotalsSnapshot,
@@ -2028,7 +2029,7 @@ async function runAgentMaintenancePlanAndExecute(
   // default) ⇒ this block is a no-op. A below-account-age-threshold author (#2561) gets a TIGHTER effective
   // cap (half, rounded up, minimum 1) — visibility/friction, still never a close on account age by itself
   // (the close, if any, is still tagged/reasoned as the ordinary contributor-cap close).
-  let contributorCapMatch: { matched: boolean; authorLogin: string; openCount: number; cap: number; itemKind: "pull requests" | "issues" } | undefined;
+  let contributorCapMatch: { matched: boolean; authorLogin: string; openCount: number; cap: number; itemKind: "pull requests" | "issues" | "pull requests and issues" } | undefined;
   const contributorOpenPrCap =
     isNewAccount && typeof settings.contributorOpenPrCap === "number"
       ? Math.max(1, Math.ceil(settings.contributorOpenPrCap / 2))
@@ -2072,14 +2073,20 @@ async function runAgentMaintenancePlanAndExecute(
     pr.authorLogin &&
     !isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)
   ) {
-    const globalOpenCount = await countOpenItemsByAuthorAcrossInstall(env, pr.authorLogin);
+    const globalOpenCount = await verifiedGlobalOpenItemCount(env, installationId, pr.authorLogin, {
+      repoFullName,
+      number: pr.number,
+      kind: "pull_request",
+    });
     if (globalOpenCount > globalContributorOpenItemCap) {
       contributorCapMatch = {
         matched: true,
         authorLogin: pr.authorLogin,
         openCount: globalOpenCount,
         cap: globalContributorOpenItemCap,
-        itemKind: "pull requests",
+        // verifiedGlobalOpenItemCount sums BOTH open PRs and open issues (gate finding) -- reporting this
+        // combined total as just "pull requests" would misstate it whenever the author also has issues.
+        itemKind: "pull requests and issues",
       };
     }
   }
@@ -3928,6 +3935,46 @@ function parseGlobalContributorOpenItemCapEnv(raw: string | undefined): number |
 }
 
 /**
+ * Install-wide contributor open-item count, LIVE-VERIFIED (#2562, gate finding): the stored DB cache can lag
+ * GitHub for a repo OTHER than the one this webhook is for (closed manually, by another automation, or by a
+ * webhook this instance hasn't processed yet) -- an inflated stale count must never itself trigger an
+ * irreversible close. Mirrors the existing per-repo issue-cap's own sibling live-verification (#2479): every
+ * OTHER counted item is confirmed still-open via a live GET before counting toward the cap; `currentItem` (the
+ * one THIS webhook just delivered) is trusted unverified, same as every other cap check in this file. Fail
+ * SAFE, not fail-open: an item this call cannot POSITIVELY confirm is still open is excluded from the count.
+ */
+async function isOpenItemRowStillLiveOpen(
+  env: Env,
+  row: OpenItemAcrossInstallRow,
+  liveToken: string | undefined,
+  admissionKey: GitHubRateLimitAdmissionKey | undefined,
+): Promise<boolean> {
+  if (row.kind === "issue") {
+    const liveState = await fetchLiveIssueState(env, row.repoFullName, row.number, liveToken, admissionKey).catch(() => undefined);
+    return liveState === "open";
+  }
+  const livePr = await fetchLivePullRequest(env, row.repoFullName, row.number, liveToken, admissionKey).catch(() => undefined);
+  return livePr?.state === "open";
+}
+
+async function verifiedGlobalOpenItemCount(
+  env: Env,
+  installationId: number,
+  authorLogin: string,
+  currentItem: { repoFullName: string; number: number; kind: "pull_request" | "issue" },
+): Promise<number> {
+  const rows = await listOpenItemsByAuthorAcrossInstall(env, authorLogin);
+  const otherRows = rows.filter(
+    (row) => !(row.repoFullName === currentItem.repoFullName && row.number === currentItem.number && row.kind === currentItem.kind),
+  );
+  const token = await createInstallationToken(env, installationId).catch(() => undefined);
+  const liveToken = token ?? env.GITHUB_PUBLIC_TOKEN;
+  const admissionKey = githubAdmissionKeyForToken(env, installationId, liveToken);
+  const confirmedOpen = await Promise.all(otherRows.map((row) => isOpenItemRowStillLiveOpen(env, row, liveToken, admissionKey)));
+  return confirmedOpen.filter(Boolean).length + 1;
+}
+
+/**
  * Per-contributor open-ISSUE cap (#2270, anti-abuse): the first `eventName === "issues"` actuation branch —
  * issues have no other auto-close path today. Mirrors the PR-path cap in runAgentMaintenancePlanAndExecute:
  * counts the author's currently-open issues on this repo (including this one), ranked by issue NUMBER
@@ -3971,7 +4018,7 @@ async function maybeCloseIssueOverContributorCap(
   const authorIsAutomationBot = isProtectedAutomationAuthor(authorLogin);
   if (authorIsOwner || authorIsAdmin || authorIsAutomationBot) return;
 
-  let contributorCapMatch: { matched: boolean; authorLogin: string; openCount: number; cap: number; itemKind: "pull requests" | "issues" } | undefined;
+  let contributorCapMatch: { matched: boolean; authorLogin: string; openCount: number; cap: number; itemKind: "pull requests" | "issues" | "pull requests and issues" } | undefined;
   let overCapNumbers = new Set<number>();
 
   if (typeof cap === "number") {
@@ -4021,9 +4068,15 @@ async function maybeCloseIssueOverContributorCap(
     globalContributorOpenItemCap !== null &&
     !isAutoCloseExempt(authorLogin, settings.autoCloseExemptLogins)
   ) {
-    const globalOpenCount = await countOpenItemsByAuthorAcrossInstall(env, authorLogin);
+    const globalOpenCount = await verifiedGlobalOpenItemCount(env, installationId, authorLogin, {
+      repoFullName,
+      number: issue.number,
+      kind: "issue",
+    });
     if (globalOpenCount > globalContributorOpenItemCap) {
-      contributorCapMatch = { matched: true, authorLogin, openCount: globalOpenCount, cap: globalContributorOpenItemCap, itemKind: "issues" };
+      // verifiedGlobalOpenItemCount sums BOTH open PRs and open issues (gate finding) -- reporting this
+      // combined total as just "issues" would misstate it whenever the author also has open PRs.
+      contributorCapMatch = { matched: true, authorLogin, openCount: globalOpenCount, cap: globalContributorOpenItemCap, itemKind: "pull requests and issues" };
       overCapNumbers = new Set([issue.number]);
     }
   }
