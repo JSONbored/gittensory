@@ -220,9 +220,13 @@ function Tuning() {
           <code>block</code>.
         </li>
         <li>
-          <code>gate.linkedIssue</code> — linked-issue gate. Default <code>advisory</code>. If the
-          dashboard "Require linked issue" toggle is on but this is <code>off</code>, it is
-          auto-promoted to <code>block</code>.
+          <code>gate.linkedIssue</code> — what happens when a PR has <em>no linked issue at all</em>
+          {". "}Default <code>advisory</code> (surfaced in the review panel, never blocks — issues
+          aren&apos;t always available). Set <code>block</code>, or turn on the dashboard "Require
+          linked issue" toggle, to make a missing issue an explicit opt-in blocker (if the toggle is
+          on but this is still <code>off</code>, it is auto-promoted to <code>block</code>). This is
+          unrelated to closing a PR that links an <em>ineligible</em> issue (owner-assigned, wrong
+          label, etc.) — that is a separate, deterministic rule, not this gate.
         </li>
         <li>
           <code>gate.readiness.mode</code> — the PR-quality / merge-readiness score gate. Default{" "}

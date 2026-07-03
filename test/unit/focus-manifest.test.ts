@@ -1703,6 +1703,22 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     const dbAdvisory = { qualityGateMode: "advisory" } as unknown as RepositorySettings;
     expect(resolveEffectiveSettings(dbAdvisory, parseFocusManifest(null)).qualityGateMode).toBe("advisory");
   });
+
+  it("REGRESSION: keeps missing-linked-issue advisory when the DB row already says advisory and nothing overrides it (#selfhost-linked-issue-gate-drift)", () => {
+    const db = { linkedIssueGateMode: "advisory", requireLinkedIssue: false } as unknown as RepositorySettings;
+    expect(resolveEffectiveSettings(db, parseFocusManifest(null)).linkedIssueGateMode).toBe("advisory");
+  });
+
+  it("does NOT blanket-downgrade a DB linkedIssueGateMode: block to advisory -- unlike qualityGateMode, block is a legitimate opt-in here (#selfhost-linked-issue-gate-drift)", () => {
+    // Deliberately the OPPOSITE assertion from the qualityGateMode regression above: qualityGateMode can
+    // NEVER legitimately be "block" (isConfiguredGateBlocker has no branch for it), so resolveEffectiveSettings
+    // unconditionally downgrades it. linkedIssueGateMode CAN legitimately be "block" -- a maintainer may
+    // explicitly opt into it -- so migration 0102's data fix (conservative: only provably-drifted rows) is
+    // the correct place to correct historically-drifted rows, not a resolver-level downgrade that would also
+    // silently defeat a real, current opt-in.
+    const db = { linkedIssueGateMode: "block", requireLinkedIssue: false } as unknown as RepositorySettings;
+    expect(resolveEffectiveSettings(db, parseFocusManifest(null)).linkedIssueGateMode).toBe("block");
+  });
 });
 
 describe("parseFocusManifest review config", () => {

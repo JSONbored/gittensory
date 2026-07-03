@@ -11,7 +11,7 @@ import {
 import type { CheckSummaryRecord, PullRequestFileRecord, PullRequestRecord, PullRequestReviewRecord } from "../types";
 import { nowIso } from "../utils/json";
 import { buildRoleContext } from "./engine";
-import { isFailingCheckSummary } from "./local-branch";
+import { isCodeFile, isFailingCheckSummary } from "./local-branch";
 import { isTestPath } from "./test-evidence";
 
 export type OpenPrWorkClassification =
@@ -260,7 +260,10 @@ function normalizeTitle(title: string): string {
 
 function missingTestsFromFiles(files: PullRequestFileRecord[]): boolean {
   if (files.length === 0) return false;
-  const codeFiles = files.filter((file) => file.path && !isTestPath(file.path));
+  // "Code" is genuine source (isCodeFile), not merely "anything that isn't a test": a docs-, lockfile-, or
+  // config-only PR has no code to cover and must not be flagged missing_tests. Mirrors the isCodeFile code-side
+  // used by slop.ts's buildMissingTestEvidenceFinding and the local-branch/local-scorer source predicates.
+  const codeFiles = files.filter((file) => file.path && isCodeFile(file.path));
   const testFiles = files.filter((file) => file.path && isTestPath(file.path));
   return codeFiles.length > 0 && testFiles.length === 0;
 }

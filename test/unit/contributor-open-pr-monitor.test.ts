@@ -353,6 +353,15 @@ describe("contributor open PR monitor", () => {
     expect(missingTestsFromFiles([{ path: "service.py" } as never, { path: "service_test.py" } as never])).toBe(false);
     expect(missingTestsFromFiles([{ path: "lib/widget.rb" } as never, { path: "models/widget_test.rb" } as never])).toBe(false);
     expect(missingTestsFromFiles([{ path: "lib/widget.rb" } as never, { path: "widget_spec.rb" } as never])).toBe(false);
+
+    // A PR touching only non-source artifacts (docs, lockfile, CI/config) has no code to cover, so it is NOT
+    // missing_tests. Regression: the code side used `!isTestPath`, which counted every non-test file as code.
+    expect(missingTestsFromFiles([{ path: "README.md" } as never])).toBe(false);
+    expect(missingTestsFromFiles([{ path: "pnpm-lock.yaml" } as never])).toBe(false);
+    expect(missingTestsFromFiles([{ path: "docs/guide.md" } as never])).toBe(false);
+    expect(missingTestsFromFiles([{ path: "package.json" } as never])).toBe(false);
+    // Genuine source alongside docs, with no test, is still missing_tests.
+    expect(missingTestsFromFiles([{ path: "src/a.ts" } as never, { path: "README.md" } as never])).toBe(true);
   });
 
   it("returns an empty monitor when the contributor has no cached open PRs", async () => {

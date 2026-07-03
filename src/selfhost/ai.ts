@@ -263,6 +263,34 @@ function codexCliEnv(parent: Record<string, string | undefined>): Record<string,
   return child;
 }
 
+/** Resolve the path to codex's auth file so we can preflight it before spawning the subprocess.
+ *  Codex stores credentials at `$CODEX_HOME/auth.json` when CODEX_HOME is set, otherwise
+ *  `$HOME/.codex/auth.json`. The Docker setup symlinks /home/node/.codex → /data/codex, so this
+ *  path is only populated after the operator runs `codex auth` at runtime. */
+export function resolveCodexAuthPath(env: Record<string, string | undefined>): string {
+  // Use the sync path.join from the already-imported "node:path" delimiter import above.
+  // We only need `join` here, which we can reconstruct simply to avoid a dynamic import in a sync helper.
+  const sep = "/";
+  const base = env.CODEX_HOME ?? `${env.HOME ?? "~"}${sep}.codex`;
+  return `${base}${sep}auth.json`;
+}
+
+/** Throws `codex_auth_not_configured` if codex's auth.json does not exist or is unreadable.
+ *  Called before spawning the codex subprocess so the error message is immediately actionable
+ *  ("run `codex auth`") rather than the cryptic `codex_exit_1: Reading prompt from stdin...`
+ *  that surfaces when the CLI silently fails without credentials. */
+async function assertCodexAuthConfigured(env: Record<string, string | undefined>): Promise<void> {
+  const { access, constants } = await import("node:fs/promises");
+  const authPath = resolveCodexAuthPath(env);
+  try {
+    await access(authPath, constants.R_OK);
+  } catch {
+    throw new Error(
+      `codex_auth_not_configured: ${authPath} not found or unreadable — run \`codex auth\` to authenticate, then restart the container`,
+    );
+  }
+}
+
 async function isolatedCliCwd(): Promise<string> {
   const { mkdtemp } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
@@ -570,7 +598,11 @@ export function createClaudeCodeAi(parentEnv: Record<string, string | undefined>
 
 /** Codex subscription (`codex exec`). Fail closed by default: Codex OAuth homes are readable by prompt-influenced
  *  review sandboxes unless an operator explicitly opts into that risk for an isolated deployment. */
-export function createCodexAi(parentEnv: Record<string, string | undefined>, spawnImpl?: SpawnFn): SelfHostAi {
+export function createCodexAi(
+  parentEnv: Record<string, string | undefined>,
+  spawnImpl?: SpawnFn,
+  authCheckImpl: (env: Record<string, string | undefined>) => Promise<void> = assertCodexAuthConfigured,
+): SelfHostAi {
   return {
     async run(model, options) {
       // Codex is chat-only here — reject embed requests so the chain routes them to an embed-capable provider.
@@ -585,6 +617,7 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
       let stdoutForMetrics = "";
       try {
         assertCodexCredentialIsolation(parentEnv);
+        await authCheckImpl(parentEnv);
         const env = codexCliEnv(parentEnv);
         const prompt = toMessages(options).map((m) => m.content).join("\n\n");
         const spawn = spawnImpl ?? (await defaultSpawn());
@@ -606,10 +639,19 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
           throw new Error(`codex_timeout: ${detail}`);
         }
         if (code !== 0) {
+          const stderrTrimmed = (stderr ?? "").trim();
+          const jsonlDetail = codexErrorFromStdout(stdout);
+          if (!jsonlDetail && stderrTrimmed === "Reading prompt from stdin...") {
+            // codex's JSONL stream carried no structured detail and stderr is ONLY the stdin-reading banner (no
+            // API/auth error appended) — auth.json was present at boot-time but is now expired or was deleted.
+            // Surface a distinct error so Sentry groups it separately from genuine API failures (rate limits,
+            // model errors, network issues).
+            throw new Error("codex_no_auth: auth.json missing or expired — re-run `codex auth` and restart");
+          }
           // Prefer the structured error from codex's JSONL stdout over the uninformative stderr startup message
           // ("Reading prompt from stdin..."). Codex reports auth/model/API failures in its JSON stream; stderr
           // at exit time usually only contains that startup status line and nothing actionable.
-          const detail = codexErrorFromStdout(stdout) ?? redactSecrets(stderr ?? "").slice(0, 500);
+          const detail = jsonlDetail ?? redactSecrets(stderrTrimmed).slice(0, 500);
           throw new Error(`codex_exit_${code}: ${detail}`);
         }
         const text = extractCliText(stdout);

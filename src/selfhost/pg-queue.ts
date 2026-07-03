@@ -2,7 +2,7 @@
 // (persist → restart re-claims, backoff retries, dead-letter) but uses `FOR UPDATE SKIP LOCKED` so multiple
 // app instances sharing one Postgres can claim jobs concurrently without double-processing. size()/deadCount()
 // are async (the metrics gauges accept async samplers).
-import type { Pool } from "pg";
+import type { Pool, QueryResult } from "pg";
 import { logAudit, extractPayloadType, extractPayloadContext } from "./audit";
 import { incr } from "./metrics";
 import { withReviewSpan } from "./tracing";
@@ -36,6 +36,91 @@ import {
   type GitHubRateLimitAdmissionTarget,
   type SelfHostQueueSnapshot,
 } from "./queue-common";
+
+// PostgreSQL SQLSTATE codes that unambiguously indicate a dead/terminated Postgres connection.
+// Unlike generic Node.js network codes (ECONNRESET etc.), these can ONLY come from the pg driver
+// talking to Postgres, so they're safe to use anywhere an error might come from — including code
+// that also runs unrelated network calls (e.g. GitHub API requests inside consume()).
+const PG_SQLSTATE_CONNECTION_CODES = new Set([
+  "57P01", // terminating connection due to administrator command
+  "57P02", // crash shutdown
+  "57P03", // cannot connect now
+  "08006", // connection failure
+  "08003", // connection does not exist
+  "08001", // unable to establish connection
+  "08004", // rejected connection
+]);
+
+// Generic Node.js error codes that ALSO indicate a dead connection, but only when we already know
+// the error came from our own pool.query() call (e.g. inside retryPoolQuery) — these codes are
+// ambiguous on their own, since any network call (not just Postgres) can throw them.
+const NODE_CONNECTION_ERROR_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE"]);
+
+function hasErrorCode(err: unknown, codes: Set<string>): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as Record<string, unknown>;
+  if (typeof e["code"] === "string" && codes.has(e["code"])) return true;
+  // node-postgres wraps some errors; check cause too
+  if (e["cause"] && hasErrorCode(e["cause"], codes)) return true;
+  return false;
+}
+
+/** Use ONLY on errors known to come from our own pool.query() calls (e.g. inside retryPoolQuery) —
+ *  covers both unambiguous Postgres SQLSTATE codes and generic Node network codes. */
+function isPgConnectionError(err: unknown): boolean {
+  return hasErrorCode(err, PG_SQLSTATE_CONNECTION_CODES) || hasErrorCode(err, NODE_CONNECTION_ERROR_CODES);
+}
+
+/** Safe to use on ANY caught error, including one thrown by arbitrary application logic (consume()) that
+ *  may make its own unrelated network calls — only matches codes that can exclusively mean "Postgres
+ *  connection lost" (excludes generic Node codes like ECONNRESET, which a non-PG network failure could
+ *  also throw and would otherwise be wrongly left in 'processing' instead of going through normal
+ *  retry/dead-letter handling). */
+function isPgSqlStateConnectionError(err: unknown): boolean {
+  return hasErrorCode(err, PG_SQLSTATE_CONNECTION_CODES);
+}
+
+/** Retry a pool query up to `retries` times on transient connection errors, with a short delay
+ *  between attempts. The pool will establish a new connection automatically. */
+async function retryPoolQuery<T>(fn: () => Promise<T>, retries = 3, delayMs = 500): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isPgConnectionError(err) || attempt === retries) throw err;
+      await new Promise((resolve) => setTimeout(resolve, delayMs * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+/** Run a retryPoolQuery-wrapped update that's safe to skip on a still-dead connection: returns null
+ *  (caller should leave the job in 'processing' for reclaim) instead of throwing. An uncaught throw here
+ *  would escape processOne() entirely and crash the surrounding pump() loop (see pump()'s catch), stopping
+ *  it from processing OTHER already-claimable jobs too -- not just deferring this one job's own retry. */
+async function retryPoolUpdateOrLeaveForReclaim(
+  fn: () => Promise<QueryResult>,
+  jobId: string,
+  event: string,
+): Promise<QueryResult | null> {
+  try {
+    return await retryPoolQuery(fn);
+  } catch (err) {
+    if (!isPgConnectionError(err)) throw err;
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        event,
+        id: jobId,
+        code: (err as Record<string, unknown>)["code"],
+        message: "PG connection terminated; reclaim mechanism will retry",
+      }),
+    );
+    return null;
+  }
+}
 import { hostLoadAvg1PerCore } from "./host-pressure";
 import {
   evaluateMaintenanceAdmission,
@@ -534,11 +619,16 @@ export function createPgQueue(
               `${job.job_key ?? ""}:${job.id}:${job.payload}`,
             );
             const lastError = `github rate-limit ${rateLimitAdmission.kind} admission`;
-            const update = await pool.query(
-              `UPDATE ${TABLE} SET status='pending', run_after=GREATEST(run_after, $1), last_error=COALESCE(last_error, $2) WHERE id=$3`,
-              [retryAfter, lastError, job.id],
+            const update = await retryPoolUpdateOrLeaveForReclaim(
+              () =>
+                pool.query(
+                  `UPDATE ${TABLE} SET status='pending', run_after=GREATEST(run_after, $1), last_error=COALESCE(last_error, $2) WHERE id=$3`,
+                  [retryAfter, lastError, job.id],
+                ),
+              job.id,
+              "selfhost_queue_pg_connection_lost_on_rate_limit_defer",
             );
-            if (update.rowCount) {
+            if (update?.rowCount) {
               await recordQueueMetric("gittensory_jobs_rate_limit_deferred_total");
               incr("gittensory_jobs_rate_limit_admission_deferred_total", rateLimitMetric.labels);
               console.warn(
@@ -572,11 +662,16 @@ export function createPgQueue(
                 maintenanceAdmissionConfig,
                 `${job.job_key ?? ""}:${job.id}:${job.payload}`,
               );
-              const update = await pool.query(
-                `UPDATE ${TABLE} SET status='pending', run_after=GREATEST(run_after, $1), last_error=COALESCE(last_error, $2) WHERE id=$3`,
-                [retryAfter, `maintenance admission deferred: ${decision.reason}`, job.id],
+              const update = await retryPoolUpdateOrLeaveForReclaim(
+                () =>
+                  pool.query(
+                    `UPDATE ${TABLE} SET status='pending', run_after=GREATEST(run_after, $1), last_error=COALESCE(last_error, $2) WHERE id=$3`,
+                    [retryAfter, `maintenance admission deferred: ${decision.reason}`, job.id],
+                  ),
+                job.id,
+                "selfhost_queue_pg_connection_lost_on_maintenance_defer",
               );
-              if (update.rowCount) {
+              if (update?.rowCount) {
                 await recordQueueMetric("gittensory_jobs_maintenance_admission_deferred_total");
                 incr("gittensory_jobs_maintenance_admission_deferred_by_reason_total", {
                   reason: decision.reason,
@@ -605,7 +700,26 @@ export function createPgQueue(
           () => consume(message),
           { parentTraceParent: message.type === "github-webhook" ? message.traceParent : undefined },
         );
-        await pool.query(`DELETE FROM ${TABLE} WHERE id=$1`, [job.id]);
+        // Retry on transient connection errors (the pool auto-reconnects). If all retries fail with a
+        // connection error, leave the row in 'processing' -- reclaimExpiredProcessingJobs() resets it to
+        // 'pending' on the next tick, so the job is retried rather than double-processed or lost.
+        try {
+          await retryPoolQuery(() => pool.query(`DELETE FROM ${TABLE} WHERE id=$1`, [job.id]));
+        } catch (deleteErr) {
+          if (isPgConnectionError(deleteErr)) {
+            console.warn(
+              JSON.stringify({
+                level: "warn",
+                event: "selfhost_queue_pg_connection_lost_on_delete",
+                id: job.id,
+                code: (deleteErr as Record<string, unknown>)["code"],
+                message: "PG connection terminated after job succeeded; reclaim mechanism will retry",
+              }),
+            );
+            return true;
+          }
+          throw deleteErr;
+        }
         await recordQueueMetric("gittensory_jobs_processed_total");
         logAudit({
           event: "job_complete",
@@ -617,6 +731,24 @@ export function createPgQueue(
           attempts: Number(job.attempts) + 1,
         }, jobTraceParent);
       } catch (error) {
+        // If the connection was lost during job processing itself (consume() made its own PG calls), leave
+        // the job in 'processing' state for the reclaim mechanism to reset rather than cascading into a
+        // secondary error trying to reschedule it over a dead connection. Still warn so operators can
+        // correlate with DB restart events. Uses the STRICT (SQLSTATE-only) check here, since consume() can
+        // throw generic network codes (ECONNRESET etc.) from its own unrelated calls (e.g. GitHub API) that
+        // must still go through normal retry/dead-letter handling, not be silently left unattempted.
+        if (isPgSqlStateConnectionError(error)) {
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              event: "selfhost_queue_pg_connection_lost",
+              id: job.id,
+              code: (error as Record<string, unknown>)["code"],
+              message: "PG connection terminated during job processing; reclaim mechanism will retry",
+            }),
+          );
+          return true;
+        }
         const attempts = Number(job.attempts) + 1;
         const errMsg = errorMessageWithCause(error);
         const rateLimitDelayMs = githubRateLimitRetryDelayMs(error);

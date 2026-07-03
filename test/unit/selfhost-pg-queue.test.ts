@@ -534,6 +534,101 @@ describe("createPgQueue (durable #977)", () => {
     expect(seen).toEqual(["review"]);
   });
 
+  it("PG connection resilience (#selfhost-pg-resilience): retries a transient connection error on the post-success DELETE, then succeeds", async () => {
+    const m = makePool();
+    m.enqueueJob("1", { type: "review" });
+    let deleteAttempts = 0;
+    let claimed = false;
+    (m.fn as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (sql: unknown) => {
+      const q = String(sql);
+      if (q.includes("DELETE FROM")) {
+        deleteAttempts += 1;
+        if (deleteAttempts < 2) {
+          const err = new Error("connection terminated") as Error & { code: string };
+          err.code = "ECONNRESET";
+          throw err;
+        }
+        return { rows: [], rowCount: 1 };
+      }
+      if (q.includes("RETURNING")) {
+        if (claimed) return { rows: [], rowCount: 0 };
+        claimed = true;
+        return { rows: [{ id: "1", payload: JSON.stringify({ type: "review" }), attempts: 0, job_key: null }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const seen: string[] = [];
+    const q = createPgQueue(m.pool, async (j) => void seen.push(typeOf(j)));
+    await q.init();
+    await q.drain();
+    expect(seen).toEqual(["review"]);
+    expect(deleteAttempts).toBe(2);
+  });
+
+  it("PG connection resilience: leaves the job in 'processing' (for reclaim) when the DELETE exhausts retries on a dead connection", async () => {
+    const m = makePool();
+    m.enqueueJob("1", { type: "review" });
+    let claimed = false;
+    (m.fn as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (sql: unknown) => {
+      const q = String(sql);
+      if (q.includes("DELETE FROM")) {
+        const err = new Error("connection terminated") as Error & { code: string };
+        err.code = "ECONNRESET";
+        throw err;
+      }
+      if (q.includes("RETURNING")) {
+        if (claimed) return { rows: [], rowCount: 0 };
+        claimed = true;
+        return { rows: [{ id: "1", payload: JSON.stringify({ type: "review" }), attempts: 0, job_key: null }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const writes: string[] = [];
+    vi.mocked(process.stdout.write).mockImplementation((chunk) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    const q = createPgQueue(m.pool, async () => undefined);
+    await q.init();
+    await q.drain();
+    expect(writes.some((line) => line.includes('"event":"job_complete"'))).toBe(false);
+  });
+
+  it("PG connection resilience: a connection error thrown by the consumer itself is left for reclaim, not dead-lettered", async () => {
+    const m = makePool();
+    m.enqueueJob("1", { type: "review" });
+    const consume = vi.fn().mockImplementation(async () => {
+      const err = new Error("connection terminated") as Error & { code: string };
+      err.code = "57P01";
+      throw err;
+    });
+    const q = createPgQueue(m.pool, consume);
+    await q.init();
+    await q.drain();
+    // No dead-letter UPDATE (status='dead') or pending-retry UPDATE (attempts=$1) should have run for this job.
+    const calls = (m.fn as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(calls.some((sql) => sql.includes("status='dead'"))).toBe(false);
+    expect(calls.some((sql) => sql.includes("attempts=$1, run_after=$2"))).toBe(false);
+  });
+
+  it("regression: a GENERIC network error from consume() (e.g. GitHub API, not Postgres) still goes through normal retry, not silent reclaim", async () => {
+    // ECONNRESET/ECONNREFUSED/EPIPE are NOT unique to Postgres -- consume() can throw them from its own
+    // unrelated network calls. Only unambiguous Postgres SQLSTATE codes should trigger the reclaim path here.
+    const m = makePool();
+    m.enqueueJob("1", { type: "review" });
+    const consume = vi.fn().mockImplementation(async () => {
+      const err = new Error("socket hang up") as Error & { code: string };
+      err.code = "ECONNRESET";
+      throw err;
+    });
+    const q = createPgQueue(m.pool, consume);
+    await q.init();
+    await q.drain();
+    const calls = (m.fn as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => String(c[0]));
+    // attempts=1 (first failure, under maxRetries) -> the normal pending-retry UPDATE must have run.
+    expect(calls.some((sql) => sql.includes("attempts=$1, run_after=$2"))).toBe(true);
+  });
+
   it("copies carried webhook trace ids into job audit logs", async () => {
     const m = makePool();
     const writes: string[] = [];
@@ -651,6 +746,47 @@ describe("createPgQueue (durable #977)", () => {
         ["gittensory_jobs_rate_limit_deferred_total", 1],
       );
       expect(await renderMetrics()).toContain('gittensory_jobs_rate_limit_admission_deferred_total{job_type="agent-regate-pr",key_scope="installation",kind="background"} 1');
+    } finally {
+      if (oldJitter === undefined) delete process.env.QUEUE_RATE_LIMIT_JITTER_MS;
+      else process.env.QUEUE_RATE_LIMIT_JITTER_MS = oldJitter;
+    }
+  });
+
+  it("PG connection resilience: a still-dead connection on the rate-limit-defer UPDATE doesn't crash the pump loop (other claimable jobs still run)", async () => {
+    // Regression: an uncaught throw here used to escape processOne() entirely and land in pump()'s own
+    // catch (see pump()'s "selfhost_queue_pump_crashed"), which ALSO breaks pump()'s `while (await
+    // processOne())` loop -- so a SECOND already-claimable job enqueued in the same batch would be left
+    // unprocessed until the next kick, not just this one job's own retry being deferred.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
+    const oldJitter = process.env.QUEUE_RATE_LIMIT_JITTER_MS;
+    process.env.QUEUE_RATE_LIMIT_JITTER_MS = "0";
+    try {
+      const m = makePool();
+      m.setRateLimitRows([{ admission_key: "installation:123", repo_full_name: "owner/other-repo", remaining: "120", reset_at: "2026-06-24T12:10:00.000Z", observed_at: "2026-06-24T11:59:30.000Z" }]);
+      m.enqueueJob("background", {
+        type: "agent-regate-pr",
+        deliveryId: "sweep:owner/repo#7",
+        repoFullName: "owner/repo",
+        prNumber: 7,
+        installationId: 123,
+      });
+      m.enqueueJob("second", { type: "review" });
+      const original = (m.fn as unknown as ReturnType<typeof vi.fn>).getMockImplementation() as (sql: unknown, params?: unknown[]) => Promise<unknown>;
+      (m.fn as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (sql: unknown, params?: unknown[]) => {
+        if (String(sql).includes("SET status='pending', run_after=GREATEST")) {
+          const err = new Error("connection terminated") as Error & { code: string };
+          err.code = "ECONNRESET";
+          throw err;
+        }
+        return original(sql, params);
+      });
+      const seen: string[] = [];
+      const q = createPgQueue(m.pool, async (j) => void seen.push(typeOf(j)));
+      await q.drain();
+      // The second job must still be processed in the same drain() call, proving the pump() while-loop
+      // continued past the first job's connection-loss instead of throwing out of it entirely.
+      expect(seen).toEqual(["review"]);
     } finally {
       if (oldJitter === undefined) delete process.env.QUEUE_RATE_LIMIT_JITTER_MS;
       else process.env.QUEUE_RATE_LIMIT_JITTER_MS = oldJitter;

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -56,8 +56,14 @@ case " $args " in
     exit 8
     ;;
 esac
-if [ "\${PGDATABASE:-}" != "postgres://gittensory:pw@postgres:5432/gittensory" ]; then
-  echo 'psql did not receive postgres URL through PGDATABASE' >&2
+case " \${PGHOST:-} \${PGPORT:-} \${PGUSER:-} \${PGPASSWORD:-} \${PGDATABASE:-} " in
+  *" postgres://"*|*" postgresql://"*)
+    echo 'psql received the whole postgres URL through an env var instead of split components' >&2
+    exit 8
+    ;;
+esac
+if [ "\${PGHOST:-}" != "postgres" ] || [ "\${PGPORT:-}" != "5432" ] || [ "\${PGUSER:-}" != "gittensory" ] || [ "\${PGPASSWORD:-}" != "pw" ] || [ "\${PGDATABASE:-}" != "gittensory" ]; then
+  echo 'psql did not receive the split connection env vars (PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE)' >&2
   exit 8
 fi
 case "$args" in
@@ -122,6 +128,26 @@ esac
   );
   chmodSync(mktemp, 0o755);
   return bin;
+}
+
+// Captures the connection env vars psql actually receives (rather than asserting a fixed expected value inline
+// like fakePsql) so callers can point it at ANY DATABASE_URL shape and inspect exactly what was parsed out.
+function capturingPsql(root: string): { bin: string; captureFile: string } {
+  const bin = join(root, "capture-bin");
+  mkdirSync(bin);
+  const psql = join(bin, "psql");
+  const captureFile = join(root, "captured-env.txt");
+  writeFileSync(
+    psql,
+    `#!/bin/sh
+printf 'PGHOST=%s\\nPGPORT=%s\\nPGUSER=%s\\nPGPASSWORD=%s\\nPGDATABASE=%s\\n' "\${PGHOST:-}" "\${PGPORT:-}" "\${PGUSER:-}" "\${PGPASSWORD:-}" "\${PGDATABASE:-}" > "${captureFile}"
+case "$*" in
+  *"information_schema.tables"*) printf '1\\n' ;;
+esac
+`,
+  );
+  chmodSync(psql, 0o755);
+  return { bin, captureFile };
 }
 
 function failingPsql(root: string): string {
@@ -219,8 +245,11 @@ esac
 
     expect(sqlite(outDb, "PRAGMA quick_check;")).toBe("ok");
     expect(sqlite(outDb, "SELECT count(*) FROM review_targets;")).toBe("3");
+    // Latest advisory conclusion for #1690 is 'neutral' -- counted as 'manual' (matches gateHeld's held-for-review
+    // definition in src/signals/engine.ts, not 'commented'/'comment') so the dashboard's manual-review panel
+    // reflects the same held state the live app itself surfaces via gittensory:needs-human-review.
     expect(sqlite(outDb, "SELECT submitter || '|' || status || '|' || verdict || '|' || updated_at FROM review_targets WHERE repo='JSONbored/gittensory' AND number=1690;")).toBe(
-      "JSONbored|commented|comment|2026-06-28T21:40:00Z",
+      "JSONbored|manual|manual|2026-06-28T21:40:00Z",
     );
     expect(sqlite(outDb, "SELECT status || '|' || verdict || '|' || updated_at FROM review_targets WHERE repo='JSONbored/gittensory' AND number=1691;")).toBe(
       "merged|merge|2026-06-28T21:47:40Z",
@@ -345,6 +374,41 @@ esac
     expect(sqlite(outDb, "PRAGMA quick_check;")).toBe("ok");
     expect(sqlite(outDb, "SELECT count(*) FROM review_targets;")).toBe("3");
     expect(sqlite(outDb, "SELECT sum(estimated_neurons) FROM ai_usage_events;")).toBe("42");
+  });
+
+  it("REGRESSION (gate-flagged): a bracketed IPv6 Postgres host (postgres://u:p@[::1]:5432/db) is split correctly, not cut apart at the address's own internal colons", () => {
+    const root = tmpRoot();
+    const outDb = join(root, "reporting.sqlite");
+    const { bin, captureFile } = capturingPsql(root);
+
+    runExporter(root, join(root, "unused.sqlite"), outDb, {
+      DATABASE_URL: "postgres://gittensory:pw@[::1]:5432/gittensory",
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    });
+
+    const captured = readFileSync(captureFile, "utf8");
+    expect(captured).toContain("PGHOST=::1\n");
+    expect(captured).toContain("PGPORT=5432\n");
+    expect(captured).toContain("PGUSER=gittensory\n");
+    expect(captured).toContain("PGPASSWORD=pw\n");
+    expect(captured).toContain("PGDATABASE=gittensory\n");
+  });
+
+  it("REGRESSION: a bracketed IPv6 Postgres host with no port and no userinfo (postgres://[::1]/db) is split correctly", () => {
+    const root = tmpRoot();
+    const outDb = join(root, "reporting.sqlite");
+    const { bin, captureFile } = capturingPsql(root);
+
+    runExporter(root, join(root, "unused.sqlite"), outDb, {
+      DATABASE_URL: "postgres://[::1]/gittensory",
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    });
+
+    const captured = readFileSync(captureFile, "utf8");
+    expect(captured).toContain("PGHOST=::1\n");
+    expect(captured).toContain("PGPORT=\n");
+    expect(captured).toContain("PGUSER=\n");
+    expect(captured).toContain("PGDATABASE=gittensory\n");
   });
 
   it("fails closed when Postgres metadata cannot be inspected", () => {
