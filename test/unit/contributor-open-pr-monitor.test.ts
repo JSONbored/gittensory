@@ -70,7 +70,7 @@ describe("contributor open PR monitor", () => {
       reviews: [approvedReview(1)],
       checks: [],
     });
-    expect(mapPendingClassToWorkClassification(approved, { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false })).toBe("approved");
+    expect(mapPendingClassToWorkClassification(approved, { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false, weakTestCoverage: false })).toBe("approved");
 
     const failing = classifyOpenPullRequest({
       pr: pr({ number: 2 }),
@@ -78,7 +78,7 @@ describe("contributor open PR monitor", () => {
       reviews: [approvedReview(2)],
       checks: [{ id: "c1", repoFullName: "entrius/allways-ui", pullNumber: 2, name: "ci", status: "completed", conclusion: "failure", payload: {} }],
     });
-    expect(mapPendingClassToWorkClassification(failing, { changeRequestCount: 0, checkFailureCount: 1, duplicateProne: false, missingTests: false })).toBe("failing_checks");
+    expect(mapPendingClassToWorkClassification(failing, { changeRequestCount: 0, checkFailureCount: 1, duplicateProne: false, missingTests: false, weakTestCoverage: false })).toBe("failing_checks");
 
     const needsAuthor = classifyOpenPullRequest({
       pr: pr({ number: 3 }),
@@ -86,7 +86,7 @@ describe("contributor open PR monitor", () => {
       reviews: [{ ...approvedReview(3), state: "CHANGES_REQUESTED" }],
       checks: [],
     });
-    expect(mapPendingClassToWorkClassification(needsAuthor, { changeRequestCount: 1, checkFailureCount: 0, duplicateProne: false, missingTests: false })).toBe("needs_author");
+    expect(mapPendingClassToWorkClassification(needsAuthor, { changeRequestCount: 1, checkFailureCount: 0, duplicateProne: false, missingTests: false, weakTestCoverage: false })).toBe("needs_author");
 
     const staleDate = new Date(Date.now() - 20 * 86_400_000).toISOString();
     const stale = classifyOpenPullRequest({
@@ -95,33 +95,40 @@ describe("contributor open PR monitor", () => {
       reviews: [approvedReview(4)],
       checks: [],
     });
-    expect(mapPendingClassToWorkClassification(stale, { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false })).toBe("should_close_or_withdraw");
+    expect(mapPendingClassToWorkClassification(stale, { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false, weakTestCoverage: false })).toBe("should_close_or_withdraw");
 
     expect(
       mapPendingClassToWorkClassification(
         classifyOpenPullRequest({ pr: pr({ number: 5, title: "fix overlap" }), roleContext: outsideContributorRole, reviews: [approvedReview(5)], checks: [] }),
-        { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: true, missingTests: false },
+        { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: true, missingTests: false, weakTestCoverage: false },
       ),
     ).toBe("duplicate_prone");
 
     expect(
       mapPendingClassToWorkClassification(
         classifyOpenPullRequest({ pr: pr({ number: 6 }), roleContext: outsideContributorRole, reviews: [approvedReview(6)], checks: [] }),
-        { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: true },
+        { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: true, weakTestCoverage: false },
       ),
     ).toBe("missing_tests");
 
     expect(
       mapPendingClassToWorkClassification(
+        classifyOpenPullRequest({ pr: pr({ number: 14 }), roleContext: outsideContributorRole, reviews: [approvedReview(14)], checks: [] }),
+        { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false, weakTestCoverage: true },
+      ),
+    ).toBe("weak_test_coverage");
+
+    expect(
+      mapPendingClassToWorkClassification(
         classifyOpenPullRequest({ pr: pr({ number: 7, authorAssociation: "OWNER" }), roleContext: outsideContributorRole, reviews: [approvedReview(7)], checks: [] }),
-        { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false },
+        { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false, weakTestCoverage: false },
       ),
     ).toBe("maintainer_lane");
 
     expect(
       mapPendingClassToWorkClassification(
         classifyOpenPullRequest({ pr: pr({ number: 8 }), roleContext: maintainerRole, reviews: [approvedReview(8)], checks: [] }),
-        { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false },
+        { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false, weakTestCoverage: false },
       ),
     ).toBe("maintainer_lane");
 
@@ -131,15 +138,15 @@ describe("contributor open PR monitor", () => {
       reviews: [],
       checks: [],
     });
-    expect(mapPendingClassToWorkClassification(draft, { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false })).toBe("draft");
+    expect(mapPendingClassToWorkClassification(draft, { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false, weakTestCoverage: false })).toBe("draft");
 
     const blocked = classifyOpenPullRequest({ pr: pr({ number: 12 }), roleContext: outsideContributorRole, reviews: [], checks: [] });
-    expect(mapPendingClassToWorkClassification(blocked, { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false })).toBe("blocked");
+    expect(mapPendingClassToWorkClassification(blocked, { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false, weakTestCoverage: false })).toBe("blocked");
 
     expect(
       mapPendingClassToWorkClassification(
         { repoFullName: "entrius/allways-ui", number: 13, title: "mystery", classification: "unknown" as never, reasons: [] },
-        { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false },
+        { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false, weakTestCoverage: false },
       ),
     ).toBe("reviewable");
   });
@@ -151,7 +158,7 @@ describe("contributor open PR monitor", () => {
       reviews: [],
       checks: [],
     });
-    expect(mapPendingClassToWorkClassification(nativeDraft, { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false })).toBe("draft");
+    expect(mapPendingClassToWorkClassification(nativeDraft, { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false, weakTestCoverage: false })).toBe("draft");
   });
 
   it("builds contributor-wide monitor answer from registered repos only", async () => {
@@ -242,6 +249,7 @@ describe("contributor open PR monitor", () => {
       [],
       false,
       false,
+      false,
     );
     expect(packet.nextSteps.join(" ")).not.toMatch(/\/Users\/|\/home\/|upload source/i);
   });
@@ -254,6 +262,7 @@ describe("contributor open PR monitor", () => {
       [{ id: "1", repoFullName: "entrius/allways-ui", pullNumber: 55, name: "ci", status: "failure", conclusion: null, payload: {} }],
       false,
       false,
+      false,
     );
     expect(statusCarried.classification).toBe("failing_checks");
     expect(statusCarried.nextSteps.join(" ")).toContain("Fix failing checks");
@@ -262,6 +271,7 @@ describe("contributor open PR monitor", () => {
       classified,
       [],
       [{ id: "2", repoFullName: "entrius/allways-ui", pullNumber: 55, name: "ci", status: "completed", conclusion: "startup_failure", payload: {} }],
+      false,
       false,
       false,
     );
@@ -448,5 +458,53 @@ describe("contributor open PR monitor", () => {
     expect(monitor.cleanupFirst).toBe(true);
     expect(monitor.pullRequests[0]?.classification).toBe("needs_author");
     expect(monitor.pullRequests[1]?.classification).toBe("approved");
+  });
+
+  it("classifies disproportionately weak test coverage separately from fully missing tests", async () => {
+    const env = createTestEnv();
+    vi.spyOn(repositories, "listRepositories").mockResolvedValue([
+      { fullName: "entrius/allways-ui", owner: "entrius", name: "allways-ui", isInstalled: true, isRegistered: true, isPrivate: false },
+    ] as Awaited<ReturnType<typeof repositories.listRepositories>>);
+    vi.spyOn(repositories, "listContributorPullRequests").mockResolvedValue([pr({ number: 60 })]);
+    vi.spyOn(repositories, "listPullRequests").mockResolvedValue([pr({ number: 60 })]);
+    vi.spyOn(repositories, "listPullRequestReviews").mockResolvedValue([approvedReview(60)]);
+    vi.spyOn(repositories, "listCheckSummaries").mockResolvedValue([]);
+    vi.spyOn(repositories, "listPullRequestFiles").mockResolvedValue([
+      ...Array.from({ length: 9 }, (_, index) => ({
+        repoFullName: "entrius/allways-ui",
+        pullNumber: 60,
+        path: `src/file${index}.ts`,
+        additions: 12,
+        deletions: 0,
+        changes: 12,
+        payload: {},
+      })),
+      {
+        repoFullName: "entrius/allways-ui",
+        pullNumber: 60,
+        path: "test/single.test.ts",
+        additions: 8,
+        deletions: 0,
+        changes: 8,
+        payload: {},
+      },
+    ]);
+
+    const monitor = await buildContributorOpenPrMonitor(env, "miner-a");
+    expect(monitor.pullRequests[0]?.classification).toBe("weak_test_coverage");
+    expect(monitor.pullRequests[0]?.nextSteps.join(" ")).toMatch(/Broaden test or fixture coverage/i);
+  });
+
+  it("derives coverage classification from cached PR file paths", () => {
+    const { testCoverageClassificationFromFiles, weakTestCoverageFromFiles, missingTestsFromFiles } = __contributorOpenPrMonitorInternals;
+    const weakFiles = [
+      ...Array.from({ length: 9 }, (_, index) => ({ repoFullName: "entrius/allways-ui", pullNumber: 1, path: `src/file${index}.ts`, additions: 1, deletions: 0, changes: 1, payload: {} })),
+      { repoFullName: "entrius/allways-ui", pullNumber: 1, path: "test/single.test.ts", additions: 1, deletions: 0, changes: 1, payload: {} },
+    ];
+    expect(testCoverageClassificationFromFiles(weakFiles)).toBe("weak");
+    expect(weakTestCoverageFromFiles(weakFiles)).toBe(true);
+    expect(missingTestsFromFiles(weakFiles)).toBe(false);
+    expect(testCoverageClassificationFromFiles([])).toBeNull();
+    expect(missingTestsFromFiles([])).toBe(false);
   });
 });

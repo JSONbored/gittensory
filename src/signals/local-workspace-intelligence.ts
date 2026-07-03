@@ -1,6 +1,6 @@
 import { isPassingValidation } from "./local-branch";
 import type { LocalBranchAnalysis, LocalBranchAnalysisInput, LocalBranchChangedFile, LocalBranchValidation } from "./local-branch";
-import { isTestPath } from "./test-evidence";
+import { buildTestCoverageSummary, isTestEvidencePath, type TestCoverageSummary } from "./test-evidence";
 import { sanitizeLocalScorerWarnings } from "./local-scorer-diagnostics";
 
 export type LocalWorkspaceIntelligence = {
@@ -30,6 +30,7 @@ export type LocalWorkspaceIntelligence = {
     passedValidationCount: number;
     commands: LocalBranchValidation[];
   };
+  testCoverage: TestCoverageSummary;
   linkedIssues: number[];
   baseFreshness: LocalBranchAnalysis["baseFreshness"];
   ciStatusHints: string[];
@@ -55,11 +56,13 @@ export function buildLocalWorkspaceIntelligence(args: {
   changedFiles: LocalBranchChangedFile[];
 }): LocalWorkspaceIntelligence {
   const validation = args.input.validation ?? [];
-  const testFileCount = args.changedFiles.filter((file) => isTestPath(file.path)).length;
+  const changedPaths = args.changedFiles.map((file) => file.path).filter(Boolean);
+  const testFileCount = changedPaths.filter((path) => isTestEvidencePath(path)).length;
   const passedValidationCount = validation.filter(isPassingValidation).length;
   const hasTestFiles = testFileCount > 0;
   const hasValidation = passedValidationCount > 0;
   const testEvidenceLevel = hasTestFiles && hasValidation ? "both" : hasTestFiles ? "test_files" : hasValidation ? "validation_commands" : "none";
+  const testCoverage = buildTestCoverageSummary(changedPaths);
   const scorer = args.input.localScorer;
 
   return {
@@ -81,6 +84,7 @@ export function buildLocalWorkspaceIntelligence(args: {
       passedValidationCount,
       commands: validation,
     },
+    testCoverage,
     linkedIssues: [...(args.input.linkedIssues ?? [])].sort((left, right) => left - right),
     baseFreshness: args.analysis.baseFreshness,
     ciStatusHints: [...(args.input.ciStatusHints ?? [])],

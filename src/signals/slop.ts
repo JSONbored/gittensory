@@ -1,6 +1,6 @@
 import { GENERIC_COMMIT_PATTERN, hasClearNoIssueRationale, type SignalFinding } from "./engine";
 import { isCodeFile, isTestFile } from "./local-branch";
-import { hasLocalTestEvidence, isTestPath } from "./test-evidence";
+import { buildTestCoverageSummary, hasLocalTestEvidence, isTestEvidencePath, isTestPath } from "./test-evidence";
 import { isFocusManifestPublicSafe } from "./focus-manifest";
 import { classifyChangedFile } from "./path-matchers";
 
@@ -47,6 +47,7 @@ export type SlopAssessment = {
 export const SLOP_WEIGHTS = {
   trivialWhitespaceChurn: 30,
   missingTestEvidence: 15,
+  weakTestCoverage: 10,
   nonSubstantivePadding: 30,
   emptyDescription: 15,
   lowQualityCommitMessage: 15,
@@ -65,6 +66,7 @@ export const SLOP_RUBRIC_MARKDOWN = [
   "Current deterministic signals:",
   "- trivial / whitespace-only churn",
   "- missing test evidence",
+  "- weak test coverage (some tests, but disproportionately low for the source diff)",
   "- non-substantive padding (generated / vendored / minified output as source)",
   "- empty pull request description on a code change",
   "- generic or empty commit message",
@@ -86,6 +88,7 @@ export function buildSlopAssessment(input: SlopAssessmentInput): SlopAssessment 
   const findings: SignalFinding[] = [];
   const trivialChurnFinding = buildTrivialWhitespaceChurnFinding(input);
   const missingTestEvidenceFinding = buildMissingTestEvidenceFinding(input);
+  const weakTestCoverageFinding = buildWeakTestCoverageFinding(input);
   const nonSubstantivePaddingFinding = buildNonSubstantivePaddingFinding(input);
   const emptyDescriptionFinding = buildEmptyDescriptionFinding(input);
   const lowQualityCommitMessageFinding = buildLowQualityCommitMessageFinding(input);
@@ -93,6 +96,7 @@ export function buildSlopAssessment(input: SlopAssessmentInput): SlopAssessment 
   const noLinkedIssueRationaleFinding = buildNoLinkedIssueRationaleFinding(input);
   if (trivialChurnFinding) findings.push(trivialChurnFinding);
   if (missingTestEvidenceFinding) findings.push(missingTestEvidenceFinding);
+  if (weakTestCoverageFinding) findings.push(weakTestCoverageFinding);
   if (nonSubstantivePaddingFinding) findings.push(nonSubstantivePaddingFinding);
   if (emptyDescriptionFinding) findings.push(emptyDescriptionFinding);
   if (lowQualityCommitMessageFinding) findings.push(lowQualityCommitMessageFinding);
@@ -102,6 +106,7 @@ export function buildSlopAssessment(input: SlopAssessmentInput): SlopAssessment 
   const slopRisk = clamp(
     (trivialChurnFinding ? SLOP_WEIGHTS.trivialWhitespaceChurn : 0) +
       (missingTestEvidenceFinding ? SLOP_WEIGHTS.missingTestEvidence : 0) +
+      (weakTestCoverageFinding ? SLOP_WEIGHTS.weakTestCoverage : 0) +
       (nonSubstantivePaddingFinding ? SLOP_WEIGHTS.nonSubstantivePadding : 0) +
       (emptyDescriptionFinding ? SLOP_WEIGHTS.emptyDescription : 0) +
       (lowQualityCommitMessageFinding ? SLOP_WEIGHTS.lowQualityCommitMessage : 0) +
@@ -262,7 +267,7 @@ export function buildMissingTestEvidenceFinding(input: SlopAssessmentInput): Sig
   // per-file line counts are unavailable we trust the path (can't prove emptiness); when known, require a few
   // added lines so a stub can't fake coverage. (#audit-3.1)
   const hasSubstantiveTestFile = changedFiles.some((file) => {
-    if (!(isTestFile(file.path) || isTestPath(file.path))) return false;
+    if (!(isTestFile(file.path) || isTestEvidencePath(file.path))) return false;
     return file.additions === undefined || nonNegative(file.additions) >= MIN_SUBSTANTIVE_TEST_ADDITIONS;
   });
   const hasChangedTestPaths = hasSubstantiveTestFile || hasLocalTestEvidence({ tests: input.tests, testFiles: input.testFiles });
@@ -281,6 +286,38 @@ export function buildMissingTestEvidenceFinding(input: SlopAssessmentInput): Sig
     code: "missing_test_evidence",
     title: "Code changes lack test evidence",
     severity: "warning",
+    detail,
+    action,
+    publicText: detail,
+  };
+}
+
+export function buildWeakTestCoverageFinding(input: SlopAssessmentInput): SignalFinding | null {
+  const changedFiles = input.changedFiles ?? [];
+  const changedPaths = changedFiles.map((file) => file.path).filter(Boolean);
+  const coverage = buildTestCoverageSummary(changedPaths);
+  if (coverage.classification !== "weak") return null;
+  if (coverage.sourcePathCount === 0) return null;
+
+  const hasSubstantiveTestFile = changedFiles.some((file) => {
+    if (!isTestEvidencePath(file.path)) return false;
+    return file.additions === undefined || nonNegative(file.additions) >= MIN_SUBSTANTIVE_TEST_ADDITIONS;
+  });
+  if (!hasSubstantiveTestFile && !hasLocalTestEvidence({ tests: input.tests, testFiles: input.testFiles })) return null;
+
+  const detail = ensurePublicSafeText(
+    `Changed paths include ${coverage.sourcePathCount} source file(s) but only ${coverage.testPathCount + coverage.fixturePathCount} test/fixture path(s) (${Math.round(coverage.testToChangedRatio * 100)}% of the diff).`,
+    "Source changes outnumber accompanying test or fixture evidence.",
+  );
+  const action = ensurePublicSafeText(
+    coverage.guidance,
+    "Add focused regression tests or fixtures for the touched modules.",
+  );
+
+  return {
+    code: "weak_test_coverage",
+    title: "Test coverage is disproportionately weak",
+    severity: "info",
     detail,
     action,
     publicText: detail,

@@ -2714,6 +2714,7 @@
               "needs_author",
               "failing_checks",
               "missing_tests",
+              "weak_test_coverage",
               "duplicate_prone",
               "reviewable",
               "should_close_or_withdraw",
@@ -7620,6 +7621,47 @@
           },
           "rerunWhen": {
             "type": "string"
+          },
+          "testCoverage": {
+            "type": "object",
+            "properties": {
+              "classification": {
+                "type": "string",
+                "enum": [
+                  "strong",
+                  "adequate",
+                  "weak",
+                  "absent"
+                ]
+              },
+              "changedPathCount": {
+                "type": "number"
+              },
+              "sourcePathCount": {
+                "type": "number"
+              },
+              "testPathCount": {
+                "type": "number"
+              },
+              "fixturePathCount": {
+                "type": "number"
+              },
+              "testToChangedRatio": {
+                "type": "number"
+              },
+              "guidance": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "classification",
+              "changedPathCount",
+              "sourcePathCount",
+              "testPathCount",
+              "fixturePathCount",
+              "testToChangedRatio",
+              "guidance"
+            ]
           }
         },
         "required": [
@@ -7628,6 +7670,7 @@
           "branch",
           "changedFiles",
           "testEvidence",
+          "testCoverage",
           "linkedIssues",
           "baseFreshness",
           "ciStatusHints",

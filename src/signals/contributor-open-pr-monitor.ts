@@ -12,7 +12,7 @@ import type { CheckSummaryRecord, PullRequestFileRecord, PullRequestRecord, Pull
 import { nowIso } from "../utils/json";
 import { buildRoleContext } from "./engine";
 import { isFailingCheckSummary } from "./local-branch";
-import { isTestPath } from "./test-evidence";
+import { buildTestCoverageSummary, type TestCoverageClassification } from "./test-evidence";
 
 export type OpenPrWorkClassification =
   | "approved"
@@ -21,6 +21,7 @@ export type OpenPrWorkClassification =
   | "needs_author"
   | "failing_checks"
   | "missing_tests"
+  | "weak_test_coverage"
   | "duplicate_prone"
   | "reviewable"
   | "should_close_or_withdraw"
@@ -89,7 +90,16 @@ export async function buildContributorOpenPrMonitor(env: Env, login: string): Pr
         duplicateProne: duplicateNumbers.has(pr.number),
         missingTests: missingTestsFromFiles(files),
       });
-      packets.push(buildNextStepPacket(classified, reviews, checks, duplicateNumbers.has(pr.number), missingTestsFromFiles(files)));
+      packets.push(
+        buildNextStepPacket(
+          classified,
+          reviews,
+          checks,
+          duplicateNumbers.has(pr.number),
+          missingTestsFromFiles(files),
+          weakTestCoverageFromFiles(files),
+        ),
+      );
     }
 
     const detection = detectPendingPrScenario({
@@ -128,7 +138,7 @@ export async function buildContributorOpenPrMonitor(env: Env, login: string): Pr
 
 export function mapPendingClassToWorkClassification(
   classified: ClassifiedOpenPullRequest,
-  args: { changeRequestCount: number; checkFailureCount: number; duplicateProne: boolean; missingTests: boolean },
+  args: { changeRequestCount: number; checkFailureCount: number; duplicateProne: boolean; missingTests: boolean; weakTestCoverage: boolean },
 ): OpenPrWorkClassification {
   if (classified.classification === "maintainer_lane") return "maintainer_lane";
   if (classified.classification === "draft") return "draft";
@@ -137,6 +147,7 @@ export function mapPendingClassToWorkClassification(
   if (args.checkFailureCount > 0) return "failing_checks";
   if (args.changeRequestCount > 0) return "needs_author";
   if (args.missingTests) return "missing_tests";
+  if (args.weakTestCoverage) return "weak_test_coverage";
   if (classified.classification === "merge_ready") return "approved";
   if (classified.classification === "blocked") return "blocked";
   return "reviewable";
@@ -148,10 +159,17 @@ function buildNextStepPacket(
   checks: CheckSummaryRecord[],
   duplicateProne: boolean,
   missingTests: boolean,
+  weakTestCoverage: boolean,
 ): ContributorOpenPrNextStepPacket {
   const changeRequestCount = reviews.filter((review) => review.state.toUpperCase() === "CHANGES_REQUESTED").length;
   const checkFailureCount = checks.filter(isFailingCheckSummary).length;
-  const classification = mapPendingClassToWorkClassification(classified, { changeRequestCount, checkFailureCount, duplicateProne, missingTests });
+  const classification = mapPendingClassToWorkClassification(classified, {
+    changeRequestCount,
+    checkFailureCount,
+    duplicateProne,
+    missingTests,
+    weakTestCoverage,
+  });
   const nextSteps = nextStepsForClassification(classification, classified.repoFullName, classified.number);
   const summary = `${classified.repoFullName}#${classified.number}: ${classification.replace(/_/g, " ")} — ${classified.title}`;
   return {
@@ -176,6 +194,11 @@ function nextStepsForClassification(classification: OpenPrWorkClassification, re
       return [`Address review comments on ${ref} and push updates.`, `Reply on the PR thread summarizing what changed.`];
     case "missing_tests":
       return [`Add or update tests on ${ref} if the repo expects test coverage.`, `Note test commands run in the PR description.`];
+    case "weak_test_coverage":
+      return [
+        `Broaden test or fixture coverage on ${ref} so it matches the source files touched.`,
+        `Add focused regression tests for the modules changed and note the commands run in the PR description.`,
+      ];
     case "duplicate_prone":
       return [`Check overlap with other open PRs in ${repoFullName}; close or consolidate duplicates.`, `Comment on ${ref} linking the canonical PR if one exists.`];
     case "stale":
@@ -259,10 +282,18 @@ function normalizeTitle(title: string): string {
 }
 
 function missingTestsFromFiles(files: PullRequestFileRecord[]): boolean {
-  if (files.length === 0) return false;
-  const codeFiles = files.filter((file) => file.path && !isTestPath(file.path));
-  const testFiles = files.filter((file) => file.path && isTestPath(file.path));
-  return codeFiles.length > 0 && testFiles.length === 0;
+  const classification = testCoverageClassificationFromFiles(files);
+  return classification === "absent";
+}
+
+function weakTestCoverageFromFiles(files: PullRequestFileRecord[]): boolean {
+  return testCoverageClassificationFromFiles(files) === "weak";
+}
+
+function testCoverageClassificationFromFiles(files: PullRequestFileRecord[]): TestCoverageClassification | null {
+  const paths = files.map((file) => file.path).filter(Boolean);
+  if (paths.length === 0) return null;
+  return buildTestCoverageSummary(paths).classification;
 }
 
 function priorityRank(classification: OpenPrWorkClassification): number {
@@ -271,6 +302,7 @@ function priorityRank(classification: OpenPrWorkClassification): number {
     "needs_author",
     "duplicate_prone",
     "missing_tests",
+    "weak_test_coverage",
     "blocked",
     "should_close_or_withdraw",
     "stale",
@@ -294,6 +326,8 @@ export const __contributorOpenPrMonitorInternals = {
   buildMonitorGuidance,
   duplicatePronePullNumbers,
   missingTestsFromFiles,
+  weakTestCoverageFromFiles,
+  testCoverageClassificationFromFiles,
   priorityRank,
   buildNextStepPacket,
 };

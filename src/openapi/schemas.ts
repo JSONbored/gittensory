@@ -335,6 +335,7 @@ export const ContributorOpenPrNextStepPacketSchema = z
       "needs_author",
       "failing_checks",
       "missing_tests",
+      "weak_test_coverage",
       "duplicate_prone",
       "reviewable",
       "should_close_or_withdraw",
@@ -2157,6 +2158,15 @@ export const LocalWorkspaceIntelligenceSchema = z
           summary: z.string().optional(),
         }),
       ),
+    }),
+    testCoverage: z.object({
+      classification: z.enum(["strong", "adequate", "weak", "absent"]),
+      changedPathCount: z.number(),
+      sourcePathCount: z.number(),
+      testPathCount: z.number(),
+      fixturePathCount: z.number(),
+      testToChangedRatio: z.number(),
+      guidance: z.string(),
     }),
     linkedIssues: z.array(z.number()),
     baseFreshness: z.object({

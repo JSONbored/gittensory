@@ -7,6 +7,7 @@ import {
   buildIssueSlopAssessment,
   buildLowQualityCommitMessageFinding,
   buildMissingTestEvidenceFinding,
+  buildWeakTestCoverageFinding,
   buildNoLinkedIssueRationaleFinding,
   buildNonSubstantivePaddingFinding,
   buildSlopAssessment,
@@ -388,6 +389,57 @@ describe("buildMissingTestEvidenceFinding", () => {
         ],
       }),
     ).toBeNull();
+  });
+});
+
+describe("buildWeakTestCoverageFinding", () => {
+  it("fires when source changes are accompanied by disproportionately weak test evidence", () => {
+    const sources = Array.from({ length: 9 }, (_, index) => ({ path: `src/file${index}.ts`, additions: 12, deletions: 0 }));
+    const finding = buildWeakTestCoverageFinding({
+      changedFiles: [...sources, { path: "test/single.test.ts", additions: 8, deletions: 0 }],
+      description: "Broad refactor across service modules.",
+    });
+
+    expect(finding).toMatchObject({
+      code: "weak_test_coverage",
+      severity: "info",
+      title: "Test coverage is disproportionately weak",
+    });
+    expect(JSON.stringify(finding)).not.toMatch(FORBIDDEN_PUBLIC_TERMS);
+  });
+
+  it("does not fire when coverage is absent (missing_test_evidence owns that case)", () => {
+    expect(
+      buildWeakTestCoverageFinding({
+        changedFiles: [{ path: "src/api/routes.ts", additions: 20, deletions: 0 }],
+      }),
+    ).toBeNull();
+  });
+
+  it("does not fire when coverage is adequate or strong", () => {
+    expect(
+      buildWeakTestCoverageFinding({
+        changedFiles: [
+          { path: "src/a.ts", additions: 10, deletions: 0 },
+          { path: "src/b.ts", additions: 10, deletions: 0 },
+          { path: "src/c.ts", additions: 10, deletions: 0 },
+          { path: "test/a.test.ts", additions: 12, deletions: 0 },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("adds weak coverage weight without making missing-test-only diffs blockable alone", () => {
+    const result = buildSlopAssessment({
+      changedFiles: [
+        ...Array.from({ length: 9 }, (_, index) => ({ path: `src/file${index}.ts`, additions: 12, deletions: 0 })),
+        { path: "test/single.test.ts", additions: 8, deletions: 0 },
+      ],
+      description: "Broad refactor across service modules.",
+    });
+    expect(result.findings.map((finding) => finding.code)).toContain("weak_test_coverage");
+    expect(result.slopRisk).toBe(SLOP_WEIGHTS.weakTestCoverage);
+    expect(result.band).toBe("low");
   });
 });
 

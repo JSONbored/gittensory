@@ -313,4 +313,38 @@ describe("local workspace intelligence v2", () => {
 
     expect(intelligence.linkedIssues).toEqual([7, 19, 42]);
   });
+
+  it("reports test coverage classification alongside test evidence level", () => {
+    const sources = Array.from({ length: 9 }, (_, index) => ({ path: `src/file${index}.ts`, status: "modified" as const }));
+    const intelligence = buildLocalWorkspaceIntelligence({
+      input: {
+        login: "oktofeesh1",
+        repoFullName: repo.fullName,
+        changedFiles: [...sources, { path: "test/single.test.ts", status: "added" }],
+      },
+      analysis: {
+        baseFreshness: { status: "fresh", changedFileCount: 10, testFileCount: 1, passedValidationCount: 0, warnings: [] },
+        branchQualityBlockers: [],
+        accountStateBlockers: [],
+        recommendedRerunCondition: "Rerun after any branch, base, or PR state changes before opening/submitting.",
+        prPacket: {
+          titleSuggestion: "Broad service refactor",
+          markdown: "# Broad service refactor\n",
+          bodySections: [],
+          reviewerNotes: [],
+          validationSummary: { passed: 0, failed: 0, notRun: 0, commands: [] },
+          publicSafeWarnings: [],
+        },
+      },
+      changedFiles: [...sources, { path: "test/single.test.ts", status: "added" }],
+    });
+
+    expect(intelligence.testEvidence.level).toBe("test_files");
+    expect(intelligence.testCoverage).toMatchObject({
+      classification: "weak",
+      sourcePathCount: 9,
+      testPathCount: 1,
+      guidance: expect.stringMatching(/outnumber test evidence/i),
+    });
+  });
 });
