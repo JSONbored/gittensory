@@ -19,7 +19,7 @@ function isTestFile(file) {
 }
 
 function isCodeFile(file) {
-  return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy)$/i.test(file) && !isTestFile(file);
+  return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|c|h|cc|cpp|hpp)$/i.test(file) && !isTestFile(file);
 }
 
 function lineCount(file) {

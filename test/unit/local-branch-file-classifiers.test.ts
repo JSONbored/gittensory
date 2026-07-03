@@ -122,6 +122,13 @@ describe("isCodeFile", () => {
       "Api/Controllers/UserController.cs",
       "Sources/App/Router.swift",
       "src/main/groovy/Pipeline.groovy",
+      // Native C/C++ source — already indexed as code by rag.ts but was "other"
+      // in slop/missing-tests signals when only the diff touched .c/.cpp/.h files.
+      "native/src/parser.c",
+      "native/include/parser.h",
+      "libs/core/engine.cc",
+      "libs/core/types.hpp",
+      "drivers/io.cpp",
     ]) {
       expect(isCodeFile(path)).toBe(true);
     }
