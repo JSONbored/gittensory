@@ -209,7 +209,6 @@ describe("private-beta auth and rate limiting", () => {
     const observedKeys: string[] = [];
     const env = createTestEnv({
       RATE_LIMITER: rateLimiterNamespace({ status: 200, body: {} }, observedKeys) as unknown as DurableObjectNamespace,
-      RATE_LIMIT_TRUSTED_PROXIES: TEST_TRUSTED_PROXY,
     });
 
     await expect(
@@ -227,56 +226,6 @@ describe("private-beta auth and rate limiting", () => {
     expect(observedKeys).toHaveLength(2);
     expect(observedKeys[0]).toBe(observedKeys[1]);
     expect(observedKeys[0]).toMatch(/^strict:\/v1\/auth\/github\/session:ip:/);
-  });
-
-  it("ignores configured trusted proxy IPs without Cloudflare client IP", async () => {
-    const observedKeys: string[] = [];
-    const env = createTestEnv({
-      RATE_LIMITER: rateLimiterNamespace({ status: 200, body: {} }, observedKeys) as unknown as DurableObjectNamespace,
-      RATE_LIMIT_TRUSTED_PROXIES: "198.51.100.99",
-      RATE_LIMIT_TRUSTED_PROXY_COUNT: "2",
-    });
-
-    await expect(
-      enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", {
-          "x-forwarded-for": "198.51.100.2, 198.51.100.99",
-          "x-real-ip": "198.51.100.2",
-        }),
-        "strict",
-      ),
-    ).resolves.toBeNull();
-    await expect(
-      enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", {
-          "x-forwarded-for": "198.51.100.3, 198.51.100.99",
-        }),
-        "strict",
-      ),
-    ).resolves.toBeNull();
-    expect(observedKeys).toHaveLength(2);
-    expect(observedKeys[0]).toBe(observedKeys[1]);
-    expect(observedKeys[0]).toMatch(/^strict:\/v1\/auth\/github\/session:ip:/);
-  });
-
-  it("ignores forwarded headers when configured trusted proxy peer is absent", async () => {
-    const observedKeys: string[] = [];
-    const env = createTestEnv({
-      RATE_LIMITER: rateLimiterNamespace({ status: 200, body: {} }, observedKeys) as unknown as DurableObjectNamespace,
-      RATE_LIMIT_TRUSTED_PROXIES: "198.51.100.99",
-    });
-
-    await expect(enforceRateLimit(fakeContext(env, "/v1/auth/github/session"), "strict")).resolves.toBeNull();
-    const unknownIpKey = observedKeys[0];
-
-    observedKeys.length = 0;
-    await expect(
-      enforceRateLimit(
-        fakeContext(env, "/v1/auth/github/session", { "x-forwarded-for": "198.51.100.1, 198.51.100.2", "x-real-ip": "198.51.100.3" }),
-        "strict",
-      ),
-    ).resolves.toBeNull();
-    expect(observedKeys[0]).toBe(unknownIpKey);
   });
 
   it("ignores malformed client address headers when building rate-limit keys", async () => {
@@ -883,8 +832,6 @@ function rateLimiterNamespace(decision: { status: number; body: Record<string, u
 function rateLimitTestEnv(overrides: Partial<Env> = {}, observedKeys?: string[]) {
   return createTestEnv({
     RATE_LIMITER: rateLimiterNamespace({ status: 200, body: {} }, observedKeys) as unknown as DurableObjectNamespace,
-    RATE_LIMIT_TRUSTED_PROXIES: TEST_TRUSTED_PROXY,
-    RATE_LIMIT_TRUSTED_PROXY_COUNT: "2",
     ...overrides,
   });
 }
