@@ -598,7 +598,11 @@ export function createClaudeCodeAi(parentEnv: Record<string, string | undefined>
 
 /** Codex subscription (`codex exec`). Fail closed by default: Codex OAuth homes are readable by prompt-influenced
  *  review sandboxes unless an operator explicitly opts into that risk for an isolated deployment. */
-export function createCodexAi(parentEnv: Record<string, string | undefined>, spawnImpl?: SpawnFn): SelfHostAi {
+export function createCodexAi(
+  parentEnv: Record<string, string | undefined>,
+  spawnImpl?: SpawnFn,
+  authCheckImpl: (env: Record<string, string | undefined>) => Promise<void> = assertCodexAuthConfigured,
+): SelfHostAi {
   return {
     async run(model, options) {
       // Codex is chat-only here — reject embed requests so the chain routes them to an embed-capable provider.
@@ -613,7 +617,7 @@ export function createCodexAi(parentEnv: Record<string, string | undefined>, spa
       let stdoutForMetrics = "";
       try {
         assertCodexCredentialIsolation(parentEnv);
-        await assertCodexAuthConfigured(parentEnv);
+        await authCheckImpl(parentEnv);
         const env = codexCliEnv(parentEnv);
         const prompt = toMessages(options).map((m) => m.content).join("\n\n");
         const spawn = spawnImpl ?? (await defaultSpawn());
