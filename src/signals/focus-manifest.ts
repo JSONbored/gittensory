@@ -4,7 +4,6 @@ import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy } from "../setting
 import { normalizeCommandAuthorizationPolicy } from "../settings/command-authorization";
 import { mergeContributorBlacklists, normalizeContributorBlacklist } from "../settings/contributor-blacklist";
 import { normalizeAutoCloseExemptLogins } from "../settings/auto-close-exempt";
-import { MAX_REVIEW_NAG_COOLDOWN_DAYS } from "../settings/agent-actions";
 import { hasUnsafeWildcardCount } from "./change-guardrail";
 import { PUBLIC_LOCAL_PATH_INLINE } from "./redaction";
 
@@ -741,6 +740,13 @@ function normalizeOptionalString(value: JsonValue | undefined, field: string, wa
   warnings.push(`Manifest settings field "${field}" must be a non-empty string; ignoring it.`);
   return null;
 }
+
+// Keep the review-nag lookback operationally bounded so repo-controlled config cannot overflow Date
+// arithmetic. Duplicated from settings/agent-actions.ts's own MAX_REVIEW_NAG_COOLDOWN_DAYS (same value,
+// same rationale) rather than imported: this module is part of the UI package's typechecked closure, and
+// agent-actions.ts transitively imports github/commands.ts -> utils/crypto.ts, pulling a heavier
+// GitHub-App-specific dependency chain into the UI build for one small constant.
+const MAX_REVIEW_NAG_COOLDOWN_DAYS = 365;
 
 /**
  * Parse the optional `settings:` mapping — a partial repository-settings override. Only recognized
