@@ -607,6 +607,7 @@ async function main(): Promise<void> {
     "gittensory_jobs_coalesced_total",
     "gittensory_jobs_recovered_total",
     "gittensory_jobs_maintenance_admission_deferred_total",
+    "gittensory_jobs_maintenance_trickle_admitted_total",
   ]) {
     gauge(name.replace("_total", "_persisted_total"), () =>
       durableJobMetric(name),
