@@ -2094,10 +2094,11 @@ export class GittensoryMcp {
     const goalSpec = input.goalSpec;
     const minRankScore = goalSpec?.minRankScore ?? 0;
     const goalLane = goalSpec?.lane;
+    const searchQuery = (input.searchQuery ?? "").toLowerCase();
     const repos = input.targets ?? [];
-    if (repos.length === 0 && !input.searchQuery) {
+    if (repos.length === 0) {
       return {
-        summary: "Provide at least one of `targets` or `searchQuery`.",
+        summary: "Provide at least one `targets` repo to search.",
         data: { status: "validation_error", ranked: [], totalCandidates: 0 },
       };
     }
@@ -2120,6 +2121,8 @@ export class GittensoryMcp {
       const claimedIssueNumbers = new Set(pullRequests.flatMap((pr) => pr.linkedIssues ?? []));
       for (const issue of issues) {
         if (issue.state !== "open") continue;
+        const issueTitle = (issue.title ?? "").toLowerCase();
+        if (searchQuery && !issueTitle.includes(searchQuery)) continue;
         const isClaimed = claimedIssueNumbers.has(issue.number);
         const dupRisk = isClaimed ? 0.8 : 0.1;
         const updatedMs = issue.updatedAt ? new Date(issue.updatedAt).getTime() : Date.now();

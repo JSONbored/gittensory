@@ -394,15 +394,20 @@ describe("MCP tool calls return schema-valid structured content", () => {
     }
   });
 
-  it("gittensory_find_opportunities handles searchQuery-only input", async () => {
-    const { client } = await connectTestClient();
+  it("gittensory_find_opportunities filters issues by searchQuery within targets", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "demo", full_name: "octo/demo", private: false, owner: { login: "octo" }, default_branch: "main" });
+    await upsertIssueFromGitHub(env, "octo/demo", { number: 1, title: "Fix scoring bug", state: "open", labels: [{ name: "bug" }], user: { login: "alice" } });
+    await upsertIssueFromGitHub(env, "octo/demo", { number: 2, title: "Add docs feature", state: "open", labels: [{ name: "feature" }], user: { login: "bob" } });
+    const { client } = await connectTestClient(env);
     const result = await client.callTool({
       name: "gittensory_find_opportunities",
-      arguments: { searchQuery: "test coverage" },
+      arguments: { targets: [{ owner: "octo", repo: "demo" }], searchQuery: "scoring" },
     });
     const data = result.structuredContent as Record<string, unknown>;
     expect(data.status).toBe("ok");
-    expect(data.ranked).toEqual([]);
+    const ranked = data.ranked as Array<Record<string, unknown>>;
+    expect(ranked.every((r) => String(r.title).toLowerCase().includes("scoring"))).toBe(true);
   });
 
   it("gittensory_find_opportunities marks issues claimed by open PRs with higher dupRisk", async () => {
