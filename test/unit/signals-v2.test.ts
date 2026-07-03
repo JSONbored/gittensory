@@ -257,6 +257,90 @@ describe("v2 signal builders", () => {
       expect(cluster).toBeDefined();
     });
 
+    it("does not flag two open PRs from different authors whose only overlap is generic directory-segment tokens, not a real shared file", () => {
+      // Both touch src/review/*.ts + test/unit/*.ts, so "src"/"review"/"test"/"unit" tokenize as shared terms
+      // even though the two PRs share zero actual file paths — a repo-wide shadow test found this drove most
+      // path-only false positives once changedFiles fed the same bag-of-words scorer as titles/labels.
+      const ivanPr: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 223,
+        title: "CLA check",
+        state: "open",
+        authorLogin: "ivan",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["src/review/cla-check.ts", "test/unit/cla-check.test.ts"],
+      };
+      const judyPr: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 224,
+        title: "RAG builder",
+        state: "open",
+        authorLogin: "judy",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["src/review/rag.ts", "test/unit/rag.test.ts"],
+      };
+      const report = buildCollisionReport(repo.fullName, [], [ivanPr, judyPr]);
+      expect(findCluster(report, 223, 224)).toBeUndefined();
+    });
+
+    it("does not flag two open PRs whose only shared file is a lockfile (touched incidentally, not real overlap)", () => {
+      const kenPr: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 225,
+        title: "Rotate secrets",
+        state: "open",
+        authorLogin: "ken",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["package-lock.json"],
+      };
+      const lisaPr: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 226,
+        title: "Trim caches",
+        state: "open",
+        authorLogin: "lisa",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["package-lock.json"],
+      };
+      const report = buildCollisionReport(repo.fullName, [], [kenPr, lisaPr]);
+      expect(findCluster(report, 225, 226)).toBeUndefined();
+    });
+
+    it("flags two open PRs from different authors once a real (non-lockfile) shared file joins otherwise-generic path tokens", () => {
+      const ivanPr: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 227,
+        title: "CLA check",
+        state: "open",
+        authorLogin: "ivan",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["src/review/cla-check.ts", "test/unit/cla-check.test.ts", "src/shared/helper.ts"],
+      };
+      const judyPr: PullRequestRecord = {
+        repoFullName: repo.fullName,
+        number: 228,
+        title: "RAG builder",
+        state: "open",
+        authorLogin: "judy",
+        authorAssociation: "NONE",
+        labels: [],
+        linkedIssues: [],
+        changedFiles: ["src/review/rag.ts", "test/unit/rag.test.ts", "src/shared/helper.ts"],
+      };
+      const report = buildCollisionReport(repo.fullName, [], [ivanPr, judyPr]);
+      expect(findCluster(report, 227, 228)).toBeDefined();
+    });
+
     it("flags an open PR against a recently-merged PR from a different author sharing a file (extends to merged history)", () => {
       const openPr: PullRequestRecord = {
         repoFullName: repo.fullName,

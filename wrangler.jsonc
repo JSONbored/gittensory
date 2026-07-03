@@ -139,9 +139,13 @@
     "GITTENSORY_DUPLICATE_WINNER": "true",
     // Open-PR file-path collision (#2653): enrich changedFiles on the reviewed PR and its open siblings from
     // the pull_request_files cache before building the collision report, so two independently-open PRs on the
-    // same file get flagged the way two title-similar PRs already are. Default OFF — unset/false leaves every
-    // PullRequestRecord's changedFiles unset (byte-identical to today, no extra D1 reads).
-    "GITTENSORY_OPEN_PR_FILE_COLLISION": "false",
+    // same file get flagged the way two title-similar PRs already are. ENABLED: a repo-wide shadow test against
+    // the live open-PR queue found path-only term overlap alone drove 12 of 17 newly-flagged pairs to false
+    // positives (shared generic directory-segment tokens like src/review/test/unit, zero actual shared files) —
+    // fixed by requiring an actual shared, non-lockfile file path before a path-driven match clusters (see the
+    // sharesMeaningfulFile guard in buildCollisionReport). Re-validated post-fix: every remaining flagged pair is
+    // backed by a real shared file.
+    "GITTENSORY_OPEN_PR_FILE_COLLISION": "true",
   },
   "routes": [
     {

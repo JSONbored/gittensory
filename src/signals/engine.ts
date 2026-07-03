@@ -33,6 +33,7 @@ import { PREFLIGHT_LIMITS } from "./preflight-limits";
 import type { UnifiedCollapsible } from "../review/unified-comment";
 import { splitAiReviewNits } from "../review/ai-notes";
 import { GITTENSORY_GATE_CHECK_NAME } from "../review/check-names";
+import { diffFilePriority } from "../review/review-diff";
 
 export type ParticipationLane = "direct_pr" | "issue_discovery" | "split" | "inactive" | "unknown";
 export type SignalFinding = AdvisoryFinding;
@@ -862,16 +863,23 @@ export function buildCollisionReport(
       }
       const overlap = termOverlap(itemTerms.get(itemKey(left)) ?? collisionTerms(left), itemTerms.get(itemKey(right)) ?? collisionTerms(right));
       if (overlap.score < 0.58 || overlap.shared < 2) continue;
-      // A contributor iterating on their own work (e.g. a follow-up PR touching the same file as their still-open
-      // prior PR) is not duplicate effort. Title/label overlap between a contributor's own items is today's
-      // established behavior (unchanged, e.g. a self-filed issue and its own PR); what's new here is that
-      // `changedFiles` now also feeds this same heuristic, and two of a contributor's own PRs sharing a file is
-      // exactly the false-positive path-overlap creates. Re-score without paths: if the pair only clears the bar
-      // WITH file-path terms, paths alone drove the match — self-authored, so skip it. If title/label terms alone
-      // already clear the bar, this is pre-existing behavior and still clusters.
-      if (isPullRequestShapedItem(left) && isPullRequestShapedItem(right) && Boolean(left.authorLogin) && sameLogin(left.authorLogin, right.authorLogin ?? "")) {
-        const titleOnlyOverlap = termOverlap(collisionTerms(left, false), collisionTerms(right, false));
-        if (titleOnlyOverlap.score < 0.58 || titleOnlyOverlap.shared < 2) continue;
+      // Re-score without path terms: tells us whether title/label overlap ALONE already clears the bar
+      // (pre-existing behavior, unaffected) or whether changedFiles tokens are what pushed this pair over —
+      // the two false-positive shapes that creates are guarded separately below.
+      const titleOnlyOverlap = termOverlap(collisionTerms(left, false), collisionTerms(right, false));
+      const pathDrivenMatch = titleOnlyOverlap.score < 0.58 || titleOnlyOverlap.shared < 2;
+      if (pathDrivenMatch) {
+        // A contributor iterating on their own work (e.g. a follow-up PR touching the same file as their
+        // still-open prior PR) is not duplicate effort — self-authored path-only overlap is dropped outright.
+        if (isPullRequestShapedItem(left) && isPullRequestShapedItem(right) && Boolean(left.authorLogin) && sameLogin(left.authorLogin, right.authorLogin ?? "")) {
+          continue;
+        }
+        // Different authors: file paths tokenize into directory segments (src, review, test, unit, ...) that
+        // recur across nearly every PR in a consistently-organized repo, so shared TOKENS alone are not
+        // reliable collision evidence — a repo-wide shadow test found this drove the large majority of
+        // path-only matches with zero actual shared files. Require an ACTUAL shared file (ignoring
+        // lockfiles/generated artifacts nobody would call a collision over) before clustering.
+        if (!sharesMeaningfulFile(left.changedFiles, right.changedFiles)) continue;
       }
       const key = [itemKey(left), itemKey(right)].sort().join("--");
       if (clusters.has(key)) continue;
@@ -5404,6 +5412,15 @@ function sameLogin(value: string | null | undefined, login: string): boolean {
 
 function isPullRequestShapedItem(item: CollisionItem): boolean {
   return item.type === "pull_request" || item.type === "recent_merged_pull_request";
+}
+
+/** True when two changed-file lists share at least one path that isn't a lockfile/generated/vendor artifact
+ *  (diffFilePriority's least-useful-to-review bucket) — a shared package-lock.json or dist/ output is touched
+ *  incidentally by unrelated PRs and is not evidence of a real collision. */
+function sharesMeaningfulFile(left: string[] | undefined, right: string[] | undefined): boolean {
+  if (!left || !right || left.length === 0 || right.length === 0) return false;
+  const rightSet = new Set(right);
+  return left.some((path) => rightSet.has(path) && diffFilePriority(path) < 4);
 }
 
 function sameRepo(left: string | null | undefined, right: string | null | undefined): boolean {
