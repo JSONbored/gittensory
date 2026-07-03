@@ -15,7 +15,7 @@ const MAX_FETCH_BYTES = 1_000_000;
 const SLUG_RE = /^[A-Za-z0-9._-]+$/;
 // A public entrypoint barrel — an `index.<js/ts>` source file. Declaration (.d.ts), test, and generated output are
 // excluded: they are not the hand-authored public surface this scan is about.
-const ENTRYPOINT_RE = /(?:^|\/)index\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
+const ENTRYPOINT_RE = /(?:^|\/)index\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const SKIP_RE = /(?:\.d\.ts$|\.min\.|\.test\.|\.spec\.|__tests__\/|(?:^|\/)(?:dist|build|vendor)\/)/;
 // A DIRECT exported declaration and its kind (matched on the line body, without the diff `+`). Anchored at column 1
 // so only TOP-LEVEL module exports are considered public surface: an INDENTED `export` (e.g. a member of an
@@ -41,7 +41,13 @@ function splitTopLevelCommas(src: string): string[] {
   for (let i = 0; i < src.length; i++) {
     const ch = src[i]!;
     if (quote) {
-      if (ch === quote && src[i - 1] !== "\\") quote = null;
+      // The quote closes only when it is NOT escaped: count consecutive preceding backslashes — an EVEN count means
+      // the quote is unescaped (a trailing `\\` inside the string doesn't escape the closing quote).
+      if (ch === quote) {
+        let backslashes = 0;
+        for (let k = i - 1; k >= 0 && src[k] === "\\"; k--) backslashes += 1;
+        if (backslashes % 2 === 0) quote = null;
+      }
       continue;
     }
     if (ch === '"' || ch === "'" || ch === "`") quote = ch;

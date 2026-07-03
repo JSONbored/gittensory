@@ -46,6 +46,13 @@ test("exportedSymbols: multi-declarator const/let/var reports every binding; gen
   assert.deepEqual(exportedSymbols("export async function* gen() {}"), ["gen"]); // async generator
   assert.deepEqual(exportedSymbols("export declare function foo(): void;"), ["foo"]); // ambient declaration
   assert.deepEqual(exportedSymbols("export declare const bar: number;"), ["bar"]);
+  // a string literal ending in an escaped backslash must not swallow the following declarator
+  assert.deepEqual(exportedSymbols('export const a = "\\\\", b = 1;'), ["a", "b"]);
+});
+
+test("scanUndocumentedExport: .mts / .cts index entrypoints are scanned", async () => {
+  const findings = await scanUndocumentedExport(req([{ path: "pkg/index.mts", status: "modified", patch: PATCH }]), headFetch(HEAD));
+  assert.deepEqual(findings, [{ file: "pkg/index.mts", line: 4, symbol: "undoc" }]);
 });
 
 test("hasPrecedingDocComment: a tool/suppression directive comment is NOT documentation", () => {
