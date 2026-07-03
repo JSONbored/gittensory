@@ -84,6 +84,12 @@ export type PlannedAgentAction = {
   // duplicate / slop / CI). The breaker downgrades ONLY "heuristic" closes; the deterministic close is EXEMPT
   // (silently holding a close whose comment already promised closure would be incoherent). Absent on non-close
   // actions; treated as a heuristic close only when explicitly tagged "heuristic".
+  // ALSO set on a `label` action that is inseparable metadata on a close of this SAME kind in the same planned
+  // batch (blacklist/contributor_cap/review_nag) — the executor correlates the two by this value so the label
+  // is only actually applied when its paired close didn't get denied/error (#label-close-split-brain: `label`
+  // mutates via the Issues API and is exempt from the PR-write-permission gate `close` must pass, so without
+  // this correlation a transient write-permission denial could leave a PR mislabeled "closed for X" while it
+  // is, in fact, still open).
   closeKind?: "linked-issue-hard-rule" | "blacklist" | "contributor_cap" | "review_nag" | "heuristic";
   // For a CI-driven heuristic close, the CI state that must still hold at actuation time. Other heuristic
   // closes (gate verdict, duplicate/slop, conflict) do not depend on red CI and must not be blocked by green CI.
@@ -374,7 +380,8 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     // NOT the generic `label` class — a repo can enable close without also opting into the broad label dial.
     // Explicit `null` (vs. absent/undefined) means "close without any label."
     const label = input.blacklistLabel === null ? null : (input.blacklistLabel ?? DEFAULT_BLACKLIST_LABEL);
-    if (acting("close") && label !== null) actions.push({ actionClass: "label", autonomyClass: "close", requiresApproval: approval("close"), reason: "blacklisted contributor", label, labelOp: "add" });
+    // Close is pushed BEFORE its coupled label (#label-close-split-brain) so the executor's outcome-correlation
+    // guard always has the close's outcome already recorded by the time it evaluates the label.
     if (acting("close")) {
       actions.push({
         actionClass: "close",
@@ -388,6 +395,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
         ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),
       });
     }
+    if (acting("close") && label !== null) actions.push({ actionClass: "label", autonomyClass: "close", closeKind: "blacklist", requiresApproval: approval("close"), reason: "blacklisted contributor", label, labelOp: "add" });
     return actions;
   }
 
@@ -399,7 +407,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     const { authorLogin, openCount, cap, itemKind, scope } = input.contributorCapMatch;
     // #label-scoping: same close-autonomy-gated, null-clearable shape as the blacklist label above.
     const label = input.contributorCapLabel === null ? null : (input.contributorCapLabel ?? DEFAULT_CONTRIBUTOR_CAP_LABEL);
-    if (acting("close") && label !== null) actions.push({ actionClass: "label", autonomyClass: "close", requiresApproval: approval("close"), reason: "over the per-contributor open-item cap", label, labelOp: "add" });
+    // Close is pushed BEFORE its coupled label (#label-close-split-brain) — see the closeKind doc comment above.
     if (acting("close")) {
       actions.push({
         actionClass: "close",
@@ -409,6 +417,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
         closeKind: "contributor_cap",
       });
     }
+    if (acting("close") && label !== null) actions.push({ actionClass: "label", autonomyClass: "close", closeKind: "contributor_cap", requiresApproval: approval("close"), reason: "over the per-contributor open-item cap", label, labelOp: "add" });
     return actions;
   }
 
@@ -422,7 +431,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     const { authorLogin, pingCount, maxPings } = input.reviewNagMatch;
     // #label-scoping: same close-autonomy-gated, null-clearable shape as the blacklist label above.
     const label = input.reviewNagLabel === null ? null : (input.reviewNagLabel ?? DEFAULT_REVIEW_NAG_LABEL);
-    if (acting("close") && label !== null) actions.push({ actionClass: "label", autonomyClass: "close", requiresApproval: approval("close"), reason: "review-nag cooldown", label, labelOp: "add" });
+    // Close is pushed BEFORE its coupled label (#label-close-split-brain) — see the closeKind doc comment above.
     if (acting("close")) {
       actions.push({
         actionClass: "close",
@@ -433,6 +442,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
         ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),
       });
     }
+    if (acting("close") && label !== null) actions.push({ actionClass: "label", autonomyClass: "close", closeKind: "review_nag", requiresApproval: approval("close"), reason: "review-nag cooldown", label, labelOp: "add" });
     return actions;
   }
 
