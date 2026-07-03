@@ -10,13 +10,13 @@ export const Route = createFileRoute("/docs/self-hosting-github-app")({
       {
         name: "description",
         content:
-          "Connect a self-hosted Gittensory review service to GitHub with a direct GitHub App or brokered Orb enrollment.",
+          "Connect a self-hosted Gittensory review service to GitHub with your own direct GitHub App (the default, recommended path) or private managed-beta brokered Orb enrollment.",
       },
       { property: "og:title", content: "Self-host GitHub App and Orb — Gittensory docs" },
       {
         property: "og:description",
         content:
-          "Connect a self-hosted Gittensory review service to GitHub with a direct GitHub App or brokered Orb enrollment.",
+          "Connect a self-hosted Gittensory review service to GitHub with your own direct GitHub App (the default, recommended path) or private managed-beta brokered Orb enrollment.",
       },
       { property: "og:url", content: "/docs/self-hosting-github-app" },
     ],
@@ -30,23 +30,30 @@ function SelfHostingGithubApp() {
     <DocsPage
       eyebrow="Self-hosting"
       title="GitHub App and Orb"
-      description="A self-host needs webhook delivery and installation tokens. Use a direct GitHub App when you own the full setup, or Orb broker mode when you want delegated token minting."
+      description="A self-host needs webhook delivery and installation tokens. Direct GitHub App is the default, recommended model — Orb broker mode is private / managed-beta only."
     >
       <h2>Choose a connection mode</h2>
       <FeatureRow
         items={[
           {
-            title: "Direct GitHub App",
+            title: "Direct GitHub App (recommended default)",
             description:
-              "Your self-host stores the App id, slug, private key, and webhook secret. It mints installation tokens directly.",
+              "Your self-host stores its own App id, slug, private key, and webhook secret, and mints installation tokens directly. No shared quota, no dependency on gittensory's own infrastructure to process a review.",
           },
           {
-            title: "Brokered Orb",
+            title: "Brokered Orb (private / managed-beta only)",
             description:
-              "Your self-host uses ORB_ENROLLMENT_SECRET to request short-lived installation tokens from the central Orb broker.",
+              "Your self-host uses ORB_ENROLLMENT_SECRET to request short-lived installation tokens from the central Orb broker instead of holding its own App key. Not open for general public use — see the operational risks below before considering it.",
           },
         ]}
       />
+      <Callout variant="safety">
+        Direct App mode is the public default: it costs gittensory nothing to support and can't
+        overrun a shared rate-limit budget. Brokered mode routes every token mint through
+        gittensory's own infrastructure and GitHub API quota — every external brokered install is
+        gittensory's rate-limit and reliability problem, not just the operator's, so it stays
+        private/managed-beta until the safeguards below are in place.
+      </Callout>
 
       <h2>One-click App creation (recommended for a Direct App)</h2>
       <p>
@@ -105,6 +112,36 @@ GITHUB_APP_PRIVATE_KEY_FILE=/run/secrets/github-app-private-key.pem
 GITHUB_WEBHOOK_SECRET=<same-secret-configured-on-the-app>`}
       />
 
+      <h2>Telemetry is separate from token brokerage</h2>
+      <p>
+        These are two independent things people conflate because they're both "Orb": anonymized
+        fleet-calibration <strong>telemetry export</strong> (always on, works in either connection
+        mode) and <strong>token brokerage</strong> (optional, private/managed-beta only, lets your
+        self-host get installation tokens from gittensory instead of holding its own App key).
+        Choosing Direct App mode does not opt you out of telemetry, and it's what makes{" "}
+        <Link to="/">the homepage counters</Link> and cross-fleet gate calibration reflect direct
+        installs, not just brokered ones.
+      </p>
+      <FeatureRow
+        items={[
+          {
+            title: "What's exported",
+            description:
+              "Per resolved PR: the gate verdict, the realized outcome (merged/closed), a reversal flag, a bucketed reason category, and cycle time.",
+          },
+          {
+            title: "What's never exported",
+            description:
+              "Repo/owner/PR names, commit SHAs, source code, diffs, comments, or logins. Repo/PR identifiers are HMAC-anonymized with a per-instance secret gittensory's own collector never holds.",
+          },
+          {
+            title: "Disabling it",
+            description:
+              "Set ORB_AIR_GAP=true to compute everything locally and send nothing — the only supported opt-out. There is no partial opt-out short of air-gapping.",
+          },
+        ]}
+      />
+
       <h2>Brokered Orb env</h2>
       <CodeBlock
         filename=".env"
@@ -115,6 +152,53 @@ ORB_BROKER_URL=https://gittensory-api.aethereal.dev`}
         Brokered mode is useful when the self-host should not hold a GitHub App private key. It
         still needs a reachable webhook path or relay mode, depending on the network setup.
       </Callout>
+      <Callout variant="warn" title="Brokered mode operational risks">
+        Before enabling this for anyone outside a controlled managed-beta cohort, weigh: (1){" "}
+        <strong>rate-limit blast radius</strong> — every brokered install's GitHub API traffic draws
+        from token pools gittensory manages, so one misbehaving or high-volume install can degrade
+        every other brokered install; (2) <strong>quota management</strong> — there is no automatic
+        per-install cap on how much of that shared budget one enrollment can consume; (3){" "}
+        <strong>support burden</strong> — a broken brokered install looks like a gittensory outage
+        to its operator, not a self-host misconfiguration, and lands as a support request on
+        gittensory directly; (4) <strong>abuse/misconfiguration risk</strong> — an enrollment secret
+        that leaks or a misconfigured relay can mint tokens or receive webhook traffic for repos the
+        intended operator doesn't control.
+      </Callout>
+
+      <h2>Minimum broker safeguards before a public rollout</h2>
+      <p>
+        A maintainer go/no-go checklist — do not open brokered enrollment beyond a small, known,
+        controlled cohort until every item below is true:
+      </p>
+      <ul>
+        <li>
+          <strong>Enrollment quota</strong> — a hard cap on how many brokered installs can be active
+          at once, not just an informal agreement.
+        </li>
+        <li>
+          <strong>Per-install concurrency limit</strong> — one brokered install cannot occupy an
+          unbounded share of the token-minting or webhook-relay pipeline.
+        </li>
+        <li>
+          <strong>Per-install rate budget</strong> — a ceiling on GitHub API calls attributable to a
+          single enrollment, independent of the other installs sharing the broker.
+        </li>
+        <li>
+          <strong>Revocation path</strong> — an enrollment secret can be revoked immediately,
+          without waiting for a deploy, when it's compromised or the install is abusive.
+        </li>
+        <li>
+          <strong>Metrics broken out by enrollment</strong> — token-mint volume, webhook-relay
+          volume, and error rate are visible per-enrollment, not only aggregated across every
+          brokered install, so one bad actor is identifiable instead of hiding in the average.
+        </li>
+      </ul>
+      <p>
+        See <Link to="/docs/self-hosting-troubleshooting">Troubleshooting</Link> for what a degraded
+        brokered relay looks like in logs today, and{" "}
+        <Link to="/docs/self-hosting-release-checklist">the beta release checklist</Link>'s
+        brokered-mode scenario for the smoke test that exercises this path.
+      </p>
 
       <h2>Webhook checks</h2>
       <CodeBlock
