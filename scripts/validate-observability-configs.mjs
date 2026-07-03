@@ -8,6 +8,13 @@ import { readFileSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 
+// Valid JSON/YAML can parse to a non-object (null, a string, a number, an array of non-objects) --
+// dereferencing a property on that crashes instead of producing a validation error. Every dereference
+// below goes through this guard first.
+function isObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function validateDashboards(dir) {
   const errors = [];
   let files;
@@ -24,6 +31,10 @@ export function validateDashboards(dir) {
       dashboard = JSON.parse(readFileSync(path, "utf8"));
     } catch (error) {
       errors.push(`${path}: invalid JSON — ${error.message}`);
+      continue;
+    }
+    if (!isObject(dashboard)) {
+      errors.push(`${path}: top level must be a JSON object, not ${JSON.stringify(dashboard)}`);
       continue;
     }
     if (typeof dashboard.title !== "string" || !dashboard.title) {
@@ -47,7 +58,11 @@ export function validateAlertRules(path) {
   if (!Array.isArray(doc?.groups)) {
     return [`${path}: missing a top-level "groups" array`];
   }
-  for (const group of doc.groups) {
+  for (const [groupIndex, group] of doc.groups.entries()) {
+    if (!isObject(group)) {
+      errors.push(`${path}: groups[${groupIndex}] must be an object, not ${JSON.stringify(group)}`);
+      continue;
+    }
     if (typeof group.name !== "string" || !group.name) {
       errors.push(`${path}: a group is missing a non-empty "name"`);
     }
@@ -55,7 +70,13 @@ export function validateAlertRules(path) {
       errors.push(`${path}: group "${group.name ?? "?"}" is missing a "rules" array`);
       continue;
     }
-    for (const rule of group.rules) {
+    for (const [ruleIndex, rule] of group.rules.entries()) {
+      if (!isObject(rule)) {
+        errors.push(
+          `${path}: group "${group.name}" rules[${ruleIndex}] must be an object, not ${JSON.stringify(rule)}`,
+        );
+        continue;
+      }
       const label = rule.alert ?? "(unnamed rule)";
       if (typeof rule.alert !== "string" || !rule.alert) {
         errors.push(`${path}: a rule in group "${group.name}" is missing "alert"`);

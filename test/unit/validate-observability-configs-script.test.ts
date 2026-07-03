@@ -57,6 +57,14 @@ describe("validate-observability-configs (#1943)", () => {
       expect(errors.length).toBe(1);
       expect(errors[0]).toContain("could not read directory");
     });
+
+    it("reports a validation error (not a crash) when a dashboard file is valid JSON but not an object", () => {
+      const dir = tmpDashboardDir({ "null.json": "null", "array.json": "[]", "string.json": '"hi"' });
+      const errors = validateDashboards(dir);
+      expect(errors.some((e) => e.includes("null.json") && e.includes("must be a JSON object"))).toBe(true);
+      expect(errors.some((e) => e.includes("array.json") && e.includes("must be a JSON object"))).toBe(true);
+      expect(errors.some((e) => e.includes("string.json") && e.includes("must be a JSON object"))).toBe(true);
+    });
   });
 
   describe("validateAlertRules", () => {
@@ -111,6 +119,19 @@ describe("validate-observability-configs (#1943)", () => {
       const errors = validateAlertRules(path);
       expect(errors.length).toBe(1);
       expect(errors[0]).toContain("invalid YAML");
+    });
+
+    it("reports a validation error (not a crash) when a group entry is not an object", () => {
+      const path = tmpAlertFile("groups:\n  - null\n  - 5\n  - just-a-string\n");
+      const errors = validateAlertRules(path);
+      expect(errors.length).toBe(3);
+      for (const e of errors) expect(e).toContain("must be an object");
+    });
+
+    it("reports a validation error (not a crash) when a rule entry is not an object", () => {
+      const path = tmpAlertFile(["groups:", "  - name: test-group", "    rules:", "      - null"].join("\n"));
+      const errors = validateAlertRules(path);
+      expect(errors.some((e) => e.includes("rules[0]") && e.includes("must be an object"))).toBe(true);
     });
   });
 });
