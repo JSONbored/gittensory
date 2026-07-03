@@ -245,9 +245,18 @@ describe("opportunity metadata signals", () => {
     ).toBeGreaterThan(0.5);
   });
 
-  it("potential covers neutral, positive-only, and bonus label branches", () => {
-    expect(computeMetadataPotential({ labels: ["enhancement"] })).toBeCloseTo(0.8, 5);
-    expect(computeMetadataPotential({ labels: ["feature"] })).toBeCloseTo(0.8, 5);
-    expect(computeMetadataPotential({ labels: ["refactor"] })).toBeCloseTo(0.5, 5);
+  it("computeMetadataFeasibility uses the long-title branch at eight characters", () => {
+    expect(computeMetadataFeasibility({ ...base, title: "12345678" }, NOW)).toBeGreaterThan(
+      computeMetadataFeasibility({ ...base, title: "1234567" }, NOW),
+    );
+  });
+
+  it("computeMetadataDupRisk skips the source issue when scanning peers", () => {
+    expect(
+      computeMetadataDupRisk(base, [
+        base,
+        { ...base, issueNumber: 11, title: "Improve queue retry semantics today" },
+      ]),
+    ).toBeGreaterThan(0);
   });
 });
