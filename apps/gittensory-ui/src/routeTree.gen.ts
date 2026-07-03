@@ -28,6 +28,7 @@ import { Route as DocsTroubleshootingRouteImport } from './routes/docs.troublesh
 import { Route as DocsSelfHostingTroubleshootingRouteImport } from './routes/docs.self-hosting-troubleshooting'
 import { Route as DocsSelfHostingSecurityRouteImport } from './routes/docs.self-hosting-security'
 import { Route as DocsSelfHostingReleasesRouteImport } from './routes/docs.self-hosting-releases'
+import { Route as DocsSelfHostingReleaseChecklistRouteImport } from './routes/docs.self-hosting-release-checklist'
 import { Route as DocsSelfHostingReesAnalyzersRouteImport } from './routes/docs.self-hosting-rees-analyzers'
 import { Route as DocsSelfHostingReesRouteImport } from './routes/docs.self-hosting-rees'
 import { Route as DocsSelfHostingRagRouteImport } from './routes/docs.self-hosting-rag'
@@ -162,6 +163,12 @@ const DocsSelfHostingReleasesRoute = DocsSelfHostingReleasesRouteImport.update({
   path: '/self-hosting-releases',
   getParentRoute: () => DocsRoute,
 } as any)
+const DocsSelfHostingReleaseChecklistRoute =
+  DocsSelfHostingReleaseChecklistRouteImport.update({
+    id: '/self-hosting-release-checklist',
+    path: '/self-hosting-release-checklist',
+    getParentRoute: () => DocsRoute,
+  } as any)
 const DocsSelfHostingReesAnalyzersRoute =
   DocsSelfHostingReesAnalyzersRouteImport.update({
     id: '/self-hosting-rees-analyzers',
@@ -405,6 +412,7 @@ export interface FileRoutesByFullPath {
   '/docs/self-hosting-rag': typeof DocsSelfHostingRagRoute
   '/docs/self-hosting-rees': typeof DocsSelfHostingReesRoute
   '/docs/self-hosting-rees-analyzers': typeof DocsSelfHostingReesAnalyzersRoute
+  '/docs/self-hosting-release-checklist': typeof DocsSelfHostingReleaseChecklistRoute
   '/docs/self-hosting-releases': typeof DocsSelfHostingReleasesRoute
   '/docs/self-hosting-security': typeof DocsSelfHostingSecurityRoute
   '/docs/self-hosting-troubleshooting': typeof DocsSelfHostingTroubleshootingRoute
@@ -460,6 +468,7 @@ export interface FileRoutesByTo {
   '/docs/self-hosting-rag': typeof DocsSelfHostingRagRoute
   '/docs/self-hosting-rees': typeof DocsSelfHostingReesRoute
   '/docs/self-hosting-rees-analyzers': typeof DocsSelfHostingReesAnalyzersRoute
+  '/docs/self-hosting-release-checklist': typeof DocsSelfHostingReleaseChecklistRoute
   '/docs/self-hosting-releases': typeof DocsSelfHostingReleasesRoute
   '/docs/self-hosting-security': typeof DocsSelfHostingSecurityRoute
   '/docs/self-hosting-troubleshooting': typeof DocsSelfHostingTroubleshootingRoute
@@ -519,6 +528,7 @@ export interface FileRoutesById {
   '/docs/self-hosting-rag': typeof DocsSelfHostingRagRoute
   '/docs/self-hosting-rees': typeof DocsSelfHostingReesRoute
   '/docs/self-hosting-rees-analyzers': typeof DocsSelfHostingReesAnalyzersRoute
+  '/docs/self-hosting-release-checklist': typeof DocsSelfHostingReleaseChecklistRoute
   '/docs/self-hosting-releases': typeof DocsSelfHostingReleasesRoute
   '/docs/self-hosting-security': typeof DocsSelfHostingSecurityRoute
   '/docs/self-hosting-troubleshooting': typeof DocsSelfHostingTroubleshootingRoute
@@ -579,6 +589,7 @@ export interface FileRouteTypes {
     | '/docs/self-hosting-rag'
     | '/docs/self-hosting-rees'
     | '/docs/self-hosting-rees-analyzers'
+    | '/docs/self-hosting-release-checklist'
     | '/docs/self-hosting-releases'
     | '/docs/self-hosting-security'
     | '/docs/self-hosting-troubleshooting'
@@ -634,6 +645,7 @@ export interface FileRouteTypes {
     | '/docs/self-hosting-rag'
     | '/docs/self-hosting-rees'
     | '/docs/self-hosting-rees-analyzers'
+    | '/docs/self-hosting-release-checklist'
     | '/docs/self-hosting-releases'
     | '/docs/self-hosting-security'
     | '/docs/self-hosting-troubleshooting'
@@ -692,6 +704,7 @@ export interface FileRouteTypes {
     | '/docs/self-hosting-rag'
     | '/docs/self-hosting-rees'
     | '/docs/self-hosting-rees-analyzers'
+    | '/docs/self-hosting-release-checklist'
     | '/docs/self-hosting-releases'
     | '/docs/self-hosting-security'
     | '/docs/self-hosting-troubleshooting'
@@ -849,6 +862,13 @@ declare module '@tanstack/react-router' {
       path: '/self-hosting-releases'
       fullPath: '/docs/self-hosting-releases'
       preLoaderRoute: typeof DocsSelfHostingReleasesRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/docs/self-hosting-release-checklist': {
+      id: '/docs/self-hosting-release-checklist'
+      path: '/self-hosting-release-checklist'
+      fullPath: '/docs/self-hosting-release-checklist'
+      preLoaderRoute: typeof DocsSelfHostingReleaseChecklistRouteImport
       parentRoute: typeof DocsRoute
     }
     '/docs/self-hosting-rees-analyzers': {
@@ -1184,6 +1204,7 @@ interface DocsRouteChildren {
   DocsSelfHostingRagRoute: typeof DocsSelfHostingRagRoute
   DocsSelfHostingReesRoute: typeof DocsSelfHostingReesRoute
   DocsSelfHostingReesAnalyzersRoute: typeof DocsSelfHostingReesAnalyzersRoute
+  DocsSelfHostingReleaseChecklistRoute: typeof DocsSelfHostingReleaseChecklistRoute
   DocsSelfHostingReleasesRoute: typeof DocsSelfHostingReleasesRoute
   DocsSelfHostingSecurityRoute: typeof DocsSelfHostingSecurityRoute
   DocsSelfHostingTroubleshootingRoute: typeof DocsSelfHostingTroubleshootingRoute
@@ -1218,6 +1239,7 @@ const DocsRouteChildren: DocsRouteChildren = {
   DocsSelfHostingRagRoute: DocsSelfHostingRagRoute,
   DocsSelfHostingReesRoute: DocsSelfHostingReesRoute,
   DocsSelfHostingReesAnalyzersRoute: DocsSelfHostingReesAnalyzersRoute,
+  DocsSelfHostingReleaseChecklistRoute: DocsSelfHostingReleaseChecklistRoute,
   DocsSelfHostingReleasesRoute: DocsSelfHostingReleasesRoute,
   DocsSelfHostingSecurityRoute: DocsSelfHostingSecurityRoute,
   DocsSelfHostingTroubleshootingRoute: DocsSelfHostingTroubleshootingRoute,

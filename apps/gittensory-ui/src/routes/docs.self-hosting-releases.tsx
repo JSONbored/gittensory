@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 
 import { DocsPage } from "@/components/site/docs-page";
 import { Callout, CodeBlock, FeatureRow } from "@/components/site/primitives";
@@ -70,6 +70,12 @@ docker pull ghcr.io/jsonbored/gittensory-selfhost:latest`}
       <Callout variant="note">
         Stable release behavior is unchanged: a plain <code>X.Y.Z</code> tag still moves{" "}
         <code>latest</code> and publishes an unmarked (non-prerelease) GitHub Release.
+      </Callout>
+      <Callout variant="safety">
+        Before tagging any <code>orb-v*</code> release or prerelease, run the{" "}
+        <Link to="/docs/self-hosting-release-checklist">beta release checklist</Link> against the
+        built image — CI only smoke-tests the plain SQLite + Redis + direct-App default, not
+        brokered mode, air-gapped mode, or any AI provider.
       </Callout>
 
       <h2>Upgrade flow</h2>
