@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createRequire } from "node:module";
 import { printHelp, printVersion, runCli } from "../lib/cli.js";
+import { runCiWait } from "../lib/ci-wait.js";
 import {
   awaitOpportunisticUpdateCheck,
   resolveUpgradeCommand,
@@ -39,6 +40,15 @@ if (
   printVersion({ packageName, packageVersion });
   await awaitOpportunisticUpdateCheck(updateCheck);
   process.exit(0);
+}
+
+if (cliArgs[0] === "ci" && cliArgs[1] === "wait") {
+  const exitCode = await runCiWait(cliArgs.slice(2), {
+    packageName,
+    env: process.env,
+  });
+  await awaitOpportunisticUpdateCheck(updateCheck);
+  process.exit(exitCode);
 }
 
 const exitCode = runCli(cliArgs, { packageName });
