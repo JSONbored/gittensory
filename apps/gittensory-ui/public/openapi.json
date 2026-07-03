@@ -9054,6 +9054,10 @@
               "mode",
               "mappings"
             ]
+          },
+          "claCheckRunAppSlug": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [

@@ -5089,7 +5089,7 @@ describe("GitHub backfill", () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       const fetchSpy = vi.fn();
       vi.stubGlobal("fetch", fetchSpy);
-      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", null, "CLA Assistant Lite", "public-token")).toBeUndefined();
+      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", null, "CLA Assistant Lite", "cla-assistant", "public-token")).toBeUndefined();
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
@@ -5097,21 +5097,54 @@ describe("GitHub backfill", () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
         expect(input.toString()).toContain("/commits/sha1/check-runs");
-        return Response.json({ total_count: 1, check_runs: [{ id: 1, name: "cla assistant lite", status: "completed", conclusion: "SUCCESS" }] });
+        return Response.json({ total_count: 1, check_runs: [{ id: 1, name: "cla assistant lite", status: "completed", conclusion: "SUCCESS", app: { slug: "cla-assistant" } }] });
       });
-      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "public-token")).toBe("success");
+      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "cla-assistant", "public-token")).toBe("success");
+    });
+
+    it("REGRESSION (gate finding): returns null (deterministic missing), not undefined (transient), without fetching when no trusted app slug is configured — a check-run-only config with no slug must still BLOCK, not silently hold forever", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", null, "public-token")).toBeNull();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("ignores a completed same-name check-run from an untrusted app slug", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async () =>
+        Response.json({
+          total_count: 1,
+          check_runs: [{ id: 1, name: "CLA Assistant Lite", status: "completed", conclusion: "success", app: { slug: "github-actions" } }],
+        }),
+      );
+      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "cla-assistant", "public-token")).toBeNull();
+    });
+
+    it("uses the trusted producer when spoofed and trusted same-name runs both exist", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async () =>
+        Response.json({
+          total_count: 2,
+          check_runs: [
+            { id: 1, name: "CLA Assistant Lite", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+            { id: 2, name: "CLA Assistant Lite", status: "completed", conclusion: "failure", app: { slug: "cla-assistant" } },
+          ],
+        }),
+      );
+      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "cla-assistant", "public-token")).toBe("failure");
     });
 
     it("returns null (resolved: not found) when the head SHA has no check-run with that name", async () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-      vi.stubGlobal("fetch", async () => Response.json({ total_count: 1, check_runs: [{ id: 1, name: "Some Other Check", status: "completed", conclusion: "success" }] }));
-      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "public-token")).toBeNull();
+      vi.stubGlobal("fetch", async () => Response.json({ total_count: 1, check_runs: [{ id: 1, name: "Some Other Check", status: "completed", conclusion: "success", app: { slug: "cla-assistant" } }] }));
+      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "cla-assistant", "public-token")).toBeNull();
     });
 
     it("returns null (resolved: not found) when the response omits check_runs entirely (nullish fallback)", async () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       vi.stubGlobal("fetch", async () => Response.json({ total_count: 0 }));
-      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "public-token")).toBeNull();
+      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "cla-assistant", "public-token")).toBeNull();
     });
 
     // #2564 gate-review finding: a matching check-run that has NOT finished yet must resolve to undefined
@@ -5120,20 +5153,20 @@ describe("GitHub backfill", () => {
     // actually finished running.
     it("returns undefined (unresolved) for a matching but still-in-progress check-run (status !== completed, conclusion: null)", async () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-      vi.stubGlobal("fetch", async () => Response.json({ total_count: 1, check_runs: [{ id: 1, name: "CLA Assistant Lite", status: "in_progress", conclusion: null }] }));
-      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "public-token")).toBeUndefined();
+      vi.stubGlobal("fetch", async () => Response.json({ total_count: 1, check_runs: [{ id: 1, name: "CLA Assistant Lite", status: "in_progress", conclusion: null, app: { slug: "cla-assistant" } }] }));
+      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "cla-assistant", "public-token")).toBeUndefined();
     });
 
     it("returns an empty string for a matching, COMPLETED check-run with an unexpected empty conclusion (genuine edge case, not the in-progress case)", async () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-      vi.stubGlobal("fetch", async () => Response.json({ total_count: 1, check_runs: [{ id: 1, name: "CLA Assistant Lite", status: "completed", conclusion: null }] }));
-      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "public-token")).toBe("");
+      vi.stubGlobal("fetch", async () => Response.json({ total_count: 1, check_runs: [{ id: 1, name: "CLA Assistant Lite", status: "completed", conclusion: null, app: { slug: "cla-assistant" } }] }));
+      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "cla-assistant", "public-token")).toBe("");
     });
 
     it("returns undefined (not evaluated) when the fetch fails, never a false 'missing'", async () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       vi.stubGlobal("fetch", async () => new Response("forbidden", { status: 403 }));
-      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "public-token")).toBeUndefined();
+      expect(await fetchNamedCheckRunConclusion(env, "JSONbored/gittensory", "sha1", "CLA Assistant Lite", "cla-assistant", "public-token")).toBeUndefined();
     });
   });
 

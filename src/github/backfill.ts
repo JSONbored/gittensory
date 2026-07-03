@@ -2372,12 +2372,15 @@ function recordBranchProtectionFetchFailure(error: unknown): void {
 
 /**
  * Best-effort fetch of ONE named check-run's conclusion on a head SHA (#2564, the CLA-bot check-run detection
- * mode of `gate.claMode`). Returns the conclusion string (lowercased; `"neutral"`/`"success"`/… or `""` when
+ * mode of `gate.claMode`). The name match is bound to the configured trusted GitHub App slug so
+ * contributor-controlled same-name check-runs cannot spoof a legal/compliance gate. Returns the conclusion string (lowercased; `"neutral"`/`"success"`/… or `""` when
  * concluded with no conclusion field, which should not normally happen) when a check-run with that exact name
- * (case-insensitive) is found; `null` when the head SHA has no such check-run (a resolved "not found," distinct
- * from "could not resolve"); `undefined` when the check-runs themselves could not be read at all (network/auth
- * error, or no headSha) — the caller must treat `undefined` as "not evaluated," never as "missing," so a
- * transient fetch failure can never manufacture a false CLA-missing blocker. Scans only the FIRST page (100
+ * (case-insensitive) from that app slug is found; `null` when the head SHA has no such trusted check-run — a
+ * resolved "not found," distinct from "could not resolve" — which ALSO covers a missing `checkRunAppSlug`
+ * (no slug to trust means no run can ever match, a deterministic configuration gap, not a transient one);
+ * `undefined` when the check-runs themselves could not be read at all (network/auth error, or no headSha) —
+ * the caller must treat `undefined` as "not evaluated," never as "missing," so a transient fetch failure can
+ * never manufacture a false CLA-missing blocker. Scans only the FIRST page (100
  * check-runs) — a CLA bot posts exactly one check-run, so a repo with >100 check-runs on a single commit (very
  * unusual) risks missing it only in that pathological case, and still degrades to `undefined` (not evaluated)
  * rather than a false negative.
@@ -2387,10 +2390,18 @@ export async function fetchNamedCheckRunConclusion(
   repoFullName: string,
   headSha: string | null | undefined,
   checkRunName: string,
+  checkRunAppSlug: string | null | undefined,
   token: string | undefined,
   admissionKey?: GitHubRateLimitAdmissionKey,
 ): Promise<string | null | undefined> {
   if (!headSha) return undefined;
+  const trustedAppSlugLc = checkRunAppSlug?.trim().toLowerCase();
+  // A missing trusted app slug is a deterministic CONFIGURATION gap, not a transient read failure -- without a
+  // slug to bind the match to, no check-run can ever be trusted, so this resolves the same as "no matching run
+  // found" (null), never `undefined` ("not evaluated"). Returning undefined here let a check-run-only blocking
+  // CLA config silently stop enforcing (a maintainer who set checkRunName but forgot checkRunAppSlug would have
+  // the gate fail OPEN forever, since the caller treats undefined as "retry later," not "missing") -- gate finding.
+  if (!trustedAppSlugLc) return null;
   const result = await githubJsonWithHeaders<{ check_runs?: GitHubCheckRunPayload[] }>(
     env,
     repoFullName,
@@ -2400,8 +2411,10 @@ export async function fetchNamedCheckRunConclusion(
   ).catch(() => undefined);
   if (!result) return undefined; // fetch failed → not evaluated, never a false "missing".
   const nameLc = checkRunName.trim().toLowerCase();
-  const run = (result.data.check_runs ?? []).find((candidate) => candidate.name.trim().toLowerCase() === nameLc);
-  if (!run) return null; // resolved: no check-run with this name exists on this commit.
+  const run = (result.data.check_runs ?? []).find(
+    (candidate) => candidate.name.trim().toLowerCase() === nameLc && candidate.app?.slug?.trim().toLowerCase() === trustedAppSlugLc,
+  );
+  if (!run) return null; // resolved: no trusted check-run with this name exists on this commit.
   // A matching check-run that has NOT finished yet (status !== "completed") has conclusion: null by GitHub's
   // own contract — that is "not yet resolved," not "resolved with an empty conclusion." Returning `undefined`
   // here (rather than coercing to "") keeps this indistinguishable from a fetch failure to the caller, so

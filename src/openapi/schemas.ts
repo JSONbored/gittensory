@@ -601,6 +601,7 @@ export const RepositorySettingsSchema = z
     claGateMode: z.enum(["off", "advisory", "block"]).optional(),
     claConsentPhrase: z.string().nullable().optional(),
     claCheckRunName: z.string().nullable().optional(),
+    claCheckRunAppSlug: z.string().nullable().optional(),
     gateDryRun: z.boolean().optional(),
     premergeContentRecheck: z.boolean().optional(),
     requireFreshRebaseWindowMinutes: z.number().int().positive().nullable().optional(),

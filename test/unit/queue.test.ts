@@ -6430,7 +6430,7 @@ describe("queue processors", () => {
     });
     await upsertOfficialMinerDetection(env, "contributor", { status: "confirmed", snapshot: queueMinerSnapshot("contributor") }, 60_000);
     // Check-run-only config: no consentPhrase, so ONLY the named check-run's conclusion is consulted.
-    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { claMode: "block", cla: { checkRunName: "CLA Assistant Lite" } } });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { claMode: "block", cla: { checkRunName: "CLA Assistant Lite", checkRunAppSlug: "cla-assistant" } } });
     await upsertPullRequestFile(env, { repoFullName: "JSONbored/gittensory", pullNumber: 52, path: "src/feature.ts", status: "modified", additions: 5, deletions: 0, changes: 5, payload: {} });
 
     let gateConclusion: string | undefined;
@@ -6439,7 +6439,7 @@ describe("queue processors", () => {
       if (url === "https://api.gittensor.io/miners") return Response.json([]);
       if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
       if (url.includes("/commits/gate129/check-runs")) {
-        return Response.json({ total_count: 1, check_runs: [{ id: 1, name: "CLA Assistant Lite", status: "completed", conclusion: "success" }] });
+        return Response.json({ total_count: 1, check_runs: [{ id: 1, name: "CLA Assistant Lite", status: "completed", conclusion: "success", app: { slug: "cla-assistant" } }] });
       }
       if (url.includes("/commits/") && url.includes("/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
       if (url.includes("/commits/") && url.includes("/status")) return Response.json({ statuses: [] });
@@ -6505,7 +6505,7 @@ describe("queue processors", () => {
       agentDryRun: false,
     });
     await upsertOfficialMinerDetection(env, "contributor", { status: "confirmed", snapshot: queueMinerSnapshot("contributor") }, 60_000);
-    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { claMode: "block", cla: { checkRunName: "CLA Assistant Lite" } } });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { claMode: "block", cla: { checkRunName: "CLA Assistant Lite", checkRunAppSlug: "cla-assistant" } } });
     await upsertPullRequestFile(env, { repoFullName: "JSONbored/gittensory", pullNumber: 53, path: "src/feature.ts", status: "modified", additions: 5, deletions: 0, changes: 5, payload: {} });
 
     let gateConclusion: string | undefined;
@@ -6515,7 +6515,7 @@ describe("queue processors", () => {
       if (url === "https://api.gittensor.io/miners") return Response.json([]);
       if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
       if (url.includes("/commits/gate130/check-runs")) {
-        return Response.json({ total_count: 1, check_runs: [{ id: 2, name: "CLA Assistant Lite", status: "completed", conclusion: "failure" }] });
+        return Response.json({ total_count: 1, check_runs: [{ id: 2, name: "CLA Assistant Lite", status: "completed", conclusion: "failure", app: { slug: "cla-assistant" } }] });
       }
       if (url.includes("/commits/") && url.includes("/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
       if (url.includes("/commits/") && url.includes("/status")) return Response.json({ statuses: [] });
@@ -6546,6 +6546,91 @@ describe("queue processors", () => {
           state: "open",
           user: { login: "contributor" },
           head: { sha: "gate130" },
+          labels: [],
+          body: "Closes #1",
+          mergeable_state: "clean",
+          reviewDecision: "APPROVED",
+        },
+      },
+    });
+    expect(gateConclusion).toBe("failure");
+    expect(gateText).toContain("CLA consent not confirmed");
+  });
+
+  it("REGRESSION (gate finding): CLA gate (#2564) — a check-run-only config missing checkRunAppSlug BLOCKS the auto-merge instead of silently holding forever", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload({ "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } }, { kind: "raw-github", url: "https://example.test" }, "2026-05-23T00:00:00.000Z"),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertInstallation(env, {
+      installation: {
+        id: 123,
+        account: { login: "JSONbored", id: 1, type: "User" },
+        repository_selection: "selected",
+        permissions: { metadata: "read", pull_requests: "write", issues: "write" },
+        events: ["pull_request"],
+      },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "enabled",
+      gateCheckMode: "enabled",
+      autonomy: { merge: "observe", request_changes: "observe" },
+      agentDryRun: false,
+    });
+    await upsertOfficialMinerDetection(env, "contributor", { status: "confirmed", snapshot: queueMinerSnapshot("contributor") }, 60_000);
+    // Misconfigured: checkRunName set, checkRunAppSlug forgotten -- no run can ever be trusted, so the gate
+    // must BLOCK (not hold), even though a same-name check-run with a passing conclusion exists on the commit.
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { claMode: "block", cla: { checkRunName: "CLA Assistant Lite" } } });
+    await upsertPullRequestFile(env, { repoFullName: "JSONbored/gittensory", pullNumber: 54, path: "src/feature.ts", status: "modified", additions: 5, deletions: 0, changes: 5, payload: {} });
+
+    let gateConclusion: string | undefined;
+    let gateText = "";
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+      // Even though a same-name check-run with a passing conclusion exists on the commit, the missing
+      // checkRunAppSlug means fetchNamedCheckRunConclusion never gets far enough to see it (returns null
+      // before any check-runs fetch) -- the gate must still see it as blocking, not "not evaluated".
+      if (url.includes("/commits/gate131/check-runs")) {
+        return Response.json({ total_count: 1, check_runs: [{ id: 3, name: "CLA Assistant Lite", status: "completed", conclusion: "success", app: { slug: "cla-assistant" } }] });
+      }
+      if (url.includes("/commits/") && url.includes("/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/") && url.includes("/status")) return Response.json({ statuses: [] });
+      if (url.includes("/check-runs")) {
+        if (init?.body) {
+          const body = JSON.parse(init.body.toString()) as { name?: string; conclusion?: string; output?: { title?: string; summary?: string } };
+          if ((body.name ?? "").includes("Gittensory Orb Review Agent") && body.conclusion) {
+            gateConclusion = body.conclusion;
+            gateText = `${body.output?.title ?? ""} ${body.output?.summary ?? ""}`;
+          }
+        }
+        return Response.json({ id: 906 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "cla-gate-checkrun-missing-slug",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: {
+          number: 54,
+          title: "feat: add a feature",
+          state: "open",
+          user: { login: "contributor" },
+          head: { sha: "gate131" },
           labels: [],
           body: "Closes #1",
           mergeable_state: "clean",

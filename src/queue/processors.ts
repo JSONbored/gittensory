@@ -6816,6 +6816,7 @@ async function maybePublishPrPublicSurface(
     // opted in makes no extra GitHub call and pushes no finding — byte-identical to today.
     if (settings.claGateMode && settings.claGateMode !== "off") {
       const claCheckRunName = settings.claCheckRunName ?? null;
+      const claCheckRunAppSlug = settings.claCheckRunAppSlug ?? null;
       // Only resolve a live check-run when the maintainer actually configured that detection method — a
       // phrase-only config must never spend an extra GitHub call.
       const claCheckRunConclusion = claCheckRunName
@@ -6824,6 +6825,7 @@ async function maybePublishPrPublicSurface(
             repoFullName,
             advisory.headSha,
             claCheckRunName,
+            claCheckRunAppSlug,
             await resolveReviewEnrichmentGithubToken(env, repoFullName),
           )
         : undefined;

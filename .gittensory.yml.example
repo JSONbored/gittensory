@@ -168,9 +168,14 @@ gate:
     # review.pre_merge_checks' descriptionContains. String or null. Default: null (not configured).
     consentPhrase: "I have read and agree to the CLA"
     # Name of a separate CLA-bot check-run this repo also runs (e.g. a CLA Assistant GitHub Action). A
-    # success/neutral conclusion for a check-run with this exact name also satisfies consent. Either
-    # method configured is enough; both may be set. String or null. Default: null (not configured).
+    # success/neutral conclusion for a check-run with this exact name also satisfies consent only when the
+    # run was produced by checkRunAppSlug. Either method configured is enough; both may be set. String or
+    # null. Default: null (not configured).
     checkRunName: null
+    # Trusted GitHub App slug that must have produced checkRunName. Required for check-run detection so a
+    # contributor-controlled same-name check-run cannot satisfy a blocking CLA/legal gate. String or null.
+    # Default: null (not configured).
+    checkRunAppSlug: null
 
   # Composite merge-readiness gate (no min score).
   # off | advisory | block. Default: off.
