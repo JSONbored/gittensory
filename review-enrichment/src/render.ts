@@ -381,6 +381,7 @@ export function renderBrief(
 
   lines.push(...renderDescriptorSection("blameLink", findings.blameLink));
   lines.push(...renderDescriptorSection("approvalIntegrity", findings.approvalIntegrity));
+  lines.push(...renderDescriptorSection("ciCheckSignals", findings.ciCheckSignals));
 
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 

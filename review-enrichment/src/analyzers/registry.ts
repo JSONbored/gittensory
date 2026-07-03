@@ -3,6 +3,7 @@ import { scanApprovalIntegrity } from "./approval-integrity.js";
 import { scanAssetWeight } from "./asset-weight.js";
 import { scanChurnHotspot } from "./churn-hotspot.js";
 import { scanBlameLink } from "./blame-link.js";
+import { scanCiCheckSignals } from "./ci-check-signals.js";
 import { scanCodeowners } from "./codeowners.js";
 import { scanCommitSignature } from "./commit-signature.js";
 import { dependencyAnalyzer } from "./dependency/descriptor.js";
@@ -515,6 +516,43 @@ export const ANALYZER_DESCRIPTORS = [
     },
     run: (req, { signal, analysis, diagnostics }) =>
       scanApprovalIntegrity(req, fetch, { signal, analysis, diagnostics }),
+  }),
+  descriptor({
+    name: "ciCheckSignals",
+    title: "CI check-run signals",
+    category: "history",
+    cost: "github-light",
+    defaultEnabled: true,
+    requires: ["github-token", "head-sha"],
+    limits: { maxCheckRuns: 100, longRunThresholdMinutes: 15 },
+    docs: {
+      summary:
+        "Flags a named check that only went green after one or more earlier non-success attempts at the current head commit, and any completed check run whose duration crossed a fixed threshold.",
+      looksAt:
+        "The head commit's check-runs (one bounded page), grouped by name and ordered by start time.",
+      reports: "Check name and either the count of failed attempts before success, or the run's duration in minutes — never logs or output.",
+      network: "Calls the GitHub check-runs API once, bounded to one page.",
+      notes:
+        "Structured-fields-only: reads name/status/conclusion/started_at/completed_at, never check output or logs. Fail-safe on missing token/head SHA/fetch error.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### CI check-run signals"];
+      for (const item of findings) {
+        if (item.kind === "retried-after-failure") {
+          const attempt = item.failedAttempts === 1 ? "attempt" : "attempts";
+          lines.push(
+            `- ${helpers.safeCodeSpan(item.checkName)} only passed after ${item.failedAttempts} earlier non-success ${attempt} at this commit`,
+          );
+        } else {
+          const minute = item.durationMinutes === 1 ? "minute" : "minutes";
+          lines.push(`- ${helpers.safeCodeSpan(item.checkName)} ran for ${item.durationMinutes} ${minute}`);
+        }
+      }
+      return lines;
+    },
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanCiCheckSignals(req, fetch, { signal, analysis, diagnostics }),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 

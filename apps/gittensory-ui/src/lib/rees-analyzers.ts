@@ -608,6 +608,30 @@ export const REES_ANALYZERS = [
         "Structured-fields-only: reads state/commit_id/user.login/submitted_at, never diff or review-body text. Fail-safe on missing token/head SHA/fetch error.",
     },
   },
+  {
+    name: "ciCheckSignals",
+    title: "CI check-run signals",
+    category: "history",
+    cost: "github-light",
+    defaultEnabled: true,
+    profiles: ["balanced", "deep"],
+    requires: ["github-token", "head-sha"],
+    limits: {
+      maxCheckRuns: 100,
+      longRunThresholdMinutes: 15,
+    },
+    docs: {
+      summary:
+        "Flags a named check that only went green after one or more earlier non-success attempts at the current head commit, and any completed check run whose duration crossed a fixed threshold.",
+      looksAt:
+        "The head commit's check-runs (one bounded page), grouped by name and ordered by start time.",
+      reports:
+        "Check name and either the count of failed attempts before success, or the run's duration in minutes — never logs or output.",
+      network: "Calls the GitHub check-runs API once, bounded to one page.",
+      notes:
+        "Structured-fields-only: reads name/status/conclusion/started_at/completed_at, never check output or logs. Fail-safe on missing token/head SHA/fetch error.",
+    },
+  },
 ] as const satisfies readonly ReesAnalyzerDoc[];
 
 export const REES_ANALYZER_NAMES = REES_ANALYZERS.map((analyzer) => analyzer.name);

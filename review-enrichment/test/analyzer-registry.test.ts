@@ -33,6 +33,7 @@ const EXPECTED_ANALYZERS = [
   "churnHotspot",
   "blameLink",
   "approvalIntegrity",
+  "ciCheckSignals",
 ];
 
 test("analyzer descriptors cover the runtime registry in stable order", () => {
