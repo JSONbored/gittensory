@@ -500,6 +500,48 @@ describe("data spine repositories", () => {
     expect(await listOpenItemsByAuthorAcrossInstall(env, 999, "farmer99")).toEqual([]);
   });
 
+  it("audits (never silently drops) when an author's open items across the install hit the list limit (#regate-review)", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "repo-a", full_name: "owner/repo-a", owner: { login: "owner" } }, 123);
+    const LIMIT = 20_000;
+    const now = new Date().toISOString();
+    const prValues = Array.from({ length: LIMIT }, (_, i) => `('pr-${i}', 'owner/repo-a', ${i + 1}, 'PR ${i}', 'open', 'farmer99', '[]', '${now}', '${now}')`).join(",");
+    await env.DB.prepare(
+      `INSERT INTO pull_requests (id, repo_full_name, number, title, state, author_login, labels_json, created_at, updated_at) VALUES ${prValues}`,
+    ).run();
+    // Issue numbers also hit the limit — both the PR side AND the issue side of the truncation check must fire.
+    const issueValues = Array.from({ length: LIMIT }, (_, i) => `('issue-${i}', 'owner/repo-a', ${i + 1}, 'Issue ${i}', 'open', 'farmer99', '[]', '${now}', '${now}')`).join(",");
+    await env.DB.prepare(
+      `INSERT INTO issues (id, repo_full_name, number, title, state, author_login, labels_json, created_at, updated_at) VALUES ${issueValues}`,
+    ).run();
+
+    const rows = await listOpenItemsByAuthorAcrossInstall(env, 123, "farmer99");
+    expect(rows).toHaveLength(LIMIT * 2); // both PR and issue results truncated at the limit each, not silently fewer
+
+    const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+      .bind("agent.global_open_item_cap.author_items_truncated", "farmer99@installation:123")
+      .first<{ n: number }>();
+    expect(audit?.n).toBe(2); // one row for the PR truncation, one for the issue truncation
+  });
+
+  it("audits when an installation's own repo set hits the list limit (#regate-review)", async () => {
+    const env = createTestEnv();
+    const LIMIT = 20_000;
+    const now = new Date().toISOString();
+    const values = Array.from({ length: LIMIT }, (_, i) => `('owner/repo-${i}', 'owner', 'repo-${i}', 123, '${now}', '${now}')`).join(",");
+    await env.DB.prepare(
+      `INSERT INTO repositories (full_name, owner, name, installation_id, created_at, updated_at) VALUES ${values}`,
+    ).run();
+
+    const rows = await listOpenItemsByAuthorAcrossInstall(env, 123, "nobody-in-particular");
+    expect(rows).toEqual([]); // no open items for this author, but the repo-list truncation must still be audited
+
+    const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+      .bind("agent.global_open_item_cap.repo_list_truncated", "installation:123")
+      .first<{ n: number }>();
+    expect(audit?.n).toBe(1);
+  });
+
   it("persists a per-PR slop assessment, round-trips it via the cached record, and keeps latest-wins (PR2)", async () => {
     const env = createTestEnv();
     await upsertPullRequestFromGitHub(env, "owner/sloppr", { number: 5, title: "Churn", state: "open", user: { login: "alice" }, labels: [], body: "x" });

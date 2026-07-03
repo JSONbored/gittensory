@@ -3111,9 +3111,34 @@ export type OpenItemAcrossInstallRow = { repoFullName: string; number: number; k
  *  convention, no FK) -- so scoping a cross-repo query to one install means resolving its repo set FIRST,
  *  mirroring the existing installation-scoped filter in markRepositoriesRemovedFromInstallation (same file)
  *  rather than a SQL join, which this codebase doesn't otherwise use. */
+// #regate-review (gate finding): a fixed LIMIT that's quietly hit degrades the install-wide contributor cap from
+// "every repo in the install is counted" to a silent undercount -- an install (or an author's open items, below)
+// at or beyond the limit could bypass GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP with no signal anything was dropped. These
+// are raised far above any realistic install size / per-author open-item count so truncation should never occur
+// in practice; LIST_TRUNCATION_AUDIT_EVENT below makes it OBSERVABLE (not silent) on the rare install where it
+// still does, rather than pretending completeness the contract promises but the query can't actually guarantee
+// at an unbounded size.
+const INSTALLATION_REPO_LIST_LIMIT = 20_000;
+const AUTHOR_OPEN_ITEM_LIST_LIMIT = 20_000;
+
+async function auditListTruncated(env: Env, eventType: string, targetKey: string, detail: string): Promise<void> {
+  /* v8 ignore next -- defensive: recordAuditEvent is a same-module direct call (not interceptable via
+   * vi.spyOn on the module's exports the way a cross-module import site is), so a genuine write failure here
+   * would require corrupting the shared test D1 handle itself; the truncation detection above must never be
+   * allowed to throw and mask the (already-truncated) result this function's caller still needs to return. */
+  await recordAuditEvent(env, { eventType, outcome: "error", targetKey, detail }).catch(() => undefined);
+}
+
 async function listRepoFullNamesForInstallation(env: Env, installationId: number): Promise<string[]> {
   const db = getDb(env.DB);
-  const rows = await db.select({ fullName: repositories.fullName }).from(repositories).where(eq(repositories.installationId, installationId)).limit(5000);
+  const rows = await db.select({ fullName: repositories.fullName }).from(repositories).where(eq(repositories.installationId, installationId)).limit(INSTALLATION_REPO_LIST_LIMIT);
+  if (rows.length === INSTALLATION_REPO_LIST_LIMIT)
+    await auditListTruncated(
+      env,
+      "agent.global_open_item_cap.repo_list_truncated",
+      `installation:${installationId}`,
+      `installation has >= ${INSTALLATION_REPO_LIST_LIMIT} repos; the global contributor-cap check may undercount repos not included here`,
+    );
   return rows.map((row) => row.fullName);
 }
 
@@ -3138,12 +3163,26 @@ export async function listOpenItemsByAuthorAcrossInstall(env: Env, installationI
     .select({ repoFullName: pullRequests.repoFullName, number: pullRequests.number })
     .from(pullRequests)
     .where(and(eq(pullRequests.state, "open"), loginMatches(pullRequests.authorLogin, authorLogin), inArray(pullRequests.repoFullName, repoNames)))
-    .limit(2000);
+    .limit(AUTHOR_OPEN_ITEM_LIST_LIMIT);
+  if (prRows.length === AUTHOR_OPEN_ITEM_LIST_LIMIT)
+    await auditListTruncated(
+      env,
+      "agent.global_open_item_cap.author_items_truncated",
+      `${authorLogin}@installation:${installationId}`,
+      `author has >= ${AUTHOR_OPEN_ITEM_LIST_LIMIT} open pull requests across the install; the global contributor-cap check may undercount`,
+    );
   const issueRows = await db
     .select({ repoFullName: issues.repoFullName, number: issues.number })
     .from(issues)
     .where(and(eq(issues.state, "open"), loginMatches(issues.authorLogin, authorLogin), inArray(issues.repoFullName, repoNames)))
-    .limit(2000);
+    .limit(AUTHOR_OPEN_ITEM_LIST_LIMIT);
+  if (issueRows.length === AUTHOR_OPEN_ITEM_LIST_LIMIT)
+    await auditListTruncated(
+      env,
+      "agent.global_open_item_cap.author_items_truncated",
+      `${authorLogin}@installation:${installationId}`,
+      `author has >= ${AUTHOR_OPEN_ITEM_LIST_LIMIT} open issues across the install; the global contributor-cap check may undercount`,
+    );
   return [
     ...prRows.map((row) => ({ repoFullName: row.repoFullName, number: row.number, kind: "pull_request" as const })),
     ...issueRows.map((row) => ({ repoFullName: row.repoFullName, number: row.number, kind: "issue" as const })),
