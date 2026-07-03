@@ -17,6 +17,7 @@ const baseFingerprintInput = (): AiReviewCacheInput => ({
   baseSha: null,
   reviewFiles: [],
   profile: null,
+  securityFocus: false,
   inlineComments: false,
   pathInstructions: [],
   pathGuidance: "",
@@ -160,6 +161,155 @@ describe("AI review cache (#1)", () => {
       reviewerCount: 2,
       findings: [],
       metadata: { inputFingerprint: matching },
+    });
+  });
+
+  describe("non-cacheable rows (#regate-churn bounded-cooldown reuse)", () => {
+    it("defaults a row to cacheable when review.cacheable is omitted (unchanged behavior)", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 20, "sha1", "block", { notes: "clean review", reviewerCount: 1 });
+      const row = await env.DB.prepare("SELECT cacheable FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?")
+        .bind("o/r", 20, "sha1")
+        .first<{ cacheable: number }>();
+      expect(row?.cacheable).toBe(1);
+      expect(await getCachedAiReview(env, "o/r", 20, "sha1", "block")).toEqual({ notes: "clean review", reviewerCount: 1, findings: [] });
+    });
+
+    it("persists a non-cacheable outcome but the STRICT read (no options) still misses it, same as before this column existed", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 21, "sha1", "block", { notes: "consensus defect", reviewerCount: 2, cacheable: false });
+      const row = await env.DB.prepare("SELECT cacheable FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?")
+        .bind("o/r", 21, "sha1")
+        .first<{ cacheable: number }>();
+      expect(row?.cacheable).toBe(0); // the attempt WAS persisted
+      expect(await getCachedAiReview(env, "o/r", 21, "sha1", "block")).toBeNull(); // but never a durable hit
+    });
+
+    it("misses a non-cacheable row when the caller does not opt into allowNonCacheable", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 22, "sha1", "block", { notes: "held", reviewerCount: 1, cacheable: false });
+      expect(await getCachedAiReview(env, "o/r", 22, "sha1", "block", undefined, {})).toBeNull();
+    });
+
+    it("reuses a non-cacheable row within the cooldown when allowNonCacheable + maxAgeMs are given", async () => {
+      const env = createTestEnv();
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-07-01T00:00:00.000Z"));
+        await putCachedAiReview(env, "o/r", 23, "sha1", "block", { notes: "consensus defect", reviewerCount: 2, cacheable: false });
+
+        vi.setSystemTime(new Date("2026-07-01T00:10:00.000Z")); // 10 minutes later, within a 30-minute cooldown
+        expect(
+          await getCachedAiReview(env, "o/r", 23, "sha1", "block", undefined, { allowNonCacheable: true, maxAgeMs: 30 * 60 * 1000 }),
+        ).toEqual({ notes: "consensus defect", reviewerCount: 2, findings: [] });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("falls through to a miss once a non-cacheable row ages past maxAgeMs", async () => {
+      const env = createTestEnv();
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-07-01T00:00:00.000Z"));
+        await putCachedAiReview(env, "o/r", 24, "sha1", "block", { notes: "consensus defect", reviewerCount: 2, cacheable: false });
+
+        vi.setSystemTime(new Date("2026-07-01T00:31:00.000Z")); // 31 minutes later, past a 30-minute cooldown
+        expect(
+          await getCachedAiReview(env, "o/r", 24, "sha1", "block", undefined, { allowNonCacheable: true, maxAgeMs: 30 * 60 * 1000 }),
+        ).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a genuinely cacheable row is unaffected by allowNonCacheable/maxAgeMs (unbounded reuse, as before)", async () => {
+      const env = createTestEnv();
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-07-01T00:00:00.000Z"));
+        await putCachedAiReview(env, "o/r", 25, "sha1", "block", { notes: "clean review", reviewerCount: 1, cacheable: true });
+
+        vi.setSystemTime(new Date("2026-08-01T00:00:00.000Z")); // a month later — far past any non-cacheable cooldown
+        expect(
+          await getCachedAiReview(env, "o/r", 25, "sha1", "block", undefined, { allowNonCacheable: true, maxAgeMs: 30 * 60 * 1000 }),
+        ).toEqual({ notes: "clean review", reviewerCount: 1, findings: [] });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still enforces the mode + input-fingerprint match on a non-cacheable reuse", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 26, "sha1", "block", {
+        notes: "held",
+        reviewerCount: 1,
+        cacheable: false,
+        metadata: { inputFingerprint: "fp-v1" },
+      });
+      const opts = { allowNonCacheable: true, maxAgeMs: 30 * 60 * 1000 };
+      expect(await getCachedAiReview(env, "o/r", 26, "sha1", "advisory", undefined, opts)).toBeNull(); // mode mismatch
+      expect(await getCachedAiReview(env, "o/r", 26, "sha1", "block", "fp-v2", opts)).toBeNull(); // fingerprint mismatch
+      expect(await getCachedAiReview(env, "o/r", 26, "sha1", "block", "fp-v1", opts)).toEqual({
+        notes: "held",
+        reviewerCount: 1,
+        findings: [],
+        metadata: { inputFingerprint: "fp-v1" },
+      });
+    });
+
+    it("treats a missing maxAgeMs as a zero-width cooldown (any elapsed time is stale)", async () => {
+      const env = createTestEnv();
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-07-01T00:00:00.000Z"));
+        await putCachedAiReview(env, "o/r", 28, "sha1", "block", { notes: "held", reviewerCount: 1, cacheable: false });
+
+        vi.setSystemTime(new Date("2026-07-01T00:00:01.000Z")); // 1 second later
+        expect(await getCachedAiReview(env, "o/r", 28, "sha1", "block", undefined, { allowNonCacheable: true })).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("fails closed (treats as stale) when the elapsed age is negative — a clock-skewed created_at", async () => {
+      const env = createTestEnv();
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-07-01T00:00:00.000Z"));
+        await putCachedAiReview(env, "o/r", 29, "sha1", "block", { notes: "held", reviewerCount: 1, cacheable: false });
+
+        vi.setSystemTime(new Date("2026-06-30T23:59:00.000Z")); // "now" moved BEFORE the row's created_at
+        expect(
+          await getCachedAiReview(env, "o/r", 29, "sha1", "block", undefined, { allowNonCacheable: true, maxAgeMs: 30 * 60 * 1000 }),
+        ).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("fails closed (treats as stale) when created_at cannot be parsed as a date", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 30, "sha1", "block", { notes: "held", reviewerCount: 1, cacheable: false });
+      await env.DB.prepare("UPDATE ai_review_cache SET created_at = ? WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?")
+        .bind("not-a-date", "o/r", 30, "sha1")
+        .run();
+      expect(
+        await getCachedAiReview(env, "o/r", 30, "sha1", "block", undefined, { allowNonCacheable: true, maxAgeMs: 30 * 60 * 1000 }),
+      ).toBeNull();
+    });
+
+    it("upserting a fresh cacheable review over a prior non-cacheable row makes it a durable hit again", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 27, "sha1", "block", { notes: "consensus defect", reviewerCount: 2, cacheable: false });
+      expect(await getCachedAiReview(env, "o/r", 27, "sha1", "block")).toBeNull();
+
+      await putCachedAiReview(env, "o/r", 27, "sha1", "block", { notes: "resolved, clean review", reviewerCount: 2, cacheable: true });
+      expect(await getCachedAiReview(env, "o/r", 27, "sha1", "block")).toEqual({
+        notes: "resolved, clean review",
+        reviewerCount: 2,
+        findings: [],
+      });
     });
   });
 });

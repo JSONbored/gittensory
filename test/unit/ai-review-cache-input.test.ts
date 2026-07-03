@@ -18,6 +18,7 @@ const baseInput = (): AiReviewCacheInput => ({
   baseSha: null,
   reviewFiles: [],
   profile: null,
+  securityFocus: false,
   inlineComments: false,
   pathInstructions: [],
   pathGuidance: "",
@@ -239,6 +240,19 @@ describe("aiReviewCacheInputFingerprint", () => {
     expect(allAuthorsChanged).not.toBe(original);
     expect(closeConfidenceChanged).not.toBe(original);
     expect(gatePackChanged).not.toBe(original);
+    expect(repeated).toBe(original);
+  });
+
+  it("changes when securityFocus toggles, independently of profile (#review-security-focus)", async () => {
+    const original = await aiReviewCacheInputFingerprint(baseInput());
+    const securityFocusOn = await aiReviewCacheInputFingerprint({ ...baseInput(), securityFocus: true });
+    const profileAndSecurityFocus = await aiReviewCacheInputFingerprint({ ...baseInput(), profile: "chill", securityFocus: true });
+    const profileOnly = await aiReviewCacheInputFingerprint({ ...baseInput(), profile: "chill" });
+    const repeated = await aiReviewCacheInputFingerprint(baseInput());
+
+    expect(securityFocusOn).not.toBe(original);
+    expect(profileAndSecurityFocus).not.toBe(profileOnly);
+    expect(profileAndSecurityFocus).not.toBe(securityFocusOn);
     expect(repeated).toBe(original);
   });
 });

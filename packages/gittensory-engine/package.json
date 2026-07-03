@@ -30,6 +30,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./miner-goal-spec-parse": {
+      "types": "./dist/miner-goal-spec-parse.d.ts",
+      "default": "./dist/miner-goal-spec-parse.js"
     }
   },
   "files": [

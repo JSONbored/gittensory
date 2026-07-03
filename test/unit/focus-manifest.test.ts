@@ -182,6 +182,8 @@ describe("parseFocusManifestContent", () => {
     expect(manifest.gate.aiReviewCloseConfidence).toBeNull();
     // #2552: requireFreshRebaseWindow also round-trips through the real parser.
     expect(manifest.gate.requireFreshRebaseWindowMinutes).toBe(10);
+    // #2563: gate.lockfileIntegrity also round-trips through the real parser.
+    expect(manifest.gate.lockfileIntegrityMode).toBe("off");
   });
 });
 
@@ -494,9 +496,9 @@ describe("compileFocusManifestPolicy", () => {
       issueDiscoveryPolicy: "neutral",
       maintainerNotes: [],
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
-      gate: { present: false, enabled: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null },
+      gate: { present: false, enabled: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, lockfileIntegrityMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null },
       settings: {},
-      review: { present: false, footerText: null, note: null, fields: {}, profile: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
+      review: { present: false, footerText: null, note: null, fields: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
       features: { present: false, rag: null, reputation: null, unifiedComment: null, safety: null },
       contentLane: { present: false, entryFileGlob: null, providerFileGlob: null, artifactGlob: null, collectionField: null, maxAppendedEntries: null, duplicateKeyFields: [], validatorId: null },
       warnings: [],
@@ -802,7 +804,7 @@ describe("parseFocusManifest gate config", () => {
     // the block→advisory deprecation-downgrade behavior itself is covered separately below.
     const m = parseFocusManifest({ gate: { linkedIssue: "block", duplicates: "advisory", readiness: { mode: "advisory", minScore: 70 } } });
     expect(m.present).toBe(true);
-    expect(m.gate).toEqual({ present: true, enabled: null, pack: null, linkedIssue: "block", duplicates: "advisory", readinessMode: "advisory", readinessMinScore: 70, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null });
+    expect(m.gate).toEqual({ present: true, enabled: null, pack: null, linkedIssue: "block", duplicates: "advisory", readinessMode: "advisory", readinessMinScore: 70, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, lockfileIntegrityMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null });
   });
 
   it("parses gate.mergeReadiness + gate.firstTimeContributorGrace, round-trips them, and warns on bad values (#822)", () => {
@@ -1717,6 +1719,32 @@ describe("parseFocusManifest review config", () => {
     expect(m.review.pathInstructions).toHaveLength(50);
     expect(m.warnings.some((w) => /path_instructions.*capped/.test(w))).toBe(true);
   });
+
+  it("parses review.security_focus (default OFF), marks present, round-trips, and warns on a non-boolean (#review-security-focus)", () => {
+    expect(parseFocusManifest({ review: { security_focus: true } }).review.securityFocus).toBe(true);
+    const on = parseFocusManifest({ review: { security_focus: true } });
+    expect(on.review.present).toBe(true); // a security-focus-only manifest IS present
+    expect(parseFocusManifest({ review: reviewConfigToJson(on.review) }).review).toEqual(on.review); // survives round-trip
+    // Explicit false is retained (and marks present, since the maintainer set it).
+    const off = parseFocusManifest({ review: { security_focus: false } });
+    expect(off.review.securityFocus).toBe(false);
+    expect(off.review.present).toBe(true);
+    // Absent ⇒ null (the byte-identical default), config not present.
+    expect(parseFocusManifest({ review: {} }).review.securityFocus).toBeNull();
+    expect(parseFocusManifest({ review: {} }).review.present).toBe(false);
+    // A non-boolean is ignored with a warning.
+    const bad = parseFocusManifest({ review: { security_focus: "yes" } });
+    expect(bad.review.securityFocus).toBeNull();
+    expect(bad.warnings.some((w) => /review\.security_focus.*must be a boolean/.test(w))).toBe(true);
+  });
+
+  it("composes review.security_focus with review.profile independently — both persist together", () => {
+    const m = parseFocusManifest({ review: { profile: "chill", security_focus: true } });
+    expect(m.review.profile).toBe("chill");
+    expect(m.review.securityFocus).toBe(true);
+    expect(m.review.present).toBe(true);
+    expect(parseFocusManifest({ review: reviewConfigToJson(m.review) }).review).toEqual(m.review);
+  });
 });
 
 describe("resolveReviewPathInstructions (#review-path-instructions)", () => {
@@ -1745,13 +1773,15 @@ describe("resolveReviewPathInstructions (#review-path-instructions)", () => {
   });
 
   it("resolveReviewPromptOverrides: non-null manifest passes the config through; null manifest → defaults", () => {
-    const manifest = parseFocusManifest({ review: { profile: "chill", inline_comments: true, path_instructions: [{ path: "src/**", instructions: "be strict" }], instructions: "Follow our async-error conventions.", exclude_paths: ["**/*.lock"] } });
-    expect(resolveReviewPromptOverrides(manifest)).toEqual({ profile: "chill", inlineComments: true, pathInstructions: [{ path: "src/**", instructions: "be strict" }], instructions: "Follow our async-error conventions.", excludePaths: ["**/*.lock"] });
-    // A null manifest (load failure) yields the byte-identical defaults; inline comments default OFF.
-    expect(resolveReviewPromptOverrides(null)).toEqual({ profile: null, inlineComments: false, pathInstructions: [], instructions: null, excludePaths: [] });
+    const manifest = parseFocusManifest({ review: { profile: "chill", security_focus: true, inline_comments: true, path_instructions: [{ path: "src/**", instructions: "be strict" }], instructions: "Follow our async-error conventions.", exclude_paths: ["**/*.lock"] } });
+    expect(resolveReviewPromptOverrides(manifest)).toEqual({ profile: "chill", securityFocus: true, inlineComments: true, pathInstructions: [{ path: "src/**", instructions: "be strict" }], instructions: "Follow our async-error conventions.", excludePaths: ["**/*.lock"] });
+    // A null manifest (load failure) yields the byte-identical defaults; inline comments + security focus default OFF.
+    expect(resolveReviewPromptOverrides(null)).toEqual({ profile: null, securityFocus: false, inlineComments: false, pathInstructions: [], instructions: null, excludePaths: [] });
     // An explicit false / absent toggle both resolve to the strict-boolean false.
     expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { inline_comments: false } })).inlineComments).toBe(false);
     expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { profile: "chill" } })).inlineComments).toBe(false);
+    expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { security_focus: false } })).securityFocus).toBe(false);
+    expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { profile: "chill" } })).securityFocus).toBe(false);
   });
 
   it("parses review.inline_comments (default OFF), marks present, round-trips, and warns on a non-boolean (#inline-comments)", () => {
@@ -1921,6 +1951,32 @@ describe("gate.size manual-review hold config (#gate-size)", () => {
     expect(bad.warnings.some((w) => w.includes("gate.size"))).toBe(true);
     const round = parseFocusManifest({ gate: gateConfigToJson(m.gate) });
     expect(round.gate.sizeMode).toBe("advisory");
+  });
+});
+
+describe("gate.lockfileIntegrity lockfile-tamper-risk gate config (#2563)", () => {
+  it("parses gate.lockfileIntegrity, sets present, round-trips via gateConfigToJson, and resolves into effective settings", () => {
+    const m = parseFocusManifest({ gate: { lockfileIntegrity: "block" } });
+    expect(m.gate.lockfileIntegrityMode).toBe("block");
+    expect(m.gate.present).toBe(true);
+    expect(gateConfigToJson(m.gate)).toMatchObject({ lockfileIntegrity: "block" });
+    const round = parseFocusManifest({ gate: gateConfigToJson(m.gate) });
+    expect(round.gate.lockfileIntegrityMode).toBe("block");
+    const eff = resolveEffectiveSettings({} as unknown as RepositorySettings, m);
+    expect(eff.lockfileIntegrityGateMode).toBe("block");
+  });
+
+  it("defaults to unset/null when omitted — byte-identical to today (off)", () => {
+    const m = parseFocusManifest({});
+    expect(m.gate.lockfileIntegrityMode).toBeNull();
+    const eff = resolveEffectiveSettings({} as unknown as RepositorySettings, m);
+    expect(eff.lockfileIntegrityGateMode).toBeUndefined();
+  });
+
+  it("warns and drops an invalid mode value rather than silently coercing it", () => {
+    const m = parseFocusManifest({ gate: { lockfileIntegrity: "sometimes" as never } });
+    expect(m.gate.lockfileIntegrityMode).toBeNull();
+    expect(m.warnings.some((w) => /gate\.lockfileIntegrity/i.test(w))).toBe(true);
   });
 });
 

@@ -192,6 +192,12 @@ jobs:
       - name: Check migrations
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
         run: npm run db:migrations:check
+      # Guards against a DIFFERENT drift class than db:migrations:check's own column-collision check (#2551,
+      # which only catches two migration FILES independently adding the same column): src/db/schema.ts's
+      # DECLARED shape silently drifting from what migrations/ ACTUALLY produces when replayed (#2565).
+      - name: Schema-vs-migrations drift check
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
+        run: npm run db:schema-drift:check
       # Guards against the same staleness-drift class as db:migrations:check/ui:openapi:check: two PRs that
       # each independently add a wrangler.jsonc binding can both pass CI in isolation, then merge sequentially
       # and leave a stale committed worker-configuration.d.ts with zero prior gate signal (#2557).

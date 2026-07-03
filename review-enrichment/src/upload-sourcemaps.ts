@@ -116,7 +116,7 @@ function numericEnv(name: string, fallback: number, max: number): number {
 
 async function runReleaseValidation(
   release: string,
-  fields: { sha?: string; deployName: string; environment: string },
+  fields: { sha?: string; deployName: string; environment: string; strict: boolean },
 ): Promise<void> {
   if (!shouldValidateRelease()) return;
   const attempts = Math.max(1, numericEnv("REES_SENTRY_VALIDATE_ATTEMPTS", 5, 20));
@@ -132,7 +132,7 @@ async function runReleaseValidation(
         SENTRY_COMMIT_SHA: fields.sha ?? "",
         SENTRY_DEPLOY_NAME: fields.deployName,
         SENTRY_ENVIRONMENT: fields.environment,
-        SENTRY_REQUIRE_COMMITS: "true",
+        SENTRY_REQUIRE_COMMITS: fields.strict ? "true" : "false",
         SENTRY_REQUIRE_DEPLOY: "true",
         SENTRY_REQUIRE_FINALIZED: "true",
       },
@@ -220,6 +220,7 @@ async function main(): Promise<number> {
       sha,
       deployName: nonBlank(process.env.RAILWAY_DEPLOYMENT_ID) ?? "railway",
       environment: resolveSentryEnvironment(process.env),
+      strict,
     });
     log("rees_sentry_sourcemap_upload_complete", { release });
     return 0;

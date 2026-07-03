@@ -33,6 +33,11 @@ export type JobMessage =
       repoFullName: string;
       prNumber: number;
       installationId: number;
+      // #regate-churn (req 8): an explicit manual re-gate request — bypasses the AI review cache and the
+      // bounded non-cacheable-reuse cooldown so it always pays for a fresh opinion. No current scheduled or
+      // webhook-driven caller sets this; it exists so a manual trigger has a supported way to force a fresh
+      // pass instead of reusing a recent (possibly disputed) result.
+      force?: boolean | undefined;
     }
   | {
       type: "refresh-registry";
@@ -555,6 +560,13 @@ export type RepositorySettings = {
    *  >= 10 changed files OR >= 1000 changed (added+deleted) lines that would otherwise pass is HELD for manual review
    *  (neutral gate → "manual" verdict), never auto-merged and never a hard failure. Opt-in via `gate.size.mode`. */
   sizeGateMode?: GateRuleMode | undefined;
+  /** Lockfile-tamper-risk gate (#2563). `off` (default/absent) = no scan; `advisory`/`block` = a changed
+   *  `package-lock.json` whose diff changes a `resolved`/`integrity` value WITHOUT the same package's version
+   *  changing in a changed `package.json`, or whose `resolved` URL points outside `registry.npmjs.org`, produces
+   *  a `lockfile_tamper_risk` finding (`block` additionally hard-blocks). Distinct from the OSV.dev CVE analyzer
+   *  in review-enrichment — this is a tamper/integrity-substitution check, not a known-CVE check. Config-as-code
+   *  only — no DB column or dashboard toggle; set via `.gittensory.yml gate.lockfileIntegrity`. */
+  lockfileIntegrityGateMode?: GateRuleMode | undefined;
   /** Dry-run disposition (#gate-dryrun). When true, the gate renders the would-be merge/close/manual verdict (every
    *  advisory sub-gate promoted to block) WITHOUT enforcing — the posted check stays non-blocking. Lets advisory mode
    *  preview exactly what it would do before the maintainer flips to real enforcement. Default off. */

@@ -55,6 +55,7 @@ export type AiReviewCacheInput = {
     | null
     | undefined;
   profile: ReviewProfile | null | undefined;
+  securityFocus: boolean;
   inlineComments: boolean;
   pathInstructions: readonly ReviewPathInstruction[];
   pathGuidance: string;
@@ -122,6 +123,7 @@ export async function aiReviewCacheInputFingerprint(input: AiReviewCacheInput): 
         }
       : null,
     profile: input.profile ?? null,
+    securityFocus: input.securityFocus,
     inlineComments: input.inlineComments,
     pathInstructions: input.pathInstructions.map((instruction) => ({
       path: instruction.path,
