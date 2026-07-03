@@ -125,6 +125,7 @@ import { buildRepoDataQuality } from "../signals/data-quality";
 import { PREFLIGHT_LIMITS } from "../signals/preflight-limits";
 import { SCENARIO_MAX_BRANCH_REF_CHARS, SCENARIO_MAX_LINKED_ISSUE_NUMBERS, SCENARIO_MAX_REPO_FULL_NAME_CHARS } from "../scenarios/input-model";
 import { loadUpstreamStatus } from "../upstream/ruleset";
+import { rankOpportunityScore } from "../../packages/gittensory-engine/src/opportunity-ranker";
 
 type AppContext = Context<{ Bindings: Env }>;
 type ToolPayload = {
@@ -195,6 +196,26 @@ const checkBeforeStartShape = {
   issueNumber: z.number().int().positive().optional(),
   title: z.string().min(1).max(PREFLIGHT_LIMITS.titleChars).optional(),
   plannedPaths: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
+};
+
+const findOpportunitiesShape = {
+  targets: z
+    .array(
+      z.object({
+        owner: z.string().min(1),
+        repo: z.string().min(1),
+      }),
+    )
+    .optional(),
+  searchQuery: z.string().min(1).max(500).optional(),
+  goalSpec: z
+    .object({
+      lane: z.string().min(1).optional(),
+      minRankScore: z.number().min(0).max(100).optional(),
+      languages: z.array(z.string()).optional(),
+    })
+    .optional(),
+  limit: z.number().int().min(1).max(50).optional(),
 };
 
 const lintPrTextShape = {
@@ -860,6 +881,26 @@ const checkBeforeStartOutputSchema = {
   report: z.unknown().optional(),
 };
 
+const findOpportunitiesOutputSchema = {
+  status: z.string().optional(),
+  ranked: z
+    .array(
+      z.object({
+        owner: z.string().optional(),
+        repo: z.string().optional(),
+        issueNumber: z.number().optional(),
+        title: z.string().optional(),
+        rankScore: z.number().optional(),
+        laneFit: z.number().optional(),
+        freshness: z.number().optional(),
+        dupRisk: z.number().optional(),
+        aiPolicyAllowed: z.boolean().optional(),
+      }),
+    )
+    .optional(),
+  totalCandidates: z.number().optional(),
+};
+
 const remediationPlanOutputSchema = {
   repoFullName: z.string().optional(),
   login: z.string().optional(),
@@ -1341,6 +1382,17 @@ export class GittensoryMcp {
         outputSchema: checkBeforeStartOutputSchema,
       },
       async (input) => this.toolResult(await this.checkBeforeStart(input)),
+    );
+
+    server.registerTool(
+      "gittensory_find_opportunities",
+      {
+        description:
+          "Cross-repo discovery: find high-fit contribution opportunities across registered Gittensor repos. Returns a ranked, public-safe list of open issues filtered by a MinerGoalSpec. Metadata-only, no GitHub writes.",
+        inputSchema: findOpportunitiesShape,
+        outputSchema: findOpportunitiesOutputSchema,
+      },
+      async (input) => this.toolResult(await this.findOpportunities(input)),
     );
 
     server.registerTool(
@@ -2028,6 +2080,75 @@ export class GittensoryMcp {
         reasons: report.reasons,
         blockers: report.blockers,
         report: report as unknown as Record<string, unknown>,
+      },
+    };
+  }
+
+  private async findOpportunities(input: {
+    targets?: Array<{ owner: string; repo: string }> | undefined;
+    searchQuery?: string | undefined;
+    goalSpec?: { lane?: string | undefined; minRankScore?: number | undefined; languages?: string[] | undefined } | undefined;
+    limit?: number | undefined;
+  }): Promise<ToolPayload> {
+    const limit = input.limit ?? 10;
+    const minRankScore = input.goalSpec?.minRankScore ?? 0;
+    const repos = input.targets ?? [];
+    if (repos.length === 0 && !input.searchQuery) {
+      return {
+        summary: "Provide at least one of `targets` or `searchQuery`.",
+        data: { status: "validation_error", ranked: [], totalCandidates: 0 },
+      };
+    }
+    const allCandidates: Array<{
+      owner: string;
+      repo: string;
+      issueNumber: number;
+      title: string;
+      labels: string[];
+      rankScore: number;
+      laneFit: number;
+      freshness: number;
+      dupRisk: number;
+      aiPolicyAllowed: true;
+    }> = [];
+    for (const target of repos.slice(0, 20)) {
+      const fullName = `${target.owner}/${target.repo}`;
+      const issues = await listIssueSignalSample(this.env, fullName);
+      const pullRequests = await listOpenPullRequests(this.env, fullName);
+      const claimedIssueNumbers = new Set(pullRequests.flatMap((pr) => pr.linkedIssues ?? []));
+      for (const issue of issues) {
+        if (issue.state !== "open") continue;
+        const isClaimed = claimedIssueNumbers.has(issue.number);
+        const dupRisk = isClaimed ? 0.8 : 0.1;
+        const ageDays = issue.updatedAt ? Math.max(0, (Date.now() - new Date(issue.updatedAt).getTime()) / 86400000) : 30;
+        const freshness = Math.max(0, 1 - ageDays / 30);
+        const laneFit = input.goalSpec?.lane ? 0.7 : 0.5;
+        const potential = 0.6;
+        const feasibility = issue.labels.length > 0 ? 0.7 : 0.5;
+        const score = rankOpportunityScore({ potential, feasibility, laneFit, freshness, dupRisk });
+        if (score * 100 < minRankScore) continue;
+        allCandidates.push({
+          owner: target.owner,
+          repo: target.repo,
+          issueNumber: issue.number,
+          title: issue.title ?? "",
+          labels: issue.labels,
+          rankScore: Math.round(score * 100),
+          laneFit,
+          freshness: Math.round(freshness * 100) / 100,
+          dupRisk: Math.round(dupRisk * 100) / 100,
+          aiPolicyAllowed: true as const,
+        });
+      }
+    }
+    allCandidates.sort((a, b) => b.rankScore - a.rankScore);
+    const ranked = allCandidates.slice(0, limit);
+    return {
+      summary: `Gittensory cross-repo opportunities: ${ranked.length} ranked candidate(s) from ${repos.length} repo(s).`,
+      data: {
+        status: "ok",
+        ranked,
+        totalCandidates: allCandidates.length,
       },
     };
   }
