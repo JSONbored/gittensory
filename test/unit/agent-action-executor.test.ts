@@ -55,6 +55,7 @@ import type { PlannedAgentAction } from "../../src/settings/agent-actions";
 import { AGENT_LABEL_PENDING_CLOSURE } from "../../src/review/linked-issue-hard-rules";
 import { getGlobalContributorBlacklist, isGlobalAgentFrozen, setGlobalAgentFrozen, upsertGlobalModerationConfig, upsertPullRequestFromGitHub } from "../../src/db/repositories";
 import { createTestEnv } from "../helpers/d1";
+import { MODERATION_VIOLATION_EVENT_TYPE } from "../../src/settings/moderation-rules";
 
 function ctx(over: Partial<AgentActionExecutionContext> = {}): AgentActionExecutionContext {
   return {
@@ -765,6 +766,22 @@ describe("moderation-rules engine escalation (#selfhost-mod-engine)", () => {
     await upsertGlobalModerationConfig(env, { enabled: true });
     await executeAgentMaintenanceActions(env, ctx({ authorLogin: "farmer99", moderationSettings: { moderationRules: ["blacklist"] } }), [coupledClose, coupledLabel]);
     expect(ensurePullRequestLabel).not.toHaveBeenCalledWith(env, 123, "owner/repo", 7, "mod:warning", expect.anything());
+  });
+
+  it("REGRESSION (gate-flagged): the escalation count is scoped to the CURRENTLY-effective rule types, not every rule type ever recorded -- an excluded rule's historical violations must not push the count toward the ban threshold", async () => {
+    const env = createTestEnv({});
+    await upsertGlobalModerationConfig(env, { enabled: true, banThreshold: 2 });
+    // A contributor_cap violation recorded earlier (e.g. from a repo/period where cap DID count).
+    await env.DB.prepare("INSERT INTO audit_events (id, event_type, actor, target_key, outcome, detail, metadata_json, created_at) VALUES (?, ?, ?, ?, 'completed', 'old', '{}', ?)")
+      .bind(crypto.randomUUID(), MODERATION_VIOLATION_EVENT_TYPE.contributor_cap, "farmer99", "owner/repo#1", new Date().toISOString())
+      .run();
+    // THIS repo only cares about blacklist -- a blacklist close here should count ONLY the blacklist history,
+    // not the pre-existing contributor_cap violation, so the total stays at 1 (< threshold 2) -> warning.
+    const blacklistClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "blacklisted contributor", closeComment: "closing", closeKind: "blacklist" };
+    const blacklistLabel: PlannedAgentAction = { actionClass: "label", autonomyClass: "close", requiresApproval: false, reason: "blacklisted contributor", label: "slop", labelOp: "add", closeKind: "blacklist" };
+    await executeAgentMaintenanceActions(env, ctx({ authorLogin: "farmer99", moderationSettings: { moderationRules: ["blacklist"] } }), [blacklistClose, blacklistLabel]);
+    expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "mod:warning", { createMissingLabel: true });
+    expect(ensurePullRequestLabel).not.toHaveBeenCalledWith(env, 123, "owner/repo", 7, "mod:banned", expect.anything());
   });
 
   it("per-repo custom label overrides win over the global config's label", async () => {

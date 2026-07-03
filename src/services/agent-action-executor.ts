@@ -326,9 +326,14 @@ async function maybeEscalateModeration(
   const targetKey = `${args.repoFullName}#${args.number}`;
   await recordModerationViolation(env, { eventType: MODERATION_VIOLATION_EVENT_TYPE[rule], actor: args.authorLogin, targetKey, repoFullName: args.repoFullName, ruleReason: `${rule} violation` }).catch(() => undefined);
 
-  const allEventTypes = Object.values(MODERATION_VIOLATION_EVENT_TYPE);
+  // #gate-flagged: count only the CURRENTLY-effective rule types, not every rule type ever recorded. A rule
+  // an operator has excluded (globally or for this repo) must not go on influencing the ban decision just
+  // because a violation of that kind happened to get recorded before the exclusion, or on a repo that still
+  // counts it -- "we don't count reviewNag violations" is an ongoing policy stance about what this contributor's
+  // standing should be judged on, not a per-recording footnote that only applies to where it happened.
+  const countedEventTypes = effectiveRules.map((r) => MODERATION_VIOLATION_EVENT_TYPE[r]);
   const sinceIso = globalConfig.violationDecayDays !== null ? new Date(Date.now() - globalConfig.violationDecayDays * 24 * 60 * 60 * 1000).toISOString() : undefined;
-  const totalCount = await countModerationViolationsForActor(env, args.authorLogin, allEventTypes, sinceIso);
+  const totalCount = await countModerationViolationsForActor(env, args.authorLogin, countedEventTypes, sinceIso);
   const tier = moderationTierForViolationCount(totalCount, globalConfig.banThreshold);
   /* v8 ignore next -- defensive: the violation just recorded above always makes totalCount >= 1 by the time
      execution reaches here (the only way to see "none" is the record write itself silently failing, which
