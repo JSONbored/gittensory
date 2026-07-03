@@ -8720,6 +8720,44 @@
             "type": "integer",
             "minimum": 0,
             "exclusiveMinimum": true
+          },
+          "aiReviewCombine": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "single",
+              "consensus",
+              "synthesis",
+              null
+            ]
+          },
+          "aiReviewOnMerge": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "either",
+              "both",
+              null
+            ]
+          },
+          "aiReviewReviewers": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string"
+                },
+                "fallback": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "model"
+              ]
+            }
           }
         },
         "required": [
