@@ -28,6 +28,9 @@ vi.mock("../../src/github/app", async (importOriginal) => ({
 // The accept-time live re-check (#2126) AND the actuation-time live CI re-check (#2128) both default to
 // "everything still looks fine" so the existing accept tests stay deterministic; individual tests below
 // override these to exercise the staleness-supersede / staleness-denial paths.
+vi.mock("../../src/github/migration-tree", () => ({
+  listMigrationFilenamesAtRef: vi.fn(async () => []),
+}));
 vi.mock("../../src/github/backfill", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/github/backfill")>()),
   fetchLiveCiAggregate: vi.fn(async () => ({ ciState: "passed" as const, hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null })),
@@ -49,9 +52,11 @@ import { createPullRequestReview, mergePullRequest } from "../../src/github/pr-a
 import { ensurePullRequestLabel } from "../../src/github/labels";
 import { createInstallationToken } from "../../src/github/app";
 import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLivePullRequestReviewDecision } from "../../src/github/backfill";
+import { listMigrationFilenamesAtRef } from "../../src/github/migration-tree";
 import { resolveLinkedIssueHardRule } from "../../src/review/linked-issue-hard-rules";
 import { actionParams, executeAgentMaintenanceActions, pendingActionToPlanned, type AgentActionExecutionContext } from "../../src/services/agent-action-executor";
 import { decidePendingAgentAction } from "../../src/services/agent-approval-queue";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import {
   countPendingAgentActions,
   createPendingAgentActionIfAbsent,
@@ -61,6 +66,7 @@ import {
   setPendingAgentActionStatus,
   upsertInstallation,
   upsertPullRequestFromGitHub,
+  upsertPullRequestFile,
   upsertRepositorySettings,
 } from "../../src/db/repositories";
 import type { PlannedAgentAction } from "../../src/settings/agent-actions";
@@ -149,6 +155,39 @@ describe("agent approval queue (#779)", () => {
     expect((await getPendingAgentAction(env, action.id))?.status).toBe("accepted");
     const audit = await env.DB.prepare("select outcome, actor from audit_events where event_type = ?").bind("agent.pending_action.accepted").first<{ outcome: string; actor: string }>();
     expect(audit).toMatchObject({ outcome: "completed", actor: "owner" });
+  });
+
+  it("accept skips the migration recheck when the PR has no migration file (#2550)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto_with_approval" } });
+    await upsertRepoFocusManifest(env, "owner/repo", { gate: { premergeContentRecheck: true } });
+    await seedInstallation(env);
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, base: { ref: "main" }, labels: [], body: "x" });
+    const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber: 7, installationId: 5, actionClass: "merge", autonomyLevel: "auto_with_approval", params: { mergeMethod: "squash", expectedHeadSha: "h7" }, reason: "clean" });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    expect(result.executionOutcome).toBe("completed");
+    expect(listMigrationFilenamesAtRef).not.toHaveBeenCalled();
+  });
+
+  it("accept rechecks live migration collisions before executing a staged merge (#2550)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto_with_approval" } });
+    await upsertRepoFocusManifest(env, "owner/repo", { gate: { premergeContentRecheck: true } });
+    await seedInstallation(env);
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, base: { ref: "main" }, labels: [], body: "x" });
+    await upsertPullRequestFile(env, { repoFullName: "owner/repo", pullNumber: 7, path: "migrations/0100_pr.sql", status: "added", additions: 1, deletions: 0, changes: 1, payload: {} });
+    vi.mocked(listMigrationFilenamesAtRef).mockResolvedValueOnce(["0099_existing.sql", "0100_sibling.sql"]);
+    const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber: 7, installationId: 5, actionClass: "merge", autonomyLevel: "auto_with_approval", params: { mergeMethod: "squash", expectedHeadSha: "h7" }, reason: "clean" });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    expect(result.status).toBe("accepted");
+    expect(result.executionOutcome).toBe("denied");
+    expect(mergePullRequest).not.toHaveBeenCalled();
+    expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 5, "owner/repo", 7, "gittensory:migration-collision", { createMissingLabel: true, mode: "live" });
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("agent.action.merge").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("denied");
+    expect(audit?.detail).toContain("live migrations/** collision on main");
   });
 
   it("accept supersedes a staged merge when the live head moved after staging (force-push fail-safe)", async () => {

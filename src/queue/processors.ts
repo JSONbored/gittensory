@@ -247,8 +247,7 @@ import {
 } from "../settings/agent-actions";
 import { isAutoCloseExempt } from "../settings/auto-close-exempt";
 import { resolveGlobalContributorOpenItemCap } from "../settings/global-contributor-cap";
-import { detectMigrationCollisions, extractMigrationNumber, KNOWN_MIGRATION_DUPLICATES } from "../db/migration-collisions";
-import { listMigrationFilenamesAtRef } from "../github/migration-tree";
+import { migrationFilenamesForLiveRecheck, resolveLiveMigrationCollisionHold } from "../services/migration-collision-recheck";
 import {
   executeAgentMaintenanceActions,
   executeIssueMaintenanceActions,
@@ -1604,59 +1603,6 @@ export function changedPathsForGuardrail(
 }
 
 /**
- * Live premerge migrations/** collision recheck (#2550). `check-migrations.mjs` (CI) only validates against
- * THIS PR's own branch snapshot at the time CI ran — it can never see a sibling PR that merged a
- * same-numbered migration file to `baseRef` in the meantime. This does the live check right before the
- * merge-decision moment: fetch the base branch's CURRENT migration filenames, drop any filename THIS PR's
- * own diff removes from the base (an outright deletion, or a rename's pre-rename name — otherwise renaming
- * an existing base migration self-collides with its own old name, which is still live on `baseRef` until
- * this PR merges), union what's left with THIS PR's own new migration filenames (the live tree never
- * contains this PR's own not-yet-merged files, so checking main alone could never detect a collision from
- * this PR's perspective — the union is load-bearing, not optional), then run the SAME collision-detection
- * function scripts/check-migrations.mjs uses.
- *
- * Deliberately scoped to a collision involving THIS PR's own migration number(s) only (via `prNumbers`) — a
- * pre-existing collision between two OTHER already-merged files (which would mean `main` itself is already
- * broken, a separate problem CI already surfaces loudly) must not hold an unrelated third PR whose own
- * migration number doesn't collide with anything.
- *
- * Fail-OPEN throughout: a missing baseRef or a failed live fetch returns undefined (no hold) rather than
- * risking a false hold on inconclusive data — this is a safety net, not a new way to get PRs stuck.
- */
-// Deliberately UNCACHED: this is the safety check the whole feature exists to provide, so it must always
-// read the live tree fresh. A cache keyed by repo+baseRef (even a short-TTL one) can serve a snapshot taken
-// BEFORE a sibling PR merged its own colliding migration — defeating the exact race this function exists to
-// catch (PR A merges 0099, a still-cached pre-merge tree lets a later-processed PR B also merge its own 0099
-// within the cache window). The existing GitHub rate-limit admission/backoff mechanism (the same
-// `admissionKey` every other live call in this function already uses) already bounds the cost; correctness
-// here matters far more than shaving a redundant API call.
-async function resolveLiveMigrationCollisionHold(
-  args: {
-    repoFullName: string;
-    baseRef: string | null | undefined;
-    token: string | undefined;
-    admissionKey: GitHubRateLimitAdmissionKey | undefined;
-    prMigrationFilenames: string[];
-    prRemovedMigrationFilenames: string[];
-  },
-): Promise<{ reason: string; comment: string } | undefined> {
-  if (!args.baseRef) return undefined;
-  const liveFilenames = await listMigrationFilenamesAtRef(args.repoFullName, args.baseRef, args.token, args.admissionKey);
-  if (liveFilenames === null) return undefined;
-  const removedFromBase = new Set(args.prRemovedMigrationFilenames);
-  const effectiveLiveFilenames = liveFilenames.filter((f) => !removedFromBase.has(f));
-  const union = [...new Set([...effectiveLiveFilenames, ...args.prMigrationFilenames])];
-  const prNumbers = new Set(args.prMigrationFilenames.map((f) => extractMigrationNumber(f)).filter((n): n is number => n !== null));
-  const collisions = detectMigrationCollisions(union, KNOWN_MIGRATION_DUPLICATES).filter((c) => prNumbers.has(c.number));
-  if (collisions.length === 0) return undefined;
-  const detail = collisions.map((c) => `${c.paddedNumber}: ${c.files.join(", ")}`).join("; ");
-  return {
-    reason: `live migrations/** collision on ${args.baseRef} (${detail})`,
-    comment: `Gittensory: a live check of \`migrations/**\` on \`${args.baseRef}\` found a migration-number collision that isn't visible from this PR's own diff — another PR merged a same-numbered migration file since this PR's CI last ran (**${detail}**). This PR is held for manual review — please rebase onto the latest \`${args.baseRef}\` and renumber your migration to the next free number before this can merge.`,
-  };
-}
-
-/**
  * Chain the two INDEPENDENT precision circuit-breakers over a planned action set (the merge-side and close-side
  * downgrades), in order. PURE — the live flag reads happen at the call site (each fail-open), so this composes
  * only the transforms:
@@ -1920,25 +1866,7 @@ async function runAgentMaintenancePlanAndExecute(
   // producing a false hold that can never clear (a later rename still carries the stale old name forever, on
   // every subsequent maintenance pass). Only `.path` (the file's CURRENT name) and only non-removed files
   // reflect what will actually exist in this PR's tree once merged.
-  const prMigrationFilenames = changedFiles
-    .filter((f) => f.status !== "removed" && f.path.startsWith("migrations/") && f.path.endsWith(".sql"))
-    .map((f) => f.path.slice("migrations/".length));
-  // Base filenames this PR's diff removes from `migrations/**` — an outright deletion's own `.path`, or a
-  // rename's pre-rename `.previousFilename` — so a filename that won't exist once this PR merges isn't still
-  // counted from the live base fetch below. Without this, renaming an EXISTING base migration within the same
-  // number (e.g. `migrations/0099_old.sql` -> `migrations/0099_new.sql`, fixing a typo on an already-merged
-  // file) unions both the old (still live) and new (this PR's) name and self-collides, even though the merged
-  // tree would only ever contain the new file.
-  const prRemovedMigrationFilenames = changedFiles.flatMap((f) => {
-    const removed: string[] = [];
-    if (f.status === "removed" && f.path.startsWith("migrations/") && f.path.endsWith(".sql")) {
-      removed.push(f.path.slice("migrations/".length));
-    }
-    if (f.previousFilename && f.previousFilename.startsWith("migrations/") && f.previousFilename.endsWith(".sql")) {
-      removed.push(f.previousFilename.slice("migrations/".length));
-    }
-    return removed;
-  });
+  const { prMigrationFilenames, prRemovedMigrationFilenames } = migrationFilenamesForLiveRecheck(changedFiles);
   const migrationCollisionHold =
     settings.premergeContentRecheck === true && prMigrationFilenames.length > 0
       ? await resolveLiveMigrationCollisionHold({

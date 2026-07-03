@@ -1,4 +1,4 @@
-import { bumpPullRequestMergeAttempt, createPendingAgentActionIfAbsent, insertNotificationDeliveryIfAbsent, isGlobalAgentFrozen, markPullRequestApproved, markPullRequestMergeBlocked, recordAuditEvent } from "../db/repositories";
+import { bumpPullRequestMergeAttempt, createPendingAgentActionIfAbsent, getPullRequest, insertNotificationDeliveryIfAbsent, isGlobalAgentFrozen, listPullRequestFiles, markPullRequestApproved, markPullRequestMergeBlocked, recordAuditEvent } from "../db/repositories";
 import { classifyMergeFailure, MERGE_RETRY_CAP } from "./merge-failure";
 import { notifyActionToDiscord, notifyActionToSlack, type NotifyOutcome } from "./notify-discord";
 import { createInstallationToken, githubErrorStatus, isGitHubRateLimitedError } from "../github/app";
@@ -9,10 +9,12 @@ import { closeIssue, closePullRequest, createIssueComment, createPullRequestRevi
 import { fetchPullRequestFreshness, pullRequestFreshnessDetail } from "../github/pr-freshness";
 import { isActingAutonomyLevel, resolveAutonomy } from "../settings/autonomy";
 import { buildAgentActionAudit, isGlobalAgentPause, resolveAgentActionMode, resolveAgentPermissionReadiness } from "../settings/agent-execution";
-import type { PlannedAgentAction } from "../settings/agent-actions";
+import { AGENT_LABEL_MIGRATION_COLLISION, type PlannedAgentAction } from "../settings/agent-actions";
 import type { AgentActionClass, AgentPendingActionParams, AutonomyLevel, AutonomyPolicy } from "../types";
 import { errorMessage } from "../utils/json";
 import { AGENT_LABEL_PENDING_CLOSURE } from "../review/linked-issue-hard-rules";
+import { migrationFilenamesForLiveRecheck, resolveLiveMigrationCollisionHold } from "./migration-collision-recheck";
+import { resolveRepositorySettings } from "../settings/repository-settings";
 
 // The agent actor name on every audit record — the App acts on the maintainer's behalf per their configured
 // autonomy (the config IS the authorization; there is no human commenter to authorize, unlike #824).
@@ -168,12 +170,44 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
         continue;
       }
     }
-    // 7) Write-permission readiness: a PR-write action needs `pull_requests: write` granted.
+    // 7) Actuation-time migrations/** recheck (#2550): planning already checks this, but a sibling PR can merge
+    //    a same-numbered migration while a merge waits in auto_with_approval or between planning and actuation.
+    //    Re-read the live base tree at the final mutation boundary so the checked invariant is fresh.
+    if (action.actionClass === "merge") {
+      const changedFiles = await listPullRequestFiles(env, ctx.repoFullName, ctx.pullNumber);
+      const { prMigrationFilenames, prRemovedMigrationFilenames } = migrationFilenamesForLiveRecheck(changedFiles);
+      if (prMigrationFilenames.length > 0) {
+        const settings = await resolveRepositorySettings(env, ctx.repoFullName);
+        if (settings.premergeContentRecheck === true) {
+          const [pr, migrationToken] = await Promise.all([
+            getPullRequest(env, ctx.repoFullName, ctx.pullNumber),
+            createInstallationToken(env, ctx.installationId).catch(() => undefined),
+          ]);
+          const migrationAdmissionKey = githubRateLimitAdmissionKeyForToken(env, migrationToken, ctx.installationId);
+          const migrationCollisionHold = await resolveLiveMigrationCollisionHold({
+            repoFullName: ctx.repoFullName,
+            baseRef: pr?.baseRef,
+            token: migrationToken,
+            admissionKey: migrationAdmissionKey,
+            prMigrationFilenames,
+            prRemovedMigrationFilenames,
+          });
+          if (migrationCollisionHold !== undefined) {
+            await ensurePullRequestLabel(env, ctx.installationId, ctx.repoFullName, ctx.pullNumber, AGENT_LABEL_MIGRATION_COLLISION, { createMissingLabel: true, mode }).catch(() => undefined);
+            await createIssueComment(env, ctx.installationId, ctx.repoFullName, ctx.pullNumber, migrationCollisionHold.comment).catch(() => undefined);
+            await audit("denied", `${migrationCollisionHold.reason} — action not executed`);
+            continue;
+          }
+        }
+      }
+    }
+
+    // 8) Write-permission readiness: a PR-write action needs `pull_requests: write` granted.
     if (PR_WRITE_CLASSES.has(action.actionClass) && resolveAgentPermissionReadiness({ autonomy: ctx.autonomy, installationPermissions: ctx.installationPermissions }) !== "ready") {
       await audit("denied", "pull_requests: write not granted — maintainer must re-consent");
       continue;
     }
-    // 8) live — perform the real mutation, recording success or the error.
+    // 9) live — perform the real mutation, recording success or the error.
     try {
       await performAction(env, ctx, action);
       await audit("completed", action.reason);
