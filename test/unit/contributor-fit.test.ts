@@ -79,12 +79,27 @@ describe("classifyContributorFit", () => {
     expect(reasons).toContain("no unlinked open pull requests");
   });
 
+  it("matches the target repo case-insensitively (GitHub full names are case-insensitive)", () => {
+    const result = profile({
+      registeredRepoActivity: {
+        pullRequests: 10,
+        mergedPullRequests: 9,
+        reposTouched: ["JSONbored/gittensory"],
+      },
+      trustSignals: { level: "established", unlinkedOpenPullRequests: 0 },
+    });
+    expect(classifyContributorFit(result, "jsonbored/gittensory").fit).toBe("strong");
+    expect(classifyContributorFit(result, "JSONBORED/Gittensory").fit).toBe("strong");
+  });
+
   it("matches the exact verdicts across the strong/neutral/weak axis", () => {
-    const verdicts = [
-      profile(),
-      profile({ trustSignals: { level: "established", unlinkedOpenPullRequests: 0 } }),
-      profile({ trustSignals: { level: "established", unlinkedOpenPullRequests: 1 } }),
-    ].map((p) => classifyContributorFit(p, "JSONbored/gittensory").fit);
-    expect(verdicts).toEqual(["strong", "strong", "weak"]);
+    const strong = profile();
+    const weak = profile({ trustSignals: { level: "established", unlinkedOpenPullRequests: 1 } });
+    const neutral = profile({
+      registeredRepoActivity: { pullRequests: 10, mergedPullRequests: 6, reposTouched: ["JSONbored/gittensory"] },
+      trustSignals: { level: "emerging", unlinkedOpenPullRequests: 0 },
+    });
+    const verdicts = [strong, weak, neutral].map((p) => classifyContributorFit(p, "JSONbored/gittensory").fit);
+    expect(verdicts).toEqual(["strong", "weak", "neutral"]);
   });
 });

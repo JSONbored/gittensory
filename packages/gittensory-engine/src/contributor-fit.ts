@@ -32,7 +32,8 @@ export function classifyContributorFit(
   targetRepoFullName: string,
 ): ContributorFitCheck {
   const { reposTouched, pullRequests, mergedPullRequests } = profile.registeredRepoActivity;
-  if (!reposTouched.includes(targetRepoFullName)) {
+  const target = targetRepoFullName.toLowerCase();
+  if (!reposTouched.some((repo) => repo.toLowerCase() === target)) {
     return {
       fit: "neutral",
       reasons: [`No prior activity on ${targetRepoFullName}; a first attempt is not evidence of poor fit.`],
