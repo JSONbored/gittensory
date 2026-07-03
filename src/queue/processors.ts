@@ -4373,12 +4373,14 @@ async function maybeCloseIssueOverContributorCap(
   const liveToken = token ?? env.GITHUB_PUBLIC_TOKEN;
   const admissionKey = githubAdmissionKeyForToken(env, installationId, liveToken);
   const confirmedOpen = new Set<number>();
-  await Promise.all(
-    otherAuthorIssueNumbers.map(async (number) => {
-      const liveState = await fetchLiveIssueState(env, repoFullName, number, liveToken, admissionKey).catch(() => undefined);
-      if (liveState === "open") confirmedOpen.add(number);
-    }),
-  );
+  // Bounded fan-out, mirroring the per-repo PR cap (#2766): an unbounded Promise.all scales with the author's
+  // own open-issue count, so a single delivery could fire dozens of concurrent live-state calls. Every sibling
+  // must still be verified (the over-cap numbers below depend on the complete confirmed-open set), so this
+  // bounds concurrency via the shared CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY rather than stopping early.
+  await mapWithConcurrency(otherAuthorIssueNumbers, CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY, async (number) => {
+    const liveState = await fetchLiveIssueState(env, repoFullName, number, liveToken, admissionKey).catch(() => undefined);
+    if (liveState === "open") confirmedOpen.add(number);
+  });
   const authorOpenIssueNumbers = otherAuthorIssueNumbers
     .filter((number) => confirmedOpen.has(number))
     .concat(issue.number)

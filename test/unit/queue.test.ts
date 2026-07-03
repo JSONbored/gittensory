@@ -9603,6 +9603,63 @@ describe("queue processors", () => {
     expect(closeAudit?.n).toBeGreaterThanOrEqual(1);
   });
 
+  it("contributor open-ISSUE cap (#2270): bounds the sibling live-check fan-out instead of firing one request per open issue at once (#2766 parity)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", issues: "write" }, events: ["issues"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    // SIBLING_COUNT other open issues from the same author, well beyond the concurrency bound, so an unbounded
+    // Promise.all would fire every live-state GET at once. The cap is set BELOW the total so the newest issue is
+    // over the cap and the sibling live-verification path actually runs (it walks the complete sibling set).
+    const SIBLING_COUNT = 30;
+    const EXPECTED_LIVE_CHECK_CONCURRENCY = 10; // mirrors CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY in processors.ts
+    const newIssue = SIBLING_COUNT + 1;
+    for (let number = 1; number <= SIBLING_COUNT; number += 1) {
+      await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number, title: `Prolific issue ${number}`, state: "open", user: { login: "prolific" }, labels: [], body: "x" });
+    }
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      autonomy: { close: "auto", label: "auto" },
+      contributorOpenIssueCap: SIBLING_COUNT,
+    });
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let closed = false;
+    const siblingCheckPattern = new RegExp(`/issues/(?:${Array.from({ length: SIBLING_COUNT }, (_, i) => i + 1).join("|")})$`);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+      if (siblingCheckPattern.test(url) && method === "GET") {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5)); // force genuine overlap between concurrent checks
+        inFlight -= 1;
+        return Response.json({ state: "open" });
+      }
+      if (url.endsWith(`/issues/${newIssue}`) && method === "PATCH") { closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ state: "closed" }); }
+      if (url.includes(`/issues/${newIssue}/comments`) && method === "POST") return Response.json({ id: 1 }, { status: 201 });
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "contributor-issue-cap-bounded-concurrency",
+      eventName: "issues",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: newIssue, title: "Prolific author's newest issue", state: "open", user: { login: "prolific" }, labels: [], body: "x" },
+      },
+    });
+
+    expect(closed).toBe(true); // the over-cap issue is closed, confirming the sibling live-check path actually ran
+    expect(maxInFlight).toBeGreaterThan(1); // genuinely concurrent, not accidentally serial
+    expect(maxInFlight).toBeLessThanOrEqual(EXPECTED_LIVE_CHECK_CONCURRENCY);
+  });
+
   it("contributor open-ISSUE cap (#2270): a maintainer-named autoCloseExemptLogins entry is exempt from the PER-REPO issue cap too (not just the install-wide cap)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, {
