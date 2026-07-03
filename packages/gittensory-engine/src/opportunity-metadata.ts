@@ -127,6 +127,11 @@ function titlesOverlap(left: string, right: string): boolean {
   return longer.includes(shorter) && shorter.length >= 12;
 }
 
+/** Branch coverage helpers for unit tests. */
+export const opportunityMetadataInternals = {
+  titlesOverlap,
+};
+
 /**
  * Estimate duplicate-work risk inside a metadata-only candidate batch by looking for overlapping titles in the
  * same repository. This is intentionally conservative: any strong overlap raises dupRisk toward 1.
