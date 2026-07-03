@@ -78,6 +78,7 @@ import {
 } from "./client";
 import { fetchCachedGitHubGraphQl } from "./graphql-cache";
 import { incr } from "../selfhost/metrics";
+import { fetchBrokeredInstallationToken, isOrbBrokerMode } from "../orb/broker-client";
 type GitHubLabelPayload = {
   name: string;
   color?: string;
@@ -847,7 +848,52 @@ type InstallationEventDiagnostic = {
   action: string;
 };
 
+// Broker mode (#selfhost-runtime-drift): a brokered self-host holds no local GitHub App private key by design,
+// and the token broker does not expose granted permissions/scopes today -- there is nothing to introspect. Report
+// that plainly instead of running the local-mode remediation math against permissions/events that were never
+// (and structurally cannot be) refreshed, which would otherwise read as either fabricated gaps or fabricated
+// confirmations depending on whatever stale/default data happens to be stored.
+function enrichBrokerInstallationHealth(health: InstallationHealthRecord) {
+  const brokerHealthy = health.status === "healthy";
+  return {
+    ...health,
+    requiredPermissions: REQUIRED_INSTALLATION_PERMISSIONS,
+    optionalPermissions: OPTIONAL_CHECK_RUN_PERMISSION,
+    requiredEvents: [...REQUIRED_INSTALLATION_EVENTS],
+    optionalVisibleEvents: [...OPTIONAL_VISIBLE_INSTALLATION_EVENTS],
+    // ok is always false here, regardless of brokerHealthy -- a reachable broker only proves it can mint
+    // tokens, never that this specific permission/event is actually granted (the broker exposes no
+    // introspection API for that today). Reporting ok: true for a check that was never verified would recreate
+    // the exact fabricated-success problem broker mode exists to avoid; brokerHealthy still drives repairSteps
+    // and the overall status above, just not these per-check flags.
+    permissionRemediation: Object.entries(REQUIRED_INSTALLATION_PERMISSIONS).map(([permission, access]) => ({
+      permission,
+      requiredAccess: access,
+      currentAccess: "unavailable_in_broker_mode",
+      ok: false,
+      action: "Permission introspection is unavailable in broker mode.",
+    })),
+    eventRemediation: REQUIRED_INSTALLATION_EVENTS.map((event) => ({
+      event,
+      ok: false,
+      action: "Event-subscription introspection is unavailable in broker mode.",
+    })),
+    repairSteps: brokerHealthy
+      ? [
+          "This is a brokered self-host (Orb token broker mode) -- it holds no local GitHub App private key by design.",
+          "The token broker is reachable and minting installation tokens normally.",
+          "Permission/event introspection is not available through the token broker today.",
+        ]
+      : [
+          "This is a brokered self-host (Orb token broker mode) -- it holds no local GitHub App private key by design.",
+          `The token broker is unreachable or failing to mint installation tokens${health.errorSummary ? `: ${health.errorSummary}` : "."}`,
+          "Check ORB_ENROLLMENT_SECRET / ORB_BROKER_URL and the central Orb's availability, then re-run refresh-installation-health.",
+        ],
+  };
+}
+
 export function enrichInstallationHealth(health: InstallationHealthRecord) {
+  if (health.authMode === "broker") return enrichBrokerInstallationHealth(health);
   const missingPermissions = new Set(health.missingPermissions);
   const requiredEventSet = new Set<string>(REQUIRED_INSTALLATION_EVENTS);
   const normalizedMissingEvents = health.missingEvents.filter((event) => requiredEventSet.has(event));
@@ -1064,9 +1110,36 @@ export async function refreshInstallationHealthForInstallation(env: Env, install
 async function refreshInstallationHealthRecords(env: Env, installations: InstallationRecord[], repositories: RepositoryRecord[]) {
   const health = [];
   for (const installation of installations) {
-    const { installation: currentInstallation, errorSummary } = await refreshStoredInstallation(env, installation);
+    const { installation: currentInstallation, errorSummary, authMode } = await refreshStoredInstallation(env, installation);
     const installedRepos = repositories.filter((repo) => repo.installationId === currentInstallation.id && repo.isInstalled);
     const registeredInstalled = installedRepos.filter((repo) => repo.isRegistered);
+
+    // Broker mode (#selfhost-runtime-drift): the token broker exposes no permission/event introspection today, so
+    // there is nothing to compare against REQUIRED_INSTALLATION_PERMISSIONS -- computing "missing" from whatever
+    // (never-refreshed) permissions/events happen to be stored would fabricate a gap. Health instead reflects
+    // whether the broker itself is reachable and minting tokens; see enrichInstallationHealth's broker branch for
+    // the honest "introspection unavailable" remediation surfaced to callers.
+    if (authMode === "broker") {
+      const record = {
+        installationId: currentInstallation.id,
+        accountLogin: currentInstallation.accountLogin,
+        repositorySelection: currentInstallation.repositorySelection,
+        installedReposCount: installedRepos.length,
+        registeredInstalledCount: registeredInstalled.length,
+        status: errorSummary ? ("needs_attention" as const) : ("healthy" as const),
+        missingPermissions: [] as string[],
+        missingEvents: [] as string[],
+        permissions: currentInstallation.permissions,
+        events: currentInstallation.events,
+        checkedAt: nowIso(),
+        errorSummary,
+        authMode,
+      } as const;
+      await upsertInstallationHealth(env, record);
+      health.push(enrichInstallationHealth(record));
+      continue;
+    }
+
     const installedSettings = await Promise.all(installedRepos.map((repo) => getRepositorySettings(env, repo.fullName)));
     const requiresChecks = installedSettings.some((settings) => settings.checkRunMode === "enabled");
     const requiresPrWrite = installedSettings.some((settings) => agentRequiresPrWrite(settings.autonomy));
@@ -1094,6 +1167,7 @@ async function refreshInstallationHealthRecords(env: Env, installations: Install
       events: currentInstallation.events,
       checkedAt: nowIso(),
       errorSummary,
+      authMode,
     } as const;
     await upsertInstallationHealth(env, record);
     health.push(enrichInstallationHealth(record));
@@ -1101,7 +1175,31 @@ async function refreshInstallationHealthRecords(env: Env, installations: Install
   return { ok: true, installations: health };
 }
 
-async function refreshStoredInstallation(env: Env, installation: InstallationRecord): Promise<{ installation: InstallationRecord; errorSummary?: string }> {
+/** Local App-key mode: refresh permissions/events from GitHub via the App's own JWT (unchanged). Broker mode
+ *  (#selfhost-runtime-drift): a brokered self-host holds no local App private key by design, so calling
+ *  getAppInstallation would always throw "GitHub App credentials are not configured" -- correct for local mode,
+ *  misleading here. Instead confirm the ONE thing broker mode can actually check today: whether the token broker
+ *  mints an installation token. currentInstallation.permissions/events are left untouched (there is nothing to
+ *  refresh them from), so callers must key off authMode rather than treating an empty missingPermissions as a
+ *  clean bill of health the way they would for local mode. */
+async function refreshStoredInstallation(
+  env: Env,
+  installation: InstallationRecord,
+): Promise<{ installation: InstallationRecord; errorSummary?: string; authMode: InstallationHealthRecord["authMode"] }> {
+  if (isOrbBrokerMode(env)) {
+    try {
+      await fetchBrokeredInstallationToken(env);
+      incr("gittensory_installation_health_broker_probe_total", { result: "ok" });
+      return { installation, authMode: "broker" };
+    } catch (error) {
+      incr("gittensory_installation_health_broker_probe_total", { result: "failed" });
+      return {
+        installation,
+        errorSummary: strippedErrorMessage(error, "Token broker did not mint an installation token."),
+        authMode: "broker",
+      };
+    }
+  }
   try {
     const live = await getAppInstallation(env, installation.id);
     await upsertInstallation(env, { installation: live });
@@ -1117,11 +1215,13 @@ async function refreshStoredInstallation(env: Env, installation: InstallationRec
         suspendedAt: live.suspended_at ?? undefined,
         updatedAt: nowIso(),
       },
+      authMode: "local",
     };
   } catch (error) {
     return {
       installation,
       errorSummary: strippedErrorMessage(error, "Failed to refresh GitHub App installation metadata."),
+      authMode: "local",
     };
   }
 }

@@ -735,6 +735,7 @@ export const installationHealth = sqliteTable("installation_health", {
   eventsJson: text("events_json").notNull().default("[]"),
   checkedAt: text("checked_at").notNull(),
   errorSummary: text("error_summary"),
+  authMode: text("auth_mode").notNull().default("local"),
 });
 
 export const advisories = sqliteTable("advisories", {

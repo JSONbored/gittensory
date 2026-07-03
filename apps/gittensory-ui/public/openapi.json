@@ -9473,6 +9473,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "authMode": {
+            "type": "string",
+            "enum": [
+              "local",
+              "broker"
+            ]
           }
         },
         "required": [
@@ -9485,7 +9492,8 @@
           "missingEvents",
           "permissions",
           "events",
-          "checkedAt"
+          "checkedAt",
+          "authMode"
         ]
       },
       "RepoSettingsPreview": {

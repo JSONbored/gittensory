@@ -1048,6 +1048,10 @@ export const InstallationHealthSchema = z
     events: z.array(z.string()),
     checkedAt: z.string(),
     errorSummary: z.string().nullable().optional(),
+    // "broker" = a brokered self-host (Orb token broker mode, no local GitHub App private key by design).
+    // Permission/event introspection is unavailable through the broker today, so missingPermissions/missingEvents
+    // are always [] there -- an empty array means "unchecked", not "all satisfied", unlike "local" mode.
+    authMode: z.enum(["local", "broker"]),
     requiredPermissions: z.record(z.string(), z.string()).optional(),
     requiredEvents: z.array(z.string()).optional(),
     optionalVisibleEvents: z.array(z.string()).optional(),

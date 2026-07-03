@@ -4452,6 +4452,7 @@ export async function upsertInstallationHealth(env: Env, health: InstallationHea
       eventsJson: jsonString(health.events),
       checkedAt: health.checkedAt,
       errorSummary: health.errorSummary ?? null,
+      authMode: health.authMode,
     })
     .onConflictDoUpdate({
       target: installationHealth.installationId,
@@ -4467,6 +4468,7 @@ export async function upsertInstallationHealth(env: Env, health: InstallationHea
         eventsJson: jsonString(health.events),
         checkedAt: health.checkedAt,
         errorSummary: health.errorSummary ?? null,
+        authMode: health.authMode,
       },
     });
 }
@@ -5206,6 +5208,7 @@ function toInstallationHealthRecord(row: typeof installationHealth.$inferSelect)
     events: parseJson<string[]>(row.eventsJson, []),
     checkedAt: row.checkedAt,
     errorSummary: row.errorSummary,
+    authMode: parseInstallationHealthAuthMode(row.authMode),
   };
 }
 
@@ -6268,6 +6271,10 @@ function parseCollisionRisk(value: string): CollisionEdgeRecord["risk"] {
 function parseInstallationHealthStatus(value: string): InstallationHealthRecord["status"] {
   if (value === "healthy" || value === "broken") return value;
   return "needs_attention";
+}
+
+function parseInstallationHealthAuthMode(value: string): InstallationHealthRecord["authMode"] {
+  return value === "broker" ? "broker" : "local";
 }
 
 function parseScoringSourceKind(value: string): ScoringModelSnapshotRecord["sourceKind"] {
