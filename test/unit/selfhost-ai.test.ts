@@ -816,17 +816,17 @@ describe("subscription CLI helpers + fail-safe", () => {
       timedOut: true,
     });
     await expect(
-      createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, withJsonlError).run("m", { prompt: "x" }),
+      createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, withJsonlError, noAuthCheck).run("m", { prompt: "x" }),
     ).rejects.toThrow(/codex_timeout: model unavailable/);
 
     const stderrOnly: StubSpawn = async () => ({ stdout: "", code: null, stderr: "connection reset", timedOut: true });
     await expect(
-      createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, stderrOnly).run("m", { prompt: "x" }),
+      createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, stderrOnly, noAuthCheck).run("m", { prompt: "x" }),
     ).rejects.toThrow(/codex_timeout: connection reset/);
 
     const neitherOutput: StubSpawn = async () => ({ stdout: "", code: null, timedOut: true });
     await expect(
-      createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, neitherOutput).run("m", { prompt: "x" }),
+      createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, neitherOutput, noAuthCheck).run("m", { prompt: "x" }),
     ).rejects.toThrow(/codex_timeout: no output/);
   });
 
