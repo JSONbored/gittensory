@@ -2316,16 +2316,31 @@ export async function countRecentAuditEventsForActorAndTarget(env: Env, actor: s
 /** Whether `deliveryId` has ALREADY been recorded for this (actor, eventType, targetKey) within `sinceIso` --
  *  makes a counting/rate-limit check idempotent against a REDELIVERED or retried webhook event (GitHub can
  *  and does redeliver the same issue_comment event), which would otherwise increment the counter twice for
- *  one real invocation and can incorrectly rate-limit it (#2560). Scoped to a short recent window (bounded
- *  row scan), not the full rate-limit window -- a genuine redelivery lands within seconds, not hours later. */
+ *  one real invocation and can incorrectly rate-limit it (#2560). Scoped to a short recent window, not the
+ *  full rate-limit window -- a genuine redelivery lands within seconds, not hours later.
+ *  Gate review finding: an earlier version matched deliveryId IN MEMORY over a `.limit(50)` slice with no
+ *  ORDER BY -- once an actor accumulated more than 50 matching rows within the window (a burst/spam scenario,
+ *  exactly what this feature exists to handle), the row carrying the original deliveryId could be excluded
+ *  from that arbitrary slice, producing a false negative right when it matters most. The deliveryId match is
+ *  now pushed into the SQL predicate itself (json_extract on metadataJson, mirroring
+ *  countRecentDeadLettersByType's own json_extract usage below), so it's an exact match against every row in
+ *  the window regardless of how many other rows exist for this actor/event/target. */
 export async function hasAuditEventForDelivery(env: Env, actor: string, eventType: string, targetKey: string, deliveryId: string, sinceIso: string): Promise<boolean> {
   const db = getDb(env.DB);
-  const rows = await db
-    .select({ metadataJson: auditEvents.metadataJson })
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
     .from(auditEvents)
-    .where(and(eq(auditEvents.actor, actor), eq(auditEvents.eventType, eventType), eq(auditEvents.targetKey, targetKey), gte(auditEvents.createdAt, sinceIso)))
-    .limit(50);
-  return rows.some((row) => parseJson<{ deliveryId?: unknown }>(row.metadataJson, {}).deliveryId === deliveryId);
+    .where(
+      and(
+        eq(auditEvents.actor, actor),
+        eq(auditEvents.eventType, eventType),
+        eq(auditEvents.targetKey, targetKey),
+        gte(auditEvents.createdAt, sinceIso),
+        sql`json_extract(${auditEvents.metadataJson}, '$.deliveryId') = ${deliveryId}`,
+      ),
+    );
+  /* v8 ignore next -- count(*) always returns exactly one row; the empty-array guard only satisfies the destructure type. */
+  return (row?.count ?? 0) > 0;
 }
 
 /** Observability for the queue dead-letter rate (#1276): how many jobs (across BOTH the maintenance and webhook

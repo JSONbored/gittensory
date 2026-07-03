@@ -514,6 +514,36 @@ describe("database row parser hardening", () => {
     expect(await hasAuditEventForDelivery(env, "maintainer", "github_app.command_invocation", "owner/repo#1#help", "delivery-a", "2026-06-24T11:00:00.000Z")).toBe(false);
   });
 
+  it("REGRESSION (gate-flagged): hasAuditEventForDelivery still finds the matching deliveryId when MORE than 50 other rows exist in the window (burst/spam scenario)", async () => {
+    // A prior version matched deliveryId IN MEMORY over a `.limit(50)` slice with no ORDER BY, so once an
+    // actor had more than 50 matching rows in the window, the row carrying the target deliveryId could be
+    // excluded from that arbitrary slice -- a false negative right when a burst/spam scenario (the abuse
+    // case this feature exists to handle) makes it most likely. The fix pushes the deliveryId match into the
+    // SQL predicate itself, so it must still be found regardless of how many OTHER rows exist.
+    const env = createTestEnv();
+    for (let i = 0; i < 60; i += 1) {
+      await recordAuditEvent(env, {
+        eventType: "github_app.command_invocation",
+        actor: "maintainer",
+        targetKey: "owner/repo#1#help",
+        outcome: "completed",
+        createdAt: "2026-06-24T10:00:00.000Z",
+        metadata: { deliveryId: `delivery-noise-${i}` },
+      });
+    }
+    await recordAuditEvent(env, {
+      eventType: "github_app.command_invocation",
+      actor: "maintainer",
+      targetKey: "owner/repo#1#help",
+      outcome: "completed",
+      createdAt: "2026-06-24T10:00:00.000Z",
+      metadata: { deliveryId: "delivery-target" },
+    });
+
+    expect(await hasAuditEventForDelivery(env, "maintainer", "github_app.command_invocation", "owner/repo#1#help", "delivery-target", "2026-06-24T09:00:00.000Z")).toBe(true);
+    expect(await hasAuditEventForDelivery(env, "maintainer", "github_app.command_invocation", "owner/repo#1#help", "delivery-never-recorded", "2026-06-24T09:00:00.000Z")).toBe(false);
+  });
+
   it("computes complete case-insensitive repo author PR history for gate grace", async () => {
     const env = createTestEnv();
 
