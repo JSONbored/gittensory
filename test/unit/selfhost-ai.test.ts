@@ -930,6 +930,13 @@ describe("subscription CLI helpers + fail-safe", () => {
     },
   );
 
+  it("codex: a bare 'Reading prompt from stdin...' stderr on a non-zero exit is surfaced as codex_no_auth (expired/deleted creds)", async () => {
+    const bannerOnly: StubSpawn = async () => ({ stdout: "", code: 1, stderr: "Reading prompt from stdin..." });
+    await expect(
+      createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, bannerOnly, noAuthCheck).run("m", { prompt: "x" }),
+    ).rejects.toThrow(/codex_no_auth: auth\.json missing or expired/);
+  });
+
   it("surfaces the CLI's stderr in the non-zero-exit error (diagnosable failures, #26)", async () => {
     // Without stderr in the message, a `claude_code_exit_1` / `codex_exit_1` is an opaque dead-end; with it the real
     // cause (auth, rate limit, model-not-supported) reaches the logs + Sentry. (stderr-present branch of `?? ""`.)
