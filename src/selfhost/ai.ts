@@ -280,13 +280,13 @@ export function resolveCodexAuthPath(env: Record<string, string | undefined>): s
  *  ("run `codex auth`") rather than the cryptic `codex_exit_1: Reading prompt from stdin...`
  *  that surfaces when the CLI silently fails without credentials. */
 async function assertCodexAuthConfigured(env: Record<string, string | undefined>): Promise<void> {
-  const { access } = await import("node:fs/promises");
+  const { access, constants } = await import("node:fs/promises");
   const authPath = resolveCodexAuthPath(env);
   try {
-    await access(authPath);
+    await access(authPath, constants.R_OK);
   } catch {
     throw new Error(
-      `codex_auth_not_configured: ${authPath} not found — run \`codex auth\` to authenticate, then restart the container`,
+      `codex_auth_not_configured: ${authPath} not found or unreadable — run \`codex auth\` to authenticate, then restart the container`,
     );
   }
 }

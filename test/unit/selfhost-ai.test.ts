@@ -908,6 +908,28 @@ describe("subscription CLI helpers + fail-safe", () => {
     expect(out.response).toBe("ok");
   });
 
+  // Root bypasses POSIX read-permission bits, so an unreadable-file assertion is meaningless under root
+  // (common on CI runners) — this only verifies anything as a non-root user, but must not false-fail as root.
+  it.skipIf(process.getuid?.() === 0)(
+    "Codex auth preflight checks READABILITY (fs.constants.R_OK), not just existence",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "codex-auth-rok-"));
+      const codexDir = join(dir, ".codex");
+      mkdirSync(codexDir, { recursive: true });
+      const authPath = join(codexDir, "auth.json");
+      writeFileSync(authPath, JSON.stringify({ token: "t" }));
+      chmodSync(authPath, 0o000);
+      try {
+        const stub: StubSpawn = async () => ({ stdout: JSON.stringify({ type: "result", result: "ok" }), code: 0 });
+        await expect(
+          createCodexAi({ HOME: dir, GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, stub).run("gpt-5", { prompt: "x" }),
+        ).rejects.toThrow(new RegExp(`codex_auth_not_configured: ${authPath} not found or unreadable`));
+      } finally {
+        chmodSync(authPath, 0o600);
+      }
+    },
+  );
+
   it("surfaces the CLI's stderr in the non-zero-exit error (diagnosable failures, #26)", async () => {
     // Without stderr in the message, a `claude_code_exit_1` / `codex_exit_1` is an opaque dead-end; with it the real
     // cause (auth, rate limit, model-not-supported) reaches the logs + Sentry. (stderr-present branch of `?? ""`.)
