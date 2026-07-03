@@ -96,25 +96,38 @@ function versionChanged(removed: string | undefined, added: string | undefined):
 
 /** Parse one `package-lock.json` unified-diff patch for per-package resolved/integrity/version changes.
  *  Heuristic line-based scan (mirrors review-enrichment's lockfile-drift parser), not a full JSON parse — good
- *  enough to flag suspicious hunks without needing the complete (potentially huge) lockfile tree in memory. */
+ *  enough to flag suspicious hunks without needing the complete (potentially huge) lockfile tree in memory.
+ *
+ *  Keyed by the FULL lockfile-entry path (e.g. `node_modules/bar/node_modules/foo`), not the bare package name
+ *  (see #2563 gate-review follow-up on #2692): a package can appear as MULTIPLE distinct lockfileVersion 2/3
+ *  entries under different nesting paths when different dependents require incompatible versions of it. Keying
+ *  by bare name merged those distinct entries into one shared record, so a genuine version bump on one entry
+ *  could mask an unbumped resolved/integrity edit on a DIFFERENT entry of the same package -- the full
+ *  `node_modules/...` path IS unique per entry (npm packages a duplicate copy under a distinct nested path
+ *  precisely because two entries with the same bare name coexist), so using it as the map key keeps every
+ *  entry's own signal independent. The bare package name is still recorded separately for display. The legacy
+ *  lockfileVersion 1 "dependencies" tree (bare, non-path keys — see npmPackageFromNodeModulesPath's fallback)
+ *  has no such embedded full path and keeps its pre-existing bare-name keying; that format predates any
+ *  actively maintained repo's lockfile and is out of scope here. */
 function scanPackageLockPatch(path: string, patch: string): LockfileTamperCandidate[] {
-  const byPackage = new Map<string, MutableCandidate>();
-  let currentPackage: string | null = null;
+  const byEntry = new Map<string, MutableCandidate>();
+  let currentEntryKey: string | null = null;
+  let currentPackageName: string | null = null;
   let sawPackagesEntry = false;
 
-  const entryFor = (pkg: string): MutableCandidate => {
-    const existing = byPackage.get(pkg);
+  const entryFor = (entryKey: string, packageName: string): MutableCandidate => {
+    const existing = byEntry.get(entryKey);
     if (existing) return existing;
     const created: MutableCandidate = {
       file: path,
-      package: pkg,
+      package: packageName,
       resolvedOrIntegrityChanged: false,
       versionChanged: false,
       offRegistryResolvedUrl: null,
       removedVersion: undefined,
       addedVersion: undefined,
     };
-    byPackage.set(pkg, created);
+    byEntry.set(entryKey, created);
     return created;
   };
 
@@ -125,24 +138,32 @@ function scanPackageLockPatch(path: string, patch: string): LockfileTamperCandid
       const key = objectHeader[1]!;
       const nodeModulesPackage = npmPackageFromNodeModulesPath(key);
       if (nodeModulesPackage) {
-        currentPackage = nodeModulesPackage;
+        currentEntryKey = key;
+        currentPackageName = nodeModulesPackage;
         sawPackagesEntry = true;
       } else if (!sawPackagesEntry && !CONTAINER_KEYS.has(key)) {
-        currentPackage = key;
+        currentEntryKey = key;
+        currentPackageName = key;
       } else {
-        currentPackage = null;
+        currentEntryKey = null;
+        currentPackageName = null;
       }
       continue;
     }
-    if (body === "}" || body.startsWith("},")) currentPackage = null;
-    if (!currentPackage || line.sign === " ") continue;
+    if (body === "}" || body.startsWith("},")) {
+      currentEntryKey = null;
+      currentPackageName = null;
+    }
+    if (!currentEntryKey || !currentPackageName || line.sign === " ") continue;
 
     const resolvedMatch = /^"resolved"\s*:\s*"([^"]*)"/.exec(body);
     const integrityMatch = /^"integrity"\s*:\s*"([^"]*)"/.exec(body);
     const versionMatch = /^"version"\s*:\s*"([^"]*)"/.exec(body);
 
     if (versionMatch) {
-      const entry = entryFor(currentPackage);
+      const entry = entryFor(currentEntryKey, currentPackageName);
+      // `line.sign` is guaranteed "+" or "-" here (never " ") by the `line.sign === " "` continue above -- a
+      // context ("unchanged") "version" line never reaches this branch, so it can never masquerade as removed.
       if (line.sign === "+") entry.addedVersion = versionMatch[1];
       else entry.removedVersion = versionMatch[1];
       entry.versionChanged = versionChanged(entry.removedVersion, entry.addedVersion);
@@ -151,13 +172,13 @@ function scanPackageLockPatch(path: string, patch: string): LockfileTamperCandid
 
     if (!resolvedMatch && !integrityMatch) continue;
 
-    const entry = entryFor(currentPackage);
+    const entry = entryFor(currentEntryKey, currentPackageName);
     entry.resolvedOrIntegrityChanged = true;
     if (resolvedMatch && line.sign === "+" && resolvedMatch[1] && HTTP_URL_RE.test(resolvedMatch[1]) && !NPM_REGISTRY_HOST_RE.test(resolvedMatch[1])) {
       entry.offRegistryResolvedUrl = resolvedMatch[1];
     }
   }
-  return [...byPackage.values()];
+  return [...byEntry.values()];
 }
 
 const MAX_FLAGGED_PACKAGES_IN_TITLE = 3;

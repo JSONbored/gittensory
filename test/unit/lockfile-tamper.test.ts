@@ -284,6 +284,57 @@ describe("lockfileTamperRiskFinding", () => {
     expect(finding).toBeNull();
   });
 
+  // REGRESSION (#2563 gate-review follow-up on #2692): two DISTINCT lockfileVersion 2/3 entries can share the
+  // same bare package name (npm nests a second copy under a dependent's own node_modules when versions
+  // conflict) -- keying candidates by bare name merged them into one shared record, so a legitimate bump on
+  // ONE entry masked an unbumped, tampered resolved/integrity edit on the OTHER. Keying by the full entry path
+  // fixes this; both orderings are tested since the old bug's masking depended on which block was processed last.
+  it("does NOT let a legitimate bump on one nested copy of a package mask a tampered edit on ANOTHER nested copy of the SAME package name", () => {
+    const lockPatch = [
+      '@@ -1,16 +1,16 @@',
+      '     "node_modules/foo": {',
+      '-      "version": "1.0.0",',
+      '-      "resolved": "https://registry.npmjs.org/foo/-/foo-1.0.0.tgz",',
+      '-      "integrity": "sha512-old1=="',
+      '+      "version": "1.1.0",',
+      '+      "resolved": "https://registry.npmjs.org/foo/-/foo-1.1.0.tgz",',
+      '+      "integrity": "sha512-new1=="',
+      '     },',
+      '     "node_modules/bar/node_modules/foo": {',
+      '       "version": "2.0.0",',
+      '-      "resolved": "https://registry.npmjs.org/foo/-/foo-2.0.0.tgz",',
+      '-      "integrity": "sha512-old2=="',
+      '+      "resolved": "https://registry.npmjs.org/foo/-/foo-2.0.0.tgz",',
+      '+      "integrity": "sha512-tampered2=="',
+      '     },',
+    ].join("\n");
+    const finding = lockfileTamperRiskFinding([lockfilePatch(lockPatch)]);
+    expect(finding).not.toBeNull();
+  });
+
+  it("still catches the masking scenario in the REVERSE order (tampered entry processed before the legitimately-bumped one)", () => {
+    const lockPatch = [
+      '@@ -1,16 +1,16 @@',
+      '     "node_modules/bar/node_modules/foo": {',
+      '       "version": "2.0.0",',
+      '-      "resolved": "https://registry.npmjs.org/foo/-/foo-2.0.0.tgz",',
+      '-      "integrity": "sha512-old2=="',
+      '+      "resolved": "https://registry.npmjs.org/foo/-/foo-2.0.0.tgz",',
+      '+      "integrity": "sha512-tampered2=="',
+      '     },',
+      '     "node_modules/foo": {',
+      '-      "version": "1.0.0",',
+      '-      "resolved": "https://registry.npmjs.org/foo/-/foo-1.0.0.tgz",',
+      '-      "integrity": "sha512-old1=="',
+      '+      "version": "1.1.0",',
+      '+      "resolved": "https://registry.npmjs.org/foo/-/foo-1.1.0.tgz",',
+      '+      "integrity": "sha512-new1=="',
+      '     },',
+    ].join("\n");
+    const finding = lockfileTamperRiskFinding([lockfilePatch(lockPatch)]);
+    expect(finding).not.toBeNull();
+  });
+
   it("still flags a genuine off-registry resolved URL (an http(s) URL outside registry.npmjs.org)", () => {
     const lockPatch = [
       '@@ -10,4 +10,4 @@',
