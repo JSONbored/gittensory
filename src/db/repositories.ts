@@ -511,6 +511,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       reviewNagMaxPings: 3,
       reviewNagCooldownDays: 5,
       reviewNagLabel: "review-nag-cooldown",
+      reviewNagMonitoredMentions: [],
       autoCloseExemptLogins: [],
       requireFreshRebaseWindowMinutes: null,
       accountAgeThresholdDays: null,
@@ -571,6 +572,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     reviewNagMaxPings: normalizePositiveIntWithDefault(row.reviewNagMaxPings, 3),
     reviewNagCooldownDays: normalizeReviewNagCooldownDays(row.reviewNagCooldownDays, 5),
     reviewNagLabel: row.reviewNagLabel,
+    reviewNagMonitoredMentions: parseAutoCloseExemptLogins(row.reviewNagMonitoredMentionsJson),
     autoCloseExemptLogins: parseAutoCloseExemptLogins(row.autoCloseExemptLoginsJson),
     requireFreshRebaseWindowMinutes: normalizeOpenItemCap(row.requireFreshRebaseWindowMinutes),
     accountAgeThresholdDays: normalizeOpenItemCap(row.accountAgeThresholdDays),
@@ -613,7 +615,11 @@ export async function upsertGlobalContributorBlacklist(env: Env, input: { contri
 }
 
 export async function upsertRepositorySettings(env: Env, settings: Partial<RepositorySettings> & { repoFullName: string }): Promise<RepositorySettings> {
-  const resolved: RepositorySettings = {
+  // `satisfies` (not a `: RepositorySettings` annotation) so the `?? default` coalescing below keeps its
+  // narrower inferred type (`string`, never `null`) for blacklistLabel/contributorCapLabel/reviewNagLabel --
+  // the DB columns backing them stay NOT NULL (#label-scoping: only `.gittensory.yml`, not the dashboard/API
+  // write path, can express "close without any label" via an explicit null; see focus-manifest.ts).
+  const resolved = {
     repoFullName: settings.repoFullName,
     commentMode: settings.commentMode ?? "detected_contributors_only",
     publicAudienceMode: settings.publicAudienceMode ?? "oss_maintainer",
@@ -663,6 +669,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     reviewNagMaxPings: normalizePositiveIntWithDefault(settings.reviewNagMaxPings, 3),
     reviewNagCooldownDays: normalizeReviewNagCooldownDays(settings.reviewNagCooldownDays, 5),
     reviewNagLabel: settings.reviewNagLabel ?? "review-nag-cooldown",
+    reviewNagMonitoredMentions: normalizeAutoCloseExemptLogins(settings.reviewNagMonitoredMentions).logins,
     autoCloseExemptLogins: normalizeAutoCloseExemptLogins(settings.autoCloseExemptLogins).logins,
     requireFreshRebaseWindowMinutes: normalizeOpenItemCap(settings.requireFreshRebaseWindowMinutes),
     accountAgeThresholdDays: normalizeOpenItemCap(settings.accountAgeThresholdDays),
@@ -671,7 +678,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     commandRateLimitMaxPerWindow: normalizePositiveIntWithDefault(settings.commandRateLimitMaxPerWindow, 20),
     commandRateLimitAiMaxPerWindow: normalizePositiveIntWithDefault(settings.commandRateLimitAiMaxPerWindow, 5),
     commandRateLimitWindowHours: normalizePositiveIntWithDefault(settings.commandRateLimitWindowHours, 24),
-  };
+  } satisfies RepositorySettings;
   const db = getDb(env.DB);
   await db
     .insert(repositorySettings)
@@ -725,6 +732,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       reviewNagMaxPings: resolved.reviewNagMaxPings,
       reviewNagCooldownDays: resolved.reviewNagCooldownDays,
       reviewNagLabel: resolved.reviewNagLabel,
+      reviewNagMonitoredMentionsJson: jsonString(resolved.reviewNagMonitoredMentions),
       autoCloseExemptLoginsJson: jsonString(resolved.autoCloseExemptLogins),
       requireFreshRebaseWindowMinutes: resolved.requireFreshRebaseWindowMinutes,
       accountAgeThresholdDays: resolved.accountAgeThresholdDays,
@@ -788,6 +796,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         reviewNagMaxPings: resolved.reviewNagMaxPings,
         reviewNagCooldownDays: resolved.reviewNagCooldownDays,
         reviewNagLabel: resolved.reviewNagLabel,
+        reviewNagMonitoredMentionsJson: jsonString(resolved.reviewNagMonitoredMentions),
         autoCloseExemptLoginsJson: jsonString(resolved.autoCloseExemptLogins),
         requireFreshRebaseWindowMinutes: resolved.requireFreshRebaseWindowMinutes,
         accountAgeThresholdDays: resolved.accountAgeThresholdDays,

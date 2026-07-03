@@ -28,36 +28,45 @@ describe("planAgentMaintenanceActions (#778)", () => {
     expect(planAgentMaintenanceActions(input({ conclusion: "skipped", autonomy: { approve: "auto" } }))).toEqual([]);
     // neutral = advisory-only blockers → NON-blocking: flows to the disposition, earns a label (clean+green here),
     // and is NEVER left silently undecided or auto-closed. (#harm-stop neutral-silent-stuck)
-    const neutral = classes(planAgentMaintenanceActions(input({ conclusion: "neutral", autonomy: { merge: "auto", label: "auto", close: "auto" } })));
+    const neutral = classes(planAgentMaintenanceActions(input({ conclusion: "neutral", autonomy: { merge: "auto", review_state_label: "auto", close: "auto" } })));
     expect(neutral).not.toEqual([]);
     expect(neutral).not.toContain("close");
   });
 
   it("plans nothing when every class is at a non-acting level", () => {
-    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { label: "suggest", request_changes: "propose", close: "observe" }, blockerTitles: ["x"] }));
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { review_state_label: "suggest", request_changes: "propose", close: "observe" }, blockerTitles: ["x"] }));
     expect(plan).toEqual([]);
   });
 
   it("labels by verdict bucket and is idempotent when the label already exists", () => {
-    expect(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { label: "auto" }, blockerTitles: ["x"] }))[0]).toMatchObject({ actionClass: "label", label: AGENT_LABEL_CHANGES });
-    expect(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto" } }))[0]).toMatchObject({ actionClass: "label", label: AGENT_LABEL_READY });
+    expect(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { review_state_label: "auto" }, blockerTitles: ["x"] }))[0]).toMatchObject({ actionClass: "label", label: AGENT_LABEL_CHANGES });
+    expect(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" } }))[0]).toMatchObject({ actionClass: "label", label: AGENT_LABEL_READY });
     // already labeled → not re-planned
-    expect(classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto" }, pr: { labels: [AGENT_LABEL_READY] } })))).not.toContain("label");
+    expect(classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" }, pr: { labels: [AGENT_LABEL_READY] } })))).not.toContain("label");
+  });
+
+  it("#label-scoping: the verdict-bucket label carries autonomyClass: review_state_label, is OFF under the broad label class, and defaults OFF entirely", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" } }));
+    expect(plan[0]).toMatchObject({ actionClass: "label", autonomyClass: "review_state_label", label: AGENT_LABEL_READY });
+    // The broad `label` class alone no longer authorizes this — one-shot mode never sees it without explicit opt-in.
+    expect(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto" } }))).toEqual([]);
+    // No autonomy configured at all → nothing (deny-by-default).
+    expect(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: {} }))).toEqual([]);
   });
 
   it("NEVER posts a formal request_changes; a blocking contributor PR closes (close acting) and is always labeled", () => {
     // close acting → CLOSE (no formal request_changes review that would block the PR)
-    const withClose = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto", label: "auto" }, blockerTitles: ["Missing linked issue", "Slop risk"] })));
+    const withClose = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto", review_state_label: "auto" }, blockerTitles: ["Missing linked issue", "Slop risk"] })));
     expect(withClose).toContain("close");
     expect(withClose).not.toContain("request_changes");
     // close NOT acting → just the changes-requested LABEL, never a formal request_changes (which would strand the PR).
-    const noClose = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { label: "auto" }, blockerTitles: ["x"] })));
+    const noClose = classes(planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { review_state_label: "auto" }, blockerTitles: ["x"] })));
     expect(noClose).toContain("label");
     expect(noClose).not.toContain("request_changes");
   });
 
   it("an action_required verdict is HELD — never request_changes, never closed (awaiting action ≠ failure)", () => {
-    const plan = classes(planAgentMaintenanceActions(input({ conclusion: "action_required", autonomy: { request_changes: "auto", close: "auto", label: "auto" }, blockerTitles: [] })));
+    const plan = classes(planAgentMaintenanceActions(input({ conclusion: "action_required", autonomy: { request_changes: "auto", close: "auto", review_state_label: "auto" }, blockerTitles: [] })));
     expect(plan).not.toContain("request_changes");
     // awaiting-action (e.g. a fork's CI awaiting approval) → HELD + labeled, NOT a one-shot close. (#harm-stop)
     expect(plan).not.toContain("close");
@@ -253,7 +262,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
   it("orders actions least → most irreversible (label, review, disposition)", () => {
     // requireApprovals:0 lets merge fire while reviewDecision is still unset, so approve fires too.
     const plan = planAgentMaintenanceActions(
-      input({ conclusion: "success", autonomy: { label: "auto", approve: "auto", merge: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, pr: { labels: [], mergeableState: "clean" } }),
+      input({ conclusion: "success", autonomy: { review_state_label: "auto", approve: "auto", merge: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, pr: { labels: [], mergeableState: "clean" } }),
     );
     expect(classes(plan)).toEqual(["label", "approve", "merge"]);
   });
@@ -293,7 +302,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("still labels a guarded PR (the reversible action is unaffected — it just falls to a human)", () => {
-      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto", merge: "auto" }, ...guarded, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } })));
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto", merge: "auto" }, ...guarded, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } })));
       expect(plan).toContain("label");
       expect(plan).not.toContain("merge");
     });
@@ -301,7 +310,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     it("labels a guarded passing PR `needs-human-review` (NOT `ready-to-merge`) and still does not merge it", () => {
       // A guardrail-hit PR that otherwise passes is withheld from auto-merge → the `ready-to-merge` label
       // would be misleading. It must carry the distinct `needs-human-review` label instead, and never merge.
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto", merge: "auto" }, ...guarded, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto", merge: "auto" }, ...guarded, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const label = plan.find((a) => a.actionClass === "label");
       expect(label?.label).toBe(AGENT_LABEL_NEEDS_REVIEW);
       expect(label?.label).not.toBe(AGENT_LABEL_READY);
@@ -310,17 +319,17 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("does not re-plan the needs-human-review label when the guarded PR already carries it (idempotent)", () => {
-      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto" }, ...guarded, pr: { labels: [AGENT_LABEL_NEEDS_REVIEW] } })));
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" }, ...guarded, pr: { labels: [AGENT_LABEL_NEEDS_REVIEW] } })));
       expect(plan).not.toContain("label");
     });
 
     it("a guarded BLOCKING PR keeps the changes-requested label (not needs-human-review)", () => {
-      const label = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { label: "auto" }, blockerTitles: ["x"], ...guarded, pr: { labels: [] } })).find((a) => a.actionClass === "label");
+      const label = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { review_state_label: "auto" }, blockerTitles: ["x"], ...guarded, pr: { labels: [] } })).find((a) => a.actionClass === "label");
       expect(label?.label).toBe(AGENT_LABEL_CHANGES);
     });
 
     it("still auto-merges when the changed paths do NOT match any guardrail glob", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto", merge: "auto" }, changedPaths: ["docs/readme.md", "src/ui/button.tsx"], hardGuardrailGlobs: ["src/scoring/**", "scripts/**"], pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto", merge: "auto" }, changedPaths: ["docs/readme.md", "src/ui/button.tsx"], hardGuardrailGlobs: ["src/scoring/**", "scripts/**"], pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       expect(classes(plan)).toContain("merge");
       // A clean, non-guarded passing PR keeps the `ready-to-merge` label (the auto-merge it promises happens).
       expect(plan.find((a) => a.actionClass === "label")?.label).toBe(AGENT_LABEL_READY);
@@ -336,7 +345,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("labels the PR gittensory:migration-collision (NOT needs-human-review or ready-to-merge) with the live-collision reason", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto", merge: "auto" }, ...collided, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto", merge: "auto" }, ...collided, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const label = plan.find((a) => a.actionClass === "label");
       expect(label?.label).toBe(AGENT_LABEL_MIGRATION_COLLISION);
       expect(label?.label).not.toBe(AGENT_LABEL_NEEDS_REVIEW);
@@ -346,37 +355,37 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("attaches the rebase-needed comment to the migration-collision label action", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto" }, ...collided, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" }, ...collided, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const label = plan.find((a) => a.actionClass === "label");
       expect(label?.comment).toContain("Please rebase");
     });
 
     it("does not attach a comment for the ordinary guardrail hold (only migration-collision carries one)", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto" }, changedPaths: ["src/scoring/model.ts"], hardGuardrailGlobs: ["src/scoring/**"], pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" }, changedPaths: ["src/scoring/model.ts"], hardGuardrailGlobs: ["src/scoring/**"], pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const label = plan.find((a) => a.actionClass === "label");
       expect(label?.label).toBe(AGENT_LABEL_NEEDS_REVIEW);
       expect(label?.comment).toBeUndefined();
     });
 
     it("does not re-plan the migration-collision label when the PR already carries it (idempotent)", () => {
-      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto" }, ...collided, pr: { labels: [AGENT_LABEL_MIGRATION_COLLISION] } })));
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" }, ...collided, pr: { labels: [AGENT_LABEL_MIGRATION_COLLISION] } })));
       expect(plan).not.toContain("label");
     });
 
     it("a BLOCKING PR keeps the changes-requested label even with a migration collision present (blocker wins)", () => {
-      const label = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { label: "auto" }, blockerTitles: ["x"], ...collided, pr: { labels: [] } })).find((a) => a.actionClass === "label");
+      const label = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { review_state_label: "auto" }, blockerTitles: ["x"], ...collided, pr: { labels: [] } })).find((a) => a.actionClass === "label");
       expect(label?.label).toBe(AGENT_LABEL_CHANGES);
       expect(label?.comment).toBeUndefined();
     });
 
     it("takes priority over a plain guardrail hold when both are true simultaneously — distinct label, not the generic one", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto" }, changedPaths: ["src/scoring/model.ts"], hardGuardrailGlobs: ["src/scoring/**"], ...collided, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" }, changedPaths: ["src/scoring/model.ts"], hardGuardrailGlobs: ["src/scoring/**"], ...collided, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const label = plan.find((a) => a.actionClass === "label");
       expect(label?.label).toBe(AGENT_LABEL_MIGRATION_COLLISION);
     });
 
     it("still auto-merges when no migration collision is present (absent input, byte-identical to today)", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto", merge: "auto" }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto", merge: "auto" }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       expect(classes(plan)).toContain("merge");
       expect(plan.find((a) => a.actionClass === "label")?.label).toBe(AGENT_LABEL_READY);
     });
@@ -384,7 +393,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
 
   describe("submission volume is NOT a manual-hold reason — only guardrail paths hold (#minimize-manual)", () => {
     it("a high-volume author's clean+green+approved PR MERGES (the quality gate, not a submission count, is the defense)", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", approve: "auto", close: "auto", label: "auto" }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", approve: "auto", close: "auto", review_state_label: "auto" }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const cls = classes(plan);
       expect(cls).toContain("merge"); // clean → merge, regardless of how many PRs the author has open
       expect(cls).not.toContain("close");
@@ -395,7 +404,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
       expect(plan).toContain("close");
     });
     it("ONLY a guardrail-touching review-good PR is held for manual review (needs-human, never merged/closed)", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", approve: "auto", close: "auto", label: "auto" }, hardGuardrailGlobs: ["src/**"], changedPaths: ["src/index.ts"], pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", approve: "auto", close: "auto", review_state_label: "auto" }, hardGuardrailGlobs: ["src/**"], changedPaths: ["src/index.ts"], pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const cls = classes(plan);
       expect(cls).not.toContain("merge");
       expect(cls).not.toContain("approve");
@@ -405,7 +414,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
   });
 
   describe("AI/review blockers remain blocking even when CI is green", () => {
-    const merging = { aiCiRefutationEnabled: true, autonomy: { merge: "auto" as const, approve: "auto" as const, close: "auto" as const, label: "auto" as const }, ciState: "passed" as const, pr: { labels: [], mergeableState: "clean" as const, reviewDecision: "APPROVED" as const } };
+    const merging = { aiCiRefutationEnabled: true, autonomy: { merge: "auto" as const, approve: "auto" as const, close: "auto" as const, review_state_label: "auto" as const }, ciState: "passed" as const, pr: { labels: [], mergeableState: "clean" as const, reviewDecision: "APPROVED" as const } };
 
     it("a consensus-defect failure on a green, clean PR closes instead of merging", () => {
       const plan = planAgentMaintenanceActions(input({ conclusion: "failure", blockerTitles: ["AI reviewers agree on a likely critical defect"], gateBlockerCodes: ["ai_consensus_defect"], ...merging }));
@@ -425,7 +434,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("the label reports the raw failure verdict, not a refuted success", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "failure", gateBlockerCodes: ["ai_consensus_defect"], aiCiRefutationEnabled: true, autonomy: { label: "auto" }, ciState: "passed", pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "failure", gateBlockerCodes: ["ai_consensus_defect"], aiCiRefutationEnabled: true, autonomy: { review_state_label: "auto" }, ciState: "passed", pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const label = plan.find((a) => a.actionClass === "label");
       expect(label?.label).toBe(AGENT_LABEL_CHANGES);
       expect(label?.reason).toBe("verdict=failure");
@@ -462,7 +471,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("a guardrail-touching blocker still closes for a contributor", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "failure", gateBlockerCodes: ["ai_consensus_defect"], aiCiRefutationEnabled: true, autonomy: { merge: "auto", approve: "auto", close: "auto", label: "auto" }, hardGuardrailGlobs: ["src/**"], changedPaths: ["src/index.ts"], ciState: "passed", pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "failure", gateBlockerCodes: ["ai_consensus_defect"], aiCiRefutationEnabled: true, autonomy: { merge: "auto", approve: "auto", close: "auto", review_state_label: "auto" }, hardGuardrailGlobs: ["src/**"], changedPaths: ["src/index.ts"], ciState: "passed", pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const cls = classes(plan);
       expect(cls).not.toContain("merge");
       expect(cls).toContain("close");
@@ -527,7 +536,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("does NOT auto-close a red-CI PR authored by an admin login (mirrors the CI-policy owner exemption)", () => {
-      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", request_changes: "auto", label: "auto" }, ciState: "failed", failingCheckNames: ["codecov/patch"], authorIsAdmin: true, pr: { labels: [] } })));
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", request_changes: "auto", review_state_label: "auto" }, ciState: "failed", failingCheckNames: ["codecov/patch"], authorIsAdmin: true, pr: { labels: [] } })));
       expect(plan).not.toContain("close");
     });
   });
@@ -560,7 +569,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("NEVER closes the owner's red-CI PR — held via the changes-requested LABEL only (no blocking request_changes), left open", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", request_changes: "auto", label: "auto" }, ciState: "failed", failingCheckNames: ["codecov/patch"], authorIsOwner: true, pr: { labels: [] } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", request_changes: "auto", review_state_label: "auto" }, ciState: "failed", failingCheckNames: ["codecov/patch"], authorIsOwner: true, pr: { labels: [] } }));
       const cls = classes(plan);
       expect(cls).not.toContain("close");
       expect(cls).not.toContain("request_changes"); // never a formal blocking review
@@ -577,12 +586,12 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("labels a red-CI PR changes-requested (not ready-to-merge)", () => {
-      const label = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto" }, ciState: "failed", failingCheckNames: ["codecov/patch"], pr: { labels: [] } })).find((a) => a.actionClass === "label");
+      const label = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" }, ciState: "failed", failingCheckNames: ["codecov/patch"], pr: { labels: [] } })).find((a) => a.actionClass === "label");
       expect(label?.label).toBe(AGENT_LABEL_CHANGES);
     });
 
     it("DEFERS every action while CI is still pending (settle-before-decide)", () => {
-      expect(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto", approve: "auto", merge: "auto", close: "auto" }, ciState: "pending", pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }))).toEqual([]);
+      expect(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto", approve: "auto", merge: "auto", close: "auto" }, ciState: "pending", pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }))).toEqual([]);
     });
 
     it("DEFERS every action when optional visible CI is still pending after required CI passed", () => {
@@ -590,7 +599,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
         planAgentMaintenanceActions(
           input({
             conclusion: "success",
-            autonomy: { label: "auto", approve: "auto", merge: "auto", close: "auto" },
+            autonomy: { review_state_label: "auto", approve: "auto", merge: "auto", close: "auto" },
             autoMaintain: { requireApprovals: 0, mergeMethod: "squash" },
             ciState: "passed",
             ciHasPending: true,
@@ -601,7 +610,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("HOLDS a contributor's gate-passing PR whose CI is UNVERIFIED — NEVER closes it (fork workflows awaiting approval) (#harm-stop)", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { label: "auto", approve: "auto", merge: "auto", close: "auto" }, ciState: "unverified", pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto", approve: "auto", merge: "auto", close: "auto" }, ciState: "unverified", pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const cls = classes(plan);
       expect(cls).not.toContain("merge"); // can't merge — green not confirmed
       expect(cls).not.toContain("approve"); // can't approve — green not confirmed
@@ -610,7 +619,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("NEVER closes the OWNER's unverified-CI PR — held (no blocking request_changes), left open", () => {
-      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", request_changes: "auto", label: "auto" }, ciState: "unverified", authorIsOwner: true, pr: { labels: [] } })));
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", request_changes: "auto", review_state_label: "auto" }, ciState: "unverified", authorIsOwner: true, pr: { labels: [] } })));
       expect(plan).not.toContain("close");
       expect(plan).not.toContain("request_changes");
     });
@@ -661,7 +670,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("does NOT close when the close autonomy class is not acting (even with a violation)", () => {
-      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "observe", label: "auto" }, ciState: "passed", linkedIssueHardRule: violation, pr: { labels: [] } })));
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "observe", review_state_label: "auto" }, ciState: "passed", linkedIssueHardRule: violation, pr: { labels: [] } })));
       expect(plan).not.toContain("close");
     });
 
@@ -673,7 +682,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("takes PRECEDENCE over an otherwise-mergeable verdict (never auto-merges a PR linking an ineligible issue)", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", close: "auto", approve: "auto", label: "auto" }, ciState: "passed", autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, linkedIssueHardRule: violation, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", close: "auto", approve: "auto", review_state_label: "auto" }, ciState: "passed", autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, linkedIssueHardRule: violation, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const cls = classes(plan);
       expect(cls).toContain("close");
       expect(cls).not.toContain("merge");
@@ -689,7 +698,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     const pendingLabel = (plan: ReturnType<typeof planAgentMaintenanceActions>) => plan.find((a) => a.actionClass === "label" && a.label === AGENT_LABEL_PENDING_CLOSURE);
 
     it("Pass 1 (verify on, label ABSENT): FLAGS (pending-closure label + warning comment), does NOT close", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", label: "auto" }, ciState: "passed", linkedIssueHardRule: violation, linkedIssueVerify: verifyOn, pr: { labels: [] } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", review_state_label: "auto" }, ciState: "passed", linkedIssueHardRule: violation, linkedIssueVerify: verifyOn, pr: { labels: [] } }));
       expect(classes(plan)).not.toContain("close");
       const flag = pendingLabel(plan);
       expect(flag).toBeTruthy();
@@ -699,19 +708,19 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("label disabled: falls back to immediate close instead of holding forever without a state label", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", label: "observe" }, ciState: "passed", linkedIssueHardRule: violation, linkedIssueVerify: verifyOn, pr: { labels: [] } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", review_state_label: "observe" }, ciState: "passed", linkedIssueHardRule: violation, linkedIssueVerify: verifyOn, pr: { labels: [] } }));
       expect(classes(plan)).toContain("close");
       expect(pendingLabel(plan)).toBeFalsy();
     });
 
     it("label approval-gated: falls back to immediate close instead of queueing an unapplied state label", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", label: "auto_with_approval" }, ciState: "passed", linkedIssueHardRule: violation, linkedIssueVerify: verifyOn, pr: { labels: [] } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", review_state_label: "auto_with_approval" }, ciState: "passed", linkedIssueHardRule: violation, linkedIssueVerify: verifyOn, pr: { labels: [] } }));
       expect(classes(plan)).toContain("close");
       expect(pendingLabel(plan)).toBeFalsy();
     });
 
     it("Pass 2 (verify on, label PRESENT, violation persists): CLOSES with the cited reason", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", label: "auto" }, ciState: "passed", linkedIssueHardRule: violation, linkedIssueVerify: verifyOn, pr: { labels: [AGENT_LABEL_PENDING_CLOSURE] } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", review_state_label: "auto" }, ciState: "passed", linkedIssueHardRule: violation, linkedIssueVerify: verifyOn, pr: { labels: [AGENT_LABEL_PENDING_CLOSURE] } }));
       const close = plan.find((a) => a.actionClass === "close");
       expect(close).toBeTruthy();
       expect(close?.reason).toBe(violation.reason);
@@ -720,7 +729,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("violation CLEARED with the label present: REMOVES the flag (+ resolved comment), never closes", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", label: "auto", merge: "auto" }, ciState: "passed", autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, linkedIssueHardRule: { violated: false, reason: null }, linkedIssueVerify: verifyOn, pr: { labels: [AGENT_LABEL_PENDING_CLOSURE], mergeableState: "clean" } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", review_state_label: "auto", merge: "auto" }, ciState: "passed", autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, linkedIssueHardRule: { violated: false, reason: null }, linkedIssueVerify: verifyOn, pr: { labels: [AGENT_LABEL_PENDING_CLOSURE], mergeableState: "clean" } }));
       expect(classes(plan)).not.toContain("close");
       const remove = pendingLabel(plan);
       expect(remove?.labelOp).toBe("remove");
@@ -728,19 +737,19 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
 
     it("verifyBeforeClose = false: IMMEDIATE close on first detection (original GAP-5 behavior, no flag)", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", label: "auto" }, ciState: "passed", linkedIssueHardRule: violation, linkedIssueVerify: { verifyBeforeClose: false, closeDelaySeconds: 30 }, pr: { labels: [] } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", review_state_label: "auto" }, ciState: "passed", linkedIssueHardRule: violation, linkedIssueVerify: { verifyBeforeClose: false, closeDelaySeconds: 30 }, pr: { labels: [] } }));
       expect(classes(plan)).toContain("close");
       expect(pendingLabel(plan)).toBeFalsy();
     });
 
     it("owner PR is NEVER flagged or closed even with verify on (isContributor guard)", () => {
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", label: "auto" }, ciState: "passed", authorIsOwner: true, linkedIssueHardRule: violation, linkedIssueVerify: verifyOn, pr: { labels: [] } }));
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", review_state_label: "auto" }, ciState: "passed", authorIsOwner: true, linkedIssueHardRule: violation, linkedIssueVerify: verifyOn, pr: { labels: [] } }));
       expect(classes(plan)).not.toContain("close");
       expect(pendingLabel(plan)).toBeFalsy();
     });
 
     it("Pass 1 does NOT approve or merge an otherwise-mergeable flagged PR (held for verification)", () => {
-      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", label: "auto", approve: "auto", merge: "auto" }, ciState: "passed", autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, linkedIssueHardRule: violation, linkedIssueVerify: verifyOn, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } })));
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", review_state_label: "auto", approve: "auto", merge: "auto" }, ciState: "passed", autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, linkedIssueHardRule: violation, linkedIssueVerify: verifyOn, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } })));
       expect(plan).not.toContain("close");
       expect(plan).not.toContain("approve");
       expect(plan).not.toContain("merge");
@@ -767,7 +776,7 @@ describe("isProtectedAutomationAuthor", () => {
 describe("downgradeMergeToHold — accuracy circuit-breaker (#self-improve / GAP-4)", () => {
   // A REAL would-merge plan from the planner: gate success + clean + approvals satisfied.
   const wouldMerge = () =>
-    planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", label: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, pr: { labels: [], mergeableState: "clean" } }));
+    planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", review_state_label: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, pr: { labels: [], mergeableState: "clean" } }));
 
   it("a real would-MERGE plan becomes a HOLD when the breaker is engaged (holdOnly=true)", () => {
     const plan = wouldMerge();
@@ -788,13 +797,13 @@ describe("downgradeCloseToHold — close-precision circuit-breaker (#close-preci
   // A REAL heuristic would-close plan from the planner: red CI on a contributor PR → changes-requested label +
   // a heuristic close.
   const heuristicClosePlan = () =>
-    planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto", label: "auto" }, ciState: "failed", failingCheckNames: ["codecov/patch"], blockerTitles: ["x"], pr: { labels: [] } }));
+    planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto", review_state_label: "auto" }, ciState: "failed", failingCheckNames: ["codecov/patch"], blockerTitles: ["x"], pr: { labels: [] } }));
   // A REAL deterministic linked-issue-hard-rule close (the exempt kind).
   const linkedIssueClosePlan = () =>
     planAgentMaintenanceActions(
       input({
         conclusion: "success",
-        autonomy: { close: "auto", label: "auto" },
+        autonomy: { close: "auto", review_state_label: "auto" },
         ciState: "passed",
         linkedIssueHardRule: { violated: true, reason: "Linked issue #5 is labeled `maintainer-only` — it is not open for community PRs." },
         linkedIssueVerify: { verifyBeforeClose: false, closeDelaySeconds: 0 },
@@ -839,7 +848,7 @@ describe("downgradeCloseToHold — close-precision circuit-breaker (#close-preci
   });
 
   it("closeHoldOnly=true but NO heuristic close planned (e.g. a would-merge) → no-op (returns plan unchanged)", () => {
-    const mergePlan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", label: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, pr: { labels: [], mergeableState: "clean" } }));
+    const mergePlan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", review_state_label: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, pr: { labels: [], mergeableState: "clean" } }));
     expect(mergePlan.some((a) => a.actionClass === "merge")).toBe(true);
     const out = downgradeCloseToHold(mergePlan, true);
     expect(out).toBe(mergePlan); // unchanged: no heuristic close to drop, merge untouched
@@ -868,7 +877,8 @@ describe("downgradeCloseToHold — close-precision circuit-breaker (#close-preci
 
 describe("contributor blacklist short-circuit (#1425)", () => {
   const blacklisted = (extra: Partial<AgentActionPlanInput> = {}) =>
-    input({ conclusion: "success", autonomy: { label: "auto", close: "auto", approve: "auto", merge: "auto" }, blacklistMatch: { matched: true, reason: "plagiarism" }, ...extra });
+    // #label-scoping: the blacklist label rides on `close` autonomy, not `label` — no `label: "auto"` needed.
+    input({ conclusion: "success", autonomy: { close: "auto", approve: "auto", merge: "auto" }, blacklistMatch: { matched: true, reason: "plagiarism" }, ...extra });
 
   it("labels + closes a blacklisted contributor's PR, winning over a passing gate (no merit review / merge)", () => {
     const plan = planAgentMaintenanceActions(blacklisted());
@@ -895,6 +905,14 @@ describe("contributor blacklist short-circuit (#1425)", () => {
     expect(planAgentMaintenanceActions(blacklisted())[0]).toMatchObject({ label: "slop" });
   });
 
+  it("#label-scoping: an explicit null blacklistLabel closes WITHOUT any label; the label action carries autonomyClass: close", () => {
+    const withLabel = planAgentMaintenanceActions(blacklisted());
+    expect(classes(withLabel)).toEqual(["label", "close"]);
+    expect(withLabel[0]).toMatchObject({ actionClass: "label", autonomyClass: "close" });
+    const withoutLabel = planAgentMaintenanceActions(blacklisted({ blacklistLabel: null }));
+    expect(classes(withoutLabel)).toEqual(["close"]);
+  });
+
   it("uses the same static public close comment when the entry has no reason", () => {
     const withReason = planAgentMaintenanceActions(blacklisted());
     const withoutReason = planAgentMaintenanceActions(blacklisted({ blacklistMatch: { matched: true, reason: null } }));
@@ -918,9 +936,12 @@ describe("contributor blacklist short-circuit (#1425)", () => {
     expect(classes(planAgentMaintenanceActions(blacklisted({ blacklistMatch: { matched: false, reason: null } })))).not.toContain("close");
   });
 
-  it("respects autonomy: observe plans nothing (still short-circuits); label-only labels but does not close", () => {
+  it("#label-scoping: the label rides on `close` autonomy, not `label` — `label` alone plans nothing, `close` alone plans both", () => {
     expect(planAgentMaintenanceActions(blacklisted({ autonomy: {} }))).toEqual([]);
-    expect(classes(planAgentMaintenanceActions(blacklisted({ autonomy: { label: "auto" } })))).toEqual(["label"]);
+    // `label: auto` alone (no `close`) is no longer sufficient — the enforcement label is inseparable from its close.
+    expect(planAgentMaintenanceActions(blacklisted({ autonomy: { label: "auto" } }))).toEqual([]);
+    // `close: auto` alone (no `label`) is now sufficient for BOTH the close and its label.
+    expect(classes(planAgentMaintenanceActions(blacklisted({ autonomy: { close: "auto" } })))).toEqual(["label", "close"]);
   });
 
   it("never publishes blacklist reason text in the public close comment", () => {
@@ -933,9 +954,10 @@ describe("contributor blacklist short-circuit (#1425)", () => {
 
 describe("per-contributor open-item cap short-circuit (#2270)", () => {
   const overCap = (extra: Partial<AgentActionPlanInput> = {}) =>
+    // #label-scoping: the cap label rides on `close` autonomy, not `label` — no `label: "auto"` needed.
     input({
       conclusion: "success",
-      autonomy: { label: "auto", close: "auto", approve: "auto", merge: "auto" },
+      autonomy: { close: "auto", approve: "auto", merge: "auto" },
       contributorCapMatch: { matched: true, authorLogin: "farmer99", openCount: 3, cap: 2, itemKind: "pull requests" },
       ...extra,
     });
@@ -985,6 +1007,14 @@ describe("per-contributor open-item cap short-circuit (#2270)", () => {
     expect(planAgentMaintenanceActions(overCap())[0]).toMatchObject({ label: "over-contributor-limit" });
   });
 
+  it("#label-scoping: an explicit null contributorCapLabel closes WITHOUT any label; the label action carries autonomyClass: close", () => {
+    const withLabel = planAgentMaintenanceActions(overCap());
+    expect(classes(withLabel)).toEqual(["label", "close"]);
+    expect(withLabel[0]).toMatchObject({ actionClass: "label", autonomyClass: "close" });
+    const withoutLabel = planAgentMaintenanceActions(overCap({ contributorCapLabel: null }));
+    expect(classes(withoutLabel)).toEqual(["close"]);
+  });
+
   it("fires AHEAD of CI — closes even while CI is still pending (not the pending early-return)", () => {
     expect(classes(planAgentMaintenanceActions(overCap({ ciState: "pending" })))).toEqual(["label", "close"]);
   });
@@ -999,9 +1029,10 @@ describe("per-contributor open-item cap short-circuit (#2270)", () => {
     expect(classes(planAgentMaintenanceActions(overCap({ contributorCapMatch: { matched: false, authorLogin: "farmer99", openCount: 1, cap: 2, itemKind: "pull requests" } })))).not.toContain("close");
   });
 
-  it("respects autonomy: observe plans nothing (still short-circuits); label-only labels but does not close", () => {
+  it("#label-scoping: the label rides on `close` autonomy, not `label` — `label` alone plans nothing, `close` alone plans both", () => {
     expect(planAgentMaintenanceActions(overCap({ autonomy: {} }))).toEqual([]);
-    expect(classes(planAgentMaintenanceActions(overCap({ autonomy: { label: "auto" } })))).toEqual(["label"]);
+    expect(planAgentMaintenanceActions(overCap({ autonomy: { label: "auto" } }))).toEqual([]);
+    expect(classes(planAgentMaintenanceActions(overCap({ autonomy: { close: "auto" } })))).toEqual(["label", "close"]);
   });
 
   it("is independent of the blacklist short-circuit — a matched blacklist entry still wins when both are present", () => {
@@ -1016,9 +1047,10 @@ describe("per-contributor open-item cap short-circuit (#2270)", () => {
 
 describe("review-nag cooldown short-circuit (#2463)", () => {
   const nagged = (extra: Partial<AgentActionPlanInput> = {}) =>
+    // #label-scoping: the nag label rides on `close` autonomy, not `label` — no `label: "auto"` needed.
     input({
       conclusion: "success",
-      autonomy: { label: "auto", close: "auto", approve: "auto", merge: "auto" },
+      autonomy: { close: "auto", approve: "auto", merge: "auto" },
       reviewNagMatch: { matched: true, authorLogin: "chatty-contributor", pingCount: 4, maxPings: 3 },
       ...extra,
     });
@@ -1049,6 +1081,14 @@ describe("review-nag cooldown short-circuit (#2463)", () => {
     expect(planAgentMaintenanceActions(nagged())[0]).toMatchObject({ label: "review-nag-cooldown" });
   });
 
+  it("#label-scoping: an explicit null reviewNagLabel closes WITHOUT any label; the label action carries autonomyClass: close", () => {
+    const withLabel = planAgentMaintenanceActions(nagged());
+    expect(classes(withLabel)).toEqual(["label", "close"]);
+    expect(withLabel[0]).toMatchObject({ actionClass: "label", autonomyClass: "close" });
+    const withoutLabel = planAgentMaintenanceActions(nagged({ reviewNagLabel: null }));
+    expect(classes(withoutLabel)).toEqual(["close"]);
+  });
+
   it("fires AHEAD of CI — closes even while CI is still pending (not the pending early-return)", () => {
     expect(classes(planAgentMaintenanceActions(nagged({ ciState: "pending" })))).toEqual(["label", "close"]);
   });
@@ -1063,8 +1103,9 @@ describe("review-nag cooldown short-circuit (#2463)", () => {
     expect(classes(planAgentMaintenanceActions(nagged({ reviewNagMatch: { matched: false, authorLogin: "x", pingCount: 0, maxPings: 3 } })))).not.toContain("close");
   });
 
-  it("respects autonomy: observe plans nothing (still short-circuits); label-only labels but does not close", () => {
+  it("#label-scoping: the label rides on `close` autonomy, not `label` — `label` alone plans nothing, `close` alone plans both", () => {
     expect(planAgentMaintenanceActions(nagged({ autonomy: {} }))).toEqual([]);
-    expect(classes(planAgentMaintenanceActions(nagged({ autonomy: { label: "auto" } })))).toEqual(["label"]);
+    expect(planAgentMaintenanceActions(nagged({ autonomy: { label: "auto" } }))).toEqual([]);
+    expect(classes(planAgentMaintenanceActions(nagged({ autonomy: { close: "auto" } })))).toEqual(["label", "close"]);
   });
 });

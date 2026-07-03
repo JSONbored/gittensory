@@ -82,7 +82,13 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
   const mode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(env) || (await isGlobalAgentFrozen(env)), agentPaused: ctx.agentPaused, agentDryRun: ctx.agentDryRun });
 
   for (const action of planned) {
-    const autonomyLevel = resolveAutonomy(ctx.autonomy, action.actionClass);
+    // #label-scoping: a `label` action may be authorized by a class OTHER than `label` itself (an anti-abuse
+    // enforcement label rides on `close`; a disposition-communication label rides on `review_state_label`) —
+    // this durable re-check must resolve autonomy via the SAME class the planner actually used, not the
+    // literal GitHub-mutation kind, or a `label` action authorized via `close`/`review_state_label` would be
+    // wrongly re-denied against the (likely still-`observe`) generic `label` dial. Absent for every action
+    // whose `actionClass` already IS its own governing class (merge/close/approve/etc).
+    const autonomyLevel = resolveAutonomy(ctx.autonomy, action.autonomyClass ?? action.actionClass);
     const audit = (outcome: AgentActionOutcome["outcome"], detail: string) => {
       const auditOutcome = outcome === "dry_run" ? "completed" : outcome;
       outcomes.push({ actionClass: action.actionClass, outcome, detail });
@@ -305,7 +311,13 @@ export async function executeIssueMaintenanceActions(env: Env, ctx: IssueActionE
   const mode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(env) || (await isGlobalAgentFrozen(env)), agentPaused: ctx.agentPaused, agentDryRun: ctx.agentDryRun });
 
   for (const action of planned) {
-    const autonomyLevel = resolveAutonomy(ctx.autonomy, action.actionClass);
+    // #label-scoping: a `label` action may be authorized by a class OTHER than `label` itself (an anti-abuse
+    // enforcement label rides on `close`; a disposition-communication label rides on `review_state_label`) —
+    // this durable re-check must resolve autonomy via the SAME class the planner actually used, not the
+    // literal GitHub-mutation kind, or a `label` action authorized via `close`/`review_state_label` would be
+    // wrongly re-denied against the (likely still-`observe`) generic `label` dial. Absent for every action
+    // whose `actionClass` already IS its own governing class (merge/close/approve/etc).
+    const autonomyLevel = resolveAutonomy(ctx.autonomy, action.autonomyClass ?? action.actionClass);
     const audit = (outcome: AgentActionOutcome["outcome"], detail: string) => {
       const auditOutcome = outcome === "dry_run" ? "completed" : outcome;
       outcomes.push({ actionClass: action.actionClass, outcome, detail });

@@ -37,6 +37,16 @@ describe("resolveAutonomy (#773 deny-by-default gate)", () => {
       expect(resolveAutonomy({}, actionClass)).toBe("observe");
     }
   });
+
+  it("review_state_label (#label-scoping) is independent of label — setting one does not act for the other", () => {
+    expect(AGENT_ACTION_CLASSES).toContain("review_state_label");
+    const autonomy: AutonomyPolicy = { label: "auto" };
+    expect(resolveAutonomy(autonomy, "label")).toBe("auto");
+    expect(resolveAutonomy(autonomy, "review_state_label")).toBe("observe");
+    const inverted: AutonomyPolicy = { review_state_label: "auto" };
+    expect(resolveAutonomy(inverted, "review_state_label")).toBe("auto");
+    expect(resolveAutonomy(inverted, "label")).toBe("observe");
+  });
 });
 
 describe("autonomy level predicates", () => {

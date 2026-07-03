@@ -311,8 +311,20 @@ settings:
   # Bool. Default: false.
   agentDryRun: false
 
-  # Autonomy dial — per-action-class level (observe … auto).
-  # Map. Default: {} (= observe everywhere, deny-by-default).
+  # Autonomy dial — per-action-class level (observe … auto). Classes: review, request_changes, approve,
+  # merge, close, label, review_state_label, update_branch. Map. Default: {} (= observe everywhere,
+  # deny-by-default).
+  #
+  # `label` vs `review_state_label` (#label-scoping): these are SEPARATE, independent dials.
+  #   - `label` alone no longer applies any planner-driven label by itself. The anti-abuse enforcement
+  #     labels (blacklist/contributor-cap/review-nag) ride on the SAME dial as their accompanying close
+  #     (`close`, below) — set `close: auto` and they close-and-label together with no `label` grant needed.
+  #   - `review_state_label` gates the bot's own disposition-communication labels only:
+  #     gittensory:ready-to-merge / gittensory:changes-requested / gittensory:needs-human-review /
+  #     gittensory:migration-collision. These are advisory signals about the bot's own verdict, not
+  #     enforcement — for a one-shot review model (merge/close/hold through the required gate check, no
+  #     back-and-forth) leave this at the default `observe` so they never appear; set it to `auto` only if
+  #     you specifically want that running commentary as GitHub labels.
   autonomy: {}
 
   # Auto-maintain policy for merges the agent is allowed to perform.
@@ -342,6 +354,8 @@ settings:
   # contributorOpenIssueCap: 5
 
   # Label applied to a PR/issue closed for exceeding a cap above. String. Default: over-contributor-limit.
+  # Gated on `autonomy.close` (#label-scoping), not `autonomy.label` — closing WITHOUT this label is
+  # available too: set this to explicit `null` (not just omitted) to close silently, with no label.
   # contributorCapLabel: over-contributor-limit
 
   # Cancel in-flight CI runs when a PR is auto-closed for exceeding contributorOpenPrCap above (#2462).
@@ -359,6 +373,17 @@ settings:
   # reviewNagMaxPings: 3      # Positive integer. Pings above this within the cooldown window trigger the policy. Default: 3.
   # reviewNagCooldownDays: 5  # Positive integer up to 365. Window the ping count is measured over. Default: 5.
   # reviewNagLabel: review-nag-cooldown  # Label applied alongside the hold/close action. Default: review-nag-cooldown.
+  #                                       # Gated on autonomy.close (#label-scoping); set to explicit `null` to
+  #                                       # close/hold without any label.
+
+  # Maintainer-mention nag moderation (#label-scoping): GitHub logins ALSO throttled under the SAME
+  # reviewNagPolicy/reviewNagMaxPings/reviewNagCooldownDays/reviewNagLabel cooldown above, on top of the
+  # bot's own @gittensory handle — e.g. a contributor who keeps tagging a specific maintainer for review
+  # instead of (or in addition to) pinging @gittensory. Counted independently per mentioned login and
+  # independently of the @gittensory counter. Only fires for the thread's OWN author, never a third party
+  # commenting on someone else's thread; owner/admin/automation-bot/autoCloseExemptLogins are always exempt.
+  # List of GitHub logins. Default: [] (no logins watched).
+  # reviewNagMonitoredMentions: [your-maintainer-login]
 
   # Shared repo-scoped exemption list (#2463): GitHub logins never throttled/closed by gittensory's
   # deterministic anti-abuse mechanisms (review-nag cooldown today; the per-contributor open-item cap

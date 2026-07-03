@@ -114,6 +114,24 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect((await auditFor(env, "merge"))?.outcome).toBe("completed");
   });
 
+  it("#label-scoping: a label action's autonomyClass (not the literal actionClass) governs the durable re-check", async () => {
+    const env = createTestEnv({});
+    // autonomy.label is OFF; autonomy.close is ON — a label authorized via autonomyClass: "close" must still
+    // execute, proving the executor resolves autonomy via `autonomyClass ?? actionClass`, not `actionClass` alone.
+    const enforcementLabel: PlannedAgentAction = { actionClass: "label", autonomyClass: "close", requiresApproval: false, reason: "blacklisted contributor", label: "slop", labelOp: "add" };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ autonomy: { label: "observe", close: "auto" } }), [enforcementLabel]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "slop", { createMissingLabel: true });
+  });
+
+  it("#label-scoping: a label action with autonomyClass: close is DENIED when close is not acting, even if the generic label class is on", async () => {
+    const env = createTestEnv({});
+    const enforcementLabel: PlannedAgentAction = { actionClass: "label", autonomyClass: "close", requiresApproval: false, reason: "blacklisted contributor", label: "slop", labelOp: "add" };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ autonomy: { label: "auto", close: "observe" } }), [enforcementLabel]);
+    expect(outcomes[0]?.outcome).toBe("denied");
+    expect(ensurePullRequestLabel).not.toHaveBeenCalled();
+  });
+
   it("REGRESSION (#2424): LIVE update_branch falls back to ctx.headSha when the action carries no expectedHeadSha of its own", async () => {
     // The `updateBranch` fixture above is pre-pinned (expectedHeadSha: "sha7"), so the big LIVE test never
     // exercises the `?? ctx.headSha` fallback -- it's parity with approve/merge for the tiny window between

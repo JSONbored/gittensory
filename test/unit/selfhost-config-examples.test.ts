@@ -24,6 +24,13 @@ describe("config/examples/global.gittensory.yml", () => {
     expect(manifest.gate.duplicates).toBe("block");
     expect(manifest.settings.contributorOpenPrCap).toBe(3);
     expect(manifest.settings.autoCloseExemptLogins).toEqual(["your-admin-login"]);
+    // #label-scoping: the recommended one-shot autonomy baseline — close authorizes enforcement
+    // labels + terminal disposition; review_state_label is intentionally left at the default (unset).
+    expect(manifest.settings.autonomy).toEqual({ close: "auto" });
+    expect(manifest.settings.reviewNagPolicy).toBe("hold");
+    expect(manifest.settings.reviewNagMaxPings).toBe(3);
+    expect(manifest.settings.reviewNagCooldownDays).toBe(5);
+    expect(manifest.settings.reviewNagMonitoredMentions).toEqual(["your-maintainer-login"]);
   });
 });
 
@@ -35,6 +42,7 @@ describe("config/examples/repo-override.gittensory.yml", () => {
     expect(manifest.gate.enabled).toBe(true);
     expect(manifest.wantedPaths).toEqual(["src/**"]);
     expect(manifest.settings.contributorOpenPrCap).toBeNull(); // documented null-clear example
+    expect(manifest.settings.contributorCapLabel).toBeNull(); // #label-scoping: close without any label
   });
 });
 
@@ -51,6 +59,8 @@ describe("the two examples together demonstrate the documented overlay behavior"
     expect(manifest.gate.duplicates).toBe("block"); // inherited from global; repo-override never mentions it
     expect(manifest.wantedPaths).toEqual(["src/**"]); // repo-override's array replaces global's (global sets none)
     expect(manifest.settings.contributorOpenPrCap).toBeNull(); // repo-override's explicit null clears global's 3
+    expect(manifest.settings.contributorCapLabel).toBeNull(); // repo-override clears the (unset) global default too
     expect(manifest.settings.autoCloseExemptLogins).toEqual(["your-admin-login"]); // inherited from global untouched
+    expect(manifest.settings.autonomy).toEqual({ close: "auto" }); // inherited from global untouched (repo-override never mentions it)
   });
 });

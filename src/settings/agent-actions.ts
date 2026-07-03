@@ -55,6 +55,14 @@ export function isProtectedAutomationAuthor(login: string | null | undefined): b
 
 export type PlannedAgentAction = {
   actionClass: AgentActionClass;
+  // #label-scoping: the autonomy class that actually AUTHORIZED this action, when it differs from `actionClass`
+  // (a `label` action can be authorized by `close` — an anti-abuse enforcement label inseparable from its
+  // close — or by `review_state_label` — the planner's own disposition-communication labels — rather than the
+  // generic `label` class). The executor's durable-pending-approval re-check MUST resolve autonomy via this
+  // field (falling back to `actionClass` when absent) so a later re-check re-verifies the SAME class the
+  // planner actually used, not a stale/unrelated `label` dial. Absent for every non-`label` action class, where
+  // `actionClass` already IS the governing autonomy class.
+  autonomyClass?: AgentActionClass;
   // auto_with_approval → the action is staged for a human approval (the #779 queue) instead of executing now.
   requiresApproval: boolean;
   reason: string;
@@ -158,8 +166,10 @@ export type AgentActionPlanInput = {
   // context; the public close comment intentionally uses static copy. Absent / not-matched ⇒ no effect.
   blacklistMatch?: { matched: boolean; reason: string | null | undefined } | undefined;
   // The repo-configured label applied to a blacklisted author's PR (#1425), resolved from `.gittensory.yml`.
-  // Absent ⇒ the default (`DEFAULT_BLACKLIST_LABEL` = "slop"), so the disposition works regardless of the label set.
-  blacklistLabel?: string | undefined;
+  // Absent ⇒ the default (`DEFAULT_BLACKLIST_LABEL` = "slop"); explicit `null` ⇒ close WITHOUT any label
+  // (#label-scoping). Gated on `close` autonomy, NOT `label` (see the `blacklistMatch` block below) — the
+  // label is inseparable metadata on the close, never applied independently.
+  blacklistLabel?: string | null | undefined;
   // Per-contributor open-PR/open-issue cap (#2270, anti-abuse): when the incoming PR pushes its author over the
   // repo's configured `contributorOpenPrCap`, the disposition SHORT-CIRCUITS to a deterministic label + close
   // ahead of ALL merit/CI/AI analysis — same zero-hallucination shape as blacklistMatch, so its close is tagged
@@ -175,8 +185,9 @@ export type AgentActionPlanInput = {
   // ("contributor_cap") and label either way — this is a description-only distinction, not a new disposition.
   contributorCapMatch?: { matched: boolean; authorLogin: string; openCount: number; cap: number; itemKind: "pull requests" | "issues"; scope?: "repository" | "install" | undefined } | undefined;
   // The repo-configured label applied to an over-cap author's PR/issue (#2270), resolved from `.gittensory.yml`.
-  // Absent ⇒ the default (`DEFAULT_CONTRIBUTOR_CAP_LABEL` = "over-contributor-limit").
-  contributorCapLabel?: string | undefined;
+  // Absent ⇒ the default (`DEFAULT_CONTRIBUTOR_CAP_LABEL` = "over-contributor-limit"); explicit `null` ⇒ close
+  // WITHOUT any label (#label-scoping). Gated on `close` autonomy, NOT `label` — same shape as {@link blacklistLabel}.
+  contributorCapLabel?: string | null | undefined;
   // Review-nag cooldown (#2463, anti-abuse): when the PR author has pinged `@gittensory` past the repo's
   // configured threshold within the cooldown window AND the repo's `reviewNagPolicy` is `"close"`, the
   // disposition SHORT-CIRCUITS to a deterministic label + close ahead of ALL merit/CI/AI analysis — same
@@ -186,8 +197,9 @@ export type AgentActionPlanInput = {
   // the resolved "yes, close this PR" verdict. Absent / not-matched ⇒ no effect.
   reviewNagMatch?: { matched: boolean; authorLogin: string; pingCount: number; maxPings: number } | undefined;
   // The repo-configured label applied to a review-nag-closed PR (#2463), resolved from `.gittensory.yml`.
-  // Absent ⇒ the default (`DEFAULT_REVIEW_NAG_LABEL` = "review-nag-cooldown").
-  reviewNagLabel?: string | undefined;
+  // Absent ⇒ the default (`DEFAULT_REVIEW_NAG_LABEL` = "review-nag-cooldown"); explicit `null` ⇒ close WITHOUT
+  // any label (#label-scoping). Gated on `close` autonomy, NOT `label` — same shape as {@link blacklistLabel}.
+  reviewNagLabel?: string | null | undefined;
   // Flag-then-close double-check for the linked-issue hard rule (#linked-issue-verify-before-close). When
   // `verifyBeforeClose` is true (the default), a violation FLAGS the PR (pending-closure label + warning comment)
   // on first detection and only CLOSES on a LATER evaluation when the violation STILL holds AND the PR already
@@ -246,6 +258,7 @@ export function downgradeMergeToHold(planned: PlannedAgentAction[], holdOnly: bo
   if (!alreadyNeedsReview) {
     next.push({
       actionClass: "label",
+      autonomyClass: "review_state_label",
       requiresApproval: stagedMerge?.requiresApproval ?? false,
       reason: "accuracy circuit-breaker engaged (merge precision dropped) — would-merge held for human review",
       label: AGENT_LABEL_NEEDS_REVIEW,
@@ -288,6 +301,7 @@ export function downgradeCloseToHold(planned: PlannedAgentAction[], closeHoldOnl
   if (!alreadyNeedsReview) {
     next.push({
       actionClass: "label",
+      autonomyClass: "review_state_label",
       requiresApproval: droppedClose?.requiresApproval ?? false,
       reason: "close-precision circuit-breaker engaged — would-close held for human review",
       label: AGENT_LABEL_NEEDS_REVIEW,
@@ -354,8 +368,11 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // static by construction so private maintainer metadata from the blacklist entry cannot leak.
   const blacklistContributor = !input.authorIsOwner && !input.authorIsAdmin && !input.authorIsAutomationBot;
   if (input.blacklistMatch?.matched === true && blacklistContributor) {
-    const label = input.blacklistLabel ?? DEFAULT_BLACKLIST_LABEL;
-    if (acting("label")) actions.push({ actionClass: "label", requiresApproval: approval("label"), reason: "blacklisted contributor", label, labelOp: "add" });
+    // #label-scoping: this label is inseparable metadata on the close below, so it rides on `close` autonomy,
+    // NOT the generic `label` class — a repo can enable close without also opting into the broad label dial.
+    // Explicit `null` (vs. absent/undefined) means "close without any label."
+    const label = input.blacklistLabel === null ? null : (input.blacklistLabel ?? DEFAULT_BLACKLIST_LABEL);
+    if (acting("close") && label !== null) actions.push({ actionClass: "label", autonomyClass: "close", requiresApproval: approval("close"), reason: "blacklisted contributor", label, labelOp: "add" });
     if (acting("close")) {
       actions.push({
         actionClass: "close",
@@ -378,8 +395,9 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   const capContributor = !input.authorIsOwner && !input.authorIsAdmin && !input.authorIsAutomationBot;
   if (input.contributorCapMatch?.matched === true && capContributor) {
     const { authorLogin, openCount, cap, itemKind, scope } = input.contributorCapMatch;
-    const label = input.contributorCapLabel ?? DEFAULT_CONTRIBUTOR_CAP_LABEL;
-    if (acting("label")) actions.push({ actionClass: "label", requiresApproval: approval("label"), reason: "over the per-contributor open-item cap", label, labelOp: "add" });
+    // #label-scoping: same close-autonomy-gated, null-clearable shape as the blacklist label above.
+    const label = input.contributorCapLabel === null ? null : (input.contributorCapLabel ?? DEFAULT_CONTRIBUTOR_CAP_LABEL);
+    if (acting("close") && label !== null) actions.push({ actionClass: "label", autonomyClass: "close", requiresApproval: approval("close"), reason: "over the per-contributor open-item cap", label, labelOp: "add" });
     if (acting("close")) {
       actions.push({
         actionClass: "close",
@@ -400,8 +418,9 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   const reviewNagContributor = !input.authorIsOwner && !input.authorIsAdmin && !input.authorIsAutomationBot;
   if (input.reviewNagMatch?.matched === true && reviewNagContributor) {
     const { authorLogin, pingCount, maxPings } = input.reviewNagMatch;
-    const label = input.reviewNagLabel ?? DEFAULT_REVIEW_NAG_LABEL;
-    if (acting("label")) actions.push({ actionClass: "label", requiresApproval: approval("label"), reason: "review-nag cooldown", label, labelOp: "add" });
+    // #label-scoping: same close-autonomy-gated, null-clearable shape as the blacklist label above.
+    const label = input.reviewNagLabel === null ? null : (input.reviewNagLabel ?? DEFAULT_REVIEW_NAG_LABEL);
+    if (acting("close") && label !== null) actions.push({ actionClass: "label", autonomyClass: "close", requiresApproval: approval("close"), reason: "review-nag cooldown", label, labelOp: "add" });
     if (acting("close")) {
       actions.push({
         actionClass: "close",
@@ -502,8 +521,9 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   const pendingClosureLabelPresent = hasLabel(input.pr.labels, AGENT_LABEL_PENDING_CLOSURE);
   // Pass 1 is only safe when the pending-closure state can be written immediately. If labels are disabled or
   // approval-gated, holding would fail open because Pass 2 is keyed on a label that cannot appear yet; fall back
-  // to the original immediate close in that case.
-  const canApplyPendingClosureFlagNow = acting("label") && !approval("label");
+  // to the original immediate close in that case. #label-scoping: this label lives in the review_state_label
+  // family (see below), so its readiness check must use the SAME class the actual push is gated on.
+  const canApplyPendingClosureFlagNow = acting("review_state_label") && !approval("review_state_label");
   // Pass 1 — violation present, verify-mode on, label NOT yet on the PR, and the state label can be applied now
   // → FLAG (label + comment), do NOT close.
   const flagForLinkedIssue = linkedIssueViolated && verifyBeforeClose && !pendingClosureLabelPresent && canApplyPendingClosureFlagNow;
@@ -523,11 +543,14 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       ? "CI could not be verified"
       : "";
 
-  // 1) label — ready-to-merge (review-good, unguarded) / needs-human-review (review-good but guarded) /
-  // changes-requested (not review-good → will be closed for a contributor, held for the owner). A pending
-  // linked-issue hard-rule close (flag OR close pass) forces the changes-requested label regardless of the gate
-  // verdict (the PR is about to be closed for an ineligible linked issue). Idempotent.
-  if (acting("label")) {
+  // 1) review_state_label (#label-scoping) — ready-to-merge (review-good, unguarded) / needs-human-review
+  // (review-good but guarded) / changes-requested (not review-good → will be closed for a contributor, held for
+  // the owner). A pending linked-issue hard-rule close (flag OR close pass) forces the changes-requested label
+  // regardless of the gate verdict (the PR is about to be closed for an ineligible linked issue). Idempotent.
+  // Gated on the DEDICATED `review_state_label` class, not the generic `label` — these are the bot's own
+  // disposition-communication labels (advisory, not enforcement), default OFF like every autonomy class so a
+  // one-shot-mode repo never sees `gittensory:changes-requested`/`needs-human-review` without an explicit opt-in.
+  if (acting("review_state_label")) {
     // A live migration-collision hold takes priority over a plain guardrail hold when both are true — it is
     // the more specific, actionable signal (tells the contributor exactly what to do: rebase), and gets its
     // own distinct label (#2550) so an operator can filter/alert on it separately from an ordinary guardrail.
@@ -544,7 +567,8 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     if (!hasLabel(input.pr.labels, label)) {
       actions.push({
         actionClass: "label",
-        requiresApproval: approval("label"),
+        autonomyClass: "review_state_label",
+        requiresApproval: approval("review_state_label"),
         reason,
         label,
         // Only the migration-collision hold carries a comment here — the guardrail/ready/changes labels never
@@ -560,7 +584,8 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       const window = closeDelaySeconds > 0 ? `~${closeDelaySeconds}s` : "the next verification";
       actions.push({
         actionClass: "label",
-        requiresApproval: approval("label"),
+        autonomyClass: "review_state_label",
+        requiresApproval: approval("review_state_label"),
         reason: `linked-issue hard rule (flagged for verification): ${ruleReason}`,
         label: AGENT_LABEL_PENDING_CLOSURE,
         labelOp: "add",
@@ -571,7 +596,8 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     if (clearLinkedIssueFlag) {
       actions.push({
         actionClass: "label",
-        requiresApproval: approval("label"),
+        autonomyClass: "review_state_label",
+        requiresApproval: approval("review_state_label"),
         reason: "linked-issue hard rule resolved — clearing the pending-closure flag",
         label: AGENT_LABEL_PENDING_CLOSURE,
         labelOp: "remove",

@@ -181,6 +181,7 @@ export type FocusManifestSettings = Partial<
     | "reviewNagMaxPings"
     | "reviewNagCooldownDays"
     | "reviewNagLabel"
+    | "reviewNagMonitoredMentions"
     | "autoCloseExemptLogins"
     | "accountAgeThresholdDays"
     | "newAccountLabel"
@@ -928,8 +929,15 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   if (aiReviewModel !== null) out.aiReviewModel = aiReviewModel;
   const gittensorLabel = normalizeOptionalString(r.gittensorLabel, "settings.gittensorLabel", warnings);
   if (gittensorLabel !== null) out.gittensorLabel = gittensorLabel;
-  const blacklistLabel = normalizeOptionalString(r.blacklistLabel, "settings.blacklistLabel", warnings);
-  if (blacklistLabel !== null) out.blacklistLabel = blacklistLabel;
+  // #label-scoping: an explicit yml `null` is load-bearing (closes WITHOUT any label), matching
+  // contributorOpenPrCap's own null-vs-omitted distinction — must be checked BEFORE normalizeOptionalString,
+  // which otherwise collapses null and undefined to the same "unset" result.
+  if (r.blacklistLabel === null) {
+    out.blacklistLabel = null;
+  } else {
+    const blacklistLabel = normalizeOptionalString(r.blacklistLabel, "settings.blacklistLabel", warnings);
+    if (blacklistLabel !== null) out.blacklistLabel = blacklistLabel;
+  }
   const publicSurface = normalizeOptionalEnum(r.publicSurface, "settings.publicSurface", ["off", "comment_and_label", "comment_only", "label_only"] as const, warnings);
   if (publicSurface !== null) out.publicSurface = publicSurface;
   for (const key of ["aiReviewByok", "aiReviewAllAuthors", "closeOwnerAuthors", "autoLabelEnabled", "badgeEnabled", "createMissingLabel", "includeMaintainerAuthors", "requireLinkedIssue", "backfillEnabled", "privateTrustEnabled", "agentPaused", "agentDryRun"] as const) {
@@ -993,8 +1001,13 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
     const contributorOpenIssueCap = normalizeOptionalPositiveInteger(r.contributorOpenIssueCap, "settings.contributorOpenIssueCap", warnings);
     if (contributorOpenIssueCap !== null) out.contributorOpenIssueCap = contributorOpenIssueCap;
   }
-  const contributorCapLabel = normalizeOptionalString(r.contributorCapLabel, "settings.contributorCapLabel", warnings);
-  if (contributorCapLabel !== null) out.contributorCapLabel = contributorCapLabel;
+  // #label-scoping: same load-bearing-null idiom as blacklistLabel above.
+  if (r.contributorCapLabel === null) {
+    out.contributorCapLabel = null;
+  } else {
+    const contributorCapLabel = normalizeOptionalString(r.contributorCapLabel, "settings.contributorCapLabel", warnings);
+    if (contributorCapLabel !== null) out.contributorCapLabel = contributorCapLabel;
+  }
   // CI-run cancellation on a contributor_cap close (#2462): an explicit yml `null` is load-bearing (clears a
   // DB-configured value back to "unset", falling through to the CONTRIBUTOR_CAP_CANCEL_CI_DEFAULT env var),
   // matching contributorOpenPrCap's own null-vs-omitted distinction above.
@@ -1014,8 +1027,22 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   if (reviewNagCooldownDays !== null && reviewNagCooldownDays > MAX_REVIEW_NAG_COOLDOWN_DAYS) {
     warnings.push(`Manifest field "settings.reviewNagCooldownDays" must be at most ${MAX_REVIEW_NAG_COOLDOWN_DAYS}; ignoring it.`);
   }
-  const reviewNagLabel = normalizeOptionalString(r.reviewNagLabel, "settings.reviewNagLabel", warnings);
-  if (reviewNagLabel !== null) out.reviewNagLabel = reviewNagLabel;
+  // #label-scoping: same load-bearing-null idiom as blacklistLabel above.
+  if (r.reviewNagLabel === null) {
+    out.reviewNagLabel = null;
+  } else {
+    const reviewNagLabel = normalizeOptionalString(r.reviewNagLabel, "settings.reviewNagLabel", warnings);
+    if (reviewNagLabel !== null) out.reviewNagLabel = reviewNagLabel;
+  }
+  // Maintainer-mention nag moderation (#label-scoping): GitHub logins ALSO throttled under the review-nag
+  // cooldown above, on top of the bot's own @gittensory handle. Only set it when at least one VALID login
+  // survives normalization, so a malformed block never blanks the DB-configured list via the resolver's
+  // `{...dbSettings, ...manifest.settings}` overlay (same reasoning as autoCloseExemptLogins below).
+  if (r.reviewNagMonitoredMentions !== undefined) {
+    const { logins: monitoredMentions, warnings: monitoredMentionWarnings } = normalizeAutoCloseExemptLogins(r.reviewNagMonitoredMentions);
+    warnings.push(...monitoredMentionWarnings);
+    if (monitoredMentions.length > 0) out.reviewNagMonitoredMentions = monitoredMentions;
+  }
   // Shared repo-scoped exemption list (#2463): only set it when at least one VALID login survives
   // normalization, so a malformed block never blanks the DB-configured list via the resolver's overlay.
   if (r.autoCloseExemptLogins !== undefined) {

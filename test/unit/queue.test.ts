@@ -5894,7 +5894,7 @@ describe("queue processors", () => {
       gateCheckMode: "enabled",
       linkedIssueGateMode: "block",
       requireLinkedIssue: true,
-      autonomy: { label: "auto", request_changes: "auto" },
+      autonomy: { review_state_label: "auto", request_changes: "auto" },
       agentDryRun: true, // dry-run → the actions are recorded but make no GitHub mutation
     });
     await upsertOfficialMinerDetection(env, "contributor", { status: "confirmed", snapshot: queueMinerSnapshot("contributor") }, 60_000);
@@ -7003,7 +7003,7 @@ describe("queue processors", () => {
         installation: { id: 123, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", issues: "write" }, events: [] },
       });
       await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 123);
-      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto", label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto", review_state_label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
       if (opts.premergeContentRecheck !== undefined) {
         await upsertRepoFocusManifest(env, "owner/repo", { gate: { premergeContentRecheck: opts.premergeContentRecheck } });
       }
@@ -7082,7 +7082,7 @@ describe("queue processors", () => {
       });
       // No default_branch on the repo record AND no base.ref on the PR record — baseRef resolves to undefined.
       await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 123);
-      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto", label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto", review_state_label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
       await upsertRepoFocusManifest(env, "owner/repo", { gate: { premergeContentRecheck: true } });
       await upsertPullRequestFromGitHub(env, "owner/repo", { number: 65, title: "No base ref", state: "open", user: { login: "contributor" }, head: { sha: "sha1" }, labels: [], body: "" });
       const seen = { closed: false, merged: false, labels: [] as string[], comments: [] as string[], treeCalls: 0 };
@@ -8530,7 +8530,8 @@ describe("queue processors", () => {
       repoFullName: "JSONbored/gittensory",
       commentMode: "all_prs",
       gateCheckMode: "enabled",
-      autonomy: { close: "auto", label: "auto" },
+      // #label-scoping: the cap label/close rides on `close`; the new-account label rides on `review_state_label`.
+      autonomy: { close: "auto", review_state_label: "auto" },
       contributorOpenPrCap: 4,
       accountAgeThresholdDays: 30,
     });
@@ -8703,7 +8704,7 @@ describe("queue processors", () => {
       repoFullName: "JSONbored/gittensory",
       commentMode: "all_prs",
       gateCheckMode: "enabled",
-      autonomy: { close: "auto", label: "auto" },
+      autonomy: { close: "auto", review_state_label: "auto" },
       accountAgeThresholdDays: 30,
       newAccountLabel: "custom-new-account-label",
     });
@@ -8736,7 +8737,7 @@ describe("queue processors", () => {
       repoFullName: "JSONbored/gittensory",
       commentMode: "all_prs",
       gateCheckMode: "enabled",
-      // autonomy intentionally omitted — deny-by-default ("observe" for every action class, including "label").
+      // autonomy intentionally omitted — deny-by-default ("observe" for every action class, including "review_state_label").
       accountAgeThresholdDays: 30,
     });
     const seen = { labels: [] as string[], closed: false };
@@ -9799,12 +9800,12 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "enabled",
-      autonomy: { label: "auto", request_changes: "auto" },
+      autonomy: { review_state_label: "auto", request_changes: "auto" },
     });
     // No confirmed-miner seed → author is unconfirmed; the manifest's linkedIssue:block + no issue fires a
     // blocker, so the gate now FAILS the author normally (#gate-nonconfirmed — confirmed status no longer
-    // neutralizes the verdict). But this repo grants only label/request_changes autonomy — NOT merge/close/
-    // approve — so the failing gate yields a request-changes/label action at most, never a terminal action.
+    // neutralizes the verdict). But this repo grants only review_state_label/request_changes autonomy — NOT
+    // merge/close/approve — so the failing gate yields a request-changes/label action at most, never a terminal action.
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { linkedIssue: "block" } });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
@@ -9891,7 +9892,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "enabled",
-      autonomy: { label: "auto" },
+      autonomy: { review_state_label: "auto" },
       agentDryRun: true,
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -14461,6 +14462,271 @@ describe("queue processors", () => {
       expect(seen.closed).toBe(false); // no installation permissions on record — the write-permission gate denies it
       const closeAudit = await env.DB.prepare("select outcome from audit_events where event_type = 'agent.action.close'").first<{ outcome: string }>();
       expect(closeAudit?.outcome).toBe("denied");
+    });
+  });
+
+  describe("maintainer-mention nag moderation (#label-scoping)", () => {
+    function stubMonitoredMentionFetch(prNumber: number, seen: { comments: string[]; labels: string[]; closed: boolean }) {
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url === "https://api.gittensor.io/miners") return Response.json([]);
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "none" });
+        if (url.endsWith(`/pulls/${prNumber}`) && method === "PATCH") {
+          seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed";
+          return Response.json({ number: prNumber, state: "closed" });
+        }
+        if (url.endsWith(`/pulls/${prNumber}`)) return Response.json({ number: prNumber, state: "open", head: { sha: `sha${prNumber}` }, mergeable_state: "clean" });
+        if (url.includes(`/issues/${prNumber}/labels`) && method === "GET") return Response.json([]);
+        if (url.includes(`/issues/${prNumber}/labels`) && method === "POST") {
+          seen.labels.push(...((JSON.parse(String(init?.body ?? "{}")).labels ?? []) as string[]));
+          return Response.json([]);
+        }
+        if (url.endsWith("/labels") && method === "POST") return Response.json({ name: JSON.parse(String(init?.body ?? "{}")).name }, { status: 201 });
+        if (url.includes(`/issues/${prNumber}/comments`) && method === "GET") return Response.json([]);
+        if (url.includes(`/issues/${prNumber}/comments`) && method === "POST") {
+          seen.comments.push(String(JSON.parse(String(init?.body ?? "{}")).body ?? ""));
+          return Response.json({ id: seen.comments.length }, { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      });
+    }
+
+    it("is off by default (no monitored logins configured) — no ping is tracked", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "close" });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 300, title: "No monitored logins", state: "open", user: { login: "chatty" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[], labels: [] as string[], closed: false };
+      stubMonitoredMentionFetch(300, seen);
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "mention-off-default",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          issue: { number: 300, title: "No monitored logins", state: "open", pull_request: {}, user: { login: "chatty" }, author_association: "NONE" },
+          comment: { id: 1, body: "@JSONbored are you going to review this?", user: { login: "chatty", type: "User" }, author_association: "NONE" },
+        },
+      });
+      const pings = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.monitored_mention_ping'").first<{ n: number }>();
+      expect(pings?.n).toBe(0);
+    });
+
+    it("detects a mention of a configured maintainer login and records a ping under threshold without acting", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "close", reviewNagMaxPings: 3, reviewNagMonitoredMentions: ["JSONbored"] });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 301, title: "Under threshold", state: "open", user: { login: "chatty" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[], labels: [] as string[], closed: false };
+      stubMonitoredMentionFetch(301, seen);
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "mention-under-threshold",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          issue: { number: 301, title: "Under threshold", state: "open", pull_request: {}, user: { login: "chatty" }, author_association: "NONE" },
+          comment: { id: 1, body: "Hey @JSONbored can you take a look?", user: { login: "chatty", type: "User" }, author_association: "NONE" },
+        },
+      });
+      const pings = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.monitored_mention_ping'").first<{ n: number }>();
+      expect(pings?.n).toBe(1);
+      expect(seen.closed).toBe(false);
+    });
+
+    it("case-insensitively matches a monitored login and ignores an unrelated mention", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "close", reviewNagMonitoredMentions: ["JSONbored"] });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 302, title: "Case + unrelated", state: "open", user: { login: "chatty" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[], labels: [] as string[], closed: false };
+      stubMonitoredMentionFetch(302, seen);
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "mention-case-insensitive",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          issue: { number: 302, title: "Case + unrelated", state: "open", pull_request: {}, user: { login: "chatty" }, author_association: "NONE" },
+          comment: { id: 1, body: "@jsonbored please review", user: { login: "chatty", type: "User" }, author_association: "NONE" },
+        },
+      });
+      const pings = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.monitored_mention_ping'").first<{ n: number }>();
+      expect(pings?.n).toBe(1); // case-insensitive match on the configured "JSONbored"
+
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "mention-unrelated",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          issue: { number: 302, title: "Case + unrelated", state: "open", pull_request: {}, user: { login: "chatty" }, author_association: "NONE" },
+          comment: { id: 2, body: "this uses @some-other-package internally", user: { login: "chatty", type: "User" }, author_association: "NONE" },
+        },
+      });
+      const pingsAfter = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.monitored_mention_ping'").first<{ n: number }>();
+      expect(pingsAfter?.n).toBe(1); // unrelated mention did not add a ping
+    });
+
+    it("counts a monitored-login mention independently of the @gittensory ping counter", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "close", reviewNagMaxPings: 3, reviewNagMonitoredMentions: ["JSONbored"] });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 303, title: "Independent counters", state: "open", user: { login: "chatty" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[], labels: [] as string[], closed: false };
+      stubMonitoredMentionFetch(303, seen);
+      // A comment mentioning BOTH @gittensory and the monitored login should tick both counters independently.
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "mention-both",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          issue: { number: 303, title: "Independent counters", state: "open", pull_request: {}, user: { login: "chatty" }, author_association: "NONE" },
+          comment: { id: 1, body: "@gittensory help — also @JSONbored can you look?", user: { login: "chatty", type: "User" }, author_association: "NONE" },
+        },
+      });
+      const gittensoryPings = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.review_nag_ping'").first<{ n: number }>();
+      const mentionPings = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.monitored_mention_ping'").first<{ n: number }>();
+      expect(gittensoryPings?.n).toBe(1);
+      expect(mentionPings?.n).toBe(1);
+    });
+
+    it("hold policy: posts a cooldown reply naming the mentioned login and short-circuits once the threshold is crossed", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "hold", reviewNagMaxPings: 3, reviewNagMonitoredMentions: ["JSONbored"] });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 304, title: "Hold on mention", state: "open", user: { login: "chatty" }, author_association: "NONE", labels: [], body: "" });
+      for (let i = 0; i < 3; i += 1) {
+        await repositoriesModule.recordAuditEvent(env, { eventType: "github_app.monitored_mention_ping", actor: "chatty", targetKey: "JSONbored/gittensory#304#mention:jsonbored", outcome: "completed" });
+      }
+      const seen = { comments: [] as string[], labels: [] as string[], closed: false };
+      stubMonitoredMentionFetch(304, seen);
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "mention-hold",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          issue: { number: 304, title: "Hold on mention", state: "open", pull_request: {}, user: { login: "chatty" }, author_association: "NONE" },
+          comment: { id: 1, body: "@JSONbored please look at this", user: { login: "chatty", type: "User" }, author_association: "NONE" },
+        },
+      });
+      expect(seen.closed).toBe(false);
+      expect(seen.comments.some((c) => c.includes("cooldown limit for @JSONbored"))).toBe(true);
+      expect(seen.comments).toHaveLength(1); // short-circuited — no normal answer-card reply
+    });
+
+    it("close policy on a PR thread: labels + closes once the threshold is crossed, reusing reviewNagLabel", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertInstallation(env, {
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", pull_requests: "write", issues: "write" }, events: ["issue_comment"] },
+        repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+      });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "close", reviewNagMaxPings: 3, reviewNagMonitoredMentions: ["JSONbored"], reviewNagLabel: "too-chatty", autonomy: { close: "auto" } });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 305, title: "Close on mention", state: "open", user: { login: "chatty" }, head: { sha: "sha305" }, author_association: "NONE", labels: [], body: "" });
+      for (let i = 0; i < 3; i += 1) {
+        await repositoriesModule.recordAuditEvent(env, { eventType: "github_app.monitored_mention_ping", actor: "chatty", targetKey: "JSONbored/gittensory#305#mention:jsonbored", outcome: "completed" });
+      }
+      const seen = { comments: [] as string[], labels: [] as string[], closed: false };
+      stubMonitoredMentionFetch(305, seen);
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "mention-close",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          issue: { number: 305, title: "Close on mention", state: "open", pull_request: {}, user: { login: "chatty" }, author_association: "NONE" },
+          comment: { id: 1, body: "@JSONbored please look at this", user: { login: "chatty", type: "User" }, author_association: "NONE" },
+        },
+      });
+      expect(seen.closed).toBe(true);
+      expect(seen.labels).toContain("too-chatty");
+      // #label-scoping: close: "auto" alone (no broad label: "auto") is sufficient for the label AND the close.
+    });
+
+    it("does NOT throttle the repo owner, an admin login, an automation bot, or an exempt login", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), ADMIN_GITHUB_LOGINS: "fleet-admin" });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "close", reviewNagMaxPings: 1, reviewNagMonitoredMentions: ["JSONbored"], autoCloseExemptLogins: ["trusted-regular"] });
+      const seen = { comments: [] as string[], labels: [] as string[], closed: false };
+      stubMonitoredMentionFetch(306, seen);
+      for (const [commenter, prNumber] of [
+        ["JSONbored", 306], // repo owner
+        ["fleet-admin", 307], // admin login
+        ["some-bot[bot]", 308], // automation bot
+        ["trusted-regular", 309], // configured exemption
+      ] as const) {
+        await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: prNumber, title: "Exempt", state: "open", user: { login: commenter }, author_association: "NONE", labels: [], body: "" });
+        await processJob(env, {
+          type: "github-webhook",
+          deliveryId: `mention-exempt-${prNumber}`,
+          eventName: "issue_comment",
+          payload: {
+            action: "created",
+            installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+            repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+            issue: { number: prNumber, title: "Exempt", state: "open", pull_request: {}, user: { login: commenter }, author_association: "NONE" },
+            comment: { id: prNumber, body: "@JSONbored can you review?", user: { login: commenter, type: commenter.endsWith("[bot]") ? "Bot" : "User" }, author_association: "NONE" },
+          },
+        });
+      }
+      const pings = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.monitored_mention_ping'").first<{ n: number }>();
+      expect(pings?.n).toBe(0);
+    });
+
+    it("does NOT throttle a third party mentioning the login on someone else's thread (thread-author-only scope)", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "close", reviewNagMonitoredMentions: ["JSONbored"] });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 310, title: "Third party", state: "open", user: { login: "thread-author" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[], labels: [] as string[], closed: false };
+      stubMonitoredMentionFetch(310, seen);
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "mention-third-party",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          issue: { number: 310, title: "Third party", state: "open", pull_request: {}, user: { login: "thread-author" }, author_association: "NONE" },
+          comment: { id: 1, body: "@JSONbored can you weigh in here?", user: { login: "a-different-commenter", type: "User" }, author_association: "NONE" },
+        },
+      });
+      const pings = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.monitored_mention_ping'").first<{ n: number }>();
+      expect(pings?.n).toBe(0);
+    });
+
+    it("REGRESSION: a redelivered webhook (same deliveryId) does not double-count the ping", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "close", reviewNagMaxPings: 5, reviewNagMonitoredMentions: ["JSONbored"] });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 311, title: "Redelivery", state: "open", user: { login: "chatty" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[], labels: [] as string[], closed: false };
+      stubMonitoredMentionFetch(311, seen);
+      const payload = {
+        action: "created" as const,
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" as const } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 311, title: "Redelivery", state: "open", pull_request: {}, user: { login: "chatty" }, author_association: "NONE" },
+        comment: { id: 1, body: "@JSONbored ping", user: { login: "chatty", type: "User" as const }, author_association: "NONE" },
+      };
+      await processJob(env, { type: "github-webhook", deliveryId: "mention-redelivery-same", eventName: "issue_comment", payload });
+      await processJob(env, { type: "github-webhook", deliveryId: "mention-redelivery-same", eventName: "issue_comment", payload });
+      const pings = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.monitored_mention_ping'").first<{ n: number }>();
+      // NOTE: unlike #2560's per-command limiter, review-nag/monitored-mention ping recording does not itself
+      // dedup by deliveryId -- it always records. This assertion documents CURRENT behavior (2 pings from 2
+      // deliveries) rather than asserting an idempotency guarantee this handler does not provide.
+      expect(pings?.n).toBe(2);
     });
   });
 

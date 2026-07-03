@@ -21,6 +21,17 @@ gate:
 
 # Anti-abuse + presentation defaults shared by every repo.
 settings:
+  # Recommended one-shot-mode autonomy baseline (#label-scoping): `close` authorizes both the
+  # terminal merge/close/hold disposition AND every anti-abuse enforcement label (blacklist/
+  # contributor-cap/review-nag) below — no separate `label` grant needed for those.
+  # `review_state_label` is left at the default `observe` so the bot's own advisory disposition
+  # labels (gittensory:ready-to-merge/changes-requested/needs-human-review) never appear — a
+  # one-shot review merges, closes, or holds through the required gate check alone, with no running
+  # commentary as GitHub labels. Set `review_state_label: auto` only if you specifically want that
+  # commentary too.
+  autonomy:
+    close: auto
+
   # Max PRs a single non-owner/non-admin/non-bot contributor may have open at once, instance-wide
   # default. A per-repo file can override this per repo, or set it to `null` to disable it there.
   contributorOpenPrCap: 3
@@ -29,3 +40,12 @@ settings:
   # owner/admin/automation-bot exemption). Replace with your own maintainer/admin logins.
   autoCloseExemptLogins:
     - your-admin-login
+
+  # Maintainer-mention nag moderation (#label-scoping): throttle a contributor who repeatedly tags a
+  # configured maintainer login for review/status, reusing the review-nag cooldown below. Replace with
+  # your own maintainer logins; empty/omitted (the default) watches nobody.
+  reviewNagPolicy: hold
+  reviewNagMaxPings: 3
+  reviewNagCooldownDays: 5
+  reviewNagMonitoredMentions:
+    - your-maintainer-login

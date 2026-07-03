@@ -102,6 +102,9 @@ export const repositorySettings = sqliteTable("repository_settings", {
   reviewNagMaxPings: integer("review_nag_max_pings").notNull().default(3),
   reviewNagCooldownDays: integer("review_nag_cooldown_days").notNull().default(5),
   reviewNagLabel: text("review_nag_label").notNull().default("review-nag-cooldown"),
+  // Maintainer-mention nag moderation (#label-scoping): a JSON array of GitHub logins ALSO throttled under the
+  // review-nag cooldown above, on top of the bot's own `@gittensory` handle. Default '[]' (no logins watched).
+  reviewNagMonitoredMentionsJson: text("review_nag_monitored_mentions_json").notNull().default("[]"),
   // Shared repo-scoped exemption list (#2463): a JSON array of GitHub logins.
   autoCloseExemptLoginsJson: text("auto_close_exempt_logins_json").notNull().default("[]"),
   // Force-rebase-before-merge window in minutes (#2552): null = never force (default). Enforcement lands in
