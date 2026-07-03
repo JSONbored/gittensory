@@ -41,12 +41,18 @@ function MaintainerInstallTrust() {
         payout, wallet, hotkey, or trust-score claims in public surfaces.
       </Callout>
 
-      <h2>Install the GitHub App</h2>
+      <h2>Install the App</h2>
       <p>
-        Start from <Link to="/docs/maintainer-self-hosting">self-hosting setup</Link> (the
-        recommended, default path — you install your own App) or{" "}
-        <Link to="/docs/github-app">GitHub App configuration</Link>, then keep the first rollout
-        narrow until the repo owner has verified permissions, webhook delivery, and public copy.
+        <strong>Self-hosting is the recommended, default path.</strong> Start from{" "}
+        <Link to="/docs/maintainer-self-hosting">self-hosting setup</Link> — the direct App's
+        required permissions and events are covered in{" "}
+        <Link to="/docs/self-hosting-github-app">GitHub App and Orb</Link>, not the checklist below.
+        Either way, keep the first rollout narrow until the repo owner has verified permissions,
+        webhook delivery, and public copy.
+      </p>
+      <p>
+        The checklist below is for the shared <strong>private / managed-beta only</strong> App — see{" "}
+        <Link to="/docs/github-app">GitHub App configuration</Link> for the install flow.
       </p>
       <ol>
         <li>Install Gittensory on one test repository or a selected repository set.</li>
@@ -64,6 +70,11 @@ function MaintainerInstallTrust() {
           preview output matches the repo's maintainer policy.
         </li>
       </ol>
+      <Callout variant="note">
+        A self-hosted direct App needs <code>Pull requests: write</code> (not read) and{" "}
+        <code>Checks: write</code> is mandatory, not optional — this checklist's permissions are
+        scoped to the shared managed-beta App only.
+      </Callout>
       <CodeBlock
         lang="http"
         code={`GET /v1/installations
