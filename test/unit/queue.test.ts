@@ -11976,12 +11976,30 @@ describe("queue processors", () => {
       expect(seen.closed).toBe(false);
     });
 
-    it("caps an oversized review-nag cooldown before Date arithmetic (regression)", async () => {
+    it("REGRESSION (gate-flagged): caps an oversized review-nag cooldown at MAX_REVIEW_NAG_COOLDOWN_DAYS before Date arithmetic, even when the resolved settings object itself carries an oversized value", async () => {
+      // upsertRepositorySettings/getRepositorySettings both clamp reviewNagCooldownDays on write AND read, so
+      // seeding an oversized value through the normal repository layer (even via a raw DB update bypassing the
+      // write-time clamp) can never actually reach maybeThrottleReviewNagPing uncapped -- the read-time clamp in
+      // getRepositorySettings neutralizes it first. Mock resolveRepositorySettings directly so this test proves
+      // processors.ts's OWN Math.min(reviewNagCooldownDays, MAX_REVIEW_NAG_COOLDOWN_DAYS) guard, not the DB layer.
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
-      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "hold", reviewNagMaxPings: 3, reviewNagCooldownDays: 1_000_000_000 });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "hold", reviewNagMaxPings: 3 });
       await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 206, title: "Huge cooldown", state: "open", user: { login: "chatty" }, author_association: "NONE", labels: [], body: "" });
+      // Three prior pings, all 400 DAYS ago -- outside the 365-day cap, but well within an uncapped
+      // "1,000,000,000-day" window. If the guard clamps correctly, these fall outside the window and don't
+      // count; if the guard were removed, the uncapped window would count all three, crossing maxPings=3.
+      vi.setSystemTime(new Date("2025-04-24T00:00:00.000Z"));
+      for (let i = 0; i < 3; i += 1) {
+        await repositoriesModule.recordAuditEvent(env, { eventType: "github_app.review_nag_ping", actor: "chatty", targetKey: "JSONbored/gittensory#206", outcome: "completed" });
+      }
+      vi.setSystemTime(new Date("2026-05-29T00:00:00.000Z")); // ~400 days later
+      const baseSettings = await repositorySettingsModule.resolveRepositorySettings(env, "JSONbored/gittensory");
+      const resolveSettingsSpy = vi
+        .spyOn(repositorySettingsModule, "resolveRepositorySettings")
+        .mockResolvedValueOnce({ ...baseSettings, reviewNagCooldownDays: 1_000_000_000 });
       const seen = { comments: [] as string[], labels: [] as string[], closed: false };
       stubReviewNagFetch(206, seen);
+
       await processJob(env, {
         type: "github-webhook",
         deliveryId: "nag-huge-cooldown",
@@ -11994,9 +12012,16 @@ describe("queue processors", () => {
           comment: { id: 1, body: "@gittensory help", user: { login: "chatty", type: "User" }, author_association: "NONE" },
         },
       });
-      const pings = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.review_nag_ping'").first<{ n: number }>();
-      expect(pings?.n).toBe(1);
+
+      // The 400-day-old pings fell outside the CAPPED 365-day window, so this is only the 1st ping this
+      // window — under maxPings=3, never throttled. An uncapped window would have counted all 3 prior pings
+      // (pingCount=4 > maxPings=3) and applied the cooldown instead.
+      const applied = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.review_nag_cooldown_applied'").first<{ n: number }>();
+      expect(applied?.n).toBe(0);
       expect(seen.closed).toBe(false);
+      expect(seen.comments.some((c) => c.includes("cooldown limit"))).toBe(false);
+      expect(resolveSettingsSpy).toHaveBeenCalled();
+      resolveSettingsSpy.mockRestore();
     });
 
     it("records pings under the configured threshold without acting; the normal @gittensory reply still proceeds", async () => {
