@@ -7784,6 +7784,12 @@ describe("queue processors", () => {
         { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } },
       ],
     });
+    // upsertInstallation's own `repositories:` array is NOT itself persisted to the `repositories` table (only
+    // the `installations` row) -- the real webhook pipeline registers a repo's installationId as a side effect
+    // of processing an event FOR that repo, which never happens here for the second, non-webhook-triggered repo.
+    // Register it explicitly so listOpenItemsByAuthorAcrossInstall's installation-scoped lookup (#2562 gate
+    // finding) can find its rows, matching what a real install actually has.
+    await upsertRepositoryFromGitHub(env, { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } }, 123);
     // farmer99 has 2 open PRs on gittensory (well under its own generous cap of 5) and 1 open PR on a SECOND
     // gated repo, metagraphed (also under ITS generous cap of 5) — 3 total across the install BEFORE the
     // incoming PR. Neither repo's own cap is anywhere close to tripping, but the install-wide cap is 3.
@@ -7855,6 +7861,12 @@ describe("queue processors", () => {
         { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } },
       ],
     });
+    // upsertInstallation's own `repositories:` array is NOT itself persisted to the `repositories` table (only
+    // the `installations` row) -- the real webhook pipeline registers a repo's installationId as a side effect
+    // of processing an event FOR that repo, which never happens here for the second, non-webhook-triggered repo.
+    // Register it explicitly so listOpenItemsByAuthorAcrossInstall's installation-scoped lookup (#2562 gate
+    // finding) can find its rows, matching what a real install actually has.
+    await upsertRepositoryFromGitHub(env, { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } }, 123);
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 53, title: "Farmer PR one", state: "open", user: { login: "farmer99" }, head: { sha: "f53" }, labels: [], body: "x" });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 54, title: "Farmer PR two", state: "open", user: { login: "farmer99" }, head: { sha: "f54" }, labels: [], body: "y" });
     await upsertPullRequestFromGitHub(env, "JSONbored/metagraphed", { number: 10, title: "Farmer PR on another repo", state: "open", user: { login: "farmer99" }, head: { sha: "m10" }, labels: [], body: "z" });
@@ -7913,6 +7925,12 @@ describe("queue processors", () => {
         { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } },
       ],
     });
+    // upsertInstallation's own `repositories:` array is NOT itself persisted to the `repositories` table (only
+    // the `installations` row) -- the real webhook pipeline registers a repo's installationId as a side effect
+    // of processing an event FOR that repo, which never happens here for the second, non-webhook-triggered repo.
+    // Register it explicitly so listOpenItemsByAuthorAcrossInstall's installation-scoped lookup (#2562 gate
+    // finding) can find its rows, matching what a real install actually has.
+    await upsertRepositoryFromGitHub(env, { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } }, 123);
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 53, title: "Farmer PR one", state: "open", user: { login: "farmer99" }, head: { sha: "f53" }, labels: [], body: "x" });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 54, title: "Farmer PR two", state: "open", user: { login: "farmer99" }, head: { sha: "f54" }, labels: [], body: "y" });
     await upsertPullRequestFromGitHub(env, "JSONbored/metagraphed", { number: 10, title: "Farmer PR on another repo", state: "open", user: { login: "farmer99" }, head: { sha: "m10" }, labels: [], body: "z" });
@@ -7971,6 +7989,12 @@ describe("queue processors", () => {
         { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } },
       ],
     });
+    // upsertInstallation's own `repositories:` array is NOT itself persisted to the `repositories` table (only
+    // the `installations` row) -- the real webhook pipeline registers a repo's installationId as a side effect
+    // of processing an event FOR that repo, which never happens here for the second, non-webhook-triggered repo.
+    // Register it explicitly so listOpenItemsByAuthorAcrossInstall's installation-scoped lookup (#2562 gate
+    // finding) can find its rows, matching what a real install actually has.
+    await upsertRepositoryFromGitHub(env, { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } }, 123);
     // farmer99 has 2 open issues on gittensory (under its own generous cap of 5) and 1 open issue on a SECOND
     // gated repo — 3 total across the install BEFORE the incoming issue, matching the install-wide cap of 3.
     await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 60, title: "Farmer issue one", state: "open", user: { login: "farmer99" }, labels: [], body: "x" });
@@ -8079,6 +8103,7 @@ describe("queue processors", () => {
           { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } },
         ],
       });
+      await upsertRepositoryFromGitHub(env, { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } }, 123);
       await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 53, title: "Farmer PR one", state: "open", user: { login: "farmer99" }, head: { sha: "f53" }, labels: [], body: "x" });
       await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 54, title: "Farmer PR two", state: "open", user: { login: "farmer99" }, head: { sha: "f54" }, labels: [], body: "y" });
       await upsertPullRequestFromGitHub(env, "JSONbored/metagraphed", { number: 10, title: "Farmer PR on another repo", state: "open", user: { login: "farmer99" }, head: { sha: "m10" }, labels: [], body: "z" });
@@ -8185,6 +8210,12 @@ describe("queue processors", () => {
         { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } },
       ],
     });
+    // upsertInstallation's own `repositories:` array is NOT itself persisted to the `repositories` table (only
+    // the `installations` row) -- the real webhook pipeline registers a repo's installationId as a side effect
+    // of processing an event FOR that repo, which never happens here for the second, non-webhook-triggered repo.
+    // Register it explicitly so listOpenItemsByAuthorAcrossInstall's installation-scoped lookup (#2562 gate
+    // finding) can find its rows, matching what a real install actually has.
+    await upsertRepositoryFromGitHub(env, { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } }, 123);
     await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 60, title: "Farmer issue one", state: "open", user: { login: "farmer99" }, labels: [], body: "x" });
     await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 61, title: "Farmer issue two", state: "open", user: { login: "farmer99" }, labels: [], body: "y" });
     await upsertIssueFromGitHub(env, "JSONbored/metagraphed", { number: 20, title: "Farmer issue on another repo", state: "open", user: { login: "farmer99" }, labels: [], body: "z" });
@@ -8232,6 +8263,12 @@ describe("queue processors", () => {
         { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } },
       ],
     });
+    // upsertInstallation's own `repositories:` array is NOT itself persisted to the `repositories` table (only
+    // the `installations` row) -- the real webhook pipeline registers a repo's installationId as a side effect
+    // of processing an event FOR that repo, which never happens here for the second, non-webhook-triggered repo.
+    // Register it explicitly so listOpenItemsByAuthorAcrossInstall's installation-scoped lookup (#2562 gate
+    // finding) can find its rows, matching what a real install actually has.
+    await upsertRepositoryFromGitHub(env, { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } }, 123);
     await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 60, title: "Farmer issue one", state: "open", user: { login: "farmer99" }, labels: [], body: "x" });
     await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 61, title: "Farmer issue two", state: "open", user: { login: "farmer99" }, labels: [], body: "y" });
     await upsertIssueFromGitHub(env, "JSONbored/metagraphed", { number: 20, title: "Farmer issue on another repo", state: "open", user: { login: "farmer99" }, labels: [], body: "z" });
@@ -8407,6 +8444,12 @@ describe("queue processors", () => {
         { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } },
       ],
     });
+    // upsertInstallation's own `repositories:` array is NOT itself persisted to the `repositories` table (only
+    // the `installations` row) -- the real webhook pipeline registers a repo's installationId as a side effect
+    // of processing an event FOR that repo, which never happens here for the second, non-webhook-triggered repo.
+    // Register it explicitly so listOpenItemsByAuthorAcrossInstall's installation-scoped lookup (#2562 gate
+    // finding) can find its rows, matching what a real install actually has.
+    await upsertRepositoryFromGitHub(env, { name: "metagraphed", full_name: "JSONbored/metagraphed", private: false, owner: { login: "JSONbored" } }, 123);
     // The local DB cache says all 3 of these are open (would total 4 with the incoming PR, over the cap of 3),
     // but the metagraphed PR was actually merged/closed on GitHub after this instance's cache went stale.
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 53, title: "Farmer PR one", state: "open", user: { login: "farmer99" }, head: { sha: "f53" }, labels: [], body: "x" });

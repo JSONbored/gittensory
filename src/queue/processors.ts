@@ -3963,7 +3963,7 @@ async function verifiedGlobalOpenItemCount(
   authorLogin: string,
   currentItem: { repoFullName: string; number: number; kind: "pull_request" | "issue" },
 ): Promise<number> {
-  const rows = await listOpenItemsByAuthorAcrossInstall(env, authorLogin);
+  const rows = await listOpenItemsByAuthorAcrossInstall(env, installationId, authorLogin);
   const otherRows = rows.filter(
     (row) => !(row.repoFullName === currentItem.repoFullName && row.number === currentItem.number && row.kind === currentItem.kind),
   );

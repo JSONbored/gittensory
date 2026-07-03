@@ -3106,28 +3106,43 @@ export async function countOpenPullRequests(env: Env, fullName: string): Promise
 
 export type OpenItemAcrossInstallRow = { repoFullName: string; number: number; kind: "pull_request" | "issue" };
 
+/** Repo full names belonging to ONE installation (#2562 gate finding): `pullRequests`/`issues` carry no
+ *  installation column of their own (only `repoFullName`, matched against `repositories.fullName` by
+ *  convention, no FK) -- so scoping a cross-repo query to one install means resolving its repo set FIRST,
+ *  mirroring the existing installation-scoped filter in markRepositoriesRemovedFromInstallation (same file)
+ *  rather than a SQL join, which this codebase doesn't otherwise use. */
+async function listRepoFullNamesForInstallation(env: Env, installationId: number): Promise<string[]> {
+  const db = getDb(env.DB);
+  const rows = await db.select({ fullName: repositories.fullName }).from(repositories).where(eq(repositories.installationId, installationId)).limit(5000);
+  return rows.map((row) => row.fullName);
+}
+
 /**
  * Install-wide contributor open-item ROWS (#2562, anti-abuse): every open PR + open issue by this author
- * across EVERY repo this install/instance tracks in the SAME D1 database -- no cross-instance networking, no
- * join through `repositories` (every row in `pullRequests`/`issues` already belongs to a repo this install
- * gates). Only called when GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP is configured. Returns the actual rows (not just a
- * count) so the caller can live-verify each one before trusting the aggregate toward an irreversible close --
- * gate finding: the stored DB cache can lag GitHub for a repo OTHER than the one this webhook is for, and an
- * inflated stale count must never itself trigger a close (mirrors the existing per-repo issue-cap's own
- * sibling live-verification, #2479). The existing per-repo countOpenPullRequests/countOpenIssues stay scoped
- * to one repo and are unaffected by this addition.
+ * across EVERY repo THIS INSTALLATION gates in the SAME D1 database -- no cross-instance networking. Gate
+ * finding: one D1 database can serve MORE than one installation (the hosted product, or a self-host operator
+ * running more than one App install), so this MUST scope to `installationId`'s own repo set rather than
+ * querying the whole database, or a contributor's activity on a completely unrelated installation's repos
+ * could wrongly count toward -- and close -- a PR here. Only called when GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP is
+ * configured. Returns the actual rows (not just a count) so the caller can live-verify each one before
+ * trusting the aggregate toward an irreversible close -- gate finding: the stored DB cache can lag GitHub for
+ * a repo OTHER than the one this webhook is for, and an inflated stale count must never itself trigger a
+ * close (mirrors the existing per-repo issue-cap's own sibling live-verification, #2479). The existing
+ * per-repo countOpenPullRequests/countOpenIssues stay scoped to one repo and are unaffected by this addition.
  */
-export async function listOpenItemsByAuthorAcrossInstall(env: Env, authorLogin: string): Promise<OpenItemAcrossInstallRow[]> {
+export async function listOpenItemsByAuthorAcrossInstall(env: Env, installationId: number, authorLogin: string): Promise<OpenItemAcrossInstallRow[]> {
+  const repoNames = await listRepoFullNamesForInstallation(env, installationId);
+  if (repoNames.length === 0) return [];
   const db = getDb(env.DB);
   const prRows = await db
     .select({ repoFullName: pullRequests.repoFullName, number: pullRequests.number })
     .from(pullRequests)
-    .where(and(eq(pullRequests.state, "open"), loginMatches(pullRequests.authorLogin, authorLogin)))
+    .where(and(eq(pullRequests.state, "open"), loginMatches(pullRequests.authorLogin, authorLogin), inArray(pullRequests.repoFullName, repoNames)))
     .limit(2000);
   const issueRows = await db
     .select({ repoFullName: issues.repoFullName, number: issues.number })
     .from(issues)
-    .where(and(eq(issues.state, "open"), loginMatches(issues.authorLogin, authorLogin)))
+    .where(and(eq(issues.state, "open"), loginMatches(issues.authorLogin, authorLogin), inArray(issues.repoFullName, repoNames)))
     .limit(2000);
   return [
     ...prRows.map((row) => ({ repoFullName: row.repoFullName, number: row.number, kind: "pull_request" as const })),
