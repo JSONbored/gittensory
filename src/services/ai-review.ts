@@ -70,7 +70,6 @@ const REVIEW_SYSTEM_PROMPT = [
   `FAIL CLOSED ON AN INCOHERENT DIFF — if the diff does not cohere with the PR title/description (it appears to describe a DIFFERENT change, the changed-file set looks stale or wrong, or you cannot map it to one coherent change), DO NOT emit a confident assessment or approval: set assessment to exactly '${INCOHERENT_DIFF_ASSESSMENT}' and return empty blockers, nits, and suggestions. Never rubber-stamp a change you cannot actually see.`,
   "Do NOT rubber-stamp: if the diff is genuinely clean, the assessment states specifically why and blockers is [].",
   "Never mention rewards, rankings, payouts, wallets, hotkeys, coldkeys, trust scores, scoreability, reviewability, or farming.",
-  "CRITICAL: your entire response must be a single JSON object starting with { and ending with }. The assessment field must be a non-empty string. Never return an empty assessment.",
 ].join(" ");
 
 /** A maintainer's BYOK provider credential, decrypted at call time. Never logged, never returned. */
@@ -624,7 +623,7 @@ const SECURITY_FOCUS_SUFFIX =
 // quiet inline PR comments (#inline-comments). Absent/off appends nothing (byte-identical). The model keeps the
 // existing 4-field shape and simply ADDS an `inlineFindings` array.
 const INLINE_FINDINGS_SUFFIX =
-    | { model: string; attempt: number; responseChars: number; hasJsonObject: boolean; responseSnippet: string }
+  '\n\nINLINE FINDINGS: ALSO include an additional top-level field "inlineFindings" in the SAME JSON object — an array (possibly empty) of your most important findings, each anchored to a specific changed line, for inline PR comments. Each item: {"path": the changed file path EXACTLY as shown in the diff, "line": the 1-based line number in the NEW file (count forward from the "+" start in the nearest "@@ -old +new @@" hunk header) of an ADDED ("+") line you are commenting on, "severity": "blocker" or "nit", "body": the one-sentence finding, "suggestion": optional replacement text for that line}. Include ONLY findings you can place on a specific added line; OMIT any you cannot anchor precisely (a wrong line is worse than none). If a suggestion is blank or you are not confident in an exact replacement, omit the suggestion field and keep the finding. At most ~10 items.';
 
 /** The effective reviewer SYSTEM prompt. Appends the grounding-discipline suffix when the caller supplied one
  *  (flag GITTENSORY_REVIEW_GROUNDING on), the `review.profile` tone suffix when set, the `review.security_focus`
@@ -653,8 +652,7 @@ function buildSystemPrompt(input: GittensoryAiReviewInput): string {
 }
 
 /** One Workers-AI opinion with a per-slot reliable fallback and a 3× retry on the primary. */
-          const responseSnippet = text.slice(0, 200);
-          lastUnparseable = { model, attempt, responseChars: text.length, hasJsonObject, responseSnippet };
+async function runWorkersOpinion(
   env: Env,
   primary: string,
   fallback: string,
@@ -663,7 +661,6 @@ function buildSystemPrompt(input: GittensoryAiReviewInput): string {
   maxTokens: number,
   diagnostics: AiReviewDiagnostic[] = [],
 ): Promise<ReviewerOpinionOutcome> {
-              responseSnippet,
   const ai = env.AI as unknown as AiRunner | undefined;
   if (!ai || typeof ai.run !== "function") return { review: null };
   // Route through Cloudflare AI Gateway when configured (caching, rate-limiting, logging, fallback). The
@@ -710,7 +707,6 @@ function buildSystemPrompt(input: GittensoryAiReviewInput): string {
           console.warn(
             JSON.stringify({
               level: "warn",
-        responseSnippet: lastUnparseable.responseSnippet,
               event: "ai_review_provider_unparseable_output",
               model,
               attempt,
