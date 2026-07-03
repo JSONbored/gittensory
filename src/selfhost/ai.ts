@@ -639,10 +639,19 @@ export function createCodexAi(
           throw new Error(`codex_timeout: ${detail}`);
         }
         if (code !== 0) {
+          const stderrTrimmed = (stderr ?? "").trim();
+          const jsonlDetail = codexErrorFromStdout(stdout);
+          if (!jsonlDetail && stderrTrimmed === "Reading prompt from stdin...") {
+            // codex's JSONL stream carried no structured detail and stderr is ONLY the stdin-reading banner (no
+            // API/auth error appended) — auth.json was present at boot-time but is now expired or was deleted.
+            // Surface a distinct error so Sentry groups it separately from genuine API failures (rate limits,
+            // model errors, network issues).
+            throw new Error("codex_no_auth: auth.json missing or expired — re-run `codex auth` and restart");
+          }
           // Prefer the structured error from codex's JSONL stdout over the uninformative stderr startup message
           // ("Reading prompt from stdin..."). Codex reports auth/model/API failures in its JSON stream; stderr
           // at exit time usually only contains that startup status line and nothing actionable.
-          const detail = codexErrorFromStdout(stdout) ?? redactSecrets(stderr ?? "").slice(0, 500);
+          const detail = jsonlDetail ?? redactSecrets(stderrTrimmed).slice(0, 500);
           throw new Error(`codex_exit_${code}: ${detail}`);
         }
         const text = extractCliText(stdout);
