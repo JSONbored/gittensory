@@ -4,6 +4,7 @@ import {
   computeMetadataDupRisk,
   computeMetadataFeasibility,
   computeMetadataPotential,
+  opportunityMetadataInternals,
   rankMetadataOpportunities,
 } from "../../packages/gittensory-engine/src/opportunity-metadata";
 import { DEFAULT_MINER_GOAL_SPEC } from "../../packages/gittensory-engine/src/miner-goal-spec";
@@ -258,5 +259,32 @@ describe("opportunity metadata signals", () => {
         { ...base, issueNumber: 11, title: "Improve queue retry semantics today" },
       ]),
     ).toBeGreaterThan(0);
+    expect(
+      computeMetadataDupRisk(base, [{ ...base, issueNumber: 11, title: "Totally unrelated issue title" }]),
+    ).toBe(0);
+    expect(
+      computeMetadataDupRisk(
+        { ...base, issueNumber: 5, repoFullName: "acme/other" },
+        [{ ...base, issueNumber: 5, title: base.title }],
+      ),
+    ).toBe(0);
+  });
+
+  it("pickMetadataTimestamp covers updatedAt, createdAt, and empty fallbacks", () => {
+    const { pickMetadataTimestamp } = opportunityMetadataInternals;
+    expect(pickMetadataTimestamp({ ...base, updatedAt: "2026-07-02T00:00:00.000Z" })).toBe(
+      "2026-07-02T00:00:00.000Z",
+    );
+    expect(
+      pickMetadataTimestamp({ ...base, updatedAt: "   ", createdAt: "2026-07-01T00:00:00.000Z" }),
+    ).toBe("2026-07-01T00:00:00.000Z");
+    expect(pickMetadataTimestamp({ ...base, updatedAt: null, createdAt: null })).toBe("");
+    expect(
+      pickMetadataTimestamp({
+        ...base,
+        updatedAt: 123 as unknown as string,
+        createdAt: "2026-07-01T00:00:00.000Z",
+      }),
+    ).toBe("2026-07-01T00:00:00.000Z");
   });
 });
