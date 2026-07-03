@@ -572,6 +572,7 @@ async function main(): Promise<void> {
   if (githubAppProbe) {
     readinessProbes.push({
       name: githubAppProbe.name,
+      check: () => withTimeout(githubAppProbe.check()),
     });
   }
 
@@ -589,7 +590,6 @@ async function main(): Promise<void> {
     readinessProbes.push({
       name: codexProbe.name,
       check: () => withTimeout(codexProbe.check()),
-      check: () => withTimeout(githubAppProbe.check()),
     });
   }
 

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createD1Adapter, nodeSqliteDriver } from "../../src/selfhost/d1-adapter";
 import {
   buildHealthBody,
+  codexAuthReadinessProbe,
   githubAppReadinessProbe,
   readiness,
   resolveHealthVersion,
@@ -105,6 +106,38 @@ describe("githubAppReadinessProbe (#2497)", () => {
   it("reports unhealthy when both are set but the mint throws (an invalid/malformed key)", async () => {
     const probe = githubAppReadinessProbe("app-123", "not-a-real-key", async () => {
       throw new Error("invalid key");
+    });
+    await expect(probe!.check()).resolves.toBe(false);
+  });
+});
+
+describe("codexAuthReadinessProbe (#GITTENSORY-C)", () => {
+  it("registers no probe when the codex reviewer opt-in is not set", () => {
+    expect(codexAuthReadinessProbe({}, async () => ({ code: 0 }))).toBeNull();
+    expect(
+      codexAuthReadinessProbe({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "0" }, async () => ({ code: 0 })),
+    ).toBeNull();
+  });
+
+  it("reports healthy when codex --version exits 0", async () => {
+    const probe = codexAuthReadinessProbe({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, async () => ({
+      code: 0,
+    }));
+    expect(probe).not.toBeNull();
+    expect(probe!.name).toBe("codex_auth");
+    await expect(probe!.check()).resolves.toBe(true);
+  });
+
+  it("reports unhealthy when codex --version exits non-zero (missing/unauthenticated auth volume)", async () => {
+    const probe = codexAuthReadinessProbe({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, async () => ({
+      code: 1,
+    }));
+    await expect(probe!.check()).resolves.toBe(false);
+  });
+
+  it("fails closed (does not throw) when spawning codex itself rejects", async () => {
+    const probe = codexAuthReadinessProbe({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, async () => {
+      throw new Error("ENOENT: codex not found");
     });
     await expect(probe!.check()).resolves.toBe(false);
   });

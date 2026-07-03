@@ -885,6 +885,29 @@ describe("subscription CLI helpers + fail-safe", () => {
     expect(metrics).toContain('gittensory_ai_requests_total{effort="high",model="m",provider="codex"} 1');
   });
 
+  it("codex: a non-zero exit after reading the prompt is surfaced as a distinct codex_auth_failed error", async () => {
+    // Codex writes "Reading prompt from stdin..." then exits non-zero when it started but couldn't authenticate —
+    // that's diagnosable (missing/invalid auth volume), unlike an opaque codex_exit_1.
+    const authFailed: StubSpawn = async () => ({
+      stdout: "",
+      code: 1,
+      stderr: "Reading prompt from stdin...\nerror: not authenticated",
+    });
+    await expect(
+      createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, authFailed).run("m", { prompt: "x" }),
+    ).rejects.toThrow(/codex_auth_failed: codex read the prompt but exited 1 — verify the codex auth volume is mounted/);
+
+    // null exit code (killed/crashed) alongside the same stderr signal — covers the `code ?? "null"` fallback arm.
+    const authFailedNullExit: StubSpawn = async () => ({
+      stdout: "",
+      code: null,
+      stderr: "Reading prompt from stdin...\nsegfault",
+    });
+    await expect(
+      createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, authFailedNullExit).run("m", { prompt: "x" }),
+    ).rejects.toThrow(/codex_auth_failed: codex read the prompt but exited null — verify the codex auth volume is mounted/);
+  });
+
   it("redacts the OAuth token and key-shaped tokens from claude stderr before they reach the error (#1605 sec)", async () => {
     // The CLI can echo the token we hand it via env; it must never land in an error string forwarded to Sentry.
     const token = "oauth-tok-abcdef123456";
