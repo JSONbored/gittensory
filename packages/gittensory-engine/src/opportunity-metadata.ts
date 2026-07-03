@@ -74,11 +74,20 @@ function resolveGoalSpec(repoFullName: string, context: MetadataRankContext): Mi
 
 const STALE_AGE_DAYS = 9999;
 
+function pickMetadataTimestamp(issue: MetadataCandidateIssue): string {
+  if (typeof issue.updatedAt === "string") {
+    const updated = issue.updatedAt.trim();
+    if (updated) return updated;
+  }
+  if (typeof issue.createdAt === "string") {
+    const created = issue.createdAt.trim();
+    if (created) return created;
+  }
+  return "";
+}
+
 function issueAgeDays(issue: MetadataCandidateIssue, nowMs: number): number {
-  const stamp =
-    (typeof issue.updatedAt === "string" && issue.updatedAt.trim()) ||
-    (typeof issue.createdAt === "string" && issue.createdAt.trim()) ||
-    "";
+  const stamp = pickMetadataTimestamp(issue);
   if (!stamp) return STALE_AGE_DAYS;
   const parsed = Date.parse(stamp);
   if (!Number.isFinite(parsed)) return STALE_AGE_DAYS;
@@ -122,8 +131,12 @@ function titlesOverlap(left: string, right: string): boolean {
   /* v8 ignore next -- Empty titles are filtered before overlap checks run. */
   if (!left || !right) return false;
   if (left === right) return true;
-  const shorter = left.length <= right.length ? left : right;
-  const longer = left.length > right.length ? left : right;
+  let shorter = left;
+  let longer = right;
+  if (left.length > right.length) {
+    shorter = right;
+    longer = left;
+  }
   return longer.includes(shorter) && shorter.length >= 12;
 }
 
@@ -132,6 +145,7 @@ export const opportunityMetadataInternals = {
   titlesOverlap,
   normalizeLabels,
   resolveGoalSpec,
+  pickMetadataTimestamp,
 };
 /* v8 ignore stop */
 
