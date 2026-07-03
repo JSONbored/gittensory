@@ -267,6 +267,13 @@ settings:
   publicSignalLevel: standard
 
   # Publish a GitHub check-run. off | enabled. Default: off.
+  # Independent, legacy advisory surface (#2691) -- separate from, and not gated
+  # by, the required `Gittensory Orb Review Agent` gate check under `gate:`
+  # above. At the default `checkRunDetailLevel: minimal` below it posts no
+  # findings at all; at standard/deep it only re-renders findings already shown
+  # in the gate check and the PR comment. One-shot self-host installs should
+  # leave this at the default `off` unless you specifically want a second,
+  # low-detail check-run surface alongside the required gate check.
   checkRunMode: off
 
   # Check-run detail. minimal | standard | deep. Default: minimal.
