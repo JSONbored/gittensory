@@ -6286,6 +6286,12 @@ async function maybePublishPrPublicSurface(
     decision.skipReason !== "not_official_gittensor_miner"
   ) {
     try {
+      // Same reasoning as `typeLabelsEnabled` above: `settings.typeLabels` is optional only for
+      // RepositorySettings-fixture-construction backward compat -- getRepositorySettings always
+      // resolves it to a concrete, complete PrTypeLabelSet (parseTypeLabelSet never returns
+      // undefined), so the `?? DEFAULT_TYPE_LABELS` fallback is unreachable on this webhook-
+      // integration path.
+      /* v8 ignore next -- see the comment above */
       const typeLabels = settings.typeLabels ?? DEFAULT_TYPE_LABELS;
       const propagation = settings.linkedIssueLabelPropagation;
       // Caller-gated (mirrors shouldCollectLinkedIssueEvidence/resolveLinkedIssueHardRule's own
