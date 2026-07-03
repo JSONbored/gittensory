@@ -469,6 +469,17 @@ type ActionsRunFetchOptions = {
   githubRateLimitAdmissionKey: GitHubRateLimitAdmissionKey;
 };
 
+// GitHub's default page size (30) means a repo whose head SHA has more than one page of matching runs would
+// silently leave page-2+ runs uncancelled while cancelInFlightWorkflowRunsForHeadSha reports totalFound/
+// cancelledCount as if the listing were complete (gate finding). per_page=100 + follow Link: rel="next" until
+// exhausted; bounded to MAX_WORKFLOW_RUN_LIST_PAGES so a pathological repo can't turn one webhook into an
+// unbounded fetch loop (mirrors src/github/backfill.ts's githubPaginatedList/PR_DETAIL_MAX_PAGES bound).
+const MAX_WORKFLOW_RUN_LIST_PAGES = 10;
+
+function hasNextWorkflowRunPage(link: string | null): boolean {
+  return Boolean(link?.split(",").some((part) => /rel="next"/.test(part)));
+}
+
 // Split out of cancelInFlightWorkflowRunsForHeadSha (a named function, not an inline for-of body) so v8's
 // per-branch coverage tracking attributes hits correctly across repeated loop iterations with early returns
 // -- an inline loop body with early `return`s inside a `for` inside an `async function` can under-report the
@@ -479,16 +490,24 @@ async function listWorkflowRunIdsForStatus(
   status: "in_progress" | "queued",
   fetchOptions: ActionsRunFetchOptions,
 ): Promise<{ kind: "ids"; ids: number[] } | { kind: "permission_missing"; warning: string } | { kind: "error"; warning: string }> {
-  const response = await timeoutFetch(`https://api.github.com/repos/${repoPath}/actions/runs?head_sha=${encodeURIComponent(headSha)}&status=${status}`, fetchOptions);
-  if (response.ok) {
+  const ids: number[] = [];
+  for (let page = 1; page <= MAX_WORKFLOW_RUN_LIST_PAGES; page += 1) {
+    const response = await timeoutFetch(
+      `https://api.github.com/repos/${repoPath}/actions/runs?head_sha=${encodeURIComponent(headSha)}&status=${status}&per_page=100&page=${page}`,
+      fetchOptions,
+    );
+    if (!response.ok) {
+      const message = await actionsApiErrorMessage(response);
+      if (response.status === 403 && isActionsPermissionMissingMessage(message)) {
+        return actionsPermissionMissingResult(message);
+      }
+      return { kind: "error", warning: `Failed to list workflow runs (${response.status}): ${message || "unknown error"}` };
+    }
     const payload = (await response.json()) as { workflow_runs?: Array<{ id: number }> };
-    return { kind: "ids", ids: (payload.workflow_runs ?? []).map((run) => run.id) };
+    ids.push(...(payload.workflow_runs ?? []).map((run) => run.id));
+    if (!hasNextWorkflowRunPage(response.headers.get("link"))) break;
   }
-  const message = await actionsApiErrorMessage(response);
-  if (response.status === 403 && isActionsPermissionMissingMessage(message)) {
-    return actionsPermissionMissingResult(message);
-  }
-  return { kind: "error", warning: `Failed to list workflow runs (${response.status}): ${message || "unknown error"}` };
+  return { kind: "ids", ids };
 }
 
 // Same extraction rationale as listWorkflowRunIdsForStatus above. Mirrors that function's error shape (#gate

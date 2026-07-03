@@ -683,6 +683,32 @@ describe("GitHub check runs", () => {
     expect(cancelledIds.sort()).toEqual([1, 2, 3]);
   });
 
+  it("cancelInFlightWorkflowRunsForHeadSha (gate finding) follows Link: rel=\"next\" pagination — a head SHA with MORE than one page of in_progress runs still gets every page cancelled", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    const cancelledIds: number[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+      if (url.includes("/actions/runs?head_sha=multipage&status=in_progress&per_page=100&page=1")) {
+        return new Response(JSON.stringify({ workflow_runs: [{ id: 1 }, { id: 2 }] }), { headers: { link: '<https://api.github.com/repos/owner/repo/actions/runs?head_sha=multipage&status=in_progress&per_page=100&page=2>; rel="next"' } });
+      }
+      if (url.includes("/actions/runs?head_sha=multipage&status=in_progress&per_page=100&page=2")) {
+        return Response.json({ workflow_runs: [{ id: 3 }] }); // no Link header — last page
+      }
+      if (url.includes("/actions/runs?head_sha=multipage&status=queued")) return Response.json({ workflow_runs: [] });
+      if (url.includes("/actions/runs/") && url.endsWith("/cancel") && method === "POST") {
+        cancelledIds.push(Number(url.match(/\/actions\/runs\/(\d+)\/cancel/)?.[1]));
+        return new Response(null, { status: 202 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const outcome = await cancelInFlightWorkflowRunsForHeadSha(createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }), 123, "owner/repo", "multipage");
+    expect(outcome).toEqual({ kind: "cancelled", cancelledCount: 3, totalFound: 3 });
+    expect(cancelledIds.sort()).toEqual([1, 2, 3]);
+  });
+
   it("cancelInFlightWorkflowRunsForHeadSha returns cancelled with zero counts when no runs are found (#2462)", async () => {
     const privateKey = await generatePrivateKeyPem();
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
