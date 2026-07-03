@@ -108,7 +108,7 @@ function formatSecretKindsFromText(text: string): string[] {
 
 /** True for unified-diff file headers (`+++ b/path`, `--- a/path`), not added content like `+++const`. */
 function isUnifiedDiffFileHeaderLine(line: string): boolean {
-  return /^(?:\+\+\+|---) (?:[ab]\/|\/dev/null)/.test(line);
+  return /^(?:\+\+\+|---) (?:[ab]\/|\/dev\/null)/.test(line);
 }
 
 /** Scan a PR diff for secret kinds introduced on added lines (and added/renamed file headers). Per-line regex
