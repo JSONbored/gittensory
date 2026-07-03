@@ -1663,6 +1663,19 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(eff.typeLabels).toEqual({ bug: "custom:bug", feature: "custom:feature", priority: "kind:priority" });
   });
 
+  it("drops a malformed typeLabels.priority from the sparse override instead of copying the normalizer's built-in-default fallback (#priority-linked-issue-gate nit)", () => {
+    const parsed = parseFocusManifest({ settings: { typeLabels: { priority: 123 } } });
+    // `priority` is present but not a valid string, so it must be ABSENT from the sparse override
+    // (not silently filled with the built-in "gittensor:priority" default) — otherwise a config typo
+    // would overwrite a DB-customized priority label with the built-in name.
+    expect(parsed.settings.typeLabels).toEqual({});
+    expect(parsed.warnings.some((w) => w.includes("settings.typeLabels.priority"))).toBe(true);
+
+    const db = { typeLabels: { bug: "kind:bug", feature: "kind:feature", priority: "kind:priority" } } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { typeLabels: { priority: 123 } } }));
+    expect(eff.typeLabels).toEqual(db.typeLabels);
+  });
+
   it("warns and preserves the existing DB value when settings.typeLabels is not an object", () => {
     const parsed = parseFocusManifest({ settings: { typeLabels: "gittensor:bug" } });
     expect(parsed.settings.typeLabels).toBeUndefined();
@@ -1724,6 +1737,40 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     const db = {} as unknown as RepositorySettings;
     const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { linkedIssueLabelPropagation: { enabled: true } } }));
     expect(eff.linkedIssueLabelPropagation).toEqual({ enabled: true, mode: "exclusive_type_label", mappings: [] });
+  });
+
+  it("drops a malformed linkedIssueLabelPropagation.enabled from the sparse override instead of copying the normalizer's built-in-default fallback (#priority-linked-issue-gate nit)", () => {
+    const parsed = parseFocusManifest({ settings: { linkedIssueLabelPropagation: { enabled: "true" } } });
+    expect(parsed.settings.linkedIssueLabelPropagation).toEqual({});
+    expect(parsed.warnings.some((w) => w.includes("settings.linkedIssueLabelPropagation.enabled"))).toBe(true);
+
+    const db = { linkedIssueLabelPropagation: { enabled: true, mode: "exclusive_type_label", mappings: [] } } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { linkedIssueLabelPropagation: { enabled: "true" } } }));
+    expect(eff.linkedIssueLabelPropagation).toEqual(db.linkedIssueLabelPropagation);
+  });
+
+  it("drops a malformed linkedIssueLabelPropagation.mode from the sparse override instead of copying the normalizer's built-in-default fallback", () => {
+    const parsed = parseFocusManifest({ settings: { linkedIssueLabelPropagation: { mode: "not_a_real_mode" } } });
+    expect(parsed.settings.linkedIssueLabelPropagation).toEqual({});
+    expect(parsed.warnings.some((w) => w.includes("settings.linkedIssueLabelPropagation.mode"))).toBe(true);
+  });
+
+  it("drops a malformed linkedIssueLabelPropagation.mappings from the sparse override instead of discarding the DB-configured mapping list", () => {
+    const parsed = parseFocusManifest({ settings: { linkedIssueLabelPropagation: { mappings: "oops" } } });
+    // A typo'd, non-array `mappings` must never silently replace a DB-configured mapping list with the
+    // normalizer's empty-array fallback -- it must be absent from the sparse override entirely.
+    expect(parsed.settings.linkedIssueLabelPropagation).toEqual({});
+    expect(parsed.warnings.some((w) => w.includes("settings.linkedIssueLabelPropagation.mappings"))).toBe(true);
+
+    const db = {
+      linkedIssueLabelPropagation: {
+        enabled: true,
+        mode: "exclusive_type_label" as const,
+        mappings: [{ issueLabel: "gittensor:priority", prLabel: "gittensor:priority", removeOtherTypeLabels: true }],
+      },
+    } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { linkedIssueLabelPropagation: { mappings: "oops" } } }));
+    expect(eff.linkedIssueLabelPropagation).toEqual(db.linkedIssueLabelPropagation);
   });
 
   it("warns and preserves the existing DB value when settings.linkedIssueLabelPropagation is not an object", () => {

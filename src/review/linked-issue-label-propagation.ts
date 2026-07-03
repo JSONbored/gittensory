@@ -23,7 +23,9 @@ export const DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION: LinkedIssueLabelPropagation
   mappings: [],
 };
 
-const VALID_MODES: readonly LinkedIssueLabelPropagationMode[] = ["exclusive_type_label"];
+// Exported so `focus-manifest.ts`'s sparse-override parser can check whether a raw `mode` value is
+// actually valid before deciding to copy the normalizer's (possibly defaults-filled-on-invalid) result.
+export const VALID_LINKED_ISSUE_LABEL_PROPAGATION_MODES: readonly LinkedIssueLabelPropagationMode[] = ["exclusive_type_label"];
 
 function normalizeMapping(input: unknown, index: number, warnings: string[]): LinkedIssueLabelPropagationMapping | null {
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
@@ -35,6 +37,15 @@ function normalizeMapping(input: unknown, index: number, warnings: string[]): Li
   const prLabel = typeof record.prLabel === "string" ? record.prLabel.trim() : "";
   if (issueLabel.length === 0 || prLabel.length === 0) {
     warnings.push(`settings.linkedIssueLabelPropagation.mappings[${index}] must have non-empty "issueLabel" and "prLabel" strings; ignoring it.`);
+    return null;
+  }
+  // `removeOtherTypeLabels` picks exclusive (replaces the type label, the gittensor:priority case) vs.
+  // additive (applied alongside it) -- silently coercing a present-but-wrong-shaped value (e.g. a quoted
+  // `"true"` string) to `false` could flip an intended-exclusive mapping to additive without any signal,
+  // so a present, non-boolean value drops the whole entry with a warning instead (omitted is still a
+  // normal, unwarned default of `false`).
+  if (record.removeOtherTypeLabels !== undefined && typeof record.removeOtherTypeLabels !== "boolean") {
+    warnings.push(`settings.linkedIssueLabelPropagation.mappings[${index}].removeOtherTypeLabels must be a boolean; ignoring this mapping.`);
     return null;
   }
   return { issueLabel, prLabel, removeOtherTypeLabels: record.removeOtherTypeLabels === true };
@@ -51,13 +62,20 @@ export function normalizeLinkedIssueLabelPropagationConfig(input: unknown, warni
     return { ...DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, mappings: [] };
   }
   const record = input as Record<string, unknown>;
-  const enabled = record.enabled === true;
+  let enabled = DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION.enabled;
+  if (record.enabled !== undefined) {
+    if (typeof record.enabled === "boolean") {
+      enabled = record.enabled;
+    } else {
+      warnings.push(`settings.linkedIssueLabelPropagation.enabled must be a boolean; using the default "${DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION.enabled}".`);
+    }
+  }
   let mode: LinkedIssueLabelPropagationMode = DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION.mode;
   if (record.mode !== undefined) {
-    if (typeof record.mode === "string" && (VALID_MODES as readonly string[]).includes(record.mode)) {
+    if (typeof record.mode === "string" && (VALID_LINKED_ISSUE_LABEL_PROPAGATION_MODES as readonly string[]).includes(record.mode)) {
       mode = record.mode as LinkedIssueLabelPropagationMode;
     } else {
-      warnings.push(`settings.linkedIssueLabelPropagation.mode must be one of ${VALID_MODES.join(", ")}; using the default "${DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION.mode}".`);
+      warnings.push(`settings.linkedIssueLabelPropagation.mode must be one of ${VALID_LINKED_ISSUE_LABEL_PROPAGATION_MODES.join(", ")}; using the default "${DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION.mode}".`);
     }
   }
   let mappings: LinkedIssueLabelPropagationMapping[] = [];

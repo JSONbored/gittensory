@@ -5,7 +5,7 @@ import { normalizeCommandAuthorizationPolicy } from "../settings/command-authori
 import { mergeContributorBlacklists, normalizeContributorBlacklist } from "../settings/contributor-blacklist";
 import { normalizeAutoCloseExemptLogins } from "../settings/auto-close-exempt";
 import { DEFAULT_TYPE_LABELS, normalizeTypeLabelSet } from "../settings/pr-type-label";
-import { DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, normalizeLinkedIssueLabelPropagationConfig } from "../review/linked-issue-label-propagation";
+import { DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, normalizeLinkedIssueLabelPropagationConfig, VALID_LINKED_ISSUE_LABEL_PROPAGATION_MODES } from "../review/linked-issue-label-propagation";
 import { hasUnsafeWildcardCount } from "./change-guardrail";
 import { PUBLIC_LOCAL_PATH_INLINE } from "./redaction";
 
@@ -986,20 +986,25 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
     warnings.push(`Manifest "settings.commandAuthorization" must be an object; ignoring it and keeping any existing policy.`);
   }
   // TYPE label NAME overrides (#priority-linked-issue-gate): unlike commandAuthorization/autoMaintain
-  // above, this is deliberately kept SPARSE -- only the keys actually present in the raw YAML are copied
-  // onto `out.typeLabels`, each individually validated via `normalizeTypeLabelSet` (which still fills in
-  // the OTHER keys to run its own shape checks, but those defaults-filled values are discarded here). A
+  // above, this is deliberately kept SPARSE -- only the keys actually present AND validly-shaped in the
+  // raw YAML are copied onto `out.typeLabels` (via `normalizeTypeLabelSet`, which still fills in the
+  // OTHER keys to run its own shape checks, but those defaults-filled values are discarded here). A
   // manifest naming only `typeLabels.priority` must inherit `bug`/`feature` from the DB-persisted value in
   // `resolveEffectiveSettings`, not have them silently reset to the built-in gittensor:* names -- assigning
   // the normalizer's complete object here would do exactly that via the resolver's wholesale
-  // `{...dbSettings, ...manifest.settings}` spread.
+  // `{...dbSettings, ...manifest.settings}` spread. The per-field shape check below (not just "is the key
+  // present") matters too: a malformed value (e.g. `typeLabels.priority: 123`) is present but invalid, so
+  // `normalizeTypeLabelSet` warns and reports its OWN built-in-default fallback for that key -- copying
+  // that fallback into the sparse override would silently overwrite a DB-customized value with the
+  // built-in default on a config typo, instead of leaving the DB value alone.
   if (typeof r.typeLabels === "object" && r.typeLabels !== null && !Array.isArray(r.typeLabels)) {
     const rawTypeLabels = r.typeLabels as Record<string, unknown>;
     const validated = normalizeTypeLabelSet(rawTypeLabels, warnings);
+    const isValidLabelName = (value: unknown): boolean => typeof value === "string" && value.trim().length > 0;
     const sparseTypeLabels: Partial<PrTypeLabelSet> = {};
-    if (rawTypeLabels.bug !== undefined) sparseTypeLabels.bug = validated.bug;
-    if (rawTypeLabels.feature !== undefined) sparseTypeLabels.feature = validated.feature;
-    if (rawTypeLabels.priority !== undefined) sparseTypeLabels.priority = validated.priority;
+    if (isValidLabelName(rawTypeLabels.bug)) sparseTypeLabels.bug = validated.bug;
+    if (isValidLabelName(rawTypeLabels.feature)) sparseTypeLabels.feature = validated.feature;
+    if (isValidLabelName(rawTypeLabels.priority)) sparseTypeLabels.priority = validated.priority;
     out.typeLabels = sparseTypeLabels;
   } else if (r.typeLabels !== undefined) {
     warnings.push(`Manifest "settings.typeLabels" must be an object; ignoring it and keeping any existing label names.`);
@@ -1008,16 +1013,22 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   // above, for the same reason -- this is the ONLY mechanism that can ever select a maintainer-reward
   // label like gittensor:priority (never inferred from title/files/AI/PR-labels), so a manifest overriding
   // just one field (e.g. `enabled`) must not silently reset `mappings` back to the built-in empty default
-  // and discard a DB-configured mapping list. `mappings` itself is still a complete replacement when
-  // present (arrays have no per-item precedence semantics here), matching the array-replace-wholesale
-  // overlay behavior documented for the private-config layer.
+  // and discard a DB-configured mapping list. Each field is gated on its OWN raw shape being valid (not
+  // just "is the key present"), for the same reason as typeLabels above -- e.g. a typo'd
+  // `mappings: "oops"` must never silently replace a DB-configured mapping list with the normalizer's
+  // empty-array fallback. A validly-shaped `mappings` array is still a complete replacement when present
+  // (arrays have no per-item precedence semantics here, and any individually-invalid entries inside it
+  // are dropped by the normalizer, not the array itself), matching the array-replace-wholesale overlay
+  // behavior documented for the private-config layer.
   if (typeof r.linkedIssueLabelPropagation === "object" && r.linkedIssueLabelPropagation !== null && !Array.isArray(r.linkedIssueLabelPropagation)) {
     const rawPropagation = r.linkedIssueLabelPropagation as Record<string, unknown>;
     const validated = normalizeLinkedIssueLabelPropagationConfig(rawPropagation, warnings);
     const sparsePropagation: Partial<LinkedIssueLabelPropagationConfig> = {};
-    if (rawPropagation.enabled !== undefined) sparsePropagation.enabled = validated.enabled;
-    if (rawPropagation.mode !== undefined) sparsePropagation.mode = validated.mode;
-    if (rawPropagation.mappings !== undefined) sparsePropagation.mappings = validated.mappings;
+    if (typeof rawPropagation.enabled === "boolean") sparsePropagation.enabled = validated.enabled;
+    if (typeof rawPropagation.mode === "string" && (VALID_LINKED_ISSUE_LABEL_PROPAGATION_MODES as readonly string[]).includes(rawPropagation.mode)) {
+      sparsePropagation.mode = validated.mode;
+    }
+    if (Array.isArray(rawPropagation.mappings)) sparsePropagation.mappings = validated.mappings;
     out.linkedIssueLabelPropagation = sparsePropagation;
   } else if (r.linkedIssueLabelPropagation !== undefined) {
     warnings.push(`Manifest "settings.linkedIssueLabelPropagation" must be an object; ignoring it and keeping any existing policy.`);

@@ -65,7 +65,7 @@ export type PrTypeLabelDecision = {
  *     ALREADY-FETCHED `linkedIssueLabels` wins. This is the ONLY way a label like `gittensor:priority`
  *     can ever be chosen — this function does no I/O and never infers it from title, changed files,
  *     AI output, or PR labels; the caller must fetch `linkedIssueLabels` itself (see
- *     `fetchLinkedIssueLabelsForPropagation` in `review/linked-issue-label-propagation.ts`).
+ *     `fetchLinkedIssueLabelsForPropagation` in `review/linked-issue-label-propagation-fetch.ts`).
  *     - `removeOtherTypeLabels: true` (exclusive) — the mapped label REPLACES the type label,
  *       exactly like today's bug/feature/priority classification (used for `gittensor:priority`).
  *     - `removeOtherTypeLabels: false` (additive) — the mapped label is applied ALONGSIDE the
