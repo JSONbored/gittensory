@@ -201,6 +201,14 @@ export function generateReplayTask(candidate, context, options) {
 // Scoring-only accessor. Call this from the isolated scorer path after replay execution has finished; do not
 // pass its result to replay workers. It deliberately shares only selection eligibility with generateReplayTask
 // and never carries frozen context.
+//
+// IMPORTANT: `eligible: true` here means only that selectFreezePoint accepted the candidate -- it does NOT
+// mean generateReplayTask would also produce a usable frozen task for it. generateReplayTask can still reject
+// a selection-eligible candidate afterward (`rejected: "unscrubbable_forward_reference"`, from
+// lintFrozenContext), because scrub/lint eligibility is about the FROZEN CONTEXT TEXT, which this function
+// never touches -- it only reveals commitCount/groundTruth, so lint/scrub has nothing to check here. A caller
+// must not assume a scoring key implies a replay task was ever generated for the same candidate; check
+// generateReplayTask's own result independently before treating the two as a matched pair.
 export function generateReplayScoringKey(candidate, options) {
   const selection = selectFreezePoint(candidate, options?.thresholds);
   if (!selection.eligible) {
