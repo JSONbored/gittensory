@@ -29,11 +29,11 @@ export function extractCatalogEntries(sourceText, catalogConstName) {
   const catalogPattern = new RegExp(`const\\s+${catalogConstName}\\s*=\\s*\\[([\\s\\S]*?)\\]\\s*as\\s*const;`);
   const catalogMatch = catalogPattern.exec(sourceText);
   if (!catalogMatch) return [];
-  const entryPattern = /id:\s*"([^"]+)"\s*,\s*title:\s*"([^"]+)"\s*,\s*description:\s*"([^"]+)"/g;
+  const entryPattern = /id:\s*"((?:\\.|[^"\\])*)"\s*,\s*title:\s*"((?:\\.|[^"\\])*)"\s*,\s*description:\s*"((?:\\.|[^"\\])*)"/g;
   return [...catalogMatch[1].matchAll(entryPattern)].map((match) => ({
-    id: match[1],
-    title: match[2],
-    description: match[3],
+    id: JSON.parse(`"${match[1]}"`),
+    title: JSON.parse(`"${match[2]}"`),
+    description: JSON.parse(`"${match[3]}"`),
   }));
 }
 

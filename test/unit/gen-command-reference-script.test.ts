@@ -45,6 +45,19 @@ describe("gen-command-reference script (#3046)", () => {
     it("returns an empty array when the named catalog does not exist", () => {
       expect(extractCatalogEntries(fixture, "MISSING_CATALOG")).toEqual([]);
     });
+
+    it("keeps entries whose title or description contains escaped quotes", () => {
+      const escapedQuote = `${String.fromCharCode(92)}"`;
+      const source = [
+        "const PUBLIC_MENTION_COMMAND_CATALOG = [",
+        `{ id: "quote-test", title: "Say ${escapedQuote}quote${escapedQuote}", description: "Render ${escapedQuote}quoted${escapedQuote} command text." },`,
+        "] as const;",
+      ].join("\n");
+
+      expect(extractCatalogEntries(source, "PUBLIC_MENTION_COMMAND_CATALOG")).toEqual([
+        { id: "quote-test", title: 'Say "quote"', description: 'Render "quoted" command text.' },
+      ]);
+    });
   });
 
   describe("renderCommandList", () => {
