@@ -11,7 +11,10 @@ function finiteNonNegative(value: number): number {
   return Math.max(0, value);
 }
 
-function finiteClusterPressure(value: number): number {
+function failClosedClusterPressure(value: number): number {
+  // Non-finite input (NaN/±Infinity) means the duplicate-cluster signal is broken, not absent, so
+  // treat it as maximal pressure instead of `finiteNonNegative`'s fail-open 0 — dividing by
+  // `Math.max(1, openPrs)` and clamping below then yields the maximum competition factor of 1.
   if (!Number.isFinite(value)) return Number.POSITIVE_INFINITY;
   return Math.max(0, value);
 }
@@ -25,7 +28,7 @@ export function computeOpportunityCompetition(
   highRiskDuplicateClusters: number,
   openPullRequests: number,
 ): number {
-  const clusters = finiteClusterPressure(highRiskDuplicateClusters);
+  const clusters = failClosedClusterPressure(highRiskDuplicateClusters);
   const openPrs = finiteNonNegative(openPullRequests);
   return round4(clamp(clusters / Math.max(1, openPrs), 0, 1));
 }

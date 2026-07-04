@@ -87,7 +87,7 @@ describe("opportunity metadata signals", () => {
 
   it("freshness and competition helpers stay pure with injected clocks and safe inputs", () => {
     expect(computeOpportunityFreshness([{ state: "closed", updatedAt: "2026-07-03T00:00:00.000Z" }], NOW)).toBe(0);
-    expect(computeOpportunityCompetition(Number.NaN, 3)).toBe(0);
+    expect(computeOpportunityCompetition(Number.NaN, 3)).toBe(1);
     expect(computeOpportunityCompetition(1, 0)).toBe(1);
     expect(computeOpportunityFreshness([{ state: "open", updatedAt: "2026-07-03T00:00:00.000Z" }], NOW)).toBeGreaterThan(
       0.8,
