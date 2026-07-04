@@ -30,8 +30,9 @@ const ADD_COLUMN_RE =
   /\bADD\s+(?!CONSTRAINT\b|PRIMARY\b|FOREIGN\b|UNIQUE\b|CHECK\b|INDEX\b|KEY\b)(?:COLUMN\s+)?\S/i;
 const NOT_NULL_RE = /\bNOT\s+NULL\b/i;
 const DEFAULT_RE = /\bDEFAULT\b/i;
-// Promoting an existing nullable column to NOT NULL without a same-line DEFAULT/backfill: rows that still
-// contain NULL fail the constraint check when the migration runs.
+// Promoting an existing nullable column to NOT NULL: existing NULL rows fail the constraint check when the
+// migration runs. A same-line DEFAULT does not backfill existing rows in PostgreSQL, so every standalone
+// SET NOT NULL (anything that is not an ADD COLUMN) is flagged.
 const SET_NOT_NULL_RE = /\bSET\s+NOT\s+NULL\b/i;
 // Column-type changes rewrite (and lock) the whole table in most engines: Postgres
 // `ALTER COLUMN x [SET DATA] TYPE …` and MySQL `MODIFY [COLUMN] …`.
@@ -57,8 +58,7 @@ export function classifyMigrationLine(
   }
   if (
     SET_NOT_NULL_RE.test(body) &&
-    !ADD_COLUMN_RE.test(body) &&
-    !DEFAULT_RE.test(body)
+    !ADD_COLUMN_RE.test(body)
   ) {
     return "set-not-null";
   }
