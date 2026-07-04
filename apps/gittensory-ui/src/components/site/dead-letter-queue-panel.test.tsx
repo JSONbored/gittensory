@@ -365,6 +365,44 @@ describe("DeadLetterQueuePanel row actions and purge", () => {
     await waitFor(() => expect(replayButtons[0].disabled).toBe(false));
   });
 
+  it("REGRESSION: two different rows in flight at once don't clear each other's pending state", async () => {
+    // A single shared "pendingRowId" (rather than a Set) would have row A's completion clear row B's
+    // still-in-flight indicator too, since they'd share one variable -- letting a duplicate click fire
+    // against row B's active request.
+    apiFetch.mockResolvedValueOnce({ ok: true, data: SAMPLE_PAGE }); // initial GET
+    render(<DeadLetterQueuePanel />);
+    await screen.findByText("github-webhook");
+
+    let resolveRowA: (value: unknown) => void = () => {};
+    apiFetch.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRowA = resolve;
+      }),
+    );
+    let resolveRowB: (value: unknown) => void = () => {};
+    apiFetch.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRowB = resolve;
+      }),
+    );
+
+    const replayButtons = screen.getAllByRole("button", { name: "Replay" }) as HTMLButtonElement[];
+    fireEvent.click(replayButtons[0]); // row A (job id 2) starts
+    await waitFor(() => expect(replayButtons[0].disabled).toBe(true));
+    fireEvent.click(replayButtons[1]); // row B (job id 1) starts while A is still in flight
+    await waitFor(() => expect(replayButtons[1].disabled).toBe(true));
+
+    resolveRowA({ ok: true, data: { ok: true, id: 2 } }); // A resolves first
+    apiFetch.mockResolvedValueOnce({ ok: true, data: SAMPLE_PAGE }); // A's refetch
+    await waitFor(() => expect(replayButtons[0].disabled).toBe(false));
+    // B is STILL in flight -- its own disabled state must be untouched by A's completion.
+    expect(replayButtons[1].disabled).toBe(true);
+
+    resolveRowB({ ok: true, data: { ok: true, id: 1 } });
+    apiFetch.mockResolvedValueOnce({ ok: true, data: SAMPLE_PAGE }); // B's refetch
+    await waitFor(() => expect(replayButtons[1].disabled).toBe(false));
+  });
+
   it("Purge all opens a confirmation dialog with the expected warning text", async () => {
     apiFetch.mockResolvedValueOnce({ ok: true, data: SAMPLE_PAGE });
     render(<DeadLetterQueuePanel />);

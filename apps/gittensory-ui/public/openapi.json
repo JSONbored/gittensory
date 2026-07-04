@@ -16199,6 +16199,18 @@
           {
             "GittensorySessionCookie": []
           }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "example": "812"
+            },
+            "required": true,
+            "description": "Dead-letter job id.",
+            "name": "id",
+            "in": "path"
+          }
         ]
       }
     },
@@ -16240,6 +16252,18 @@
           },
           {
             "GittensorySessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "example": "812"
+            },
+            "required": true,
+            "description": "Dead-letter job id.",
+            "name": "id",
+            "in": "path"
           }
         ]
       }

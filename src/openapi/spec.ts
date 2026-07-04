@@ -739,6 +739,11 @@ export function buildOpenApiSpec() {
   registry.registerPath({
     method: "post",
     path: "/v1/app/selfhost/queue/dead/{id}/replay",
+    request: {
+      params: z.object({
+        id: z.string().openapi({ param: { description: "Dead-letter job id." }, example: "812" }),
+      }),
+    },
     responses: {
       200: { description: "Job replayed", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
       400: { description: "Invalid job id" },
@@ -751,6 +756,11 @@ export function buildOpenApiSpec() {
   registry.registerPath({
     method: "delete",
     path: "/v1/app/selfhost/queue/dead/{id}",
+    request: {
+      params: z.object({
+        id: z.string().openapi({ param: { description: "Dead-letter job id." }, example: "812" }),
+      }),
+    },
     responses: {
       200: { description: "Job deleted", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
       400: { description: "Invalid job id" },

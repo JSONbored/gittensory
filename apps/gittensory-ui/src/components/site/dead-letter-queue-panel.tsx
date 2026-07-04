@@ -152,10 +152,14 @@ function DeadLetterQueueTable({
       return next;
     });
 
-  const [pendingRowId, setPendingRowId] = useState<number | null>(null);
+  // A Set, not a single id: two DIFFERENT rows can have requests in flight at once (the user clicks Replay on
+  // row A, then Delete on row B before A resolves). A single shared "pendingRowId" would have row A's own
+  // completion clear row B's still-in-flight indicator too, letting a duplicate click fire against row B's
+  // active request.
+  const [pendingRowIds, setPendingRowIds] = useState<Set<number>>(new Set());
 
   async function runJobAction(id: number, action: "replay" | "delete") {
-    setPendingRowId(id);
+    setPendingRowIds((current) => new Set(current).add(id));
     const result = await apiFetch<{ ok: true; id: number }>(
       apiUrl(buildDeadLetterJobActionPath(id, action)),
       {
@@ -164,7 +168,11 @@ function DeadLetterQueueTable({
         credentials: "include",
       },
     );
-    setPendingRowId(null);
+    setPendingRowIds((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
     if (result.ok) {
       toast.success(action === "replay" ? "Job queued for replay" : "Job deleted", {
         description: `Job #${id} ${action === "replay" ? "was requeued." : "was removed from the dead-letter queue."}`,
@@ -235,13 +243,13 @@ function DeadLetterQueueTable({
                     <div className="flex flex-wrap items-center gap-2">
                       <StateActionButton
                         onClick={() => void runJobAction(item.id, "replay")}
-                        disabled={pendingRowId === item.id}
+                        disabled={pendingRowIds.has(item.id)}
                       >
                         Replay
                       </StateActionButton>
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
-                          <StateActionButton disabled={pendingRowId === item.id}>
+                          <StateActionButton disabled={pendingRowIds.has(item.id)}>
                             Delete
                           </StateActionButton>
                         </AlertDialogTrigger>
