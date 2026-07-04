@@ -128,6 +128,11 @@ describe("opportunity metadata signals", () => {
     expect(
       computeMetadataFeasibility({ ...base, updatedAt: "not-a-date", createdAt: null }, NOW),
     ).toBeLessThan(computeMetadataFeasibility(base, NOW));
+    // A present-but-unparseable updatedAt must fall through to a valid createdAt, not shadow it into the stale
+    // sentinel: a fresh createdAt scores strictly higher than having no usable timestamp at all.
+    expect(
+      computeMetadataFeasibility({ ...base, updatedAt: "not-a-date", createdAt: "2026-07-03T00:00:00.000Z" }, NOW),
+    ).toBeGreaterThan(computeMetadataFeasibility({ ...base, updatedAt: "not-a-date", createdAt: null }, NOW));
   });
 
   it("treats blank titles as maximum dup risk and exact title matches as overlaps", () => {

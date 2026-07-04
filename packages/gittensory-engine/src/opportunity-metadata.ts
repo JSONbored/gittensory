@@ -78,13 +78,16 @@ const STALE_AGE_DAYS = 9999;
 
 /* v8 ignore start -- Internal timestamp helpers mirror freshness semantics; exercised via exported ranker paths. */
 function pickMetadataTimestamp(issue: MetadataCandidateIssue): string {
+  // Mirror freshness semantics (opportunity-freshness's pickTimestamp): only commit to a timestamp that actually
+  // parses. Without the guard, a present-but-unparseable updatedAt shadows a valid createdAt, so issueAgeDays
+  // hits the STALE_AGE_DAYS sentinel and a genuinely fresh issue is scored as maximally stale.
   if (typeof issue.updatedAt === "string") {
     const updated = issue.updatedAt.trim();
-    if (updated) return updated;
+    if (updated && Number.isFinite(Date.parse(updated))) return updated;
   }
   if (typeof issue.createdAt === "string") {
     const created = issue.createdAt.trim();
-    if (created) return created;
+    if (created && Number.isFinite(Date.parse(created))) return created;
   }
   return "";
 }
