@@ -965,12 +965,17 @@ describe("closeConcreteEvidence — concrete-evidence exemption from the close-p
 
   it("a base conflict (isConflict) is concrete evidence even with ciState passed (the isConflict OR-arm, ciFailed false)", () => {
     const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "passed", pr: { labels: [], mergeableState: "dirty" } }));
-    expect(closeOf(plan)).toMatchObject({ closeKind: "heuristic", closeConcreteEvidence: true });
+    // closeRequiresMergeableState is the ONLY non-CI close reason the approval queue's accept-time recheck has a
+    // cheap live signal for (mergeable_state) -- it must be true here, and ONLY here among the non-CI reasons,
+    // so a duplicate/slop/blocker-only close (below) is never subjected to that recheck (gate review finding).
+    expect(closeOf(plan)).toMatchObject({ closeKind: "heuristic", closeConcreteEvidence: true, closeRequiresMergeableState: true });
   });
 
-  it("a deterministic linked-issue-overlap duplicate (linkedDuplicateCount > 0) is concrete evidence", () => {
+  it("a deterministic linked-issue-overlap duplicate (linkedDuplicateCount > 0) is concrete evidence, but NOT conflict-justified", () => {
     const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "passed", pr: { labels: [], linkedDuplicateCount: 1 } }));
-    expect(closeOf(plan)).toMatchObject({ closeKind: "heuristic", closeConcreteEvidence: true });
+    // Concrete evidence (duplicate) does NOT imply closeRequiresMergeableState -- that field is specifically
+    // about whether a base conflict was part of the reason, not whether the close is "trustworthy" in general.
+    expect(closeOf(plan)).toMatchObject({ closeKind: "heuristic", closeConcreteEvidence: true, closeRequiresMergeableState: false });
   });
 
   it("linkedDuplicateCount absent (nullish ?? 0) does NOT count as concrete on its own", () => {
