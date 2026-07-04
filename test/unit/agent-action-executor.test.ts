@@ -43,6 +43,7 @@ import { createInstallationToken } from "../../src/github/app";
 import { fetchLiveCiAggregate, refreshInstallationHealthForInstallation } from "../../src/github/backfill";
 import {
   actionParams,
+  clearInstallationHealthRefreshCooldownForTest,
   clearWritePermissionDenialCooldownForTest,
   executeAgentMaintenanceActions,
   executeIssueMaintenanceActions,
@@ -93,6 +94,7 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
       liveHeadSha: args.expectedHeadSha ?? null,
       liveState: "open",
     }));
+    clearInstallationHealthRefreshCooldownForTest();
     clearWritePermissionDenialCooldownForTest();
     resetMetrics();
   });
@@ -309,7 +311,7 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
   it("LIVE merge is denied when live CI has since turned failing (#2128)", async () => {
     const env = createTestEnv({});
     vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({ ciState: "failed", hasPending: false, hasVisiblePending: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null });
-    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ installationId: 127 }), [merge]);
     expect(outcomes[0]?.outcome).toBe("denied");
     expect(outcomes[0]?.detail).toContain("live CI is no longer passing (now: failed)");
     expect(mergePullRequest).not.toHaveBeenCalled();
@@ -728,6 +730,26 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect(outcomes[0]?.outcome).toBe("error");
     expect(outcomes[0]?.detail).toMatch(/not mergeable/i);
     expect((await auditFor(env, "merge"))?.outcome).toBe("error");
+  });
+
+  it("REGRESSION: a generic GitHub 403 merge rejection does not immediately pin merge_blocked_sha", async () => {
+    const env = createTestEnv({});
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "c" }, head: { sha: "sha7" }, labels: [], body: "" });
+    vi.mocked(mergePullRequest).mockRejectedValueOnce(Object.assign(new Error("Resource not accessible by integration"), { status: 403 }));
+
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
+
+    expect(outcomes[0]).toMatchObject({ actionClass: "merge", outcome: "error" });
+    const row = await env.DB.prepare(
+      "select merge_attempt_count as mergeAttemptCount, merge_blocked_sha as mergeBlockedSha, merge_blocked_reason as mergeBlockedReason from pull_requests where repo_full_name = ? and number = ?",
+    )
+      .bind("owner/repo", 7)
+      .first<{ mergeAttemptCount: number; mergeBlockedSha: string | null; mergeBlockedReason: string | null }>();
+    expect(row).toEqual({ mergeAttemptCount: 1, mergeBlockedSha: null, mergeBlockedReason: null });
+    const blocked = await env.DB.prepare("select count(*) as count from audit_events where event_type = ?")
+      .bind("agent.action.merge_blocked")
+      .first<{ count: number }>();
+    expect(blocked?.count).toBe(0);
   });
 
   it("opportunistically refreshes installation health when a PR-write mutation fails with a 403 (#2265)", async () => {
