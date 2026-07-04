@@ -2171,8 +2171,13 @@ export function compileFocusManifestPolicy(
 
 function buildPolicyEntryGuidance(manifest: FocusManifest): string[] {
   const guidance: string[] = [];
-  if (manifest.wantedPaths.length > 0) {
-    guidance.push(`Focus changes on maintainer-wanted areas: ${manifest.wantedPaths.slice(0, 5).join(", ")}.`);
+  // Build the sentence from the public-safe subset (as preferredLabels and publicNotes below already do, and
+  // as the sibling buildPolicyContributionLanes does for preferredPaths). Joining the raw wantedPaths means a
+  // single reserved-word path (e.g. `src/ranking/`) fails the all-or-nothing public-safety filter at the end
+  // and silently drops the entire focus-areas guidance line instead of surfacing the safe paths.
+  const safeWantedPaths = manifest.wantedPaths.filter(isFocusManifestPublicSafe);
+  if (safeWantedPaths.length > 0) {
+    guidance.push(`Focus changes on maintainer-wanted areas: ${safeWantedPaths.slice(0, 5).join(", ")}.`);
   }
   if (manifest.linkedIssuePolicy === "required") guidance.push("Link a tracked issue before opening a pull request.");
   else if (manifest.linkedIssuePolicy === "preferred") guidance.push("Linking a tracked issue is preferred before opening a pull request.");

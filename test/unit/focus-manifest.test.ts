@@ -458,6 +458,15 @@ describe("compileFocusManifestPolicy", () => {
     expect(policy.publicSafe.issueDiscoveryPolicy).toBe("encouraged");
   });
 
+  it("keeps the focus-areas guidance for the public-safe wanted paths when one wanted path is a reserved word", () => {
+    const policy = compileFocusManifestPolicy(REPO, parseFocusManifest({ wantedPaths: ["src/api/", "src/ranking/"] }), opts);
+    const guidance = policy.publicSafe.entryGuidance.join(" ");
+    // The safe path still surfaces; only the reserved-word path is dropped — the entire guidance line is no
+    // longer discarded just because one wanted path is public-unsafe (consistent with contributionLanes).
+    expect(guidance).toContain("Focus changes on maintainer-wanted areas: src/api/.");
+    expect(guidance).not.toMatch(/ranking/i);
+  });
+
   it("treats legacy blockedPaths-only manifests as absent", () => {
     const policy = compileFocusManifestPolicy(REPO, parseFocusManifest({ blockedPaths: ["infra/"] }), opts);
     expect(policy.present).toBe(false);
