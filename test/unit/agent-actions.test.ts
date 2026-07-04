@@ -622,11 +622,11 @@ describe("planAgentMaintenanceActions (#778)", () => {
       expect(label?.label).toBe(AGENT_LABEL_CHANGES);
     });
 
-    it("DEFERS every action while CI is still pending (settle-before-decide)", () => {
+    it("DEFERS success-path actions while CI is still pending (settle-before-decide)", () => {
       expect(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto", approve: "auto", merge: "auto", close: "auto" }, ciState: "pending", pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }))).toEqual([]);
     });
 
-    it("DEFERS every action when optional visible CI is still pending after required CI passed", () => {
+    it("DEFERS success-path actions when optional visible CI is still pending after required CI passed", () => {
       expect(
         planAgentMaintenanceActions(
           input({
@@ -639,6 +639,32 @@ describe("planAgentMaintenanceActions (#778)", () => {
           }),
         ),
       ).toEqual([]);
+    });
+
+    it("CLOSES a base-conflicting contributor PR even while CI is still pending (#2968)", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto", merge: "auto", close: "auto" }, ciState: "pending", pr: { labels: [], mergeableState: "dirty", reviewDecision: "APPROVED" } }));
+      const cls = classes(plan);
+      expect(cls).not.toContain("approve");
+      expect(cls).not.toContain("merge");
+      expect(cls).toContain("close");
+      expect(plan.find((a) => a.actionClass === "close")).toMatchObject({
+        closeKind: "heuristic",
+        closeConcreteEvidence: true,
+        closeRequiresMergeableState: true,
+      });
+    });
+
+    it("CLOSES a blocking gate failure even when optional visible CI is still pending", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { approve: "auto", merge: "auto", close: "auto" }, ciState: "passed", ciHasPending: true, gateBlockerCodes: ["ai_consensus_defect"], blockerTitles: ["AI review found a defect"], pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const cls = classes(plan);
+      expect(cls).not.toContain("approve");
+      expect(cls).not.toContain("merge");
+      expect(cls).toContain("close");
+      expect(plan.find((a) => a.actionClass === "close")).toMatchObject({
+        closeKind: "heuristic",
+        closeConcreteEvidence: false,
+        closeRequiresMergeableState: false,
+      });
     });
 
     it("HOLDS a contributor's gate-passing PR whose CI is UNVERIFIED — NEVER closes it (fork workflows awaiting approval) (#harm-stop)", () => {

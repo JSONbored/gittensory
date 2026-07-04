@@ -558,16 +558,29 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   if (input.conclusion === "skipped") return actions;
 
   // CI state over ALL of the PR's checks (required OR not — codecov/patch included) — reviewbot's ci_red
-  // parity. A red CI is NEVER approved/merged and is itself a close-worthy signal (non-owner); while CI is
-  // still running we take NO action and wait for the check-completion webhook to re-run this planner.
+  // parity. A red CI is NEVER approved/merged and is itself a close-worthy signal (non-owner). While CI is
+  // still running, never approve or merge, but do not let unrelated pending checks mask terminal close reasons
+  // that are already known now (a base conflict or a blocking gate verdict).
   const ciPassed = input.ciState === "passed";
   const ciFailed = input.ciState === "failed";
-  // Settle-before-decide: never approve / merge / close on a half-finished CI run.
-  if (input.ciState === "pending" || input.ciHasPending === true) return actions;
+  const ciPending = input.ciState === "pending" || input.ciHasPending === true;
 
   // The gate verdict is authoritative. Green CI is still required for merge/approve, but it does not rewrite an AI
   // or review-thread blocker into success once the gate has classified it as blocking.
   const conclusion: GateCheckConclusion = input.conclusion;
+  const isConflict = input.pr.mergeableState === "dirty"; // conflicts with base — can't merge as-is
+  const isContributor = !input.authorIsOwner && !input.authorIsAdmin && !input.authorIsAutomationBot;
+  // The owner-close exemption is PER-REPO CONFIGURABLE (#configurable-owner-close): by default the repo owner's
+  // own PRs are exempt from auto-close (closeOwnerAuthors !== true ⇒ merge or manual-hold only), but a maintainer
+  // can opt in to closing them like a contributor's. #2133 folds the fleet-operator admin allowlist into the same
+  // trusted-identity exemption (a login honored as a maintainer everywhere else in the codebase must not be
+  // treated as an ordinary contributor here). Automation bots stay exempt regardless (a noise heuristic must not
+  // kill a recurring maintainer-managed accumulator).
+  const closeEligible = isContributor || ((input.authorIsOwner || input.authorIsAdmin) && input.closeOwnerAuthors === true);
+  const pendingCiTerminalClose = closeEligible && acting("close") && (conclusion === "failure" || isConflict);
+  // Settle-before-decide: pending CI suppresses success-path work, but not terminal close work. Otherwise a PR
+  // with a known base conflict or blocking gate verdict can sit open forever behind an unrelated stuck check.
+  if (ciPending && !pendingCiTerminalClose) return actions;
 
   // Only SUCCESS earns the review-good auto-merge. A NEUTRAL gate flows (no longer silently returns []) but is
   // NOT auto-merged — it falls through to a HELD + labeled state for review. (Auto-merging a neutral / grace
@@ -596,16 +609,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // would-approve/would-merge dispositions into a manual hold.
   const ciUnverified = input.ciState === "unverified";
   const reviewGood = gatePassing && ciPassed;
-  const isContributor = !input.authorIsOwner && !input.authorIsAdmin && !input.authorIsAutomationBot;
-  // The owner-close exemption is PER-REPO CONFIGURABLE (#configurable-owner-close): by default the repo owner's
-  // own PRs are exempt from auto-close (closeOwnerAuthors !== true ⇒ merge or manual-hold only), but a maintainer
-  // can opt in to closing them like a contributor's. #2133 folds the fleet-operator admin allowlist into the same
-  // trusted-identity exemption (a login honored as a maintainer everywhere else in the codebase must not be
-  // treated as an ordinary contributor here). Automation bots stay exempt regardless (a noise heuristic must not
-  // kill a recurring maintainer-managed accumulator).
-  const closeEligible = isContributor || ((input.authorIsOwner || input.authorIsAdmin) && input.closeOwnerAuthors === true);
   const mergeableClean = input.pr.mergeableState === "clean";
-  const isConflict = input.pr.mergeableState === "dirty"; // conflicts with base — can't merge as-is
   // RC3: a prior merge attempt failed terminally for THIS exact head SHA (403/405/409/conflict) → never re-plan
   // the merge; it can't complete for this commit. A new commit makes the live head differ from mergeBlockedSha.
   const mergeTerminallyBlocked = input.pr.mergeBlockedSha != null && input.pr.headSha != null && input.pr.mergeBlockedSha === input.pr.headSha;
