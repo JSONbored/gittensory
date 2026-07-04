@@ -359,7 +359,7 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   },
   {
     name: "SENTRY_DSN",
-    firstReference: "src/selfhost/sentry.ts:365",
+    firstReference: "src/selfhost/sentry.ts:370",
   },
   {
     name: "SENTRY_ENVIRONMENT",
@@ -371,11 +371,11 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   },
   {
     name: "SENTRY_SERVER_NAME",
-    firstReference: "src/selfhost/sentry.ts:383",
+    firstReference: "src/selfhost/sentry.ts:388",
   },
   {
     name: "SENTRY_TRACES_SAMPLE_RATE",
-    firstReference: "src/selfhost/sentry.ts:171",
+    firstReference: "src/selfhost/sentry.ts:176",
   },
   {
     name: "SETUP_OUTPUT_PATH",
@@ -478,11 +478,11 @@ export const SELFHOST_ENV_REFERENCE_MARKDOWN = [
   "| `SELFHOST_BUNDLE_ALL` | `scripts/build-selfhost.mjs:13` |",
   "| `SELFHOST_SERVICE` | `scripts/smoke-observability-traces.mjs:5` |",
   "| `SELFHOST_SETUP_TOKEN` | `src/selfhost/preflight.ts:186` |",
-  "| `SENTRY_DSN` | `src/selfhost/sentry.ts:365` |",
+  "| `SENTRY_DSN` | `src/selfhost/sentry.ts:370` |",
   "| `SENTRY_ENVIRONMENT` | `src/selfhost/otel.ts:60` |",
   "| `SENTRY_RELEASE` | `src/selfhost/otel.ts:62` |",
-  "| `SENTRY_SERVER_NAME` | `src/selfhost/sentry.ts:383` |",
-  "| `SENTRY_TRACES_SAMPLE_RATE` | `src/selfhost/sentry.ts:171` |",
+  "| `SENTRY_SERVER_NAME` | `src/selfhost/sentry.ts:388` |",
+  "| `SENTRY_TRACES_SAMPLE_RATE` | `src/selfhost/sentry.ts:176` |",
   "| `SETUP_OUTPUT_PATH` | `src/server.ts:833` |",
   "| `SLACK_WEBHOOK_URL` | `src/services/notify-discord.ts:173` |",
 ].join("\n");
