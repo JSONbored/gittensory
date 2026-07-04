@@ -375,3 +375,24 @@ test("scanPatch does not flag a truncated Notion integration secret", () => {
   const findings = scanPatch("src/config.ts", hunk([`const notion = "${truncated}";`]));
   assert.equal(findings.length, 0);
 });
+
+test("scanPatch flags a Mailgun API key with high confidence", () => {
+  // Real Mailgun private keys use a 32-char alphanumeric body, not hex-only.
+  const fakeMailgunKey = ["key-", "3ax6xnjp29jd6fds4gc373sgvjxteol0"].join("");
+  const findings = scanPatch("src/config.ts", hunk([`const mg = "${fakeMailgunKey}";`]));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "mailgun_api_key");
+  assert.equal(findings[0].confidence, "high");
+});
+
+test("scanPatch does not flag a truncated Mailgun API key", () => {
+  const truncated = "key-" + "a".repeat(31);
+  const findings = scanPatch("src/config.ts", hunk([`const mg = "${truncated}";`]));
+  assert.equal(findings.length, 0);
+});
+
+test("scanPatch does not flag a Mailgun-shaped key with an invalid body character", () => {
+  const invalid = "key-" + "a".repeat(31) + "_";
+  const findings = scanPatch("src/config.ts", hunk([`const mg = "${invalid}";`]));
+  assert.equal(findings.length, 0);
+});

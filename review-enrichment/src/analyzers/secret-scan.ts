@@ -164,6 +164,12 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // Mailgun private API key: `key-` + 32 alphanumeric chars.
+    kind: "mailgun_api_key",
+    re: /\bkey-[0-9A-Za-z]{32}\b/,
+    confidence: "high",
+  },
+  {
     kind: "private_key",
     re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/,
     confidence: "high",
