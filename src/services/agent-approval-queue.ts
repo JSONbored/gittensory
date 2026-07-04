@@ -169,13 +169,18 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
     }
   }
 
-  // Re-derive live justification for a staged MERGE at accept time. auto_with_approval rows have no expiry, so
-  // CI can flip red, the base can go dirty, or a reviewer can request changes while the row just sits waiting for
-  // a maintainer — none of which move the head SHA, so the check above alone would not catch it. Best-effort: a
-  // failed live read fails OPEN on that specific check (the executor's own mutation call independently needs a
-  // valid token/state and will fail cleanly if something is actually wrong). (#2126)
+  // Re-derive live justification for a staged MERGE or non-CI heuristic CLOSE at accept time. auto_with_approval
+  // rows have no expiry, so CI can flip red, the base can go dirty/clean, or a reviewer can request/unrequest
+  // changes while the row just sits waiting for a maintainer — none of which move the head SHA, so the check above
+  // alone would not catch it. Best-effort: a failed live read fails OPEN on that specific check (the executor's own
+  // mutation call independently needs a valid token/state and will fail cleanly if something is actually wrong).
+  // (#2126, #2478)
   let liveParams: AgentPendingActionParams = pending.params;
-  if (pending.actionClass === "merge" && pr?.headSha) {
+  const shouldRecheckLiveDisposition =
+    pr?.headSha &&
+    (pending.actionClass === "merge" ||
+      (pending.actionClass === "close" && pending.params.closeKind === "heuristic" && pending.params.closeRequiresCiState === "not_required"));
+  if (shouldRecheckLiveDisposition) {
     const token = await createInstallationToken(env, pending.installationId).catch(() => undefined);
     const admissionKey = githubRateLimitAdmissionKeyForToken(env, token, pending.installationId);
     // Promise.allSettled, not Promise.all: each live re-check is independently best-effort (per the comment
@@ -197,13 +202,17 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
     const mergeableState = mergeableResult.status === "fulfilled" ? mergeableResult.value : undefined;
     const reviewDecision = reviewResult.status === "fulfilled" ? reviewResult.value : undefined;
     const staleReason =
-      ciState !== undefined && ciState !== "passed"
-        ? `live CI is no longer passing (now: ${ciState})`
-        : mergeableState === "dirty"
-          ? "the base branch now conflicts (mergeable_state: dirty)"
-          : reviewDecision === "CHANGES_REQUESTED"
-            ? "a reviewer has since requested changes"
-            : null;
+      pending.actionClass === "merge"
+        ? ciState !== undefined && ciState !== "passed"
+          ? `live CI is no longer passing (now: ${ciState})`
+          : mergeableState === "dirty"
+            ? "the base branch now conflicts (mergeable_state: dirty)"
+            : reviewDecision === "CHANGES_REQUESTED"
+              ? "a reviewer has since requested changes"
+              : null
+        : ciState === "passed" && mergeableState === "clean" && reviewDecision !== "CHANGES_REQUESTED"
+          ? "the non-CI heuristic close no longer has a live stale-disposition signal"
+          : null;
     if (staleReason) {
       await setPendingAgentActionStatus(env, pending.id, { status: "rejected", decidedBy: input.decidedBy });
       await recordAuditEvent(env, {
