@@ -626,7 +626,7 @@ describe("resolveReesAnalyzers", () => {
       resolveReesAnalyzers(
         env({
           REES_ANALYZERS:
-            "dependency,lockfileDrift,secret,license,installScript,heavyDependency,actionPin,eol,redos,provenance,codeowners,secretLog,assetWeight,typosquat,commitSignature,iacMisconfig,nativeBuild,history,docCommentDrift,duplication,churnHotspot,blameLink,approvalIntegrity,ciCheckSignals,undocumentedExport,staleBranch,commitHygiene,pendingReviewRequests,testRatio",
+            "dependency,lockfileDrift,secret,license,installScript,heavyDependency,actionPin,eol,redos,provenance,codeowners,secretLog,assetWeight,typosquat,commitSignature,iacMisconfig,nativeBuild,history,docCommentDrift,duplication,churnHotspot,blameLink,approvalIntegrity,ciCheckSignals,undocumentedExport,staleBranch,commitHygiene,pendingReviewRequests,testRatio,migrationSafety",
         }),
       ),
     ).toEqual([
@@ -659,6 +659,7 @@ describe("resolveReesAnalyzers", () => {
       "commitHygiene",
       "pendingReviewRequests",
       "testRatio",
+      "migrationSafety",
     ]);
   });
 

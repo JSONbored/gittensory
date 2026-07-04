@@ -394,6 +394,14 @@ export interface TestRatioFinding {
   belowThreshold: boolean;
 }
 
+/** A risky schema operation on an added migration-SQL line — a change that can break running deployments
+ *  mid-rollout (#2022, part of #1499). Reports the location + rule kind only, never SQL content. */
+export interface MigrationSafetyFinding {
+  file: string;
+  line: number;
+  kind: "drop" | "rename" | "not-null-no-default" | "blocking-rewrite";
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -425,6 +433,7 @@ export interface BriefFindings {
   commitHygiene?: CommitHygieneFinding[];
   pendingReviewRequests?: PendingReviewRequestFinding[];
   testRatio?: TestRatioFinding[];
+  migrationSafety?: MigrationSafetyFinding[];
 }
 
 /** A JSDoc/TSDoc block whose `@param` tags name parameters the adjacent function no longer declares — a

@@ -751,6 +751,28 @@ export const REES_ANALYZERS = [
         "A cheap, always-available complement to the coverage-delta analyzer: works even when no CI coverage artifact exists.",
     },
   },
+  {
+    name: "migrationSafety",
+    title: "SQL migration safety",
+    category: "config",
+    cost: "local",
+    defaultEnabled: true,
+    profiles: ["fast", "balanced", "deep"],
+    requires: ["files"],
+    limits: {
+      maxFindings: 20,
+      maxLineChars: 2000,
+    },
+    docs: {
+      summary:
+        "Flags risky schema operations in added migration SQL: drops, renames, non-nullable columns without a default, and blocking table rewrites.",
+      looksAt: "Added lines in migration paths (migrations/, db/migrate/, *.sql).",
+      reports: "File, line, and public-safe rule kind — never SQL content.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Detection is line-anchored single-statement shapes only; statements split across lines are skipped rather than tracked with cross-line state.",
+    },
+  },
 ] as const satisfies readonly ReesAnalyzerDoc[];
 
 export const REES_ANALYZER_NAMES = REES_ANALYZERS.map((analyzer) => analyzer.name);

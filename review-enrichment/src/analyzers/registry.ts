@@ -25,6 +25,7 @@ import { secretAnalyzer } from "./secret/descriptor.js";
 import { scanSecretLog } from "./secret-log.js";
 import { scanStaleBranch } from "./stale-branch.js";
 import { scanTestRatio } from "./test-ratio.js";
+import { scanMigrationSafety } from "./migration-safety.js";
 import { scanTyposquat } from "./typosquat.js";
 import { scanUndocumentedExport } from "./undocumented-export.js";
 import type {
@@ -708,6 +709,47 @@ export const ANALYZER_DESCRIPTORS = [
       return lines;
     },
     run: (req) => scanTestRatio(req),
+  }),
+  descriptor({
+    name: "migrationSafety",
+    title: "SQL migration safety",
+    category: "config",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: 20, maxLineChars: 2000 },
+    docs: {
+      summary:
+        "Flags risky schema operations in added migration SQL: drops, renames, non-nullable columns without a default, and blocking table rewrites.",
+      looksAt: "Added lines in migration paths (migrations/, db/migrate/, *.sql).",
+      reports: "File, line, and public-safe rule kind — never SQL content.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Detection is line-anchored single-statement shapes only; statements split across lines are skipped rather than tracked with cross-line state.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const explain = (kind: (typeof findings)[number]["kind"]): string => {
+        switch (kind) {
+          case "drop":
+            return "drops a table or column; still-running deployments that read the old schema break immediately";
+          case "rename":
+            return "renames a table or column in one step; code still using the old name fails until fully rolled out";
+          case "not-null-no-default":
+            return "adds a NOT NULL column without a DEFAULT; inserts from not-yet-updated code omit it and fail";
+          case "blocking-rewrite":
+            return "changes a column type, which rewrites (and locks) the table in most engines while it runs";
+        }
+      };
+      const lines = ["### SQL migration safety (deploy-breaking schema changes)"];
+      for (const item of findings) {
+        lines.push(
+          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} — ${explain(item.kind)}`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal }) => scanMigrationSafety(req, signal),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 

@@ -440,6 +440,7 @@ export function renderBrief(
   lines.push(...renderDescriptorSection("commitHygiene", findings.commitHygiene));
   lines.push(...renderDescriptorSection("pendingReviewRequests", findings.pendingReviewRequests));
   lines.push(...renderDescriptorSection("testRatio", findings.testRatio));
+  lines.push(...renderDescriptorSection("migrationSafety", findings.migrationSafety));
 
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 
