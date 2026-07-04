@@ -84,6 +84,7 @@ describe("gittensory-miner claim ledger (#2314)", () => {
     ledger.recordClaim({ repoFullName: "o/a", issueNumber: 9, note: "v1" });
     const released = ledger.releaseClaim("o/a", 9);
     expect(released?.status).toBe("released");
+    expect(ledger.releaseClaim("o/a", 9)).toBeNull();
     // Re-claim after release: same single row, back to active, note refreshed.
     const reclaimed = ledger.recordClaim({ repoFullName: "o/a", issueNumber: 9, note: "v2" });
     expect(reclaimed).toMatchObject({ status: "active", note: "v2", id: released?.id });

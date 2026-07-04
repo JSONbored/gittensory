@@ -106,7 +106,7 @@ export function openClaimLedger(dbPath = resolveClaimLedgerDbPath()) {
     "SELECT * FROM miner_claims WHERE repo_full_name = ? AND issue_number = ?",
   );
   const releaseStatement = db.prepare(
-    "UPDATE miner_claims SET status = 'released' WHERE repo_full_name = ? AND issue_number = ?",
+    "UPDATE miner_claims SET status = 'released' WHERE repo_full_name = ? AND issue_number = ? AND status = 'active'",
   );
   const listAllStatement = db.prepare("SELECT * FROM miner_claims ORDER BY id ASC");
   const listRepoStatement = db.prepare(
@@ -138,7 +138,8 @@ export function openClaimLedger(dbPath = resolveClaimLedgerDbPath()) {
     releaseClaim(repoFullName, issueNumber) {
       const normalizedRepo = normalizeRepoFullName(repoFullName);
       const normalizedIssue = normalizeIssueNumber(issueNumber);
-      releaseStatement.run(normalizedRepo, normalizedIssue);
+      const result = releaseStatement.run(normalizedRepo, normalizedIssue);
+      if (result.changes === 0) return null;
       const row = getStatement.get(normalizedRepo, normalizedIssue);
       return row ? rowToClaim(row) : null;
     },
