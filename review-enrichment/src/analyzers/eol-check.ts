@@ -109,9 +109,14 @@ export function extractVersionPins(
         const version = leadingVersion(line);
         if (version) pins.push({ file: file.path, product: "go", version });
       } else if (base === "go.mod") {
+        // Module language version (`go 1.21`) and optional toolchain pin (`toolchain go1.22.0`).
         const match = /^go\s+(\d+\.\d+)/.exec(line);
         if (match)
           pins.push({ file: file.path, product: "go", version: match[1]! });
+        // `toolchain go1.22.0` — no space after `go`; capture full leading version (may include patch).
+        const toolchain = /^toolchain\s+go(\d+(?:\.\d+)*)/.exec(line);
+        if (toolchain)
+          pins.push({ file: file.path, product: "go", version: toolchain[1]! });
       }
     }
   }

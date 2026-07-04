@@ -44,6 +44,17 @@ test("extractVersionPins reads .nvmrc and go.mod pins", () => {
   ]);
 });
 
+test("extractVersionPins reads go.mod toolchain directives", () => {
+  // Go 1.21+ `toolchain go1.22.0` pins the toolchain independently of the `go` language line.
+  assert.deepEqual(
+    extractVersionPins([added("go.mod", "go 1.21", "toolchain go1.22.0")]),
+    [
+      { file: "go.mod", product: "go", version: "1.21" },
+      { file: "go.mod", product: "go", version: "1.22.0" },
+    ],
+  );
+});
+
 test("extractVersionPins reads .node-version pins like .nvmrc", () => {
   // nodenv/asdf use `.node-version` with the same leading-version format as `.nvmrc`.
   assert.deepEqual(extractVersionPins([added(".node-version", "20.11.0")]), [
