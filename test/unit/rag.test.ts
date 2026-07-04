@@ -45,6 +45,22 @@ describe("rag: code-not-content filtering (free-tier cost guard)", () => {
   it("indexes source code + docs, skips content/data/deps/binaries", () => {
     expect(classifyRepoFile("src/core/runtime.ts")).toBe("code");
     expect(classifyRepoFile("scripts/build.mjs")).toBe("code");
+    // additional source languages (parity with the changed-file source classifiers)
+    for (const p of [
+      "lib/widget.dart",
+      "scripts/hook.lua",
+      "lib/app.ex",
+      "test/app_test.exs",
+      "src/core.clj",
+      "web/app.cljs",
+      "src/Main.hs",
+      "analysis/model.jl",
+      "src/server.nim",
+      "src/fast.zig",
+      "pipeline/Jenkinsfile.groovy",
+    ]) {
+      expect(classifyRepoFile(p)).toBe("code");
+    }
     expect(classifyRepoFile("README.md")).toBe("doc");
     expect(classifyRepoFile("docs/architecture.mdx")).toBe("doc");
     // long-form doc spellings (parity with signals/path-matchers DOCS_EXTENSIONS)

@@ -122,7 +122,7 @@ const SKIP_FILE_RE =
 const BINARY_EXT_RE =
   /\.(png|jpe?g|gif|webp|avif|svg|ico|pdf|zip|gz|tgz|tar|wasm|woff2?|ttf|eot|mp4|mov|mp3|wav|bin|exe|dll|so|dylib|node|parquet|onnx)$/i;
 const CODE_EXT_RE =
-  /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|kts|rb|php|c|h|cc|cpp|hpp|cs|swift|scala|sh|bash|zsh|sql|graphql|proto|toml|yaml|yml|json|jsonc|css|scss|less|vue|svelte|astro|tf|hcl)$/i;
+  /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|kts|rb|php|c|h|cc|cpp|hpp|cs|swift|scala|sh|bash|zsh|sql|graphql|proto|toml|yaml|yml|json|jsonc|css|scss|less|vue|svelte|astro|tf|hcl|dart|lua|ex|exs|clj|cljs|cljc|hs|jl|nim|zig|groovy)$/i;
 // Doc extensions mirror the canonical DOCS_EXTENSIONS set in signals/path-matchers.ts
 // (md, mdx, markdown, rst, adoc, asciidoc); the long-form `markdown`/`asciidoc`
 // spellings were missing here, so e.g. NOTES.markdown / guide.asciidoc were
