@@ -90,6 +90,45 @@ test("scanPatchForIacMisconfig does not flag NODE_TLS_REJECT_UNAUTHORIZED when T
   );
 });
 
+test("scanPatchForIacMisconfig flags PYTHONHTTPSVERIFY=0 as TLS verification disabled", () => {
+  // Python's stdlib `urllib`/`requests` honor this env var; `0` disables certificate verification
+  // process-wide — the Python equivalent of `NODE_TLS_REJECT_UNAUTHORIZED=0`.
+  const dotenv = scanPatchForIacMisconfig(
+    ".env.production",
+    ["@@ -1,0 +7,1 @@", "+PYTHONHTTPSVERIFY=0"].join("\n"),
+  );
+  assert.deepEqual(dotenv, [
+    { file: ".env.production", line: 7, kind: "tls-verification-disabled" },
+  ]);
+
+  const dockerfile = scanPatchForIacMisconfig(
+    "Dockerfile",
+    ["@@ -1,0 +3,1 @@", "+ENV PYTHONHTTPSVERIFY 0"].join("\n"),
+  );
+  assert.deepEqual(dockerfile, [
+    { file: "Dockerfile", line: 3, kind: "tls-verification-disabled" },
+  ]);
+
+  const quoted = scanPatchForIacMisconfig(
+    "compose.yaml",
+    ["@@ -1,0 +9,1 @@", '+      PYTHONHTTPSVERIFY: "0"'].join("\n"),
+  );
+  assert.deepEqual(quoted, [
+    { file: "compose.yaml", line: 9, kind: "tls-verification-disabled" },
+  ]);
+});
+
+test("scanPatchForIacMisconfig does not flag PYTHONHTTPSVERIFY when verification stays on", () => {
+  // Only the value `0` disables verification; `1` (verification on) must not be flagged.
+  assert.deepEqual(
+    scanPatchForIacMisconfig(
+      ".env",
+      "@@ -1,0 +1,1 @@\n+PYTHONHTTPSVERIFY=1",
+    ),
+    [],
+  );
+});
+
 test("isRelevantConfigPath recognizes environment-specific dotenv files", async () => {
   // The path gate must admit mode-suffixed dotenv files (`.env.production`, `.env.local`,
   // `apps/api/.env.staging`) — the canonical home of `NODE_TLS_REJECT_UNAUTHORIZED=0` — not only a bare `.env`.
