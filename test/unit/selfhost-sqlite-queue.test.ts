@@ -1782,6 +1782,108 @@ describe("createSqliteQueue (durable #980)", () => {
     });
   });
 
+  describe("replay/delete/purge dead-letter jobs (#2215)", () => {
+    it("replayDeadLetterJob requeues an existing dead row with a fresh retry budget", () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, last_error, dead_at) VALUES (?, 'dead', 3, 0, 1000, 'boom', 5000)",
+        [JSON.stringify(msg("agent-regate-pr"))],
+      );
+      expect(q.replayDeadLetterJob(1)).toBe(true);
+      const row = driver.query("SELECT status, attempts, last_error, dead_at, run_after FROM _selfhost_jobs WHERE id=1", [])
+        .rows[0] as { status: string; attempts: number; last_error: string | null; dead_at: number | null; run_after: number };
+      expect(row.status).toBe("pending");
+      expect(row.attempts).toBe(0);
+      expect(row.last_error).toBeNull();
+      expect(row.dead_at).toBeNull();
+      expect(row.run_after).toBeGreaterThan(0);
+    });
+
+    it("replayDeadLetterJob returns false for a non-existent id", () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      expect(q.replayDeadLetterJob(999)).toBe(false);
+    });
+
+    it("replayDeadLetterJob returns false and leaves a non-dead row untouched", () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'pending', 0, 42, 1000)",
+        [JSON.stringify(msg("agent-regate-pr"))],
+      );
+      expect(q.replayDeadLetterJob(1)).toBe(false);
+      const row = driver.query("SELECT status, run_after FROM _selfhost_jobs WHERE id=1", []).rows[0] as {
+        status: string;
+        run_after: number;
+      };
+      expect(row.status).toBe("pending");
+      expect(row.run_after).toBe(42);
+    });
+
+    it("deleteDeadLetterJob removes an existing dead row", () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, dead_at) VALUES (?, 'dead', 1, 0, 1000, 1000)",
+        [JSON.stringify(msg("agent-regate-pr"))],
+      );
+      expect(q.deleteDeadLetterJob(1)).toBe(true);
+      expect(driver.query("SELECT id FROM _selfhost_jobs WHERE id=1", []).rows).toEqual([]);
+    });
+
+    it("deleteDeadLetterJob returns false for a non-existent id", () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      expect(q.deleteDeadLetterJob(999)).toBe(false);
+    });
+
+    it("deleteDeadLetterJob returns false and does not delete a non-dead row", () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'processing', 0, 0, 1000)",
+        [JSON.stringify(msg("agent-regate-pr"))],
+      );
+      expect(q.deleteDeadLetterJob(1)).toBe(false);
+      expect(driver.query("SELECT id FROM _selfhost_jobs WHERE id=1", []).rows).toHaveLength(1);
+    });
+
+    it("purgeDeadLetterJobs deletes every dead row and leaves non-dead rows untouched", () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      for (let i = 0; i < 3; i++) {
+        driver.query(
+          "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, dead_at) VALUES (?, 'dead', 0, 0, ?, ?)",
+          [JSON.stringify(msg("agent-regate-pr")), 1000 + i, 1000 + i],
+        );
+      }
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'pending', 0, 0, 2000)",
+        [JSON.stringify(msg("agent-regate-pr"))],
+      );
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'processing', 0, 0, 3000)",
+        [JSON.stringify(msg("agent-regate-pr"))],
+      );
+      expect(q.purgeDeadLetterJobs()).toBe(3);
+      expect((driver.query("SELECT COUNT(*) AS c FROM _selfhost_jobs WHERE status='dead'", []).rows[0] as { c: number }).c).toBe(0);
+      expect((driver.query("SELECT COUNT(*) AS c FROM _selfhost_jobs WHERE status!='dead'", []).rows[0] as { c: number }).c).toBe(2);
+    });
+
+    it("purgeDeadLetterJobs returns 0 and touches nothing when there are no dead rows", () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at) VALUES (?, 'pending', 0, 0, 1000)",
+        [JSON.stringify(msg("agent-regate-pr"))],
+      );
+      expect(q.purgeDeadLetterJobs()).toBe(0);
+      expect((driver.query("SELECT COUNT(*) AS c FROM _selfhost_jobs", []).rows[0] as { c: number }).c).toBe(1);
+    });
+  });
+
   it("retries then dead-letters after maxRetries", async () => {
     const driver = makeDriver();
     let calls = 0;

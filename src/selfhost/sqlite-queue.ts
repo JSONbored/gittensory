@@ -140,6 +140,13 @@ export interface DurableQueue {
   /** Paginated dead-letter rows, newest-death-first, for the DLQ dashboard table (#2214). Also mirrored onto
    *  `binding` (see queue-common.ts's SelfHostQueueDeadLetterAdmin) so Hono routes can reach it via env.JOBS. */
   listDeadLetterJobs(limit: number, offset: number): DeadLetterJob[];
+  /** Manual, operator-initiated replay of ONE dead job with a FRESH retry budget (#2215) -- unlike the automatic
+   *  reviveDeadLetterJobs() sweep above, which deliberately preserves `attempts` under a ceiling. */
+  replayDeadLetterJob(id: number): boolean;
+  /** Manual, operator-initiated permanent delete of ONE dead job (#2215). */
+  deleteDeadLetterJob(id: number): boolean;
+  /** Manual, operator-initiated permanent delete of EVERY dead job (#2215). */
+  purgeDeadLetterJobs(): number;
 }
 
 interface JobRow {
@@ -669,6 +676,34 @@ export function createSqliteQueue(
     }));
   }
 
+  // Manual, operator-initiated dead-letter actions (#2215) -- distinct from reviveEligibleDeadJobs above, which
+  // is an unattended timer sweep that deliberately preserves `attempts` under a ceiling. These three are each
+  // triggered by a human clicking a specific button for a specific job on the dashboard, so they don't need (and
+  // must not reuse) that automatic ceiling/jitter machinery.
+
+  /** Manually requeues ONE dead job with a FRESH retry budget (attempts reset to 0) -- see the doc comment on
+   *  SelfHostQueueDeadLetterAdmin.replayDeadLetterJob in queue-common.ts for the full rationale. Returns false
+   *  if no row with that id is currently dead. */
+  function replayDeadLetterJob(id: number): boolean {
+    const { changes } = driver.query(
+      `UPDATE ${TABLE} SET status='pending', run_after=?, last_error=NULL, dead_at=NULL, attempts=0 WHERE id=? AND status='dead'`,
+      [Date.now(), id],
+    );
+    return changes > 0;
+  }
+
+  /** Permanently deletes ONE dead job by id. Returns false if no row with that id is currently dead. */
+  function deleteDeadLetterJob(id: number): boolean {
+    const { changes } = driver.query(`DELETE FROM ${TABLE} WHERE id=? AND status='dead'`, [id]);
+    return changes > 0;
+  }
+
+  /** Permanently deletes EVERY dead job. Returns the number of rows deleted. */
+  function purgeDeadLetterJobs(): number {
+    const { changes } = driver.query(`DELETE FROM ${TABLE} WHERE status='dead'`, []);
+    return changes;
+  }
+
   function claimNextWhere(
     now: number,
     priorityPredicate: string,
@@ -1041,10 +1076,16 @@ export function createSqliteQueue(
     },
     deadCount,
     listDeadLetterJobs,
+    replayDeadLetterJob,
+    deleteDeadLetterJob,
+    purgeDeadLetterJobs,
   } as unknown as Queue & {
     snapshot(): SelfHostQueueSnapshot;
     deadCount(): number;
     listDeadLetterJobs(limit: number, offset: number): DeadLetterJob[];
+    replayDeadLetterJob(id: number): boolean;
+    deleteDeadLetterJob(id: number): boolean;
+    purgeDeadLetterJobs(): number;
   };
 
   return {
@@ -1111,6 +1152,9 @@ export function createSqliteQueue(
     },
     topBacklogRepos,
     listDeadLetterJobs,
+    replayDeadLetterJob,
+    deleteDeadLetterJob,
+    purgeDeadLetterJobs,
   };
 }
 

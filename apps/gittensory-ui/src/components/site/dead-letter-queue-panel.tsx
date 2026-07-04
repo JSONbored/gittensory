@@ -1,14 +1,28 @@
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 
 import {
+  buildDeadLetterJobActionPath,
   buildDeadLetterQueuePath,
+  DEAD_LETTER_QUEUE_PURGE_PATH,
   formatDeadLetterTimestamp,
   normalizeDeadLetterQueuePage,
   truncateErrorMessage,
   type DeadLetterQueueItem,
 } from "@/components/site/dead-letter-queue-panel-model";
 import { StatusPill } from "@/components/site/control-primitives";
-import { StateBoundary } from "@/components/site/state-views";
+import { StateActionButton, StateBoundary } from "@/components/site/state-views";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import {
   Pagination,
   PaginationContent,
@@ -16,7 +30,13 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
+import { getApiOrigin } from "@/lib/api/origin";
+import { apiFetch } from "@/lib/api/request";
 import { useApiResource } from "@/lib/api/use-api-resource";
+
+function apiUrl(path: string): string {
+  return `${getApiOrigin().replace(/\/$/, "")}${path}`;
+}
 
 export function DeadLetterQueuePanel() {
   const [offset, setOffset] = useState(0);
@@ -24,6 +44,28 @@ export function DeadLetterQueuePanel() {
   const resource = useApiResource<unknown>(path, "Dead-letter queue");
   const page = resource.status === "ready" ? normalizeDeadLetterQueuePage(resource.data) : null;
   const isMalformed = resource.status === "ready" && page === null;
+  const [purging, setPurging] = useState(false);
+
+  async function purgeAll() {
+    setPurging(true);
+    const result = await apiFetch<{ ok: true; purged: number }>(
+      apiUrl(DEAD_LETTER_QUEUE_PURGE_PATH),
+      {
+        method: "DELETE",
+        label: "Purge dead-letter queue",
+        credentials: "include",
+      },
+    );
+    setPurging(false);
+    if (result.ok) {
+      toast.success("Dead-letter queue purged", {
+        description: `Purged ${result.data.purged} job${result.data.purged === 1 ? "" : "s"}.`,
+      });
+      resource.reload();
+    } else {
+      toast.error("Purge failed", { description: result.message });
+    }
+  }
 
   return (
     <section className="rounded-token border border-border bg-transparent p-5">
@@ -34,9 +76,35 @@ export function DeadLetterQueuePanel() {
             Jobs that exhausted their retry budget. Newest failures first.
           </p>
         </div>
-        {page ? (
-          <StatusPill status={page.total === 0 ? "ready" : "warn"}>{page.total} dead</StatusPill>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {page ? (
+            <StatusPill status={page.total === 0 ? "ready" : "warn"}>{page.total} dead</StatusPill>
+          ) : null}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <StateActionButton disabled={!page || page.total === 0 || purging}>
+                Purge all
+              </StateActionButton>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Purge the dead-letter queue?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This permanently deletes every dead-letter job. This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  onClick={() => void purgeAll()}
+                >
+                  Purge all
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
       </div>
 
       <div className="mt-4">
@@ -58,7 +126,7 @@ export function DeadLetterQueuePanel() {
           }
         >
           {page && page.items.length > 0 ? (
-            <DeadLetterQueueTable page={page} onPageChange={setOffset} />
+            <DeadLetterQueueTable page={page} onPageChange={setOffset} onReload={resource.reload} />
           ) : null}
         </StateBoundary>
       </div>
@@ -69,9 +137,11 @@ export function DeadLetterQueuePanel() {
 function DeadLetterQueueTable({
   page,
   onPageChange,
+  onReload,
 }: {
   page: { limit: number; offset: number; total: number; items: DeadLetterQueueItem[] };
   onPageChange: (offset: number) => void;
+  onReload: () => void;
 }) {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const toggleExpanded = (id: number) =>
@@ -82,6 +152,31 @@ function DeadLetterQueueTable({
       return next;
     });
 
+  const [pendingRowId, setPendingRowId] = useState<number | null>(null);
+
+  async function runJobAction(id: number, action: "replay" | "delete") {
+    setPendingRowId(id);
+    const result = await apiFetch<{ ok: true; id: number }>(
+      apiUrl(buildDeadLetterJobActionPath(id, action)),
+      {
+        method: action === "replay" ? "POST" : "DELETE",
+        label: action === "replay" ? "Replay dead-letter job" : "Delete dead-letter job",
+        credentials: "include",
+      },
+    );
+    setPendingRowId(null);
+    if (result.ok) {
+      toast.success(action === "replay" ? "Job queued for replay" : "Job deleted", {
+        description: `Job #${id} ${action === "replay" ? "was requeued." : "was removed from the dead-letter queue."}`,
+      });
+      onReload();
+    } else {
+      toast.error(action === "replay" ? "Replay failed" : "Delete failed", {
+        description: result.message,
+      });
+    }
+  }
+
   const rangeStart = page.total === 0 ? 0 : page.offset + 1;
   const rangeEnd = Math.min(page.offset + page.items.length, page.total);
   const hasPrevious = page.offset > 0;
@@ -90,7 +185,7 @@ function DeadLetterQueueTable({
   return (
     <div className="space-y-3">
       <div className="overflow-x-auto rounded-token border border-border bg-transparent">
-        <table className="w-full min-w-[760px] text-left text-token-sm">
+        <table className="w-full min-w-[880px] text-left text-token-sm">
           <thead className="border-b border-border text-token-xs uppercase text-muted-foreground">
             <tr>
               <th className="px-4 py-3 font-medium">Job ID</th>
@@ -99,6 +194,7 @@ function DeadLetterQueueTable({
               <th className="px-4 py-3 font-medium">Last error</th>
               <th className="px-4 py-3 font-medium">Created</th>
               <th className="px-4 py-3 font-medium">Died</th>
+              <th className="px-4 py-3 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -134,6 +230,22 @@ function DeadLetterQueueTable({
                   </td>
                   <td className="px-4 py-3 font-mono text-token-xs text-muted-foreground whitespace-nowrap">
                     {formatDeadLetterTimestamp(item.deadAtMs)}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StateActionButton
+                        onClick={() => void runJobAction(item.id, "replay")}
+                        disabled={pendingRowId === item.id}
+                      >
+                        Replay
+                      </StateActionButton>
+                      <StateActionButton
+                        onClick={() => void runJobAction(item.id, "delete")}
+                        disabled={pendingRowId === item.id}
+                      >
+                        Delete
+                      </StateActionButton>
+                    </div>
                   </td>
                 </tr>
               );

@@ -225,6 +225,15 @@ export interface PgDurableQueue {
   /** Paginated dead-letter rows, newest-death-first, for the DLQ dashboard table (#2214). Also mirrored onto
    *  `binding` (see queue-common.ts's SelfHostQueueDeadLetterAdmin) so Hono routes can reach it via env.JOBS. */
   listDeadLetterJobs(limit: number, offset: number): Promise<DeadLetterJob[]>;
+  /** Manually requeues ONE dead job by id with a fresh retry budget (#2215). Also mirrored onto `binding` (see
+   *  queue-common.ts's SelfHostQueueDeadLetterAdmin) so Hono routes can reach it via env.JOBS. */
+  replayDeadLetterJob(id: number): Promise<boolean>;
+  /** Permanently deletes ONE dead job by id (#2215). Also mirrored onto `binding` (see queue-common.ts's
+   *  SelfHostQueueDeadLetterAdmin) so Hono routes can reach it via env.JOBS. */
+  deleteDeadLetterJob(id: number): Promise<boolean>;
+  /** Permanently deletes EVERY dead job (#2215). Also mirrored onto `binding` (see queue-common.ts's
+   *  SelfHostQueueDeadLetterAdmin) so Hono routes can reach it via env.JOBS. */
+  purgeDeadLetterJobs(): Promise<number>;
 }
 
 interface JobRow {
@@ -534,6 +543,28 @@ export function createPgQueue(
       createdAtMs: Number(row.created_at),
       deadAtMs: row.dead_at === null ? null : Number(row.dead_at),
     }));
+  }
+
+  // Manual, operator-initiated dead-letter actions (#2215), triggered from a dashboard button -- distinct from
+  // reviveEligibleDeadJobs above, which is an AUTOMATIC bulk sweep that deliberately preserves attempts under a
+  // ceiling. A human clicking "replay" on one specific job is a conscious, one-off decision, so it resets
+  // attempts to 0 for a full fresh retry budget instead of inheriting whatever the automatic sweep would allow.
+  async function replayDeadLetterJob(id: number): Promise<boolean> {
+    const result = await pool.query(
+      `UPDATE ${TABLE} SET status='pending', run_after=$1, last_error=NULL, dead_at=NULL, attempts=0 WHERE id=$2 AND status='dead'`,
+      [Date.now(), id],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async function deleteDeadLetterJob(id: number): Promise<boolean> {
+    const result = await pool.query(`DELETE FROM ${TABLE} WHERE id=$1 AND status='dead'`, [id]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async function purgeDeadLetterJobs(): Promise<number> {
+    const result = await pool.query(`DELETE FROM ${TABLE} WHERE status='dead'`);
+    return result.rowCount ?? 0;
   }
 
   async function recoverProcessingJobs(): Promise<number> {
@@ -1346,10 +1377,16 @@ export function createPgQueue(
     },
     deadCount,
     listDeadLetterJobs,
+    replayDeadLetterJob,
+    deleteDeadLetterJob,
+    purgeDeadLetterJobs,
   } as unknown as Queue & {
     snapshot(): Promise<SelfHostQueueSnapshot>;
     deadCount(): Promise<number>;
     listDeadLetterJobs(limit: number, offset: number): Promise<DeadLetterJob[]>;
+    replayDeadLetterJob(id: number): Promise<boolean>;
+    deleteDeadLetterJob(id: number): Promise<boolean>;
+    purgeDeadLetterJobs(): Promise<number>;
   };
 
   return {
@@ -1417,6 +1454,9 @@ export function createPgQueue(
     },
     topBacklogRepos,
     listDeadLetterJobs,
+    replayDeadLetterJob,
+    deleteDeadLetterJob,
+    purgeDeadLetterJobs,
   };
 
   async function reclaimExpiredProcessingJobs(): Promise<number> {

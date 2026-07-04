@@ -271,7 +271,12 @@ import type {
   RepositorySettings,
 } from "../types";
 import { errorMessage, nowIso } from "../utils/json";
-import { queueDeadLetterPageFromBinding } from "../selfhost/queue-common";
+import {
+  queueDeadLetterPageFromBinding,
+  queueDeleteDeadLetterJobViaBinding,
+  queuePurgeDeadLetterJobsViaBinding,
+  queueReplayDeadLetterJobViaBinding,
+} from "../selfhost/queue-common";
 
 type AppBindings = { Bindings: Env };
 type AppContext = Context<AppBindings>;
@@ -1400,6 +1405,84 @@ export function createApp() {
       );
     }
     return c.json({ generatedAt: nowIso(), limit, offset, total: page.total, items: page.items });
+  });
+
+  // Dead-letter-queue admin actions (#2215): replay/delete a single dead job, or purge all of them. Same
+  // env.JOBS-binding mirror and null/501 "admin unavailable" contract as the read-only GET route above --
+  // absent entirely on Cloudflare, where the plain Queue binding exposes none of these methods.
+  app.post("/v1/app/selfhost/queue/dead/:id/replay", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) return c.json({ error: "invalid_job_id" }, 400);
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- requireAppRole already rejects an unauthenticated caller before this handler runs. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const result = await queueReplayDeadLetterJobViaBinding(c.env.JOBS, id);
+    if (result === null) {
+      return c.json(
+        { error: "dead_letter_admin_unavailable", message: "This deployment's queue backend does not expose dead-letter admin." },
+        501,
+      );
+    }
+    if (result === false) return c.json({ error: "dead_letter_job_not_found" }, 404);
+    await recordAuditEvent(c.env, {
+      eventType: "operator.dlq_job_replayed",
+      actor: identity.actor,
+      targetKey: `selfhost_jobs#${id}`,
+      outcome: "completed",
+      metadata: { id },
+    });
+    return c.json({ ok: true, id });
+  });
+
+  app.delete("/v1/app/selfhost/queue/dead/:id", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) return c.json({ error: "invalid_job_id" }, 400);
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- requireAppRole already rejects an unauthenticated caller before this handler runs. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const result = await queueDeleteDeadLetterJobViaBinding(c.env.JOBS, id);
+    if (result === null) {
+      return c.json(
+        { error: "dead_letter_admin_unavailable", message: "This deployment's queue backend does not expose dead-letter admin." },
+        501,
+      );
+    }
+    if (result === false) return c.json({ error: "dead_letter_job_not_found" }, 404);
+    await recordAuditEvent(c.env, {
+      eventType: "operator.dlq_job_deleted",
+      actor: identity.actor,
+      targetKey: `selfhost_jobs#${id}`,
+      outcome: "completed",
+      metadata: { id },
+    });
+    return c.json({ ok: true, id });
+  });
+
+  app.delete("/v1/app/selfhost/queue/dead", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- requireAppRole already rejects an unauthenticated caller before this handler runs. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const purged = await queuePurgeDeadLetterJobsViaBinding(c.env.JOBS);
+    if (purged === null) {
+      return c.json(
+        { error: "dead_letter_admin_unavailable", message: "This deployment's queue backend does not expose dead-letter admin." },
+        501,
+      );
+    }
+    await recordAuditEvent(c.env, {
+      eventType: "operator.dlq_purged",
+      actor: identity.actor,
+      targetKey: "selfhost_jobs#all",
+      outcome: "completed",
+      metadata: { purged },
+    });
+    return c.json({ ok: true, purged });
   });
 
   // Global agent kill-switch (#2359): the write side (setGlobalAgentFrozen) previously had zero callers — the

@@ -28,6 +28,14 @@ export function buildDeadLetterQueuePath(
   return `/v1/app/selfhost/queue/dead?${params.toString()}`;
 }
 
+export const DEAD_LETTER_QUEUE_PURGE_PATH = "/v1/app/selfhost/queue/dead";
+
+/** Builds the admin-action path for a single dead-letter job (replay, or the bare id path for delete). */
+export function buildDeadLetterJobActionPath(id: number, action: "replay" | "delete"): string {
+  const base = `${DEAD_LETTER_QUEUE_PURGE_PATH}/${id}`;
+  return action === "replay" ? `${base}/replay` : base;
+}
+
 function isDeadLetterQueueItem(value: unknown): value is DeadLetterQueueItem {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<DeadLetterQueueItem>;

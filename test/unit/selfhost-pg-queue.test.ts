@@ -1419,6 +1419,132 @@ describe("createPgQueue (durable #977)", () => {
     });
   });
 
+  describe("replay/delete/purge dead-letter jobs (#2215)", () => {
+    // Manual, operator-initiated dead-letter actions (distinct from the automatic reviveEligibleDeadJobs sweep
+    // tested below under "reviveDeadLetterJobs (#audit-rate-headroom)"). Each stub matches on a distinguishing
+    // SQL fragment so a test can't accidentally satisfy the wrong query -- delete-by-id is distinguished from
+    // purge-all by the presence/absence of "id=$1", mirroring how stubDeadLetterRows above matches on SQL text.
+    function stubReplay(rowCount: number | null): {
+      pool: { query: Pool["query"] };
+      calls: Array<{ sql: string; params: unknown[] }>;
+    } {
+      const calls: Array<{ sql: string; params: unknown[] }> = [];
+      return {
+        pool: {
+          query: (async (sql: unknown, params?: unknown[]) => {
+            const q = String(sql);
+            if (q.includes("SET status='pending'") && q.includes("attempts=0")) {
+              calls.push({ sql: q, params: params ?? [] });
+              return { rows: [], rowCount };
+            }
+            return { rows: [], rowCount: 0 };
+          }) as Pool["query"],
+        },
+        calls,
+      };
+    }
+
+    function stubDeleteById(rowCount: number | null): {
+      pool: { query: Pool["query"] };
+      calls: Array<{ sql: string; params: unknown[] }>;
+    } {
+      const calls: Array<{ sql: string; params: unknown[] }> = [];
+      return {
+        pool: {
+          query: (async (sql: unknown, params?: unknown[]) => {
+            const q = String(sql);
+            if (q.includes("DELETE FROM") && q.includes("status='dead'") && q.includes("id=$1")) {
+              calls.push({ sql: q, params: params ?? [] });
+              return { rows: [], rowCount };
+            }
+            return { rows: [], rowCount: 0 };
+          }) as Pool["query"],
+        },
+        calls,
+      };
+    }
+
+    function stubPurge(rowCount: number | null): {
+      pool: { query: Pool["query"] };
+      calls: Array<{ sql: string; params: unknown[] }>;
+    } {
+      const calls: Array<{ sql: string; params: unknown[] }> = [];
+      return {
+        pool: {
+          query: (async (sql: unknown, params?: unknown[]) => {
+            const q = String(sql);
+            if (q.includes("DELETE FROM") && q.includes("status='dead'") && !q.includes("id=$1")) {
+              calls.push({ sql: q, params: params ?? [] });
+              return { rows: [], rowCount };
+            }
+            return { rows: [], rowCount: 0 };
+          }) as Pool["query"],
+        },
+        calls,
+      };
+    }
+
+    it("replayDeadLetterJob requeues a dead row with a fresh attempts budget and returns true", async () => {
+      const m = stubReplay(1);
+      const q = createPgQueue(m.pool as unknown as Pool, async () => undefined);
+
+      expect(await q.replayDeadLetterJob(7)).toBe(true);
+      expect(m.calls).toHaveLength(1);
+      expect(m.calls[0]?.params).toEqual([expect.any(Number), 7]);
+    });
+
+    it("replayDeadLetterJob returns false when the id is not currently dead (already handled/deleted/never existed)", async () => {
+      const m = stubReplay(0);
+      const q = createPgQueue(m.pool as unknown as Pool, async () => undefined);
+
+      expect(await q.replayDeadLetterJob(7)).toBe(false);
+      expect(m.calls[0]?.params).toEqual([expect.any(Number), 7]);
+    });
+
+    it("deleteDeadLetterJob deletes one dead row by id and returns true", async () => {
+      const m = stubDeleteById(1);
+      const q = createPgQueue(m.pool as unknown as Pool, async () => undefined);
+
+      expect(await q.deleteDeadLetterJob(9)).toBe(true);
+      expect(m.calls).toHaveLength(1);
+      expect(m.calls[0]?.params).toEqual([9]);
+    });
+
+    it("deleteDeadLetterJob returns false when the id is not currently dead", async () => {
+      const m = stubDeleteById(0);
+      const q = createPgQueue(m.pool as unknown as Pool, async () => undefined);
+
+      expect(await q.deleteDeadLetterJob(9)).toBe(false);
+      expect(m.calls[0]?.params).toEqual([9]);
+    });
+
+    it("purgeDeadLetterJobs deletes every dead row with no id param and returns the count", async () => {
+      const m = stubPurge(3);
+      const q = createPgQueue(m.pool as unknown as Pool, async () => undefined);
+
+      expect(await q.purgeDeadLetterJobs()).toBe(3);
+      expect(m.calls).toHaveLength(1);
+      expect(m.calls[0]?.params).toEqual([]);
+    });
+
+    it("purgeDeadLetterJobs returns 0 when nothing was dead", async () => {
+      const m = stubPurge(0);
+      const q = createPgQueue(m.pool as unknown as Pool, async () => undefined);
+
+      expect(await q.purgeDeadLetterJobs()).toBe(0);
+    });
+
+    it("REGRESSION: purgeDeadLetterJobs falls back to 0 (not null/undefined/NaN) when the driver omits rowCount", async () => {
+      // Exercises the `?? 0` branch specifically: a plain rowCount:0 response takes the SAME branch as a null
+      // rowCount here (0 ?? 0 === 0), so it doesn't prove the nullish fallback actually fires. Returning
+      // rowCount: null (a real pg driver possibility for some statement shapes) does.
+      const m = stubPurge(null);
+      const q = createPgQueue(m.pool as unknown as Pool, async () => undefined);
+
+      expect(await q.purgeDeadLetterJobs()).toBe(0);
+    });
+  });
+
   it("REGRESSION: releases the reserved background slot when a background claim query rejects (#selfhost-bg-slot-leak)", async () => {
     // A raw pool failure during the BACKGROUND claim (a dropped connection / lock timeout — the exact failures
     // pump() is documented to catch) rejects out of claimNext(), which runs OUTSIDE processOne's try/finally, so
