@@ -7,6 +7,7 @@ import * as rateLimitModule from "../../src/github/rate-limit";
 import * as repositoriesModule from "../../src/db/repositories";
 import * as repositorySettingsModule from "../../src/settings/repository-settings";
 import * as sentryModule from "../../src/selfhost/sentry";
+import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 import {
   listCollisionEdges,
   createAgentRun,
@@ -19503,6 +19504,75 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
     expect(seen.merged).toBe(true);
     const mergeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.merge'").first<{ n: number }>();
     expect(mergeAudit?.n).toBeGreaterThanOrEqual(1);
+  });
+
+  // #terminal-outcome-audit: end-to-end proof that the LIVE runAgentMaintenancePlanAndExecute call site (not just
+  // the extracted pure precisionBreakerDowngradeDirections/applyPrecisionBreakers unit tests) actually increments
+  // gittensory_precision_breaker_downgrades_total when an engaged accuracy circuit-breaker rewrites a real plan.
+  it("REGRESSION (#terminal-outcome-audit): an engaged holdonly breaker withholds a real would-merge AND increments the downgrade counter", async () => {
+    // Mirrors the "#selfhost-backlog-convergence" chain test above (same two-step CI-pending-then-green shape,
+    // the proven way this suite reaches a REAL merge attempt): a plain "opened" webhook with CI already green
+    // never reaches the merge decision in this harness; the check_suite.completed re-review path does.
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_REPOS: REPO });
+    await setupAutoActionRepo(env, { autonomy: { merge: "auto", approve: "auto" }, linkedIssueGateMode: "off" });
+    await upsertOfficialMinerDetection(env, "contributor", { status: "confirmed", snapshot: queueMinerSnapshot("contributor") }, 60_000);
+    const seen = { closed: false, merged: false };
+    let ciState: "pending" | "passed" = "pending";
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url === "https://api.github.com/graphql") return Response.json({ data: { repository: { pullRequest: { reviewDecision: "APPROVED" } } } });
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/65/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.includes("/pulls/65/reviews")) return Response.json([]);
+      if (url.includes("/pulls/65/commits")) return Response.json([]);
+      if (url.endsWith("/pulls/65/merge") && method === "PUT") { seen.merged = true; return Response.json({ merged: true }); }
+      if (url.endsWith("/pulls/65")) return Response.json({ number: 65, state: "open", user: { login: "contributor" }, head: { sha: "conv65" }, mergeable_state: "clean" });
+      if (url.includes("/commits/conv65/check-runs")) {
+        return ciState === "pending"
+          ? Response.json({ total_count: 1, check_runs: [{ name: "CI", status: "in_progress", conclusion: null, app: { slug: "github-actions" } }] })
+          : Response.json({ total_count: 1, check_runs: [{ name: "CI", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+      }
+      if (url.includes("/commits/conv65/status")) return Response.json({ state: ciState === "pending" ? "pending" : "success", statuses: [] });
+      if (url.includes("/issues/65/labels")) return Response.json([]);
+      if (url.includes("/issues/65/comments")) return Response.json([]);
+      return Response.json({});
+    });
+
+    // Step 1: a synchronize webhook while CI is still running — establishes the PR, no merge yet.
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "conv-holdonly-1",
+      eventName: "pull_request",
+      payload: prPayload({ number: 65, head: { sha: "conv65" }, body: "Closes #1", action: "synchronize" }),
+    });
+    expect(seen.merged).toBe(false);
+
+    // Engage the merge-precision breaker for this exact repo BEFORE CI resolves — mirrors how runSelfTuneBreaker
+    // (or a human) would set it via system_flags ahead of the next re-review.
+    await env.DB.prepare("INSERT OR REPLACE INTO system_flags (key, value, updated_at) VALUES ('holdonly:JSONbored/gittensory', '1', CURRENT_TIMESTAMP)").run();
+    resetMetrics();
+
+    // Step 2: CI finishes; a check_suite.completed webhook re-triggers the pipeline — without the breaker this
+    // would merge exactly like the sibling convergence-chain test above; the engaged breaker withholds it instead.
+    ciState = "passed";
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "conv-holdonly-2",
+      eventName: "check_suite",
+      payload: {
+        action: "completed",
+        installation: { id: INSTALLATION_ID, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: REPO, private: false, owner: { login: "JSONbored" } },
+        check_suite: { head_sha: "conv65", conclusion: "success", pull_requests: [{ number: 65 }] },
+      } as never,
+    });
+
+    expect(seen.merged).toBe(false);
+    const mergeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.merge'").first<{ n: number }>();
+    expect(mergeAudit?.n).toBe(0);
+    expect(await renderMetrics()).toContain('gittensory_precision_breaker_downgrades_total{direction="merge"} 1');
   });
 
   it("REGRESSION: closeOwnerAuthors=false (default) protects an owner-authored blocked PR from the general heuristic-close path", async () => {
