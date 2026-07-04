@@ -108,6 +108,30 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
     expect(py.nonCodeTokenScore).toBe(0);
   });
 
+  it("classifies Dart/Flutter *_test.dart as a test in both .mjs and .py previews", () => {
+    // Parity with src/signals/test-evidence.ts: co-located `foo_test.dart` must count as test evidence,
+    // not source/non-code, in every mirrored classifier.
+    const files = [
+      { path: "lib/models/user_test.dart", additions: 8, deletions: 0 },
+      { path: "lib/models/user.dart", additions: 3, deletions: 0 }, // non-code (dart not in isCodeFile)
+    ];
+    const mjs = runPreview(files);
+    expect(mjs.testTokenScore).toBe(8);
+    expect(mjs.sourceTokenScore).toBe(0);
+    expect(mjs.nonCodeTokenScore).toBe(3);
+
+    const python = findPython();
+    if (!python) return;
+    const env = { ...process.env };
+    delete env.GITTENSOR_ROOT;
+    const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: files }), encoding: "utf8", env });
+    expect(res.status, res.stderr).toBe(0);
+    const py = JSON.parse(res.stdout);
+    expect(py.testTokenScore).toBe(8);
+    expect(py.sourceTokenScore).toBe(0);
+    expect(py.nonCodeTokenScore).toBe(3);
+  });
+
   it("does not misclassify a *.test.mjs.map source-map as a test (extension anchored to end-of-path, matching the server)", () => {
     // A substring match on ".test.mjs" wrongly flagged non-tests like dist/widget.test.mjs.map; the rule must be
     // end-anchored like isTestPath. It's a source-map — neither test nor code — so it counts as non-code.

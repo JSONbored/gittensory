@@ -17,7 +17,7 @@ from pathlib import Path
 # dir, and ".test.mjs" matched non-tests like `dist/widget.test.mjs.map` where the extension is not end-of-path.
 _TEST_PATH_RES = (
     re.compile(r"(?:^|/)(?:tests?|spec|__tests__|__snapshots__|src/test)/", re.IGNORECASE),  # dir conventions
-    re.compile(r"(?:^|/)[^/]+_test\.(?:go|py|rb)$", re.IGNORECASE),  # go/py/rb *_test suffix
+    re.compile(r"(?:^|/)[^/]+_test\.(?:go|py|rb|dart)$", re.IGNORECASE),  # go/py/rb/dart *_test suffix
     re.compile(r"(?:^|/)test_[^/]*\.py$", re.IGNORECASE),  # pytest test_*.py prefix
     re.compile(r"(?:^|/)[^/]+_spec\.rb$", re.IGNORECASE),  # RSpec *_spec.rb suffix
     re.compile(r"\.(?:test|spec)\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs)$", re.IGNORECASE),  # .test/.spec.<ext>
