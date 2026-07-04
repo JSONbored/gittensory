@@ -149,7 +149,7 @@ export function initPortfolioQueueStore(dbPath = resolvePortfolioQueueDbPath()) 
       return row ? rowToEntry(row) : null;
     },
     listQueue(repoFullName) {
-      const rows = repoFullName === undefined
+      const rows = repoFullName === undefined || repoFullName === null
         ? listAllStatement.all()
         : listRepoStatement.all(normalizeRepoFullName(repoFullName));
       return rows.map(rowToEntry);

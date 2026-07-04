@@ -111,6 +111,7 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
     expect(store.listQueue("o/a").map((entry) => entry.identifier)).toEqual(["2", "1"]); // priority DESC
     expect(store.listQueue("o/b").map((entry) => entry.repoFullName)).toEqual(["o/b"]);
     expect(store.listQueue().length).toBe(3);
+    expect(store.listQueue(null).length).toBe(3);
   });
 
   it("re-enqueue re-activates a done item and refreshes its placeholder priority", () => {
