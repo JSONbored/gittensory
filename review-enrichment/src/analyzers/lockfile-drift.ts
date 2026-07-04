@@ -349,13 +349,23 @@ function parseLockfile(path: string, patch: string, maxLines: number): LockfileC
   return [];
 }
 
+/** Stable key for direct-dep exclusion. PyPI names are PEP 503–normalized (case-insensitive;
+ *  `-` / `_` / `.` equivalent) so `Django` in requirements.txt matches `django` in poetry.lock.
+ *  npm keys stay exact — registry names are case-sensitive / enforced-lowercase. */
+function packageKey(ecosystem: string, pkg: string): string {
+  if (ecosystem === "PyPI") {
+    return `PyPI::${pkg.toLowerCase().replace(/[-_.]+/g, "-")}`;
+  }
+  return `${ecosystem}::${pkg}`;
+}
+
 /** Extract lockfile-only resolved package changes. Top-level manifest changes are excluded as direct deps. */
 export function extractLockfileChanges(
   files: NonNullable<EnrichRequest["files"]>,
   limits: ScanLimits = {},
 ): LockfileChange[] {
   const direct = new Set(
-    extractDependencyChanges(files).map((dep) => `${dep.ecosystem}::${dep.package}`),
+    extractDependencyChanges(files).map((dep) => packageKey(dep.ecosystem, dep.package)),
   );
   const maxFiles = limits.maxLockfileFiles ?? MAX_LOCKFILE_FILES;
   const maxLines = limits.maxPatchLinesPerFile ?? MAX_PATCH_LINES_PER_FILE;
@@ -366,7 +376,7 @@ export function extractLockfileChanges(
     scannedFiles += 1;
     if (scannedFiles > maxFiles) break;
     for (const change of parseLockfile(file.path, file.patch, maxLines)) {
-      if (direct.has(`${change.ecosystem}::${change.package}`)) continue;
+      if (direct.has(packageKey(change.ecosystem, change.package))) continue;
       if (!isSafeQuery(change.package, change.to)) continue;
       changes.push(change);
     }
