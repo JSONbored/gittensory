@@ -170,6 +170,24 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // Discord bot token: `[MNO]` + 23 base64url chars, `.`, 6-char segment, `.`, 27-char segment.
+    kind: "discord_bot_token",
+    re: /\b[MNO][A-Za-z0-9_-]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // Twilio Account SID: `AC` + 32 hex chars (distinct from Auth Token, which has no prefix).
+    kind: "twilio_account_sid",
+    re: /\bAC[0-9a-fA-F]{32}(?![0-9a-fA-F])/,
+    confidence: "high",
+  },
+  {
+    // Twilio API Key SID: `SK` + 32 hex chars.
+    kind: "twilio_api_key_sid",
+    re: /\bSK[0-9a-fA-F]{32}(?![0-9a-fA-F])/,
+    confidence: "high",
+  },
+  {
     // Google OAuth 2.0 client secret: `GOCSPX-` + 28 base64url chars.
     kind: "google_oauth_client_secret",
     re: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/,

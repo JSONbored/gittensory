@@ -415,6 +415,52 @@ test("scanPatch does not flag a Mailgun-shaped key with an invalid body characte
   assert.equal(findings.length, 0);
 });
 
+test("scanPatch flags a Discord bot token with high confidence", () => {
+  const fakeDiscordBotToken = ["M", "A".repeat(23), ".", "b".repeat(6), ".", "c".repeat(27)].join("");
+  const findings = scanPatch("src/config.ts", hunk([`const discord = "${fakeDiscordBotToken}";`]));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "discord_bot_token");
+  assert.equal(findings[0].confidence, "high");
+});
+
+test("scanPatch does not flag a truncated Discord bot token", () => {
+  const truncated = ["M", "A".repeat(23), ".", "b".repeat(6), ".", "c".repeat(26)].join("");
+  const findings = scanPatch("src/config.ts", hunk([`const discord = "${truncated}";`]));
+  assert.equal(findings.length, 0);
+});
+
+test("scanPatch does not classify a Discord bot token as a webhook URL", () => {
+  const fakeDiscordBotToken = ["N", "B".repeat(23), ".", "d".repeat(6), ".", "e".repeat(27)].join("");
+  const findings = scanPatch("src/config.ts", hunk([`const discord = "${fakeDiscordBotToken}";`]));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "discord_bot_token");
+  assert.equal(findings.some((f) => f.kind === "discord_webhook_url"), false);
+});
+
+test("scanPatch flags Twilio Account and API Key SIDs with high confidence", () => {
+  const fakeTwilioAccountSid = "AC" + "a".repeat(32);
+  const fakeTwilioApiKeySid = "SK" + "b".repeat(32);
+  const accountFindings = scanPatch("src/config.ts", hunk([`const sid = "${fakeTwilioAccountSid}";`]));
+  assert.equal(accountFindings.length, 1);
+  assert.equal(accountFindings[0].kind, "twilio_account_sid");
+  assert.equal(accountFindings[0].confidence, "high");
+
+  const keyFindings = scanPatch("src/config.ts", hunk([`const apiKey = "${fakeTwilioApiKeySid}";`]));
+  assert.equal(keyFindings.length, 1);
+  assert.equal(keyFindings[0].kind, "twilio_api_key_sid");
+  assert.equal(keyFindings[0].confidence, "high");
+});
+
+test("scanPatch does not flag truncated Twilio SIDs or hex overrun", () => {
+  const truncated = "AC" + "a".repeat(31);
+  assert.equal(scanPatch("src/config.ts", hunk([`const sid = "${truncated}";`])).length, 0);
+  const overrun = "AC" + "a".repeat(32) + "f";
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const sid = "${overrun}";`])).some((f) => f.kind === "twilio_account_sid"),
+    false,
+  );
+});
+
 test("scanPatch flags additional high-confidence SaaS/cloud/CI credential formats", () => {
   const cases = [
     ["google_oauth_client_secret", "GOCSPX-" + b62(28)],
