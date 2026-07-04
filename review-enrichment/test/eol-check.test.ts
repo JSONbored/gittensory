@@ -62,7 +62,15 @@ test("isDockerfile matches the bare name case-insensitively", () => {
   assert.equal(isDockerfile("web.dockerfile"), true);
   assert.equal(isDockerfile("web.Dockerfile"), true);
   assert.equal(isDockerfile("Makefile"), false);
-  assert.equal(isDockerfile("Dockerfile.bak"), false);
+  assert.equal(isDockerfile("NotADockerfile"), false);
+});
+
+test("isDockerfile matches suffixed Dockerfile.* variants", () => {
+  // Common multi-stage / env-specific names; the prior scheduler gate was `/^Dockerfile(?:\..*)?$/`.
+  assert.equal(isDockerfile("Dockerfile.prod"), true);
+  assert.equal(isDockerfile("Dockerfile.dev"), true);
+  assert.equal(isDockerfile("deploy/Dockerfile.staging"), true);
+  assert.equal(isDockerfile("dockerfile.production"), true);
 });
 
 test("extractVersionPins reads FROM pins from a lowercase dockerfile path", () => {
@@ -71,5 +79,14 @@ test("extractVersionPins reads FROM pins from a lowercase dockerfile path", () =
   ]);
   assert.deepEqual(pins, [
     { file: "dockerfile", product: "python", version: "3.8" },
+  ]);
+});
+
+test("extractVersionPins reads FROM pins from Dockerfile.prod", () => {
+  const pins = extractVersionPins([
+    added("Dockerfile.prod", "FROM python:3.8-slim"),
+  ]);
+  assert.deepEqual(pins, [
+    { file: "Dockerfile.prod", product: "python", version: "3.8" },
   ]);
 });
