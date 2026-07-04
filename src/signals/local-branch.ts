@@ -1271,8 +1271,12 @@ export function isCodeFile(file: string): boolean {
   // recognizes their `SomethingTest(s)`/`Spec` test files, so their source must
   // count as code too — otherwise a C#/Swift/Groovy/PHP source file is neither test
   // nor code in the local scorer.
+  // The C/C++/CUDA family (c/cc/cpp/cxx headers+impl, cu/cuh) covers native components common in
+  // registered subnet repos (C-extension modules, CUDA kernels); their `*_test.cc` tests are recognized
+  // by isTestPath, so the source must count as code. `kts` (Kotlin script) restores parity with isTestPath,
+  // whose `SomethingTests.kts` rule already treats `.kts` as a test extension.
   return (
-    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php)$/i.test(file) &&
+    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|kts|scala|java|go|sql|cs|swift|groovy|php|c|cc|cpp|cxx|h|hpp|hh|hxx|cu|cuh)$/i.test(file) &&
     !isTestFile(file)
   );
 }

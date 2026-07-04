@@ -126,6 +126,16 @@ describe("isCodeFile", () => {
       // files, so PHP source must count as code too (else it is neither test nor code).
       "app/Http/Controllers/UserController.php",
       "src/Service/PaymentGateway.php",
+      // C/C++/CUDA native sources (C-extension modules, kernels) common in subnet repos — source, not churn.
+      "csrc/ops/attention.cpp",
+      "native/reduce.cc",
+      "src/module.c",
+      "include/kernel.h",
+      "include/api.hpp",
+      "kernels/gemm.cu",
+      "kernels/util.cuh",
+      // Kotlin script source — parity with isTestPath, whose `SomethingTests.kts` rule already treats .kts as a test ext.
+      "gradle/plugin.kts",
     ]) {
       expect(isCodeFile(path)).toBe(true);
     }
@@ -147,6 +157,12 @@ describe("isCodeFile", () => {
       "AppTests/LoginTests.swift",
       // PHP class-suffix test file (PHPUnit) — code extension, but a test, not code.
       "app/Service/PaymentTest.php",
+      // C/C++ GoogleTest-style `*_test.cc` files carry a code extension but are tests, not source.
+      "native/attention_test.cc",
+      "src/reduce_test.cpp",
+      "lib/parser_test.c",
+      // A C/C++ test living under a tests/ directory is caught by the directory rule.
+      "tests/kernel_bench.cc",
     ]) {
       expect(isCodeFile(path)).toBe(false);
     }

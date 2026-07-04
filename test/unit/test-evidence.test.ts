@@ -4,6 +4,11 @@ import { classifyTestCoverage, hasLocalTestEvidence, isTestPath } from "../../sr
 describe("test evidence helpers", () => {
   it("detects common test path conventions", () => {
     expect(isTestPath("pkg/foo_test.go")).toBe(true);
+    // C/C++ GoogleTest-style `*_test.{cc,cpp,c,cxx}` suffix next to source (not only under a tests/ dir).
+    expect(isTestPath("native/attention_test.cc")).toBe(true);
+    expect(isTestPath("src/reduce_test.cpp")).toBe(true);
+    expect(isTestPath("lib/parser_test.c")).toBe(true);
+    expect(isTestPath("include/kernel.h")).toBe(false); // a bare header is source, not a test
     expect(isTestPath("spec/models/widget_spec.rb")).toBe(true);
     expect(isTestPath("src/test/helpers.ts")).toBe(true);
     expect(isTestPath("tests/integration/api.test.ts")).toBe(true);

@@ -305,6 +305,26 @@ describe("signal coverage edge cases", () => {
     expect(linkedIssuesFor("unfixes owner/direct#42").linkedIssues).not.toContain(42);
   });
 
+  it("counts C/C++/CUDA source via the engine-side isCodeFile mirror (kept in sync with local-branch)", () => {
+    const directRepo = repo("owner/direct");
+    const local = buildLocalDiffPreflightResult(
+      {
+        repoFullName: directRepo.fullName,
+        title: "Add fused attention CUDA kernel",
+        body: "Fixes #1",
+        changedFiles: ["csrc/attention.cpp", "kernels/gemm.cu"],
+        testFiles: ["native/attention_test.cc"],
+        changedLineCount: 80,
+      },
+      directRepo,
+      [issue(directRepo.fullName, 1, "kernel")],
+      [],
+    );
+    // engine.ts's private isCodeFile mirror must recognize C/C++/CUDA source (both changed files are code), and
+    // the GoogleTest-style `_test.cc` must count as a test, not source — otherwise a native PR is mis-scored.
+    expect(local.localDiff).toMatchObject({ codeFileCount: 2, testFileCount: 1 });
+  });
+
   it("covers issue quality, burden, bounties, noise, and reviewability edge decisions", () => {
     const directRepo = repo("owner/direct");
     const issueRepo = repo("owner/issues", { issueDiscoveryShare: 1 });

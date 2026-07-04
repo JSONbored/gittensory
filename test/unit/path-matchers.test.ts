@@ -54,6 +54,10 @@ describe("isGeneratedFile", () => {
     for (const path of ["src/service.h", "include/foo.h", "src/service.cc"]) {
       expect(isGeneratedFile(path)).toBe(false);
     }
+    // Precedence: the generated check runs before the (now C/C++-aware) source check, so a generated `.pb.cc`
+    // stays "generated" while a hand-written `.cc` is "source".
+    expect(classifyChangedFile("proto/service.pb.cc")).toBe("generated");
+    expect(classifyChangedFile("src/service.cc")).toBe("source");
   });
 
   it("matches Python gRPC protobuf stubs alongside the message stubs", () => {
