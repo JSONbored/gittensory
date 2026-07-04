@@ -4,6 +4,7 @@ import {
   ANALYZER_NAMES,
   getAnalyzerDescriptor,
 } from "./analyzers/registry.js";
+import { isDockerfile } from "./analyzers/eol-check.js";
 import type {
   AnalyzerCostClass,
   AnalyzerDescriptor,
@@ -400,9 +401,8 @@ function historyCanRunWithoutGitHub(
 
 function isRuntimePinPath(path: string): boolean {
   const basename = path.split("/").pop() ?? path;
-  return (
-    /^Dockerfile(?:\..*)?$/.test(basename) ||
-    basename === ".nvmrc" ||
-    basename === "go.mod"
-  );
+  // Share the eol analyzer's own Dockerfile predicate so the gate can't skip a file the analyzer would
+  // parse. The prior bespoke `/^Dockerfile(?:\..*)?$/` missed `*.dockerfile` (e.g. web.dockerfile), silently
+  // dropping eol analysis for it even though isDockerfile() handles it.
+  return isDockerfile(path) || basename === ".nvmrc" || basename === "go.mod";
 }

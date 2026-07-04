@@ -300,3 +300,30 @@ test("lockfileDrift runs for mixed-case lockfile paths", async () => {
   assert.equal(brief.analyzerStatus.lockfileDrift, "ok");
   assert.notEqual(brief.telemetry.analyzers.lockfileDrift.skipReason, "no_lockfile");
 });
+
+test("eol runs for a *.dockerfile path (gate shares the analyzer's Dockerfile predicate)", async () => {
+  let eolRan = false;
+  const brief = await buildBrief(
+    {
+      repoFullName: "JSONbored/gittensory",
+      prNumber: 2940,
+      analyzers: ["eol"],
+      files: [
+        {
+          path: "deploy/web.dockerfile",
+          patch: "@@ -1,0 +1,1 @@\n+FROM node:16-alpine",
+        },
+      ],
+    },
+    {
+      eol: async () => {
+        eolRan = true;
+        return [];
+      },
+    },
+  );
+
+  assert.equal(eolRan, true);
+  assert.equal(brief.analyzerStatus.eol, "ok");
+  assert.notEqual(brief.telemetry.analyzers.eol.skipReason, "no_runtime_pin");
+});

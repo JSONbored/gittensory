@@ -42,7 +42,10 @@ function leadingVersion(value: string): string | null {
   return /^v?(\d+(?:\.\d+)*)/.exec(value.trim())?.[1] ?? null;
 }
 
-function isDockerfile(path: string): boolean {
+/** True for a Dockerfile the FROM-pin parser understands: the literal `Dockerfile`, or a `*.dockerfile`
+ *  (e.g. `web.dockerfile`). Exported so the scheduler's runtime-pin gate shares ONE predicate and cannot
+ *  drift from what this analyzer actually parses. */
+export function isDockerfile(path: string): boolean {
   const base = path.split("/").pop() ?? path;
   return base === "Dockerfile" || /\.dockerfile$/i.test(base);
 }
