@@ -73,6 +73,18 @@ const HARDCODED_BUILD_SECRET_RE =
 // A package installer pointed at a plaintext-HTTP index (dependency-download MITM).
 const INSECURE_PIP_INDEX_RE = /--(?:extra-)?index-url[=\s]+http:\/\//i;
 
+// TLS / certificate-verification bypass across ecosystems. In every case the MATCHED VALUE is the bypass
+// action itself (disabling verification / trusting any certificate), so there is no "safe value" form of the
+// same line — the secure setting uses a different value the regex never matches. Complements the existing
+// `tls-verification-disabled` rule with database-, Go-, Git-, SSH-, PHP-, .NET-, and Kubernetes-specific forms.
+const DB_SSL_DISABLED_RE = /\bssl[_-]?mode\s*[=:]\s*["']?(?:disable|disabled|none)\b/i;
+const GIT_SSL_NO_VERIFY_RE = /\bGIT_SSL_NO_VERIFY\b[\s"'=:,-]*["']?(?:1|true|yes)\b/i;
+const SSH_HOST_KEY_OFF_RE = /\bStrictHostKeyChecking\b[\s"'=:,-]*["']?(?:no|false)\b/i;
+const VERIFY_SSL_OFF_RE = /\bverify[_-]?(?:ssl|certs?|certificate)\b[\s"'=:,-]*["']?(?:false|no|0)\b/i;
+const VALIDATE_CERTS_OFF_RE = /\bvalidate_certs\b[\s"'=:,-]*["']?(?:no|false)\b/i;
+const TLS_SKIP_VERIFY_RE = /\b(?:tls_skip_verify|insecure_skip_verify)\b[\s"'=:,-]*true\b/i;
+const TRUST_ALL_CERTS_RE = /\bTrustServerCertificate\s*=\s*["']?true\b/i;
+
 function* patchLines(patch: string): Generator<string> {
   let start = 0;
   for (let i = 0; i <= patch.length; i++) {
@@ -396,6 +408,48 @@ export function scanPatchForIacMisconfig(
     if (
       INSECURE_PIP_INDEX_RE.test(body) &&
       pushFinding(findings, seen, path, newLine, "insecure-pip-index", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      DB_SSL_DISABLED_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "db-ssl-disabled", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      GIT_SSL_NO_VERIFY_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "git-ssl-no-verify", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      SSH_HOST_KEY_OFF_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "ssh-host-key-check-off", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      VERIFY_SSL_OFF_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "verify-ssl-off", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      VALIDATE_CERTS_OFF_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "validate-certs-off", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      TLS_SKIP_VERIFY_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "tls-skip-verify", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      TRUST_ALL_CERTS_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "trust-all-server-certs", maxFindings)
     ) {
       return findings;
     }

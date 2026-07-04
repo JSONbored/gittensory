@@ -243,7 +243,14 @@ export interface IacMisconfigFinding {
     | "npm-unsafe-perm"
     | "sudo-in-build"
     | "hardcoded-build-secret"
-    | "insecure-pip-index";
+    | "insecure-pip-index"
+    | "db-ssl-disabled"
+    | "git-ssl-no-verify"
+    | "ssh-host-key-check-off"
+    | "verify-ssl-off"
+    | "validate-certs-off"
+    | "tls-skip-verify"
+    | "trust-all-server-certs";
 }
 
 /** A newly-added dependency whose install compiles native code (npm node-gyp addon) or has no prebuilt wheel
