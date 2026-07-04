@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/api/routes";
 import { brokerOrbToken, isOrbBrokerEnabled, issueOrbEnrollment } from "../../src/orb/broker";
+import { MAX_ORB_RELAY_REGISTER_BODY_BYTES } from "../../src/orb/relay";
 import { createTestEnv, type TestD1Database } from "../helpers/d1";
 
 async function pkcs8Pem(): Promise<string> {
@@ -259,6 +260,53 @@ describe("broker endpoints", () => {
     const { secret } = (await issueOrbEnrollment(e, 401)) as { secret: string };
     await db(e).prepare("UPDATE orb_github_installations SET registered=0 WHERE installation_id=401").run();
     expect((await app.request("/v1/orb/token", { method: "POST", headers: { authorization: `Bearer ${secret}` } }, e)).status).toBe(403);
+  });
+
+  it("/v1/orb/token rejects oversized force-refresh bodies before parsing or validating the bearer", async () => {
+    const e = await brokerEnv();
+    const parseSpy = vi.spyOn(JSON, "parse");
+    const res = await app.request(
+      "/v1/orb/token",
+      {
+        method: "POST",
+        headers: { authorization: "Bearer orbsec_bad", "content-length": String(MAX_ORB_RELAY_REGISTER_BODY_BYTES + 1) },
+        body: "{}",
+      },
+      e,
+    );
+
+    expect(res.status).toBe(413);
+    expect(parseSpy).not.toHaveBeenCalled();
+    parseSpy.mockRestore();
+    await expect(res.json()).resolves.toEqual({ error: "payload_too_large", maxBytes: MAX_ORB_RELAY_REGISTER_BODY_BYTES });
+  });
+
+  it("/v1/orb/token caps streamed bodies when no content-length is declared", async () => {
+    const e = await brokerEnv();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_ORB_RELAY_REGISTER_BODY_BYTES + 1));
+        controller.close();
+      },
+    });
+    const res = await app.request("/v1/orb/token", { method: "POST", headers: { authorization: "Bearer orbsec_bad" }, body: stream, duplex: "half" } as RequestInit, e);
+
+    expect(res.status).toBe(413);
+    await expect(res.json()).resolves.toMatchObject({ error: "payload_too_large" });
+  });
+
+  it("/v1/orb/token accepts small force-refresh JSON and ignores malformed JSON", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-25T07:00:00Z"));
+    const e = await brokerEnv({ TOKEN_ENCRYPTION_SECRET: "orb-route-cache-secret" });
+    await seedInstall(e, 405, { registered: 1 });
+    const { secret } = (await issueOrbEnrollment(e, 405)) as { secret: string };
+    const calls = countingTokenFetch("2026-06-25T08:00:00Z", { contents: "write" });
+
+    expect((await app.request("/v1/orb/token", { method: "POST", headers: { authorization: `Bearer ${secret}` }, body: "{bad" }, e)).status).toBe(200);
+    expect(calls()).toBe(1);
+    expect((await app.request("/v1/orb/token", { method: "POST", headers: { authorization: `Bearer ${secret}` }, body: JSON.stringify({ forceRefresh: true }) }, e)).status).toBe(200);
+    expect(calls()).toBe(2);
   });
 
   it("/v1/internal/orb/enrollments: 400 missing id, 409 unregistered, 404 unknown", async () => {

@@ -132,7 +132,13 @@ import { handleOrbIngest, readOrbIngestBody } from "../orb/ingest";
 import { handleOrbWebhook } from "../orb/webhook";
 import { handleOrbOAuthCallback } from "../orb/oauth";
 import { brokerOrbToken, isOrbBrokerEnabled, issueOrbEnrollment } from "../orb/broker";
-import { pullRelayPending, readOrbRelayRegisterBody, registerValidatedOrbRelay, validateOrbRelayEnrollment } from "../orb/relay";
+import {
+  MAX_ORB_RELAY_REGISTER_BODY_BYTES,
+  pullRelayPending,
+  readOrbRelayRegisterBody,
+  registerValidatedOrbRelay,
+  validateOrbRelayEnrollment,
+} from "../orb/relay";
 import { computeFleetAnalytics } from "../orb/analytics";
 import { handleMcpRequest } from "../mcp/server";
 import { buildOpenApiSpec } from "../openapi/spec";
@@ -3118,7 +3124,16 @@ export function createApp() {
     const auth = c.req.header("authorization") ?? "";
     const secret = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
     if (!secret) return c.json({ error: "missing_enrollment_secret" }, 401);
-    const body = await c.req.json().catch(() => null);
+    const rawBody = await readOrbRelayRegisterBody(c.req.raw, c.req.header("content-length"));
+    if (rawBody === null) return c.json({ error: "payload_too_large", maxBytes: MAX_ORB_RELAY_REGISTER_BODY_BYTES }, 413);
+    let body: unknown = null;
+    if (rawBody) {
+      try {
+        body = JSON.parse(rawBody) as unknown;
+      } catch {
+        body = null;
+      }
+    }
     const forceRefresh = typeof body === "object" && body !== null && (body as { forceRefresh?: unknown }).forceRefresh === true;
     let result: Awaited<ReturnType<typeof brokerOrbToken>>;
     try {
