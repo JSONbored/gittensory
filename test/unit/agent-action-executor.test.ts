@@ -631,14 +631,18 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     });
   });
 
-  it("#label-close-split-brain: a coupled anti-abuse label+close pair (matching closeKind) BOTH complete when the close succeeds", async () => {
+  it("#label-close-split-brain: a coupled anti-abuse label+close pair (matching closeKind) BOTH complete when the close succeeds and closes the PR before the label", async () => {
     const env = createTestEnv({});
     const coupledClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "over the per-contributor open-item cap", closeComment: "closing", closeKind: "contributor_cap" };
     const coupledLabel: PlannedAgentAction = { actionClass: "label", autonomyClass: "close", requiresApproval: false, reason: "over the per-contributor open-item cap", label: "over-contributor-limit", labelOp: "add", closeKind: "contributor_cap" };
+    vi.mocked(fetchPullRequestFreshness)
+      .mockResolvedValueOnce({ status: "current", liveHeadSha: "sha7", liveState: "open" })
+      .mockResolvedValueOnce({ status: "stale", reason: "closed", expectedHeadSha: "sha7", liveHeadSha: "sha7", liveState: "closed" });
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [coupledClose, coupledLabel]);
     expect(outcomes.map((o) => o.outcome)).toEqual(["completed", "completed"]);
     expect(closePullRequest).toHaveBeenCalledTimes(1);
     expect(ensurePullRequestLabel).toHaveBeenCalledTimes(1);
+    expect(fetchPullRequestFreshness).toHaveBeenCalledTimes(1);
   });
 
   it("#label-close-split-brain (confirmed root cause of PR-cap miscounting): a coupled anti-abuse label is SKIPPED, not posted, when its paired close is denied for lacking pull_requests:write — `label` mutates via the Issues API and is otherwise exempt from that gate, so without this correlation a PR could be mislabeled 'over-contributor-limit' while it stays open forever", async () => {

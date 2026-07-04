@@ -262,30 +262,37 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
     //    leave a PR mislabeled "closed for X" while still open. A coupled close that is still "queued" (awaiting
     //    the SAME approval) or "completed" lets the label through unchanged; a close with no `closeKind` match
     //    (e.g. a plain review_state_label) is unaffected.
+    let pairedCloseOutcome: AgentActionOutcome["outcome"] | undefined;
     if (action.actionClass === "label" && action.closeKind) {
-      const closeOutcome = coupledCloseOutcome(planned, outcomes, action.closeKind);
-      if (closeOutcome === "denied" || closeOutcome === "error") {
-        await audit("denied", `paired ${action.closeKind} close did not complete (${closeOutcome}) — skipping the companion label so the PR isn't mislabeled while still open`);
+      pairedCloseOutcome = coupledCloseOutcome(planned, outcomes, action.closeKind);
+      if (pairedCloseOutcome === "denied" || pairedCloseOutcome === "error") {
+        await audit("denied", `paired ${action.closeKind} close did not complete (${pairedCloseOutcome}) — skipping the companion label so the PR isn't mislabeled while still open`);
         continue;
       }
     }
     // 7) Freshness guard: every supported live action mutates PR state or PR-visible output, so it must still
     //    target the reviewed, open head. This protects approval-queue replays and slow webhook jobs from
-    //    force-pushes or manual closes that happen after the review was planned.
+    //    force-pushes or manual closes that happen after the review was planned. A companion anti-abuse label
+    //    whose paired close just completed in this same batch reuses the close's already-passed guard: the
+    //    successful close intentionally flips the PR to closed, so a second open-PR freshness read would deny
+    //    the label for the state transition this executor just performed.
     const expectedHeadSha = action.expectedHeadSha ?? ctx.headSha ?? null;
-    if (!expectedHeadSha) {
-      await audit("denied", "live PR head guard unavailable — action not executed");
-      continue;
-    }
-    const freshness = await fetchPullRequestFreshness(env, {
-      installationId: ctx.installationId,
-      repoFullName: ctx.repoFullName,
-      pullNumber: ctx.pullNumber,
-      expectedHeadSha,
-    });
-    if (freshness.status !== "current") {
-      await audit("denied", `${pullRequestFreshnessDetail(freshness)} — action not executed`);
-      continue;
+    const freshnessAlreadyProvenByPairedClose = action.actionClass === "label" && action.closeKind !== undefined && pairedCloseOutcome === "completed";
+    if (!freshnessAlreadyProvenByPairedClose) {
+      if (!expectedHeadSha) {
+        await audit("denied", "live PR head guard unavailable — action not executed");
+        continue;
+      }
+      const freshness = await fetchPullRequestFreshness(env, {
+        installationId: ctx.installationId,
+        repoFullName: ctx.repoFullName,
+        pullNumber: ctx.pullNumber,
+        expectedHeadSha,
+      });
+      if (freshness.status !== "current") {
+        await audit("denied", `${pullRequestFreshnessDetail(freshness)} — action not executed`);
+        continue;
+      }
     }
     // 8) Live CI re-verification for a merge or a CI-driven heuristic close (#2128): the CI aggregate that drove
     //    either decision was read seconds-to-tens-of-seconds earlier, in the planning pass, and the freshness
