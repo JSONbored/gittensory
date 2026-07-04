@@ -61,6 +61,15 @@ test("scanPatch flags a GitLab access token whose final token character is a hyp
   assert.equal(findings[0].confidence, "high");
 });
 
+test("scanPatch does not flag a GitLab-shaped run that continues past the expected 20-char token length", () => {
+  const overrun = fakeGitlabToken + "X"; // 21 token-alphabet chars after the prefix
+  const findings = scanPatch("src/config.ts", hunk([`const gl = "${overrun}";`]));
+  assert.equal(
+    findings.some((f) => f.kind === "gitlab_token"),
+    false,
+  );
+});
+
 test("scanPatch flags an npm token with high confidence", () => {
   const findings = scanPatch("src/config.ts", hunk([`const registryAuth = "${fakeNpmToken}";`]));
   assert.equal(findings.length, 1);
