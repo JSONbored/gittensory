@@ -148,7 +148,9 @@ export function scanPatchForSecretLog(
         }
       }
       newLine++;
-    } else if (!line.startsWith("-")) {
+    } else if (!line.startsWith("-") && !line.startsWith("\\")) {
+      // A `\ No newline at end of file` marker is not a new-file line — do not advance the cursor
+      // (same class as the iac-misconfig / redos fix).
       newLine++;
     }
   }
