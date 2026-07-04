@@ -7,7 +7,7 @@
 
 import type { AdvisoryFinding } from "../types";
 import { neutralizePromptInjection, safeReviewTitle } from "./prompt-injection";
-import { scanForSecrets } from "./secrets-scan";
+import { scanPrDiffForSecretKinds } from "./secrets-scan";
 
 // Concrete credential formats only — NOT the weak heuristics (`seed_or_mnemonic` / `bittensor_key`) that
 // false-positive on legitimate config/workflow content. A `coldkey:` / `hotkey =` line or the word
@@ -98,21 +98,10 @@ export function secretLeakFinding(diff: string): AdvisoryFinding | null {
   // secret-shaped string (e.g. deleting/defanging a test fixture, or rotating a credential out). Added/renamed
   // file paths are also committed PR state, but buildSecretScanDiff carries them only in `### path (status)`
   // headers, so keep those metadata lines while still dropping modified/removed headers and `+++` patch headers.
-  const added = diff
-    .split("\n")
-    .filter(
-      (line) =>
-        (line.startsWith("+") && !line.startsWith("+++")) ||
-        /^### .+ \((?:added|renamed)\) /.test(line),
-    )
-    .join("\n");
-  // Only CONCRETE credential formats hard-block. The raw scanner also returns the weak `seed_or_mnemonic` /
-  // `bittensor_key` heuristics, which false-positive on `coldkey:` / `hotkey =` / "mnemonic" lines in
-  // legitimate config/workflow files (RC6); those are filtered out here so they never produce a `secret_leak`
-  // blocker. A real token (github_token, aws_access_key, …) still blocks regardless of which file it is in.
-  const kinds = scanForSecrets(added).kinds.filter((kind) =>
-    HARD_SECRET_KINDS.has(kind),
-  );
+  // scanPrDiffForSecretKinds walks the diff line-by-line (with a bounded cross-line literal join on consecutive
+  // added lines, #2454) instead of joining all `+` lines into one blob — that join would miss a credential
+  // split across adjacent assignments and would also ignore hunk/context boundaries the gate must respect.
+  const kinds = scanPrDiffForSecretKinds(diff).filter((kind) => HARD_SECRET_KINDS.has(kind));
   if (kinds.length === 0) return null;
   return {
     code: "secret_leak",

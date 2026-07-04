@@ -435,4 +435,17 @@ describe("secretLeakFinding scans only ADDED lines", () => {
     const diff = `### fixtures/${fakeToken}.txt (removed) +0/-1\n@@\n-const unrelated = 1;`;
     expect(secretLeakFinding(diff)).toBeNull();
   });
+
+  it("flags a credential split across consecutive added lines (#2454)", () => {
+    const awsKeyFragmentA = "AKIA" + "IOSFODNN7";
+    const awsKeyFragmentB = "EXAMPLE";
+    const diff = [
+      "### src/config.ts (modified) +2/-0",
+      "@@ -1,0 +1,2 @@",
+      `+const part1 = "${awsKeyFragmentA}";`,
+      `+const part2 = "${awsKeyFragmentB}";`,
+    ].join("\n");
+    expect(secretLeakFinding(diff)?.code).toBe("secret_leak");
+    expect(secretLeakFinding(diff)?.title).toContain("aws_access_key");
+  });
 });
