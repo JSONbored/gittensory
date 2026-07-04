@@ -615,10 +615,13 @@ describe("resolveReesAnalyzers", () => {
     warnSpy.mockRestore();
   });
 
-  it("accepts docCommentDrift as a configured analyzer subset", () => {
+  it("accepts newer github-light analyzers as configured analyzer subsets", () => {
     expect(
       resolveReesAnalyzers(env({ REES_ANALYZERS: "docCommentDrift" })),
     ).toEqual(["docCommentDrift"]);
+    expect(
+      resolveReesAnalyzers(env({ REES_ANALYZERS: "undocumentedExport" })),
+    ).toEqual(["undocumentedExport"]);
   });
 
   it("accepts every REES analyzer currently registered by the service", () => {
@@ -626,7 +629,7 @@ describe("resolveReesAnalyzers", () => {
       resolveReesAnalyzers(
         env({
           REES_ANALYZERS:
-            "dependency,lockfileDrift,secret,license,installScript,heavyDependency,actionPin,eol,redos,provenance,codeowners,secretLog,assetWeight,typosquat,commitSignature,iacMisconfig,nativeBuild,history,docCommentDrift",
+            "dependency,lockfileDrift,secret,license,installScript,heavyDependency,actionPin,eol,redos,provenance,codeowners,secretLog,assetWeight,typosquat,commitSignature,iacMisconfig,nativeBuild,history,docCommentDrift,undocumentedExport",
         }),
       ),
     ).toEqual([
@@ -649,6 +652,7 @@ describe("resolveReesAnalyzers", () => {
       "nativeBuild",
       "history",
       "docCommentDrift",
+      "undocumentedExport",
     ]);
   });
 
