@@ -11,10 +11,10 @@
 // forbidden-path patterns enforced in `scripts/check-mcp-package.mjs` plus a conservative git force-push guard.
 
 /**
- * Compile a glob to an anchored RegExp. `**` matches across path segments (any char incl. `/`); a leading `**​/`
- * also matches zero directories; `*` matches within a single segment (no `/`); every other char is literal. Kept
- * intentionally small — it only needs the shapes the built-in rules use (`.github/workflows/**`, `**​/.env*`,
- * `**​/secret*​/**`, `**​/*private*key*`).
+ * Compile a glob to an anchored, case-insensitive RegExp. `**` matches across path segments (any char incl.
+ * `/`); a leading `**​/` also matches zero directories; `*` matches within a single segment (no `/`); every
+ * other char is literal. Inputs are normalized before matching so `./`, nested, and Windows-style variants
+ * cannot bypass the built-in path rules.
  */
 function globToRegExp(glob) {
   let source = "";
@@ -36,19 +36,28 @@ function globToRegExp(glob) {
       source += char.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
     }
   }
-  return new RegExp(`^${source}$`);
+  return new RegExp(`^${source}$`, "i");
 }
 
-/** Collect the string values in a tool-call input (top-level strings and string elements of top-level arrays) so a
- *  rule can test them without hard-coding field names. Non-object input yields no strings (rule can't match). */
-function collectInputStrings(input) {
+function normalizePathCandidate(value) {
+  return value
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/\/\.\//g, "/")
+    .replace(/\/+$/, "");
+}
+
+/** Collect string values anywhere in a tool-call input so rules can test nested tool arguments without
+ *  hard-coding field names. Non-object input yields no strings (rule can't match). */
+function collectInputStrings(input, seen = new WeakSet()) {
   const strings = [];
-  if (!input || typeof input !== "object" || Array.isArray(input)) return strings;
-  for (const value of Object.values(input)) {
+  if (!input || typeof input !== "object") return strings;
+  if (seen.has(input)) return strings;
+  seen.add(input);
+  const values = Array.isArray(input) ? input : Object.values(input);
+  for (const value of values) {
     if (typeof value === "string") strings.push(value);
-    else if (Array.isArray(value)) {
-      for (const element of value) if (typeof element === "string") strings.push(element);
-    }
+    else if (value && typeof value === "object") strings.push(...collectInputStrings(value, seen));
   }
   return strings;
 }
@@ -61,12 +70,15 @@ function collectInputStrings(input) {
  * the whole-value candidate.
  */
 function pathCandidates(value) {
-  const candidates = [value];
+  const candidates = new Set([value, normalizePathCandidate(value)]);
   for (const token of value.split(/\s+/)) {
     const trimmed = token.replace(/^["']+|["']+$/g, "");
-    if (trimmed && trimmed !== value) candidates.push(trimmed);
+    if (trimmed) {
+      candidates.add(trimmed);
+      candidates.add(normalizePathCandidate(trimmed));
+    }
   }
-  return candidates;
+  return [...candidates].filter(Boolean);
 }
 
 function matcherMatches(matcher, toolName) {
@@ -96,9 +108,13 @@ function ruleMatches(rule, toolName, inputStrings) {
  * key material) and adds a conservative git force-push guard (a command carrying both `push` and `--force`).
  */
 export const DEFAULT_DENY_RULES = [
-  { matcher: "*", pathPattern: ".github/workflows/**", reason: "Never modify CI workflows (.github/workflows/**)." },
+  { matcher: "*", pathPattern: "**/.github/workflows/**", reason: "Never modify CI workflows (.github/workflows/**)." },
   { matcher: "*", pathPattern: "**/.env*", reason: "Never read or write environment files (.env*)." },
-  { matcher: "*", pathPattern: "**/secret*/**", reason: "Never touch secret-bearing paths (**/secret*/**)." },
+  { matcher: "*", pathPattern: "**/.dev.vars", reason: "Never read or write local Worker secrets (.dev.vars)." },
+  { matcher: "*", pathPattern: "**/.npmrc", reason: "Never read or write npm credential files (.npmrc)." },
+  { matcher: "*", pathPattern: "**/*.pem", reason: "Never touch PEM key material (*.pem)." },
+  { matcher: "*", pathPattern: "**/*secret*/**", reason: "Never touch secret-bearing directories (**/*secret*/**)." },
+  { matcher: "*", pathPattern: "**/*secret*", reason: "Never touch secret-bearing paths (**/*secret*)." },
   { matcher: "*", pathPattern: "**/*private*key*", reason: "Never touch private key material (**/*private*key*)." },
   { matcher: "*", inputIncludesAll: ["push", "--force"], reason: "Never force-push (git push --force)." },
 ];
