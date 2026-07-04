@@ -582,7 +582,7 @@ describe("runAiReviewForAdvisory", () => {
     // Simulate a webhook pass already in-flight for this exact (repo, PR, head, mode) tuple — the caller under
     // test (a sweep-shaped pass, say) must defer instead of racing it with a second, independently-decided
     // LLM call.
-    expect(await claimAiReviewLock(env, "acme/widgets", 3, "sha3", "block")).toBe(true);
+    expect((await claimAiReviewLock(env, "acme/widgets", 3, "sha3", "block")).acquired).toBe(true);
 
     const result = await runAiReviewForAdvisory(env, {
       settings: { aiReviewMode: "block" } as RepositorySettings,

@@ -23,6 +23,16 @@ export function createRedisCache(redis: Redis) {
       const result = await redis.set(key, value, "EX", ttlSeconds, "NX");
       return result === "OK";
     },
+    // Atomic compare-and-delete: only the holder whose token still matches may release the key.
+    async releaseIfValue(key: string, value: string): Promise<boolean> {
+      const result = await redis.eval(
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+        1,
+        key,
+        value,
+      );
+      return result === 1;
+    },
   };
 }
 
