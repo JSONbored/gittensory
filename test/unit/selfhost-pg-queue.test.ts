@@ -1163,38 +1163,61 @@ describe("createPgQueue (durable #977)", () => {
   });
 
   describe("topBacklogRepos (#selfhost-lane-observability)", () => {
-    function stubBacklogJobKeys(jobKeys: Array<string | null>): { query: Pool["query"] } {
+    // The COUNT/GROUP BY/ORDER BY/LIMIT run IN SQL now (gate review) -- this mock can't execute real SQL, so it
+    // returns a pre-aggregated {repo, cnt} result set (as the real query would) and these tests verify (a) the
+    // query is scoped to the backlog lane + the agent-regate-pr job_key prefix with the limit bound as a
+    // parameter, and (b) the {repo, cnt} rows map to {repo, count} correctly. The aggregation SQL itself
+    // (substring/position extraction, GROUP BY, ORDER BY, exclusion of dead/fresh-lane/no-hash-edge rows) is
+    // verified directly against a real Postgres instance and, identically, against the real SQLite engine in
+    // selfhost-sqlite-queue.test.ts (both backends share the same query shape).
+    function stubAggregatedBacklogRepos(rows: Array<{ repo: string; cnt: string | number }>): {
+      pool: { query: Pool["query"] };
+      calls: Array<{ sql: string; params: unknown[] }>;
+    } {
+      const calls: Array<{ sql: string; params: unknown[] }> = [];
       return {
-        query: (async (sql: unknown) => {
-          const q = String(sql);
-          if (q.includes("SELECT job_key FROM") && q.includes("foreground_lane='backlog'")) {
-            return { rows: jobKeys.map((job_key) => ({ job_key })), rowCount: jobKeys.length };
-          }
-          return { rows: [], rowCount: 0 };
-        }) as Pool["query"],
+        pool: {
+          query: (async (sql: unknown, params?: unknown[]) => {
+            const q = String(sql);
+            if (q.includes("foreground_lane='backlog'") && q.includes("GROUP BY repo")) {
+              calls.push({ sql: q, params: params ?? [] });
+              return { rows, rowCount: rows.length };
+            }
+            return { rows: [], rowCount: 0 };
+          }) as Pool["query"],
+        },
+        calls,
       };
     }
 
     it("returns an empty array when no backlog-lane row is pending", async () => {
-      const q = createPgQueue(stubBacklogJobKeys([]) as unknown as Pool, async () => undefined);
+      const m = stubAggregatedBacklogRepos([]);
+      const q = createPgQueue(m.pool as unknown as Pool, async () => undefined);
       expect(await q.topBacklogRepos(10)).toEqual([]);
     });
 
-    it("counts rows grouped by repo, sorted by depth, honoring the limit", async () => {
-      const q = createPgQueue(
-        stubBacklogJobKeys([
-          "agent-regate-pr:owner/a#1",
-          "agent-regate-pr:owner/b#1",
-          "agent-regate-pr:owner/b#2",
-          "agent-regate-pr:owner/b#3",
-          "agent-regate-pr:owner/c#1",
-        ]) as unknown as Pool,
-        async () => undefined,
-      );
+    it("maps aggregated {repo, cnt} rows to {repo, count}, binding the prefix, LIKE pattern, and limit as params", async () => {
+      const m = stubAggregatedBacklogRepos([
+        { repo: "owner/b", cnt: "3" },
+        { repo: "owner/a", cnt: 1 },
+      ]);
+      const q = createPgQueue(m.pool as unknown as Pool, async () => undefined);
+
       expect(await q.topBacklogRepos(2)).toEqual([
         { repo: "owner/b", count: 3 },
         { repo: "owner/a", count: 1 },
       ]);
+      expect(m.calls).toHaveLength(1);
+      expect(m.calls[0]?.params).toEqual(["agent-regate-pr:", "agent-regate-pr:%", 2]);
+      expect(m.calls[0]?.sql).toContain("status IN ('pending','processing')");
+    });
+
+    it("clamps a negative limit to 0 rather than passing it through to SQL (LIMIT -1 means unlimited in some dialects)", async () => {
+      const m = stubAggregatedBacklogRepos([]);
+      const q = createPgQueue(m.pool as unknown as Pool, async () => undefined);
+
+      await q.topBacklogRepos(-5);
+      expect(m.calls[0]?.params).toEqual(["agent-regate-pr:", "agent-regate-pr:%", 0]);
     });
   });
 

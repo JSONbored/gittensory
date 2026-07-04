@@ -50,11 +50,11 @@ import {
   type MaintenancePressureSignals,
 } from "./maintenance-admission";
 import {
+  AGENT_REGATE_PR_JOB_KEY_PREFIX,
   backlogRepoCandidatesFromJobKeys,
   foregroundLaneForJob,
   nextForegroundLane,
   pickBacklogRepo,
-  topBacklogRepoCounts,
   type BacklogRepoCount,
   type ForegroundLane,
 } from "./queue-fairness";
@@ -575,16 +575,30 @@ export function createSqliteQueue(
    *  (#selfhost-lane-observability) -- a snapshot read, distinct from claimNextForegroundLane's own backlog
    *  query (which is scoped to run_after<=now and only reads job_key+created_at for the round-robin picker).
    *  This one counts EVERY pending+processing backlog-lane row regardless of run_after, matching the "how deep
-   *  is each repo's backlog right now" framing of a dashboard panel rather than a claim-time eligibility set. */
+   *  is each repo's backlog right now" framing of a dashboard panel rather than a claim-time eligibility set.
+   *  The COUNT/GROUP BY/ORDER BY/LIMIT run IN SQL (gate review, #selfhost-lane-observability) -- a self-host
+   *  install with a large real backlog must never pull every matching job_key into JS on every /metrics scrape
+   *  just to throw away all but the top 10; only the final, already-bounded rows ever leave the DB. */
   function topBacklogRepos(limit: number): BacklogRepoCount[] {
     const { rows } = driver.query(
-      `SELECT job_key FROM ${TABLE} WHERE status IN ('pending','processing') AND foreground_lane='backlog'`,
-      [],
+      `WITH backlog_rest AS (
+         SELECT substr(job_key, length(?) + 1) AS rest
+           FROM ${TABLE}
+          WHERE status IN ('pending','processing') AND foreground_lane='backlog' AND job_key LIKE ?
+       ),
+       backlog_repos AS (
+         SELECT CASE WHEN instr(rest, '#') > 0 THEN substr(rest, 1, instr(rest, '#') - 1) ELSE rest END AS repo
+           FROM backlog_rest
+       )
+       SELECT repo, COUNT(*) AS cnt
+         FROM backlog_repos
+        WHERE repo != ''
+        GROUP BY repo
+        ORDER BY cnt DESC, repo ASC
+        LIMIT ?`,
+      [AGENT_REGATE_PR_JOB_KEY_PREFIX, `${AGENT_REGATE_PR_JOB_KEY_PREFIX}%`, Math.max(0, limit)],
     );
-    return topBacklogRepoCounts(
-      (rows as Array<{ job_key: string | null }>).map((row) => ({ jobKey: row.job_key })),
-      limit,
-    );
+    return (rows as Array<{ repo: string; cnt: number }>).map((row) => ({ repo: row.repo, count: Number(row.cnt) }));
   }
 
   function claimNextWhere(
