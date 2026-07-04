@@ -459,6 +459,7 @@ import type {
   JsonValue,
   PullRequestFilePathRecord,
   PullRequestRecord,
+  RepositoryCommandAuthorizationPolicy,
   RepositoryRecord,
   RepositorySettings,
 } from "../types";
@@ -471,6 +472,10 @@ const OFFICIAL_MINER_DETECTION_TTL_MS = 5 * 60 * 1000;
 const OFFICIAL_MINER_DETECTION_UNAVAILABLE_TTL_MS = 60 * 1000;
 const PER_PR_REGATE_BACKPRESSURE_TYPES = ["agent-regate-pr"] as const;
 const SWEEP_OPEN_PULL_REQUEST_SYNC_MAX_AGE_MS = 10 * 60 * 1000;
+const PR_PANEL_RETRIGGER_COMMAND_AUTHORIZATION: RepositoryCommandAuthorizationPolicy = {
+  default: ["maintainer", "collaborator"],
+  commands: { "review-now": ["maintainer", "collaborator"] },
+};
 const PR_PUBLIC_SURFACE_ACTIONS = new Set([
   "opened",
   "reopened",
@@ -2368,6 +2373,7 @@ async function runAgentMaintenancePlanAndExecute(
     );
   }
   const changedPaths = changedPathsForGuardrail(changedFiles);
+  const guardrailMatches = guardrailPathMatches(changedPaths, hardGuardrailGlobs);
   // #2550: live migrations/** collision recheck — config-gated (off by default) AND path-gated (only a PR
   // that actually touches migrations/** pays the extra GitHub API call), so a non-migrations PR sees zero
   // added latency: the whole block short-circuits on the boolean+array checks before any network call.
@@ -2754,6 +2760,7 @@ async function runAgentMaintenancePlanAndExecute(
         closeOwnerAuthors: settings.closeOwnerAuthors,
         precisionBreakerEngaged: precisionBreakerDirections.length > 0,
         precisionBreakerDirections,
+        guardrailMatches,
         disposition,
         plannedActionClasses: planned.map((action) => action.actionClass),
         finalActionClasses: breakerOnPlan.map((action) => action.actionClass),
@@ -9506,9 +9513,9 @@ async function maybeProcessPrPanelRetrigger(
     issue,
     actor,
     commandName: "review-now",
-    settings,
+    settings: { ...settings, commandAuthorization: PR_PANEL_RETRIGGER_COMMAND_AUTHORIZATION },
     pr,
-    needsMinerDetection: true,
+    needsMinerDetection: false,
   });
   if (!authorization.authorized) {
     await recordPrPanelRetriggerSkip(
@@ -9531,7 +9538,7 @@ async function maybeProcessPrPanelRetrigger(
         reason: authorization.reason,
         actorKind: authorization.actorKind,
         allowedRoles: commandAuthorizationAllowedRoles(
-          settings.commandAuthorization,
+          PR_PANEL_RETRIGGER_COMMAND_AUTHORIZATION,
           "review-now",
         ),
       },

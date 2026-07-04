@@ -12763,7 +12763,7 @@ describe("queue processors", () => {
     expect(audit?.outcome).toBe("completed");
   });
 
-  it("reruns the panel when a confirmed-miner PR author checks the rerun task (#824 miner-detection path)", async () => {
+  it("skips PR panel reruns from confirmed-miner PR authors because the checkbox is maintainer-only", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
     await upsertRepositorySettings(env, {
@@ -12774,7 +12774,8 @@ describe("queue processors", () => {
       checkRunMode: "off",
       gateCheckMode: "off",
       includeMaintainerAuthors: true,
-      // review-now allows a confirmed miner, so a confirmed-miner PR author can retrigger their own panel.
+      // Even if repo config tries to allow confirmed miners, the checkbox is a maintainer/write-collaborator
+      // control because it mutates the bot's persisted review comment.
       commandAuthorization: { default: ["maintainer", "collaborator", "confirmed_miner"], commands: { "review-now": ["maintainer", "confirmed_miner"] } },
     });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
@@ -12829,14 +12830,15 @@ describe("queue processors", () => {
       },
     });
 
-    // The confirmed-miner detection WAS fetched (the #824 helper's miner-detection path) and the panel retriggered.
-    expect(calls.minerList).toBeGreaterThanOrEqual(1);
+    // The checkbox authorization ignores the widened repo command policy, so it never reaches miner detection or
+    // comment mutation for a plain PR author.
+    expect(calls.minerList).toBe(0);
     expect(calls.permission).toBe(1);
-    expect(calls.commentPatches).toBe(2);
-    const audit = await env.DB.prepare("select actor, outcome from audit_events where event_type = ? and target_key = ?")
-      .bind("github_app.pr_panel_retriggered", "JSONbored/gittensory#48")
-      .first<{ actor: string; outcome: string }>();
-    expect(audit).toMatchObject({ actor: "contributor", outcome: "completed" });
+    expect(calls.commentPatches).toBe(0);
+    const audit = await env.DB.prepare("select actor, outcome, detail from audit_events where event_type = ? and target_key = ?")
+      .bind("github_app.pr_panel_retrigger_skipped", "JSONbored/gittensory#48")
+      .first<{ actor: string; outcome: string; detail: string }>();
+    expect(audit).toMatchObject({ actor: "contributor", outcome: "completed", detail: "maintainer_command_requires_maintainer" });
   });
 
   it("skips PR panel reruns from users without repository write permission", async () => {
@@ -20536,6 +20538,13 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
     expect(seen.merged).toBe(false);
     expect(seen.closed).toBe(false);
     expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="hold",autonomy_level="auto",blocker_class="guardrail_hold"} 1');
+    const holdAudit = await env.DB.prepare("select metadata_json from audit_events where event_type = 'agent.action.hold' order by created_at desc limit 1").first<{ metadata_json: string }>();
+    expect(JSON.parse(holdAudit?.metadata_json ?? "{}")).toMatchObject({
+      repoFullName: REPO,
+      pullNumber: 61,
+      disposition: { actionClass: "hold", blockerClass: "guardrail_hold" },
+      guardrailMatches: [{ path: ".github/workflows/ci.yml", glob: ".github/workflows/**" }],
+    });
   });
 
   it("reviewCheckMode: disabled still auto-closes a blocked contributor PR via the general heuristic-close path (#2852)", async () => {

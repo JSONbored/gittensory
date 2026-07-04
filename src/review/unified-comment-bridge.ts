@@ -138,6 +138,27 @@ const BOILERPLATE_NIT_CODES = new Set([
 ]);
 const BOILERPLATE_NIT_TITLE =
   /local gittensory cache|registration is not available|config was not parsed|not registered/i;
+const MANUAL_HOLD_WARNING_CODES = new Set([
+  "guardrail_hold",
+  "oversized_pr",
+  "ai_review_inconclusive",
+]);
+
+function holdWarningVerdictReason(finding: AdvisoryFinding): string {
+  const title = finding.title.trim();
+  const detail = finding.detail.trim();
+  return detail.length > 0 ? `${title}: ${detail}` : title;
+}
+
+function gateVerdictReason(gate: GateCheckEvaluation): string | undefined {
+  const holdReasons = gate.warnings
+    .filter((finding) => MANUAL_HOLD_WARNING_CODES.has(finding.code))
+    .map(holdWarningVerdictReason)
+    .filter(Boolean);
+  if (holdReasons.length > 0) return holdReasons.join("; ");
+  return gate.summary?.trim() || gate.title?.trim() || undefined;
+}
+
 export function isBoilerplateNit(finding: AdvisoryFinding): boolean {
   return (
     BOILERPLATE_NIT_CODES.has(finding.code) ||
@@ -367,7 +388,7 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
   // by construction (gate summary/title are author-facing) and angle-escaped by the renderer's verdictLine.
   // Only attached for a NON-merge verdict: a passing (merge → ready) PR keeps its positive "safe to merge" /
   // "all checks passed" wording rather than being overwritten by the gate's "no blocker found" summary.
-  const gateReason = args.gate.summary?.trim() || args.gate.title?.trim() || undefined;
+  const gateReason = gateVerdictReason(args.gate);
   const verdictReason = verdict !== "merge" ? gateReason : undefined;
   const input = buildUnifiedReviewInput({
     changedFiles: args.changedFiles,
