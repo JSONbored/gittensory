@@ -96,6 +96,10 @@ export type PlannedAgentAction = {
   // ALWAYS set for a heuristic close (never omitted) -- see the field's doc comment on AgentPendingActionParams
   // in types.ts for why the tri-state (rather than an optional "failed") matters (#2478).
   closeRequiresCiState?: "failed" | "not_required";
+  // True when a base conflict was part of this close's justification -- see the doc comment on
+  // AgentPendingActionParams in types.ts for why the approval queue's accept-time recheck is scoped to this
+  // specific case rather than every non-CI heuristic close. ALWAYS set for a heuristic close (never omitted).
+  closeRequiresMergeableState?: boolean;
   // For a "heuristic" close: true when the close is backed by CONCRETE, non-judgment evidence — a committed
   // secret, a failing/red CI run, a base conflict, a deterministic linked-issue-overlap duplicate, or a
   // rule-based lane/manifest/pre-merge rejection — rather than any AI/model-derived verdict or a fuzzy score.
@@ -855,6 +859,8 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       // Always explicit (never omitted) -- see the field's doc comment (#2478): an omitted value on a REPLAYED
       // staged action must unambiguously mean "legacy row, predates this field", not "not CI-driven".
       closeRequiresCiState: ciFailed ? "failed" : "not_required",
+      // Always explicit (never omitted), mirroring closeRequiresCiState's own discipline above.
+      closeRequiresMergeableState: isConflict,
     });
   }
   // else: guarded → manual (needs-human/changes label above); not-good OWNER/automation → held

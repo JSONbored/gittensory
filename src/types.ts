@@ -1007,6 +1007,17 @@ export type AgentPendingActionParams = {
   // ALWAYS set (to "failed" or "not_required") for a freshly planned heuristic close (#2478) -- never omitted --
   // so `undefined` unambiguously means a LEGACY row staged before this field existed, not "not CI-driven".
   closeRequiresCiState?: "failed" | "not_required";
+  // True when a base conflict (mergeable_state: "dirty") was part of this heuristic close's justification --
+  // the ONLY non-CI close reason the approval queue's accept-time live recheck has a cheap, reliable live
+  // signal for. Other non-CI heuristic reasons (duplicate PR, slop score, a gate-verdict blocker) have no
+  // equivalently cheap live re-derivation, so decidePendingAgentAction only reruns its mergeable-state/
+  // review-decision staleness check when this is true -- gating it on closeRequiresCiState === "not_required"
+  // alone (any non-CI reason) instead would supersede EVERY duplicate/slop/blocker-only close whose
+  // mergeability simply happens to read "clean" (which most never-conflicted PRs already are), even though
+  // their actual justification never depended on mergeability and may still be live (gate review finding).
+  // ALWAYS set (never omitted) for a freshly planned heuristic close, mirroring closeRequiresCiState's own
+  // discipline -- so `undefined` unambiguously means a legacy row staged before this field existed.
+  closeRequiresMergeableState?: boolean;
   // Persisted so the close-precision breaker's concrete-evidence exemption (see
   // PlannedAgentAction.closeConcreteEvidence) still applies correctly when a staged heuristic close is later
   // accepted -- without this, EVERY staged close would silently fall back to "not concrete" at accept-time and

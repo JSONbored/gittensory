@@ -176,10 +176,14 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
   // mutation call independently needs a valid token/state and will fail cleanly if something is actually wrong).
   // (#2126, #2478)
   let liveParams: AgentPendingActionParams = pending.params;
+  // For close, scoped to closeRequiresMergeableState === true (a base-conflict-justified heuristic close) --
+  // NOT the broader closeRequiresCiState === "not_required" (any non-CI reason). A duplicate/slop/blocker-only
+  // close has no cheap live re-derivation, so it is intentionally left out of this recheck entirely (see the
+  // field's doc comment on AgentPendingActionParams in types.ts).
   const shouldRecheckLiveDisposition =
     pr?.headSha &&
     (pending.actionClass === "merge" ||
-      (pending.actionClass === "close" && pending.params.closeKind === "heuristic" && pending.params.closeRequiresCiState === "not_required"));
+      (pending.actionClass === "close" && pending.params.closeKind === "heuristic" && pending.params.closeRequiresMergeableState === true));
   if (shouldRecheckLiveDisposition) {
     const token = await createInstallationToken(env, pending.installationId).catch(() => undefined);
     const admissionKey = githubRateLimitAdmissionKeyForToken(env, token, pending.installationId);
@@ -200,7 +204,12 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
     // non-stale-tolerant signal that the staged merge's justification no longer holds (#2126).
     const ciState = ciResult.status === "fulfilled" ? ciResult.value.ciState : undefined;
     const mergeableState = mergeableResult.status === "fulfilled" ? mergeableResult.value : undefined;
-    const reviewDecision = reviewResult.status === "fulfilled" ? reviewResult.value : undefined;
+    // Tracked separately from reviewDecision's VALUE: a REJECTED promise also resolves reviewDecision to
+    // undefined below, which must not be indistinguishable from "fetched successfully and confirmed not
+    // CHANGES_REQUESTED" -- otherwise a transient read failure silently satisfies the close-staleness check
+    // below instead of failing open on it (gate review finding).
+    const reviewFetchSucceeded = reviewResult.status === "fulfilled";
+    const reviewDecision = reviewFetchSucceeded ? reviewResult.value : undefined;
     const staleReason =
       pending.actionClass === "merge"
         ? ciState !== undefined && ciState !== "passed"
@@ -210,11 +219,13 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
             : reviewDecision === "CHANGES_REQUESTED"
               ? "a reviewer has since requested changes"
               : null
-        : // CI state is irrelevant here: closeRequiresCiState === "not_required" already means CI wasn't why this
-          // close was staged, so gating staleness on ciState === "passed" would fail to catch a cleared conflict
-          // whenever live CI simply hasn't finished (or the read failed) at accept time (#2478).
-          mergeableState === "clean" && reviewDecision !== "CHANGES_REQUESTED"
-          ? "the non-CI heuristic close no longer has a live stale-disposition signal"
+        : // Only reached when closeRequiresMergeableState === true (see shouldRecheckLiveDisposition above), so
+          // CI state is irrelevant to this specific close's justification and the only live signal that matters
+          // is whether the conflict has cleared. reviewFetchSucceeded is required alongside the value check --
+          // see its own comment above -- so a failed live-review read fails open instead of masquerading as
+          // "confirmed no changes requested".
+          reviewFetchSucceeded && mergeableState === "clean" && reviewDecision !== "CHANGES_REQUESTED"
+          ? "the conflict that justified this close has since cleared"
           : null;
     if (staleReason) {
       await setPendingAgentActionStatus(env, pending.id, { status: "rejected", decidedBy: input.decidedBy });
