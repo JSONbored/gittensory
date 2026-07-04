@@ -854,6 +854,11 @@ describe("subscription CLI helpers + fail-safe", () => {
     expect(codexErrorFromStdout("")).toBeNull();
   });
 
+  it("codexErrorFromStdout redacts token-shaped stdout details before they reach provider errors", () => {
+    const leaky = JSON.stringify({ message: "model echoed private token ghp_ABCDEFGHIJ0123456789KLMNOPQRSTUV" });
+    expect(codexErrorFromStdout(leaky)).toBe("model echoed private token [redacted]");
+  });
+
   it("Codex fails closed when a mounted OAuth home would be exposed to the review sandbox", async () => {
     const shouldNotSpawn: StubSpawn = async () => {
       throw new Error("spawned");

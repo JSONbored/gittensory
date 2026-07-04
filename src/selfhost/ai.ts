@@ -449,7 +449,7 @@ export function codexErrorFromStdout(stdout: string): string | null {
         (typeof o.msg === "string" && o.msg) ||
         (errorObj && typeof errorObj.message === "string" ? errorObj.message : null) ||
         null;
-      if (detail) return detail.slice(0, 500);
+      if (detail) return redactSecrets(detail).slice(0, 500);
     } catch {
       /* not JSON — skip */
     }
