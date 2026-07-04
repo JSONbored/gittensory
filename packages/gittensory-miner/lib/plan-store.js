@@ -83,7 +83,9 @@ function validatePlanDag(plan) {
   if (!plan || typeof plan !== "object" || Array.isArray(plan)) throw new Error("invalid_plan");
   const keys = Object.keys(plan);
   if (keys.length !== 1 || keys[0] !== "steps") throw new Error("invalid_plan");
-  if (!Array.isArray(plan.steps) || plan.steps.length > 100) throw new Error("invalid_plan");
+  if (!Array.isArray(plan.steps) || plan.steps.length === 0 || plan.steps.length > 100) {
+    throw new Error("invalid_plan");
+  }
   if (!plan.steps.every(isValidStep)) throw new Error("invalid_plan");
   const seenStepIds = new Set();
   for (const step of plan.steps) {

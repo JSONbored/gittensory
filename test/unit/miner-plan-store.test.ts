@@ -95,6 +95,7 @@ describe("gittensory-miner plan store (#2318)", () => {
     const store = tempStore();
     expect(() => store.savePlan("x", { steps: [{ id: "s1", title: "no status", dependsOn: [], attempts: 0, maxAttempts: 1 } as never] })).toThrow("invalid_plan");
     expect(() => store.savePlan("x", { steps: "nope" as never })).toThrow("invalid_plan");
+    expect(() => store.savePlan("empty", { steps: [] })).toThrow("invalid_plan");
     expect(() => store.savePlan("x", { steps: [], extra: 1 } as never)).toThrow("invalid_plan"); // strict: no unknown keys
     expect(() => store.savePlan("", PLAN)).toThrow("invalid_plan_id");
     expect(() =>
