@@ -6664,6 +6664,7 @@ async function maybePublishPrPublicSurface(
               repoFullName,
               linkedIssues: pr.linkedIssues,
               installationId,
+              prAuthorLogin: pr.authorLogin,
             })
           : [];
       const decisionResult = resolvePrTypeLabel({
