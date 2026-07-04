@@ -1,7 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@jsonbored/gittensory-engine", async () => {
@@ -53,8 +52,8 @@ describe("gittensory-miner pairwise calibration CLI (#3013)", () => {
     });
   });
 
-  it("parsePairwiseScoreArgs reads JSON from an @file path", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-pairwise-cli-"));
+  it("parsePairwiseScoreArgs reads JSON from a relative @file path", () => {
+    const root = mkdtempSync(join(process.cwd(), "gittensory-miner-pairwise-cli-"));
     roots.push(root);
     const file = join(root, "input.json");
     writeFileSync(
@@ -64,7 +63,7 @@ describe("gittensory-miner pairwise calibration CLI (#3013)", () => {
         samples: [{ attempts: [{ replayFirst: "tie", revealedFirst: "tie" }] }],
       }),
     );
-    expect(parsePairwiseScoreArgs(["--input", `@${file}`])).toEqual({
+    expect(parsePairwiseScoreArgs(["--input", `@${relative(process.cwd(), file)}`])).toEqual({
       json: false,
       input: {
         objectiveAnchor: 0.4,
@@ -76,6 +75,12 @@ describe("gittensory-miner pairwise calibration CLI (#3013)", () => {
   it("parsePairwiseScoreArgs rejects @file paths that traverse outside the cwd", () => {
     expect(parsePairwiseScoreArgs(["--input", "@../../etc/passwd"])).toEqual({
       error: expect.stringMatching(/\.\. segments/u),
+    });
+  });
+
+  it("parsePairwiseScoreArgs rejects absolute @file paths", () => {
+    expect(parsePairwiseScoreArgs(["--input", "@/etc/passwd"])).toEqual({
+      error: expect.stringMatching(/relative to the current working directory/u),
     });
   });
 

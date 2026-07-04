@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 const PAIRWISE_SCORE_USAGE =
   "Usage: gittensory-miner calibration pairwise score --input <json|@file> [--json]";
@@ -7,11 +7,14 @@ const PAIRWISE_SCORE_USAGE =
 function readJsonFileArg(filePath, label) {
   const trimmed = filePath.trim();
   if (!trimmed) return { error: `${label} file path must not be empty.` };
+  if (isAbsolute(trimmed)) {
+    return { error: `${label} file path must be relative to the current working directory.` };
+  }
   if (trimmed.split(/[/\\]/).some((segment) => segment === "..")) {
     return { error: `${label} file path must not contain .. segments.` };
   }
   try {
-    return { value: readFileSync(resolve(trimmed), "utf8") };
+    return { value: readFileSync(resolve(process.cwd(), trimmed), "utf8") };
   } catch {
     return { error: `${label} could not read file: ${trimmed}` };
   }
