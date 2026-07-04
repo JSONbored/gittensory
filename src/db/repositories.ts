@@ -5460,9 +5460,9 @@ function redactProductUsageActor(value: string | null, actorRedactor: ProductUsa
   if (!value || !actorRedactor) return value;
   return value.replace(actorRedactor.pattern, (match, offset: number, source: string) => {
     const previous = offset > 0 ? source[offset - 1] : undefined;
-    const next = source[offset + match.length];
+    const next = source[offset + match.length] ?? "";
     const hasLeftBoundary = isProductUsageActorTokenBoundary(previous) || isProductUsageCamelBoundaryBefore(previous, match);
-    const hasRightBoundary = isProductUsageActorTokenBoundary(next) || isProductUsageCamelBoundaryAfter(next);
+    const hasRightBoundary = isProductUsageActorTokenBoundary(next) || isProductUsageCamelBoundaryAfter(next, match);
     return hasLeftBoundary && hasRightBoundary ? "<redacted-actor>" : match;
   });
 }
@@ -5479,8 +5479,12 @@ function isProductUsageCamelBoundaryBefore(previous: string | undefined, match: 
   return Boolean(previous && /[a-z0-9]/.test(previous) && /^[A-Z]/.test(match));
 }
 
-function isProductUsageCamelBoundaryAfter(next: string | undefined): boolean {
-  return Boolean(next && /[A-Z]/.test(next));
+function isProductUsageCamelBoundaryAfter(next: string, match: string): boolean {
+  // Mirror of isProductUsageCamelBoundaryBefore: a camelCase boundary after the match requires the match
+  // to END in a lowercase/digit and the next char to be uppercase (a real `bob`→`Key` hump). Without the
+  // `match` end check, an uppercase→uppercase transition inside an all-caps word (e.g. `bob` matched in
+  // `BOBCAT`) is mistaken for a boundary and the surrounding word is wrongly redacted.
+  return /[A-Z]/.test(next) && /[a-z0-9]$/.test(match);
 }
 
 async function upsertProductUsageDailyRollup(env: Env, day: string, generatedAt: string): Promise<ProductUsageDailyRollupRecord> {

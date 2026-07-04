@@ -115,6 +115,26 @@ describe("product usage events", () => {
     expect(JSON.stringify(row)).not.toMatch(/\bbob\b|bobKey|forBob/i);
   });
 
+  it("does not over-redact an all-caps word that merely starts with the actor handle", async () => {
+    const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "fixed-test-salt" });
+
+    await recordProductUsageEvent(env, {
+      surface: "api",
+      eventName: "local_branch_analysis_completed",
+      actor: "bob",
+      repoFullName: "acme/tool",
+      targetKey: "acme:tool#1",
+      metadata: { note: "BOBCAT ran the job", viewer: "bob" },
+    });
+
+    const [row] = await listProductUsageEvents(env);
+    expect(row).toBeDefined();
+    if (!row) throw new Error("expected product usage event");
+    // "BOBCAT" is one all-caps word, not a `bob`+`Cat` camelCase hump, so it must stay readable while the
+    // standalone actor handle is still redacted.
+    expect(row.metadata).toMatchObject({ note: "BOBCAT ran the job", viewer: "<redacted-actor>" });
+  });
+
   it("bounds actor redaction patterns while still covering long valid handles", async () => {
     const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "fixed-test-salt" });
     const actor = "a".repeat(200);
