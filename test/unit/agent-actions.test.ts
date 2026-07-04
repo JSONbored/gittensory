@@ -667,6 +667,25 @@ describe("planAgentMaintenanceActions (#778)", () => {
       });
     });
 
+    it("CLOSES on already-red CI even while an unrelated check is still pending — red is terminal, it does not need the rest to settle", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto", merge: "auto", close: "auto" }, ciState: "failed", ciHasPending: true, failingCheckNames: ["build"], pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const cls = classes(plan);
+      expect(cls).not.toContain("approve");
+      expect(cls).not.toContain("merge");
+      expect(cls).toContain("close");
+      expect(plan.find((a) => a.actionClass === "close")).toMatchObject({
+        closeKind: "heuristic",
+        closeConcreteEvidence: true,
+        closeRequiresMergeableState: false,
+        closeRequiresCiState: "failed",
+      });
+    });
+
+    it("DEFERS red-but-pending CI for a non-close-eligible author (owner without closeOwnerAuthors) — the terminal bypass never overrides the close-eligibility guard", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto", merge: "auto", close: "auto" }, ciState: "failed", ciHasPending: true, authorIsOwner: true, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      expect(plan).toEqual([]);
+    });
+
     it("HOLDS a contributor's gate-passing PR whose CI is UNVERIFIED — NEVER closes it (fork workflows awaiting approval) (#harm-stop)", () => {
       const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto", approve: "auto", merge: "auto", close: "auto" }, ciState: "unverified", pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
       const cls = classes(plan);

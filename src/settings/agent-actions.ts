@@ -560,7 +560,8 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // CI state over ALL of the PR's checks (required OR not — codecov/patch included) — reviewbot's ci_red
   // parity. A red CI is NEVER approved/merged and is itself a close-worthy signal (non-owner). While CI is
   // still running, never approve or merge, but do not let unrelated pending checks mask terminal close reasons
-  // that are already known now (a base conflict or a blocking gate verdict).
+  // that are already known now (a base conflict, a blocking gate verdict, or CI that has already gone red even
+  // if some other, unrelated check is still pending).
   const ciPassed = input.ciState === "passed";
   const ciFailed = input.ciState === "failed";
   const ciPending = input.ciState === "pending" || input.ciHasPending === true;
@@ -577,10 +578,15 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // treated as an ordinary contributor here). Automation bots stay exempt regardless (a noise heuristic must not
   // kill a recurring maintainer-managed accumulator).
   const closeEligible = isContributor || ((input.authorIsOwner || input.authorIsAdmin) && input.closeOwnerAuthors === true);
-  const pendingCiTerminalClose = closeEligible && acting("close") && (conclusion === "failure" || isConflict);
+  // A terminal reason is one that CANNOT be un-decided by an unrelated check eventually settling: a confirmed
+  // gate failure, a base conflict, or CI already red (red is red regardless of what else is still pending —
+  // see #ci-fail-closes-guarded below, which closes on `ciFailed` once fully settled; this bypass just lets
+  // that same verdict fire immediately instead of waiting on unrelated pending checks to catch up).
+  const pendingCiMayStillCloseForTerminalReason = closeEligible && acting("close") && (conclusion === "failure" || isConflict || ciFailed);
   // Settle-before-decide: pending CI suppresses success-path work, but not terminal close work. Otherwise a PR
-  // with a known base conflict or blocking gate verdict can sit open forever behind an unrelated stuck check.
-  if (ciPending && !pendingCiTerminalClose) return actions;
+  // with a known base conflict, a blocking gate verdict, or already-red CI can sit open forever behind an
+  // unrelated stuck check.
+  if (ciPending && !pendingCiMayStillCloseForTerminalReason) return actions;
 
   // Only SUCCESS earns the review-good auto-merge. A NEUTRAL gate flows (no longer silently returns []) but is
   // NOT auto-merged — it falls through to a HELD + labeled state for review. (Auto-merging a neutral / grace
