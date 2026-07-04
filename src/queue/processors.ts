@@ -7868,16 +7868,55 @@ async function maybePublishPrPublicSurface(
           check.status === "completed",
       );
       if (currentGateCheck) {
-        incr("gittensory_public_surface_publish_skipped_current_total");
-        await recordAuditEvent(env, {
-          eventType: "github_app.public_surface_publish_skipped_current",
-          actor: author,
-          targetKey: `${repoFullName}#${pr.number}`,
-          outcome: "completed",
-          detail: "public surface already current for this head; skipped republish",
-          metadata: { deliveryId: webhook.deliveryId, repoFullName, /* v8 ignore next -- reached only inside aiReviewWillRun (which requires a truthy advisory.headSha) or the publish-skip guard's own `advisory.headSha &&` check; the `?? null` is a type-level fallback for an unreachable branch. */ headSha: advisory.headSha ?? null },
-        }).catch(() => undefined);
-        return gateEvaluation;
+        let canSkipCurrentSurface = true;
+        if (pendingGateCheckRunId !== undefined) {
+          const refreshedGateCheckResult = await createOrUpdateGateCheckRun(
+            env,
+            installationId,
+            repoFullName,
+            advisory,
+            gatePolicy,
+            { checkRunId: pendingGateCheckRunId, gate: gateEvaluation },
+            mode,
+          );
+          if (refreshedGateCheckResult?.kind === "published") {
+            await recordPublishedGateCheckSummary(env, {
+              repoFullName,
+              pullNumber: pr.number,
+              headSha: advisory.headSha,
+              checkRunId: refreshedGateCheckResult.id,
+              conclusion: gateEvaluation?.conclusion ?? null,
+              detailsUrl: refreshedGateCheckResult.html_url,
+              deliveryId: webhook.deliveryId,
+            }).catch((error) => {
+              console.error(
+                JSON.stringify({
+                  level: "warn",
+                  event: "gate_check_summary_upsert_failed",
+                  repoFullName,
+                  pullNumber: pr.number,
+                  error: errorMessage(error),
+                }),
+              );
+            });
+          } else {
+            canSkipCurrentSurface = false;
+          }
+        }
+        if (canSkipCurrentSurface) {
+          incr("gittensory_public_surface_publish_skipped_current_total");
+          await recordAuditEvent(env, {
+            eventType: "github_app.public_surface_publish_skipped_current",
+            actor: author,
+            targetKey: `${repoFullName}#${pr.number}`,
+            outcome: "completed",
+            detail: "public surface already current for this head; skipped republish",
+            metadata: { deliveryId: webhook.deliveryId, repoFullName, /* v8 ignore next -- reached only inside aiReviewWillRun (which requires a truthy advisory.headSha) or the publish-skip guard's own `advisory.headSha &&` check; the `?? null` is a type-level fallback for an unreachable branch. */ headSha: advisory.headSha ?? null },
+          }).catch(() => undefined);
+          return gateEvaluation;
+        }
+        // The no-op proof is only safe if the pending check this pass created is terminal too.
+        // Fall through to the normal publish path on any doubt so branch protection cannot be left pending.
       }
     }
     const finalFreshness = await freshnessForReviewOutput("final_publish");

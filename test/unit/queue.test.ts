@@ -2730,7 +2730,8 @@ describe("queue processors", () => {
         payload: {},
       });
       await repositoriesModule.markPullRequestSurfacePublished(env, "JSONbored/gittensory", 62, "a62");
-      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const checkRunWrites: Array<{ method: string; body: Record<string, unknown> }> = [];
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
         if (url.includes("/pulls/62/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
@@ -2738,6 +2739,15 @@ describe("queue processors", () => {
         if (url.includes("/commits/a62/status")) return Response.json({ state: "success", statuses: [] });
         if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
         if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+        if (url.includes("/check-runs") && init?.method === "POST") {
+          checkRunWrites.push({ method: "POST", body: JSON.parse(String(init.body)) as Record<string, unknown> });
+          return Response.json({ id: 6201 });
+        }
+        if (url.includes("/check-runs/6201") && init?.method === "PATCH") {
+          checkRunWrites.push({ method: "PATCH", body: JSON.parse(String(init.body)) as Record<string, unknown> });
+          return Response.json({ id: 6201 });
+        }
+        if (url.includes("/check-runs")) return Response.json({ check_runs: [{ id: 6200, status: "completed" }] });
         return Response.json({});
       });
 
@@ -2751,6 +2761,10 @@ describe("queue processors", () => {
         .bind("github_app.pr_public_surface_published", "JSONbored/gittensory#62")
         .first<{ n: number }>();
       expect(publishedAudit?.n).toBe(0); // the full publish path never ran — it was proven redundant up-front
+      expect(checkRunWrites.map((write) => [write.method, write.body.status])).toEqual([
+        ["POST", "in_progress"],
+        ["PATCH", "completed"],
+      ]);
     });
 
     it("swallows a failing publish-skip audit write without throwing", async () => {
