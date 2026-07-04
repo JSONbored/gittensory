@@ -61,6 +61,22 @@ describe("isGeneratedFile", () => {
       expect(isGeneratedFile(path)).toBe(true);
     }
   });
+
+  it("matches Swift protobuf, Dart freezed/retrofit, and C# designer/XAML codegen", () => {
+    for (const path of [
+      "proto/messages.pb.swift",
+      "lib/user.freezed.dart",
+      "lib/api_client.gr.dart",
+      "ui/MainForm.Designer.cs",
+      "views/App.g.cs",
+    ]) {
+      expect(isGeneratedFile(path)).toBe(true);
+    }
+    // hand-written siblings must NOT match (the codegen infix is required).
+    for (const path of ["src/MainForm.cs", "lib/user.dart", "net/message.swift"]) {
+      expect(isGeneratedFile(path)).toBe(false);
+    }
+  });
 });
 
 describe("isVendoredFile", () => {
