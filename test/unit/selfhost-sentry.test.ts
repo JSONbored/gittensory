@@ -636,6 +636,52 @@ describe("enabled when SENTRY_DSN is set", () => {
     expect(mocks.captureException).not.toHaveBeenCalled();
   });
 
+  it("derives the dead-letter-revive schedule from an operator's configured interval override (#1824 regression)", async () => {
+    process.env.QUEUE_DEAD_LETTER_REVIVE_INTERVAL_MS = String(90 * 60_000);
+    try {
+      await initSentry({
+        SENTRY_DSN: "d",
+        SENTRY_ENVIRONMENT: "prod",
+      } as unknown as NodeJS.ProcessEnv);
+
+      await withSentryMonitor("queue-dead-letter-revive", { jobType: "queue-dead-letter-revive" }, async () => 1);
+
+      expect(mocks.captureCheckIn).toHaveBeenNthCalledWith(
+        1,
+        { monitorSlug: "gittensory-selfhost-prod-queue-dead-letter-revive", status: "in_progress" },
+        expect.objectContaining({
+          schedule: { type: "interval", value: 90, unit: "minute" },
+          checkinMargin: 30,
+        }),
+      );
+    } finally {
+      delete process.env.QUEUE_DEAD_LETTER_REVIVE_INTERVAL_MS;
+    }
+  });
+
+  it("floors an operator's dead-letter-revive interval override to at least 1 minute for the monitor schedule", async () => {
+    process.env.QUEUE_DEAD_LETTER_REVIVE_INTERVAL_MS = "1000";
+    try {
+      await initSentry({
+        SENTRY_DSN: "d",
+        SENTRY_ENVIRONMENT: "prod",
+      } as unknown as NodeJS.ProcessEnv);
+
+      await withSentryMonitor("queue-dead-letter-revive", { jobType: "queue-dead-letter-revive" }, async () => 1);
+
+      expect(mocks.captureCheckIn).toHaveBeenNthCalledWith(
+        1,
+        { monitorSlug: "gittensory-selfhost-prod-queue-dead-letter-revive", status: "in_progress" },
+        expect.objectContaining({
+          schedule: { type: "interval", value: 1, unit: "minute" },
+          checkinMargin: 5,
+        }),
+      );
+    } finally {
+      delete process.env.QUEUE_DEAD_LETTER_REVIVE_INTERVAL_MS;
+    }
+  });
+
   it("records successful Sentry cron monitor check-ins with the configured schedule", async () => {
     await initSentry({
       SENTRY_DSN: "d",

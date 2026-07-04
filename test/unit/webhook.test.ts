@@ -158,7 +158,7 @@ describe("github webhook enqueue failure (#786)", () => {
       action: "opened",
       repository: { full_name: "JSONbored/gittensory" },
       installation: { id: 1 },
-      pull_request: { title: "raw diff with a secret token gho_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+      pull_request: { title: "raw diff with a secret token UNIQUE-PAYLOAD-MARKER-THAT-MUST-NEVER-LEAK" },
     });
     const signature = await signWebhook(rawBody, env.GITHUB_WEBHOOK_SECRET);
     const request = new Request("https://example.com/webhook", { method: "POST", body: rawBody });
@@ -185,7 +185,7 @@ describe("github webhook enqueue failure (#786)", () => {
     const logged = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
     expect(logged).toContain("selfhost_webhook_enqueue_failed");
     expect(logged).not.toContain("raw diff");
-    expect(logged).not.toContain("gho_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    expect(logged).not.toContain("UNIQUE-PAYLOAD-MARKER-THAT-MUST-NEVER-LEAK");
     errorSpy.mockRestore();
   });
 

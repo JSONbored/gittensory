@@ -13,6 +13,7 @@ import {
   type OpenTelemetryBridge,
 } from "./otel";
 import { hashedInstallationIdWith } from "./review-tracing";
+import { queueDeadLetterReviveIntervalMs } from "./queue-common";
 
 type SentryNs = typeof import("@sentry/node");
 type SentryClient = NonNullable<ReturnType<SentryNs["init"]>>;
@@ -79,7 +80,7 @@ async function loadNodeHasher(): Promise<void> {
     createHash("sha256").update(input).digest("hex");
 }
 
-const SENTRY_MONITORS: Record<SentryMonitorName, { slug: string; config: SentryMonitorConfig }> = {
+const SENTRY_MONITORS: Record<SentryMonitorName, { slug: string; config: SentryMonitorConfig | (() => SentryMonitorConfig) }> = {
   "scheduled-loop": {
     slug: "scheduled-loop",
     config: {
@@ -120,19 +121,22 @@ const SENTRY_MONITORS: Record<SentryMonitorName, { slug: string; config: SentryM
       recoveryThreshold: 1,
     },
   },
-  // Matches the default QUEUE_DEAD_LETTER_REVIVE_INTERVAL_MS (30min, see queue-common.ts). A configured operator
-  // override still reports on this fixed schedule -- an operator who shortens the interval gets a monitor that
-  // checks in MORE often than it expects (never flagged missed), and one who lengthens it accepts a wider margin
-  // than strictly needed; both are safe, and matching the schedule to every possible override isn't worth the
-  // added surface. Silent stoppage here means dead jobs never retry again without manual intervention (#1824).
+  // Derived from the LIVE QUEUE_DEAD_LETTER_REVIVE_INTERVAL_MS override (default 30min, see queue-common.ts)
+  // rather than hard-coded: a static 30min schedule would report false missed check-ins for any operator who
+  // configures an interval longer than the schedule + margin window, even though the job is running exactly on
+  // its own configured cadence. Silent stoppage here means dead jobs never retry again without manual
+  // intervention (#1824), so the monitor must track whatever interval is actually in effect.
   "queue-dead-letter-revive": {
     slug: "queue-dead-letter-revive",
-    config: {
-      schedule: { type: "interval", value: 30, unit: "minute" },
-      checkinMargin: 10,
-      maxRuntime: 5,
-      failureIssueThreshold: 2,
-      recoveryThreshold: 1,
+    config: () => {
+      const intervalMinutes = Math.max(1, Math.round(queueDeadLetterReviveIntervalMs() / 60_000));
+      return {
+        schedule: { type: "interval", value: intervalMinutes, unit: "minute" },
+        checkinMargin: Math.max(5, Math.ceil(intervalMinutes / 3)),
+        maxRuntime: 5,
+        failureIssueThreshold: 2,
+        recoveryThreshold: 1,
+      };
     },
   },
 };
@@ -615,10 +619,9 @@ export async function withSentryMonitor<T>(
 ): Promise<T> {
   if (!active || !Sentry) return callback();
   const monitorSlug = resolveSentryMonitorSlug(name);
-  const checkInId = Sentry.captureCheckIn(
-    { monitorSlug, status: "in_progress" },
-    SENTRY_MONITORS[name].config,
-  );
+  const configOrResolver = SENTRY_MONITORS[name].config;
+  const resolvedConfig = typeof configOrResolver === "function" ? configOrResolver() : configOrResolver;
+  const checkInId = Sentry.captureCheckIn({ monitorSlug, status: "in_progress" }, resolvedConfig);
   const startedAt = Date.now();
   try {
     const result = await callback();
