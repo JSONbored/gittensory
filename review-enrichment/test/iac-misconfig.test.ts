@@ -86,6 +86,34 @@ test("scanPatchForIacMisconfig does not flag NODE_TLS_REJECT_UNAUTHORIZED when T
   );
 });
 
+test("scanPatchForIacMisconfig flags PYTHONHTTPSVERIFY=0 as TLS verification disabled", () => {
+  // Python's global HTTPS-verification switch: PYTHONHTTPSVERIFY=0 disables certificate verification for the
+  // whole interpreter — the Python equivalent of the already-detected NODE_TLS_REJECT_UNAUTHORIZED=0.
+  const dotenv = scanPatchForIacMisconfig(
+    ".env.production",
+    ["@@ -1,0 +2,1 @@", "+PYTHONHTTPSVERIFY=0"].join("\n"),
+  );
+  assert.deepEqual(dotenv, [
+    { file: ".env.production", line: 2, kind: "tls-verification-disabled" },
+  ]);
+
+  const quoted = scanPatchForIacMisconfig(
+    "compose.yaml",
+    ["@@ -1,0 +7,1 @@", '+      PYTHONHTTPSVERIFY: "0"'].join("\n"),
+  );
+  assert.deepEqual(quoted, [
+    { file: "compose.yaml", line: 7, kind: "tls-verification-disabled" },
+  ]);
+});
+
+test("scanPatchForIacMisconfig does not flag PYTHONHTTPSVERIFY when verification stays on", () => {
+  // Only `0` disables; any other value keeps Python's certificate verification enabled.
+  assert.deepEqual(
+    scanPatchForIacMisconfig(".env", "@@ -1,0 +1,1 @@\n+PYTHONHTTPSVERIFY=1"),
+    [],
+  );
+});
+
 test("scanPatchForIacMisconfig ignores unchanged lines and honors maxFindings", () => {
   assert.deepEqual(
     scanPatchForIacMisconfig(
