@@ -772,6 +772,67 @@ describe("agent approval queue (#779)", () => {
     expect(closePullRequest).toHaveBeenCalledWith(env, 5, "owner/repo", 7);
   });
 
+  it("accept still executes a non-CI heuristic close when a reviewer has since requested changes", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { close: "auto_with_approval" } });
+    await seedInstallation(env);
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "x" });
+    vi.mocked(fetchLivePullRequestReviewDecision).mockResolvedValueOnce("CHANGES_REQUESTED");
+    const { action } = await createPendingAgentActionIfAbsent(env, {
+      repoFullName: "owner/repo",
+      pullNumber: 7,
+      installationId: 5,
+      actionClass: "close",
+      autonomyLevel: "auto_with_approval",
+      params: { closeComment: "base conflict", closeKind: "heuristic", closeRequiresCiState: "not_required", expectedHeadSha: "h7" },
+      reason: "base branch now conflicts",
+    });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+
+    expect(result.status).toBe("accepted");
+    expect(result.executionOutcome).toBe("completed");
+    const { closePullRequest } = await import("../../src/github/pr-actions");
+    expect(closePullRequest).toHaveBeenCalledWith(env, 5, "owner/repo", 7);
+  });
+
+  it("REGRESSION (#2478): supersedes a non-CI heuristic close on a cleared conflict even when live CI has not settled to passed", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { close: "auto_with_approval" } });
+    await seedInstallation(env);
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "x" });
+    // closeRequiresCiState is "not_required" -- CI was never the justification for this close, so a live CI read
+    // of "pending" (rather than "passed") must NOT mask a cleared conflict (mergeableState "clean", the default mock).
+    vi.mocked(fetchLiveCiAggregate).mockResolvedValueOnce({
+      ciState: "pending",
+      hasPending: true,
+      hasVisiblePending: true,
+      hasMissingRequiredContext: false,
+      failingDetails: [],
+      nonRequiredFailingDetails: [],
+      ciCompletenessWarning: null,
+    });
+    const { action } = await createPendingAgentActionIfAbsent(env, {
+      repoFullName: "owner/repo",
+      pullNumber: 7,
+      installationId: 5,
+      actionClass: "close",
+      autonomyLevel: "auto_with_approval",
+      params: { closeComment: "base conflict", closeKind: "heuristic", closeRequiresCiState: "not_required", expectedHeadSha: "h7" },
+      reason: "base branch now conflicts",
+    });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+
+    expect(result.status).toBe("rejected");
+    expect(result.executionOutcome).toBe("stale_disposition");
+    const { closePullRequest } = await import("../../src/github/pr-actions");
+    expect(closePullRequest).not.toHaveBeenCalled();
+    const audit = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = ?").bind("agent.pending_action.superseded").first<{ detail: string; metadata_json: string }>();
+    expect(audit?.detail).toContain("non-CI heuristic close no longer has a live stale-disposition signal");
+    expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ ciState: "pending", mergeableState: "clean" });
+  });
+
   it("accept downgrades a staged heuristic close to a needs-human-review label when the close breaker engaged (#2127)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
     await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { close: "auto_with_approval", review_state_label: "auto" } });

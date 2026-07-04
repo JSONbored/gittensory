@@ -210,7 +210,10 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
             : reviewDecision === "CHANGES_REQUESTED"
               ? "a reviewer has since requested changes"
               : null
-        : ciState === "passed" && mergeableState === "clean" && reviewDecision !== "CHANGES_REQUESTED"
+        : // CI state is irrelevant here: closeRequiresCiState === "not_required" already means CI wasn't why this
+          // close was staged, so gating staleness on ciState === "passed" would fail to catch a cleared conflict
+          // whenever live CI simply hasn't finished (or the read failed) at accept time (#2478).
+          mergeableState === "clean" && reviewDecision !== "CHANGES_REQUESTED"
           ? "the non-CI heuristic close no longer has a live stale-disposition signal"
           : null;
     if (staleReason) {
