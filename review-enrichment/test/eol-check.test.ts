@@ -58,6 +58,13 @@ test("extractVersionPins reads .python-version pins as Python", () => {
   ]);
 });
 
+test("extractVersionPins reads .ruby-version pins as Ruby", () => {
+  // rbenv/asdf use `.ruby-version` with the same leading-version format.
+  assert.deepEqual(extractVersionPins([added(".ruby-version", "3.2.2")]), [
+    { file: ".ruby-version", product: "ruby", version: "3.2.2" },
+  ]);
+});
+
 test("extractVersionPins ignores removed/context lines and files with no patch", () => {
   const patch = ["@@ -1 +1,2 @@", "-FROM python:3.7", " FROM python:3.9"].join(
     "\n",

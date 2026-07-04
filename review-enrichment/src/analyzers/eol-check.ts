@@ -96,6 +96,10 @@ export function extractVersionPins(
         // pyenv/asdf pin file — same leading-version format, product is Python.
         const version = leadingVersion(line);
         if (version) pins.push({ file: file.path, product: "python", version });
+      } else if (base === ".ruby-version") {
+        // rbenv/asdf pin file — same leading-version format, product is Ruby.
+        const version = leadingVersion(line);
+        if (version) pins.push({ file: file.path, product: "ruby", version });
       } else if (base === "go.mod") {
         const match = /^go\s+(\d+\.\d+)/.exec(line);
         if (match)
