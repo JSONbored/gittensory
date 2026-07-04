@@ -1692,6 +1692,233 @@ describe("queue processors", () => {
     }
   });
 
+  describe("durable CI-state snapshot cache (#selfhost-ci-verification, cross-job)", () => {
+    async function seedRepoAndPr(headSha: string): Promise<{ env: ReturnType<typeof createTestEnv> }> {
+      // GITTENSORY_REVIEW_REPOS (review/cutover-gate.ts) gates maybeReReviewOnCiCompletion's whole invalidation
+      // loop -- an unlisted repo leaves the durable cache never invalidated by a check_run/check_suite webhook,
+      // relying solely on the 60s TTL. Must be allowlisted for the invalidation tests below to be meaningful.
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_REPOS: "owner/agent-repo" });
+      await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", checks: "write" }, events: [] } });
+      await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+      // isAgentConfigured (settings/autonomy.ts) requires at least one ACTING autonomy class before
+      // prReadyForReview even reaches the live CI read (processors.ts's readiness short-circuits to `true`,
+      // skipping cachedLiveCiAggregate entirely, when no class is "auto"/"auto_with_approval") -- so this can't
+      // be omitted or left fully "observe" the way a non-CI-cache test could. `auto_with_approval` (not `auto`)
+      // keeps both passes comparable: it satisfies isAgentConfigured, but the action executor STAGES the merge
+      // for approval instead of ever calling the GitHub merge endpoint, so the PR stays open with the same
+      // head_sha across both passes.
+      await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto_with_approval", update_branch: "auto_with_approval" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+      await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Cross-job CI cache", state: "open", user: { login: "contributor" }, head: { sha: headSha }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+      return { env };
+    }
+
+    it("a second agent-regate-pr pass for the SAME still-settled head_sha serves the readiness check from the durable cache (fewer live CI reads than the first pass)", async () => {
+      const { env } = await seedRepoAndPr("a7");
+      const requiredContextsSpy = vi.spyOn(backfillModule, "fetchRequiredStatusContexts").mockResolvedValue(null);
+      const liveCiSpy = vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl").mockResolvedValue({
+        ciState: "passed",
+        hasPending: false,
+        hasVisiblePending: false,
+        hasMissingRequiredContext: false,
+        failingDetails: [],
+        nonRequiredFailingDetails: [],
+        ciCompletenessWarning: null,
+      });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "https://api.gittensor.io/miners") return Response.json([]);
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") return Response.json({ number: 7, title: "Cross-job CI cache", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+        if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+        return Response.json({});
+      });
+
+      try {
+        resetMetrics();
+        // Pass 1: cold. Readiness's cachedLiveCiAggregate misses (nothing cached yet); the disposition planner's
+        // refreshLiveCiAggregate always forces a live read regardless. Both write through the same durable row.
+        await processJob(env, { type: "agent-regate-pr", deliveryId: "cross-job-pass-1", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+        const callsAfterPass1 = liveCiSpy.mock.calls.length;
+        expect(callsAfterPass1).toBeGreaterThan(0);
+        expect(await renderMetrics()).toContain('gittensory_ci_state_cache_total{field="aggregate",result="miss"} 1');
+        expect(await renderMetrics()).toContain('gittensory_ci_state_cache_total{field="aggregate",result="forced"} 1');
+
+        // Pass 2: SAME PR, SAME head_sha, no invalidating webhook in between. Readiness's cachedLiveCiAggregate
+        // now HITS the row pass 1's disposition planner wrote through -- one fewer live call than pass 1, even
+        // though the disposition planner's OWN refreshLiveCiAggregate still forces a fresh read every time.
+        await processJob(env, { type: "agent-regate-pr", deliveryId: "cross-job-pass-2", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+        const callsDuringPass2 = liveCiSpy.mock.calls.length - callsAfterPass1;
+        expect(callsDuringPass2).toBeLessThan(callsAfterPass1);
+        expect(await renderMetrics()).toContain('gittensory_ci_state_cache_total{field="aggregate",result="hit"} 1');
+        // The disposition planner's forced refresh fired again on pass 2 too (now 2 total across both passes).
+        expect(await renderMetrics()).toContain('gittensory_ci_state_cache_total{field="aggregate",result="forced"} 2');
+      } finally {
+        liveCiSpy.mockRestore();
+        requiredContextsSpy.mockRestore();
+      }
+    });
+
+    it("a check_run completed webhook invalidates the durable cache, forcing the NEXT readiness check to miss again", async () => {
+      const { env } = await seedRepoAndPr("a7");
+      const requiredContextsSpy = vi.spyOn(backfillModule, "fetchRequiredStatusContexts").mockResolvedValue(null);
+      const liveCiSpy = vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl").mockResolvedValue({
+        ciState: "passed",
+        hasPending: false,
+        hasVisiblePending: false,
+        hasMissingRequiredContext: false,
+        failingDetails: [],
+        nonRequiredFailingDetails: [],
+        ciCompletenessWarning: null,
+      });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "https://api.gittensor.io/miners") return Response.json([]);
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") return Response.json({ number: 7, title: "Cross-job CI cache", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+        if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+        return Response.json({});
+      });
+
+      try {
+        resetMetrics();
+        await processJob(env, { type: "agent-regate-pr", deliveryId: "invalidate-pass-1", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+        expect(await renderMetrics()).toContain('gittensory_ci_state_cache_total{field="aggregate",result="miss"} 1');
+        // The durable row now has a fresh ciState, well within the 60s TTL.
+        expect(await getPullRequestDetailSyncState(env, "owner/agent-repo", 7)).toMatchObject({ ciState: "passed" });
+
+        // maybeReReviewOnCiCompletion invalidates THEN (unless coalesced) immediately re-reviews the same PR --
+        // so a naive "row is null right after the webhook" assertion is a race against that same job's own
+        // re-review repopulating it. Pre-claim the ci-coalesce window (mirrors the existing technique above at
+        // "ci-coalesce:owner/agent-repo#7") so this delivery's own re-review is skipped, leaving the
+        // invalidation's null state directly observable rather than immediately overwritten.
+        await env.SELFHOST_TRANSIENT_CACHE?.set("ci-coalesce:owner/agent-repo#7", "1", 60);
+        await processJob(env, {
+          type: "github-webhook",
+          deliveryId: "check-run-completed",
+          eventName: "check_run",
+          payload: {
+            action: "completed",
+            repository: { name: "agent-repo", full_name: "owner/agent-repo", owner: { login: "owner" } },
+            installation: { id: 9001 },
+            check_run: { head_sha: "a7", pull_requests: [{ number: 7 }] },
+          },
+        } as never);
+
+        expect(await getPullRequestDetailSyncState(env, "owner/agent-repo", 7)).toMatchObject({ ciState: null, ciStateFetchedAt: null });
+
+        // A subsequent readiness check misses again -- proving invalidation, not just a coincidental TTL expiry.
+        resetMetrics();
+        await processJob(env, { type: "agent-regate-pr", deliveryId: "invalidate-pass-2", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+        expect(await renderMetrics()).toContain('gittensory_ci_state_cache_total{field="aggregate",result="miss"} 1');
+      } finally {
+        liveCiSpy.mockRestore();
+        requiredContextsSpy.mockRestore();
+      }
+    });
+
+    it("a failing cache invalidation write does not crash the check_run webhook's re-review (best-effort, fail-open)", async () => {
+      const { env } = await seedRepoAndPr("a7");
+      const requiredContextsSpy = vi.spyOn(backfillModule, "fetchRequiredStatusContexts").mockResolvedValue(null);
+      const liveCiSpy = vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl").mockResolvedValue({
+        ciState: "passed",
+        hasPending: false,
+        hasVisiblePending: false,
+        hasMissingRequiredContext: false,
+        failingDetails: [],
+        nonRequiredFailingDetails: [],
+        ciCompletenessWarning: null,
+      });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "https://api.gittensor.io/miners") return Response.json([]);
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") return Response.json({ number: 7, title: "Cross-job CI cache", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+        if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+        return Response.json({});
+      });
+      // invalidateCiStateCache's OWN read already fails open internally; this instead breaks its WRITE (the one
+      // call the function does not itself wrap in a .catch), so the coverage that matters here is the CALL SITE's
+      // own .catch(() => undefined) in maybeReReviewOnCiCompletion (processors.ts) -- one bad invalidation write
+      // must never crash the webhook job or block the coalesced re-review that follows it in the same loop body.
+      const upsertSyncStateSpy = vi.spyOn(repositoriesModule, "upsertPullRequestDetailSyncState").mockRejectedValueOnce(new Error("D1 write failed"));
+
+      try {
+        await expect(
+          processJob(env, {
+            type: "github-webhook",
+            deliveryId: "check-run-invalidate-write-fails",
+            eventName: "check_run",
+            payload: {
+              action: "completed",
+              repository: { name: "agent-repo", full_name: "owner/agent-repo", owner: { login: "owner" } },
+              installation: { id: 9001 },
+              check_run: { head_sha: "a7", pull_requests: [{ number: 7 }] },
+            },
+          } as never),
+        ).resolves.toBeUndefined();
+        // The re-review after the failed invalidation still ran and wrote its own fresh entry.
+        expect(await getPullRequestDetailSyncState(env, "owner/agent-repo", 7)).toMatchObject({ ciState: "passed" });
+      } finally {
+        upsertSyncStateSpy.mockRestore();
+        liveCiSpy.mockRestore();
+        requiredContextsSpy.mockRestore();
+      }
+    });
+
+    // #selfhost-ci-verification MVP scope boundary: status/workflow_run events aren't handled by
+    // maybeReReviewOnCiCompletion for RE-REVIEW TRIGGERING today, so they don't invalidate the CI-state cache
+    // either -- the 60s TTL is the sole backstop for these two event types. This test documents that boundary
+    // explicitly rather than leaving it silently unverified.
+    it.each(["status", "workflow_run"])("a %s webhook event does not invalidate the durable CI-state cache (documented MVP boundary — TTL is the backstop)", async (eventName) => {
+      const { env } = await seedRepoAndPr("a7");
+      const requiredContextsSpy = vi.spyOn(backfillModule, "fetchRequiredStatusContexts").mockResolvedValue(null);
+      const liveCiSpy = vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl").mockResolvedValue({
+        ciState: "passed",
+        hasPending: false,
+        hasVisiblePending: false,
+        hasMissingRequiredContext: false,
+        failingDetails: [],
+        nonRequiredFailingDetails: [],
+        ciCompletenessWarning: null,
+      });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "https://api.gittensor.io/miners") return Response.json([]);
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") return Response.json({ number: 7, title: "Cross-job CI cache", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+        if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+        return Response.json({});
+      });
+
+      try {
+        await processJob(env, { type: "agent-regate-pr", deliveryId: "mvp-boundary-seed", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+        expect(await getPullRequestDetailSyncState(env, "owner/agent-repo", 7)).toMatchObject({ ciState: "passed" });
+
+        await processJob(env, {
+          type: "github-webhook",
+          deliveryId: `${eventName}-event`,
+          eventName,
+          payload: {
+            action: "completed",
+            repository: { name: "agent-repo", full_name: "owner/agent-repo", owner: { login: "owner" } },
+            installation: { id: 9001 },
+            [eventName]: { sha: "a7", head_sha: "a7" },
+          },
+        } as never);
+
+        // Still cached -- this event type is not wired to invalidateCiStateCache today.
+        expect(await getPullRequestDetailSyncState(env, "owner/agent-repo", 7)).toMatchObject({ ciState: "passed" });
+      } finally {
+        liveCiSpy.mockRestore();
+        requiredContextsSpy.mockRestore();
+      }
+    });
+  });
+
   // #selfhost-ci-verification: settings.expectedCiContexts must actually change the live-CI disposition, not just
   // get threaded through as an inert parameter. Branch protection is unreadable (empty) on BOTH calls, so without
   // expectedCiContexts folded into mergeRequiredCiContexts every check-run folds to "passed" (fold-all); WITH

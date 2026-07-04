@@ -342,6 +342,14 @@ const PR_STATE_CACHE_METRIC = "gittensory_pr_state_cache_total";
 // Safety-net max age for a webhook-invalidated PR-state cache row (a dropped/missed webhook must not pin a stale
 // value forever). Short enough that a missed synchronize/closed/reopened event self-heals within one sweep tick.
 const PR_STATE_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+// #selfhost-ci-verification: durable-cache counter for the CI-state snapshot cache, sibling to PR_STATE_CACHE_METRIC.
+// Exported: the cache-check/hit/miss orchestration lives in queue/processors.ts (see writeThroughCiStateCache's
+// own doc comment for why), which needs this same metric name.
+export const CI_STATE_CACHE_METRIC = "gittensory_ci_state_cache_total";
+// Shorter than PR_STATE_CACHE_MAX_AGE_MS (5min): CI state changes faster and more consequentially than bare PR
+// state, and check_run/check_suite `completed` webhooks already invalidate this cache explicitly (see
+// invalidateCiStateCache below) -- this is purely the backstop for a delayed/missed webhook delivery.
+export const CI_STATE_CACHE_MAX_AGE_MS = 60 * 1000;
 const CURRENT_OPEN_SCAN_MARKER = "gittensory-current-open-scan-v1";
 const FRESH_TOTALS_SNAPSHOT_MS = 10 * 60 * 1000;
 const TOTALS_SNAPSHOT_LOOKBACK = 8;
@@ -3276,6 +3284,109 @@ export async function invalidatePrStateCache(env: Env, repoFullName: string, pul
     prMergeableState: null,
     prState: null,
     prStateFetchedAt: null,
+  });
+}
+
+// #selfhost-ci-verification: durable, webhook-invalidated cache for the CI-state aggregate (fetchLiveCiAggregate/
+// fetchLiveCiAggregateViaGraphQl), sibling to the #2537 PR-state cache above. Unlike the request-local
+// LiveGithubFacts memo (queue/processors.ts), this survives ACROSS webhook deliveries / job re-checks, cutting
+// repeat check-runs/status/check-suites reads for an unchanged (repo, pr, head_sha, expectedCiContexts) tuple.
+// NEVER used by the act-boundary merge/close decision (services/agent-approval-queue.ts,
+// services/agent-action-executor.ts) -- those call fetchLiveCiAggregate/fetchLiveCiAggregatePreferGraphQl
+// directly, by design, and must keep doing so (this cache is a distinct, separately-exported function these two
+// call sites simply never import).
+export function isCiStateCacheFresh(
+  cached: Pick<PullRequestDetailSyncStateRecord, "ciHeadSha" | "ciRequiredContextsKey" | "ciStateFetchedAt"> | null | undefined,
+  headSha: string | null | undefined,
+  requiredContextsKey: string,
+): boolean {
+  if (!cached?.ciStateFetchedAt) return false;
+  const fetchedAtMs = Date.parse(cached.ciStateFetchedAt);
+  if (!Number.isFinite(fetchedAtMs)) return false;
+  if (Date.now() - fetchedAtMs >= CI_STATE_CACHE_MAX_AGE_MS) return false;
+  // A stale head_sha (a new commit since this row was cached) or a changed expectedCiContexts config is an
+  // automatic miss regardless of TTL -- mirrors the files-cache's own headSha-matching discipline.
+  if ((cached.ciHeadSha ?? null) !== (headSha ?? null)) return false;
+  if ((cached.ciRequiredContextsKey ?? "") !== requiredContextsKey) return false;
+  return true;
+}
+
+/** Reconstruct a LiveCiAggregate from a cached row, or null on any parse failure / missing ciState (fail-open:
+ *  the caller treats null as a cache miss and falls through to a live fetch, never throws). */
+export function deserializeCachedCiAggregate(
+  cached: Pick<
+    PullRequestDetailSyncStateRecord,
+    "ciState" | "ciHasPending" | "ciHasVisiblePending" | "ciHasMissingRequiredContext" | "ciFailingDetailsJson" | "ciNonRequiredFailingDetailsJson" | "ciCompletenessWarning"
+  >,
+): LiveCiAggregate | null {
+  if (!cached.ciState) return null;
+  try {
+    return {
+      ciState: cached.ciState,
+      hasPending: cached.ciHasPending ?? false,
+      hasVisiblePending: cached.ciHasVisiblePending ?? false,
+      hasMissingRequiredContext: cached.ciHasMissingRequiredContext ?? false,
+      failingDetails: JSON.parse(cached.ciFailingDetailsJson ?? "[]"),
+      nonRequiredFailingDetails: JSON.parse(cached.ciNonRequiredFailingDetailsJson ?? "[]"),
+      ciCompletenessWarning: cached.ciCompletenessWarning ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Best-effort write-through for the CI-state cache fields (mirrors writeThroughPrStateCache's fail-open,
+ *  preserve-status contract). Always stamps ciStateFetchedAt = now on a successful live read.
+ *
+ *  Exported (not orchestrated in this module) because the actual cache-check-then-live-fetch-then-write-through
+ *  sequence lives in queue/processors.ts's cachedFetchLiveCiAggregate, alongside cachedLiveCiAggregate/
+ *  refreshLiveCiAggregate -- NOT here, even though this is the natural file for #2537's PR-state cache sibling.
+ *  A same-module call from THIS file to fetchLiveCiAggregatePreferGraphQl (below) would be invisible to
+ *  `vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl")`, which many existing tests already rely on to
+ *  intercept the cross-module call processors.ts has always made -- moving the orchestration there preserves
+ *  that exact call shape. */
+export async function writeThroughCiStateCache(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+  previousState: Pick<PullRequestDetailSyncStateRecord, "status"> | null | undefined,
+  headSha: string | null | undefined,
+  requiredContextsKey: string,
+  aggregate: LiveCiAggregate,
+): Promise<void> {
+  incr(CI_STATE_CACHE_METRIC, { field: "write", result: "set" });
+  await upsertPullRequestDetailSyncState(env, {
+    repoFullName,
+    pullNumber: prNumber,
+    status: previousState?.status ?? "never_synced",
+    ciHeadSha: headSha ?? null,
+    ciState: aggregate.ciState,
+    ciHasPending: aggregate.hasPending,
+    ciHasVisiblePending: aggregate.hasVisiblePending,
+    ciHasMissingRequiredContext: aggregate.hasMissingRequiredContext,
+    ciFailingDetailsJson: JSON.stringify(aggregate.failingDetails),
+    ciNonRequiredFailingDetailsJson: JSON.stringify(aggregate.nonRequiredFailingDetails),
+    ciCompletenessWarning: aggregate.ciCompletenessWarning,
+    ciRequiredContextsKey: requiredContextsKey,
+    ciStateFetchedAt: nowIso(),
+  }).catch(() => undefined);
+}
+
+/** Invalidate the durable CI-state cache (mirrors invalidatePrStateCache) -- called from
+ *  maybeReReviewOnCiCompletion on every check_run/check_suite `completed` webhook, best-effort. Explicit null
+ *  (not omitted) so the PARTIAL-UPDATE CONTRACT actually clears the stale value rather than leaving it. */
+export async function invalidateCiStateCache(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+): Promise<void> {
+  const existing = await getPullRequestDetailSyncState(env, repoFullName, prNumber).catch(() => null);
+  await upsertPullRequestDetailSyncState(env, {
+    repoFullName,
+    pullNumber: prNumber,
+    status: existing?.status ?? "never_synced",
+    ciState: null,
+    ciStateFetchedAt: null,
   });
 }
 

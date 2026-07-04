@@ -82,11 +82,15 @@ import {
   backfillRegisteredRepositories,
   backfillRepositorySegment,
   cachedFetchLivePullRequestMergeState,
+  CI_STATE_CACHE_METRIC,
+  deserializeCachedCiAggregate,
   enqueueRepositoryOpenDataBackfill,
   fetchAndStorePullRequestFilesForReview,
   fetchLinkedIssueFacts,
   fetchLiveBaseBranchAdvancedAt,
   fetchLiveCiAggregatePreferGraphQl,
+  invalidateCiStateCache,
+  isCiStateCacheFresh,
   type LiveCiAggregate,
   fetchLiveIssueState,
   fetchLivePullRequest,
@@ -105,6 +109,7 @@ import {
   refreshContributorActivity,
   refreshInstallationHealth,
   refreshPullRequestDetails,
+  writeThroughCiStateCache,
 } from "../github/backfill";
 import {
   contributorRepoStatsFromGittensor,
@@ -568,23 +573,76 @@ function evictLiveFactOnReject<T>(
   });
 }
 
+/**
+ * Cached read of the live CI aggregate, backed by pull_request_detail_sync_state (#selfhost-ci-verification,
+ * sibling to the #2537 PR-state cache in backfill.ts). A fresh cache row (webhook-invalidated on
+ * check_run/check_suite `completed` via invalidateCiStateCache, capped at CI_STATE_CACHE_MAX_AGE_MS) is served
+ * without a GitHub call; otherwise fetches live via fetchLiveCiAggregatePreferGraphQl and write-throughs the
+ * result via writeThroughCiStateCache. Fail-open throughout: any cache read/write hiccup falls back to /
+ * degrades to a live fetch, never blocks it.
+ *
+ * `forceRefresh` (set by refreshLiveCiAggregate below, mirroring refreshLiveMergeState's OWN "never durable-
+ * cached" contract for merge-state): skips the cache READ entirely, always fetching live -- a "refresh" caller
+ * needs a genuinely fresh read even within the SAME job pass (e.g. re-checking CI right after this pass's own
+ * gate/check-run publication, which can flip a status GitHub hasn't sent a webhook for yet). The WRITE-through
+ * still happens on a forced refresh, so a LATER pass/job still benefits from this read.
+ *
+ * Deliberately implemented HERE, not in backfill.ts (where writeThroughCiStateCache/isCiStateCacheFresh/
+ * deserializeCachedCiAggregate live) -- a same-module call from backfill.ts to its own
+ * fetchLiveCiAggregatePreferGraphQl would be invisible to `vi.spyOn(backfillModule,
+ * "fetchLiveCiAggregatePreferGraphQl")`, which many existing tests already rely on to intercept the CROSS-module
+ * call this file has always made. Keeping the orchestration here preserves that exact, already-tested call shape.
+ *
+ * NEVER call this from an act-boundary merge/close decision -- services/agent-approval-queue.ts and
+ * services/agent-action-executor.ts call fetchLiveCiAggregate/fetchLiveCiAggregatePreferGraphQl directly, by
+ * design, and must keep doing so.
+ */
+async function cachedFetchLiveCiAggregate(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+  headSha: string | null | undefined,
+  token: string | undefined,
+  requiredContexts: ReadonlySet<string> | null | undefined,
+  requiredContextsKey: string,
+  forceRefresh: boolean,
+  admissionKey?: GitHubRateLimitAdmissionKey,
+): Promise<LiveCiAggregate> {
+  const cached = await getPullRequestDetailSyncState(env, repoFullName, prNumber).catch(() => null);
+  if (!forceRefresh && cached && isCiStateCacheFresh(cached, headSha, requiredContextsKey)) {
+    const deserialized = deserializeCachedCiAggregate(cached);
+    if (deserialized) {
+      incr(CI_STATE_CACHE_METRIC, { field: "aggregate", result: "hit" });
+      return deserialized;
+    }
+  }
+  incr(CI_STATE_CACHE_METRIC, { field: "aggregate", result: forceRefresh ? "forced" : "miss" });
+  const live = await fetchLiveCiAggregatePreferGraphQl(env, repoFullName, headSha, token, requiredContexts, admissionKey);
+  await writeThroughCiStateCache(env, repoFullName, prNumber, cached, headSha, requiredContextsKey, live);
+  return live;
+}
+
 function fetchLiveCiAggregateWithRequiredContexts(
   env: Env,
   repoFullName: string,
   facts: LiveGithubFacts,
+  prNumber: number,
   headSha: string | null | undefined,
   baseRef: string | null | undefined,
   token: string | undefined,
   expectedCiContexts: ReadonlyArray<string> | null | undefined,
+  forceRefresh: boolean,
   admissionKey?: GitHubRateLimitAdmissionKey,
 ): Promise<LiveCiAggregate> {
   // CI refresh callers need fresh check/status state; branch protection contexts move slowly enough to stay
   // request-cached. When the #1941 flag is on, fetchLiveCiAggregatePreferGraphQl collapses the check/status reads
   // into one GraphQL rollup (reusing these requiredContexts), else it uses the proven REST aggregate.
+  // cachedFetchLiveCiAggregate (#selfhost-ci-verification) is the durable, cross-job snapshot cache sibling to
+  // this request-scoped LiveGithubFacts memo -- it is only ever consulted here, on a LiveGithubFacts miss.
   return cachedRequiredStatusContexts(env, repoFullName, facts, baseRef, token, expectedCiContexts, admissionKey)
     .catch(() => null)
     .then((requiredContexts) =>
-      fetchLiveCiAggregatePreferGraphQl(env, repoFullName, headSha, token, requiredContexts, admissionKey),
+      cachedFetchLiveCiAggregate(env, repoFullName, prNumber, headSha, token, requiredContexts, expectedCiContextsKeyPart(expectedCiContexts), forceRefresh, admissionKey),
     );
 }
 
@@ -592,6 +650,7 @@ function cachedLiveCiAggregate(
   env: Env,
   repoFullName: string,
   facts: LiveGithubFacts,
+  prNumber: number,
   headSha: string | null | undefined,
   baseRef: string | null | undefined,
   token: string | undefined,
@@ -608,10 +667,12 @@ function cachedLiveCiAggregate(
       env,
       repoFullName,
       facts,
+      prNumber,
       headSha,
       baseRef,
       token,
       expectedCiContexts,
+      false,
       admissionKey,
     ),
   );
@@ -623,6 +684,7 @@ function refreshLiveCiAggregate(
   env: Env,
   repoFullName: string,
   facts: LiveGithubFacts,
+  prNumber: number,
   headSha: string | null | undefined,
   baseRef: string | null | undefined,
   token: string | undefined,
@@ -637,10 +699,12 @@ function refreshLiveCiAggregate(
       env,
       repoFullName,
       facts,
+      prNumber,
       headSha,
       baseRef,
       token,
       expectedCiContexts,
+      true,
       admissionKey,
     ),
   );
@@ -2146,6 +2210,7 @@ async function runAgentMaintenancePlanAndExecute(
     env,
     repoFullName,
     args.liveFacts,
+    pr.number,
     pr.headSha,
     baseRef,
     token,
@@ -2921,7 +2986,7 @@ async function prReadyForReview(
   }
   // 2) wait for CI to finish before running the Gittensory review. Required contexts still define which failures
   // block/close, but hasPending tracks any visible non-bot CI that is not settled yet.
-  const ci = await cachedLiveCiAggregate(env, repoFullName, liveFacts, pr.headSha, pr.baseRef, token, settings.expectedCiContexts, admissionKey).catch(() => undefined);
+  const ci = await cachedLiveCiAggregate(env, repoFullName, liveFacts, pr.number, pr.headSha, pr.baseRef, token, settings.expectedCiContexts, admissionKey).catch(() => undefined);
   if (ci?.hasPending) {
     // Staleness cap: inferred or unreadable pending CI can otherwise defer FOREVER (orphaned required context,
     // transiently unreadable pages, fork check that never reports). Past the cap we stop deferring and let the
@@ -3610,6 +3675,14 @@ async function maybeReReviewOnCiCompletion(
       }).catch(() => undefined);
     }
     for (const prNumber of prNumbers) {
+      // #selfhost-ci-verification: invalidate the durable CI-state cache for EVERY resolved PR, regardless of
+      // whether the re-review below actually fires -- some OTHER reader (a readiness check or disposition-
+      // planner pass already in flight) may consult the cache in the near future and must not see a stale
+      // pre-completion snapshot. Best-effort, matches every other cache-invalidation call site's fail-open
+      // contract; ordered BEFORE reReviewStoredPullRequest so that pass's own refreshLiveCiAggregate read (which
+      // now also consults this durable cache on a request-scoped memo miss) sees a genuine miss and re-fetches
+      // live, preserving refreshLiveCiAggregate's existing "always fresh" contract for this triggering PR.
+      await invalidateCiStateCache(env, repoFullName, prNumber).catch(() => undefined);
       // Coalesce the CI-completion storm: skip if this PR was re-reviewed within the window.
       if (await ciReReviewCoalesced(env, repoFullName, prNumber)) continue;
       await reReviewStoredPullRequest(
@@ -8267,7 +8340,7 @@ async function maybePublishPrPublicSurface(
       const baseRef = pr.baseRef ?? repo?.defaultBranch;
       // Required contexts still detect missing/pending required CI, but every visible completed red check/status is
       // adverse and blocks the PR.
-      const liveCi = await refreshLiveCiAggregate(env, repoFullName, webhook.liveFacts, pr.headSha, baseRef, token, settings.expectedCiContexts, admissionKey);
+      const liveCi = await refreshLiveCiAggregate(env, repoFullName, webhook.liveFacts, pr.number, pr.headSha, baseRef, token, settings.expectedCiContexts, admissionKey);
       // Live merge-state too — the SAME source the disposition uses (planAgentMaintenanceActions reads liveMergeState).
       // The stored pr.mergeableState lags GitHub's async recompute, and the gate's own check/review publication can
       // also advance mergeability after readiness ran, so refresh at this post-publish boundary.

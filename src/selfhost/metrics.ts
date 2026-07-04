@@ -120,6 +120,7 @@ const DEFAULT_METRIC_META: readonly (readonly [string, MetricMeta])[] = [
   ["gittensory_github_branch_protection_permission_denied_total", { help: "GitHub branch-protection reads denied by permissions.", type: "counter" }],
   ["gittensory_github_pr_files_fetch_total", { help: "GitHub pull-request file fetch attempts.", type: "counter" }],
   ["gittensory_pr_state_cache_total", { help: "Pull-request state cache outcomes.", type: "counter" }],
+  ["gittensory_ci_state_cache_total", { help: "CI-state snapshot cache outcomes.", type: "counter" }],
 ];
 const metricMeta = new Map<string, MetricMeta>(DEFAULT_METRIC_META);
 

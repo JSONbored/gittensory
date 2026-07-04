@@ -1262,6 +1262,16 @@ export async function upsertPullRequestDetailSyncState(env: Env, state: PullRequ
       prMergeableState: state.prMergeableState,
       prState: state.prState,
       prStateFetchedAt: state.prStateFetchedAt,
+      ciHeadSha: state.ciHeadSha,
+      ciState: state.ciState,
+      ciHasPending: state.ciHasPending,
+      ciHasVisiblePending: state.ciHasVisiblePending,
+      ciHasMissingRequiredContext: state.ciHasMissingRequiredContext,
+      ciFailingDetailsJson: state.ciFailingDetailsJson,
+      ciNonRequiredFailingDetailsJson: state.ciNonRequiredFailingDetailsJson,
+      ciCompletenessWarning: state.ciCompletenessWarning,
+      ciRequiredContextsKey: state.ciRequiredContextsKey,
+      ciStateFetchedAt: state.ciStateFetchedAt,
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -1278,6 +1288,16 @@ export async function upsertPullRequestDetailSyncState(env: Env, state: PullRequ
         prMergeableState: state.prMergeableState,
         prState: state.prState,
         prStateFetchedAt: state.prStateFetchedAt,
+        ciHeadSha: state.ciHeadSha,
+        ciState: state.ciState,
+        ciHasPending: state.ciHasPending,
+        ciHasVisiblePending: state.ciHasVisiblePending,
+        ciHasMissingRequiredContext: state.ciHasMissingRequiredContext,
+        ciFailingDetailsJson: state.ciFailingDetailsJson,
+        ciNonRequiredFailingDetailsJson: state.ciNonRequiredFailingDetailsJson,
+        ciCompletenessWarning: state.ciCompletenessWarning,
+        ciRequiredContextsKey: state.ciRequiredContextsKey,
+        ciStateFetchedAt: state.ciStateFetchedAt,
         updatedAt: nowIso(),
       },
     });
@@ -4703,6 +4723,16 @@ function toPullRequestDetailSyncStateRecord(row: typeof pullRequestDetailSyncSta
     prMergeableState: row.prMergeableState,
     prState: row.prState,
     prStateFetchedAt: row.prStateFetchedAt,
+    ciHeadSha: row.ciHeadSha,
+    ciState: parseCiState(row.ciState),
+    ciHasPending: row.ciHasPending,
+    ciHasVisiblePending: row.ciHasVisiblePending,
+    ciHasMissingRequiredContext: row.ciHasMissingRequiredContext,
+    ciFailingDetailsJson: row.ciFailingDetailsJson,
+    ciNonRequiredFailingDetailsJson: row.ciNonRequiredFailingDetailsJson,
+    ciCompletenessWarning: row.ciCompletenessWarning,
+    ciRequiredContextsKey: row.ciRequiredContextsKey,
+    ciStateFetchedAt: row.ciStateFetchedAt,
     updatedAt: row.updatedAt,
   };
 }
@@ -6351,6 +6381,13 @@ function parseScorePreviewTargetType(value: string): ScorePreviewRecord["targetT
 function parsePullRequestDetailSyncStatus(value: string): PullRequestDetailSyncStateRecord["status"] {
   if (value === "running" || value === "complete" || value === "partial" || value === "waiting_rate_limit" || value === "error") return value;
   return "never_synced";
+}
+
+// Unlike parsePullRequestDetailSyncStatus above, `ci_state` has no sensible non-null default -- absent/invalid
+// genuinely means "never cached", so this returns null rather than coercing to a fake status.
+function parseCiState(value: string | null): PullRequestDetailSyncStateRecord["ciState"] {
+  if (value === "passed" || value === "failed" || value === "pending" || value === "unverified") return value;
+  return null;
 }
 
 function loginMatches(column: unknown, login: string) {

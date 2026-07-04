@@ -1156,6 +1156,21 @@ export type PullRequestDetailSyncStateRecord = {
   prMergeableState?: string | null | undefined;
   prState?: string | null | undefined;
   prStateFetchedAt?: string | null | undefined;
+  // #selfhost-ci-verification (CI-state snapshot cache sibling to the #2537 PR-state trio above): a durable
+  // mirror of the LiveCiAggregate the gate's own live-CI fetch already produces (src/github/backfill.ts),
+  // keyed fresh only when BOTH ciHeadSha matches the head_sha being queried AND ciRequiredContextsKey matches
+  // the current settings.expectedCiContexts. NEVER read by the act-boundary merge/close decision (see the
+  // schema.ts comment) -- those paths always force a live fetch.
+  ciHeadSha?: string | null | undefined;
+  ciState?: "passed" | "failed" | "pending" | "unverified" | null | undefined;
+  ciHasPending?: boolean | null | undefined;
+  ciHasVisiblePending?: boolean | null | undefined;
+  ciHasMissingRequiredContext?: boolean | null | undefined;
+  ciFailingDetailsJson?: string | null | undefined;
+  ciNonRequiredFailingDetailsJson?: string | null | undefined;
+  ciCompletenessWarning?: string | null | undefined;
+  ciRequiredContextsKey?: string | null | undefined;
+  ciStateFetchedAt?: string | null | undefined;
   updatedAt?: string | null | undefined;
 };
 
