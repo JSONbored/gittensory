@@ -87,6 +87,13 @@ describe("fetchCandidateIssues (#2307)", () => {
         htmlUrl: "https://github.com/acme/widgets/issues/7",
         aiPolicyAllowed: true,
         aiPolicySource: "CONTRIBUTING.md",
+        aiPolicyFatigue: {
+          tier: "none",
+          priorityAdjustment: "none",
+          priorityFactor: 1,
+          deferRecheckUntil: null,
+          evidence: [],
+        },
       },
     ]);
     expect(calls.every((call) => call.method === "GET")).toBe(true);

@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { resolveAiPolicyVerdict } from "@jsonbored/gittensory-engine";
+import { resolveAiPolicyAssessment } from "@jsonbored/gittensory-engine";
 
 const defaultApiBaseUrl = "https://api.github.com";
 const defaultConcurrency = 5;
@@ -152,7 +152,11 @@ async function resolveRepoAiPolicy(target, githubToken, options, summary, warnin
   // CONTRIBUTING.md (the exact case resolveAiPolicyVerdict was fixed to handle in #2900, which can only fire if
   // both docs reach it).
   if (aiUsage !== null && aiUsage.trim().length > 0) {
-    return resolveAiPolicyVerdict({ aiUsage, contributing: null });
+    return resolveAiPolicyAssessment({
+      docs: { aiUsage, contributing: null },
+      closedPullRequests: options.closedPullRequestsByRepo?.[target.repoFullName] ?? [],
+      nowMs: options.nowMs,
+    });
   }
   const contributing = await fetchRepoDoc(
     target,
@@ -162,7 +166,13 @@ async function resolveRepoAiPolicy(target, githubToken, options, summary, warnin
     summary,
     warnings,
   );
-  return resolveAiPolicyVerdict({ aiUsage: null, contributing });
+  return resolveAiPolicyAssessment({
+    docs: { aiUsage: null, contributing },
+    previousContributing: options.previousContributingByRepo?.[target.repoFullName] ?? null,
+    contributingObservedAt: options.contributingObservedAtByRepo?.[target.repoFullName] ?? null,
+    closedPullRequests: options.closedPullRequestsByRepo?.[target.repoFullName] ?? [],
+    nowMs: options.nowMs,
+  });
 }
 
 function labelNames(labels) {
@@ -176,7 +186,7 @@ function labelNames(labels) {
     .filter((name) => name.length > 0);
 }
 
-function normalizeIssue(target, issue, policySource) {
+function normalizeIssue(target, issue, policyVerdict) {
   if (!issue || typeof issue !== "object" || issue.pull_request) return null;
   if (!Number.isInteger(issue.number) || issue.number <= 0) return null;
   if (typeof issue.title !== "string" || issue.title.trim().length === 0) return null;
@@ -191,8 +201,9 @@ function normalizeIssue(target, issue, policySource) {
     createdAt: typeof issue.created_at === "string" ? issue.created_at : null,
     updatedAt: typeof issue.updated_at === "string" ? issue.updated_at : null,
     htmlUrl: typeof issue.html_url === "string" ? issue.html_url : null,
-    aiPolicyAllowed: true,
-    aiPolicySource: policySource,
+    aiPolicyAllowed: policyVerdict.allowed,
+    aiPolicySource: policyVerdict.source,
+    aiPolicyFatigue: policyVerdict.fatigue,
   };
 }
 
@@ -222,7 +233,7 @@ async function fetchTargetIssues(target, githubToken, options, summary, warnings
       return [];
     }
     return payload
-      .map((issue) => normalizeIssue(target, issue, verdict.source))
+      .map((issue) => normalizeIssue(target, issue, verdict))
       .filter((issue) => issue !== null);
   } catch (error) {
     warnings.push(
@@ -354,7 +365,7 @@ export async function searchCandidateIssuesWithSummary(searchQuery, githubToken,
     if (!target) continue;
     const policy = policiesByKey.get(targetKey(target));
     if (!policy?.allowed) continue;
-    const normalizedIssue = normalizeIssue(target, item, policy.source);
+    const normalizedIssue = normalizeIssue(target, item, policy);
     if (normalizedIssue) issues.push(normalizedIssue);
   }
 

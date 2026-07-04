@@ -403,9 +403,35 @@ injected-clock semantics for local miners.
 
 ## AI Policy Map
 
-`scanAiPolicyText` and `resolveAiPolicyVerdict` provide the deterministic policy gate used by miner discovery.
-They only deny on small, explicit AI-contribution ban phrases in `AI-USAGE.md` or `CONTRIBUTING.md`; ambiguous,
-missing, or empty policy text stays allowed so discovery does not invent a ban.
+`scanAiPolicyText`, `resolveAiPolicyVerdict`, and `resolveAiPolicyAssessment` provide the deterministic policy gate
+used by miner discovery. They only hard-skip on small, explicit AI-contribution ban phrases in `AI-USAGE.md` or
+`CONTRIBUTING.md`; ambiguous, missing, or empty policy text stays allowed so discovery does not invent a ban.
+
+`resolveAiPolicyAssessment()` adds a separate organic AI-fatigue tier (#3009) derived from metadata only:
+
+- concentrated terse rejections on AI-attributed closed PRs
+- recency-weighted AI/automation language added to contributing docs without matching a formal ban phrase
+
+Fatigue never overrides or promotes into the hard-skip boolean. Instead it emits a priority adjustment
+(`deprioritize` or `defer`) that `rankMetadataOpportunities()` can apply via `aiPolicyFatigueByRepo`. Per-repo cache
+helpers use a shorter TTL for fatigue signals than for formal bans.
+
+```ts
+import {
+  resolveAiPolicyAssessment,
+  applyAiPolicyFatigueToRankScore,
+  writeAiPolicyVerdictCache,
+} from "@jsonbored/gittensory-engine";
+
+const verdict = resolveAiPolicyAssessment({
+  docs: { aiUsage: null, contributing: "Please disclose AI-assisted contributions." },
+  closedPullRequests: [
+    { number: 1, state: "closed", merged: false, aiAttributed: true, terseRejection: true },
+  ],
+});
+
+applyAiPolicyFatigueToRankScore(0.82, verdict.fatigue, Date.now());
+```
 
 ## Governor ledger
 

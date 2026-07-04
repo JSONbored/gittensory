@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { resolveAiPolicyVerdict, scanAiPolicyText } from "../../packages/gittensory-engine/src/ai-policy-map";
+import {
+  resolveAiPolicyAssessment,
+  resolveAiPolicyVerdict,
+  scanAiPolicyText,
+} from "../../packages/gittensory-engine/src/ai-policy-map";
 
-describe("miner AI policy map (#2305)", () => {
+const FATIGUE_NONE = {
+  tier: "none" as const,
+  priorityAdjustment: "none" as const,
+  priorityFactor: 1,
+  deferRecheckUntil: null,
+  evidence: [],
+};
+
+describe("miner AI policy map (#2305, #3009)", () => {
   it.each([
     ["We allow bug fixes, but no AI-generated pull requests.", "no ai-generated pull requests"],
     ["AI-generated PRs are rejected by maintainers.", "ai-generated prs are rejected"],
@@ -12,6 +24,7 @@ describe("miner AI policy map (#2305)", () => {
       allowed: false,
       matchedPhrase: phrase,
       source: "CONTRIBUTING.md",
+      fatigue: FATIGUE_NONE,
     });
   });
 
@@ -20,21 +33,25 @@ describe("miner AI policy map (#2305)", () => {
       allowed: true,
       matchedPhrase: null,
       source: "CONTRIBUTING.md",
+      fatigue: FATIGUE_NONE,
     });
     expect(scanAiPolicyText("", "AI-USAGE.md")).toEqual({
       allowed: true,
       matchedPhrase: null,
       source: "AI-USAGE.md",
+      fatigue: FATIGUE_NONE,
     });
     expect(scanAiPolicyText(null, "CONTRIBUTING.md")).toEqual({
       allowed: true,
       matchedPhrase: null,
       source: "CONTRIBUTING.md",
+      fatigue: FATIGUE_NONE,
     });
     expect(scanAiPolicyText(undefined, "none")).toEqual({
       allowed: true,
       matchedPhrase: null,
       source: "none",
+      fatigue: FATIGUE_NONE,
     });
   });
 
@@ -48,6 +65,7 @@ describe("miner AI policy map (#2305)", () => {
       allowed: true,
       matchedPhrase: null,
       source: "AI-USAGE.md",
+      fatigue: FATIGUE_NONE,
     });
   });
 
@@ -56,20 +74,43 @@ describe("miner AI policy map (#2305)", () => {
       allowed: false,
       matchedPhrase: "ai-generated prs are rejected",
       source: "CONTRIBUTING.md",
+      fatigue: FATIGUE_NONE,
     });
     expect(resolveAiPolicyVerdict({ aiUsage: null, contributing: null })).toEqual({
       allowed: true,
       matchedPhrase: null,
       source: "none",
+      fatigue: FATIGUE_NONE,
     });
   });
 
   it("treats an empty, whitespace-only, or undefined AI-USAGE.md as absent and falls back to CONTRIBUTING.md", () => {
-    const banned = { allowed: false, matchedPhrase: "ai-generated prs are rejected", source: "CONTRIBUTING.md" } as const;
+    const banned = {
+      allowed: false,
+      matchedPhrase: "ai-generated prs are rejected",
+      source: "CONTRIBUTING.md",
+      fatigue: FATIGUE_NONE,
+    } as const;
     const contributing = "AI-generated PRs are not accepted.";
-    // A stub AI-USAGE.md carries no policy and must not fail open over a real ban in CONTRIBUTING.md.
     expect(resolveAiPolicyVerdict({ aiUsage: "", contributing })).toEqual(banned);
     expect(resolveAiPolicyVerdict({ aiUsage: "   \n  ", contributing })).toEqual(banned);
     expect(resolveAiPolicyVerdict({ aiUsage: undefined, contributing })).toEqual(banned);
+  });
+
+  it("detects organic AI-fatigue without promoting it to a hard skip (#3009)", () => {
+    const verdict = resolveAiPolicyAssessment({
+      docs: {
+        aiUsage: null,
+        contributing: "Please disclose AI-assisted contributions in your PR description.",
+      },
+      closedPullRequests: [
+        { number: 1, state: "closed", merged: false, aiAttributed: true, terseRejection: true },
+        { number: 2, state: "closed", merged: false, aiAttributed: true, terseRejection: true },
+        { number: 3, state: "closed", merged: false, aiAttributed: true, terseRejection: true },
+      ],
+    });
+    expect(verdict.allowed).toBe(true);
+    expect(verdict.fatigue.tier).not.toBe("none");
+    expect(verdict.fatigue.priorityAdjustment).not.toBe("none");
   });
 });

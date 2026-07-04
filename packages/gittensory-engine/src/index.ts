@@ -101,10 +101,31 @@ export * from "./plan-export.js";
 export * from "./plan-templates.js";
 export * from "./portfolio/queue.js";
 export {
+  AI_POLICY_FATIGUE_CACHE_TTL_MS,
+  AI_POLICY_FATIGUE_DEFER_RECHECK_MS,
+  AI_POLICY_FORMAL_BAN_CACHE_TTL_MS,
+  applyAiPolicyFatigueToRankScore,
+  aiPolicyVerdictCacheTtlMs,
+  detectContributingDocFatigueRevision,
+  detectTerseRejectionFatigue,
+  inferAiAttributionFromPrMetadata,
+  readAiPolicyVerdictCache,
+  renderAiPolicyAssessmentMarkdown,
+  resolveAiPolicyAssessment,
   resolveAiPolicyVerdict,
   scanAiPolicyText,
+  scanContributingDocFatigueLanguage,
+  writeAiPolicyVerdictCache,
+  type AiAttributedPullRequestMetadata,
+  type AiPolicyAssessmentInput,
+  type AiPolicyFatigueEvidence,
+  type AiPolicyFatigueEvidenceKind,
+  type AiPolicyFatigueSignal,
+  type AiPolicyFatigueTier,
+  type AiPolicyPriorityAdjustment,
   type AiPolicySource,
   type AiPolicyVerdict,
+  type AiPolicyVerdictCacheEntry,
 } from "./ai-policy-map.js";
 export {
   DEFAULT_MINER_GOAL_SPEC,

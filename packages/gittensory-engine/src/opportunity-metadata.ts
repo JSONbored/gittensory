@@ -1,3 +1,4 @@
+import { applyAiPolicyFatigueToRankScore, type AiPolicyFatigueSignal } from "./ai-policy-map.js";
 import { computeMinerGoalLaneFit, isMinerRepoTargetable } from "./miner-goal-lane-fit.js";
 import { DEFAULT_MINER_GOAL_SPEC, type MinerGoalSpec } from "./miner-goal-spec.js";
 import { computeOpportunityCompetition } from "./opportunity-competition.js";
@@ -23,6 +24,8 @@ export type MetadataRankContext = {
   highRiskDuplicateClusters?: number | undefined;
   openPullRequests?: number | undefined;
   goalSpecsByRepo?: Readonly<Record<string, MinerGoalSpec>> | undefined;
+  /** Optional per-repo AI-fatigue signals (#3009) keyed by repo full name. */
+  aiPolicyFatigueByRepo?: Readonly<Record<string, AiPolicyFatigueSignal>> | undefined;
 };
 
 const POSITIVE_LABELS = Object.freeze([
@@ -218,11 +221,20 @@ export function buildMetadataRankInput(
   };
 }
 
+function resolveFatigueSignal(repoFullName: string, context: MetadataRankContext): AiPolicyFatigueSignal | null {
+  const target = repoFullName.trim().toLowerCase();
+  const entries = context.aiPolicyFatigueByRepo ? Object.entries(context.aiPolicyFatigueByRepo) : [];
+  for (const [repo, signal] of entries) {
+    if (repo.trim().toLowerCase() === target) return signal;
+  }
+  return null;
+}
+
 /** Rank metadata-only candidates with the shared opportunity ranker. Pure. */
 export function rankMetadataOpportunities<T extends MetadataCandidateIssue>(
   candidates: readonly T[],
   context: MetadataRankContext,
-): Array<T & OpportunityRankInput & { rankScore: number }> {
+): Array<T & OpportunityRankInput & { rankScore: number; aiPolicyDeferred?: boolean }> {
   const targetableCandidates = candidates.filter((candidate) =>
     isMinerRepoTargetable(resolveGoalSpec(candidate.repoFullName, context)),
   );
@@ -231,6 +243,16 @@ export function rankMetadataOpportunities<T extends MetadataCandidateIssue>(
     ...buildMetadataRankInput(candidate, targetableCandidates, context),
   }));
   /* v8 ignore next */
-  return rankOpportunities(annotated) as Array<T & OpportunityRankInput & { rankScore: number }>;
+  const ranked = rankOpportunities(annotated) as Array<T & OpportunityRankInput & { rankScore: number }>;
+  return ranked.map((candidate) => {
+    const fatigue = resolveFatigueSignal(candidate.repoFullName, context);
+    if (!fatigue || fatigue.priorityAdjustment === "none") return candidate;
+    const adjusted = applyAiPolicyFatigueToRankScore(candidate.rankScore, fatigue, context.nowMs);
+    return {
+      ...candidate,
+      rankScore: adjusted.rankScore,
+      ...(adjusted.deferred ? { aiPolicyDeferred: true as const } : {}),
+    };
+  });
 }
 /* v8 ignore stop */

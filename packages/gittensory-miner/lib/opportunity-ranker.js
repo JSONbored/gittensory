@@ -46,6 +46,9 @@ function normalizeCandidate(candidate) {
       candidate.aiPolicySource === "none"
         ? candidate.aiPolicySource
         : "none",
+    ...(candidate.aiPolicyFatigue && typeof candidate.aiPolicyFatigue === "object"
+      ? { aiPolicyFatigue: candidate.aiPolicyFatigue }
+      : {}),
   };
 }
 
@@ -59,12 +62,26 @@ function buildGoalSpecsByRepo(options = {}) {
   return goalSpecsByRepo;
 }
 
-function buildRankContext(options = {}) {
+function buildAiPolicyFatigueByRepo(candidates) {
+  const fatigueByRepo = {};
+  for (const candidate of Array.isArray(candidates) ? candidates : []) {
+    const repoFullName = typeof candidate?.repoFullName === "string" ? candidate.repoFullName.trim() : "";
+    if (!repoFullName || !candidate?.aiPolicyFatigue) continue;
+    fatigueByRepo[repoFullName] = candidate.aiPolicyFatigue;
+  }
+  return fatigueByRepo;
+}
+
+function buildRankContext(candidates, options = {}) {
   return {
     nowMs: finiteEpochMs(options.nowMs),
     highRiskDuplicateClusters: finiteNonNegativeInt(options.highRiskDuplicateClusters),
     openPullRequests: finiteNonNegativeInt(options.openPullRequests),
     goalSpecsByRepo: buildGoalSpecsByRepo(options),
+    aiPolicyFatigueByRepo: {
+      ...buildAiPolicyFatigueByRepo(candidates),
+      ...(options.aiPolicyFatigueByRepo ?? {}),
+    },
   };
 }
 
@@ -103,12 +120,12 @@ function rankedUsesDefaultGoalSpec(ranked, options = {}) {
  */
 export function rankCandidateIssues(candidates, options = {}) {
   const { normalized } = collectCandidates(candidates);
-  return rankMetadataOpportunities(normalized, buildRankContext(options));
+  return rankMetadataOpportunities(normalized, buildRankContext(normalized, options));
 }
 
 export function rankCandidateIssuesWithSummary(candidates, options = {}) {
   const { normalized, skippedInvalid } = collectCandidates(candidates);
-  const ranked = rankMetadataOpportunities(normalized, buildRankContext(options));
+  const ranked = rankMetadataOpportunities(normalized, buildRankContext(normalized, options));
   return {
     issues: ranked,
     skippedInvalid,

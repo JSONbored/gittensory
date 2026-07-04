@@ -273,4 +273,24 @@ describe("rankCandidateIssues (#2302 follow-up)", () => {
     expect(ranked[0]?.freshness).toBeGreaterThan(0);
     vi.useRealTimers();
   });
+
+  it("deprioritizes candidates carrying an AI-fatigue signal without hard-skipping them (#3009)", () => {
+    const baseline = rankCandidateIssues([rawIssue()], { nowMs: NOW })[0]?.rankScore ?? 0;
+    const fatigued = rankCandidateIssues(
+      [
+        rawIssue({
+          aiPolicyFatigue: {
+            tier: "elevated",
+            priorityAdjustment: "deprioritize",
+            priorityFactor: 0.55,
+            deferRecheckUntil: null,
+            evidence: [{ kind: "terse_rejection_pattern", detail: "3/3 terse", weight: 1 }],
+          },
+        }),
+      ],
+      { nowMs: NOW },
+    )[0]?.rankScore;
+    expect(fatigued).toBeLessThan(baseline);
+    expect(fatigued).toBeGreaterThan(0);
+  });
 });
