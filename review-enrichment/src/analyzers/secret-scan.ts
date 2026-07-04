@@ -178,13 +178,13 @@ const RULES: Rule[] = [
   {
     // Twilio Account SID: `AC` + 32 hex chars (distinct from Auth Token, which has no prefix).
     kind: "twilio_account_sid",
-    re: /\bAC[0-9a-fA-F]{32}(?![0-9a-fA-F])/,
+    re: /\bAC[0-9a-fA-F]{32}(?![A-Za-z0-9_])/,
     confidence: "high",
   },
   {
     // Twilio API Key SID: `SK` + 32 hex chars.
     kind: "twilio_api_key_sid",
-    re: /\bSK[0-9a-fA-F]{32}(?![0-9a-fA-F])/,
+    re: /\bSK[0-9a-fA-F]{32}(?![A-Za-z0-9_])/,
     confidence: "high",
   },
   {

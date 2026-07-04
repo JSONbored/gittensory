@@ -451,12 +451,22 @@ test("scanPatch flags Twilio Account and API Key SIDs with high confidence", () 
   assert.equal(keyFindings[0].confidence, "high");
 });
 
-test("scanPatch does not flag truncated Twilio SIDs or hex overrun", () => {
+test("scanPatch does not flag truncated Twilio SIDs or identifier continuation past 32 hex chars", () => {
   const truncated = "AC" + "a".repeat(31);
   assert.equal(scanPatch("src/config.ts", hunk([`const sid = "${truncated}";`])).length, 0);
-  const overrun = "AC" + "a".repeat(32) + "f";
+  const hexOverrun = "AC" + "a".repeat(32) + "f";
   assert.equal(
-    scanPatch("src/config.ts", hunk([`const sid = "${overrun}";`])).some((f) => f.kind === "twilio_account_sid"),
+    scanPatch("src/config.ts", hunk([`const sid = "${hexOverrun}";`])).some((f) => f.kind === "twilio_account_sid"),
+    false,
+  );
+  const nonHexTail = "AC" + "a".repeat(32) + "z";
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const sid = "${nonHexTail}";`])).some((f) => f.kind === "twilio_account_sid"),
+    false,
+  );
+  const skNonHexTail = "SK" + "b".repeat(32) + "z";
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const key = "${skNonHexTail}";`])).some((f) => f.kind === "twilio_api_key_sid"),
     false,
   );
 });
