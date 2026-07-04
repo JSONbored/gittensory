@@ -7747,8 +7747,8 @@ describe("queue processors", () => {
       if (url.includes("/commits/f55/status")) return Response.json({ state: "success", statuses: [] });
       if (url.includes("/issues/55/labels")) return Response.json([]);
       if (url.includes("/issues/55/comments")) return Response.json([]);
-      if (url.includes("/actions/runs?head_sha=f55&status=in_progress")) { seen.listedStatuses.push("in_progress"); return Response.json({ workflow_runs: (runListResponses.in_progress ?? []).map((id) => ({ id })) }); }
-      if (url.includes("/actions/runs?head_sha=f55&status=queued")) { seen.listedStatuses.push("queued"); return Response.json({ workflow_runs: (runListResponses.queued ?? []).map((id) => ({ id })) }); }
+      if (url.includes("/actions/runs?head_sha=f55&status=in_progress")) { seen.listedStatuses.push("in_progress"); return Response.json({ workflow_runs: (runListResponses.in_progress ?? []).map((id) => ({ id, event: "pull_request", pull_requests: [{ number: 55 }] })) }); }
+      if (url.includes("/actions/runs?head_sha=f55&status=queued")) { seen.listedStatuses.push("queued"); return Response.json({ workflow_runs: (runListResponses.queued ?? []).map((id) => ({ id, event: "pull_request", pull_requests: [{ number: 55 }] })) }); }
       if (url.includes("/actions/runs/") && url.endsWith("/cancel") && method === "POST") {
         seen.cancelledIds.push(Number(url.match(/\/actions\/runs\/(\d+)\/cancel/)?.[1]));
         return cancelResponse();

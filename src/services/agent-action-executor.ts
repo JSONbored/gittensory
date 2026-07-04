@@ -289,7 +289,7 @@ async function auditContributorCapCiCancelFailed(env: Env, targetKey: string, re
 
 async function recordContributorCapCiCancelOutcome(env: Env, ctx: AgentActionExecutionContext, headSha: string): Promise<void> {
   const targetKey = `${ctx.repoFullName}#${ctx.pullNumber}`;
-  const outcome = await cancelInFlightWorkflowRunsForHeadSha(env, ctx.installationId, ctx.repoFullName, headSha);
+  const outcome = await cancelInFlightWorkflowRunsForHeadSha(env, ctx.installationId, ctx.repoFullName, headSha, ctx.pullNumber);
   if (outcome.kind === "cancelled") {
     await auditContributorCapCiCancelled(env, targetKey, ctx.repoFullName, headSha, outcome);
     return;
