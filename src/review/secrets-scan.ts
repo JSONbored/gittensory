@@ -27,6 +27,24 @@ const SECRET_PATTERNS: Array<{ name: string; re: RegExp }> = [
   { name: "bittensor_key", re: /\b(?:hot|cold)key\b\s*[:=]/i },
 ];
 
+/** Concrete credential formats the gate hard-blocks — NOT weak heuristics (`seed_or_mnemonic` / `bittensor_key`). */
+export const GATE_BLOCKING_SECRET_KINDS = new Set([
+  "github_token",
+  "github_pat",
+  "private_key_block",
+  "aws_access_key",
+  "slack_token",
+  "google_api_key",
+  "gitlab_token",
+  "npm_token",
+  "jwt",
+  "generic_secret_assignment",
+]);
+
+function isGateBlockingKind(kind: string): boolean {
+  return GATE_BLOCKING_SECRET_KINDS.has(kind);
+}
+
 // Deliberately NOT in SECRET_PATTERNS above: unlike the format-specific patterns (a real GitHub token/AWS key
 // ALWAYS matches its exact character format, so a bare .test() is precise enough), a keyword-plus-quoted-value
 // SHAPE also matches plenty of non-secrets -- a Zod schema field (`password: z.string()`), a TypeScript type
@@ -89,4 +107,115 @@ export function scanForSecrets(text: string): SecretScanResult {
   const kinds = SECRET_PATTERNS.filter((pattern) => pattern.re.test(text)).map((pattern) => pattern.name);
   if (hasGenericSecretAssignment(text)) kinds.push("generic_secret_assignment");
   return { found: kinds.length > 0, kinds };
+}
+
+/** Extract quoted string-literal inner text from one source line (for cross-line join below). */
+function extractStringLiteralContents(line: string): string[] {
+  const literals: string[] = [];
+  const re = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(line)) !== null) literals.push(match[0].slice(1, -1));
+  return literals;
+}
+
+function formatSecretKindsFromText(text: string): string[] {
+  const kinds = SECRET_PATTERNS.filter((pattern) => pattern.re.test(text)).map((pattern) => pattern.name);
+  if (hasGenericSecretAssignment(text)) kinds.push("generic_secret_assignment");
+  return kinds;
+}
+
+/** True for unified-diff file headers (`+++ b/path`, `--- a/path`), not added content like `+++const`.
+ *  Mirrors review-enrichment/src/analyzers/diff-lines.ts `isDiffFileHeaderLine`. */
+function isUnifiedDiffFileHeaderLine(line: string): boolean {
+  return /^(?:\+\+\+|---) (?:[ab]\/|\/dev\/null)/.test(line);
+}
+
+/** Scan a PR diff for secret kinds introduced on added lines (and added/renamed file headers). Per-line regex
+ *  first; then a bounded cross-line join of consecutive added lines' adjacent string literals (#2454) so a
+ *  credential split across `const a = "AKIA…"; const b = "REST";` still trips the unconditional gate. Context,
+ *  removed, hunk, and file-section boundaries reset both the literal-join window and generic-assignment runs. */
+export function scanPrDiffForSecretKinds(diff: string): string[] {
+  const found = new Set<string>();
+  let inFileSection = false;
+  let inHunk = false;
+  let previousLiterals: string[] = [];
+  let addedRun: string[] = [];
+
+  const resetJoinState = (): void => {
+    previousLiterals = [];
+    addedRun = [];
+  };
+
+  const noteGenericFromAddedRun = (): void => {
+    if (found.has("generic_secret_assignment") || addedRun.length === 0) return;
+    if (hasGenericSecretAssignment(addedRun.join("\n"))) {
+      found.add("generic_secret_assignment");
+    }
+  };
+
+  for (const line of diff.split("\n")) {
+    if (line === "") {
+      inFileSection = false;
+      inHunk = false;
+      resetJoinState();
+      continue;
+    }
+    if (/^### .+ \(.+\) /.test(line)) {
+      inFileSection = true;
+      inHunk = false;
+      resetJoinState();
+      if (/^### .+ \((?:added|renamed)\) /.test(line)) {
+        for (const kind of formatSecretKindsFromText(line)) found.add(kind);
+      }
+      continue;
+    }
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      resetJoinState();
+      continue;
+    }
+    if (line.startsWith("+")) {
+      if (!inFileSection) continue;
+      // Skip pre-hunk file headers only; inside a hunk `+++…` is added content, not a header.
+      if (!inHunk && isUnifiedDiffFileHeaderLine(line)) continue;
+      const content = line.slice(1);
+      addedRun.push(content);
+      let matchedBlocking = false;
+      for (const kind of formatSecretKindsFromText(content)) {
+        found.add(kind);
+        if (isGateBlockingKind(kind)) matchedBlocking = true;
+      }
+      noteGenericFromAddedRun();
+      const currentLiterals = extractStringLiteralContents(content);
+      const lastPrevious = previousLiterals.at(-1);
+      const firstCurrent = currentLiterals[0];
+      // Only skip the cross-line join when this line already matched a gate-blocking kind on its own.
+      // A soft heuristic alone (e.g. `coldkey:` in config) must not suppress joining literals that
+      // complete a split concrete credential (#2877 / Gittensory review blocker).
+      if (!matchedBlocking && lastPrevious !== undefined && firstCurrent !== undefined) {
+        const joined = lastPrevious + firstCurrent;
+        for (const pattern of SECRET_PATTERNS) {
+          if (!isGateBlockingKind(pattern.name)) continue;
+          if (pattern.re.test(joined)) {
+            found.add(pattern.name);
+            break;
+          }
+        }
+        if (!found.has("generic_secret_assignment") && hasGenericSecretAssignment(joined)) {
+          found.add("generic_secret_assignment");
+        }
+      }
+      previousLiterals = currentLiterals;
+      continue;
+    }
+    if (line.startsWith("-")) {
+      resetJoinState();
+      continue;
+    }
+    if (inHunk && line.startsWith(" ")) {
+      resetJoinState();
+    }
+  }
+
+  return [...found];
 }

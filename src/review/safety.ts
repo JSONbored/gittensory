@@ -7,33 +7,11 @@
 
 import type { AdvisoryFinding } from "../types";
 import { neutralizePromptInjection, safeReviewTitle } from "./prompt-injection";
-import { scanForSecrets } from "./secrets-scan";
+import { GATE_BLOCKING_SECRET_KINDS, scanPrDiffForSecretKinds } from "./secrets-scan";
 
 // Concrete credential formats only — NOT the weak heuristics (`seed_or_mnemonic` / `bittensor_key`) that
-// false-positive on legitimate config/workflow content. A `coldkey:` / `hotkey =` line or the word
-// "mnemonic" in a .toml, .github/workflows/**, or wrangler/workers config is NOT a leaked credential, but it
-// matches those two patterns — on these Bittensor repos that wrongly hard-blocked owner config/workflow PRs
-// (RC6: #1505/#1495/#1485). A real-format token IS a leak regardless of the file it lives in, so we keep the
-// concrete formats as hard blockers and ignore only the ambiguous heuristics. This mirrors the same gate the
-// content lane already uses (src/review/content-lane/security-scan.ts).
-//
-// #2553: widened to match review-enrichment/src/analyzers/secret-scan.ts's richer, higher-recall rule set.
-// google_api_key/jwt are as format-precise as the original five (near-zero false-positive risk).
-// generic_secret_assignment is the one keyword-shaped pattern here — secrets-scan.ts already excludes
-// placeholder/type-declaration/schema-shaped matches (see isPlaceholderSecretValue there) before this kind
-// is ever produced, so it is safe to treat as an unconditional hard blocker like the rest.
-const HARD_SECRET_KINDS = new Set([
-  "github_token",
-  "github_pat",
-  "private_key_block",
-  "aws_access_key",
-  "slack_token",
-  "google_api_key",
-  "gitlab_token",
-  "npm_token",
-  "jwt",
-  "generic_secret_assignment",
-]);
+// false-positive on legitimate config/workflow content. See {@link GATE_BLOCKING_SECRET_KINDS} in
+// secrets-scan.ts (single source of truth shared with scanPrDiffForSecretKinds cross-line join logic).
 
 /** True when the safety scan is enabled. Flag-OFF (default) → every helper below is a no-op pass-through. */
 export function isSafetyEnabled(env: {
@@ -86,7 +64,7 @@ export function defangReviewInput(input: SafetyReviewInput): {
  * Scan the PR diff for leaked secrets and, on a hit, return ONE critical `secret_leak` advisory finding (else
  * null). Mapped to gittensory's {@link AdvisoryFinding} shape. The gate treats this code as a hard blocker
  * (see rules/advisory.ts) so a leaked secret holds the PR. Only CONCRETE credential formats
- * ({@link HARD_SECRET_KINDS}) qualify — the weak `seed_or_mnemonic` / `bittensor_key` heuristics are ignored
+ * ({@link GATE_BLOCKING_SECRET_KINDS}) qualify — the weak `seed_or_mnemonic` / `bittensor_key` heuristics are ignored
  * here because they false-positive on legitimate config/workflow content (e.g. `coldkey:` / `hotkey =` lines
  * in *.toml, .github/workflows/**, or wrangler/workers config). This is UNCONDITIONAL (#audit-3.4): a concrete,
  * real-format committed credential is a leak on any repo, so the caller runs it regardless of the safety flag /
@@ -98,21 +76,10 @@ export function secretLeakFinding(diff: string): AdvisoryFinding | null {
   // secret-shaped string (e.g. deleting/defanging a test fixture, or rotating a credential out). Added/renamed
   // file paths are also committed PR state, but buildSecretScanDiff carries them only in `### path (status)`
   // headers, so keep those metadata lines while still dropping modified/removed headers and `+++` patch headers.
-  const added = diff
-    .split("\n")
-    .filter(
-      (line) =>
-        (line.startsWith("+") && !line.startsWith("+++")) ||
-        /^### .+ \((?:added|renamed)\) /.test(line),
-    )
-    .join("\n");
-  // Only CONCRETE credential formats hard-block. The raw scanner also returns the weak `seed_or_mnemonic` /
-  // `bittensor_key` heuristics, which false-positive on `coldkey:` / `hotkey =` / "mnemonic" lines in
-  // legitimate config/workflow files (RC6); those are filtered out here so they never produce a `secret_leak`
-  // blocker. A real token (github_token, aws_access_key, …) still blocks regardless of which file it is in.
-  const kinds = scanForSecrets(added).kinds.filter((kind) =>
-    HARD_SECRET_KINDS.has(kind),
-  );
+  // scanPrDiffForSecretKinds walks the diff line-by-line (with a bounded cross-line literal join on consecutive
+  // added lines, #2454) instead of joining all `+` lines into one blob — that join would miss a credential
+  // split across adjacent assignments and would also ignore hunk/context boundaries the gate must respect.
+  const kinds = scanPrDiffForSecretKinds(diff).filter((kind) => GATE_BLOCKING_SECRET_KINDS.has(kind));
   if (kinds.length === 0) return null;
   return {
     code: "secret_leak",
