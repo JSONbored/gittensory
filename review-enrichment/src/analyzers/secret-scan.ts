@@ -21,6 +21,13 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // GitHub fine-grained personal access token (GitHub's recommended default): `github_pat_` + 82
+    // base62/underscore chars. The classic `gh[pousr]_` rule above never matches this prefix.
+    kind: "github_pat",
+    re: /\bgithub_pat_[0-9A-Za-z_]{82}\b/,
+    confidence: "high",
+  },
+  {
     kind: "slack_token",
     re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
     confidence: "high",

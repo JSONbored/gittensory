@@ -21,6 +21,9 @@ const fakeHuggingfaceToken = "hf_" + "a".repeat(34);
 const fakeAnthropicKey = ["sk-ant-", "api03-", "a".repeat(20)].join("");
 const fakeGitlabToken = "glpat-" + "aBcDeFgHiJkLmNoPqRsT"; // 20 chars after the prefix
 const fakeNpmToken = "npm_" + "a".repeat(36);
+// GitHub fine-grained PAT: `github_pat_` + 82 base62/underscore chars (fragments only — never a contiguous
+// literal in source, so push protection doesn't flag this fixture).
+const fakeGithubPat = "github" + "_pat_" + "1".repeat(11) + "_" + "a".repeat(70);
 // A high-entropy value that matches NO format-specific rule, so it only trips the
 // generic keyword-assignment rule (built from fragments, never a contiguous literal).
 const fakeGenericValue = "aK9xQ2mZw7Ln" + "4Rv8Pt3Bh6Tc";
@@ -51,6 +54,14 @@ test("scanPatch flags an npm token with high confidence", () => {
   const findings = scanPatch("src/config.ts", hunk([`const registryAuth = "${fakeNpmToken}";`]));
   assert.equal(findings.length, 1);
   assert.equal(findings[0].kind, "npm_token");
+  assert.equal(findings[0].confidence, "high");
+});
+
+test("scanPatch flags a GitHub fine-grained PAT with high confidence", () => {
+  // `gh` var name avoids the generic keyword rule, so the fine-grained-PAT rule is the only match.
+  const findings = scanPatch("src/config.ts", hunk([`const gh = "${fakeGithubPat}";`]));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "github_pat");
   assert.equal(findings[0].confidence, "high");
 });
 
