@@ -74,6 +74,52 @@ describe("buildAgentActionAudit", () => {
     expect(audit.actor).toBeNull();
     expect(audit.detail).toBeNull();
   });
+
+  it("records structured close reasons only for close-action audit metadata", () => {
+    const closeAudit = buildAgentActionAudit({
+      actionClass: "close",
+      autonomyLevel: "auto",
+      mode: "live",
+      outcome: "completed",
+      repoFullName: "owner/repo",
+      reason: "ci failed; blocker",
+      closeReasons: ["ci failed", "blocker"],
+    });
+    expect(closeAudit.metadata).toMatchObject({ closeReasons: ["ci failed", "blocker"], closeReasonCount: 2 });
+
+    const mergeAudit = buildAgentActionAudit({
+      actionClass: "merge",
+      autonomyLevel: "auto",
+      mode: "live",
+      outcome: "completed",
+      repoFullName: "owner/repo",
+      reason: "clean",
+      closeReasons: ["must not attach"],
+    });
+    expect(mergeAudit.metadata).not.toHaveProperty("closeReasons");
+    expect(mergeAudit.metadata).not.toHaveProperty("closeReasonCount");
+
+    const legacyCloseAudit = buildAgentActionAudit({
+      actionClass: "close",
+      autonomyLevel: "auto",
+      mode: "live",
+      outcome: "completed",
+      repoFullName: "owner/repo",
+      reason: "legacy flattened reason",
+    });
+    expect(legacyCloseAudit.metadata).not.toHaveProperty("closeReasons");
+
+    const emptyCloseAudit = buildAgentActionAudit({
+      actionClass: "close",
+      autonomyLevel: "auto",
+      mode: "live",
+      outcome: "completed",
+      repoFullName: "owner/repo",
+      reason: "empty reason list",
+      closeReasons: [],
+    });
+    expect(emptyCloseAudit.metadata).not.toHaveProperty("closeReasons");
+  });
 });
 
 describe("agent write-permission readiness (#775)", () => {

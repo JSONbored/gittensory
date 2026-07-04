@@ -277,6 +277,31 @@ describe("planAgentMaintenanceActions (#778)", () => {
     expect(winnerClose.reason).not.toContain("duplicate of another open PR");
   });
 
+  it("keeps every close cause as a structured closeReasons list for historical audit accuracy", () => {
+    const plan = planAgentMaintenanceActions(
+      input({
+        conclusion: "failure",
+        autonomy: { close: "auto" },
+        blockerTitles: ["AI reviewers found a blocker", "Security scanner found a blocker"],
+        ciState: "failed",
+        failingCheckNames: ["codecov/patch", "validate"],
+        pr: { labels: [], linkedDuplicateCount: 2, mergeableState: "dirty", slopRisk: 80 },
+      }),
+    );
+    const close = plan.find((a) => a.actionClass === "close");
+
+    expect(close?.closeReasons).toEqual([
+      "CI is failing (codecov/patch, validate)",
+      "conflicts with the base branch — resolve and open a fresh PR",
+      "AI reviewers found a blocker",
+      "Security scanner found a blocker",
+      "slop score 80 ≥ 60",
+      "duplicate of another open PR",
+    ]);
+    expect(close?.reason).toBe(close?.closeReasons?.join("; "));
+    for (const reason of close?.closeReasons ?? []) expect(close?.closeComment).toContain(reason);
+  });
+
   it("never plans both merge and close", () => {
     const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", close: "auto" }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED", slopRisk: 95 } }));
     const cls = classes(plan);
@@ -715,6 +740,7 @@ describe("planAgentMaintenanceActions (#778)", () => {
       const close = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto" }, ciState: "passed", linkedIssueHardRule: violation, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } })).find((a) => a.actionClass === "close");
       expect(close).toBeTruthy();
       expect(close?.reason).toBe(violation.reason);
+      expect(close?.closeReasons).toEqual([violation.reason]);
       // the cited reason is surfaced in the close comment too
       expect(close?.closeComment).toContain(violation.reason);
     });
@@ -1160,6 +1186,7 @@ describe("contributor blacklist short-circuit (#1425)", () => {
     // guard always has the close's outcome already recorded by the time it evaluates the label.
     expect(classes(plan)).toEqual(["close", "label"]); // short-circuit: no approve/merge despite a SUCCESS gate
     expect(plan[0]).toMatchObject({ actionClass: "close", closeKind: "blacklist" });
+    expect(plan[0]?.closeReasons).toEqual(["blacklisted contributor"]);
     expect(plan[1]).toMatchObject({ actionClass: "label", label: DEFAULT_BLACKLIST_LABEL, labelOp: "add", closeKind: "blacklist" });
     expect(plan[0]?.closeComment).not.toContain("plagiarism");
     expect(plan[0]?.closeComment).toContain("blocked from contributing");
@@ -1243,6 +1270,7 @@ describe("per-contributor open-item cap short-circuit (#2270)", () => {
     // close is pushed BEFORE its coupled label (#label-close-split-brain) — see the blacklist section above.
     expect(classes(plan)).toEqual(["close", "label"]); // short-circuit: no approve/merge despite a SUCCESS gate
     expect(plan[0]).toMatchObject({ actionClass: "close", closeKind: "contributor_cap" });
+    expect(plan[0]?.closeReasons).toEqual(["over the per-contributor open-item cap"]);
     expect(plan[1]).toMatchObject({ actionClass: "label", label: DEFAULT_CONTRIBUTOR_CAP_LABEL, labelOp: "add", closeKind: "contributor_cap" });
   });
 
@@ -1337,6 +1365,7 @@ describe("review-nag cooldown short-circuit (#2463)", () => {
     // close is pushed BEFORE its coupled label (#label-close-split-brain) — see the blacklist section above.
     expect(classes(plan)).toEqual(["close", "label"]); // short-circuit: no approve/merge despite a SUCCESS gate
     expect(plan[0]).toMatchObject({ actionClass: "close", closeKind: "review_nag" });
+    expect(plan[0]?.closeReasons).toEqual(["review-nag cooldown"]);
     expect(plan[1]).toMatchObject({ actionClass: "label", label: DEFAULT_REVIEW_NAG_LABEL, labelOp: "add", closeKind: "review_nag" });
     expect(plan[0]?.closeComment).toContain("chatty-contributor");
     expect(plan[0]?.closeComment).toContain("4");

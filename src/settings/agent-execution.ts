@@ -55,7 +55,9 @@ export function buildAgentActionAudit(input: {
   targetKey?: string | null | undefined;
   actor?: string | null | undefined;
   reason?: string | null | undefined;
+  closeReasons?: readonly string[] | null | undefined;
 }): AuditEventRecord {
+  const closeReasons = input.actionClass === "close" && input.closeReasons?.length ? [...input.closeReasons] : null;
   return {
     eventType: `agent.action.${input.actionClass}`,
     actor: input.actor ?? null,
@@ -67,6 +69,7 @@ export function buildAgentActionAudit(input: {
       actionClass: input.actionClass,
       autonomyLevel: input.autonomyLevel,
       mode: input.mode,
+      ...(closeReasons ? { closeReasons, closeReasonCount: closeReasons.length } : {}),
     },
   };
 }

@@ -115,6 +115,22 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect(replayed).toMatchObject({ actionClass: "label", autonomyClass: "close", requiresApproval: false, reason: "blacklisted contributor", label: "slop", labelOp: "add" });
   });
 
+  it("actionParams round-trips structured closeReasons so approval replay preserves every close cause", () => {
+    const closeWithReasons: PlannedAgentAction = {
+      actionClass: "close",
+      requiresApproval: true,
+      reason: "CI failed; blocker",
+      closeComment: "closing",
+      closeReasons: ["CI failed", "blocker"],
+    };
+
+    const persisted = actionParams(closeWithReasons);
+    const replayed = pendingActionToPlanned({ actionClass: "close", params: persisted, reason: closeWithReasons.reason });
+
+    expect(persisted).toEqual({ closeComment: "closing", closeReasons: ["CI failed", "blocker"] });
+    expect(replayed).toMatchObject({ actionClass: "close", requiresApproval: false, reason: "CI failed; blocker", closeComment: "closing", closeReasons: ["CI failed", "blocker"] });
+  });
+
   it("LIVE: executes each action class via its GitHub primitive and audits completed", async () => {
     const env = createTestEnv({});
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [label, requestChanges, approve, merge, close, updateBranch]);
@@ -145,9 +161,12 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect(outcomes[0]?.outcome).toBe("completed");
     expect(outcomes[0]?.detail.length).toBe(281); // 280 chars + the "…" truncation marker
     expect(outcomes[0]?.detail.endsWith("…")).toBe(true);
-    const audit = await (env.DB.prepare("select detail from audit_events where event_type = 'agent.action.close' order by created_at desc limit 1").first<{ detail: string }>());
+    const audit = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = 'agent.action.close' order by created_at desc limit 1").first<{ detail: string; metadata_json: string }>();
     expect(audit?.detail).toBe(outcomes[0]?.detail);
     expect(audit?.detail.length).toBeLessThan(longReason.length);
+    const metadata = JSON.parse(audit?.metadata_json ?? "{}");
+    expect(metadata.closeReasons).toEqual([outcomes[0]?.detail]);
+    expect(metadata.closeReasonCount).toBe(1);
   });
 
   it("does NOT truncate a reason at or under the bound (no stray truncation marker on ordinary-length reasons)", async () => {
@@ -155,6 +174,48 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [close]);
     expect(outcomes[0]?.detail).toBe("noise");
     expect(outcomes[0]?.detail.endsWith("…")).toBe(false);
+  });
+
+  it("records every structured close reason in audit metadata instead of only the flattened detail", async () => {
+    const env = createTestEnv({});
+    const closeWithReasons: PlannedAgentAction = {
+      actionClass: "close",
+      requiresApproval: false,
+      reason: "CI is failing (codecov/patch); review blocker; base conflict",
+      closeComment: "closing",
+      closeReasons: ["CI is failing (codecov/patch)", "review blocker", "base conflict"],
+    };
+
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [closeWithReasons]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+
+    const audit = await auditFor(env, "close");
+    const metadata = JSON.parse(audit?.metadata_json ?? "{}");
+    expect(metadata.closeReasons).toEqual(["CI is failing (codecov/patch)", "review blocker", "base conflict"]);
+    expect(metadata.closeReasonCount).toBe(3);
+    expect(outcomes[0]?.detail).toBe(closeWithReasons.reason);
+  });
+
+  it("bounds explicit structured close reasons before storing them in audit metadata", async () => {
+    const env = createTestEnv({});
+    const longReason = "review blocker: ".repeat(30);
+    const closeWithLongStructuredReason: PlannedAgentAction = {
+      actionClass: "close",
+      requiresApproval: false,
+      reason: "combined close reason",
+      closeComment: "closing",
+      closeReasons: ["short reason", longReason],
+    };
+
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [closeWithLongStructuredReason]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+
+    const audit = await auditFor(env, "close");
+    const metadata = JSON.parse(audit?.metadata_json ?? "{}");
+    expect(metadata.closeReasons[0]).toBe("short reason");
+    expect(metadata.closeReasons[1]).toHaveLength(281);
+    expect(metadata.closeReasons[1].endsWith("…")).toBe(true);
+    expect(metadata.closeReasons[1].length).toBeLessThan(longReason.length);
   });
 
   it("#label-scoping: a label action's autonomyClass (not the literal actionClass) governs the durable re-check", async () => {
@@ -1201,9 +1262,12 @@ describe("executeIssueMaintenanceActions (#2270 issue-side actuation)", () => {
     expect(outcomes[0]?.outcome).toBe("completed");
     expect(outcomes[0]?.detail.length).toBe(281); // 280 chars + the "…" truncation marker
     expect(outcomes[0]?.detail.endsWith("…")).toBe(true);
-    const audit = await env.DB.prepare("select detail from audit_events where event_type = 'agent.action.close' order by created_at desc limit 1").first<{ detail: string }>();
+    const audit = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = 'agent.action.close' order by created_at desc limit 1").first<{ detail: string; metadata_json: string }>();
     expect(audit?.detail).toBe(outcomes[0]?.detail);
     expect(audit?.detail.length).toBeLessThan(longReason.length);
+    const metadata = JSON.parse(audit?.metadata_json ?? "{}");
+    expect(metadata.closeReasons).toEqual([outcomes[0]?.detail]);
+    expect(metadata.closeReasonCount).toBe(1);
   });
 
   it("does NOT truncate a reason at or under the bound (no stray truncation marker on ordinary-length reasons)", async () => {

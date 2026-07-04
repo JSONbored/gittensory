@@ -1211,7 +1211,7 @@ describe("agent approval queue (#779)", () => {
     expect(actionParams({ actionClass: "label", autonomyClass: "review_state_label", requiresApproval: false, reason: "x", label: "L" })).toEqual({ autonomyClass: "review_state_label", label: "L" });
     expect(actionParams({ actionClass: "request_changes", requiresApproval: false, reason: "x", reviewBody: "B" })).toEqual({ reviewBody: "B" });
     expect(actionParams({ actionClass: "merge", requiresApproval: false, reason: "x", mergeMethod: "rebase" })).toEqual({ mergeMethod: "rebase" });
-    expect(actionParams({ actionClass: "close", requiresApproval: false, reason: "x", closeComment: "C" })).toEqual({ closeComment: "C" });
+    expect(actionParams({ actionClass: "close", requiresApproval: false, reason: "x", closeComment: "C", closeReasons: ["x"] })).toEqual({ closeComment: "C", closeReasons: ["x"] });
     // closeKind must round-trip through staging — without it the close-precision breaker could never match a
     // staged close as heuristic on accept (#2127).
     expect(actionParams({ actionClass: "close", requiresApproval: false, reason: "x", closeComment: "C", closeKind: "heuristic", closeRequiresCiState: "failed" })).toEqual({ closeComment: "C", closeKind: "heuristic", closeRequiresCiState: "failed" });
@@ -1232,6 +1232,12 @@ describe("agent approval queue (#779)", () => {
   it("pendingActionToPlanned clears requiresApproval and defaults the reason", () => {
     expect(pendingActionToPlanned({ actionClass: "merge", params: { mergeMethod: "squash" } })).toMatchObject({ actionClass: "merge", requiresApproval: false, reason: "maintainer-approved", mergeMethod: "squash" });
     expect(pendingActionToPlanned({ actionClass: "label", params: { label: "L" }, reason: "explicit" }).reason).toBe("explicit");
+    expect(pendingActionToPlanned({ actionClass: "close", params: { closeReasons: ["ci failed", "blocker"] }, reason: "ci failed; blocker" })).toMatchObject({
+      actionClass: "close",
+      requiresApproval: false,
+      reason: "ci failed; blocker",
+      closeReasons: ["ci failed", "blocker"],
+    });
   });
 
   it("countPendingAgentActions respects both the repo filter and the status filter", async () => {

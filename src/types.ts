@@ -997,6 +997,9 @@ export type AgentPendingActionParams = {
   reviewBody?: string;
   mergeMethod?: AutoMergeMethod;
   closeComment?: string;
+  // Individual close reasons, persisted for approval-queue replay so the eventual audit row keeps the structured
+  // reason list rather than only the flattened `reason` field.
+  closeReasons?: string[];
   // Which kind of close this is (see PlannedAgentAction.closeKind), persisted so it round-trips through staging:
   // the close-precision circuit-breaker still scopes itself correctly when a staged close is later accepted
   // (#2127), and the actuation-time live-CI re-check (#2364) — which only applies to a heuristic close — still

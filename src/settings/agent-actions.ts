@@ -78,6 +78,10 @@ export type PlannedAgentAction = {
   reviewBody?: string;
   mergeMethod?: AutoMergeMethod;
   closeComment?: string;
+  // For a `close` action: the individual reasons that justified closure. `reason` stays as the flat,
+  // human-readable summary for legacy callers/public notification text; this structured list is persisted into
+  // audit metadata so a close caused by multiple independent signals remains historically reconstructable.
+  closeReasons?: string[];
   // For a `close` action: WHICH kind of close this is, so the close-precision circuit-breaker can scope itself.
   // "linked-issue-hard-rule" = the DETERMINISTIC flag-then-close state machine (zero hallucination risk — and on
   // the verify path it posts a comment PROMISING closure); "heuristic" = a verdict-driven close (gate-verdict /
@@ -493,6 +497,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
         actionClass: "close",
         requiresApproval: approval("close"),
         reason: "blacklisted contributor",
+        closeReasons: ["blacklisted contributor"],
         closeComment: sanitizePublicComment(blacklistCloseMessage()),
         closeKind: "blacklist",
         // Pin like merge/approve (#2452): for an auto_with_approval stage this travels into the pending row so
@@ -519,6 +524,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
         actionClass: "close",
         requiresApproval: approval("close"),
         reason: "over the per-contributor open-item cap",
+        closeReasons: ["over the per-contributor open-item cap"],
         closeComment: sanitizePublicComment(contributorCapCloseMessage(authorLogin, openCount, cap, itemKind, scope)),
         closeKind: "contributor_cap",
       });
@@ -543,6 +549,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
         actionClass: "close",
         requiresApproval: approval("close"),
         reason: "review-nag cooldown",
+        closeReasons: ["review-nag cooldown"],
         closeComment: sanitizePublicComment(reviewNagCloseMessage(authorLogin, pingCount, maxPings)),
         closeKind: "review_nag",
         ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),
@@ -826,6 +833,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       actionClass: "close",
       requiresApproval: approval("close"),
       reason,
+      closeReasons: [reason],
       closeComment: closeMessage([reason]),
       closeKind: "linked-issue-hard-rule",
       // Pin like merge/approve (#2452): lets the accept-time supersede check detect a force-push after staging.
@@ -860,6 +868,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       actionClass: "close",
       requiresApproval: approval("close"),
       reason: closeReasons.join("; "),
+      closeReasons,
       closeComment: closeMessage(closeReasons),
       closeKind: "heuristic",
       closeConcreteEvidence: hasConcreteCloseEvidence(input, ciFailed, isConflict),

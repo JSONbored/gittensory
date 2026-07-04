@@ -45,6 +45,16 @@ const AGENT_ACTOR = "gittensory";
 // already used for mergeBlockedReason (db/repositories.ts) and the merge_blocked audit metadata below.
 const AUDIT_REASON_MAX_LENGTH = 280;
 
+function boundAuditReason(detail: string): string {
+  return detail.length > AUDIT_REASON_MAX_LENGTH ? `${detail.slice(0, AUDIT_REASON_MAX_LENGTH)}…` : detail;
+}
+
+function closeReasonsForAudit(action: PlannedAgentAction): string[] | undefined {
+  if (action.actionClass !== "close") return undefined;
+  const rawReasons = action.closeReasons?.length ? action.closeReasons : [action.reason];
+  return rawReasons.map((reason) => boundAuditReason(reason));
+}
+
 // The PR-visible action classes that require an elevated GitHub App write permission. Most use
 // `pull_requests: write`; merge uses `contents: write`; `label` mutates through the Issues API, so it is exempt
 // from this readiness gate.
@@ -203,11 +213,11 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
       // merge_blocked path below, db/repositories.ts's mergeBlockedReason) -- a heuristic close's reason is
       // built by joining every blocker title, so a PR with many blockers could otherwise write an arbitrarily
       // large, un-truncated string into audit_events.detail (#terminal-outcome-audit).
-      const boundedDetail = detail.length > AUDIT_REASON_MAX_LENGTH ? `${detail.slice(0, AUDIT_REASON_MAX_LENGTH)}…` : detail;
+      const boundedDetail = boundAuditReason(detail);
       outcomes.push({ actionClass: action.actionClass, outcome, detail: boundedDetail });
       return recordAuditEvent(
         env,
-        buildAgentActionAudit({ actionClass: action.actionClass, autonomyLevel, mode, outcome: auditOutcome, repoFullName: ctx.repoFullName, targetKey, actor: AGENT_ACTOR, reason: boundedDetail }),
+        buildAgentActionAudit({ actionClass: action.actionClass, autonomyLevel, mode, outcome: auditOutcome, repoFullName: ctx.repoFullName, targetKey, actor: AGENT_ACTOR, reason: boundedDetail, closeReasons: closeReasonsForAudit(action) }),
       );
     };
 
@@ -548,11 +558,11 @@ export async function executeIssueMaintenanceActions(env: Env, ctx: IssueActionE
       // merge_blocked path below, db/repositories.ts's mergeBlockedReason) -- a heuristic close's reason is
       // built by joining every blocker title, so a PR with many blockers could otherwise write an arbitrarily
       // large, un-truncated string into audit_events.detail (#terminal-outcome-audit).
-      const boundedDetail = detail.length > AUDIT_REASON_MAX_LENGTH ? `${detail.slice(0, AUDIT_REASON_MAX_LENGTH)}…` : detail;
+      const boundedDetail = boundAuditReason(detail);
       outcomes.push({ actionClass: action.actionClass, outcome, detail: boundedDetail });
       return recordAuditEvent(
         env,
-        buildAgentActionAudit({ actionClass: action.actionClass, autonomyLevel, mode, outcome: auditOutcome, repoFullName: ctx.repoFullName, targetKey, actor: AGENT_ACTOR, reason: boundedDetail }),
+        buildAgentActionAudit({ actionClass: action.actionClass, autonomyLevel, mode, outcome: auditOutcome, repoFullName: ctx.repoFullName, targetKey, actor: AGENT_ACTOR, reason: boundedDetail, closeReasons: closeReasonsForAudit(action) }),
       );
     };
 
@@ -701,6 +711,7 @@ export function actionParams(action: PlannedAgentAction): AgentPendingActionPara
     ...(action.reviewBody !== undefined ? { reviewBody: action.reviewBody } : {}),
     ...(action.mergeMethod !== undefined ? { mergeMethod: action.mergeMethod } : {}),
     ...(action.closeComment !== undefined ? { closeComment: action.closeComment } : {}),
+    ...(action.closeReasons !== undefined ? { closeReasons: action.closeReasons } : {}),
     ...(action.expectedHeadSha !== undefined ? { expectedHeadSha: action.expectedHeadSha } : {}),
     ...(action.dismissStaleApproval !== undefined ? { dismissStaleApproval: action.dismissStaleApproval } : {}),
     // Round-trip closeKind so a staged close's kind survives to accept-time — without it, the close-precision
