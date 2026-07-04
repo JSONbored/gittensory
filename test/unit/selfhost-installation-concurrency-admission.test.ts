@@ -211,8 +211,9 @@ describe("installationConcurrencyKeyForJob", () => {
   // BY TYPE, rather than by priority at the queue-backend call site: agent-regate-sweep's own row priority (8)
   // collides with FOREGROUND_QUEUE_PRIORITY_FLOOR (also 8), so a priority-based guard at the call site would
   // have silently exempted sweep fan-out too -- exactly the background job this policy exists to bound.
-  it("returns null for a foreground agent-regate-pr job (excluded by type, not by priority)", () => {
+  it("returns null for a foreground agent-regate-pr job (excluded by type, not by priority), but a key for agent-regate-sweep despite the same priority-8 floor collision", () => {
     expect(installationConcurrencyKeyForJob(foregroundRegate)).toBeNull();
+    expect(installationConcurrencyKeyForJob(scheduledSweep)).toBe("installation:42");
   });
 
   it("returns the admission key for a GITHUB_BUDGET_BACKGROUND_TYPES job carrying installationId", () => {

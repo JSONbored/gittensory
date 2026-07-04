@@ -3197,8 +3197,19 @@ describe("createPgQueue (durable #977)", () => {
     it("a second concurrent agent-regate-sweep job for the SAME installation is deferred at the limit", async () => {
       process.env.GITHUB_INSTALLATION_CONCURRENCY_LIMIT = "1";
       const m = makePool();
-      m.enqueueJob("1", { type: "agent-regate-sweep", installationId: 42 }, 0, "sweep:42:a");
-      m.enqueueJob("2", { type: "agent-regate-sweep", installationId: 42 }, 0, null);
+      // enqueueJob's fabricated row carries no priority column, which defaults to falsy/NaN under
+      // isForegroundJobPriority -- indistinguishable from a real background job either way, so it can't prove
+      // this regression. Use the REAL sweep priority (8, PRIORITY_BY_TYPE) via enqueueResult directly: under the
+      // old priority-based exclusion this collides with FOREGROUND_QUEUE_PRIORITY_FLOOR (also 8) and would wrongly
+      // exempt the job, so only the type-based fix in installationConcurrencyKeyForJob makes this test pass.
+      m.enqueueResult({
+        rows: [{ id: "1", payload: JSON.stringify({ type: "agent-regate-sweep", installationId: 42 }), attempts: 0, job_key: "sweep:42:a", priority: 8 }],
+        rowCount: 1,
+      });
+      m.enqueueResult({
+        rows: [{ id: "2", payload: JSON.stringify({ type: "agent-regate-sweep", installationId: 42 }), attempts: 0, job_key: null, priority: 8 }],
+        rowCount: 1,
+      });
       let release!: () => void;
       const gate = new Promise<void>((resolve) => {
         release = resolve;
