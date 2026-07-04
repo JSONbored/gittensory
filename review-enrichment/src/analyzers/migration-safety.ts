@@ -1,7 +1,8 @@
 // SQL migration-safety linter (#2022). Flags risky schema operations in ADDED migration SQL — the changes that
 // can break running deployments mid-rollout: dropping/truncating tables or columns the old code still reads,
 // renames (the old code's names disappear), non-nullable columns added without a DEFAULT (inserts from old code
-// fail), SET NOT NULL on existing nullable columns without a same-line DEFAULT, column-type changes that force
+// fail), SET NOT NULL on existing nullable columns (including when a same-line DEFAULT is present — it does not
+// backfill existing NULL rows in PostgreSQL), column-type changes that force
 // a blocking table rewrite, and non-concurrent index builds that lock writers. Pure compute over added patch lines in migration
 // paths — no network, no SQL parsing beyond single-line statement shapes. Detection is deliberately
 // line-anchored: a statement split across lines is missed (fail-quiet) rather than tracked with cross-line
@@ -17,8 +18,9 @@ const MIGRATION_PATH_RE = /(?:^|\/)(?:migrations?|db\/migrate)\/|\.sql$/i;
 
 // Dropping a table or column breaks any still-deployed reader/writer of the old schema.
 const DROP_RE = /\bDROP\s+(?:TABLE|COLUMN)\b/i;
-// TRUNCATE wipes live rows; still-running code that reads the table sees empty data mid-rollout.
-const TRUNCATE_RE = /\bTRUNCATE\b/i;
+// TRUNCATE wipes live rows; still-running code that reads the table sees empty data mid-rollout. Anchored to
+// the statement start so `GRANT TRUNCATE ON TABLE …` privilege grants are not mistaken for destructive DDL.
+const TRUNCATE_RE = /^\s*TRUNCATE(?:\s+TABLE)?\b/i;
 // Renames remove the old name in one step; running code that still uses it fails immediately. Covers the
 // standard forms: `ALTER TABLE a RENAME TO b`, `… RENAME [COLUMN] x TO y` (PostgreSQL/SQLite treat the
 // COLUMN keyword as optional), and MySQL's `RENAME TABLE a TO b`.

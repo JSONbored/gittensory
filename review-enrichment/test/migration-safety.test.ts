@@ -25,6 +25,11 @@ test("isMigrationPath: recognizes migrations/, db/migrate/, and bare .sql paths"
 test("classifyMigrationLine: maps each risky DDL shape to its kind", () => {
   assert.equal(classifyMigrationLine("DROP TABLE legacy_events;"), "drop");
   assert.equal(classifyMigrationLine("TRUNCATE TABLE legacy_events;"), "truncate");
+  assert.equal(classifyMigrationLine("  truncate users;"), "truncate");
+  assert.equal(
+    classifyMigrationLine("GRANT TRUNCATE ON TABLE jobs TO app_role;"),
+    null,
+  );
   assert.equal(
     classifyMigrationLine("ALTER TABLE users ADD COLUMN age INTEGER NOT NULL;"),
     "not-null-no-default",
@@ -49,6 +54,14 @@ test("scanPatchForMigrationSafety: flags TRUNCATE as truncate", () => {
     findings.map((f) => f.kind),
     ["truncate", "truncate"],
   );
+});
+
+test("scanPatchForMigrationSafety: GRANT TRUNCATE privilege lines are not flagged as truncate", () => {
+  const findings = scanPatchForMigrationSafety(
+    "migrations/0015_grants.sql",
+    patchOf(["GRANT TRUNCATE ON TABLE jobs TO app_role;"]),
+  );
+  assert.deepEqual(findings, []);
 });
 
 test("scanPatchForMigrationSafety: flags ALTER COLUMN SET NOT NULL without a DEFAULT as set-not-null", () => {
