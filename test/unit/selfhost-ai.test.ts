@@ -389,6 +389,39 @@ describe("isAiProviderHealthy (readiness streak, #2497)", () => {
     await expect(createChainAi([working]).run("m", { prompt: "x" })).resolves.toEqual({ response: "ok" });
     expect(isAiProviderHealthy()).toBe(true);
   });
+
+  it("regression: direct provider-name review failures update readiness", async () => {
+    const directFailing = { name: "openai", ai: { run: vi.fn(async () => { throw new Error("ai_http_401"); }) } };
+    const route = routeProviders([directFailing]);
+
+    await expect(route.run("openai", { prompt: "x" })).rejects.toThrow(/ai_http_401/);
+    await expect(route.run("openai", { prompt: "x" })).rejects.toThrow(/ai_http_401/);
+    expect(isAiProviderHealthy()).toBe(true);
+
+    await expect(route.run("openai", { prompt: "x" })).rejects.toThrow(/ai_http_401|circuit_open/);
+    expect(isAiProviderHealthy()).toBe(false);
+  });
+
+  it("direct provider-name review success resets readiness after direct failures", async () => {
+    let shouldFail = true;
+    const direct = { name: "openai", ai: { run: vi.fn(async () => {
+      if (shouldFail) throw new Error("ai_http_401");
+      return { response: "ok" };
+    }) } };
+    const route = routeProviders([direct]);
+
+    for (let i = 0; i < 3; i += 1) {
+      await expect(route.run("openai", { prompt: "x" })).rejects.toThrow();
+    }
+    expect(isAiProviderHealthy()).toBe(false);
+
+    vi.useFakeTimers();
+    await vi.advanceTimersByTimeAsync(60_001);
+    shouldFail = false;
+    await expect(route.run("openai", { prompt: "x" })).resolves.toEqual({ response: "ok" });
+    expect(isAiProviderHealthy()).toBe(true);
+    vi.useRealTimers();
+  });
 });
 
 describe("shouldMarkAiProviderUnhealthyAtBoot (#2497 follow-up)", () => {

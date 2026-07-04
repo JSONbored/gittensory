@@ -686,6 +686,14 @@ export function resetAiProviderHealthForTest(): void {
   aiConsecutiveFailures = 0;
 }
 
+function recordAiProviderSuccess(): void {
+  aiConsecutiveFailures = 0;
+}
+
+function recordAiProvidersExhausted(): void {
+  aiConsecutiveFailures += 1;
+}
+
 // Per-provider circuit breaker (#2540): a provider that is failing hard (bad credential, sustained outage)
 // otherwise pays the FULL cost of a fresh attempt (a real HTTP call, or a real CLI subprocess spawn) on
 // every single review during the outage. This is independent of `aiConsecutiveFailures` above -- that streak
@@ -742,7 +750,7 @@ export function createChainAi(providers: Array<{ name: string; ai: SelfHostAi }>
       for (const p of providers) {
         try {
           const result = await runProviderWithOtel(p, model, options);
-          aiConsecutiveFailures = 0;
+          recordAiProviderSuccess();
           return result;
         } catch (error) {
           lastError = error;
@@ -750,7 +758,7 @@ export function createChainAi(providers: Array<{ name: string; ai: SelfHostAi }>
           console.error(JSON.stringify({ level: "warn", event: "selfhost_ai_provider_failed_in_chain", provider: p.name, error: errorMessage(error) }));
         }
       }
-      aiConsecutiveFailures += 1;
+      recordAiProvidersExhausted();
       console.error(
         JSON.stringify({
           level: "error",
@@ -861,9 +869,15 @@ export function routeProviders(providers: Array<{ name: string; ai: SelfHostAi }
       const colon = trimmed.indexOf(":");
       const name = (colon < 0 ? trimmed : trimmed.slice(0, colon)).toLowerCase();
       const direct = byName.get(name);
-      return direct
-        ? runProviderWithOtel({ name, ai: direct }, colon < 0 ? "" : trimmed.slice(colon + 1), options)
-        : chain.run(model, options);
+      if (!direct) return chain.run(model, options);
+      try {
+        const result = await runProviderWithOtel({ name, ai: direct }, colon < 0 ? "" : trimmed.slice(colon + 1), options);
+        recordAiProviderSuccess();
+        return result;
+      } catch (error) {
+        recordAiProvidersExhausted();
+        throw error;
+      }
     },
   };
 }
