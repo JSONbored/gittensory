@@ -107,6 +107,37 @@ test("queryPackageWeight: does NOT cache a transient failure (network_error), so
   assert.equal(calls, 2, "a transient failure must not be cached — the next call should retry");
 });
 
+test("queryPackageWeight: rejects overlong package specs before fetch or cache (regression for unbounded cache keys)", async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return bundlephobiaResponse();
+  };
+
+  const overlongVersion = `1.0.0+${"a".repeat(256)}`;
+  const result = await queryPackageWeight("left-pad", overlongVersion, fetchImpl);
+
+  assert.equal(result, null);
+  assert.equal(calls, 0, "overlong versions must not be fetched or cached");
+  assert.equal(weightCacheSizeForTest(), 0);
+});
+
+test("queryPackageWeight: accepts package specs at the configured length bounds", async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return bundlephobiaResponse();
+  };
+  const scopedNameAtNpmLimit = `@${"a".repeat(106)}/${"b".repeat(106)}`;
+  const versionAtLimit = `1.0.0+${"a".repeat(250)}`;
+
+  const result = await queryPackageWeight(scopedNameAtNpmLimit, versionAtLimit, fetchImpl);
+
+  assert.equal(calls, 1);
+  assert.equal(result?.installSizeBytes, 1_000_000);
+  assert.equal(weightCacheSizeForTest(), 1);
+});
+
 test("queryPackageWeight: the cache is bounded, evicting the oldest entry once at capacity", async () => {
   const fetchImpl = async () => bundlephobiaResponse();
 
