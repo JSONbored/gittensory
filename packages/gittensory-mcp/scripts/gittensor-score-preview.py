@@ -136,10 +136,13 @@ def metadata_fallback(metadata: dict) -> dict:
     non_code = 0
     for entry in metadata.get("changedFiles") or []:
         path = str(entry.get("path") or "")
+        # Match the server/JS classifiers' case-insensitive extension check (e.g. `/i` regex flag) so an
+        # upper-case native source path like `Foo.C` or `Foo.H` is not silently miscounted as non-code here.
+        lower_path = path.lower()
         lines = max(int(entry.get("additions") or 0) + int(entry.get("deletions") or 0), 0)
         if is_test_file(path):
             tests += lines
-        elif path.endswith((".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rb", ".rs", ".go", ".java", ".kt", ".scala", ".sql", ".cs", ".swift", ".groovy", ".php", ".cpp", ".c", ".h", ".m")):
+        elif lower_path.endswith((".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rb", ".rs", ".go", ".java", ".kt", ".scala", ".sql", ".cs", ".swift", ".groovy", ".php", ".cpp", ".c", ".h", ".m")):
             source += lines
         else:
             non_code += lines

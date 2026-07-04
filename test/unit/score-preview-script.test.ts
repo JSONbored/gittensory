@@ -63,6 +63,51 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
     expect(out.nonCodeTokenScore).toBe(0);
   });
 
+  it("the .py fallback classifier also counts native source extensions as code, matching the .mjs (skipped when no python is available)", () => {
+    // Regression coverage for the native-extension addition (.c/.cpp/.h/.m): the earlier .py assertion above only
+    // exercised SAMPLE, which carries no native files, so it never actually covered metadata_fallback's native
+    // branch. Mirror the .mjs native-extension case here so drift between the two mirrors is caught.
+    const python = findPython();
+    if (!python) return;
+    const nativeFiles = [
+      { path: "src/native/add.c", additions: 2, deletions: 0 },
+      { path: "src/native/add.cpp", additions: 3, deletions: 0 },
+      { path: "include/native/add.h", additions: 4, deletions: 0 },
+      { path: "src/objc/View.m", additions: 6, deletions: 0 },
+    ];
+    const env = { ...process.env };
+    delete env.GITTENSOR_ROOT;
+    const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: nativeFiles }), encoding: "utf8", env });
+    expect(res.status, res.stderr).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.sourceTokenScore).toBe(15); // 2 + 3 + 4 + 6
+    expect(out.testTokenScore).toBe(0);
+    expect(out.nonCodeTokenScore).toBe(0);
+  });
+
+  it("classifies upper-case native source extensions as code identically in the .mjs and .py previews", () => {
+    // Regression test: gittensor-score-preview.py's metadata_fallback used a case-SENSITIVE path.endswith(...)
+    // tuple while the .mjs/.ts classifiers are case-insensitive (`/i` flag), so an upper-case native path like
+    // `Foo.C` or `Foo.H` was miscounted as non-code by the Python preview only. Both previews must agree.
+    const upperCaseFiles = [
+      { path: "src/native/Foo.C", additions: 2, deletions: 0 },
+      { path: "include/native/Foo.H", additions: 4, deletions: 0 },
+    ];
+    const mjs = runPreview(upperCaseFiles);
+    expect(mjs.sourceTokenScore).toBe(6);
+    expect(mjs.nonCodeTokenScore).toBe(0);
+
+    const python = findPython();
+    if (!python) return;
+    const env = { ...process.env };
+    delete env.GITTENSOR_ROOT;
+    const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: upperCaseFiles }), encoding: "utf8", env });
+    expect(res.status, res.stderr).toBe(0);
+    const py = JSON.parse(res.stdout);
+    expect(py.sourceTokenScore).toBe(6);
+    expect(py.nonCodeTokenScore).toBe(0);
+  });
+
   it("does not misclassify a *.test.mjs.map source-map as a test (extension anchored to end-of-path, matching the server)", () => {
     // A substring match on ".test.mjs" wrongly flagged non-tests like dist/widget.test.mjs.map; the rule must be
     // end-anchored like isTestPath. It's a source-map — neither test nor code — so it counts as non-code.
