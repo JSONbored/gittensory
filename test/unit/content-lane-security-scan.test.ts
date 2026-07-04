@@ -36,6 +36,7 @@ describe("scanForSecrets", () => {
 
   it("flags a GitLab and an npm token (parity with the PR-diff gate)", () => {
     expect(scanForSecrets("glpat-" + "aBcDeFgHiJkLmNoPqRsT").kinds).toContain("gitlab_token");
+    expect(scanForSecrets("glpat-" + "aBcDeFgHiJkLmNoPqRs-").kinds).toContain("gitlab_token");
     expect(scanForSecrets("npm_" + "a".repeat(36)).kinds).toContain("npm_token");
   });
 

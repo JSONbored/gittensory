@@ -41,7 +41,7 @@ const RULES: Rule[] = [
   {
     // GitLab personal/project/group access token: `glpat-` + 20 base64url chars.
     kind: "gitlab_token",
-    re: /\bglpat-[0-9A-Za-z_-]{20}\b/,
+    re: /\bglpat-[0-9A-Za-z_-]{20}(?![0-9A-Za-z_-])/,
     confidence: "high",
   },
   {
