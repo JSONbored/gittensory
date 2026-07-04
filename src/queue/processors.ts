@@ -534,6 +534,17 @@ function expectedCiContextsKeyPart(expectedCiContexts: ReadonlyArray<string> | n
   return [...expectedCiContexts].sort().join(" ");
 }
 
+// Stable, order-independent cache-key fragment for the RESOLVED required-contexts set (#selfhost-ci-verification):
+// unlike expectedCiContextsKeyPart above (the raw, unresolved settings.expectedCiContexts config), this reflects
+// mergeRequiredCiContexts' actual output -- live branch-protection required contexts unioned with config. The
+// durable cross-job CI-state cache (cachedFetchLiveCiAggregate) MUST key on this, not on the raw config: branch
+// protection can change server-side while expectedCiContexts config stays put, and a stale durable row keyed only
+// on the unchanged config would keep serving an aggregate computed against the old required-context set.
+function resolvedRequiredContextsKeyPart(requiredContexts: ReadonlySet<string> | null | undefined): string {
+  if (!requiredContexts || requiredContexts.size === 0) return "";
+  return [...requiredContexts].sort().join(" ");
+}
+
 // RC2 + #selfhost-ci-verification: the EFFECTIVE required-status-check contexts for this repo/baseRef, merging
 // live branch-protection required contexts with the maintainer-configured settings.expectedCiContexts fallback
 // (mergeRequiredCiContexts — branch protection stays authoritative when readable; expectedCiContexts is the
@@ -582,10 +593,11 @@ function evictLiveFactOnReject<T>(
  * degrades to a live fetch, never blocks it.
  *
  * `forceRefresh` (set by refreshLiveCiAggregate below, mirroring refreshLiveMergeState's OWN "never durable-
- * cached" contract for merge-state): skips the cache READ entirely, always fetching live -- a "refresh" caller
- * needs a genuinely fresh read even within the SAME job pass (e.g. re-checking CI right after this pass's own
- * gate/check-run publication, which can flip a status GitHub hasn't sent a webhook for yet). The WRITE-through
- * still happens on a forced refresh, so a LATER pass/job still benefits from this read.
+ * cached" contract for merge-state): skips the freshness CHECK entirely (the existing row is still fetched, to
+ * carry its `status` field into the write-through's previousState, but is never treated as a hit), so this always
+ * fetches live -- a "refresh" caller needs a genuinely fresh read even within the SAME job pass (e.g. re-checking
+ * CI right after this pass's own gate/check-run publication, which can flip a status GitHub hasn't sent a webhook
+ * for yet). The WRITE-through still happens on a forced refresh, so a LATER pass/job still benefits from this read.
  *
  * Deliberately implemented HERE, not in backfill.ts (where writeThroughCiStateCache/isCiStateCacheFresh/
  * deserializeCachedCiAggregate live) -- a same-module call from backfill.ts to its own
@@ -650,7 +662,7 @@ function fetchLiveCiAggregateWithRequiredContexts(
     .then((requiredContexts) => ({ requiredContexts, resolved: true }))
     .catch(() => ({ requiredContexts: null, resolved: false }))
     .then(({ requiredContexts, resolved }) =>
-      cachedFetchLiveCiAggregate(env, repoFullName, prNumber, headSha, token, requiredContexts, expectedCiContextsKeyPart(expectedCiContexts), forceRefresh, resolved, admissionKey),
+      cachedFetchLiveCiAggregate(env, repoFullName, prNumber, headSha, token, requiredContexts, resolvedRequiredContextsKeyPart(requiredContexts), forceRefresh, resolved, admissionKey),
     );
 }
 

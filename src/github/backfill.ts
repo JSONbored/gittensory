@@ -3321,13 +3321,19 @@ export function deserializeCachedCiAggregate(
 ): LiveCiAggregate | null {
   if (!cached.ciState) return null;
   try {
+    const failingDetails = JSON.parse(cached.ciFailingDetailsJson ?? "[]");
+    const nonRequiredFailingDetails = JSON.parse(cached.ciNonRequiredFailingDetailsJson ?? "[]");
+    // A corrupted/malformed row (e.g. hand-edited D1 row, or a future schema change that leaves an old JSON
+    // shape behind) must fail OPEN as a cache miss, not hand callers a wrong shape -- never trust the parse
+    // result's type just because JSON.parse didn't throw.
+    if (!Array.isArray(failingDetails) || !Array.isArray(nonRequiredFailingDetails)) return null;
     return {
       ciState: cached.ciState,
       hasPending: cached.ciHasPending ?? false,
       hasVisiblePending: cached.ciHasVisiblePending ?? false,
       hasMissingRequiredContext: cached.ciHasMissingRequiredContext ?? false,
-      failingDetails: JSON.parse(cached.ciFailingDetailsJson ?? "[]"),
-      nonRequiredFailingDetails: JSON.parse(cached.ciNonRequiredFailingDetailsJson ?? "[]"),
+      failingDetails,
+      nonRequiredFailingDetails,
       ciCompletenessWarning: cached.ciCompletenessWarning ?? null,
     };
   } catch {

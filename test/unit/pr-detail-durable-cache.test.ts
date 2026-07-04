@@ -646,6 +646,36 @@ describe("durable CI-state cache (#selfhost-ci-verification)", () => {
       ).toBeNull();
     });
 
+    it("fails open to null when ciFailingDetailsJson parses to valid JSON that is NOT an array (corrupted row shape)", () => {
+      // JSON.parse succeeds here (it's valid JSON), so this exercises the Array.isArray guard specifically,
+      // not the catch block above -- a corrupted/malformed row must never hand callers a wrong shape.
+      expect(
+        deserializeCachedCiAggregate({
+          ciState: "passed",
+          ciHasPending: false,
+          ciHasVisiblePending: false,
+          ciHasMissingRequiredContext: false,
+          ciFailingDetailsJson: '{"not":"an array"}',
+          ciNonRequiredFailingDetailsJson: "[]",
+          ciCompletenessWarning: null,
+        }),
+      ).toBeNull();
+    });
+
+    it("fails open to null when ciNonRequiredFailingDetailsJson parses to valid JSON that is NOT an array (corrupted row shape)", () => {
+      expect(
+        deserializeCachedCiAggregate({
+          ciState: "passed",
+          ciHasPending: false,
+          ciHasVisiblePending: false,
+          ciHasMissingRequiredContext: false,
+          ciFailingDetailsJson: "[]",
+          ciNonRequiredFailingDetailsJson: '"just a string"',
+          ciCompletenessWarning: null,
+        }),
+      ).toBeNull();
+    });
+
     it("defaults hasPending/hasVisiblePending/hasMissingRequiredContext to false and the JSON arrays to [] when null", () => {
       expect(
         deserializeCachedCiAggregate({

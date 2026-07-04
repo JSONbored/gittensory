@@ -2170,6 +2170,64 @@ describe("queue processors", () => {
     expect(deferred?.n).toBe(0);
   });
 
+  // REGRESSION (#selfhost-ci-verification): the DURABLE cross-job CI-state cache row must be keyed on the actual
+  // RESOLVED required-contexts set (mergeRequiredCiContexts' output: live branch-protection contexts unioned with
+  // settings.expectedCiContexts), not on the raw, unresolved expectedCiContexts config alone. Branch protection can
+  // change server-side (a maintainer adds a required check in GitHub's UI) while expectedCiContexts config stays
+  // put and the head_sha is unchanged -- if the durable row were keyed only on the config, the readiness path would
+  // keep serving a stale aggregate computed against the OLD required-context set for up to the 60s TTL, producing a
+  // wrong merge/close verdict. Two processJob passes at the SAME head_sha, same unchanged expectedCiContexts config,
+  // but DIFFERENT branch-protection required contexts between them, must each independently reach a live CI read
+  // (both misses) and each persist their OWN ciRequiredContextsKey -- proving the key tracks the resolved set.
+  it("REGRESSION (#selfhost-ci-verification): the durable CI-state cache keys on the RESOLVED required-contexts set, not the raw expectedCiContexts config", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", checks: "write" }, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto", update_branch: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Branch protection drift", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+    // expectedCiContexts is configured ONCE and never changes across the two calls below -- only branch protection
+    // (the OTHER input to mergeRequiredCiContexts) drifts between them.
+    await upsertRepoFocusManifest(env, "owner/agent-repo", { gate: { expectedCiContexts: ["lint"] } });
+    let requiredContextsFromBranchProtection: Array<string | null> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") return Response.json({ number: 7, title: "Branch protection drift", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.includes("/commits/a7/check-runs")) return Response.json({ total_count: 1, check_runs: [{ name: "lint", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+      if (url.includes("/commits/a7/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/branches/")) return Response.json({ contexts: requiredContextsFromBranchProtection });
+      return Response.json({});
+    });
+
+    // Pass 1: branch protection requires nothing extra beyond expectedCiContexts's own "lint" -- the resolved set
+    // is exactly {"lint"}, satisfied by the check-run above, so CI resolves and the durable row's key reflects it.
+    requiredContextsFromBranchProtection = [];
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "branch-protection-before", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+    const rowAfterPass1 = await getPullRequestDetailSyncState(env, "owner/agent-repo", 7);
+    expect(rowAfterPass1?.ciState).toBe("passed");
+    const keyAfterPass1 = rowAfterPass1?.ciRequiredContextsKey ?? null;
+
+    // A maintainer now adds "required-build" as a branch-protection required check via GitHub's UI -- the SAME
+    // head_sha, the SAME (unchanged) expectedCiContexts config, but the RESOLVED required-contexts set just grew.
+    requiredContextsFromBranchProtection = ["required-build"];
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "branch-protection-after", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+    const rowAfterPass2 = await getPullRequestDetailSyncState(env, "owner/agent-repo", 7);
+    const keyAfterPass2 = rowAfterPass2?.ciRequiredContextsKey ?? null;
+
+    // The durable row's key must differ once the RESOLVED set changed -- if it were still derived from the raw,
+    // unchanged expectedCiContexts config (the bug), keyAfterPass2 would equal keyAfterPass1 even though the
+    // resolved required-contexts set is now materially different (missing "required-build" entirely).
+    expect(keyAfterPass2).not.toBe(keyAfterPass1);
+    // "required-build" never appears in any check-run/status ⇒ once it is folded into the resolved required set,
+    // reduceLiveCiAggregate can no longer treat it as satisfied ⇒ the aggregate correctly flips to pending,
+    // proving pass 2 actually re-derived against the NEW resolved set rather than serving pass 1's stale "passed"
+    // row from a durable cache keyed on the unchanged config.
+    expect(rowAfterPass2?.ciState).toBe("pending");
+  });
+
   it("#sweep-resync: a failing resync upsert is swallowed (fail-open) — the sweep never throws", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
