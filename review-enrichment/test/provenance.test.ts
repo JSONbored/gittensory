@@ -22,3 +22,14 @@ test("classifyAddedFile treats bower_components and jspm_packages as vendored, l
   assert.equal(classifyAddedFile("src/bower_components.ts"), null);
   assert.equal(classifyAddedFile("src/app.ts"), null);
 });
+
+test("classifyAddedFile flags prebuilt native-addon binaries (.node/.pyd) as binary artifacts", () => {
+  // Compiled Node native addons and Windows Python extension DLLs are unauditable prebuilt binaries — the
+  // same category as the exe/dll/so/wasm entries already flagged. A committed `*.node` fell through to null.
+  for (const path of ["build/Release/bcrypt_lib.node", "prebuilds/darwin-x64/foo.node", "native/mod.pyd"]) {
+    assert.equal(classifyAddedFile(path), "binary", path);
+  }
+  // Extension is `$`-anchored: a source file merely named like one is still ordinary source (null).
+  assert.equal(classifyAddedFile("src/node.ts"), null);
+  assert.equal(classifyAddedFile("app/foo.node.js"), null);
+});

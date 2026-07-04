@@ -17,9 +17,11 @@ import { boundedFetchJson } from "../external-fetch.js";
 const MAX_ATTESTATION_CHECKS = 20; // bound network round-trips
 const MAX_FINDINGS = 30; // keep the brief bounded
 
-// Compiled/non-source binary artifact extensions.
+// Compiled/non-source binary artifact extensions. `node` is a compiled Node native addon (matching the
+// binary set in asset-weight.ts) and `pyd` is a Windows Python extension DLL (the sibling of the pyc/pyo/so
+// entries) — both are unauditable prebuilt binaries a PR should not check in without source.
 const BINARY_EXT_RE =
-  /\.(exe|dll|so|dylib|bin|pyc|pyo|class|jar|war|ear|wasm|o|a)$/i;
+  /\.(exe|dll|so|dylib|bin|pyc|pyo|pyd|class|jar|war|ear|wasm|node|o|a)$/i;
 // Vendored / embedded third-party source trees. bower_components (Bower) and jspm_packages (JSPM) are
 // installed-dependency directories — the same vendored case as node_modules — so a committed tree under either
 // is a vendored artifact, not contributor source (mirrors src/signals/path-matchers.ts's vendored classifier).
