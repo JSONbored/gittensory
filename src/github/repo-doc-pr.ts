@@ -1,13 +1,21 @@
-// Repo-doc PR delivery (#3000, part of the repo-doc generation roadmap #2993). Turns a rendered AGENTS.md body
-// (src/review/repo-doc-render.ts, itself derived from src/review/repo-profile.ts) into an actual pull request
-// against the target repo -- branch + commit + PR-open, reusing the SAME installation-token write chokepoint
-// (makeInstallationOctokit) every other GitHub write in this engine goes through. Never a direct commit to the
-// target repo's default branch: AGENTS.md and CLAUDE.md are always delivered as a PR, first-run or refresh alike.
-import { withInstallationTokenRetry } from "./app";
+// Repo-doc PR delivery (#3000/#3004, part of the repo-doc generation roadmap #2993). Turns a rendered AGENTS.md
+// body (src/review/repo-doc-render.ts, itself derived from src/review/repo-profile.ts) into an actual pull
+// request against the target repo -- branch + commit + PR-open, reusing the SAME installation-token write
+// chokepoint (makeInstallationOctokit) every other GitHub write in this engine goes through. Never a direct
+// commit to the target repo's default branch: AGENTS.md and CLAUDE.md are always delivered as a PR.
+//
+// DIFF-AWARE REFRESH (#3004): before building anything, the CURRENT AGENTS.md on the default branch (if any) is
+// fetched and run through src/review/generated-doc-refresh.ts's marker-block refresh. That call is the single
+// source of truth for what happens next -- a first-run repo gets the full generated content, a repo whose
+// generated section is unchanged gets NO pull request at all (no-op), a repo whose generated section changed
+// gets a pull request with everything outside the markers preserved byte-for-byte, and a repo whose marker
+// block is missing or malformed gets neither a silent overwrite nor a guess -- just a reported reason.
+import { githubErrorStatus, withInstallationTokenRetry } from "./app";
 import { githubRateLimitAdmissionKeyForInstallation, makeInstallationOctokit } from "./client";
 import { getRepository } from "../db/repositories";
 import { extractRepoProfile } from "../review/repo-profile";
-import { renderRepoDocContent } from "../review/repo-doc-render";
+import { REPO_DOC_MARKERS, renderRepoDocContent } from "../review/repo-doc-render";
+import { refreshGeneratedDoc } from "../review/generated-doc-refresh";
 import type { AgentActionMode } from "../settings/agent-execution";
 
 /** Stable across runs (not per-run unique) so a repeat invocation targets the SAME branch/PR instead of piling up
@@ -32,6 +40,30 @@ function splitRepo(repoFullName: string): { owner: string; repo: string } {
 
 type DocTreeEntry = { path: string; mode: "100644" | "120000"; type: "blob"; content: string };
 type Octokit = ReturnType<typeof makeInstallationOctokit>;
+
+// GitHub's Contents API base64-encodes the file's raw bytes (with line-wrapped whitespace); decoding through
+// atob + TextDecoder (rather than a naive charCodeAt reassembly) is what makes this correct for non-ASCII
+// manual content a maintainer added outside the generated markers.
+function decodeGitHubFileContent(base64: string): string {
+  const binary = atob(base64.replace(/\s+/g, ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new TextDecoder().decode(bytes);
+}
+
+/** The current AGENTS.md content on `ref`, or `null` when it doesn't exist yet (first run). Any OTHER failure
+ *  (rate limit, auth, a transient 5xx) is rethrown -- a repo we simply couldn't read must never be treated the
+ *  same as a genuinely empty one, or a refresh could mistake "we don't know" for "there's nothing there yet". */
+async function fetchExistingAgentsMdContent(octokit: Octokit, owner: string, repo: string, ref: string): Promise<string | null> {
+  try {
+    const response = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", { owner, repo, path: AGENTS_FILE_PATH, ref });
+    const data = response.data as { content?: string };
+    return typeof data.content === "string" ? decodeGitHubFileContent(data.content) : null;
+  } catch (error) {
+    if (githubErrorStatus(error) === 404) return null;
+    throw error;
+  }
+}
 
 /** Builds the two-file tree (AGENTS.md + CLAUDE.md) atop the branch's current tree in ONE commit, so first-run
  *  (paths absent) and refresh (paths present) are handled identically -- `base_tree` + explicit per-path entries
@@ -74,9 +106,11 @@ Disable repo-doc generation for this repository, or simply close this pull reque
  * profile has no data yet (#2999's fail-closed branch), `mode` is not `"live"` (dry-run/paused instances must not
  * chain several dependent GitHub writes through synthetic suppressed responses -- see `maybeEscalateModeration`
  * in `agent-action-executor.ts` for the same "no side effect for a write that didn't really happen" guard on a
- * different action), or any step failed partway through. The ENTIRE body runs inside one try/catch (not just the
- * GitHub-write chain) so a failure in the repo/profile lookups themselves is reported the same honest way,
- * rather than propagating as an uncaught exception from what the rest of the engine treats as a fail-safe call.
+ * different action), the diff-aware refresh (#3004) found nothing meaningful to change, the existing file's
+ * marker block is missing/malformed (fails closed rather than guessing), or any step failed partway through. The
+ * ENTIRE body runs inside one try/catch (not just the GitHub-write chain) so a failure in the repo/profile
+ * lookups themselves is reported the same honest way, rather than propagating as an uncaught exception from
+ * what the rest of the engine treats as a fail-safe call.
  */
 export async function openRepoDocPullRequest(env: Env, repoFullName: string, mode: AgentActionMode): Promise<RepoDocPullRequestResult> {
   try {
@@ -85,8 +119,8 @@ export async function openRepoDocPullRequest(env: Env, repoFullName: string, mod
 
     const profile = await extractRepoProfile(env, repoFullName);
     if (!profile.present) return { opened: false, reason: profile.reason };
-    const agentsContent = renderRepoDocContent(profile);
-    if (!agentsContent) return { opened: false, reason: "no content rendered from profile" };
+    const generatedSection = renderRepoDocContent(profile);
+    if (!generatedSection) return { opened: false, reason: "no content rendered from profile" };
 
     if (mode !== "live") return { opened: false, reason: `repo-doc pull request not opened: action mode is "${mode}"` };
 
@@ -100,6 +134,12 @@ export async function openRepoDocPullRequest(env: Env, repoFullName: string, mod
       const existingOpenPrs = await octokit.request("GET /repos/{owner}/{repo}/pulls", { owner, repo, state: "open", head: `${owner}:${REPO_DOC_BRANCH_NAME}`, base: baseBranch });
       const existing = (existingOpenPrs.data as Array<{ number: number; html_url: string }>)[0];
       if (existing) return { opened: true, reused: true, pullNumber: existing.number, url: existing.html_url, claudeMode: "symlink" };
+
+      const currentAgentsContent = await fetchExistingAgentsMdContent(octokit, owner, repo, baseBranch);
+      const refresh = refreshGeneratedDoc(currentAgentsContent, generatedSection, REPO_DOC_MARKERS);
+      if (refresh.action === "no-change") return { opened: false, reason: "no meaningful change since the last generated AGENTS.md" };
+      if (refresh.action === "manual-review-required") return { opened: false, reason: `AGENTS.md needs manual review before it can be refreshed: ${refresh.reason}` };
+      const agentsContent = refresh.content;
 
       const branchInfo = await octokit.request("GET /repos/{owner}/{repo}/branches/{branch}", { owner, repo, branch: baseBranch });
       const baseCommitSha = branchInfo.data.commit.sha;

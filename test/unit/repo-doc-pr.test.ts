@@ -4,7 +4,13 @@ import { openRepoDocPullRequest } from "../../src/github/repo-doc-pr";
 import { upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import * as repositoriesModule from "../../src/db/repositories";
 import * as repoDocRenderModule from "../../src/review/repo-doc-render";
+import { renderRepoDocContent } from "../../src/review/repo-doc-render";
+import { extractRepoProfile } from "../../src/review/repo-profile";
 import { createTestEnv } from "../helpers/d1";
+
+function base64Utf8(text: string): string {
+  return Buffer.from(text, "utf8").toString("base64");
+}
 
 const REPO = "owner/widgets";
 const [PROJECT, CHUNK_REPO] = ["owner", "widgets"];
@@ -111,6 +117,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       const method = init?.method ?? "GET";
       calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : {} });
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
+      if (url.includes("/contents/AGENTS.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "base-commit-sha", commit: { tree: { sha: "base-tree-sha" } } } });
       if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "new-tree-sha" });
       if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "new-commit-sha" });
@@ -150,6 +157,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       if (TOKEN_URL.test(url)) return Response.json({ token: "t" });
       const method = init?.method ?? "GET";
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
+      if (url.includes("/contents/AGENTS.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "base-commit-sha", commit: { tree: { sha: "base-tree-sha" } } } });
       if (url.endsWith("/git/trees") && method === "POST") {
         treeAttempts += 1;
@@ -178,6 +186,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       calls.push(`${method} ${url}`);
       if (url.endsWith("/repos/owner/widgets") && method === "GET") return Response.json({ default_branch: "trunk" });
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
+      if (url.includes("/contents/AGENTS.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.endsWith("/branches/trunk")) return Response.json({ commit: { sha: "c", commit: { tree: { sha: "t" } } } });
       if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "ts" });
       if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "cs" });
@@ -190,6 +199,117 @@ describe("openRepoDocPullRequest (#3000)", () => {
     expect(calls.some((c) => c === "GET https://api.github.com/repos/owner/widgets")).toBe(true);
   });
 
+  it("#3004: treats a contents response with no string .content as first-run (generates fresh content)", async () => {
+    const env = envWithKey();
+    await seedInstalledRepo(env, { defaultBranch: "main" });
+    await seedProfileData(env);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (TOKEN_URL.test(url)) return Response.json({ token: "t" });
+      const method = init?.method ?? "GET";
+      if (url.includes("/pulls?") && method === "GET") return Response.json([]);
+      if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json([{ name: "AGENTS.md", type: "dir" }]);
+      if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "base-commit-sha", commit: { tree: { sha: "base-tree-sha" } } } });
+      if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "new-tree-sha" });
+      if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "new-commit-sha" });
+      if (url.endsWith("/git/refs") && method === "POST") return Response.json({});
+      if (url.endsWith("/repos/owner/widgets/pulls") && method === "POST") return Response.json({ number: 61, html_url: "https://github.com/owner/widgets/pull/61" });
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await openRepoDocPullRequest(env, REPO, "live");
+    expect(result).toEqual({ opened: true, reused: false, pullNumber: 61, url: "https://github.com/owner/widgets/pull/61", claudeMode: "symlink" });
+  });
+
+  it("REGRESSION (#3004): reports no-change and creates no branch/commit/PR when the existing AGENTS.md is already current", async () => {
+    const env = envWithKey();
+    await seedInstalledRepo(env, { defaultBranch: "main" });
+    await seedProfileData(env);
+    const profile = await extractRepoProfile(env, REPO);
+    const currentContent = renderRepoDocContent(profile)!;
+    let wroteAnything = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (TOKEN_URL.test(url)) return Response.json({ token: "t" });
+      const method = init?.method ?? "GET";
+      if (url.includes("/pulls?") && method === "GET") return Response.json([]);
+      if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json({ content: base64Utf8(currentContent), encoding: "base64" });
+      if (method === "POST") wroteAnything = true;
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await openRepoDocPullRequest(env, REPO, "live");
+    expect(result).toEqual({ opened: false, reason: "no meaningful change since the last generated AGENTS.md" });
+    expect(wroteAnything).toBe(false);
+  });
+
+  it("#3004: rethrows (rather than treating as first-run) a non-404 failure while fetching the existing AGENTS.md", async () => {
+    const env = envWithKey();
+    await seedInstalledRepo(env, { defaultBranch: "main" });
+    await seedProfileData(env);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (TOKEN_URL.test(url)) return Response.json({ token: "t" });
+      const method = init?.method ?? "GET";
+      if (url.includes("/pulls?") && method === "GET") return Response.json([]);
+      if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json({ message: "rate limited" }, { status: 403 });
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await openRepoDocPullRequest(env, REPO, "live");
+    expect(result.opened).toBe(false);
+    expect((result as { opened: false; reason: string }).reason).toMatch(/rate limited/);
+  });
+
+  it("#3004: fails closed with a manual-review reason and creates no branch/commit/PR when the existing file has no marker block", async () => {
+    const env = envWithKey();
+    await seedInstalledRepo(env, { defaultBranch: "main" });
+    await seedProfileData(env);
+    let wroteAnything = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (TOKEN_URL.test(url)) return Response.json({ token: "t" });
+      const method = init?.method ?? "GET";
+      if (url.includes("/pulls?") && method === "GET") return Response.json([]);
+      if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json({ content: base64Utf8("# Hand-written AGENTS.md\n\nNo markers here.\n"), encoding: "base64" });
+      if (method === "POST") wroteAnything = true;
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await openRepoDocPullRequest(env, REPO, "live");
+    expect(result).toEqual({ opened: false, reason: "AGENTS.md needs manual review before it can be refreshed: no generated-content marker block found" });
+    expect(wroteAnything).toBe(false);
+  });
+
+  it("#3004: opens a refresh PR that preserves manual content outside the marker block", async () => {
+    const env = envWithKey();
+    await seedInstalledRepo(env, { defaultBranch: "main" });
+    await seedProfileData(env);
+    const profile = await extractRepoProfile(env, REPO);
+    const staleGeneratedSection = renderRepoDocContent(profile)!.replace("`npm run lint`", "an older lint command");
+    const currentContent = `# Preamble the maintainer added.\n\n${staleGeneratedSection}\nAn appendix the maintainer added.\n`;
+    const calls: Array<{ method: string; url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (TOKEN_URL.test(url)) return Response.json({ token: "t" });
+      const method = init?.method ?? "GET";
+      calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : {} });
+      if (url.includes("/pulls?") && method === "GET") return Response.json([]);
+      if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json({ content: base64Utf8(currentContent), encoding: "base64" });
+      if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "base-commit-sha", commit: { tree: { sha: "base-tree-sha" } } } });
+      if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "refresh-tree-sha" });
+      if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "refresh-commit-sha" });
+      if (url.endsWith("/git/refs") && method === "POST") return Response.json({});
+      if (url.endsWith("/repos/owner/widgets/pulls") && method === "POST") return Response.json({ number: 55, html_url: "https://github.com/owner/widgets/pull/55" });
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await openRepoDocPullRequest(env, REPO, "live");
+    expect(result).toEqual({ opened: true, reused: false, pullNumber: 55, url: "https://github.com/owner/widgets/pull/55", claudeMode: "symlink" });
+
+    const treeCall = calls.find((c) => c.url.endsWith("/git/trees"));
+    const agentsEntry = (treeCall?.body.tree as Array<{ path: string; content: string }>).find((entry) => entry.path === "AGENTS.md");
+    expect(agentsEntry?.content).toContain("# Preamble the maintainer added.");
+    expect(agentsEntry?.content).toContain("An appendix the maintainer added.");
+    expect(agentsEntry?.content).toContain("Lint: `npm run lint`");
+    expect(agentsEntry?.content).not.toContain("an older lint command");
+  });
+
   it("reports a caught GitHub Error's message when both the symlink and copy tree attempts fail", async () => {
     const env = envWithKey();
     await seedInstalledRepo(env, { defaultBranch: "main" });
@@ -199,6 +319,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       if (TOKEN_URL.test(url)) return Response.json({ token: "t" });
       const method = init?.method ?? "GET";
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
+      if (url.includes("/contents/AGENTS.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "c", commit: { tree: { sha: "t" } } } });
       if (url.endsWith("/git/trees") && method === "POST") return Response.json({ message: "tree rejected entirely" }, { status: 422 });
       return new Response("unexpected", { status: 500 });
