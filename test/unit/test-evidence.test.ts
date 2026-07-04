@@ -4,6 +4,7 @@ import { classifyTestCoverage, hasLocalTestEvidence, isTestPath } from "../../sr
 describe("test evidence helpers", () => {
   it("detects common test path conventions", () => {
     expect(isTestPath("pkg/foo_test.go")).toBe(true);
+    expect(isTestPath("lib/widget_test.dart")).toBe(true); // Dart/Flutter *_test.dart
     expect(isTestPath("spec/models/widget_spec.rb")).toBe(true);
     expect(isTestPath("src/test/helpers.ts")).toBe(true);
     expect(isTestPath("tests/integration/api.test.ts")).toBe(true);
