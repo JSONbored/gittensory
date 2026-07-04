@@ -4,9 +4,10 @@
 // history on both sides to be worth scoring, and (b) nothing in the frozen context lets a replay run infer
 // the future by pattern-matching text rather than reasoning. This module selects calibration-worthy freeze
 // points, scrubs forward references out of the frozen context, tags each point's recency pool, and returns
-// the frozen snapshot and the revealed post-T ground truth as *separate* bundles so the replay pipeline never
-// holds both at once. Every function here is pure and deterministic — no clock, no randomness, no IO — so a
-// given (candidate, context) always yields an identical task.
+// the frozen replay task without the revealed post-T ground truth. Scoring data is exposed through a separate
+// function so replay execution never has to hold both sides at once. Every function here is pure and
+// deterministic — no clock, no randomness, no IO — so a given (candidate, context) always yields an
+// identical task.
 
 // What a scrubbed-away forward reference is replaced with. A fixed, self-delimiting token so the scrubbed
 // text stays readable and the substitution is itself deterministic.
@@ -168,9 +169,9 @@ export function classifyRecencyPool(candidate, options) {
   return lastActivityAt >= modelCutoffIso ? "recent" : "older";
 }
 
-// One-shot generator. Applies selection, then scrubs and lints the frozen context, then returns the frozen
-// snapshot and the revealed post-T ground truth as SEPARATE bundles — never merged — so a caller persists and
-// scopes them independently. An ineligible or un-scrubbable candidate is rejected without producing a task.
+// One-shot replay generator. Applies selection, then scrubs and lints the frozen context, then returns only
+// the frozen replay task. Revealed post-T ground truth is intentionally available only through
+// generateReplayScoringKey, so a replay worker/serializer/logger/model call never receives both sides.
 export function generateReplayTask(candidate, context, options) {
   const selection = selectFreezePoint(candidate, options?.thresholds);
   if (!selection.eligible) {
@@ -194,9 +195,21 @@ export function generateReplayTask(candidate, context, options) {
       commitT: typeof candidate?.commitT === "string" ? candidate.commitT : null,
       contextTexts: scrubbedTexts,
     },
-    revealed: {
-      commitCount: selection.revealedCommitCount,
-      groundTruth: candidate?.revealedGroundTruth ?? null,
-    },
+  };
+}
+
+// Scoring-only accessor. Call this from the isolated scorer path after replay execution has finished; do not
+// pass its result to replay workers. It deliberately shares only selection eligibility with generateReplayTask
+// and never carries frozen context.
+export function generateReplayScoringKey(candidate, options) {
+  const selection = selectFreezePoint(candidate, options?.thresholds);
+  if (!selection.eligible) {
+    return { eligible: false, rejected: "selection", reasons: selection.reasons };
+  }
+
+  return {
+    eligible: true,
+    commitCount: selection.revealedCommitCount,
+    groundTruth: candidate?.revealedGroundTruth ?? null,
   };
 }

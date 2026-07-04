@@ -72,10 +72,12 @@ export type ReplayTask = {
     commitT: string | null;
     contextTexts: string[];
   };
-  revealed: {
-    commitCount: number;
-    groundTruth: unknown;
-  };
+};
+
+export type ReplayScoringKey = {
+  eligible: true;
+  commitCount: number;
+  groundTruth: unknown;
 };
 
 export function detectForwardReferences(
@@ -108,3 +110,8 @@ export function generateReplayTask(
   context: ForwardRefContext | null | undefined,
   options: ReplayTaskOptions | null | undefined,
 ): ReplayTask | ReplayTaskRejected;
+
+export function generateReplayScoringKey(
+  candidate: FreezePointCandidate | null | undefined,
+  options: ReplayTaskOptions | null | undefined,
+): ReplayScoringKey | ReplayTaskRejected;
