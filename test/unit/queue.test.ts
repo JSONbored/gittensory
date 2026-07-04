@@ -2228,6 +2228,51 @@ describe("queue processors", () => {
     expect(rowAfterPass2?.ciState).toBe("pending");
   });
 
+  it("REGRESSION (#selfhost-ci-verification): the durable CI-state cache key does not collide for required context names containing spaces", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", checks: "write" }, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto", update_branch: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Spaced context drift", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
+    await upsertRepoFocusManifest(env, "owner/agent-repo", { gate: { expectedCiContexts: ["lint"] } });
+    let requiredContextsFromBranchProtection: Array<string | null> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (/\/pulls\/7(?:\?|$)/.test(url) && method === "GET") return Response.json({ number: 7, title: "Spaced context drift", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, mergeable_state: "clean", labels: [], body: "Closes #1" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.includes("/commits/a7/check-runs")) {
+        return Response.json({
+          total_count: 3,
+          check_runs: [
+            { name: "lint", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+            { name: "a b", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+            { name: "c", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+          ],
+        });
+      }
+      if (url.includes("/commits/a7/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/branches/")) return Response.json({ contexts: requiredContextsFromBranchProtection });
+      return Response.json({});
+    });
+
+    requiredContextsFromBranchProtection = ["a b", "c"];
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "spaced-contexts-before", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+    const rowAfterPass1 = await getPullRequestDetailSyncState(env, "owner/agent-repo", 7);
+    expect(rowAfterPass1?.ciState).toBe("passed");
+    const keyAfterPass1 = rowAfterPass1?.ciRequiredContextsKey ?? null;
+
+    requiredContextsFromBranchProtection = ["a", "b c"];
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "spaced-contexts-after", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
+    const rowAfterPass2 = await getPullRequestDetailSyncState(env, "owner/agent-repo", 7);
+    const keyAfterPass2 = rowAfterPass2?.ciRequiredContextsKey ?? null;
+
+    expect(keyAfterPass2).not.toBe(keyAfterPass1);
+    expect(rowAfterPass2?.ciState).toBe("pending");
+  });
+
   it("#sweep-resync: a failing resync upsert is swallowed (fail-open) — the sweep never throws", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });

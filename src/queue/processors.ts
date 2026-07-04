@@ -543,7 +543,7 @@ function expectedCiContextsKeyPart(expectedCiContexts: ReadonlyArray<string> | n
 // on the unchanged config would keep serving an aggregate computed against the old required-context set.
 function resolvedRequiredContextsKeyPart(requiredContexts: ReadonlySet<string> | null | undefined): string {
   if (!requiredContexts || requiredContexts.size === 0) return "";
-  return [...requiredContexts].sort().join(" ");
+  return JSON.stringify([...requiredContexts].sort());
 }
 
 // RC2 + #selfhost-ci-verification: the EFFECTIVE required-status-check contexts for this repo/baseRef, merging
