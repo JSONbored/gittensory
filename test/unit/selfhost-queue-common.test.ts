@@ -174,6 +174,16 @@ describe("self-host queue common helpers", () => {
     } as unknown as Queue;
     await expect(queueDeadLetterPageFromBinding(malformedItemBinding, 25, 0)).resolves.toBeNull();
 
+    // A falsy row (not just a truthy-but-wrong-shaped object) must also be rejected -- exercises isDeadLetterJob's
+    // own `!value` branch, distinct from `typeof value !== "object"` on a wrong-shaped object.
+    const nullItemBinding = {
+      async send() {},
+      async sendBatch() {},
+      listDeadLetterJobs: () => [validItem, null],
+      deadCount: () => 2,
+    } as unknown as Queue;
+    await expect(queueDeadLetterPageFromBinding(nullItemBinding, 25, 0)).resolves.toBeNull();
+
     const malformedTotalBinding = {
       async send() {},
       async sendBatch() {},
