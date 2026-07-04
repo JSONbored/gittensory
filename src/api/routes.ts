@@ -2129,6 +2129,7 @@ export function createApp() {
       const forbidden = await requireSessionRepoAccess(c, identity, fullName, repo);
       if (forbidden) return forbidden;
     }
+    if (identity.kind === "static" && identity.actor === "mcp" && !(await import("../auth/security")).isMcpReadRepoAllowed(c.env.MCP_READ_REPO_ALLOWLIST, fullName)) return c.json({ error: "forbidden_repo" }, 403);
     const response = await buildIssueQualityResponse(c.env, fullName);
     if (!response) return c.json({ error: "issue_quality_not_found", repoFullName: fullName }, 404);
     return c.json(response);

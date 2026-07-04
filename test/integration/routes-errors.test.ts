@@ -317,6 +317,30 @@ describe("api route guards and error branches", () => {
     await expect(wildcardDecisionPack.json()).resolves.toMatchObject({ login: "victim", summary: "private advisory summary" });
   });
 
+  it("blocks the shared MCP token from reading issue-quality outside MCP_READ_REPO_ALLOWLIST (#2455 HTTP parity)", async () => {
+    const app = createApp();
+    const scopedEnv = createTestEnv({ MCP_READ_REPO_ALLOWLIST: "owner/private-repo" });
+    await upsertRepositoryFromGitHub(scopedEnv, { name: "private-repo", full_name: "owner/private-repo", private: true, owner: { login: "owner" } });
+    await upsertRepositoryFromGitHub(scopedEnv, { name: "other-repo", full_name: "other/other-repo", private: false, owner: { login: "other" } });
+    const mcpHeaders = { authorization: `Bearer ${scopedEnv.GITTENSORY_MCP_TOKEN}` };
+
+    const forbidden = await app.request("/v1/repos/other/other-repo/issue-quality", { headers: mcpHeaders }, scopedEnv);
+    expect(forbidden.status).toBe(403);
+    await expect(forbidden.json()).resolves.toMatchObject({ error: "forbidden_repo" });
+
+    const allowlisted = await app.request("/v1/repos/owner/private-repo/issue-quality", { headers: mcpHeaders }, scopedEnv);
+    expect(allowlisted.status).not.toBe(403);
+
+    const operator = await app.request("/v1/repos/other/other-repo/issue-quality", { headers: apiHeaders(scopedEnv) }, scopedEnv);
+    expect(operator.status).not.toBe(403);
+
+    const denyEnv = createTestEnv({ MCP_READ_REPO_ALLOWLIST: "" });
+    await upsertRepositoryFromGitHub(denyEnv, { name: "demo", full_name: "octo/demo", private: false, owner: { login: "octo" } });
+    const denied = await app.request("/v1/repos/octo/demo/issue-quality", { headers: { authorization: `Bearer ${denyEnv.GITTENSORY_MCP_TOKEN}` } }, denyEnv);
+    expect(denied.status).toBe(403);
+    await expect(denied.json()).resolves.toMatchObject({ error: "forbidden_repo" });
+  });
+
   it("keeps OAuth setup, CORS, and rate limits explicit", async () => {
     const app = createApp();
     const env = createTestEnv();
