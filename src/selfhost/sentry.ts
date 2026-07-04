@@ -40,6 +40,11 @@ const SECRET_VALUE = new RegExp(
     String.raw`gh[opsru]_[A-Za-z0-9_]{20,}`,
     String.raw`sk-[A-Za-z0-9_-]{20,}`,
     String.raw`xox[baprs]-[A-Za-z0-9-]+`,
+    // Gittensory's own opaque tokens (createOpaqueToken, src/auth/security.ts): gts_ is the default session-token
+    // prefix, orbenr_/orbsec_ are the Orb broker's enrollment id/secret (#1825) — a broker error message can quote
+    // these bare (no "secret"/"token"-named field for the key-based redaction above to catch), so the VALUE itself
+    // must be recognized here too.
+    String.raw`(?:gts|orbenr|orbsec)_[A-Za-z0-9_]{20,}`,
     String.raw`Bearer\s+[A-Za-z0-9._~+/=-]{12,}`,
     String.raw`-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----`,
   ].join("|"),

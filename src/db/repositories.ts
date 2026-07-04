@@ -6034,7 +6034,7 @@ const PRODUCT_USAGE_SENSITIVE_VALUE =
 // Compose from the canonical scrubber in redaction.ts so this surface cannot drift from the boundary;
 // it already covered /root/ and /var/, and now unifies the Windows form (also accepts `C:/Users/`).
 const PRODUCT_USAGE_LOCAL_PATH = PUBLIC_LOCAL_PATH_SCRUB_PATTERN;
-const PRODUCT_USAGE_TOKEN_VALUE = /\b(?:ghp_|github_pat_|gts_|glpat-|sk-)[A-Za-z0-9_=-]{8,}/g;
+const PRODUCT_USAGE_TOKEN_VALUE = /\b(?:ghp_|github_pat_|gts_|orbenr_|orbsec_|glpat-|sk-)[A-Za-z0-9_=-]{8,}/g;
 const PRODUCT_USAGE_BEARER_VALUE = /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi;
 
 function sanitizeProductUsageMetadata(value: Record<string, unknown> | null | undefined, actorRedactor: ProductUsageActorRedactor | null): Record<string, JsonValue> {

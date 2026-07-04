@@ -258,6 +258,23 @@ describe("scrubEvent — redact secrets before an event leaves the box", () => {
     expect(ev.exception.values[0].stacktrace.frames[0].vars.safe).toBe("value");
   });
 
+  // Regression (#1825): the Orb broker's enrollment id/secret (createOpaqueToken("orbenr"/"orbsec"),
+  // src/orb/broker.ts) are bare opaque tokens with no "secret"/"token"-NAMED field for the key-based redaction
+  // to catch when a broker error message quotes one directly (e.g. an error string embedding the failed
+  // Authorization value) — the VALUE-based SECRET_VALUE pattern must recognize the orbenr_/orbsec_ shape too.
+  it("redacts a bare Orb enrollment id/secret value from an exception message (#1825)", () => {
+    const fakeEnrollId = `orbenr_${"c".repeat(64)}`;
+    const fakeSecret = `orbsec_${"d".repeat(64)}`;
+    const ev = scrubbedEvent({
+      exception: {
+        values: [{ value: `Orb broker rejected enrollment ${fakeEnrollId} using secret ${fakeSecret}` }],
+      },
+    }) as any;
+    expect(ev.exception.values[0].value).not.toContain(fakeEnrollId);
+    expect(ev.exception.values[0].value).not.toContain(fakeSecret);
+    expect(ev.exception.values[0].value).toBe("Orb broker rejected enrollment [redacted] using secret [redacted]");
+  });
+
   it("scrubs transaction span descriptions and data before sending transaction events", () => {
     const queryTokenKey = fakeQueryTokenKey();
     const ev = scrubbedEvent({
