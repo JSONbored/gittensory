@@ -1087,7 +1087,7 @@ describe("runGittensoryAiReview self-host dual-AI plan (#dual-ai-combiner)", () 
       expect(await renderMetrics()).not.toContain("gittensory_ai_review_onmerge_clamped_total");
     });
 
-    it("when the operator set no onMerge floor at all, any per-repo value is honored unclamped", async () => {
+    it("a synthesis operator plan with no onMerge still clamps repo both against the implicit either floor", async () => {
       const env = planEnv(
         { reviewers: [{ model: "claude-code" }, { model: "codex" }], combine: "synthesis" }, // no onMerge set
         async (model) =>
@@ -1099,11 +1099,11 @@ describe("runGittensoryAiReview self-host dual-AI plan (#dual-ai-combiner)", () 
         ...baseInput,
         mode: "block",
         combine: "synthesis",
-        onMerge: "both", // no floor to violate
+        onMerge: "both", // attempted loosening of synthesis' implicit "either" default
       });
       if (result.status !== "ok") throw new Error("expected ok");
-      expect(result.consensusDefect).toBeNull(); // "both" honored: lone blocker does not decide
-      expect(await renderMetrics()).not.toContain("gittensory_ai_review_onmerge_clamped_total");
+      expect(result.consensusDefect?.title).toContain("Lone blocker");
+      expect(await renderMetrics()).toContain('gittensory_ai_review_onmerge_clamped_total{mode="block"} 1');
     });
   });
 });
@@ -1144,6 +1144,14 @@ describe("resolveEffectiveAiReviewPlan (#2567 gate-review follow-up: combine/rev
 
     const noOperatorPlan = resolveEffectiveAiReviewPlan({ combine: "single", reviewers: [{ model: "claude-code" }] }, null);
     expect(noOperatorPlan).toEqual({ combine: "single", onMerge: undefined, reviewers: [{ model: "claude-code" }], clamped: false });
+  });
+
+  it("gate finding: synthesis with omitted operator onMerge protects its implicit either floor", () => {
+    const implicitFloor = resolveEffectiveAiReviewPlan(
+      { onMerge: "both" },
+      { combine: "synthesis", reviewers: TWO_REVIEWERS },
+    );
+    expect(implicitFloor).toEqual({ combine: "synthesis", onMerge: "either", reviewers: TWO_REVIEWERS, clamped: true });
   });
 
   it("gate finding: an either-floor operator plan cannot be neutered by a repo override reducing reviewer count", () => {

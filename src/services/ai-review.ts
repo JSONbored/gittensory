@@ -96,7 +96,7 @@ export type { CombineStrategy, OnMerge } from "../types";
  *   - operator floor `either` + repo override `both`  → CLAMPED to `either` (an attempted loosening).
  *   - operator floor `either` + repo override `either` → `either` (a no-op tightening).
  *   - operator floor `both` (or unset)                → the repo override (or the operator's own value) wins
- *     unclamped — there is no stricter floor to violate.
+ *     unclamped — there is no stricter floor visible to this field-level helper.
  * Returns the resolved value alongside whether a clamp fired, so the caller can log/surface it (a maintainer
  * who configured a loosening override should see it was not honored, not have it silently ignored).
  */
@@ -138,8 +138,12 @@ export function resolveEffectiveAiReviewPlan(
   repoOverride: AiReviewPlanShape,
   operatorPlan: AiReviewPlanShape | null | undefined,
 ): { combine: CombineStrategy | null | undefined; onMerge: OnMerge | null | undefined; reviewers: AiReviewPlanShape["reviewers"]; clamped: boolean } {
-  const onMergeResolution = resolveEffectiveAiReviewOnMerge(repoOverride.onMerge, operatorPlan?.onMerge);
-  const hasOperatorFloor = operatorPlan?.onMerge === "either";
+  // In synthesis mode, an omitted operator onMerge is not "no floor": combineReviews' historical effective
+  // default is `either`. Clamp against that implicit default too, otherwise a repo could set `both` and loosen a
+  // self-host dual-review plan whose operator simply relied on the default.
+  const operatorOnMergeFloor = operatorPlan?.onMerge ?? (operatorPlan?.combine === "synthesis" ? "either" : undefined);
+  const onMergeResolution = resolveEffectiveAiReviewOnMerge(repoOverride.onMerge, operatorOnMergeFloor);
+  const hasOperatorFloor = operatorOnMergeFloor === "either";
   if (hasOperatorFloor) {
     // The operator's OWN effective reviewer count under their plan -- absent reviewers falls back to the
     // built-in default pair (2), the historical dual-reviewer behavior (see GittensoryAiReviewInput.reviewers).
