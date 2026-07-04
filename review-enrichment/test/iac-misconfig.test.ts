@@ -352,3 +352,49 @@ test("scanPatchForIacMisconfig does not flag the safe counterpart of each Docker
     );
   }
 });
+
+test("scanPatchForIacMisconfig flags TLS/certificate-verification bypass across ecosystems", () => {
+  // In each case the matched VALUE is the bypass action itself, so there is no safe-value form of the line.
+  const cases = [
+    ["+DATABASE_URL=postgres://u:p@h/db?sslmode=disable", "db-ssl-disabled"],
+    ["+  GIT_SSL_NO_VERIFY: true", "git-ssl-no-verify"],
+    ["+  StrictHostKeyChecking no", "ssh-host-key-check-off"],
+    ["+  verify_ssl: false", "verify-ssl-off"],
+    ["+  validate_certs: no", "validate-certs-off"],
+    ["+  insecure_skip_verify = true", "tls-skip-verify"],
+    ["+  ConnectionString: Server=db;TrustServerCertificate=true", "trust-all-server-certs"],
+    ["+    - --insecure-skip-tls-verify", "kube-insecure-tls"],
+  ];
+  for (const [added, kind] of cases) {
+    const findings = scanPatchForIacMisconfig(
+      "config.yaml",
+      ["@@ -1,0 +1,1 @@", added].join("\n"),
+    );
+    assert.deepEqual(
+      findings,
+      [{ file: "config.yaml", line: 1, kind }],
+      `${kind}: expected exactly one finding of that kind, got ${JSON.stringify(findings)}`,
+    );
+  }
+});
+
+test("scanPatchForIacMisconfig does not flag the secure counterpart of each TLS-bypass setting", () => {
+  // The secure value uses a different token the regex never matches (verification stays ON).
+  const safe = [
+    "+DATABASE_URL=postgres://u:p@h/db?sslmode=require",
+    "+  GIT_SSL_NO_VERIFY: false",
+    "+  StrictHostKeyChecking yes",
+    "+  verify_ssl: true",
+    "+  validate_certs: yes",
+    "+  insecure_skip_verify = false",
+    "+  ConnectionString: Server=db;TrustServerCertificate=false",
+    "+    - --request-timeout=30s",
+  ];
+  for (const added of safe) {
+    assert.deepEqual(
+      scanPatchForIacMisconfig("config.yaml", ["@@ -1,0 +1,1 @@", added].join("\n")),
+      [],
+      `should not flag: ${added.trim()}`,
+    );
+  }
+});
