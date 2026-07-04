@@ -87,6 +87,7 @@ const DEFAULT_METRIC_META: readonly (readonly [string, MetricMeta])[] = [
   ["gittensory_github_rest_rate_limit_observations_total", { help: "Observed GitHub REST rate-limit remaining buckets.", type: "counter" }],
   ["gittensory_github_rest_rate_limit_responses_total", { help: "Observed GitHub REST rate-limit response statuses.", type: "counter" }],
   ["gittensory_redis_gh_response_cache_total", { help: "Redis-backed GitHub response cache outcomes.", type: "counter" }],
+  ["gittensory_redis_gh_response_cache_hit_ratio", { help: "Current in-process hit ratio for the Redis-backed GitHub response cache.", type: "gauge" }],
   ["gittensory_redis_token_cache_total", { help: "Redis-backed GitHub token cache outcomes.", type: "counter" }],
   ["gittensory_qdrant_queries_total", { help: "Qdrant vector query attempts.", type: "counter" }],
   ["gittensory_qdrant_upserts_total", { help: "Qdrant vector upserted item count.", type: "counter" }],
@@ -187,6 +188,11 @@ export function registerMetricMeta(name: string, meta: MetricMeta): void {
 export function incr(name: string, labels?: Labels, by = 1): void {
   const k = seriesKey(name, publicLabelsForMetric(name, labels));
   counters.set(k, (counters.get(k) ?? 0) + by);
+}
+
+/** Read a counter series for scrape-time derived metrics. Missing series are zero. */
+export function counterValue(name: string, labels?: Labels): number {
+  return counters.get(seriesKey(name, publicLabelsForMetric(name, labels))) ?? 0;
 }
 
 /** Register a gauge sampled at scrape time (sync or async). Re-registering replaces the sampler. */

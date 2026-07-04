@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { gauge, gaugeVector, incr, observe, registerMetricMeta, renderMetrics, resetMetrics, setSelfHostedMetricsMode } from "../../src/selfhost/metrics";
+import { counterValue, gauge, gaugeVector, incr, observe, registerMetricMeta, renderMetrics, resetMetrics, setSelfHostedMetricsMode } from "../../src/selfhost/metrics";
 
 afterEach(() => {
   resetMetrics();
@@ -70,6 +70,13 @@ describe("metrics registry (#982)", () => {
     incr("c_total");
     incr("c_total", undefined, 2);
     expect((await renderMetrics())).toContain("c_total 3");
+  });
+
+  it("reads counter values while treating absent series as zero", () => {
+    incr("readable_total", { result: "hit" }, 3);
+
+    expect(counterValue("readable_total", { result: "hit" })).toBe(3);
+    expect(counterValue("readable_total", { result: "miss" })).toBe(0);
   });
 
   it("renders labels in Prometheus format", async () => {

@@ -11,11 +11,26 @@ import type { Redis } from "ioredis";
 import type { CachedGitHubResponse, GitHubResponseCache } from "../github/client";
 import { incr } from "./metrics";
 
-const REDIS_GITHUB_RESPONSE_CACHE_METRIC = "gittensory_redis_gh_response_cache_total";
+export const REDIS_GITHUB_RESPONSE_CACHE_METRIC = "gittensory_redis_gh_response_cache_total";
+export const REDIS_GITHUB_RESPONSE_CACHE_HIT_RATIO_METRIC = "gittensory_redis_gh_response_cache_hit_ratio";
 const keyFor = (key: string): string => `gh:resp:${key}`;
+
+type CounterReader = (name: string, labels?: Record<string, string>) => number;
 
 function isReplayableCachedStatus(status: unknown): status is number {
   return status === 200 || status === 403 || status === 404;
+}
+
+export function hitRatio(hits: number, misses: number): number {
+  const total = hits + misses;
+  return total === 0 ? 0 : hits / total;
+}
+
+export function redisResponseCacheHitRatio(readCounter: CounterReader): number {
+  return hitRatio(
+    readCounter(REDIS_GITHUB_RESPONSE_CACHE_METRIC, { result: "hit" }),
+    readCounter(REDIS_GITHUB_RESPONSE_CACHE_METRIC, { result: "miss" }),
+  );
 }
 
 function recordRedisResponseCacheMetric(result: "hit" | "miss" | "set" | "error"): void {

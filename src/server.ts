@@ -51,7 +51,8 @@ import {
   sqliteBackupAdvisory,
   type ReadinessProbe,
 } from "./selfhost/health";
-import { gauge, gaugeVector, incr, observe, renderMetrics, setSelfHostedMetricsMode } from "./selfhost/metrics";
+import { counterValue, gauge, gaugeVector, incr, observe, renderMetrics, setSelfHostedMetricsMode } from "./selfhost/metrics";
+import { REDIS_GITHUB_RESPONSE_CACHE_HIT_RATIO_METRIC, redisResponseCacheHitRatio } from "./selfhost/redis-response-cache";
 import { runSelfHostMigrations } from "./selfhost/migrate";
 import { createPgAdapter, tuneGithubRateLimitObservationsAutovacuum } from "./selfhost/pg-adapter";
 import { createPgQueue } from "./selfhost/pg-queue";
@@ -623,6 +624,8 @@ async function main(): Promise<void> {
     });
   }
 
+  /* v8 ignore next -- server.ts starts a live process; the sampler and wiring invariant are unit-tested. */
+  gauge(REDIS_GITHUB_RESPONSE_CACHE_HIT_RATIO_METRIC, () => redisResponseCacheHitRatio(counterValue));
   gauge("gittensory_queue_pending", () => backend.queue.size());
   gauge("gittensory_queue_dead", () => backend.queue.deadCount());
   gauge("gittensory_queue_processing", () => backend.queue.processingCount());

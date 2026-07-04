@@ -1,7 +1,14 @@
+import { readFileSync } from "node:fs";
 import type { Redis } from "ioredis";
 import { afterEach, describe, expect, it } from "vitest";
-import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
-import { createRedisResponseCache } from "../../src/selfhost/redis-response-cache";
+import { counterValue, gauge, incr, renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
+import {
+  createRedisResponseCache,
+  hitRatio,
+  REDIS_GITHUB_RESPONSE_CACHE_HIT_RATIO_METRIC,
+  REDIS_GITHUB_RESPONSE_CACHE_METRIC,
+  redisResponseCacheHitRatio,
+} from "../../src/selfhost/redis-response-cache";
 
 function fakeRedis(): {
   redis: Redis;
@@ -26,6 +33,37 @@ function fakeRedis(): {
 const URL_A = "https://api.github.com/repos/o/r/pulls/1";
 
 afterEach(() => resetMetrics());
+
+describe("Redis response-cache hit-ratio metrics (#2090)", () => {
+  it("computes mixed, all-hit, all-miss, and zero-sample ratios", () => {
+    expect(hitRatio(3, 1)).toBe(0.75);
+    expect(hitRatio(4, 0)).toBe(1);
+    expect(hitRatio(0, 5)).toBe(0);
+    expect(hitRatio(0, 0)).toBe(0);
+  });
+
+  it("samples zero when the hit and miss counters are absent", () => {
+    expect(redisResponseCacheHitRatio(counterValue)).toBe(0);
+  });
+
+  it("renders the hit-ratio gauge from the current hit and miss counters", async () => {
+    incr(REDIS_GITHUB_RESPONSE_CACHE_METRIC, { result: "hit" }, 3);
+    incr(REDIS_GITHUB_RESPONSE_CACHE_METRIC, { result: "miss" }, 1);
+    gauge(REDIS_GITHUB_RESPONSE_CACHE_HIT_RATIO_METRIC, () => redisResponseCacheHitRatio(counterValue));
+
+    expect(await renderMetrics()).toContain(
+      "# HELP gittensory_redis_gh_response_cache_hit_ratio Current in-process hit ratio for the Redis-backed GitHub response cache.\n# TYPE gittensory_redis_gh_response_cache_hit_ratio gauge\ngittensory_redis_gh_response_cache_hit_ratio 0.75",
+    );
+  });
+
+  it("wires the hit-ratio gauge into the self-host server scrape", () => {
+    const server = readFileSync("src/server.ts", "utf8");
+
+    expect(server).toContain(
+      "gauge(REDIS_GITHUB_RESPONSE_CACHE_HIT_RATIO_METRIC, () => redisResponseCacheHitRatio(counterValue));",
+    );
+  });
+});
 
 describe("createRedisResponseCache (#perf GitHub GET cache)", () => {
   it("get returns null for a missing url", async () => {
