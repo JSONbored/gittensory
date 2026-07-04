@@ -5550,6 +5550,12 @@ function markEligiblePatchLessFilesIncomplete(
   });
 }
 
+/** @internal Exported for patch-less secret-scan unit tests only. */
+export const secretScanPatchFallbackInternals = {
+  markEligiblePatchLessFilesIncomplete,
+  shouldAttemptPatchLessSecretScan,
+};
+
 export function incompletePatchLessSecretScanFinding(
   files: Awaited<ReturnType<typeof listPullRequestFiles>>,
 ): AdvisoryFinding | null {

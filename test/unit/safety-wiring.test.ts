@@ -6,6 +6,7 @@ import {
   enrichSecretScanFilesWithPatchFallback,
   incompletePatchLessSecretScanFinding,
   maybeAddSecretLeakFinding,
+  secretScanPatchFallbackInternals,
 } from "../../src/queue/processors";
 import type { FileFetcher } from "../../src/review/review-grounding";
 import {
@@ -447,6 +448,19 @@ describe("enrichSecretScanFilesWithPatchFallback", () => {
   it("addedLinesForSecretScan returns only multiset-added lines", () => {
     expect(addedLinesForSecretScan("a\nb\n", "a\nb\nc\n")).toEqual(["c"]);
     expect(addedLinesForSecretScan("a\na\n", "a\na\na\n")).toEqual(["a"]);
+  });
+
+  it("returns an empty list unchanged when there are no patch-less files to enrich", async () => {
+    const fetcher: FileFetcher = {
+      async getFileContent() {
+        throw new Error("fetch should not run for an empty file list");
+      },
+    };
+    const enriched = await enrichSecretScanFilesWithPatchFallback([], {
+      headSha: "head-sha",
+      fetcher,
+    });
+    expect(enriched).toEqual([]);
   });
 
   it("synthesizes a scannable patch for a patch-less added file", async () => {
@@ -1151,6 +1165,78 @@ describe("enrichSecretScanFilesWithPatchFallback", () => {
   });
 });
 
+describe("secretScanPatchFallbackInternals", () => {
+  const { markEligiblePatchLessFilesIncomplete, shouldAttemptPatchLessSecretScan } =
+    secretScanPatchFallbackInternals;
+
+  it("shouldAttemptPatchLessSecretScan only allows added files without baseSha", () => {
+    expect(shouldAttemptPatchLessSecretScan({}, "added", null)).toBe(true);
+    expect(shouldAttemptPatchLessSecretScan({}, "modified", "base-sha")).toBe(true);
+    expect(shouldAttemptPatchLessSecretScan({}, "modified", null)).toBe(false);
+    expect(shouldAttemptPatchLessSecretScan({}, "removed", "base-sha")).toBe(false);
+    expect(shouldAttemptPatchLessSecretScan({}, "copied", "base-sha")).toBe(false);
+    expect(
+      shouldAttemptPatchLessSecretScan({ previousFilename: "old.env" }, "renamed", "base-sha"),
+    ).toBe(true);
+    expect(shouldAttemptPatchLessSecretScan({ previousFilename: "old.env" }, "renamed", null)).toBe(
+      false,
+    );
+    expect(shouldAttemptPatchLessSecretScan({}, "renamed", "base-sha")).toBe(false);
+  });
+
+  it("markEligiblePatchLessFilesIncomplete preserves inline patches and ineligible patch-less files", () => {
+    const files = [
+      {
+        repoFullName: "acme/widgets",
+        pullNumber: 7,
+        path: "inline.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        payload: { patch: "@@\n+const ok = 1;" },
+      },
+      {
+        repoFullName: "acme/widgets",
+        pullNumber: 7,
+        path: "unchanged.env",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        payload: {},
+      },
+      {
+        repoFullName: "acme/widgets",
+        pullNumber: 7,
+        path: "removed.env",
+        status: "removed",
+        additions: 0,
+        deletions: 1,
+        changes: 1,
+        payload: {},
+      },
+      {
+        repoFullName: "acme/widgets",
+        pullNumber: 7,
+        path: "added.env",
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        payload: {},
+      },
+    ] as Parameters<typeof markEligiblePatchLessFilesIncomplete>[0];
+    const marked = markEligiblePatchLessFilesIncomplete(files, null);
+    expect(marked[0]?.payload.patch).toBe("@@\n+const ok = 1;");
+    expect(marked[0]?.payload.secretScanIncomplete).toBeUndefined();
+    expect(marked[1]?.payload.secretScanIncomplete).toBeUndefined();
+    expect(marked[2]?.payload.secretScanIncomplete).toBeUndefined();
+    expect(marked[3]?.payload.secretScanIncomplete).toBe(true);
+    expect(incompletePatchLessSecretScanFinding(marked)?.detail).toContain("added.env");
+  });
+});
+
 describe("maybeAddSecretLeakFinding patch-less fallback wiring", () => {
   const fakeToken = "ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
@@ -1298,6 +1384,38 @@ describe("maybeAddSecretLeakFinding patch-less fallback wiring", () => {
     spy.mockRestore();
     expect(adv.findings.some((f) => f.title.includes("could not be fully scanned"))).toBe(true);
     expect(adv.findings.map((f) => f.code)).toContain("secret_leak");
+  });
+
+  it("does not block modified patch-less files when fetcher rejects and baseSha is unknown", async () => {
+    const env = createTestEnv();
+    const adv = advisory();
+    const files = [
+      {
+        repoFullName: "acme/widgets",
+        pullNumber: 7,
+        path: "src/config.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        payload: {},
+      },
+    ];
+    const groundingWire = await import("../../src/review/grounding-wire");
+    const spy = vi
+      .spyOn(groundingWire, "makeGithubFileFetcher")
+      .mockRejectedValue(new Error("installation token unavailable"));
+    await maybeAddSecretLeakFinding(env, {
+      advisory: adv,
+      repoFullName: "acme/widgets",
+      pullNumber: 7,
+      files,
+      installationId: 1,
+      headSha: "head-sha",
+    });
+    spy.mockRestore();
+    expect(adv.findings.some((f) => f.title.includes("could not be fully scanned"))).toBe(false);
+    expect(adv.findings).toHaveLength(0);
   });
 
   it("blocks when patch-less enrichment cannot fully scan an oversized file", async () => {
