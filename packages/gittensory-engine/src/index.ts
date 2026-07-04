@@ -75,6 +75,22 @@ export {
   type ReplayHarnessStatus,
 } from "./phase7-calibration-loop.js";
 export {
+  computeFindingSeverityCompositeCalibrationScore,
+  ingestFindingSeverityCalibrationSignals,
+  renderFindingSeverityCalibrationAuditMarkdown,
+  resolveFindingSeverityCalibrationConfig,
+  type FindingSeverityCalibrationConfig,
+  type FindingSeverityCalibrationIngestion,
+  type FindingSeverityCalibrationManifest,
+  type FindingSeverityCalibrationSignal,
+  type FindingSeverityCalibrationSignalInput,
+  type FindingSeverityCalibrationWeights,
+  type FindingSeverityCompositeCalibrationScore,
+  type FindingSeverityTier,
+  type FindingSeverityTierInput,
+  type FindingSeverityTierSignal,
+} from "./finding-severity-calibration.js";
+export {
   computeTrackRecordSummary,
   renderTrackRecordSummaryMarkdown,
   resolveTrackRecordSummaryConfig,

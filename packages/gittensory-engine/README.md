@@ -376,6 +376,72 @@ The rendered block is intentionally narrow: login, resolved public PR counts, pu
 status, and optional public evidence URLs for active incidents. Caller-provided ids, PR URLs, and arbitrary metadata are
 never copied into the Markdown, and the renderer fails closed if a blocked private-field name is introduced.
 
+## Structured finding-severity calibration
+
+`resolveFindingSeverityCalibrationConfig()`, `ingestFindingSeverityCalibrationSignals()`, and
+`computeFindingSeverityCompositeCalibrationScore()` provide the pure engine contract for the opt-in finding-severity
+calibration signal. It sits in the same family as objective-anchor and pairwise-judge: the hosted review stack decides
+whether a repo is opted in from its resolved `.gittensory.yml`/private config, and the engine contract is deliberately
+default-off and safe to call at ingestion time.
+
+The preferred config-as-code surface is:
+
+```yaml
+miner:
+  calibration:
+    shareStructuredFindingSeverity: true
+    structuredFindingSeverityWeight: 0.2
+```
+
+Only `shareStructuredFindingSeverity: true` enables ingestion. Missing, malformed, or falsey values all fail closed to
+no sharing. `calibration.shareStructuredFindingSeverity` is accepted as a narrow top-level alias. The optional weight is
+non-negative and finite; malformed values fall back to the default.
+
+The accepted signal is intentionally narrow: repo/run ids plus, per severity tier (`blocker`, `warning`, `advisory`,
+`nit`), how many findings the review raised and how many were subsequently CONFIRMED (true positives). It has no fields
+for raw review text, secrets, trust scores, reward values, private rankings, or maintainer evidence.
+
+```ts
+import {
+  computeFindingSeverityCompositeCalibrationScore,
+  ingestFindingSeverityCalibrationSignals,
+} from "@jsonbored/gittensory-engine";
+
+const findingSeverity = ingestFindingSeverityCalibrationSignals([
+  {
+    repoFullName: "jsonbored/gittensory",
+    replayRunId: "replay-2026-07-04",
+    reviewRunId: "review-123",
+    optedIn: true,
+    tiers: [
+      { tier: "blocker", total: 2, confirmed: 2 },
+      { tier: "warning", total: 5, confirmed: 3 },
+      { tier: "nit", total: 9, confirmed: 1 },
+    ],
+  },
+]);
+
+const score = computeFindingSeverityCompositeCalibrationScore({
+  objectiveAnchor: 0.65,
+  pairwise: 0.8,
+  findingSeverity,
+});
+```
+
+The per-PR score is the severity-and-volume-weighted mean of the per-tier confirmation rates, so a confirmed blocker
+moves calibration far more than a confirmed nit, and a review that raises blockers which are then dismissed (false
+positives at the most disruptive tier) calibrates poorly. Each tier's `confirmed` count is clamped to its `total` and
+discounted by an optional per-tier `confidence`, so an unverified "all confirmed" claim cannot inflate the score.
+
+The composite scorer renormalizes weights when a signal is absent: if a repo opts out or no tier survives
+normalization, the structured finding-severity weight drops to zero and the objective/pairwise signals are
+renormalized. The returned audit trail records which opted-in repos contributed and which rows were rejected because the
+repo was not opted in, had invalid ids, or exposed no recognized non-empty tiers.
+
+`renderFindingSeverityCalibrationAuditMarkdown(result)` turns the composite result into a deterministic local artifact
+with component scores, effective weights, contributing repos, per-tier tables, rejected rows, and a contributing-repo
+summary. All caller-supplied ids and repo names are Markdown-escaped and newline-collapsed before rendering.
+
 ## Plan templates
 
 `plan-templates.ts` exports one builder per miner lifecycle stage (`analyze`, `plan`, `prepare`, `create`, `manage`).
