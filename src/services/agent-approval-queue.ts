@@ -1,4 +1,4 @@
-import { getInstallation, getPullRequest, getPendingAgentAction, recordAuditEvent, setPendingAgentActionStatus } from "../db/repositories";
+import { claimPendingAgentActionDecision, getInstallation, getPullRequest, getPendingAgentAction, recordAuditEvent, setPendingAgentActionStatus } from "../db/repositories";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import { createInstallationToken } from "../github/app";
 import { loadLinkedIssueHardRules, resolveLinkedIssueHardRule } from "../review/linked-issue-hard-rules";
@@ -23,7 +23,7 @@ export type ApprovalDecisionResult = {
  * Decide a staged approval-queue action (#779). Accept → run the action through the current executor gates
  * (the maintainer's accept IS the approval, so only the approval queue gate is bypassed). Reject → cancel.
  * Either decision marks the row decided (idempotent: a second decision is a no-op) and records an audit event
- * that feeds the trust loop.
+ * that feeds the trust loop. Concurrent accepts/rejects are serialized by an atomic pending→decided claim.
  */
 export async function decidePendingAgentAction(env: Env, input: { id: string; decision: ApprovalDecision; decidedBy: string }): Promise<ApprovalDecisionResult> {
   const pending = await getPendingAgentAction(env, input.id);
@@ -33,9 +33,18 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
   const baseMetadata = { pendingId: pending.id, repoFullName: pending.repoFullName, pullNumber: pending.pullNumber, actionClass: pending.actionClass, autonomyLevel: pending.autonomyLevel };
 
   if (input.decision === "reject") {
-    await setPendingAgentActionStatus(env, pending.id, { status: "rejected", decidedBy: input.decidedBy });
+    if (!(await claimPendingAgentActionDecision(env, pending.id, { status: "rejected", decidedBy: input.decidedBy }))) {
+      const current = await getPendingAgentAction(env, pending.id);
+      return { status: "already_decided", action: current ?? pending };
+    }
     await recordAuditEvent(env, { eventType: "agent.pending_action.rejected", actor: input.decidedBy, targetKey, outcome: "completed", detail: `rejected ${pending.actionClass}`, metadata: baseMetadata });
     return { status: "rejected", action: { ...pending, status: "rejected", decidedBy: input.decidedBy } };
+  }
+
+  // Claim before any async re-validation or execution so two concurrent accepts cannot both reach the executor.
+  if (!(await claimPendingAgentActionDecision(env, pending.id, { status: "accepted", decidedBy: input.decidedBy }))) {
+    const current = await getPendingAgentAction(env, pending.id);
+    return { status: "already_decided", action: current ?? pending };
   }
 
   // accept → execute the staged action live, then record the result.

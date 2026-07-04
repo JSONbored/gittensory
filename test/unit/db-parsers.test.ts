@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  claimPendingAgentActionDecision,
   claimRegateFanoutSlot,
   countRecentDeadLetters,
   countRecentDeadLettersByType,
@@ -23,6 +24,8 @@ import {
   extractLinkedIssueNumbers,
   extractLinkedIssueNumbersWithOverflow,
   MAX_LINKED_ISSUE_NUMBERS,
+  createPendingAgentActionIfAbsent,
+  getPendingAgentAction,
 } from "../../src/db/repositories";
 import { getDb } from "../../src/db/client";
 import { webhookEvents } from "../../src/db/schema";
@@ -313,6 +316,22 @@ describe("database row parser hardening", () => {
     expect(await claimRegateFanoutSlot(env, "2026-06-25T01:00:50.000Z", W)).toBe(false); // +50s, still inside → loses
     expect(await claimRegateFanoutSlot(env, "2026-06-25T01:01:31.000Z", W)).toBe(true); // +91s, outside window → wins again
     expect(await claimRegateFanoutSlot(env, "2026-06-25T01:01:40.000Z", W)).toBe(false); // back inside the new window → loses
+  });
+
+  it("claimPendingAgentActionDecision lets exactly one caller decide a pending row", async () => {
+    const env = createTestEnv();
+    const { action } = await createPendingAgentActionIfAbsent(env, {
+      repoFullName: "owner/repo",
+      pullNumber: 7,
+      installationId: 5,
+      actionClass: "merge",
+      autonomyLevel: "auto_with_approval",
+      params: {},
+      reason: "x",
+    });
+    expect(await claimPendingAgentActionDecision(env, action.id, { status: "rejected", decidedBy: "owner" })).toBe(true);
+    expect(await claimPendingAgentActionDecision(env, action.id, { status: "rejected", decidedBy: "owner" })).toBe(false);
+    expect((await getPendingAgentAction(env, action.id))?.status).toBe("rejected");
   });
 
   it("REGRESSION: recordWebhookEvent updates payload_hash when processing an existing queued delivery", async () => {

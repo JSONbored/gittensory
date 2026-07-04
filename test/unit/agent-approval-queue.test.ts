@@ -52,6 +52,7 @@ import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLivePullRequ
 import { resolveLinkedIssueHardRule } from "../../src/review/linked-issue-hard-rules";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { actionParams, executeAgentMaintenanceActions, pendingActionToPlanned, type AgentActionExecutionContext } from "../../src/services/agent-action-executor";
+import * as agentActionExecutor from "../../src/services/agent-action-executor";
 import { decidePendingAgentAction } from "../../src/services/agent-approval-queue";
 import {
   countPendingAgentActions,
@@ -1122,6 +1123,40 @@ describe("agent approval queue (#779)", () => {
     const second = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
     expect(second.status).toBe("already_decided");
     expect(second.action?.status).toBe("rejected");
+  });
+
+  it("REGRESSION: two concurrent accepts execute the staged action at most once", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto_with_approval" } });
+    await seedInstallation(env);
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "x" });
+    const { action } = await createPendingAgentActionIfAbsent(env, {
+      repoFullName: "owner/repo",
+      pullNumber: 7,
+      installationId: 5,
+      actionClass: "merge",
+      autonomyLevel: "auto_with_approval",
+      params: { mergeMethod: "squash", expectedHeadSha: "h7" },
+      reason: "clean",
+    });
+
+    let unblockExecution = () => {};
+    const executionBlocked = new Promise<void>((resolve) => {
+      unblockExecution = resolve;
+    });
+    const execSpy = vi.spyOn(agentActionExecutor, "executeAgentMaintenanceActions").mockImplementation(async () => {
+      await executionBlocked;
+      return [{ actionClass: "merge", outcome: "completed", detail: "merged" }];
+    });
+
+    const first = decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    const second = decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    unblockExecution();
+    const [result1, result2] = await Promise.all([first, second]);
+
+    expect([result1.status, result2.status].sort()).toEqual(["accepted", "already_decided"]);
+    expect(execSpy).toHaveBeenCalledTimes(1);
+    execSpy.mockRestore();
   });
 
   it("returns not_found for an unknown id", async () => {

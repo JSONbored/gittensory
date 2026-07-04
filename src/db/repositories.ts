@@ -4403,7 +4403,22 @@ export async function getPendingAgentAction(env: Env, id: string): Promise<Agent
   return row ? toAgentPendingActionRecord(row) : null;
 }
 
-/** Mark a staged action accepted/rejected. Idempotency is the caller's concern (it checks status === pending). */
+/** Atomically transition a pending approval-queue row to a decided status. Exactly one concurrent caller wins
+ *  (changes === 1); the rest must treat a false return as already_decided and must not execute the action. */
+export async function claimPendingAgentActionDecision(
+  env: Env,
+  id: string,
+  update: { status: AgentPendingActionStatus; decidedBy: string },
+): Promise<boolean> {
+  const result = await getDb(env.DB)
+    .update(agentPendingActions)
+    .set({ status: update.status, decidedBy: update.decidedBy, decidedAt: nowIso(), updatedAt: nowIso() })
+    .where(and(eq(agentPendingActions.id, id), eq(agentPendingActions.status, "pending")));
+  /* v8 ignore next -- D1 update metadata normally includes changes; the ?? 0 fallback protects driver anomalies. */
+  return Number(result.meta.changes ?? 0) === 1;
+}
+
+/** Mark a staged action accepted/rejected/errored after it has already been claimed. */
 export async function setPendingAgentActionStatus(env: Env, id: string, update: { status: AgentPendingActionStatus; decidedBy: string | null }): Promise<void> {
   await getDb(env.DB)
     .update(agentPendingActions)
