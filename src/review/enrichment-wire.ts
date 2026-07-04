@@ -220,27 +220,22 @@ interface EnrichmentInput {
 }
 
 /**
- * Combine the operator's env analyzer selection with a repo's per-analyzer `review.enrichment` toggles into the
- * final list sent to REES. The env selection (`undefined` ⇒ REES runs its full registry) is the base; each explicit
- * repo toggle then adds (`true`) or removes (`false`) an analyzer, restricted to the known registry. Returns
- * `undefined` — omitting the field so REES runs everything, byte-identical to today — only when there is no repo
- * override, or when the base is the full registry and the toggles leave it that way. Otherwise an explicit,
- * registry-ordered list. Pure.
+ * Apply a repo's per-analyzer `review.enrichment` toggles without widening the operator's REES policy. When
+ * `REES_ANALYZERS` is unset, keep omitting `analyzers` so REES can apply `REES_PROFILE` cost filtering itself; turning
+ * repo-owned toggles into an explicit near-full list would bypass profile limits. When the operator did provide an
+ * explicit list, repo toggles may only narrow that list (`false` removes); `true` is a no-op rather than an addition.
+ * The returned explicit list stays in registry order. Pure.
  */
 export function resolveEnrichmentAnalyzerSelection(
   envSelected: string[] | undefined,
   toggles: Partial<Record<ReesAnalyzerName, boolean>> | undefined,
 ): string[] | undefined {
-  if (toggles === undefined || Object.keys(toggles).length === 0) return envSelected;
-  const enabled = new Set<string>(envSelected ?? REES_ANALYZER_NAMES);
+  if (toggles === undefined || Object.keys(toggles).length === 0 || envSelected === undefined) return envSelected;
+  const enabled = new Set<string>(envSelected);
   for (const name of REES_ANALYZER_NAMES) {
-    const flag = toggles[name];
-    if (flag === true) enabled.add(name);
-    else if (flag === false) enabled.delete(name);
+    if (toggles[name] === false) enabled.delete(name);
   }
-  const selected = REES_ANALYZER_NAMES.filter((name) => enabled.has(name));
-  if (envSelected === undefined && selected.length === REES_ANALYZER_NAMES.length) return undefined;
-  return selected;
+  return REES_ANALYZER_NAMES.filter((name) => enabled.has(name));
 }
 
 /** Prefer explicit linkedIssues; fall back to Fixes #N parsing from the PR body. */

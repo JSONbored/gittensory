@@ -9,13 +9,8 @@ describe("resolveEnrichmentAnalyzerSelection (env + per-repo toggle composition)
     expect(resolveEnrichmentAnalyzerSelection(["secret"], undefined)).toEqual(["secret"]);
   });
 
-  it("removes a disabled analyzer from the full default set (env unset)", () => {
-    const result = resolveEnrichmentAnalyzerSelection(undefined, { secret: false });
-    expect(result).toEqual(REES_ANALYZER_NAMES.filter((n) => n !== "secret"));
-    expect(result).not.toContain("secret");
-  });
-
-  it("stays byte-identical (undefined) when a toggle only re-enables an already-included analyzer", () => {
+  it("keeps the implicit REES default when env is unset so profile filtering remains authoritative", () => {
+    expect(resolveEnrichmentAnalyzerSelection(undefined, { secret: false })).toBeUndefined();
     expect(resolveEnrichmentAnalyzerSelection(undefined, { secret: true })).toBeUndefined();
   });
 
@@ -23,8 +18,8 @@ describe("resolveEnrichmentAnalyzerSelection (env + per-repo toggle composition)
     expect(resolveEnrichmentAnalyzerSelection(["dependency", "secret"], { secret: false })).toEqual(["dependency"]);
   });
 
-  it("adds an enabled analyzer to an explicit env list in registry order", () => {
-    expect(resolveEnrichmentAnalyzerSelection(["dependency"], { secret: true })).toEqual(["dependency", "secret"]);
+  it("does not let a repo enable toggle widen an explicit operator env list", () => {
+    expect(resolveEnrichmentAnalyzerSelection(["dependency"], { secret: true })).toEqual(["dependency"]);
   });
 
   it("can disable every analyzer in an explicit list, yielding an empty (not undefined) selection", () => {
