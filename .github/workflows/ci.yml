@@ -33,6 +33,8 @@ jobs:
       uiContract: ${{ steps.filter.outputs.uiContract }}
       mcp: ${{ steps.filter.outputs.mcp }}
       mcpCliHarness: ${{ steps.filter.outputs.mcpCliHarness }}
+      engine: ${{ steps.filter.outputs.engine }}
+      miner: ${{ steps.filter.outputs.miner }}
       rees: ${{ steps.filter.outputs.rees }}
       observability: ${{ steps.filter.outputs.observability }}
     steps:
@@ -115,6 +117,10 @@ jobs:
               - 'test/unit/mcp-cli-*.test.ts'
               - 'test/unit/mcp-discovery.test.ts'
               - 'test/unit/support/mcp-cli-harness.ts'
+            engine:
+              - 'packages/gittensory-engine/**'
+            miner:
+              - 'packages/gittensory-miner/**'
             rees:
               - 'review-enrichment/**'
               - '.github/workflows/ci.yml'
@@ -206,6 +212,11 @@ jobs:
       - name: Validate observability configs
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.observability == 'true' }}
         run: npm run selfhost:validate-observability
+      # Must precede Typecheck: root src/ now imports @jsonbored/gittensory-engine, whose type
+      # declarations resolve from its gitignored dist/, so the engine has to be built first.
+      - name: Build engine package
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' }}
+        run: npm run build:engine
       - name: Typecheck
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
         run: npm run typecheck
@@ -322,6 +333,12 @@ jobs:
       - name: MCP package check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.mcp == 'true' }}
         run: npm run test:mcp-pack
+      - name: Engine test suite
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.engine == 'true' }}
+        run: npm run test:engine
+      - name: Build miner CLI
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.miner == 'true' }}
+        run: npm run build:miner
       # review-enrichment is not an npm workspace member (its own package-lock.json), so it needs its own
       # cache entry -- same restore/save-after-success pattern and fork/trusted key split as the root
       # install above, for the same reasons.
