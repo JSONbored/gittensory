@@ -606,6 +606,11 @@ async function cachedFetchLiveCiAggregate(
   requiredContexts: ReadonlySet<string> | null | undefined,
   requiredContextsKey: string,
   forceRefresh: boolean,
+  // False when the caller's own required-context lookup FAILED (not merely resolved to "none configured") --
+  // that fail-open aggregate must never be persisted under the normal key, or a transient lookup error would
+  // mask the repo's real required-context state for every other reader until the entry's TTL expires (#selfhost-
+  // ci-verification gate review finding). The live-fetched aggregate is still returned to THIS caller either way.
+  requiredContextsResolved: boolean,
   admissionKey?: GitHubRateLimitAdmissionKey,
 ): Promise<LiveCiAggregate> {
   const cached = await getPullRequestDetailSyncState(env, repoFullName, prNumber).catch(() => null);
@@ -618,7 +623,9 @@ async function cachedFetchLiveCiAggregate(
   }
   incr(CI_STATE_CACHE_METRIC, { field: "aggregate", result: forceRefresh ? "forced" : "miss" });
   const live = await fetchLiveCiAggregatePreferGraphQl(env, repoFullName, headSha, token, requiredContexts, admissionKey);
-  await writeThroughCiStateCache(env, repoFullName, prNumber, cached, headSha, requiredContextsKey, live);
+  if (requiredContextsResolved) {
+    await writeThroughCiStateCache(env, repoFullName, prNumber, cached, headSha, requiredContextsKey, live);
+  }
   return live;
 }
 
@@ -640,9 +647,10 @@ function fetchLiveCiAggregateWithRequiredContexts(
   // cachedFetchLiveCiAggregate (#selfhost-ci-verification) is the durable, cross-job snapshot cache sibling to
   // this request-scoped LiveGithubFacts memo -- it is only ever consulted here, on a LiveGithubFacts miss.
   return cachedRequiredStatusContexts(env, repoFullName, facts, baseRef, token, expectedCiContexts, admissionKey)
-    .catch(() => null)
-    .then((requiredContexts) =>
-      cachedFetchLiveCiAggregate(env, repoFullName, prNumber, headSha, token, requiredContexts, expectedCiContextsKeyPart(expectedCiContexts), forceRefresh, admissionKey),
+    .then((requiredContexts) => ({ requiredContexts, resolved: true }))
+    .catch(() => ({ requiredContexts: null, resolved: false }))
+    .then(({ requiredContexts, resolved }) =>
+      cachedFetchLiveCiAggregate(env, repoFullName, prNumber, headSha, token, requiredContexts, expectedCiContextsKeyPart(expectedCiContexts), forceRefresh, resolved, admissionKey),
     );
 }
 
@@ -3707,6 +3715,58 @@ async function maybeReReviewOnCiCompletion(
 }
 
 /**
+ * Invalidate the durable CI-state cache on a legacy `status`/`workflow_run` event (#selfhost-ci-verification gate
+ * review finding). These two event types are NOT wired to re-review triggering (see maybeReReviewOnCiCompletion's
+ * own doc comment) -- that stays out of scope here -- but leaving the cache itself untouched meant a real legacy
+ * status/workflow_run transition could leave prReadyForReview reading a stale, pre-transition CI aggregate for up
+ * to the full cache TTL. Deliberately narrower than maybeReReviewOnCiCompletion: only resolves PR numbers via the
+ * fast stored-DB head-SHA lookup (no live GitHub fork-fallback call) -- a cache entry only exists for a PR this
+ * process already tracks, so there is nothing to invalidate for an untracked/fork PR the DB lookup misses.
+ */
+async function maybeInvalidateCiCacheOnLegacyCiEvent(
+  env: Env,
+  deliveryId: string,
+  eventName: string,
+  payload: GitHubWebhookPayload,
+): Promise<boolean> {
+  if (eventName !== "status" && eventName !== "workflow_run") return false;
+  const repoFullName = payload.repository?.full_name;
+  const installationId = getInstallationId(payload);
+  if (!repoFullName || !installationId) return false;
+  // `status`'s state settles the same event this-transition-matters signal that `action: "completed"` gives
+  // check_run/check_suite/workflow_run -- "pending" is an in-flight update, not a settled result worth
+  // invalidating over. workflow_run DOES carry `action`, exactly like check_run/check_suite.
+  const settled =
+    eventName === "status"
+      ? (payload as unknown as { state?: string }).state !== "pending"
+      : (payload as unknown as { action?: string }).action === "completed";
+  if (settled && isConvergenceRepoAllowed(env, repoFullName)) {
+    const headSha = (
+      eventName === "status"
+        ? ((payload as unknown as { sha?: string }).sha ?? "")
+        : ((payload as unknown as { workflow_run?: { head_sha?: string } }).workflow_run?.head_sha ?? "")
+    ).trim();
+    if (headSha) {
+      const open = await listOpenPullRequests(env, repoFullName).catch(() => []);
+      for (const pr of open) {
+        if (pr.headSha !== headSha) continue;
+        await invalidateCiStateCache(env, repoFullName, pr.number).catch(() => undefined);
+      }
+    }
+  }
+  await recordWebhookEvent(env, {
+    deliveryId,
+    eventName,
+    action: payload.action,
+    installationId,
+    repositoryFullName: repoFullName,
+    payloadHash: "processed",
+    status: "processed",
+  });
+  return true;
+}
+
+/**
  * Wake linked PRs on an issue-side signal (#2259). Labeling/unlabeling (e.g. maintainer-only) or
  * assigning/unassigning on a linked ISSUE can flip a linked-issue hard-rule verdict, but that only gets
  * re-evaluated when the PR ITSELF receives a webhook or the staleness-ordered sweep eventually reaches it —
@@ -4974,6 +5034,11 @@ async function processGitHubWebhook(
     // stored PR row and re-reviews it now that CI has settled (merge on green, close-non-owner / hold-owner on
     // red). Without this a PR that goes green/red AFTER its open-time review is never re-evaluated.
     if (await maybeReReviewOnCiCompletion(env, deliveryId, eventName, payload))
+      return;
+    // Legacy status/workflow_run CI signals aren't re-review triggers (see the function's own doc comment), but
+    // must still invalidate the durable CI-state cache so a tracked PR's next reader doesn't see a stale
+    // pre-transition aggregate for the rest of the cache TTL.
+    if (await maybeInvalidateCiCacheOnLegacyCiEvent(env, deliveryId, eventName, payload))
       return;
     // deployment_status (preview deploy finished) → re-review so the visual before/after capture fills in.
     if (
