@@ -9,9 +9,24 @@ import {
 } from "../dist/analyzers/redos.js";
 
 test("extractRegexSources pulls bodies from /.../ literals and RegExp(...) args", () => {
-  assert.deepEqual(extractRegexSources("const re = /(a+)+/.test(x);"), ["(a+)+"]);
+  assert.deepEqual(extractRegexSources("const re = /(a+)+/.test(x);"), [
+    "(a+)+",
+  ]);
   assert.deepEqual(extractRegexSources('new RegExp("a|b")'), ["a|b"]);
   assert.deepEqual(extractRegexSources("plain text, no slashes"), []);
+});
+
+test("extractRegexSources finds a regex literal in an arrow body written without a space", () => {
+  // `() =>/foo/` is valid JS; the `/` follows `>`, which must count as a regex-position boundary.
+  assert.deepEqual(
+    extractRegexSources("const match = (s) =>/(a+)+/.test(s);"),
+    ["(a+)+"],
+  );
+  // Spaced form already worked via the whitespace branch; keep it locked.
+  assert.deepEqual(
+    extractRegexSources("const match = (s) => /(a+)+/.test(s);"),
+    ["(a+)+"],
+  );
 });
 
 test("hasCatastrophicBacktracking flags a nested unbounded quantifier and spares linear shapes", () => {
@@ -24,7 +39,12 @@ test("hasCatastrophicBacktracking flags a nested unbounded quantifier and spares
 });
 
 test("scanPatchForRedos cites the added-line number of a catastrophic literal", () => {
-  const patch = ["@@ -1,2 +1,3 @@", " context", "+const re = /(a+)+/;", " more"].join("\n");
+  const patch = [
+    "@@ -1,2 +1,3 @@",
+    " context",
+    "+const re = /(a+)+/;",
+    " more",
+  ].join("\n");
   const findings = scanPatchForRedos("src/x.ts", patch);
   assert.equal(findings.length, 1);
   assert.equal(findings[0]?.file, "src/x.ts");

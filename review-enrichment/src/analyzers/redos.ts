@@ -39,7 +39,9 @@ function* patchLines(patch: string): Generator<string> {
 // never produce a false finding on its own.
 
 // `/` opens a regex literal (not division) when the char just before it is a statement/operator boundary.
-const REGEX_POSITION_PREFIX = "=(,:?&|!{[;";
+// `>` covers arrow-function bodies written without a space (`() =>/foo/`), which are valid JS and a
+// common minified form; without it the extractor mistakes the `/` for division and misses the literal.
+const REGEX_POSITION_PREFIX = "=(,:?&|!{[;>";
 
 function isWordChar(ch: string): boolean {
   return (
