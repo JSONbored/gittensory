@@ -19839,6 +19839,8 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
     // code (missing_linked_issue, from the default linkedIssueGateMode:block + no-linked-issue body) as the
     // bounded blocker_class -- proof this reaches the real gate.blockers, not just a hardcoded label.
     expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="close",autonomy_level="auto",blocker_class="missing_linked_issue"} 1');
+    const nativeDecision = await env.DB.prepare("select decision, summary, source from review_audit where event_type = 'gate_decision' and target_id = ?").bind(`${REPO}#60`).first<{ decision: string; summary: string; source: string }>();
+    expect(nativeDecision).toMatchObject({ decision: "close", summary: "missing_linked_issue", source: "gittensory-native" });
   });
 
   // REGRESSION (gate-flagged gap, #terminal-outcome-audit): a PR that touches a guardrail-protected path (e.g.

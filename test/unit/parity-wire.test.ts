@@ -128,6 +128,16 @@ describe("recordNativeGateDecision — flag-gated SHADOW recording into review_a
     expect(rows[0]).toMatchObject({ decision: "hold", summary: "slop_risk" }); // failure → hold, latest wins
   });
 
+  it("can replace the gate-shaped hold with the downstream native close disposition for self-tune", async () => {
+    const env = createTestEnv({ GITTENSORY_REVIEW_PARITY_AUDIT: "true" });
+    await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 7, headSha: "abc123", conclusion: "failure", reasonCode: "slop_risk" });
+    await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 7, headSha: "abc123", conclusion: "failure", action: "close", reasonCode: "ci_failed" });
+
+    const rows = await rawAll(env, "SELECT * FROM review_audit");
+    expect(rows.length).toBe(1);
+    expect(rows[0]).toMatchObject({ decision: "close", summary: "ci_failed", source: GITTENSORY_NATIVE_SOURCE });
+  });
+
   it("a new commit gets its OWN row", async () => {
     const env = createTestEnv({ GITTENSORY_REVIEW_PARITY_AUDIT: "true" });
     await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 7, headSha: "sha1", conclusion: "success" });

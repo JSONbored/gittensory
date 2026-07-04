@@ -2488,6 +2488,18 @@ async function runAgentMaintenancePlanAndExecute(
     blocker_class: disposition.blockerClass,
     autonomy_level: resolveAutonomy(settings.autonomy, disposition.actionClass === "merge" ? "merge" : "close"),
   });
+  // The native eval source is used by the self-tune precision breakers, so the stored prediction must reflect the
+  // downstream autonomous disposition (merge/close/hold), not only the gate check conclusion. In particular, a
+  // failing gate can still become a concrete auto-close after CI/conflict/duplicate/linked-issue planning; recording
+  // only the gate's hold-shaped conclusion would blind the close-precision breaker to those live closes.
+  await recordNativeGateDecision(env, {
+    project: repoFullName,
+    pullNumber: pr.number,
+    headSha: pr.headSha,
+    conclusion: gate.conclusion,
+    action: disposition.actionClass,
+    reasonCode: disposition.blockerClass === "none" ? gate.conclusion : disposition.blockerClass,
+  });
   if (disposition.actionClass === "hold") {
     const gateBlockerCodes = gate.blockers.map((blocker) => blocker.code);
     const holdDetail = agentHoldAuditDetail({

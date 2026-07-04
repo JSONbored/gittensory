@@ -137,12 +137,12 @@ type ParityRecorderEnv = {
  */
 export async function recordNativeGateDecision(
   env: ParityRecorderEnv,
-  input: { project: string; pullNumber: number; headSha: string | null | undefined; conclusion: GateCheckConclusion; reasonCode?: string | null | undefined },
+  input: { project: string; pullNumber: number; headSha: string | null | undefined; conclusion: GateCheckConclusion; reasonCode?: string | null | undefined; action?: GateAction | undefined },
 ): Promise<void> {
   // Self-hosted instances always record (their own local DB; exportOrbBatch needs this data). The cloud
   // worker keeps the exact flag-gated, byte-identical-when-off contract.
   if (!isSelfHostedReviewRuntime(env) && !isParityAuditEnabled(env)) return;
-  const action = nativeGateActionFromConclusion(input.conclusion);
+  const action = input.action ?? nativeGateActionFromConclusion(input.conclusion);
   if (action === null) return; // not a comparable decision (neutral/skipped) → nothing to record
   if (!input.headSha) return; // parity REQUIRES head_sha to pair a decision to a commit; no sha → not comparable
   const project = input.project.slice(0, 200);
