@@ -1024,7 +1024,7 @@ export function createPgQueue(
         message = JSON.parse(job.payload) as JobMessage;
       } catch {
         await pool.query(
-          `UPDATE ${TABLE} SET status='dead', last_error='unparseable payload', dead_at=$1 WHERE id=$2`,
+          `UPDATE ${TABLE} SET status='dead', attempts=attempts+1, last_error='unparseable payload', dead_at=$1 WHERE id=$2`,
           [Date.now(), job.id],
         );
         await recordQueueMetric("gittensory_jobs_dead_total");

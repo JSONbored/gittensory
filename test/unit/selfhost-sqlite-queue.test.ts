@@ -2999,6 +2999,9 @@ describe("createSqliteQueue (durable #980)", () => {
     const [row] = q.listDeadLetterJobs(10, 0);
     expect(row).toMatchObject({ jobType: "unknown", lastError: "unparseable payload" });
     expect(row!.deadAtMs).not.toBeNull();
+    // A malformed payload consumes the same bounded retry budget as a normal failure (previously left `attempts`
+    // at its pre-death value, so the dead-letter reviver would requeue the same unparseable row forever).
+    expect(row!.attempts).toBe(1);
   });
 
   it("sendBatch enqueues all; default backoff reschedules a failure into the future", async () => {

@@ -1952,8 +1952,10 @@ describe("createPgQueue (durable #977)", () => {
     const q = createPgQueue(m.pool, async () => undefined, { maxRetries: 3 });
     await q.init();
     await q.drain();
-    // UPDATE dead + then no more rows → pump exits cleanly.
-    expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("status='dead'"), expect.arrayContaining(["1"]));
+    // UPDATE dead + then no more rows → pump exits cleanly. Asserts the full clause set (not just "status='dead'")
+    // so a malformed payload provably consumes the same bounded retry budget as a normal failure -- attempts must
+    // be bumped, or the dead-letter reviver's own "attempts<ceiling" SELECT would requeue this row forever.
+    expect(m.pool.query).toHaveBeenCalledWith(expect.stringContaining("status='dead', attempts=attempts+1, last_error='unparseable payload'"), expect.arrayContaining(["1"]));
   });
 
   it("retries a failing job (job_error audit emitted) then dead-letters at maxRetries (job_dead)", async () => {

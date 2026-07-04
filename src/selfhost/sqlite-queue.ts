@@ -767,7 +767,7 @@ export function createSqliteQueue(
         message = JSON.parse(job.payload) as JobMessage;
       } catch {
         driver.query(
-          `UPDATE ${TABLE} SET status='dead', last_error='unparseable payload', dead_at=? WHERE id=?`,
+          `UPDATE ${TABLE} SET status='dead', attempts=attempts+1, last_error='unparseable payload', dead_at=? WHERE id=?`,
           [Date.now(), job.id],
         );
         recordQueueMetric(driver, "gittensory_jobs_dead_total");
