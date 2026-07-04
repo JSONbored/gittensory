@@ -290,6 +290,7 @@ describe("createPgQueue (durable #977)", () => {
   it("init() skips already-normalized priority and job-key rows", async () => {
     const priorityUpdateSql = "UPDATE _selfhost_jobs SET priority=$1";
     const jobKeyUpdateSql = "UPDATE _selfhost_jobs SET job_key=$1";
+    const claimSortUpdateSql = "UPDATE _selfhost_jobs SET claim_sort_key=$1";
     const fn = vi.fn().mockImplementation(async (sql: unknown, params?: unknown[]) => {
       const q = String(sql);
       if (q.includes("SELECT id, payload, priority")) {
@@ -324,6 +325,24 @@ describe("createPgQueue (durable #977)", () => {
           rowCount: 2,
         };
       }
+      if (q.includes("SELECT id, payload, run_after, claim_sort_key")) {
+        return {
+          rows: [
+            {
+              id: "sorted",
+              payload: JSON.stringify({
+                type: "agent-regate-pr",
+                deliveryId: "backlog-convergence:owner/repo#7",
+                repoFullName: "owner/repo",
+                prNumber: 7,
+              }),
+              run_after: 999,
+              claim_sort_key: Date.parse("2000-01-01T00:00:00.000Z") + 7,
+            },
+          ],
+          rowCount: 1,
+        };
+      }
       if (q.includes("WHERE status='processing'")) return { rows: [], rowCount: 0 };
       if (q.includes("WHERE status='pending' AND run_after<=$1")) return { rows: [], rowCount: 0 };
       return { rows: [], rowCount: 0 };
@@ -340,6 +359,61 @@ describe("createPgQueue (durable #977)", () => {
       expect.stringContaining(jobKeyUpdateSql),
       expect.anything(),
     );
+    expect(fn).not.toHaveBeenCalledWith(
+      expect.stringContaining(claimSortUpdateSql),
+      expect.anything(),
+    );
+  });
+
+  it("init() backfills stale PR claim-sort keys while leaving already-normalized rows untouched", async () => {
+    const updates: unknown[][] = [];
+    const fn = vi.fn().mockImplementation(async (sql: unknown, params?: unknown[]) => {
+      const q = String(sql);
+      if (q.includes("SELECT id, payload, priority")) return { rows: [], rowCount: 0 };
+      if (q.includes("SELECT id, payload, job_key") && q.includes("status IN")) return { rows: [], rowCount: 0 };
+      if (q.includes("SELECT id, payload, run_after, claim_sort_key")) {
+        return {
+          rows: [
+            {
+              id: "stale",
+              payload: JSON.stringify({
+                type: "agent-regate-pr",
+                deliveryId: "backlog-convergence:owner/repo#12",
+                repoFullName: "owner/repo",
+                prNumber: 12,
+                prCreatedAt: "2026-07-03T12:00:00.000Z",
+              }),
+              run_after: "999",
+              claim_sort_key: 0,
+            },
+            {
+              id: "fresh",
+              payload: JSON.stringify({
+                type: "agent-regate-pr",
+                deliveryId: "backlog-convergence:owner/repo#13",
+                repoFullName: "owner/repo",
+                prNumber: 13,
+              }),
+              run_after: "999",
+              claim_sort_key: Date.parse("2000-01-01T00:00:00.000Z") + 13,
+            },
+          ],
+          rowCount: 2,
+        };
+      }
+      if (q.includes("UPDATE _selfhost_jobs SET claim_sort_key=$1")) {
+        updates.push(params ?? []);
+        return { rows: [], rowCount: 1 };
+      }
+      if (q.includes("WHERE status='processing'")) return { rows: [], rowCount: 0 };
+      if (q.includes("WHERE status='pending' AND run_after<=$1")) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    });
+    const q = createPgQueue({ query: fn } as unknown as Pool, async () => undefined);
+
+    await q.init();
+
+    expect(updates).toEqual([[Date.parse("2026-07-03T12:00:00.000Z"), "stale"]]);
   });
 
   it("init() backfills job keys, recovers crashed jobs, and spreads due startup backlog", async () => {
@@ -934,6 +1008,48 @@ describe("createPgQueue (durable #977)", () => {
     expect(claimSql[1]).toContain("priority < $2");
   });
 
+  it("stores a PR-created claim sort key for per-PR re-gate jobs", async () => {
+    const m = makePool();
+    const q = createPgQueue(m.pool, async () => undefined);
+    await q.init();
+
+    await q.binding.send({
+      type: "agent-regate-pr",
+      deliveryId: "backlog-convergence:jsonbored/gittensory#10",
+      repoFullName: "jsonbored/gittensory",
+      prNumber: 10,
+      installationId: 123,
+      prCreatedAt: "2026-07-03T10:00:00.000Z",
+    });
+
+    expect(m.pool.query).toHaveBeenCalledWith(
+      expect.stringContaining("claim_sort_key) VALUES"),
+      expect.arrayContaining([Date.parse("2026-07-03T10:00:00.000Z")]),
+    );
+  });
+
+  it("REGRESSION: claim SQL sorts by PR claim_sort_key and locks job_key siblings before claiming", async () => {
+    const m = makePool();
+    const seen: string[] = [];
+    m.enqueueJob("1", regateJob(123, 10), 0, "agent-regate-pr:jsonbored/gittensory#10");
+    const q = createPgQueue(m.pool, async (message) => void seen.push(typeOf(message)), {
+      concurrency: 1,
+      maxRetries: 1,
+      backoffMs: () => 0,
+    });
+    await q.init();
+
+    await q.drain();
+
+    const claimSql = vi.mocked(m.pool.query).mock.calls
+      .map((call) => String(call[0]))
+      .find((sql) => sql.includes("FOR UPDATE SKIP LOCKED") && sql.includes("candidate.claim_sort_key"));
+    expect(claimSql).toContain("ORDER BY candidate.priority DESC, candidate.claim_sort_key, candidate.run_after, candidate.id");
+    expect(claimSql).toContain("pg_try_advisory_xact_lock(hashtextextended(candidate.job_key, 0))");
+    expect(claimSql).toContain("processing.status='processing' AND processing.job_key=candidate.job_key");
+    expect(seen).toEqual(["agent-regate-pr"]);
+  });
+
   it("processes a background-lane job when foreground work is empty", async () => {
     const m = makePool();
     m.enqueueResult({ rows: [], rowCount: 0 });
@@ -1146,6 +1262,7 @@ describe("createPgQueue (durable #977)", () => {
       m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // fairness singleton INSERT
       m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // priority backfill SELECT
       m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // job-key backfill SELECT
+      m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // claim-sort-key backfill SELECT
       m.fn.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // maintenance-flags backfill SELECT
       m.fn.mockResolvedValueOnce({
         rows: [{ id: "legacy", payload: JSON.stringify({ type: "agent-regate-pr", deliveryId: "backlog-convergence:owner/repo#1" }), foreground_lane: null }],

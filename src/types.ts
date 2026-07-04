@@ -40,6 +40,8 @@ export type JobMessage =
       repoFullName: string;
       prNumber: number;
       installationId: number;
+      /** Original GitHub PR creation time. Durable self-host queues use this to drain contributor PR work oldest-first. */
+      prCreatedAt?: string | null | undefined;
       // #regate-churn (req 8): an explicit manual re-gate request — bypasses the AI review cache and the
       // bounded non-cacheable-reuse cooldown so it always pays for a fresh opinion. No current scheduled or
       // webhook-driven caller sets this; it exists so a manual trigger has a supported way to force a fresh

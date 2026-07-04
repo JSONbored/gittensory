@@ -910,6 +910,7 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
         message.installationId,
         message.deliveryId,
         message.force,
+        message.prCreatedAt,
       );
       return;
     case "run-agent":
@@ -1551,6 +1552,7 @@ async function sweepRepoRegate(
         repoFullName,
         prNumber: pr.number,
         installationId: sweepInstallationId,
+        ...(pr.createdAt ? { prCreatedAt: pr.createdAt } : {}),
       };
       const delaySeconds = Math.min(index * 10, 600);
       await (delaySeconds > 0
@@ -1669,6 +1671,7 @@ async function sweepRepoBacklogConvergence(
         repoFullName,
         prNumber: pr.number,
         installationId: sweepInstallationId,
+        ...(pr.createdAt ? { prCreatedAt: pr.createdAt } : {}),
       };
       const delaySeconds = Math.min(index * 10, 600);
       return delaySeconds > 0
@@ -1707,6 +1710,7 @@ async function regatePullRequest(
   installationId: number,
   deliveryId: string,
   force?: boolean,
+  prCreatedAt?: string | null,
 ): Promise<void> {
   // Reserve installation rate-limit headroom (#audit-rate-headroom): all repos share ONE GitHub App installation
   // = ONE REST bucket, so when the shared budget is low, DEFER this re-review until the reset instead of
@@ -1729,6 +1733,7 @@ async function regatePullRequest(
         repoFullName,
         prNumber,
         installationId,
+        ...(prCreatedAt ? { prCreatedAt } : {}),
         ...(force ? { force: true } : {}),
       },
       { delaySeconds: delayUntil(rateResetAt) },
@@ -3098,6 +3103,7 @@ async function scheduleTrailingIssueLinkedReReview(
   installationId: number,
   repoFullName: string,
   prNumber: number,
+  prCreatedAt?: string | null,
 ): Promise<void> {
   const key = `issue-link-trailing:${repoFullName.toLowerCase()}#${prNumber}`;
   // Check-then-claim, but the CLAIM only happens after the send actually succeeds (#2371 follow-up): claiming
@@ -3114,6 +3120,7 @@ async function scheduleTrailingIssueLinkedReReview(
         repoFullName,
         prNumber,
         installationId,
+        ...(prCreatedAt ? { prCreatedAt } : {}),
       },
       { delaySeconds: CI_COALESCE_WINDOW_SECONDS },
     );
@@ -3488,10 +3495,11 @@ async function maybeReReviewOnLinkedIssueChange(
     // Issue-side label/assignment changes can flip linked-issue hard-rule verdicts from mergeable to close.
     // Queue every linked open PR (bounded only by listOpenPullRequests' repo-wide DB limit) so the tail cannot
     // retain a stale passing gate until the scheduled sweep happens to reach it.
-    const linkingPrNumbers = openPullRequests
+    const linkingPrs = openPullRequests
       .filter((pr) => pr.linkedIssues.includes(issueNumber))
-      .map((pr) => pr.number);
-    for (const [index, prNumber] of linkingPrNumbers.entries()) {
+      .map((pr) => ({ number: pr.number, createdAt: pr.createdAt ?? null }));
+    for (const [index, pr] of linkingPrs.entries()) {
+      const prNumber = pr.number;
       if (await issueLinkedPrReReviewCoalesced(env, repoFullName, prNumber)) {
         await scheduleTrailingIssueLinkedReReview(
           env,
@@ -3499,6 +3507,7 @@ async function maybeReReviewOnLinkedIssueChange(
           installationId,
           repoFullName,
           prNumber,
+          pr.createdAt,
         );
         continue;
       }
@@ -3508,6 +3517,7 @@ async function maybeReReviewOnLinkedIssueChange(
         repoFullName,
         prNumber,
         installationId,
+        ...(pr.createdAt ? { prCreatedAt: pr.createdAt } : {}),
       };
       const delaySeconds = Math.min(index * 10, 600);
       await (delaySeconds > 0
