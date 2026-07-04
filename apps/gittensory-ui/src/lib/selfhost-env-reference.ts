@@ -263,7 +263,7 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   },
   {
     name: "QUEUE_BACKGROUND_CONCURRENCY",
-    firstReference: "src/selfhost/queue-common.ts:120",
+    firstReference: "src/selfhost/queue-common.ts:130",
   },
   {
     name: "REDIS_URL",
@@ -382,7 +382,7 @@ export const SELFHOST_ENV_REFERENCE_MARKDOWN = [
   "| `QDRANT_API_KEY` | `src/selfhost/qdrant-vectorize.ts:50` |",
   "| `QDRANT_DIM` | `src/selfhost/qdrant-vectorize.ts:71` |",
   "| `QDRANT_URL` | `src/server.ts:527` |",
-  "| `QUEUE_BACKGROUND_CONCURRENCY` | `src/selfhost/queue-common.ts:120` |",
+  "| `QUEUE_BACKGROUND_CONCURRENCY` | `src/selfhost/queue-common.ts:130` |",
   "| `REDIS_URL` | `src/selfhost/preflight.ts:144` |",
   "| `REVIEW_AUDIT_DIR` | `src/server.ts:572` |",
   "| `SELFHOST_BUNDLE_ALL` | `scripts/build-selfhost.mjs:13` |",

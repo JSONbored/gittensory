@@ -1,4 +1,4 @@
-import { computeMinerGoalLaneFit } from "./miner-goal-lane-fit.js";
+import { computeMinerGoalLaneFit, isMinerRepoTargetable } from "./miner-goal-lane-fit.js";
 import { DEFAULT_MINER_GOAL_SPEC, type MinerGoalSpec } from "./miner-goal-spec.js";
 import { computeOpportunityCompetition } from "./opportunity-competition.js";
 import { computeOpportunityFreshness } from "./opportunity-freshness.js";
@@ -220,9 +220,12 @@ export function rankMetadataOpportunities<T extends MetadataCandidateIssue>(
   candidates: readonly T[],
   context: MetadataRankContext,
 ): Array<T & OpportunityRankInput & { rankScore: number }> {
-  const annotated = candidates.map((candidate) => ({
+  const targetableCandidates = candidates.filter((candidate) =>
+    isMinerRepoTargetable(resolveGoalSpec(candidate.repoFullName, context)),
+  );
+  const annotated = targetableCandidates.map((candidate) => ({
     ...candidate,
-    ...buildMetadataRankInput(candidate, candidates, context),
+    ...buildMetadataRankInput(candidate, targetableCandidates, context),
   }));
   /* v8 ignore next */
   return rankOpportunities(annotated) as Array<T & OpportunityRankInput & { rankScore: number }>;
