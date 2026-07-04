@@ -107,7 +107,8 @@ export function collectManageStatus(sources) {
 }
 
 function display(value) {
-  return value ?? "-";
+  if (value === null || value === undefined) return "-";
+  return String(value);
 }
 
 export function renderManageStatusTable(rows) {
