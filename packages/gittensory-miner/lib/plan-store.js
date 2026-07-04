@@ -79,6 +79,11 @@ function validatePlanDag(plan) {
   if (keys.length !== 1 || keys[0] !== "steps") throw new Error("invalid_plan");
   if (!Array.isArray(plan.steps) || plan.steps.length > 100) throw new Error("invalid_plan");
   if (!plan.steps.every(isValidStep)) throw new Error("invalid_plan");
+  const seenStepIds = new Set();
+  for (const step of plan.steps) {
+    if (seenStepIds.has(step.id)) throw new Error("invalid_plan");
+    seenStepIds.add(step.id);
+  }
   return plan;
 }
 

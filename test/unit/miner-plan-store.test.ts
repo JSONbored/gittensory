@@ -88,6 +88,14 @@ describe("gittensory-miner plan store (#2318)", () => {
     expect(() => store.savePlan("x", { steps: "nope" as never })).toThrow("invalid_plan");
     expect(() => store.savePlan("x", { steps: [], extra: 1 } as never)).toThrow("invalid_plan"); // strict: no unknown keys
     expect(() => store.savePlan("", PLAN)).toThrow("invalid_plan_id");
+    expect(() =>
+      store.savePlan("dup", {
+        steps: [
+          { id: "a", title: "A", dependsOn: [], status: "pending", attempts: 0, maxAttempts: 1 },
+          { id: "a", title: "B", dependsOn: [], status: "pending", attempts: 0, maxAttempts: 1 },
+        ],
+      }),
+    ).toThrow("invalid_plan");
   });
 
   it("rejects a corrupted plan blob on load instead of returning a malformed plan", () => {
