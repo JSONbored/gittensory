@@ -1,4 +1,5 @@
 import { scanActionPins } from "./actions-pin.js";
+import { scanApiBreakingChange } from "./api-breaking-change.js";
 import { scanApprovalIntegrity } from "./approval-integrity.js";
 import { scanAssetWeight } from "./asset-weight.js";
 import { scanChurnHotspot } from "./churn-hotspot.js";
@@ -650,6 +651,38 @@ export const ANALYZER_DESCRIPTORS = [
     },
     run: (req, { signal, analysis, diagnostics }) =>
       scanCommitHygiene(req, fetch, { signal, analysis, diagnostics }),
+  }),
+  descriptor({
+    name: "apiBreakingChange",
+    title: "Exported-API breaking changes",
+    category: "supply-chain",
+    cost: "github-heavy",
+    defaultEnabled: true,
+    requires: ["files", "github-token", "head-sha", "public-network"],
+    limits: { maxFiles: 10, maxFindings: 30 },
+    docs: {
+      summary:
+        "Flags an exported symbol removed or signature-changed at a package's public TypeScript entrypoint that is still part of the currently-published npm type surface — a downstream break.",
+      looksAt:
+        "Removed/added `export` declarations in changed `index.*` or `.d.ts` entrypoints, the owning package.json resolved at headSha, and the latest published `.d.ts` from npm + unpkg.",
+      reports:
+        "The entrypoint file, symbol, change kind (removed or signature-changed), and the package name + currently-published version — never file contents.",
+      network:
+        "One GitHub contents fetch per candidate to resolve the package.json (requires headSha and token forwarding for private repos), plus the npm registry and unpkg for the published type surface.",
+      notes:
+        "Conservative: a symbol removed AND re-added with an identical declaration is not a break; only symbols still present in the published surface are reported. Fail-safe on any missing input or fetch error.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### Exported-API breaking changes"];
+      for (const item of findings) {
+        lines.push(
+          `- ${helpers.safeCodeSpan(`${item.packageName}@${item.publishedVersion}`)} ${item.change} exported ${helpers.safeCodeSpan(item.symbol)} (${item.file})`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal }) => scanApiBreakingChange(req, fetch, { signal }),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 

@@ -791,6 +791,34 @@
         "network": "Calls the GitHub PR-commits API once, bounded to one page.",
         "notes": "Structured-fields-only: reads commit.message and parents, matched one line at a time, never cross-line state. Fail-safe on missing token/fetch error."
       }
+    },
+    {
+      "name": "apiBreakingChange",
+      "title": "Exported-API breaking changes",
+      "category": "supply-chain",
+      "cost": "github-heavy",
+      "defaultEnabled": true,
+      "profiles": [
+        "balanced",
+        "deep"
+      ],
+      "requires": [
+        "files",
+        "github-token",
+        "head-sha",
+        "public-network"
+      ],
+      "limits": {
+        "maxFiles": 10,
+        "maxFindings": 30
+      },
+      "docs": {
+        "summary": "Flags an exported symbol removed or signature-changed at a package's public TypeScript entrypoint that is still part of the currently-published npm type surface — a downstream break.",
+        "looksAt": "Removed/added `export` declarations in changed `index.*` or `.d.ts` entrypoints, the owning package.json resolved at headSha, and the latest published `.d.ts` from npm + unpkg.",
+        "reports": "The entrypoint file, symbol, change kind (removed or signature-changed), and the package name + currently-published version — never file contents.",
+        "network": "One GitHub contents fetch per candidate to resolve the package.json (requires headSha and token forwarding for private repos), plus the npm registry and unpkg for the published type surface.",
+        "notes": "Conservative: a symbol removed AND re-added with an identical declaration is not a break; only symbols still present in the published surface are reported. Fail-safe on any missing input or fetch error."
+      }
     }
   ]
 }

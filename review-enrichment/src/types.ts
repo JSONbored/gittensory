@@ -364,6 +364,17 @@ export type CommitHygieneFinding =
   | { shaPrefix: string; kind: "fixup-commit-present"; subject: string }
   | { shaPrefix: string; kind: "unattributed-co-author"; coAuthor: string };
 
+/** An exported symbol REMOVED or SIGNATURE-CHANGED at a package's public TypeScript entrypoint that is still part of
+ *  the package's currently-published type surface — a downstream break for consumers on the latest npm release.
+ *  Reports the entrypoint file, symbol, change kind, and the package name + published version only. (#1510) */
+export interface ApiBreakingChangeFinding {
+  file: string;
+  symbol: string;
+  change: "removed" | "signature-changed";
+  packageName: string;
+  publishedVersion: string;
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -393,6 +404,7 @@ export interface BriefFindings {
   undocumentedExport?: UndocumentedExportFinding[];
   staleBranch?: StaleBranchFinding[];
   commitHygiene?: CommitHygieneFinding[];
+  apiBreakingChange?: ApiBreakingChangeFinding[];
 }
 
 /** A JSDoc/TSDoc block whose `@param` tags name parameters the adjacent function no longer declares — a
