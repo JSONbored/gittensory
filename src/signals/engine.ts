@@ -2506,7 +2506,7 @@ export function buildPreflightResult(
   issueQuality?: IssueQualityReport | null | undefined,
 ): PreflightResult {
   const lane = buildLaneAdvice(repo, input.repoFullName);
-  const linkedIssues = [...new Set([...(input.linkedIssues ?? []), ...extractLinkedIssueNumbers(truncateText(input.body ?? "", PREFLIGHT_LIMITS.bodyChars))])].sort(
+  const linkedIssues = [...new Set([...(input.linkedIssues ?? []), ...extractLinkedIssueNumbers(truncateText(input.body ?? "", PREFLIGHT_LIMITS.bodyChars), input.repoFullName)])].sort(
     (left, right) => left - right,
   );
   // Flag an existing open-work cluster as a possible duplicate when it shares a
@@ -2621,7 +2621,7 @@ export function buildLocalDiffPreflightResult(
 ): LocalDiffPreflightResult {
   /* v8 ignore next -- Undefined metadata arrays are normalized at API/MCP boundaries; local analysis tests cover empty metadata behavior. */
   const changedFiles = [...new Set([...(input.changedFiles ?? []), ...(input.testFiles ?? [])])];
-  const linkedFromCommit = extractLinkedIssueNumbers([input.commitMessage, input.body, input.title].filter(Boolean).join("\n"));
+  const linkedFromCommit = extractLinkedIssueNumbers([input.commitMessage, input.body, input.title].filter(Boolean).join("\n"), input.repoFullName);
   const base = buildPreflightResult(
     {
       ...input,
@@ -5294,9 +5294,16 @@ function tokenize(value: string): string[] {
     .filter((term) => term.length > 2 && !STOPWORDS.has(term));
 }
 
-function extractLinkedIssueNumbers(text: string): number[] {
-  const matches = [...text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)];
-  return [...new Set(matches.map((match) => Number(match[1])).filter((value) => Number.isInteger(value) && value > 0))];
+function extractLinkedIssueNumbers(text: string, repoFullName: string): number[] {
+  const numbers = [...text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)].map((match) => Number(match[1]));
+  // GitHub also auto-closes via the fully-qualified `KEYWORD owner/repo#N` form (e.g. Renovate/Dependabot bodies).
+  // Count it only when owner/repo case-insensitively equals THIS repo — a reference to a different repo closes an
+  // issue elsewhere, not here, so it must not spoof a same-repo link. Same `\b`-anchored keywords as above (#1988).
+  const target = repoFullName.toLowerCase();
+  for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+([\w.-]+\/[\w.-]+)#(\d+)\b/gi)) {
+    if (match[1]!.toLowerCase() === target) numbers.push(Number(match[2]));
+  }
+  return [...new Set(numbers.filter((value) => Number.isInteger(value) && value > 0))];
 }
 
 function outcomeSuccessPatterns(history: ContributorOutcomeHistory): OutcomePattern[] {
