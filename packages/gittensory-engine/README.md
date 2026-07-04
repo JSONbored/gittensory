@@ -297,6 +297,58 @@ The rendered block is intentionally narrow: login, resolved public PR counts, pu
 status, and optional public evidence URLs for active incidents. Caller-provided ids, PR URLs, and arbitrary metadata are
 never copied into the Markdown, and the renderer fails closed if a blocked private-field name is introduced.
 
+## Replay-target snapshots
+
+`createReplayTargetSnapshot()` provides the deterministic engine contract for historical replay target freezes. The
+miner/runtime layer remains responsible for reading git history and exporting the actual worktree, while the engine
+filters already-read commits, tags, releases, README data, tree-file metadata, and external references to the target
+commit boundary.
+
+```ts
+import { createReplayTargetSnapshot } from "@jsonbored/gittensory-engine";
+
+const snapshot = createReplayTargetSnapshot({
+  repo: "jsonbored/gittensory",
+  targetCommitSha: "2222222222222222222222222222222222222222",
+  commits: [
+    {
+      sha: "1111111111111111111111111111111111111111",
+      committedAt: "2026-06-01T00:00:00Z",
+      subject: "docs: initial readme",
+      paths: ["README.md"],
+    },
+    {
+      sha: "2222222222222222222222222222222222222222",
+      committedAt: "2026-06-02T00:00:00Z",
+      subject: "feat: add replay harness",
+      paths: ["packages/gittensory-engine/src/objective-anchor.ts"],
+    },
+  ],
+  tags: [{ name: "v0.1.0", targetSha: "1111111111111111111111111111111111111111" }],
+  readme: {
+    path: "README.md",
+    blobSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    observedAt: "2026-06-02T00:00:00Z",
+    text: "# Gittensory\n",
+  },
+});
+```
+
+The returned snapshot includes:
+
+- a `git-worktree` export plan with a content-addressed destination key;
+- a context bundle containing only commits/tags/releases/references knowable at or before the target commit;
+- normalized README and tree-file metadata for the target working tree;
+- objective-anchor history features derived through the same replay history extractor used by calibration scoring;
+- an excluded-artifact audit for post-target context that was intentionally withheld.
+
+`validateReplayTargetSnapshot()` and `assertReplayTargetSnapshotValid()` fail fast if a context artifact contains a
+timestamp after the target commit or if the target commit is missing from the exported history. Given the same repo,
+target commit, and context inputs, `JSON.stringify(snapshot)` is stable across repeated exports.
+
+`renderReplayTargetSnapshotManifestMarkdown()` turns the same snapshot into a deterministic audit manifest with included
+context, excluded post-target context, export paths, and validation findings for local replay artifacts.
+
 ## Plan templates
 
 `plan-templates.ts` exports one builder per miner lifecycle stage (`analyze`, `plan`, `prepare`, `create`, `manage`).

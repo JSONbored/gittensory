@@ -71,6 +71,31 @@ export {
   type TrackRecordSummaryOutcomeCounts,
   type TrackRecordTenure,
 } from "./track-record-summary.js";
+export {
+  assertReplayTargetSnapshotValid,
+  createReplayTargetSnapshot,
+  renderReplayTargetSnapshotManifestMarkdown,
+  validateReplayTargetSnapshot,
+  type ReplayTargetCommitInput,
+  type ReplayTargetExternalReferenceInput,
+  type ReplayTargetReadmeInput,
+  type ReplayTargetReleaseInput,
+  type ReplayTargetRepoRef,
+  type ReplayTargetSnapshot,
+  type ReplayTargetSnapshotCommit,
+  type ReplayTargetSnapshotContext,
+  type ReplayTargetSnapshotExportPlan,
+  type ReplayTargetSnapshotInput,
+  type ReplayTargetSnapshotReadme,
+  type ReplayTargetSnapshotReference,
+  type ReplayTargetSnapshotRelease,
+  type ReplayTargetSnapshotTag,
+  type ReplayTargetSnapshotTreeFile,
+  type ReplayTargetSnapshotValidation,
+  type ReplayTargetSnapshotValidationViolation,
+  type ReplayTargetTagInput,
+  type ReplayTargetTreeFileInput,
+} from "./replay-target-snapshot.js";
 export * from "./governor/rate-limit.js";
 export {
   GOVERNOR_LEDGER_EVENT_TYPES,
