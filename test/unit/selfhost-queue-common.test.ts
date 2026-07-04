@@ -31,6 +31,9 @@ import {
   queueDeadLetterAutoRetryMaxExtraAttempts,
   queueDeadLetterPageFromBinding,
   queueDeadLetterReviveIntervalMs,
+  queueDeleteDeadLetterJobViaBinding,
+  queuePurgeDeadLetterJobsViaBinding,
+  queueReplayDeadLetterJobViaBinding,
   queueProcessingTimeoutMs,
   queueRecoveryJitterMs,
   queueSnapshotBacklog,
@@ -175,6 +178,54 @@ describe("self-host queue common helpers", () => {
     } as unknown as Queue;
 
     await expect(queueDeadLetterPageFromBinding(binding, 25, 0)).resolves.toEqual({ items, total: 1 });
+  });
+
+  it("replays/deletes/purges dead-letter jobs only via a binding that exposes the admin surface (#2215)", async () => {
+    const bareBinding = { async send() {}, async sendBatch() {} } as unknown as Queue;
+    await expect(queueReplayDeadLetterJobViaBinding(bareBinding, 1)).resolves.toBeNull();
+    await expect(queueDeleteDeadLetterJobViaBinding(bareBinding, 1)).resolves.toBeNull();
+    await expect(queuePurgeDeadLetterJobsViaBinding(bareBinding)).resolves.toBeNull();
+
+    const syncBinding = {
+      async send() {},
+      async sendBatch() {},
+      replayDeadLetterJob: (id: number) => {
+        expect(id).toBe(42);
+        return true;
+      },
+      deleteDeadLetterJob: (id: number) => {
+        expect(id).toBe(42);
+        return false;
+      },
+      purgeDeadLetterJobs: () => 3,
+    } as unknown as Queue;
+    await expect(queueReplayDeadLetterJobViaBinding(syncBinding, 42)).resolves.toBe(true);
+    await expect(queueDeleteDeadLetterJobViaBinding(syncBinding, 42)).resolves.toBe(false);
+    await expect(queuePurgeDeadLetterJobsViaBinding(syncBinding)).resolves.toBe(3);
+
+    const asyncBinding = {
+      async send() {},
+      async sendBatch() {},
+      replayDeadLetterJob: async () => false,
+      deleteDeadLetterJob: async () => true,
+      purgeDeadLetterJobs: async () => 0,
+    } as unknown as Queue;
+    await expect(queueReplayDeadLetterJobViaBinding(asyncBinding, 7)).resolves.toBe(false);
+    await expect(queueDeleteDeadLetterJobViaBinding(asyncBinding, 7)).resolves.toBe(true);
+    await expect(queuePurgeDeadLetterJobsViaBinding(asyncBinding)).resolves.toBe(0);
+
+    // A binding that returns the wrong result TYPE (a future bug, or a misbehaving plugin binding) is treated
+    // the same as "admin unavailable" -- null -- not coerced/trusted as if it were a real boolean/count.
+    const malformedBinding = {
+      async send() {},
+      async sendBatch() {},
+      replayDeadLetterJob: () => "yes",
+      deleteDeadLetterJob: () => 1,
+      purgeDeadLetterJobs: () => "three",
+    } as unknown as Queue;
+    await expect(queueReplayDeadLetterJobViaBinding(malformedBinding, 1)).resolves.toBeNull();
+    await expect(queueDeleteDeadLetterJobViaBinding(malformedBinding, 1)).resolves.toBeNull();
+    await expect(queuePurgeDeadLetterJobsViaBinding(malformedBinding)).resolves.toBeNull();
   });
 
   it("identifies GitHub-budget background jobs without pre-yielding fresh webhooks or manual re-gates", () => {

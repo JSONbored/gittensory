@@ -67,6 +67,16 @@ export type DeadLetterJob = {
 export interface SelfHostQueueDeadLetterAdmin {
   deadCount(): number | Promise<number>;
   listDeadLetterJobs(limit: number, offset: number): DeadLetterJob[] | Promise<DeadLetterJob[]>;
+  /** Manually requeues ONE dead job by id with a FRESH retry budget (attempts reset to 0) -- distinct from the
+   *  automatic reviveDeadLetterJobs() sweep, which deliberately preserves attempts under a ceiling to avoid an
+   *  unsupervised infinite-retry loop for a permanently-broken job. An operator clicking replay is a conscious,
+   *  one-off decision, so it gets a full budget. Returns false if no row with that id is currently dead (already
+   *  handled, already deleted, or never existed) -- the route maps that to 404, not a false-success 200. */
+  replayDeadLetterJob(id: number): boolean | Promise<boolean>;
+  /** Permanently deletes ONE dead job by id. Returns false if no row with that id is currently dead. */
+  deleteDeadLetterJob(id: number): boolean | Promise<boolean>;
+  /** Permanently deletes EVERY dead job. Returns the number of rows deleted. */
+  purgeDeadLetterJobs(): number | Promise<number>;
 }
 
 // Webhook-driven work (a fresh PR -> its review) jumps ahead of heavy background jobs. Per-PR review refreshes
@@ -215,6 +225,32 @@ export async function queueDeadLetterPageFromBinding(
     Promise.resolve(admin.deadCount()),
   ]);
   return { items, total };
+}
+
+/** Null when the binding doesn't expose the admin surface at all (Cloudflare, or not wired) -- same 501
+ *  contract as queueDeadLetterPageFromBinding. A boolean false (id not found / not dead) is a real, valid
+ *  result distinct from null, so callers can tell "admin unavailable" apart from "nothing to replay". */
+export async function queueReplayDeadLetterJobViaBinding(binding: Queue, id: number): Promise<boolean | null> {
+  const admin = binding as Queue & Partial<SelfHostQueueDeadLetterAdmin>;
+  if (typeof admin.replayDeadLetterJob !== "function") return null;
+  const result = await Promise.resolve(admin.replayDeadLetterJob(id));
+  return typeof result === "boolean" ? result : null;
+}
+
+/** Same null/boolean contract as queueReplayDeadLetterJobViaBinding, for permanently deleting one dead job. */
+export async function queueDeleteDeadLetterJobViaBinding(binding: Queue, id: number): Promise<boolean | null> {
+  const admin = binding as Queue & Partial<SelfHostQueueDeadLetterAdmin>;
+  if (typeof admin.deleteDeadLetterJob !== "function") return null;
+  const result = await Promise.resolve(admin.deleteDeadLetterJob(id));
+  return typeof result === "boolean" ? result : null;
+}
+
+/** Null when the binding doesn't expose the admin surface; otherwise the count of dead jobs purged. */
+export async function queuePurgeDeadLetterJobsViaBinding(binding: Queue): Promise<number | null> {
+  const admin = binding as Queue & Partial<SelfHostQueueDeadLetterAdmin>;
+  if (typeof admin.purgeDeadLetterJobs !== "function") return null;
+  const result = await Promise.resolve(admin.purgeDeadLetterJobs());
+  return typeof result === "number" ? result : null;
 }
 
 function queueStatus(value: unknown): SelfHostQueueJobStatus | null {
