@@ -11,6 +11,18 @@ The logic is extracted from the app's `src/` in follow-up issues; this skeleton 
 the meantime. The root `package.json` already globs `packages/*` in its `workspaces` field, so `npm ci`
 discovers this package with no additional wiring.
 
+## Audience & versioning
+
+This is an **internal dependency**, not a package end users install directly. It is consumed by two callers only —
+the hosted Gittensory review-stack backend and the local [`@jsonbored/gittensory-miner`](../gittensory-miner) — so
+that a single, shared, deterministic implementation runs identically in both. Contributors interact with it only
+transitively (through the review backend or the miner CLI).
+
+Because both callers depend on the exact same logic, the engine is **version-pinned**: `gittensory-miner` pins an
+exact `@jsonbored/gittensory-engine` version in its `dependencies` (not a range), and that pinned version is what
+the miner is built and validated against. The package is versioned independently of the app and follows semver, so
+a caller upgrades deliberately rather than drifting onto new engine behavior implicitly.
+
 ## Build
 
 ```
