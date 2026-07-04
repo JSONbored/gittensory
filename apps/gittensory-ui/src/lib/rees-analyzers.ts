@@ -679,6 +679,30 @@ export const REES_ANALYZERS = [
         "Structured-fields-only: reads default_branch and behind_by, never diff or commit text. Fail-safe on missing token/head SHA/either fetch failing.",
     },
   },
+  {
+    name: "commitHygiene",
+    title: "Commit-history hygiene",
+    category: "history",
+    cost: "github-light",
+    defaultEnabled: true,
+    profiles: ["balanced", "deep"],
+    requires: ["github-token"],
+    limits: {
+      maxCommits: 100,
+      maxFindings: 25,
+    },
+    docs: {
+      summary:
+        "Flags commit-history hygiene issues: a merge commit pulled into the PR's own history, a commit left with git's fixup!/squash! autosquash marker, and a commit carrying a Co-authored-by trailer.",
+      looksAt:
+        "The PR's commits (one bounded page) — each commit's message subject/trailers and parent count.",
+      reports:
+        "A short commit-SHA prefix, the finding kind, and (for fixup/co-author) the subject line or co-author — never full diff/file content.",
+      network: "Calls the GitHub PR-commits API once, bounded to one page.",
+      notes:
+        "Structured-fields-only: reads commit.message and parents, matched one line at a time, never cross-line state. Fail-safe on missing token/fetch error.",
+    },
+  },
 ] as const satisfies readonly ReesAnalyzerDoc[];
 
 export const REES_ANALYZER_NAMES = REES_ANALYZERS.map((analyzer) => analyzer.name);

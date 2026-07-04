@@ -5,6 +5,7 @@ import { scanChurnHotspot } from "./churn-hotspot.js";
 import { scanBlameLink } from "./blame-link.js";
 import { scanCiCheckSignals } from "./ci-check-signals.js";
 import { scanCodeowners } from "./codeowners.js";
+import { scanCommitHygiene } from "./commit-hygiene.js";
 import { scanCommitSignature } from "./commit-signature.js";
 import { dependencyAnalyzer } from "./dependency/descriptor.js";
 import { scanDocCommentDrift } from "./doc-comment-drift.js";
@@ -615,6 +616,40 @@ export const ANALYZER_DESCRIPTORS = [
     },
     run: (req, { signal, analysis, diagnostics }) =>
       scanStaleBranch(req, fetch, { signal, analysis, diagnostics }),
+  }),
+  descriptor({
+    name: "commitHygiene",
+    title: "Commit-history hygiene",
+    category: "history",
+    cost: "github-light",
+    defaultEnabled: true,
+    requires: ["github-token"],
+    limits: { maxCommits: 100, maxFindings: 25 },
+    docs: {
+      summary:
+        "Flags commit-history hygiene issues: a merge commit pulled into the PR's own history, a commit left with git's fixup!/squash! autosquash marker, and a commit carrying a Co-authored-by trailer.",
+      looksAt: "The PR's commits (one bounded page) — each commit's message subject/trailers and parent count.",
+      reports: "A short commit-SHA prefix, the finding kind, and (for fixup/co-author) the subject line or co-author — never full diff/file content.",
+      network: "Calls the GitHub PR-commits API once, bounded to one page.",
+      notes:
+        "Structured-fields-only: reads commit.message and parents, matched one line at a time, never cross-line state. Fail-safe on missing token/fetch error.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### Commit-history hygiene"];
+      for (const item of findings) {
+        if (item.kind === "merge-commit-in-history") {
+          lines.push(`- ${helpers.safeCodeSpan(item.shaPrefix)} is a merge commit pulled into this PR's own history`);
+        } else if (item.kind === "fixup-commit-present") {
+          lines.push(`- ${helpers.safeCodeSpan(item.shaPrefix)} is an unsquashed fixup/squash commit: ${helpers.safeCodeSpan(item.subject)}`);
+        } else {
+          lines.push(`- ${helpers.safeCodeSpan(item.shaPrefix)} credits a co-author: ${helpers.safeCodeSpan(item.coAuthor)}`);
+        }
+      }
+      return lines;
+    },
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanCommitHygiene(req, fetch, { signal, analysis, diagnostics }),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 

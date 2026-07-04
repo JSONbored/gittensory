@@ -417,6 +417,7 @@ export function renderBrief(
   lines.push(...renderDescriptorSection("ciCheckSignals", findings.ciCheckSignals));
   lines.push(...renderDescriptorSection("undocumentedExport", findings.undocumentedExport));
   lines.push(...renderDescriptorSection("staleBranch", findings.staleBranch));
+  lines.push(...renderDescriptorSection("commitHygiene", findings.commitHygiene));
 
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 

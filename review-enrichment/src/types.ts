@@ -353,6 +353,17 @@ export interface StaleBranchFinding {
   behindBy: number;
 }
 
+/** A commit-history hygiene signal, read from structured GitHub PR-commits API fields only (`commit.message`,
+ *  `parents`) — never diff/file content beyond the already-public commit list. `merge-commit-in-history`: a
+ *  commit in the PR has more than one parent (usually the base branch merged into a feature branch instead of a
+ *  rebase). `fixup-commit-present`: a commit subject starts with git's own `fixup!`/`squash!` autosquash marker,
+ *  meant to be squashed before merge. `unattributed-co-author`: a commit message carries a `Co-authored-by:`
+ *  trailer, surfacing multi-author attribution. */
+export type CommitHygieneFinding =
+  | { shaPrefix: string; kind: "merge-commit-in-history" }
+  | { shaPrefix: string; kind: "fixup-commit-present"; subject: string }
+  | { shaPrefix: string; kind: "unattributed-co-author"; coAuthor: string };
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -381,6 +392,7 @@ export interface BriefFindings {
   ciCheckSignals?: CiCheckSignalFinding[];
   undocumentedExport?: UndocumentedExportFinding[];
   staleBranch?: StaleBranchFinding[];
+  commitHygiene?: CommitHygieneFinding[];
 }
 
 /** A JSDoc/TSDoc block whose `@param` tags name parameters the adjacent function no longer declares — a

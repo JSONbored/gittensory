@@ -30,6 +30,7 @@ export const REES_ANALYZER_NAMES = [
   "ciCheckSignals",
   "undocumentedExport",
   "staleBranch",
+  "commitHygiene",
 ] as const;
 
 export type ReesAnalyzerName = (typeof REES_ANALYZER_NAMES)[number];
