@@ -61,6 +61,13 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // Anthropic API key: `sk-ant-` + base64url body. Distinct from Stripe `sk_live_` (underscore).
+    // Negative-lookahead terminator (not `\b`) so a body ending in `-` still matches, like SendGrid.
+    kind: "anthropic_api_key",
+    re: /\bsk-ant-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
     kind: "private_key",
     re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/,
     confidence: "high",

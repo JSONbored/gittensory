@@ -17,6 +17,8 @@ const fakeAwsKey = awsKeyFragmentA + awsKeyFragmentB;
 const fakeStripeKey = ["sk_live_", "abcdefghijklmnop1234567890"].join(""); // sk_live_ + 26 base62
 const fakeSendgridKey = ["SG.", "a".repeat(22), ".", "b".repeat(43)].join("");
 const fakeHuggingfaceToken = "hf_" + "a".repeat(34);
+// Anthropic keys are `sk-ant-` + a long base64url body (fragments only — never a contiguous literal in source).
+const fakeAnthropicKey = ["sk-ant-", "api03-", "a".repeat(20)].join("");
 const fakeGitlabToken = "glpat-" + "aBcDeFgHiJkLmNoPqRsT"; // 20 chars after the prefix
 const fakeNpmToken = "npm_" + "a".repeat(36);
 // A high-entropy value that matches NO format-specific rule, so it only trips the
@@ -168,3 +170,19 @@ for (const content of ['++const key = "AWS_KEY";', '++ const key = "AWS_KEY";'])
     assert.equal(findings[0].line, 1);
   });
 }
+
+test("scanPatch flags an Anthropic API key with high confidence", () => {
+  const findings = scanPatch("src/config.ts", hunk([`const anthropicKey = "${fakeAnthropicKey}";`]));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "anthropic_api_key");
+  assert.equal(findings[0].confidence, "high");
+});
+
+test("scanPatch flags an Anthropic key whose final body character is a hyphen", () => {
+  // Negative lookahead (not `\b`) so a body ending in `-` still matches — same style as SendGrid.
+  const hyphenTail = ["sk-ant-", "api03-", "a".repeat(19), "-"].join("");
+  const findings = scanPatch("src/config.ts", hunk([`const anthropicKey = "${hyphenTail}";`]));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "anthropic_api_key");
+  assert.equal(findings[0].confidence, "high");
+});
