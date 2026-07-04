@@ -66,7 +66,7 @@ git push origin orb-v0.1.0`}
       </Callout>
       <p>
         Going forward, the scheme is ordinary semver under the <code>orb-v</code> prefix:{" "}
-        <code>orb-v0.1.1</code> for a patch, <code>orb-v0.2.0</code> for a feature bump, and an{" "}
+        <code>orb-v0.1.1</code> for a patch, the next minor version for a feature bump, and an{" "}
         <code>-rc.N</code>/<code>-beta.N</code> suffix on any tag that should run the pipeline
         without touching <code>latest</code> or the default GitHub Release. This checklist and the
         smoke matrix below apply to every future cut, not just the first.
