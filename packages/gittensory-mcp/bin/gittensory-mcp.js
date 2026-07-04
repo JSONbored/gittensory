@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -1485,12 +1485,28 @@ async function runCli(args) {
   writeBranchAnalysisCli(result, command);
 }
 
+// Opens, type-checks, and reads the file through ONE file descriptor rather than a separate
+// stat-then-read pair: a check-then-read on a path string leaves a race window where a symlink or
+// special file (FIFO, device) can be swapped in between the two calls, letting the earlier
+// isFile()/size validation apply to a different, unvalidated file than the one actually read.
+// O_NOFOLLOW makes a symlinked path fail to open outright instead of silently following it.
 function readCliTextFile(path, label) {
-  if (!existsSync(path)) throw new Error(`${label} file not found: ${path}`);
-  const stats = lstatSync(path);
-  if (!stats.isFile()) throw new Error(`${label} file must be a regular file: ${path}`);
-  if (stats.size > cliTextFileMaxBytes) throw new Error(`${label} file is too large: ${path} (max ${cliTextFileMaxBytes} bytes)`);
-  return readFileSync(path, "utf8");
+  let fd;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch (error) {
+    if (error && error.code === "ENOENT") throw new Error(`${label} file not found: ${path}`);
+    if (error && (error.code === "ELOOP" || error.code === "EMLINK")) throw new Error(`${label} file must be a regular file: ${path}`);
+    throw error;
+  }
+  try {
+    const stats = fstatSync(fd);
+    if (!stats.isFile()) throw new Error(`${label} file must be a regular file: ${path}`);
+    if (stats.size > cliTextFileMaxBytes) throw new Error(`${label} file is too large: ${path} (max ${cliTextFileMaxBytes} bytes)`);
+    return readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function printLintPrTextHelp() {
