@@ -104,6 +104,10 @@ export function extractVersionPins(
         // phpenv/asdf pin file — same leading-version format, product is PHP.
         const version = leadingVersion(line);
         if (version) pins.push({ file: file.path, product: "php", version });
+      } else if (base === ".go-version") {
+        // goenv/asdf pin file — same leading-version format, product is Go.
+        const version = leadingVersion(line);
+        if (version) pins.push({ file: file.path, product: "go", version });
       } else if (base === "go.mod") {
         const match = /^go\s+(\d+\.\d+)/.exec(line);
         if (match)

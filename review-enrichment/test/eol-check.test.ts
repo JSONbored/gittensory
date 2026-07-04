@@ -72,6 +72,13 @@ test("extractVersionPins reads .php-version pins as PHP", () => {
   ]);
 });
 
+test("extractVersionPins reads .go-version pins as Go", () => {
+  // goenv/asdf use `.go-version` with the same leading-version format.
+  assert.deepEqual(extractVersionPins([added(".go-version", "1.22.0")]), [
+    { file: ".go-version", product: "go", version: "1.22.0" },
+  ]);
+});
+
 test("extractVersionPins ignores removed/context lines and files with no patch", () => {
   const patch = ["@@ -1 +1,2 @@", "-FROM python:3.7", " FROM python:3.9"].join(
     "\n",
