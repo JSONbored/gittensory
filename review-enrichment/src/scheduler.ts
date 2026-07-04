@@ -414,6 +414,7 @@ function isRuntimePinPath(path: string): boolean {
     basename === ".php-version" ||
     basename === ".go-version" ||
     basename === ".rust-version" ||
+    basename === ".java-version" ||
     basename === "go.mod"
   );
 }

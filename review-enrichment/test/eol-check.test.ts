@@ -97,6 +97,13 @@ test("extractVersionPins reads .rust-version pins as Rust", () => {
   ]);
 });
 
+test("extractVersionPins reads .java-version pins as oracle-jdk", () => {
+  // jenv/asdf use `.java-version`; endoflife.date tracks Oracle JDK release cycles.
+  assert.deepEqual(extractVersionPins([added(".java-version", "21.0.2")]), [
+    { file: ".java-version", product: "oracle-jdk", version: "21.0.2" },
+  ]);
+});
+
 test("extractVersionPins ignores removed/context lines and files with no patch", () => {
   const patch = ["@@ -1 +1,2 @@", "-FROM python:3.7", " FROM python:3.9"].join(
     "\n",
