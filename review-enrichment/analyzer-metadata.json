@@ -741,6 +741,31 @@
         "network": "One GitHub contents fetch per changed entrypoint (at headSha). Requires GitHub token forwarding for private repos.",
         "notes": "Conservative: re-export lists (`export { x }`) and `export *` are ignored; a preceding `//` line (except tool directives like `eslint-disable`) or a real JSDoc `/**` block counts as documented (a plain `/* … */` block does not)."
       }
+    },
+    {
+      "name": "conflictMarker",
+      "title": "Merge-conflict markers",
+      "category": "quality",
+      "cost": "local",
+      "defaultEnabled": true,
+      "profiles": [
+        "fast",
+        "balanced",
+        "deep"
+      ],
+      "requires": [
+        "files"
+      ],
+      "limits": {
+        "maxFindings": 25
+      },
+      "docs": {
+        "summary": "Flags leftover VCS merge-conflict markers accidentally committed in a PR's added lines.",
+        "looksAt": "Added lines matching the seven-character git conflict markers: <<<<<<<, |||||||, =======, and >>>>>>>.",
+        "reports": "File, line, and which conflict marker was left in place.",
+        "network": "Pure local analyzer. No external network call.",
+        "notes": "The ambiguous ======= separator is not flagged in Markdown/AsciiDoc files, where a bare ======= line is a valid setext heading underline or section rule; the unambiguous <<<<<<< / >>>>>>> markers are flagged everywhere."
+      }
     }
   ]
 }
