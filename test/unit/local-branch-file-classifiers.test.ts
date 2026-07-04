@@ -126,6 +126,11 @@ describe("isCodeFile", () => {
       // files, so PHP source must count as code too (else it is neither test nor code).
       "app/Http/Controllers/UserController.php",
       "src/Service/PaymentGateway.php",
+      // Native source extensions are annotatable in advisory check runs and must remain code here too.
+      "src/native/add.c",
+      "src/native/add.cpp",
+      "include/native/add.h",
+      "src/objc/View.m",
     ]) {
       expect(isCodeFile(path)).toBe(true);
     }

@@ -35,8 +35,15 @@ function findPython(): string | null {
 
 describe("gittensor-score-preview.mjs classifier parity with the server", () => {
   it("counts module-ext source as code and pytest-prefix/Cypress files as tests, matching isTestPath/isCodeFile", () => {
-    const out = runPreview([...SAMPLE, { path: "app/FooTests.java", additions: 7, deletions: 0 }]); // + JVM test control
-    expect(out.sourceTokenScore).toBe(10); // only src/loader.mts is source now
+    const out = runPreview([
+      ...SAMPLE,
+      { path: "app/FooTests.java", additions: 7, deletions: 0 }, // + JVM test control
+      { path: "src/native/add.c", additions: 2, deletions: 0 },
+      { path: "src/native/add.cpp", additions: 3, deletions: 0 },
+      { path: "include/native/add.h", additions: 4, deletions: 0 },
+      { path: "src/objc/View.m", additions: 6, deletions: 0 },
+    ]);
+    expect(out.sourceTokenScore).toBe(25); // src/loader.mts + native source extensions
     expect(out.testTokenScore).toBe(SAMPLE_TEST_LINES + 7); // cy + pytest + root snapshot + JVM tests
     expect(out.nonCodeTokenScore).toBe(0); // the .mts is no longer misfiled as non-code
   });
