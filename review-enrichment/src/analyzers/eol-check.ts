@@ -42,12 +42,13 @@ function leadingVersion(value: string): string | null {
   return /^v?(\d+(?:\.\d+)*)/.exec(value.trim())?.[1] ?? null;
 }
 
-/** True for a Dockerfile the FROM-pin parser understands: the literal `Dockerfile`, or a `*.dockerfile`
- *  (e.g. `web.dockerfile`). Exported so the scheduler's runtime-pin gate shares ONE predicate and cannot
- *  drift from what this analyzer actually parses. */
+/** True for a Dockerfile the FROM-pin parser understands: the bare name `Dockerfile` (any casing —
+ *  Docker and case-insensitive filesystems treat it that way, and sibling matchers like the IaC
+ *  config-path gate already use `/i`), or a `*.dockerfile` (e.g. `web.dockerfile`). Exported so the
+ *  scheduler's runtime-pin gate shares ONE predicate and cannot drift from what this analyzer parses. */
 export function isDockerfile(path: string): boolean {
   const base = path.split("/").pop() ?? path;
-  return base === "Dockerfile" || /\.dockerfile$/i.test(base);
+  return /^dockerfile$/i.test(base) || /\.dockerfile$/i.test(base);
 }
 
 /** Pull (product, version) pins out of the added lines of changed Dockerfile / .nvmrc / go.mod. Pure. */
@@ -164,7 +165,10 @@ export async function scanEol(
     if (seen.has(key)) continue;
     seen.add(key);
     if (!cyclesByProduct.has(pin.product))
-      cyclesByProduct.set(pin.product, await fetchCycles(pin.product, fetchImpl, options));
+      cyclesByProduct.set(
+        pin.product,
+        await fetchCycles(pin.product, fetchImpl, options),
+      );
     const cycles = cyclesByProduct.get(pin.product);
     if (!cycles) continue;
     const cycle = matchCycle(cycles, pin.version);
