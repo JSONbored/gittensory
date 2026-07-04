@@ -329,6 +329,14 @@ docker compose --profile postgres --profile observability --profile backup up -d
         <code>docker-compose.override.yml.example</code>) rather than an oversight, since the right
         ceiling depends entirely on the host's core count and how many runner replicas you run.
       </p>
+
+      <h2>Docker resource hygiene</h2>
+      <p>
+        Every service in <code>docker-compose.yml</code> caps its own container logs (10MB × 3
+        rotated files) out of the box, so log growth alone won&apos;t fill your disk. Unused Docker
+        images and build cache are a separate, larger disk-growth vector on a host that rebuilds or
+        pulls images repeatedly over months — Docker does not reclaim either automatically.
+      </p>
       <p>
         Install the provided host-level timer to reclaim both on a schedule (anything unused for
         less than 7 days is left alone, so a recent deploy is never at risk):
