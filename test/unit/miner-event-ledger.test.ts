@@ -96,6 +96,15 @@ describe("gittensory-miner event ledger (#2290)", () => {
     expect(ledger.readEvents({ repoFullName: "o/a", since: 1 }).map((entry) => entry.seq)).toEqual([3]);
   });
 
+  it("rejects a non-integer or non-finite since cursor rather than querying with it", () => {
+    const ledger = tempLedger();
+    ledger.appendEvent({ type: "discovered_issue", payload: {} });
+    expect(() => ledger.readEvents({ since: Number.NaN })).toThrow("invalid_since");
+    expect(() => ledger.readEvents({ since: Number.POSITIVE_INFINITY })).toThrow("invalid_since");
+    expect(() => ledger.readEvents({ since: -1 })).toThrow("invalid_since");
+    expect(() => ledger.readEvents({ since: 1.5 })).toThrow("invalid_since");
+  });
+
   it("rejects a non-object payload and a malformed repo scope rather than persisting them", () => {
     const ledger = tempLedger();
     // @ts-expect-error — payload must be an object
