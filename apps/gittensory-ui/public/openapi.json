@@ -9101,6 +9101,73 @@
           "pendingClosureLabel": {
             "type": "string",
             "nullable": true
+          },
+          "linkedIssueHardRules": {
+            "type": "object",
+            "properties": {
+              "ownerAssignedClose": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "off"
+                ]
+              },
+              "assignedIssueClose": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "off"
+                ]
+              },
+              "missingPointLabelClose": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "off"
+                ]
+              },
+              "maintainerOnlyLabelClose": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "off"
+                ]
+              },
+              "pointBearingLabels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maintainerOnlyLabels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "defaultLabelRepo": {
+                "type": "boolean"
+              },
+              "verifyBeforeClose": {
+                "type": "boolean"
+              },
+              "closeDelaySeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 300
+              }
+            },
+            "required": [
+              "ownerAssignedClose",
+              "assignedIssueClose",
+              "missingPointLabelClose",
+              "maintainerOnlyLabelClose",
+              "pointBearingLabels",
+              "maintainerOnlyLabels",
+              "defaultLabelRepo",
+              "verifyBeforeClose",
+              "closeDelaySeconds"
+            ]
           }
         },
         "required": [

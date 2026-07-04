@@ -2334,6 +2334,7 @@ async function runAgentMaintenancePlanAndExecute(
     body: pr.body,
     linkedIssues: pr.linkedIssues,
     ciToken,
+    prAuthorLogin: pr.authorLogin,
     installationId,
   });
 
@@ -6962,7 +6963,6 @@ async function maybePublishPrPublicSurface(
               repoFullName,
               linkedIssues: pr.linkedIssues,
               installationId,
-              prAuthorLogin: pr.authorLogin,
             })
           : [];
       const decisionResult = resolvePrTypeLabel({

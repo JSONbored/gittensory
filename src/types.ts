@@ -740,6 +740,11 @@ export type RepositorySettings = {
    *  (`enabled: false`, no mappings) — a self-hoster opts in per repo. Always populated by the DB
    *  layer; optional so existing settings fixtures/callers need not be touched. */
   linkedIssueLabelPropagation?: LinkedIssueLabelPropagationConfig | undefined;
+  /** Deterministic linked-issue hard rules. Config-as-code only; set with
+   *  `.gittensory.yml settings.linkedIssueHardRules` in private/global or per-repo config. These rules close
+   *  contributor PRs that link ineligible issues before spending AI review budget: owner/other-assigned,
+   *  maintainer-only, or missing point-label issues. Defaults all-off so self-hosters opt into their own policy. */
+  linkedIssueHardRules?: LinkedIssueHardRulesConfig | undefined;
   publicSurface: "off" | "comment_and_label" | "comment_only" | "label_only";
   includeMaintainerAuthors: boolean;
   requireLinkedIssue: boolean;
@@ -938,6 +943,21 @@ export type LinkedIssueLabelPropagationConfig = {
   enabled: boolean;
   mode: LinkedIssueLabelPropagationMode;
   mappings: LinkedIssueLabelPropagationMapping[];
+};
+
+export type LinkedIssueHardRulesMode = "block" | "off";
+
+export type LinkedIssueHardRulesConfig = {
+  ownerAssignedClose: LinkedIssueHardRulesMode;
+  /** Close when an open linked issue is assigned to someone other than the PR author. */
+  assignedIssueClose: LinkedIssueHardRulesMode;
+  missingPointLabelClose: LinkedIssueHardRulesMode;
+  maintainerOnlyLabelClose: LinkedIssueHardRulesMode;
+  pointBearingLabels: string[];
+  maintainerOnlyLabels: string[];
+  defaultLabelRepo: boolean;
+  verifyBeforeClose: boolean;
+  closeDelaySeconds: number;
 };
 
 /** A blocked contributor (#1425, anti-abuse): a GitHub `login` plus optional maintainer metadata. The converged

@@ -20,12 +20,20 @@ export const DEFAULT_TYPE_LABELS: PrTypeLabelSet = {
 
 export const ALL_TYPE_LABELS: readonly string[] = [DEFAULT_TYPE_LABELS.bug, DEFAULT_TYPE_LABELS.feature, DEFAULT_TYPE_LABELS.priority];
 
-/** feature ONLY for genuine new functionality (feat); EVERYTHING else — fix, test, docs, chore, refactor,
- *  perf, ci, build, style, revert — is bug (a test PR is a test, not a feature). (reviewbot auto-label.ts:27) */
+const FEATURE_TITLE_ACTION_RE = /\b(add|adds|added|create|creates|created|enable|enables|enabled|implement|implements|implemented|integrate|integrates|integrated|introduce|introduces|introduced|launch|launches|launched|support|supports|supported|wire|wires|wired)\b/i;
+const FEATURE_TITLE_DOWNGRADE_RE = /\b(avoid|block|bug|bugfix|cache|classify|classifies|classifying|cleanup|clean-up|clean up|detect|detects|detecting|docs?|fix|format|guard|lint|normalize|recognize|recognizes|recognizing|refactor|regression|rename|test|tests|testing|tighten|typo)\b/i;
+
+/** feature ONLY for substantial new functionality: a feat/feature prefix plus a concrete add/support/enable
+ *  action, with small recognition/classification/cleanup-style work downgraded to bug/work. EVERYTHING else —
+ *  fix, test, docs, chore, refactor, perf, ci, build, style, revert — is bug. */
 export function deriveKindFromTitle(title: string | undefined): "bug" | "feature" {
-  const match = /^([a-zA-Z]+)/.exec((title ?? "").trim());
+  const normalized = (title ?? "").trim();
+  const match = /^([a-zA-Z]+)/.exec(normalized);
   const type = match?.[1]?.toLowerCase();
-  return type === "feat" || type === "feature" ? "feature" : "bug";
+  if (type !== "feat" && type !== "feature") return "bug";
+  const subject = normalized.replace(/^[a-zA-Z]+(?:\([^)]*\))?:?\s*/, "");
+  if (!FEATURE_TITLE_ACTION_RE.test(subject)) return "bug";
+  return FEATURE_TITLE_DOWNGRADE_RE.test(subject) ? "bug" : "feature";
 }
 
 /** Defaults-fill a per-repo `typeLabels` override (config-as-code): each of bug/feature/priority is

@@ -1962,6 +1962,72 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(eff.linkedIssueLabelPropagation).toEqual(db.linkedIssueLabelPropagation);
   });
 
+  it("wires settings.linkedIssueHardRules into the manifest parser as a sparse override", () => {
+    const parsed = parseFocusManifest({
+      settings: {
+        linkedIssueHardRules: {
+          assignedIssueClose: "block",
+          maintainerOnlyLabels: ["maintainer-only"],
+          verifyBeforeClose: false,
+          closeDelaySeconds: 3.8,
+        },
+      },
+    });
+    expect(parsed.settings.linkedIssueHardRules).toEqual({
+      assignedIssueClose: "block",
+      maintainerOnlyLabels: ["maintainer-only"],
+      verifyBeforeClose: false,
+      closeDelaySeconds: 3,
+    });
+    expect(parsed.warnings).toEqual([]);
+  });
+
+  it("resolveEffectiveSettings merges partial linkedIssueHardRules overrides without clearing lower-layer labels", () => {
+    const db = {
+      linkedIssueHardRules: {
+        ownerAssignedClose: "off",
+        assignedIssueClose: "off",
+        missingPointLabelClose: "off",
+        maintainerOnlyLabelClose: "block",
+        pointBearingLabels: ["gittensor:bug", "gittensor:feature", "gittensor:priority"],
+        maintainerOnlyLabels: ["maintainer-only"],
+        defaultLabelRepo: true,
+        verifyBeforeClose: true,
+        closeDelaySeconds: 30,
+      },
+    } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { linkedIssueHardRules: { assignedIssueClose: "block" } } }));
+    expect(eff.linkedIssueHardRules).toEqual({
+      ownerAssignedClose: "off",
+      assignedIssueClose: "block",
+      missingPointLabelClose: "off",
+      maintainerOnlyLabelClose: "block",
+      pointBearingLabels: ["gittensor:bug", "gittensor:feature", "gittensor:priority"],
+      maintainerOnlyLabels: ["maintainer-only"],
+      defaultLabelRepo: true,
+      verifyBeforeClose: true,
+      closeDelaySeconds: 30,
+    });
+  });
+
+  it("drops malformed linkedIssueHardRules fields instead of replacing existing policy with defaults", () => {
+    const parsed = parseFocusManifest({
+      settings: {
+        linkedIssueHardRules: {
+          assignedIssueClose: "close",
+          maintainerOnlyLabels: "maintainer-only",
+          defaultLabelRepo: "true",
+          closeDelaySeconds: -1,
+        },
+      },
+    });
+    expect(parsed.settings.linkedIssueHardRules).toEqual({});
+    expect(parsed.warnings.some((w) => w.includes("settings.linkedIssueHardRules.assignedIssueClose"))).toBe(true);
+    expect(parsed.warnings.some((w) => w.includes("settings.linkedIssueHardRules.maintainerOnlyLabels"))).toBe(true);
+    expect(parsed.warnings.some((w) => w.includes("settings.linkedIssueHardRules.defaultLabelRepo"))).toBe(true);
+    expect(parsed.warnings.some((w) => w.includes("settings.linkedIssueHardRules.closeDelaySeconds"))).toBe(true);
+  });
+
   it("parses aiReview from settings: and lets gate.aiReview win in resolveEffectiveSettings", () => {
     const parsed = parseFocusManifest({ settings: { aiReviewMode: "advisory", aiReviewByok: true } });
     expect(parsed.settings.aiReviewMode).toBe("advisory");

@@ -29,7 +29,7 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
       return new Response("not found", { status: 404 });
     });
     const env = createTestEnv({});
-    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: [1], installationId: 123, prAuthorLogin: "contrib" });
+    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: [1], installationId: 123 });
     expect(result).toEqual(["gittensor:priority", "help wanted"]);
   });
 
@@ -41,7 +41,7 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
       return new Response("not found", { status: 404 });
     });
     const env = createTestEnv({});
-    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: [1, 2], installationId: 123, prAuthorLogin: "contrib" });
+    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: [1, 2], installationId: 123 });
     expect(result).toEqual(["gittensor:priority"]);
   });
 
@@ -59,7 +59,7 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
     const spy = vi.spyOn(appModule, "createInstallationToken").mockRejectedValue(new Error("mint failed"));
     stubFetch((url) => (url.endsWith("/issues/1") ? Response.json({ number: 1, state: "open", user: { login: "contrib" }, labels: ["gittensor:priority"] }) : new Response("not found", { status: 404 })));
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: [1], installationId: 123, prAuthorLogin: "contrib" });
+    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: [1], installationId: 123 });
     expect(result).toEqual(["gittensor:priority"]);
     spy.mockRestore();
   });
@@ -76,20 +76,20 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
     });
     const env = createTestEnv({});
     const manyIssues = Array.from({ length: 75 }, (_, i) => i + 1);
-    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: manyIssues, installationId: 123, prAuthorLogin: "contrib" });
+    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: manyIssues, installationId: 123 });
     expect(issueFetchCount).toBe(50);
     expect(result).toEqual(Array(50).fill("gittensor:priority"));
   });
 
-  it("ignores a priority label on an unrelated linked issue, even when the PR body names it", async () => {
+  it("trusts a priority label on any verified open linked issue, independent of PR author ownership", async () => {
     stubFetch((url) => {
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.endsWith("/issues/777")) return Response.json({ number: 777, state: "open", user: { login: "maintainer" }, assignees: [], labels: ["gittensor:priority"] });
       return new Response("not found", { status: 404 });
     });
     const env = createTestEnv({});
-    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: [777], installationId: 123, prAuthorLogin: "drive-by" });
-    expect(result).toEqual([]);
+    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: [777], installationId: 123 });
+    expect(result).toEqual(["gittensor:priority"]);
   });
 
   it("ignores a priority label on a closed linked issue, even when the PR author is tied to it", async () => {
@@ -99,11 +99,11 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
       return new Response("not found", { status: 404 });
     });
     const env = createTestEnv({});
-    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: [777], installationId: 123, prAuthorLogin: "contrib" });
+    const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: [777], installationId: 123 });
     expect(result).toEqual([]);
   });
 
-  it("ignores linked-issue labels when the PR author is unavailable", async () => {
+  it("does not require a PR author to propagate labels from a verified open linked issue", async () => {
     stubFetch((url) => {
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.endsWith("/issues/1")) return Response.json({ number: 1, state: "open", user: { login: "contrib" }, labels: ["gittensor:priority"] });
@@ -111,7 +111,7 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
     });
     const env = createTestEnv({});
     const result = await fetchLinkedIssueLabelsForPropagation({ env, repoFullName: "owner/repo", linkedIssues: [1], installationId: 123 });
-    expect(result).toEqual([]);
+    expect(result).toEqual(["gittensor:priority"]);
   });
 
 });

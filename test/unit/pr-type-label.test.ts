@@ -3,9 +3,11 @@ import { DEFAULT_TYPE_LABELS, deriveKindFromTitle, normalizeTypeLabelSet, resolv
 import type { LinkedIssueLabelPropagationConfig } from "../../src/types";
 
 describe("deriveKindFromTitle", () => {
-  it("maps feat/feature → feature; everything else → bug", () => {
-    expect(deriveKindFromTitle("feat: add X")).toBe("feature");
-    expect(deriveKindFromTitle("feature(api): boards")).toBe("feature");
+  it("maps substantial feat/feature titles to feature and keeps small feat-style work as bug", () => {
+    expect(deriveKindFromTitle("feat: add provider fallback")).toBe("feature");
+    expect(deriveKindFromTitle("feature(api): support board exports")).toBe("feature");
+    expect(deriveKindFromTitle("feat(signals): recognize Conan dependency manifests")).toBe("bug");
+    expect(deriveKindFromTitle("feature(api): boards")).toBe("bug");
     expect(deriveKindFromTitle("fix: bug")).toBe("bug");
     expect(deriveKindFromTitle("test: add coverage")).toBe("bug");
     expect(deriveKindFromTitle("docs: readme")).toBe("bug");
@@ -22,7 +24,7 @@ function propagation(overrides: Partial<LinkedIssueLabelPropagationConfig> = {})
 
 describe("resolvePrTypeLabel (#priority-linked-issue-gate)", () => {
   it("returns the feature label by title when propagation is not configured", () => {
-    const result = resolvePrTypeLabel({ title: "feat: x" });
+    const result = resolvePrTypeLabel({ title: "feat: add provider fallback" });
     expect(result).toEqual({ applyLabels: [DEFAULT_TYPE_LABELS.feature], removeLabels: [DEFAULT_TYPE_LABELS.bug, DEFAULT_TYPE_LABELS.priority], source: "title" });
   });
 
@@ -92,14 +94,14 @@ describe("resolvePrTypeLabel (#priority-linked-issue-gate)", () => {
   });
 
   it("does not crash on an empty mappings array and falls through to title-based", () => {
-    const result = resolvePrTypeLabel({ title: "feat: x", linkedIssueLabels: ["anything"], propagation: propagation({ mappings: [] }) });
+    const result = resolvePrTypeLabel({ title: "feat: add provider fallback", linkedIssueLabels: ["anything"], propagation: propagation({ mappings: [] }) });
     expect(result.applyLabels).toEqual([DEFAULT_TYPE_LABELS.feature]);
     expect(result.source).toBe("title");
   });
 
   it("does not crash when linkedIssueLabels is omitted entirely (propagation enabled with mappings configured)", () => {
     const result = resolvePrTypeLabel({
-      title: "feat: x",
+      title: "feat: add provider fallback",
       propagation: propagation({ mappings: [{ issueLabel: "gittensor:priority", prLabel: "gittensor:priority", removeOtherTypeLabels: true }] }),
     });
     expect(result.applyLabels).toEqual([DEFAULT_TYPE_LABELS.feature]);
@@ -123,7 +125,7 @@ describe("resolvePrTypeLabel (#priority-linked-issue-gate)", () => {
 
   it("respects a custom typeLabels set for both the title fallback and the removal set", () => {
     const custom = { bug: "kind:bug", feature: "kind:feature", priority: "kind:priority" };
-    const result = resolvePrTypeLabel({ title: "feat: x", labels: custom });
+    const result = resolvePrTypeLabel({ title: "feat: add provider fallback", labels: custom });
     expect(result).toEqual({ applyLabels: ["kind:feature"], removeLabels: ["kind:bug", "kind:priority"], source: "title" });
   });
 });

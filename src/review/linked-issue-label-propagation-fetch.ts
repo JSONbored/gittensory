@@ -18,9 +18,9 @@ import { githubRateLimitAdmissionKeyForToken } from "../github/client";
 const MAX_LINKED_ISSUES_TO_FETCH = 50;
 
 /** FETCH every linked issue's labels (fail-open) and flatten into one label list for
- *  `resolvePrTypeLabel` (`src/settings/pr-type-label.ts`) to match against. Only OPEN issues
- *  that are tied to the PR author (authored by them or assigned to them) can contribute labels;
- *  closing-keyword text in a PR body is author-controlled and is not authority by itself. Mirrors
+ *  `resolvePrTypeLabel` (`src/settings/pr-type-label.ts`) to match against. Only verified OPEN issues
+ *  can contribute labels; closing-keyword text in a PR body is author-controlled and is not authority by
+ *  itself. Mirrors
  *  `resolveLinkedIssueHardRule`'s own fetch idiom (`src/review/linked-issue-hard-rules.ts`): a per-issue
  *  fetch failure contributes no labels rather than throwing, so if EVERY linked issue fails, the result is
  *  `[]` — which can never match a mapping, meaning a sensitive label like `gittensor:priority` never applies
@@ -38,19 +38,11 @@ export async function fetchLinkedIssueLabelsForPropagation(args: {
   repoFullName: string;
   linkedIssues: number[];
   installationId: number;
-  prAuthorLogin?: string | null | undefined;
 }): Promise<string[]> {
   if (args.linkedIssues.length === 0) return [];
   const linkedIssues = args.linkedIssues.slice(0, MAX_LINKED_ISSUES_TO_FETCH);
   const token = (await createInstallationToken(args.env, args.installationId).catch(() => undefined)) ?? args.env.GITHUB_PUBLIC_TOKEN;
   const admissionKey = githubRateLimitAdmissionKeyForToken(args.env, token, args.installationId);
   const results = await Promise.all(linkedIssues.map((issueNumber) => fetchLinkedIssueFacts(args.env, args.repoFullName, issueNumber, token, admissionKey)));
-  const prAuthorLogin = args.prAuthorLogin?.toLowerCase();
-  if (!prAuthorLogin) return [];
-  return results.flatMap((result) => {
-    if (result.status !== "found" || result.facts.state !== "open") return [];
-    const issueAuthorLogin = result.facts.authorLogin?.toLowerCase();
-    const assignees = new Set(result.facts.assignees.map((login) => login.toLowerCase()));
-    return issueAuthorLogin === prAuthorLogin || assignees.has(prAuthorLogin) ? result.facts.labels : [];
-  });
+  return results.flatMap((result) => (result.status === "found" && result.facts.state === "open" ? result.facts.labels : []));
 }

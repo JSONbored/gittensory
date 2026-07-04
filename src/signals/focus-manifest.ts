@@ -1,11 +1,12 @@
 import { parse as parseYaml } from "yaml";
-import type { GatePolicyPack, GateRuleMode, JsonValue, LinkedIssueLabelPropagationConfig, PrTypeLabelSet, RepositorySettings, ReviewCheckMode } from "../types";
+import type { GatePolicyPack, GateRuleMode, JsonValue, LinkedIssueHardRulesConfig, LinkedIssueLabelPropagationConfig, PrTypeLabelSet, RepositorySettings, ReviewCheckMode } from "../types";
 import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy } from "../settings/autonomy";
 import { normalizeCommandAuthorizationPolicy } from "../settings/command-authorization";
 import { mergeContributorBlacklists, normalizeContributorBlacklist } from "../settings/contributor-blacklist";
 import { normalizeAutoCloseExemptLogins } from "../settings/auto-close-exempt";
 import { DEFAULT_TYPE_LABELS, normalizeTypeLabelSet } from "../settings/pr-type-label";
 import { DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, normalizeLinkedIssueLabelPropagationConfig, VALID_LINKED_ISSUE_LABEL_PROPAGATION_MODES } from "../review/linked-issue-label-propagation";
+import { DEFAULT_LINKED_ISSUE_HARD_RULES, isLinkedIssueHardRuleMode, normalizeLinkedIssueHardRulesConfig } from "../review/linked-issue-hard-rules-config";
 import { normalizeModerationLabel, normalizeModerationRules } from "../settings/moderation-rules";
 import { REES_ANALYZER_NAME_SET, type ReesAnalyzerName } from "../review/enrichment-analyzer-names";
 import { hasUnsafeWildcardCount } from "./change-guardrail";
@@ -221,7 +222,7 @@ export type FocusManifestSettings = Partial<
     | "moderationBannedLabel"
   >
 > & {
-  // `typeLabels`/`linkedIssueLabelPropagation` are declared PARTIAL here (not via the `Pick<RepositorySettings,
+  // `typeLabels`/`linkedIssueLabelPropagation`/`linkedIssueHardRules` are declared PARTIAL here (not via the `Pick<RepositorySettings,
   // ...>` above, which would force a complete, defaults-filled object) so `resolveEffectiveSettings` can merge
   // them field-by-field against the DB value — a `.gittensory.yml` override naming only one key (e.g. just
   // `typeLabels.priority`) must inherit the OTHER keys from the DB-persisted value, not silently reset them to
@@ -230,6 +231,7 @@ export type FocusManifestSettings = Partial<
   // documented array-replace-wholesale overlay behavior).
   typeLabels?: Partial<PrTypeLabelSet> | undefined;
   linkedIssueLabelPropagation?: Partial<LinkedIssueLabelPropagationConfig> | undefined;
+  linkedIssueHardRules?: Partial<LinkedIssueHardRulesConfig> | undefined;
 };
 
 /** Field keys for the public review-panel rows a maintainer can show/hide via `review.fields`. */
@@ -1086,6 +1088,27 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   } else if (r.linkedIssueLabelPropagation !== undefined) {
     warnings.push(`Manifest "settings.linkedIssueLabelPropagation" must be an object; ignoring it and keeping any existing policy.`);
   }
+  // Linked-issue hard rules: same sparse-partial overlay contract as linkedIssueLabelPropagation. A global config
+  // can enable the policy and set label lists; a repo override can toggle one mode without resetting those lists.
+  if (typeof r.linkedIssueHardRules === "object" && r.linkedIssueHardRules !== null && !Array.isArray(r.linkedIssueHardRules)) {
+    const rawRules = r.linkedIssueHardRules as Record<string, unknown>;
+    const validated = normalizeLinkedIssueHardRulesConfig(rawRules, warnings);
+    const sparseRules: Partial<LinkedIssueHardRulesConfig> = {};
+    if (isLinkedIssueHardRuleMode(rawRules.ownerAssignedClose)) sparseRules.ownerAssignedClose = validated.ownerAssignedClose;
+    if (isLinkedIssueHardRuleMode(rawRules.assignedIssueClose)) sparseRules.assignedIssueClose = validated.assignedIssueClose;
+    if (isLinkedIssueHardRuleMode(rawRules.missingPointLabelClose)) sparseRules.missingPointLabelClose = validated.missingPointLabelClose;
+    if (isLinkedIssueHardRuleMode(rawRules.maintainerOnlyLabelClose)) sparseRules.maintainerOnlyLabelClose = validated.maintainerOnlyLabelClose;
+    if (Array.isArray(rawRules.pointBearingLabels)) sparseRules.pointBearingLabels = validated.pointBearingLabels;
+    if (Array.isArray(rawRules.maintainerOnlyLabels)) sparseRules.maintainerOnlyLabels = validated.maintainerOnlyLabels;
+    if (typeof rawRules.defaultLabelRepo === "boolean") sparseRules.defaultLabelRepo = validated.defaultLabelRepo;
+    if (typeof rawRules.verifyBeforeClose === "boolean") sparseRules.verifyBeforeClose = validated.verifyBeforeClose;
+    if (typeof rawRules.closeDelaySeconds === "number" && Number.isFinite(rawRules.closeDelaySeconds) && rawRules.closeDelaySeconds >= 0) {
+      sparseRules.closeDelaySeconds = validated.closeDelaySeconds;
+    }
+    out.linkedIssueHardRules = sparseRules;
+  } else if (r.linkedIssueHardRules !== undefined) {
+    warnings.push(`Manifest "settings.linkedIssueHardRules" must be an object; ignoring it and keeping any existing policy.`);
+  }
   // Contributor blacklist (#1425): `settings.contributorBlacklist` is a list of banned-login entries. Only set it
   // when at least one VALID entry survives normalization, so a malformed block never blanks the DB-configured
   // list via the resolver's `{...dbSettings, ...manifest.settings}` overlay. Normalization warnings are folded in.
@@ -1617,13 +1640,19 @@ export function resolveEffectiveSettings(
   manifest: FocusManifest,
   sharedContributorBlacklist: RepositorySettings["contributorBlacklist"] = [],
 ): RepositorySettings {
-  // `typeLabels`/`linkedIssueLabelPropagation` are parsed as SPARSE partials (see parseFocusManifest above),
+  // `typeLabels`/`linkedIssueLabelPropagation`/`linkedIssueHardRules` are parsed as SPARSE partials (see
+  // parseFocusManifest above),
   // unlike every other `manifest.settings` field, which is always a complete value ready to overlay the DB
   // value wholesale via the spread below. Pull them out of the spread and merge each field individually,
   // manifest override > DB value > built-in default, so a `.gittensory.yml` naming only one key (e.g.
   // `typeLabels.priority`) can never silently reset the others back to the built-in default and discard a
   // DB-customized value (#priority-linked-issue-gate).
-  const { typeLabels: typeLabelsOverride, linkedIssueLabelPropagation: linkedIssueLabelPropagationOverride, ...restManifestSettings } = manifest.settings;
+  const {
+    typeLabels: typeLabelsOverride,
+    linkedIssueLabelPropagation: linkedIssueLabelPropagationOverride,
+    linkedIssueHardRules: linkedIssueHardRulesOverride,
+    ...restManifestSettings
+  } = manifest.settings;
   const effective: RepositorySettings = { ...dbSettings, ...restManifestSettings };
   if (typeLabelsOverride !== undefined) {
     const base = dbSettings.typeLabels ?? DEFAULT_TYPE_LABELS;
@@ -1635,6 +1664,20 @@ export function resolveEffectiveSettings(
       enabled: linkedIssueLabelPropagationOverride.enabled ?? base.enabled,
       mode: linkedIssueLabelPropagationOverride.mode ?? base.mode,
       mappings: linkedIssueLabelPropagationOverride.mappings ?? base.mappings,
+    };
+  }
+  if (linkedIssueHardRulesOverride !== undefined) {
+    const base = dbSettings.linkedIssueHardRules ?? DEFAULT_LINKED_ISSUE_HARD_RULES;
+    effective.linkedIssueHardRules = {
+      ownerAssignedClose: linkedIssueHardRulesOverride.ownerAssignedClose ?? base.ownerAssignedClose,
+      assignedIssueClose: linkedIssueHardRulesOverride.assignedIssueClose ?? base.assignedIssueClose,
+      missingPointLabelClose: linkedIssueHardRulesOverride.missingPointLabelClose ?? base.missingPointLabelClose,
+      maintainerOnlyLabelClose: linkedIssueHardRulesOverride.maintainerOnlyLabelClose ?? base.maintainerOnlyLabelClose,
+      pointBearingLabels: linkedIssueHardRulesOverride.pointBearingLabels ?? base.pointBearingLabels,
+      maintainerOnlyLabels: linkedIssueHardRulesOverride.maintainerOnlyLabels ?? base.maintainerOnlyLabels,
+      defaultLabelRepo: linkedIssueHardRulesOverride.defaultLabelRepo ?? base.defaultLabelRepo,
+      verifyBeforeClose: linkedIssueHardRulesOverride.verifyBeforeClose ?? base.verifyBeforeClose,
+      closeDelaySeconds: linkedIssueHardRulesOverride.closeDelaySeconds ?? base.closeDelaySeconds,
     };
   }
   const gate = manifest.gate;

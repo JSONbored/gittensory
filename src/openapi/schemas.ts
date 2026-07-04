@@ -636,6 +636,19 @@ export const RepositorySettingsSchema = z
         mappings: z.array(z.object({ issueLabel: z.string(), prLabel: z.string(), removeOtherTypeLabels: z.boolean() })),
       })
       .optional(),
+    linkedIssueHardRules: z
+      .object({
+        ownerAssignedClose: z.enum(["block", "off"]),
+        assignedIssueClose: z.enum(["block", "off"]),
+        missingPointLabelClose: z.enum(["block", "off"]),
+        maintainerOnlyLabelClose: z.enum(["block", "off"]),
+        pointBearingLabels: z.array(z.string()),
+        maintainerOnlyLabels: z.array(z.string()),
+        defaultLabelRepo: z.boolean(),
+        verifyBeforeClose: z.boolean(),
+        closeDelaySeconds: z.number().int().min(0).max(300),
+      })
+      .optional(),
     gittensorLabel: z.string(),
     blacklistLabel: z.string().nullable(),
     createMissingLabel: z.boolean(),

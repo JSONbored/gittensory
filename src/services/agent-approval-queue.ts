@@ -159,6 +159,7 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
         body: pr.body,
         linkedIssues: pr.linkedIssues,
         ciToken,
+        prAuthorLogin: pr.authorLogin,
         installationId: pending.installationId,
       });
       stillJustified = linkedIssueHardRule?.violated === true;
@@ -318,6 +319,7 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
         body: pr.body,
         linkedIssues: pr.linkedIssues,
         ciToken,
+        prAuthorLogin: pr.authorLogin,
         installationId: pending.installationId,
       });
       if (linkedIssueHardRule?.violated) {

@@ -167,6 +167,7 @@ import { DEFAULT_GLOBAL_MODERATION_CONFIG, MAX_MODERATION_VIOLATION_DECAY_DAYS, 
 import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy, DEFAULT_AUTO_MAINTAIN_POLICY } from "../settings/autonomy";
 import { DEFAULT_TYPE_LABELS, normalizeTypeLabelSet } from "../settings/pr-type-label";
 import { DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, normalizeLinkedIssueLabelPropagationConfig } from "../review/linked-issue-label-propagation";
+import { DEFAULT_LINKED_ISSUE_HARD_RULES } from "../review/linked-issue-hard-rules-config";
 import { decryptSecret, encryptSecret, sha256Hex } from "../utils/crypto";
 import { errorMessage, jsonString, nowIso, parseJson, repoParts } from "../utils/json";
 import { PUBLIC_LOCAL_PATH_SCRUB_PATTERN } from "../signals/redaction";
@@ -501,6 +502,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       typeLabelsEnabled: true,
       typeLabels: { ...DEFAULT_TYPE_LABELS },
       linkedIssueLabelPropagation: { ...DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, mappings: [] },
+      linkedIssueHardRules: { ...DEFAULT_LINKED_ISSUE_HARD_RULES, pointBearingLabels: [], maintainerOnlyLabels: [] },
       gittensorLabel: "gittensor",
       blacklistLabel: "slop",
       createMissingLabel: true,
@@ -570,6 +572,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     typeLabelsEnabled: row.typeLabelsEnabled,
     typeLabels: parseTypeLabelSet(row.typeLabelsJson),
     linkedIssueLabelPropagation: parseLinkedIssueLabelPropagationConfig(row.linkedIssueLabelPropagationJson),
+    linkedIssueHardRules: { ...DEFAULT_LINKED_ISSUE_HARD_RULES, pointBearingLabels: [], maintainerOnlyLabels: [] },
     gittensorLabel: row.gittensorLabel,
     blacklistLabel: row.blacklistLabel,
     createMissingLabel: row.createMissingLabel,
