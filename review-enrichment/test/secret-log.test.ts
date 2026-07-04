@@ -104,6 +104,26 @@ test("scanPatchForSecretLog cites the added line via the hunk header", () => {
   ]);
 });
 
+test("scanPatchForSecretLog does not let a no-newline marker skew the line number", () => {
+  // `\ No newline at end of file` is not a new-file line; advancing past it would cite the
+  // sink one line too high (same class as the iac-misconfig / redos regression).
+  const patch = [
+    "@@ -1,1 +1,2 @@",
+    "-const x = 1;",
+    "\\ No newline at end of file",
+    "+const x = 1;",
+    "+console.dir(req.headers)",
+  ].join("\n");
+  assert.deepEqual(scanPatchForSecretLog("src/app.ts", patch), [
+    {
+      file: "src/app.ts",
+      line: 2,
+      sink: "console.dir",
+      category: "request-object",
+    },
+  ]);
+});
+
 test("scanPatchForSecretLog ignores context and removed lines", () => {
   const patch = [
     "@@ -1,2 +1,1 @@",
