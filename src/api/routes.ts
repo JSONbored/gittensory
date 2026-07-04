@@ -619,7 +619,10 @@ const repositorySettingsSchema = z.object({
   publicAudienceMode: z.enum(["oss_maintainer", "gittensor_only"]).default("oss_maintainer"),
   publicSignalLevel: z.enum(["minimal", "standard"]).default("standard"),
   checkRunMode: z.enum(["off", "enabled"]).default("off"),
-  checkRunDetailLevel: z.enum(["minimal", "standard", "deep"]).default("standard"),
+  // Matches repository_settings.check_run_detail_level's own column default (#2907) -- the Context check's
+  // public output is intentionally minimal by design (see formatCheckRunOutput's doc comment), so a caller of
+  // this full-replace route that omits this field must land on the same safe default as a never-configured row.
+  checkRunDetailLevel: z.enum(["minimal", "standard", "deep"]).default("minimal"),
   gateCheckMode: z.enum(["off", "enabled"]).default("off"),
   // #2852: deliberately NO `.default()` here (unlike every sibling field above) -- this is a non-partial,
   // full-replace schema (see upsertRepositorySettings call below, which passes every parsed field straight

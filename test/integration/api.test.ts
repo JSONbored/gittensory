@@ -269,6 +269,18 @@ describe("api routes", () => {
     await expect(response.json()).resolves.toMatchObject({ repoFullName: "acme/badged", badgeEnabled: true });
   });
 
+  it("REGRESSION (#2907): defaults checkRunDetailLevel to minimal, matching the DB column's own default, when omitted", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    const response = await app.request(
+      "/v1/internal/repos/acme/detail-level-default/settings",
+      { method: "POST", headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ checkRunMode: "enabled" }) },
+      env,
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ checkRunMode: "enabled", checkRunDetailLevel: "minimal" });
+  });
+
   it("downgrades qualityGateMode: block to advisory through the internal settings write endpoint too (#2267)", async () => {
     // Readiness/quality can never hard-block a PR — the internal full-settings write path (used by tooling,
     // not just the maintainer dashboard) gets the identical downgrade so it can't persist "block" either.

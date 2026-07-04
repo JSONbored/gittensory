@@ -51,6 +51,7 @@ function fixtureRoot(): string {
     [
       "const serviceOnly = process.env.SERVICE_ONLY;",
       "const helperOnly = envString(env, 'SERVICE_HELPER_ONLY');",
+      "const casted = (env as unknown as Record<string, unknown>).CASTED_ONLY;",
       "",
     ].join("\n"),
   );
@@ -62,6 +63,7 @@ describe("gen-selfhost-env-reference (#2081)", () => {
     expect(collectSelfHostEnvVars({ rootDir: fixtureRoot() })).toEqual([
       { name: "ALIASED_ENV", firstReference: "src/selfhost/a.ts:5" },
       { name: "BRACKET_ONLY", firstReference: "src/selfhost/a.ts:4" },
+      { name: "CASTED_ONLY", firstReference: "src/services/notify-discord.ts:3" },
       { name: "CTX_ONLY", firstReference: "src/selfhost/a.ts:10" },
       { name: "DEFAULTED_ENV", firstReference: "src/selfhost/a.ts:5" },
       { name: "DESTRUCTURED", firstReference: "src/selfhost/a.ts:5" },

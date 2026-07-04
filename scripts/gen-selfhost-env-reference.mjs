@@ -95,7 +95,16 @@ function bindingElementName(element) {
   return null;
 }
 
-function isEnvContainer(node) {
+// Unwraps `(x)` and `x as T` (including chained casts like `env as unknown as Record<string, unknown>`, the
+// pattern src/services/notify-discord.ts uses to read an env key TypeScript's Env type doesn't declare) so
+// isEnvContainer sees the underlying identifier/property-access instead of the cast wrapper (#2907).
+function unwrapEnvExpression(node) {
+  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node)) return unwrapEnvExpression(node.expression);
+  return node;
+}
+
+function isEnvContainer(rawNode) {
+  const node = unwrapEnvExpression(rawNode);
   if (ts.isIdentifier(node)) return node.text === "env";
   return (
     ts.isPropertyAccessExpression(node) &&

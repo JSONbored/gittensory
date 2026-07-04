@@ -383,6 +383,13 @@ settings:
   # Bool. Default: false.
   includeMaintainerAuthors: false
 
+  # Standing rule: the repo OWNER's own PRs (and ADMIN_GITHUB_LOGINS fleet-operator PRs, #2133) are NEVER
+  # auto-closed by default -- they may still auto-merge when clean + passing, or fall to a manual hold.
+  # Set true to make owner/admin-authored PRs eligible for auto-close like a contributor's (still gated by
+  # the `close` autonomy class below + adverse-signal conditions). Automation-bot PRs stay exempt regardless
+  # of this setting. Bool. Default: false.
+  closeOwnerAuthors: false
+
   # Require a linked issue on every PR (dashboard equivalent of the toggle that
   # can auto-promote gate.linkedIssue to block). Bool. Default: false.
   requireLinkedIssue: false
@@ -512,3 +519,26 @@ settings:
   # commandRateLimitMaxPerWindow: 20        # Positive integer. Per-command invocation limit for a CHEAP command (cache-only, no AI call) within the window. Default: 20.
   # commandRateLimitAiMaxPerWindow: 5       # Positive integer. Tighter limit for an AI-cost-bearing command (ask/blockers/preflight/reviewability/packet/duplicate-check/next-action/repo-fit). Default: 5.
   # commandRateLimitWindowHours: 24         # Positive integer. Rolling window (hours) both limits above count against. Default: 24.
+
+# Per-repo activation overrides for the converged review features that ship behind a deployment-wide
+# GITTENSORY_REVIEW_* env kill-switch (rag/reputation/unifiedComment/safety). Each key is `true` (force on
+# for this repo, subject to the env flag still being enabled), `false` (force off), or omitted (falls back
+# to the GITTENSORY_REVIEW_REPOS allowlist default -- an operator who sets nothing keeps today's behavior).
+# features:
+#   rag: true
+#   reputation: false
+#   unifiedComment: true
+#   safety: true
+
+# Registry-review lane (#2435): lets a self-hosted maintainer point gittensory at their OWN structured
+# registry (e.g. a subnet/plugin/package catalog) without a gittensory code change -- reviewing additions
+# to a data file the same way it reviews code. Uncomment and set at least entryFileGlob + collectionField
+# (both required; the block is ignored with a warning if either is missing).
+# contentLane:
+#   entryFileGlob: registry/*.json      # Glob for the structured entry files this lane reviews. Required.
+#   collectionField: entries            # The JSON field holding the collection this lane diffs. Required.
+#   providerFileGlob: providers/*.ts    # Optional glob for source files the entries are validated against.
+#   artifactGlob: dist/registry.json    # Optional glob for a generated/build artifact to cross-check.
+#   maxAppendedEntries: 1               # Positive integer cap on new entries per PR. Default: unbounded.
+#   duplicateKeyFields: [slug]          # Field name(s) used to detect a duplicate entry. Default: [] (no dedup check).
+#   validatorId: my-registry-validator  # Optional identifier for a custom per-entry validator. Default: none.
