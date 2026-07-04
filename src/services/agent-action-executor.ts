@@ -40,6 +40,12 @@ import { incr } from "../selfhost/metrics";
 // autonomy (the config IS the authorization; there is no human commenter to authorize, unlike #824).
 const AGENT_ACTOR = "gittensory";
 
+// Bound on audit_events.detail / the reason embedded in buildAgentActionAudit (#terminal-outcome-audit). A
+// heuristic close/hold reason is built by joining every blocker's title (agent-actions.ts), so an unbounded PR
+// with many blockers could otherwise write an arbitrarily large string; matches the existing 280-char bound
+// already used for mergeBlockedReason (db/repositories.ts) and the merge_blocked audit metadata below.
+const AUDIT_REASON_MAX_LENGTH = 280;
+
 // The PR-visible action classes that require an elevated GitHub App write permission. Most use
 // `pull_requests: write`; merge uses `contents: write`; `label` mutates through the Issues API, so it is exempt
 // from this readiness gate.
@@ -186,10 +192,15 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
     const autonomyLevel = resolveAutonomy(ctx.autonomy, action.autonomyClass ?? action.actionClass);
     const audit = (outcome: AgentActionOutcome["outcome"], detail: string) => {
       const auditOutcome = outcome === "dry_run" ? "completed" : outcome;
-      outcomes.push({ actionClass: action.actionClass, outcome, detail });
+      // Bounded like every other audit-facing reason field in this codebase (agent-action-executor.ts's own
+      // merge_blocked path below, db/repositories.ts's mergeBlockedReason) -- a heuristic close's reason is
+      // built by joining every blocker title, so a PR with many blockers could otherwise write an arbitrarily
+      // large, un-truncated string into audit_events.detail (#terminal-outcome-audit).
+      const boundedDetail = detail.length > AUDIT_REASON_MAX_LENGTH ? `${detail.slice(0, AUDIT_REASON_MAX_LENGTH)}…` : detail;
+      outcomes.push({ actionClass: action.actionClass, outcome, detail: boundedDetail });
       return recordAuditEvent(
         env,
-        buildAgentActionAudit({ actionClass: action.actionClass, autonomyLevel, mode, outcome: auditOutcome, repoFullName: ctx.repoFullName, targetKey, actor: AGENT_ACTOR, reason: detail }),
+        buildAgentActionAudit({ actionClass: action.actionClass, autonomyLevel, mode, outcome: auditOutcome, repoFullName: ctx.repoFullName, targetKey, actor: AGENT_ACTOR, reason: boundedDetail }),
       );
     };
 
@@ -516,10 +527,15 @@ export async function executeIssueMaintenanceActions(env: Env, ctx: IssueActionE
     const autonomyLevel = resolveAutonomy(ctx.autonomy, action.autonomyClass ?? action.actionClass);
     const audit = (outcome: AgentActionOutcome["outcome"], detail: string) => {
       const auditOutcome = outcome === "dry_run" ? "completed" : outcome;
-      outcomes.push({ actionClass: action.actionClass, outcome, detail });
+      // Bounded like every other audit-facing reason field in this codebase (agent-action-executor.ts's own
+      // merge_blocked path below, db/repositories.ts's mergeBlockedReason) -- a heuristic close's reason is
+      // built by joining every blocker title, so a PR with many blockers could otherwise write an arbitrarily
+      // large, un-truncated string into audit_events.detail (#terminal-outcome-audit).
+      const boundedDetail = detail.length > AUDIT_REASON_MAX_LENGTH ? `${detail.slice(0, AUDIT_REASON_MAX_LENGTH)}…` : detail;
+      outcomes.push({ actionClass: action.actionClass, outcome, detail: boundedDetail });
       return recordAuditEvent(
         env,
-        buildAgentActionAudit({ actionClass: action.actionClass, autonomyLevel, mode, outcome: auditOutcome, repoFullName: ctx.repoFullName, targetKey, actor: AGENT_ACTOR, reason: detail }),
+        buildAgentActionAudit({ actionClass: action.actionClass, autonomyLevel, mode, outcome: auditOutcome, repoFullName: ctx.repoFullName, targetKey, actor: AGENT_ACTOR, reason: boundedDetail }),
       );
     };
 

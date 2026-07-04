@@ -113,6 +113,7 @@ const DEFAULT_METRIC_META: readonly (readonly [string, MetricMeta])[] = [
   ["gittensory_public_surface_publish_skipped_current_total", { help: "Public surface publishes skipped because state is current.", type: "counter" }],
   ["gittensory_gate_decisions_total", { help: "Gate decisions by conclusion.", type: "counter" }],
   ["gittensory_precision_breaker_downgrades_total", { help: "Would-merge/would-close actions downgraded to a human hold by an accuracy circuit-breaker, by breaker direction.", type: "counter" }],
+  ["gittensory_agent_disposition_total", { help: "Final agent disposition per PR pass (merge/close/hold), by repo, action class, blocker-code class, and autonomy level.", type: "counter" }],
   ["gittensory_reviews_published_total", { help: "Published review comments.", type: "counter" }],
   ["gittensory_github_branch_protection_permission_denied_total", { help: "GitHub branch-protection reads denied by permissions.", type: "counter" }],
   ["gittensory_github_pr_files_fetch_total", { help: "GitHub pull-request file fetch attempts.", type: "counter" }],
@@ -120,14 +121,27 @@ const DEFAULT_METRIC_META: readonly (readonly [string, MetricMeta])[] = [
 ];
 const metricMeta = new Map<string, MetricMeta>(DEFAULT_METRIC_META);
 
-// These public counters are scraped without auth; redact repo labels at the counter call-site.
+// These public counters are scraped without auth on the shared CLOUD worker, so redact repo labels at the
+// counter call-site there. A self-hosted instance's /metrics endpoint is the operator's own Prometheus/Grafana
+// scrape target, not a publicly reachable one -- there is no other-tenant repo name to protect from itself, and
+// redacting `repo` there just breaks the operator's own per-repo dashboards (#terminal-outcome-audit gap: the
+// one label gittensory_gate_decisions_total carried was being dropped even for self-host, with no bypass).
+let selfHostedMetricsMode = false;
+
+/** Call ONCE at boot (self-host entrypoint only) to stop redacting `repo` from PRIVATE_REPO_LABEL_METRICS.
+ *  Never called on the shared cloud worker, so its default (false, i.e. redact) stays byte-identical there. */
+export function setSelfHostedMetricsMode(isSelfHosted: boolean): void {
+  selfHostedMetricsMode = isSelfHosted;
+}
+
 const PRIVATE_REPO_LABEL_METRICS = new Set([
   "gittensory_gate_decisions_total",
   "gittensory_reviews_published_total",
+  "gittensory_agent_disposition_total",
 ]);
 
 function publicLabelsForMetric(name: string, labels?: Labels): Labels | undefined {
-  if (!labels || !PRIVATE_REPO_LABEL_METRICS.has(name) || !("repo" in labels)) return labels;
+  if (!labels || selfHostedMetricsMode || !PRIVATE_REPO_LABEL_METRICS.has(name) || !("repo" in labels)) return labels;
   const publicLabels = { ...labels };
   delete publicLabels.repo;
   return Object.keys(publicLabels).length > 0 ? publicLabels : undefined;

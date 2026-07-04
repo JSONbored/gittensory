@@ -122,6 +122,31 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect((await auditFor(env, "merge"))?.outcome).toBe("completed");
   });
 
+  // #terminal-outcome-audit: a heuristic close's reason is built by joining every blocker title
+  // (planAgentMaintenanceActions), so a PR with many/verbose blockers could otherwise write an unbounded string
+  // into audit_events.detail. Bounded the same way the pre-existing merge_blocked/mergeBlockedReason paths
+  // already are (280 chars).
+  it("truncates an oversized action reason to AUDIT_REASON_MAX_LENGTH (280 chars) before writing to audit_events.detail", async () => {
+    const env = createTestEnv({});
+    const longReason = "blocker: ".repeat(50); // 450 chars, well over the 280-char bound
+    expect(longReason.length).toBeGreaterThan(280);
+    const closeWithLongReason: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: longReason, closeComment: "closing" };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [closeWithLongReason]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(outcomes[0]?.detail.length).toBe(281); // 280 chars + the "…" truncation marker
+    expect(outcomes[0]?.detail.endsWith("…")).toBe(true);
+    const audit = await (env.DB.prepare("select detail from audit_events where event_type = 'agent.action.close' order by created_at desc limit 1").first<{ detail: string }>());
+    expect(audit?.detail).toBe(outcomes[0]?.detail);
+    expect(audit?.detail.length).toBeLessThan(longReason.length);
+  });
+
+  it("does NOT truncate a reason at or under the bound (no stray truncation marker on ordinary-length reasons)", async () => {
+    const env = createTestEnv({});
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [close]);
+    expect(outcomes[0]?.detail).toBe("noise");
+    expect(outcomes[0]?.detail.endsWith("…")).toBe(false);
+  });
+
   it("#label-scoping: a label action's autonomyClass (not the literal actionClass) governs the durable re-check", async () => {
     const env = createTestEnv({});
     // autonomy.label is OFF; autonomy.close is ON — a label authorized via autonomyClass: "close" must still
@@ -1128,6 +1153,29 @@ describe("executeIssueMaintenanceActions (#2270 issue-side actuation)", () => {
     const outcomes = await executeIssueMaintenanceActions(env, issueCtx(), [issueClose]);
     expect(outcomes[0]?.outcome).toBe("error");
     expect((await auditFor(env, "close"))?.outcome).toBe("error");
+  });
+
+  // #terminal-outcome-audit: the issue-actions executor has its own `audit` closure (a separate function scope
+  // from executeAgentMaintenanceActions above), so the same bounded-reason fix needed its own coverage here.
+  it("truncates an oversized action reason to AUDIT_REASON_MAX_LENGTH (280 chars) before writing to audit_events.detail", async () => {
+    const env = createTestEnv({});
+    const longReason = "over the per-contributor open-item cap: ".repeat(10); // well over the 280-char bound
+    expect(longReason.length).toBeGreaterThan(280);
+    const closeWithLongReason: PlannedAgentAction = { ...issueClose, reason: longReason };
+    const outcomes = await executeIssueMaintenanceActions(env, issueCtx(), [closeWithLongReason]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(outcomes[0]?.detail.length).toBe(281); // 280 chars + the "…" truncation marker
+    expect(outcomes[0]?.detail.endsWith("…")).toBe(true);
+    const audit = await env.DB.prepare("select detail from audit_events where event_type = 'agent.action.close' order by created_at desc limit 1").first<{ detail: string }>();
+    expect(audit?.detail).toBe(outcomes[0]?.detail);
+    expect(audit?.detail.length).toBeLessThan(longReason.length);
+  });
+
+  it("does NOT truncate a reason at or under the bound (no stray truncation marker on ordinary-length reasons)", async () => {
+    const env = createTestEnv({});
+    const outcomes = await executeIssueMaintenanceActions(env, issueCtx(), [issueClose]);
+    expect(outcomes[0]?.detail).toBe(issueClose.reason);
+    expect(outcomes[0]?.detail.endsWith("…")).toBe(false);
   });
 });
 

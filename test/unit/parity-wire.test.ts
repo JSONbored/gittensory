@@ -16,8 +16,10 @@ import {
   computeParityReadiness,
   isParityAuditEnabled,
   nativeGateActionFromConclusion,
+  neutralHoldReasonCode,
   recordNativeGateDecision,
 } from "../../src/review/parity-wire";
+import type { AdvisoryFinding } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
 
 // ── Direct D1 helpers over the real migrated schema (0049 review_audit) ──────────────────────────────────────
@@ -54,12 +56,44 @@ describe("isParityAuditEnabled — default OFF, truthy convention", () => {
 // ── nativeGateActionFromConclusion — gittensory conclusion → comparable GateAction (pure) ────────────────────
 
 describe("nativeGateActionFromConclusion — gittensory gate conclusion → parity GateAction", () => {
-  it("maps success → merge, failure/action_required → hold (gittensory never closes), neutral/skipped → null", () => {
+  it("maps success → merge, failure/action_required/neutral → hold (gittensory never closes), skipped → null", () => {
     expect(nativeGateActionFromConclusion("success")).toBe("merge");
     expect(nativeGateActionFromConclusion("failure")).toBe("hold");
     expect(nativeGateActionFromConclusion("action_required")).toBe("hold");
-    expect(nativeGateActionFromConclusion("neutral")).toBeNull();
+    // #terminal-outcome-audit: neutral is a REAL "hold this PR for a human" decision (guardrail/size/manifest-
+    // blocked/ai-inconclusive), not "no decision was made" -- recording it is what lets an operator see holds
+    // without hand-querying review_audit for a hold class the parity recorder used to silently discard.
+    expect(nativeGateActionFromConclusion("neutral")).toBe("hold");
+    // skipped is genuinely different: the gate was never evaluated at all (e.g. the repo hasn't finished
+    // syncing), so there is no decision, comparable or otherwise, to record.
     expect(nativeGateActionFromConclusion("skipped")).toBeNull();
+  });
+});
+
+// ── neutralHoldReasonCode — bounded reason-class for a neutral hold (pure) ───────────────────────────────────
+
+describe("neutralHoldReasonCode — bounded hold-reason class for a neutral gate evaluation", () => {
+  const finding = (code: string): AdvisoryFinding => ({ code, severity: "warning", title: "t", detail: "d" });
+
+  it("returns null for a non-neutral conclusion, regardless of warnings", () => {
+    expect(neutralHoldReasonCode({ conclusion: "success", warnings: [finding("guardrail_hold")] })).toBeNull();
+    expect(neutralHoldReasonCode({ conclusion: "failure", warnings: [finding("guardrail_hold")] })).toBeNull();
+    expect(neutralHoldReasonCode({ conclusion: "skipped", warnings: [] })).toBeNull();
+  });
+
+  it("returns the recognized code for each known neutral-hold class (guardrail, size, manifest-blocked, ai-inconclusive, sync-state)", () => {
+    for (const code of ["guardrail_hold", "oversized_pr", "manifest_blocked_path", "ai_review_inconclusive", "repo_not_registered", "repo_not_seen", "pr_not_cached", "pre_merge_check_unresolved", "cla_check_unresolved"]) {
+      expect(neutralHoldReasonCode({ conclusion: "neutral", warnings: [finding(code)] })).toBe(code);
+    }
+  });
+
+  it("returns null (fail-safe fallback) when neutral but no recognized code is present in warnings", () => {
+    expect(neutralHoldReasonCode({ conclusion: "neutral", warnings: [finding("readiness_score_below_threshold")] })).toBeNull();
+    expect(neutralHoldReasonCode({ conclusion: "neutral", warnings: [] })).toBeNull();
+  });
+
+  it("picks the first recognized code by priority order when multiple hold findings are present (oversized_pr before guardrail_hold)", () => {
+    expect(neutralHoldReasonCode({ conclusion: "neutral", warnings: [finding("guardrail_hold"), finding("oversized_pr")] })).toBe("oversized_pr");
   });
 });
 
@@ -101,12 +135,22 @@ describe("recordNativeGateDecision — flag-gated SHADOW recording into review_a
     expect((await rawAll(env, "SELECT * FROM review_audit")).length).toBe(2);
   });
 
-  it("does NOT record a non-comparable conclusion (neutral/skipped) or a decision with no head_sha", async () => {
+  it("does NOT record a genuinely non-comparable conclusion (skipped) or a decision with no head_sha", async () => {
     const env = createTestEnv({ GITTENSORY_REVIEW_PARITY_AUDIT: "true" });
-    await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 1, headSha: "sha", conclusion: "neutral" });
     await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 2, headSha: "sha", conclusion: "skipped" });
     await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 3, headSha: null, conclusion: "success" });
     expect((await rawAll(env, "SELECT * FROM review_audit")).length).toBe(0);
+  });
+
+  // #terminal-outcome-audit: neutral (a guardrail/size/manifest-blocked/ai-inconclusive hold) now records as a
+  // comparable 'hold' row, same as failure -- this is the fix for the class of hold that used to vanish
+  // silently (nativeGateActionFromConclusion previously mapped neutral to null, same as skipped).
+  it("records a neutral conclusion as a 'hold' row (the fix for a previously-silent hold class)", async () => {
+    const env = createTestEnv({ GITTENSORY_REVIEW_PARITY_AUDIT: "true" });
+    await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 1, headSha: "sha", conclusion: "neutral", reasonCode: "guardrail_hold" });
+    const rows = await rawAll(env, "SELECT * FROM review_audit");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ decision: "hold", summary: "guardrail_hold" });
   });
 
   it("flag-OFF records NOTHING on the CLOUD WORKER — no D1 write (byte-identical review path)", async () => {

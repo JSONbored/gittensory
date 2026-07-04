@@ -19607,12 +19607,17 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
     await setupAutoActionRepo(env, { autonomy: { close: "auto" } });
     const seen = { closed: false, merged: false };
     stubPrFetch(60, "conv60", seen);
+    resetMetrics();
 
     await processJob(env, { type: "github-webhook", deliveryId: "conv-close", eventName: "pull_request", payload: prPayload() });
 
     expect(seen.closed).toBe(true);
     const closeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.close'").first<{ n: number }>();
     expect(closeAudit?.n).toBeGreaterThanOrEqual(1);
+    // #terminal-outcome-audit: the disposition counter's "close" action_class, with the actual gate-blocker
+    // code (missing_linked_issue, from the default linkedIssueGateMode:block + no-linked-issue body) as the
+    // bounded blocker_class -- proof this reaches the real gate.blockers, not just a hardcoded label.
+    expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="close",autonomy_level="auto",blocker_class="missing_linked_issue"} 1');
   });
 
   it("reviewCheckMode: disabled still auto-closes a blocked contributor PR via the general heuristic-close path (#2852)", async () => {
@@ -19716,6 +19721,7 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
     // Step 2: CI finishes; a check_suite.completed webhook for the SAME head re-triggers the pipeline, which now
     // sees a passing CI aggregate and merges.
     ciState = "passed";
+    resetMetrics();
     await processJob(env, {
       type: "github-webhook",
       deliveryId: "conv-chain-2",
@@ -19731,6 +19737,8 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
     expect(seen.merged).toBe(true);
     const mergeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.merge'").first<{ n: number }>();
     expect(mergeAudit?.n).toBeGreaterThanOrEqual(1);
+    // #terminal-outcome-audit: the disposition counter's "merge" action_class, on the actual live call site.
+    expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="merge",autonomy_level="auto",blocker_class="none"} 1');
   });
 
   // #terminal-outcome-audit: end-to-end proof that the LIVE runAgentMaintenancePlanAndExecute call site (not just
@@ -19800,6 +19808,11 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
     const mergeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.merge'").first<{ n: number }>();
     expect(mergeAudit?.n).toBe(0);
     expect(await renderMetrics()).toContain('gittensory_precision_breaker_downgrades_total{direction="merge"} 1');
+    // #terminal-outcome-audit: the ALWAYS-recorded disposition counter, placed before the "nothing was planned"
+    // early return -- this is the exact "hold, but no audit_events row at all" shape (the breaker downgrade
+    // leaves no merge/close action) that previously had zero aggregate signal. close autonomy is unset in this
+    // repo's settings (only merge/approve are configured), so it resolves to the default "observe".
+    expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="hold",autonomy_level="observe",blocker_class="none"} 1');
   });
 
   it("reviewCheckMode: disabled still auto-merges a green PR via the general heuristic path, with ZERO check-run API calls (#2852)", async () => {

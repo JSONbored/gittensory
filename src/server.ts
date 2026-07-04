@@ -51,7 +51,7 @@ import {
   sqliteBackupAdvisory,
   type ReadinessProbe,
 } from "./selfhost/health";
-import { gauge, gaugeVector, incr, observe, renderMetrics } from "./selfhost/metrics";
+import { gauge, gaugeVector, incr, observe, renderMetrics, setSelfHostedMetricsMode } from "./selfhost/metrics";
 import { runSelfHostMigrations } from "./selfhost/migrate";
 import { createPgAdapter, tuneGithubRateLimitObservationsAutovacuum } from "./selfhost/pg-adapter";
 import { createPgQueue } from "./selfhost/pg-queue";
@@ -276,6 +276,11 @@ async function main(): Promise<void> {
   loadFileSecrets();
   /* v8 ignore next -- importing this entrypoint starts the Node server; pure validation is covered in selfhost-preflight tests. */
   assertSelfHostPreflight(process.env);
+  // This entrypoint IS the self-host runtime by definition (the cloud worker never imports server.ts), so the
+  // /metrics endpoint it serves is the operator's own private scrape target, not a publicly reachable one --
+  // stop redacting the `repo` label PRIVATE_REPO_LABEL_METRICS otherwise drops for every deployment
+  // (#terminal-outcome-audit).
+  setSelfHostedMetricsMode(true);
   // Container-private per-repo config (self-host): register the GITTENSORY_REPO_CONFIG_DIR reader so the focus-
   // manifest loader prefers a mounted `{owner}__{repo}.yml`, deep-merged over an optional root `.gittensory.yml`
   // global default, over the public `.gittensory.yml` (review policy stays private; see
@@ -288,6 +293,18 @@ async function main(): Promise<void> {
   // repo's conventions. Unset dir ⇒ null reader ⇒ no change.
   setLocalReviewContextReader(
     makeLocalReviewContextReader(process.env.GITTENSORY_REPO_CONFIG_DIR),
+  );
+  // Boot-time visibility (config-drift guardrail): state which config dir is actually in effect, unconditionally
+  // -- neither reader above logs anything, so an operator previously had no way to confirm from the logs alone
+  // which directory (if any) was live, which is exactly the ambiguity that let a stale, no-longer-mounted config
+  // path get mistaken for the real one during a past incident. Never touches or validates any file; this is
+  // purely a log line, same "state what's in effect" shape as the sentry/otel boot logs below.
+  console.log(
+    JSON.stringify({
+      event: "selfhost_config_dir",
+      configured: Boolean(process.env.GITTENSORY_REPO_CONFIG_DIR?.trim()),
+      dir: process.env.GITTENSORY_REPO_CONFIG_DIR?.trim() || null,
+    }),
   );
   // Error tracking (#1468): opt-in via SENTRY_DSN — a complete no-op when unset. When on, capture uncaught crashes
   // + unhandled rejections (flush before exit for the fatal case); per-subsystem captures (queue dead-letter,

@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { gauge, gaugeVector, incr, observe, registerMetricMeta, renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
+import { gauge, gaugeVector, incr, observe, registerMetricMeta, renderMetrics, resetMetrics, setSelfHostedMetricsMode } from "../../src/selfhost/metrics";
 
-afterEach(() => resetMetrics());
+afterEach(() => {
+  resetMetrics();
+  // setSelfHostedMetricsMode is a separate module-level flag from the counters/gauges resetMetrics() clears --
+  // reset it explicitly so a test that turns it on can never leak into an unrelated later test.
+  setSelfHostedMetricsMode(false);
+});
 
 describe("metrics registry (#982)", () => {
   it("renders unregistered counters exactly as bare samples", async () => {
@@ -107,6 +112,30 @@ describe("metrics registry (#982)", () => {
   it("preserves repository labels for unrelated metrics", async () => {
     incr("debug_total", { repo: "public-owner/public-repo" });
     expect(await renderMetrics()).toContain('debug_total{repo="public-owner/public-repo"} 1');
+  });
+
+  // #terminal-outcome-audit: a self-hosted instance's /metrics is the operator's own private scrape target, not
+  // a publicly reachable one -- setSelfHostedMetricsMode(true) (called once at self-host boot) must stop
+  // redacting `repo` from these counters so an operator can actually slice their OWN dashboards by repo.
+  it("setSelfHostedMetricsMode(true) stops redacting the repo label on the cloud-private counters", async () => {
+    setSelfHostedMetricsMode(true);
+    incr("gittensory_gate_decisions_total", { repo: "owner/repo", conclusion: "success" });
+    incr("gittensory_reviews_published_total", { repo: "owner/repo" });
+    incr("gittensory_agent_disposition_total", { repo: "owner/repo", action_class: "hold", blocker_class: "none", autonomy_level: "auto" });
+
+    const out = await renderMetrics();
+    expect(out).toContain('gittensory_gate_decisions_total{conclusion="success",repo="owner/repo"} 1');
+    expect(out).toContain('gittensory_reviews_published_total{repo="owner/repo"} 1');
+    expect(out).toContain('repo="owner/repo"');
+  });
+
+  it("setSelfHostedMetricsMode(false) (the default) still redacts — byte-identical to the cloud worker", async () => {
+    setSelfHostedMetricsMode(false);
+    incr("gittensory_agent_disposition_total", { repo: "owner/repo", action_class: "hold", blocker_class: "none", autonomy_level: "auto" });
+
+    const out = await renderMetrics();
+    expect(out).not.toContain("owner/repo");
+    expect(out).toContain('gittensory_agent_disposition_total{action_class="hold",autonomy_level="auto",blocker_class="none"} 1');
   });
 
   it("gauges sample at scrape time", async () => {

@@ -437,7 +437,7 @@ import {
   recordReversalSignals,
   runSelfTuneBreaker,
 } from "../review/outcomes-wire";
-import { recordNativeGateDecision } from "../review/parity-wire";
+import { neutralHoldReasonCode, recordNativeGateDecision } from "../review/parity-wire";
 import type { SubmissionOutcome } from "../review/submitter-reputation";
 import type {
   AdvisoryFinding,
@@ -1876,6 +1876,21 @@ export function precisionBreakerDowngradeDirections(planned: PlannedAgentAction[
   return directions;
 }
 
+/** PURE: the bounded `{actionClass, blockerClass}` label pair for the `gittensory_agent_disposition_total`
+ *  counter (#terminal-outcome-audit), derived from the FINAL post-breaker plan and the gate's own blocker
+ *  codes -- never from free text. `actionClass` is "merge"/"close" when the final plan still contains that
+ *  action, else "hold" (guardrail, owner-exemption, migration-collision, not-yet-mergeable, breaker-downgraded,
+ *  or any other bucket that produces no merge/close action). `blockerClass` is the first gate-blocker code, or
+ *  "none" when the gate reported none (a clean PR held for a non-blocker reason, e.g. CI still pending). */
+export function agentDispositionLabels(breakerOnPlan: PlannedAgentAction[], gateBlockerCodes: string[]): { actionClass: "merge" | "close" | "hold"; blockerClass: string } {
+  const actionClass = breakerOnPlan.some((action) => action.actionClass === "merge")
+    ? "merge"
+    : breakerOnPlan.some((action) => action.actionClass === "close")
+      ? "close"
+      : "hold";
+  return { actionClass, blockerClass: gateBlockerCodes[0] ?? "none" };
+}
+
 /**
  * Historical compatibility helper for callers/tests that still need to know whether branch-protection contexts
  * were readable. The disposition planner no longer uses this to soften red CI: any visible completed red
@@ -2391,6 +2406,20 @@ async function runAgentMaintenancePlanAndExecute(
   for (const direction of precisionBreakerDowngradeDirections(planned, breakerOnPlan)) {
     incr("gittensory_precision_breaker_downgrades_total", { direction });
   }
+  // Observability (#terminal-outcome-audit): the final per-pass disposition, ALWAYS recorded -- including the
+  // "hold" bucket below (guardrail, owner-exemption, migration-collision, breaker-downgraded, or any other
+  // reason that produces no merge/close action), which previously left NO aggregate signal at all. Placed
+  // BEFORE the early return so an empty breakerOnPlan (the most common hold shape: nothing was ever planned)
+  // still increments. autonomy_level reports the class most directly relevant to the recorded action_class --
+  // `close` for a hold, since "autonomy.close is auto but this PR still holds" is the exact symptom this
+  // metric exists to make visible without hand-querying review_audit.
+  const disposition = agentDispositionLabels(breakerOnPlan, gate.blockers.map((blocker) => blocker.code));
+  incr("gittensory_agent_disposition_total", {
+    repo: repoFullName,
+    action_class: disposition.actionClass,
+    blocker_class: disposition.blockerClass,
+    autonomy_level: resolveAutonomy(settings.autonomy, disposition.actionClass === "merge" ? "merge" : "close"),
+  });
   if (breakerOnPlan.length === 0) return;
 
   // #2552 (gate review finding, round 2): force a fresh rebase + CI recheck when the base has advanced within
@@ -7667,10 +7696,14 @@ async function maybePublishPrPublicSurface(
     // authoritative 'reviewbot' rows it is later compared against are written by reviewbot's deploy-time dual-
     // run, not here (see src/review/parity-wire.ts). Only a finalized gate evaluation (not skipped) is recorded.
     if (gateEvaluation) {
+      // #terminal-outcome-audit: a neutral conclusion is now ALSO recorded as a hold (nativeGateActionFromConclusion),
+      // so give it the same bounded-reason-class treatment "failure" already gets, instead of falling back to
+      // the bare "neutral" string -- an operator asking "why is this held" should see guardrail_hold /
+      // oversized_pr / ai_review_inconclusive / etc, not an undifferentiated bucket.
       const reasonCode =
         gateEvaluation.conclusion === "failure"
           ? (gateEvaluation.blockers[0]?.code ?? gateEvaluation.conclusion)
-          : gateEvaluation.conclusion;
+          : (neutralHoldReasonCode(gateEvaluation) ?? gateEvaluation.conclusion);
       await recordNativeGateDecision(env, {
         project: repoFullName,
         pullNumber: pr.number,
