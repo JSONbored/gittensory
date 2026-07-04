@@ -2580,7 +2580,11 @@ export function createApp() {
   });
 
   app.get("/v1/repos/:owner/:repo/pulls/:number/reviewability", async (c) => {
+    const unauthorized = await requireStaticProtectedApiToken(c);
+    if (unauthorized) return unauthorized;
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const identity = await authenticateRequestIdentity(c);
+    if (identity?.kind === "static" && identity.actor === "mcp" && !(await import("../auth/security")).isMcpReadRepoAllowed(c.env.MCP_READ_REPO_ALLOWLIST, fullName)) return c.json({ error: "forbidden_repo" }, 403);
     const number = Number(c.req.param("number"));
     if (!Number.isInteger(number) || number <= 0) return c.json({ error: "invalid_pull_number" }, 400);
     const [repo, pullRequest, issues, pullRequests, files, reviews, checks, recentMergedPullRequests] = await Promise.all([
