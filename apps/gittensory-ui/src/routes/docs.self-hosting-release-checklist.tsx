@@ -553,19 +553,20 @@ docker rm -f gt-qdrant && docker network rm gt-rag-smoke`}
           {
             title: "apps/ (gittensory-ui) and test/ — excluded from the build context",
             description:
-              "Added to .dockerignore alongside the existing exclusions: the self-host bundle's only entry point is src/server.ts and npm ci only reads the root package*.json, so the UI workspace app and the test suite are never read during the image build (~11MB of this repo's ~22MB tracked-file footprint kept out).",
+              "Already in .dockerignore alongside the existing exclusions (shipped ahead of this checklist, in the same #1819 hardening pass): the self-host bundle's only entry point is src/server.ts and npm ci only reads the root package*.json, so the UI workspace app and the test suite are never read during the image build (~11MB of this repo's ~22MB tracked-file footprint kept out).",
           },
           {
             title: "npm install cache — trimmed",
             description:
-              "npm cache clean --force now runs immediately after the AI-CLI global install in the same RUN layer, removing the ~180MB download cache (~/.npm/_cacache) that npm install -g leaves behind but nothing at runtime ever reads.",
+              "npm cache clean --force already runs immediately after the AI-CLI global install in the same RUN layer, removing the ~180MB download cache (~/.npm/_cacache) that npm install -g leaves behind but nothing at runtime ever reads.",
           },
         ]}
       />
       <p>
-        Net effect of the two <code>.dockerignore</code>/Dockerfile changes above: the built image
-        measured <strong>754MB</strong>, down from 942MB before them. Re-verify the size on the
-        actual published <code>orb-v0.1.0</code> image as part of the checklist:
+        Net effect of the two <code>.dockerignore</code>/Dockerfile changes audited above (already
+        shipped, not part of this checklist itself): the built image measured <strong>754MB</strong>
+        , down from 942MB before them. Re-verify the size on the actual published{" "}
+        <code>orb-v0.1.0</code> image as part of the checklist:
       </p>
       <CodeBlock
         lang="bash"
@@ -677,9 +678,9 @@ The \`latest\` tag now points here.
 - \`.env\`, \`gittensory-config/\`, and all data volumes (database, Redis, Qdrant, Grafana) — never
   overwritten by an update and never baked into the image.
 - GitHub App credentials or \`ORB_ENROLLMENT_SECRET\`, AI-provider credentials, and any \`SENTRY_DSN\`.
-- Resource limits and profile selection — see [Resource profiles](/docs/self-hosting-operations)
+- Resource limits and profile selection — see [Resource profiles](https://gittensory.aethereal.dev/docs/self-hosting-operations)
   for measured CPU/memory guidance per profile.
-- Backup and restore procedure — see [Backup and scaling](/docs/self-hosting-backup-scaling).
+- Backup and restore procedure — see [Backup and scaling](https://gittensory.aethereal.dev/docs/self-hosting-backup-scaling).
 
 Full changelog: compare against \`orb-v0.1.0-beta.2\`.`}
       />
