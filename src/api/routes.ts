@@ -1146,6 +1146,8 @@ export function createApp() {
   });
 
   app.get("/v1/app/overview", async (c) => {
+    const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
+    if (forbidden) return forbidden;
     const identity = await authenticateRequestIdentity(c);
     const login = identity?.kind === "session" ? identity.actor : undefined;
     const [repositories, installations, health, registry, scoring, upstreamDrift, rateLimits, runs, roleSummary] = await Promise.all([

@@ -713,6 +713,7 @@ export function buildOpenApiSpec() {
     responses: {
       200: { description: "Live app overview assembled from backend data", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
       401: { description: "Unauthorized" },
+      403: { description: "Insufficient role" },
     },
   });
   for (const path of [

@@ -2199,8 +2199,8 @@ describe("api routes", () => {
     });
     expect(JSON.stringify(unknownSessionBody)).not.toMatch(/wallet|hotkey|raw trust|payout|reward estimate|farming|private reviewability|public score estimate|\/Users|github_pat|ghp_/i);
     const unknownOverview = await app.request("/v1/app/overview", { headers: unknownHeaders }, unknownEnv);
-    expect(unknownOverview.status).toBe(200);
-    await expect(unknownOverview.json()).resolves.toMatchObject({ roleSummary: { roles: [], onboarding: { status: "needs_setup" } } });
+    expect(unknownOverview.status).toBe(403);
+    await expect(unknownOverview.json()).resolves.toMatchObject({ error: "insufficient_role" });
     expect((await app.request("/v1/app/operator-dashboard", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
     expect((await app.request("/v1/app/maintainer-dashboard", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
     expect((await app.request("/v1/app/commands/usefulness", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
