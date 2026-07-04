@@ -17,7 +17,7 @@ import { hashedInstallationIdWith } from "./review-tracing";
 type SentryNs = typeof import("@sentry/node");
 type SentryClient = NonNullable<ReturnType<SentryNs["init"]>>;
 type SentryMonitorConfig = NonNullable<Parameters<SentryNs["captureCheckIn"]>[1]>;
-export type SentryMonitorName = "scheduled-loop" | "orb-export" | "orb-relay-drain" | "orb-relay-register";
+export type SentryMonitorName = "scheduled-loop" | "orb-export" | "orb-relay-drain" | "orb-relay-register" | "queue-dead-letter-revive";
 type SentryScope = {
   setContext(name: string, context: Record<string, unknown>): void;
   setTag(key: string, value: string): void;
@@ -117,6 +117,21 @@ const SENTRY_MONITORS: Record<SentryMonitorName, { slug: string; config: SentryM
       checkinMargin: 2,
       maxRuntime: 1,
       failureIssueThreshold: 3,
+      recoveryThreshold: 1,
+    },
+  },
+  // Matches the default QUEUE_DEAD_LETTER_REVIVE_INTERVAL_MS (30min, see queue-common.ts). A configured operator
+  // override still reports on this fixed schedule -- an operator who shortens the interval gets a monitor that
+  // checks in MORE often than it expects (never flagged missed), and one who lengthens it accepts a wider margin
+  // than strictly needed; both are safe, and matching the schedule to every possible override isn't worth the
+  // added surface. Silent stoppage here means dead jobs never retry again without manual intervention (#1824).
+  "queue-dead-letter-revive": {
+    slug: "queue-dead-letter-revive",
+    config: {
+      schedule: { type: "interval", value: 30, unit: "minute" },
+      checkinMargin: 10,
+      maxRuntime: 5,
+      failureIssueThreshold: 2,
       recoveryThreshold: 1,
     },
   },

@@ -594,6 +594,46 @@ describe("enabled when SENTRY_DSN is set", () => {
     expect(resolveSentryMonitorSlug("orb-relay-drain", "x".repeat(60))).toBe(
       `gittensory-selfhost-${"x".repeat(48)}-orb-relay-drain`,
     );
+    expect(resolveSentryMonitorSlug("queue-dead-letter-revive", "prod")).toBe(
+      "gittensory-selfhost-prod-queue-dead-letter-revive",
+    );
+  });
+
+  it("records dead-letter-revive check-ins on the 30-minute schedule (#1824)", async () => {
+    await initSentry({
+      SENTRY_DSN: "d",
+      SENTRY_ENVIRONMENT: "prod",
+    } as unknown as NodeJS.ProcessEnv);
+
+    await expect(
+      withSentryMonitor(
+        "queue-dead-letter-revive",
+        { jobType: "queue-dead-letter-revive" },
+        async () => 3,
+      ),
+    ).resolves.toBe(3);
+
+    expect(mocks.captureCheckIn).toHaveBeenNthCalledWith(
+      1,
+      { monitorSlug: "gittensory-selfhost-prod-queue-dead-letter-revive", status: "in_progress" },
+      expect.objectContaining({
+        schedule: { type: "interval", value: 30, unit: "minute" },
+        checkinMargin: 10,
+        maxRuntime: 5,
+        failureIssueThreshold: 2,
+        recoveryThreshold: 1,
+      }),
+    );
+    expect(mocks.captureCheckIn).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        monitorSlug: "gittensory-selfhost-prod-queue-dead-letter-revive",
+        status: "ok",
+        checkInId: "check-in-id",
+        duration: expect.any(Number),
+      }),
+    );
+    expect(mocks.captureException).not.toHaveBeenCalled();
   });
 
   it("records successful Sentry cron monitor check-ins with the configured schedule", async () => {

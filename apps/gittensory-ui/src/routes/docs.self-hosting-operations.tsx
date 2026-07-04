@@ -70,7 +70,9 @@ selfhost_embed_provider
 selfhost_vectorize
 selfhost_job_dead
 selfhost_cron_error
-review_context_fetch_failed`}
+review_context_fetch_failed
+selfhost_webhook_enqueue_failed
+selfhost_webhook_enqueue_binding_missing`}
       />
 
       <h2>Observability profile</h2>
@@ -452,6 +454,11 @@ volumes:
             description:
               "The recurring retry loop that (re-)registers this instance with the relay broker.",
           },
+          {
+            title: "Queue dead-letter revive",
+            description:
+              "The 30-minute (by default) sweep that retries dead-lettered jobs still under the auto-retry ceiling.",
+          },
         ]}
       />
       <p>
@@ -464,7 +471,7 @@ volumes:
       <ul>
         <li>Queue pending count is not growing without processing.</li>
         <li>Dead jobs stay at zero or are investigated promptly.</li>
-        <li>Webhook deliveries are recent and have 2xx responses.</li>
+        <li>Webhook deliveries are recent and have 2xx responses, with no enqueue failures.</li>
         <li>AI usage matches expected review volume and model/effort choices.</li>
         <li>REES and RAG failures are visible and bounded.</li>
         <li>
