@@ -500,6 +500,10 @@ function pathSlug(path: string): string {
 }
 
 async function loadContributorIssueDraftContext(env: Env, repoFullName: string): Promise<ContributorIssueDraftContext> {
+  // Intentionally the raw DB `settings` alongside the raw (cache-only, never live-fetched) `focusManifest`,
+  // not resolveRepositorySettings's merged view: downstream consumers (e.g. buildContributorIssueDraftTestingRequirements)
+  // read `focusManifest` on its own for the yml-authored policy (wantedPaths/testExpectations/etc.), separate
+  // from `settings` for the currently-active dashboard/API behavior (#2912).
   const [repo, settings, openIssues, declinedIssues, focusManifest, upstreamReports, issues, pullRequests, recentMergedPullRequests, labels, queueCounts] = await Promise.all([
     getRepository(env, repoFullName),
     getRepositorySettings(env, repoFullName),

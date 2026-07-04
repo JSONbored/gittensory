@@ -282,6 +282,10 @@ type AppContext = Context<AppBindings>;
 async function loadPublicRepoBadge(env: Env, owner: string, repo: string): Promise<PublicRepoQuality | null> {
   const repository = await getRepository(env, `${owner}/${repo}`);
   if (!repository || repository.isPrivate || !repository.isInstalled) return null;
+  // Intentionally the raw DB row, not resolveRepositorySettings: this is an unauthenticated, high-frequency
+  // public route (a README-embedded badge image), so it deliberately trades honoring a yml-only `badgeEnabled`
+  // override for avoiding a manifest-cache lookup (and a possible cold-cache GitHub fetch) on every image load.
+  // `badgeEnabled` is normally set via the dashboard/API, which persists straight to this same DB row (#2912).
   const settings = await getRepositorySettings(env, repository.fullName);
   if (!settings.badgeEnabled) return null;
   const pullRequests = await listPullRequests(env, repository.fullName);
@@ -4332,6 +4336,11 @@ async function buildRepoOutcomePatternsResponse(env: Env, fullName: string) {
 
 async function buildRegistrationReadinessResponse(env: Env, fullName: string) {
   /* v8 ignore start -- Registration readiness route-level shaping over covered signal helpers. */
+  // Intentionally the raw DB `settings` alongside the raw (cache-only, never live-fetched) `focusManifest`,
+  // not resolveRepositorySettings's merged view: this endpoint's whole purpose is to advise on the
+  // relationship between the two config layers (e.g. "your yml sets X but the currently active settings say
+  // Y"), which requires seeing them unmerged (#2912). See buildRegistrationReadiness's use of `focusManifest`
+  // for the yml-compiled policy section, separate from `settings` for the currently-active-behavior section.
   const [intelligence, settings, upstreamReports, focusManifest] = await Promise.all([
     buildRepoIntelligenceResponse(env, fullName),
     getRepositorySettings(env, fullName),
@@ -4385,6 +4394,10 @@ async function buildSelfDogfoodRegistrationPackResponse(env: Env) {
 
 async function buildGittensorConfigRecommendationResponse(env: Env, fullName: string) {
   /* v8 ignore start -- Config recommendation route-level shaping over covered signal helpers. */
+  // Intentionally the raw DB settings, not resolveRepositorySettings's merged view: this tool recommends what
+  // to ADD to .gittensory.yml based on the repo's currently-active (dashboard/API-configured) behavior — using
+  // the yml-merged view here would be comparing the recommendation against itself once a yml override exists
+  // (#2912).
   const intelligence = await buildRepoIntelligenceResponse(env, fullName);
   const settings = await getRepositorySettings(env, fullName);
   const repo = intelligence.repo;

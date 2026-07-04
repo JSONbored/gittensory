@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GittensoryMcp } from "../../src/mcp/server";
 import { getRepositoryCollaboratorPermission } from "../../src/github/app";
 import { mergePullRequest } from "../../src/github/pr-actions";
@@ -50,6 +50,10 @@ const mockedPermission = vi.mocked(getRepositoryCollaboratorPermission);
 beforeEach(() => {
   mockedPermission.mockReset();
   mockedPermission.mockResolvedValue("write");
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 async function connect(env: Env, identity?: AuthIdentity) {
@@ -110,6 +114,27 @@ describe("MCP gittensory_get_automation_state (#784)", () => {
     expect(result.isError).toBeFalsy();
     const data = result.structuredContent as State;
     expect(data.pendingActionCount).toBe(201);
+  });
+
+  it("REGRESSION (#2912): honors a .gittensory.yml-only agentPaused: true override (DB row left at its false default)", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 5);
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto" } });
+    // No agentPaused in the DB row above (stays at its false default): only the yml manifest pauses the repo,
+    // so this only passes if the resolver (not the raw DB accessor) is consulted.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.endsWith("/.gittensory.yml")) return new Response("settings:\n  agentPaused: true\n", { status: 200 });
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const client = await connect(env);
+    const result = await client.callTool({ name: "gittensory_get_automation_state", arguments: { owner: "owner", repo: "repo" } });
+
+    expect(result.isError).toBeFalsy();
+    const data = result.structuredContent as State;
+    expect(data.agentPaused).toBe(true);
+    expect(data.mode).toBe("paused");
   });
 
   it("reports unconfigured + not_required readiness for an unknown / un-onboarded repo (no repo record)", async () => {

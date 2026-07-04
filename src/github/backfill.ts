@@ -1,5 +1,4 @@
 import {
-  getRepositorySettings,
   getRepository,
   getPullRequest,
   countOpenIssues,
@@ -43,6 +42,7 @@ import {
   extractLinkedIssueNumbers,
 } from "../db/repositories";
 import { agentRequiresContentsWrite, agentRequiresPrWrite } from "../settings/agent-execution";
+import { resolveRepositorySettings } from "../settings/repository-settings";
 import type {
   ContributorRepoStatRecord,
   GitHubRateLimitObservationRecord,
@@ -373,7 +373,7 @@ export async function backfillRegisteredRepositories(
   const mode = options.mode ?? "light";
   const limits = { ...DEFAULT_LIMITS, ...MODE_LIMITS[mode], ...(options.limits ?? {}) };
   const repoResults = await mapWithConcurrency(repositories, limits.repoConcurrency, async (repo): Promise<RepoBackfillResult> => {
-    const settings = await getRepositorySettings(env, repo.fullName);
+    const settings = await resolveRepositorySettings(env, repo.fullName);
     if (!settings.backfillEnabled) {
       const completedAt = nowIso();
       await upsertSkippedSegments(env, repo, mode, completedAt, ["Backfill is disabled for this repository."]);
@@ -447,7 +447,7 @@ export async function enqueueRepositoryOpenDataBackfill(
   const repo = await getRepository(env, options.repoFullName);
   if (!repo?.isRegistered) return { ok: true, repoFullName: options.repoFullName, status: "skipped", warnings: ["Repository is not registered for Gittensory backfill."] };
   const mode = options.mode ?? "light";
-  const settings = await getRepositorySettings(env, repo.fullName);
+  const settings = await resolveRepositorySettings(env, repo.fullName);
   if (!settings.backfillEnabled) return { ok: true, repoFullName: repo.fullName, status: "skipped", warnings: ["Backfill is disabled for this repository."] };
   const token = await tokenForRepo(env, repo);
   const sourceKind: RepoSyncSegmentRecord["sourceKind"] = repo.installationId && token !== env.GITHUB_PUBLIC_TOKEN ? "installation" : "github";
@@ -950,7 +950,7 @@ export function enrichInstallationHealth(health: InstallationHealthRecord) {
 
 export async function buildInstallationRepairDiagnostics(env: Env, health: InstallationHealthRecord) {
   const installedRepos = (await listRepositories(env)).filter((repo) => repo.installationId === health.installationId && repo.isInstalled);
-  const installedSettings = await Promise.all(installedRepos.map((repo) => getRepositorySettings(env, repo.fullName)));
+  const installedSettings = await Promise.all(installedRepos.map((repo) => resolveRepositorySettings(env, repo.fullName)));
   const commentRepoCount = installedSettings.filter(usesCommentMode).length;
   const labelRepoCount = installedSettings.filter(usesLabelMode).length;
   const checkRunRepoCount = installedSettings.filter((settings) => settings.checkRunMode === "enabled").length;
@@ -1149,7 +1149,7 @@ async function refreshInstallationHealthRecords(env: Env, installations: Install
     const { installation: currentInstallation, errorSummary, authMode } = await refreshStoredInstallation(env, installation);
     const installedRepos = repositories.filter((repo) => repo.installationId === currentInstallation.id && repo.isInstalled);
     const registeredInstalled = installedRepos.filter((repo) => repo.isRegistered);
-    const installedSettings = await Promise.all(installedRepos.map((repo) => getRepositorySettings(env, repo.fullName)));
+    const installedSettings = await Promise.all(installedRepos.map((repo) => resolveRepositorySettings(env, repo.fullName)));
     const requiresChecks = installedSettings.some((settings) => settings.checkRunMode === "enabled");
     const requiresPrWrite = installedSettings.some((settings) => agentRequiresPrWrite(settings.autonomy));
     const requiresContentsWrite = installedSettings.some((settings) => agentRequiresContentsWrite(settings.autonomy));

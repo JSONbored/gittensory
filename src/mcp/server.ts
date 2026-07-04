@@ -20,7 +20,6 @@ import {
   getPendingAgentAction,
   getPullRequest,
   getRepository,
-  getRepositorySettings,
   isGlobalAgentFrozen,
   getRepoQueueTrendSnapshot,
   listAgentAuditEvents,
@@ -117,6 +116,7 @@ import {
 import { applyStepResult, buildPlanDag, nextReadySteps, planProgress, validatePlanDag, type PlanDag } from "../services/plan-dag";
 import { isGlobalAgentPause, resolveAgentActionMode, resolveAgentPermissionReadiness } from "../settings/agent-execution";
 import { AGENT_ACTION_CLASSES, isActingAutonomyLevel, resolveAutonomy } from "../settings/autonomy";
+import { resolveRepositorySettings } from "../settings/repository-settings";
 import { MAX_FOCUS_MANIFEST_BYTES } from "../signals/focus-manifest";
 import { loadPublicRepoFocusManifest, loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
@@ -2450,7 +2450,7 @@ export class GittensoryMcp {
     await this.requireRepoAccess(fullName);
     const [repo, settings, pendingActionCount] = await Promise.all([
       getRepository(this.env, fullName),
-      getRepositorySettings(this.env, fullName),
+      resolveRepositorySettings(this.env, fullName),
       countPendingAgentActions(this.env, { repoFullName: fullName, status: "pending" }),
     ]);
     const autonomy = settings.autonomy;
