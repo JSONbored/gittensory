@@ -163,6 +163,36 @@ describe("self-host queue common helpers", () => {
     ).resolves.toBeNull();
   });
 
+  it("rejects the whole page (not a partial/filtered one) when a binding returns a malformed row or total (#2214)", async () => {
+    const validItem = { id: 1, jobType: "agent-regate-pr", attempts: 3, lastError: "boom", createdAtMs: 1000, deadAtMs: 5000 };
+
+    const malformedItemBinding = {
+      async send() {},
+      async sendBatch() {},
+      listDeadLetterJobs: () => [validItem, { id: "not-a-number" }],
+      deadCount: () => 2,
+    } as unknown as Queue;
+    await expect(queueDeadLetterPageFromBinding(malformedItemBinding, 25, 0)).resolves.toBeNull();
+
+    // A falsy row (not just a truthy-but-wrong-shaped object) must also be rejected -- exercises isDeadLetterJob's
+    // own `!value` branch, distinct from `typeof value !== "object"` on a wrong-shaped object.
+    const nullItemBinding = {
+      async send() {},
+      async sendBatch() {},
+      listDeadLetterJobs: () => [validItem, null],
+      deadCount: () => 2,
+    } as unknown as Queue;
+    await expect(queueDeadLetterPageFromBinding(nullItemBinding, 25, 0)).resolves.toBeNull();
+
+    const malformedTotalBinding = {
+      async send() {},
+      async sendBatch() {},
+      listDeadLetterJobs: () => [validItem],
+      deadCount: () => "seven",
+    } as unknown as Queue;
+    await expect(queueDeadLetterPageFromBinding(malformedTotalBinding, 25, 0)).resolves.toBeNull();
+  });
+
   it("awaits async (Postgres-backed) admin methods for a dead-letter-queue page", async () => {
     const items = [
       { id: 2, jobType: "github-webhook", attempts: 1, lastError: "kaboom", createdAtMs: 2000, deadAtMs: 9000 },
