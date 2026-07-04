@@ -744,7 +744,7 @@ export const ANALYZER_DESCRIPTORS = [
           case "truncate":
             return "truncates a table, wiping live rows while older deployments may still read it";
           case "set-not-null":
-            return "sets NOT NULL on an existing column without a same-line DEFAULT; rows still containing NULL fail the check";
+            return "sets NOT NULL on an existing column; rows still containing NULL fail the constraint check";
           case "blocking-index":
             return "creates an index without CONCURRENTLY, which locks the table for writes until the build finishes";
         }

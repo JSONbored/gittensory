@@ -65,14 +65,20 @@ test("scanPatchForMigrationSafety: flags ALTER COLUMN SET NOT NULL without a DEF
   );
 });
 
-test("scanPatchForMigrationSafety: SET DEFAULT and SET NOT NULL on one line is safe", () => {
+test("scanPatchForMigrationSafety: SET DEFAULT and SET NOT NULL on one line is still flagged as set-not-null", () => {
   const findings = scanPatchForMigrationSafety(
-    "migrations/0017_safe_set_not_null.sql",
+    "migrations/0017_combined_set_not_null.sql",
     patchOf([
       "ALTER TABLE users ALTER COLUMN email SET DEFAULT '', ALTER COLUMN email SET NOT NULL;",
     ]),
   );
-  assert.deepEqual(findings, []);
+  assert.deepEqual(findings, [
+    {
+      file: "migrations/0017_combined_set_not_null.sql",
+      line: 1,
+      kind: "set-not-null",
+    },
+  ]);
 });
 
 test("scanPatchForMigrationSafety: SET NOT NULL on a later line is flagged even when DEFAULT is set earlier", () => {
