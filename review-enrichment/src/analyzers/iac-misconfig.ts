@@ -49,6 +49,30 @@ const IMDS_V1_RE = /\bhttp_tokens\b[\s"'=:,-]*["']?optional\b/i;
 // (`chmod 1777`) does not match because the value must begin at the optional `0` then `777`.
 const WORLD_WRITABLE_RE = /\b(?:chmod\s+|(?:file_)?mode[\s"'=:,-]*["']?)0?777\b/i;
 
+// Dockerfile build-security hardening (hadolint / checkov CKV_DOCKER_*). The uppercase instruction keywords
+// (ADD/FROM/USER/EXPOSE) are Dockerfile-specific, so they do not fire on lowercase YAML/JSON keys; the
+// flag/shell shapes are risky in any build/config file the path gate already admits.
+const DOCKER_ADD_REMOTE_RE = /\bADD\s+(?:--\S+\s+)*https?:\/\/\S/;
+const DOCKER_LATEST_TAG_RE = /\bFROM\s+(?:--\S+\s+)*\S+:latest\b/;
+const DOCKER_ROOT_USER_RE = /\bUSER\s+(?:root|0)\b/;
+// A remote download piped straight into a shell — the classic `curl … | sh` run-remote-code-at-build shape.
+const REMOTE_SHELL_PIPE_RE =
+  /\b(?:curl|wget)\b[^\n]*?\|\s*(?:sudo\s+)?(?:bash|zsh|ksh|dash|ash|sh)\b/;
+// Build flags that disable download / TLS certificate verification (wget/apt/curl/pip).
+const INSECURE_DOWNLOAD_FLAG_RE =
+  /--(?:no-check-certificate|allow-unauthenticated|force-yes|trusted-host)\b/;
+const SSH_PORT_EXPOSED_RE = /\bEXPOSE\s+(?:\d+(?:\/\w+)?\s+)*22(?:\/tcp)?\b/;
+const NPM_UNSAFE_PERM_RE = /--unsafe-perm\b/;
+// `sudo` invoked inside a RUN layer (privilege elevation during build). `RUN apt-get install sudo` does NOT
+// match because sudo does not immediately follow `RUN`/`&&`.
+const SUDO_IN_BUILD_RE = /\bRUN\s+sudo\s|&&\s*sudo\s/;
+// A credential-shaped value hardcoded into an image layer via ENV/ARG WITH a value (build secrets persist in
+// the image history). A bare `ARG DB_PASSWORD` (no `=value`) is a legitimate build-arg declaration and is skipped.
+const HARDCODED_BUILD_SECRET_RE =
+  /\b(?:ENV|ARG)\s+\w*(?:PASSWORD|PASSWD|SECRET|TOKEN|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY)\w*\s*=\s*\S/i;
+// A package installer pointed at a plaintext-HTTP index (dependency-download MITM).
+const INSECURE_PIP_INDEX_RE = /--(?:extra-)?index-url[=\s]+http:\/\//i;
+
 function* patchLines(patch: string): Generator<string> {
   let start = 0;
   for (let i = 0; i <= patch.length; i++) {
@@ -312,6 +336,66 @@ export function scanPatchForIacMisconfig(
         "world-writable-permissions",
         maxFindings,
       )
+    ) {
+      return findings;
+    }
+    if (
+      DOCKER_ADD_REMOTE_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "docker-add-remote-url", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      DOCKER_LATEST_TAG_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "docker-image-latest-tag", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      DOCKER_ROOT_USER_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "docker-root-user", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      REMOTE_SHELL_PIPE_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "remote-shell-pipe", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      INSECURE_DOWNLOAD_FLAG_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "insecure-download-flag", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      SSH_PORT_EXPOSED_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "ssh-port-exposed", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      NPM_UNSAFE_PERM_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "npm-unsafe-perm", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      SUDO_IN_BUILD_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "sudo-in-build", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      HARDCODED_BUILD_SECRET_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "hardcoded-build-secret", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      INSECURE_PIP_INDEX_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "insecure-pip-index", maxFindings)
     ) {
       return findings;
     }

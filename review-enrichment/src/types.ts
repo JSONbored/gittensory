@@ -233,7 +233,17 @@ export interface IacMisconfigFinding {
     | "unencrypted-storage"
     | "publicly-accessible-database"
     | "imdsv1-allowed"
-    | "world-writable-permissions";
+    | "world-writable-permissions"
+    | "docker-add-remote-url"
+    | "docker-image-latest-tag"
+    | "docker-root-user"
+    | "remote-shell-pipe"
+    | "insecure-download-flag"
+    | "ssh-port-exposed"
+    | "npm-unsafe-perm"
+    | "sudo-in-build"
+    | "hardcoded-build-secret"
+    | "insecure-pip-index";
 }
 
 /** A newly-added dependency whose install compiles native code (npm node-gyp addon) or has no prebuilt wheel

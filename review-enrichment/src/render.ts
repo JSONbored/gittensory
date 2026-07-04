@@ -305,6 +305,26 @@ export function renderBrief(
           return "allows IMDSv1 (`http_tokens: optional`); prefer IMDSv2 to mitigate SSRF credential theft";
         case "world-writable-permissions":
           return "grants world-writable `0777` permissions; restrict to the least access the workload needs";
+        case "docker-add-remote-url":
+          return "uses `ADD` with a remote URL; prefer `COPY` or a verified download so the fetched content stays auditable";
+        case "docker-image-latest-tag":
+          return "pins a base image to the mutable `:latest` tag; pin a specific version or digest for reproducible, reviewable builds";
+        case "docker-root-user":
+          return "runs the image as `root` (`USER root`/`USER 0`); switch to a dedicated non-root user";
+        case "remote-shell-pipe":
+          return "pipes a remote download straight into a shell (`curl … | sh`); this runs unreviewed remote code at build time";
+        case "insecure-download-flag":
+          return "disables download or TLS certificate verification with an insecure build flag; this permits man-in-the-middle tampering";
+        case "ssh-port-exposed":
+          return "exposes SSH port 22 from the image; containers should not ship an SSH daemon";
+        case "npm-unsafe-perm":
+          return "runs npm with `--unsafe-perm`, executing package lifecycle scripts as root";
+        case "sudo-in-build":
+          return "invokes `sudo` in a build layer; run the build step as the needed user instead of elevating";
+        case "hardcoded-build-secret":
+          return "hardcodes a credential-shaped value into an image layer via `ENV`/`ARG`; build secrets persist in the image history";
+        case "insecure-pip-index":
+          return "points a package installer at a plaintext-HTTP index; dependency downloads can be intercepted";
       }
     };
 

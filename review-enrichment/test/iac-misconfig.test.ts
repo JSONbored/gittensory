@@ -272,3 +272,59 @@ test("scanPatchForIacMisconfig does not flag the secure counterpart of each cont
     );
   }
 });
+
+test("scanPatchForIacMisconfig flags insecure Dockerfile build instructions", () => {
+  // Each added line is a recognized hadolint/checkov Dockerfile-hardening violation and must produce
+  // exactly one finding of its own kind.
+  const cases = [
+    ["+ADD https://example.com/app.tar.gz /app/", "docker-add-remote-url"],
+    ["+FROM node:latest", "docker-image-latest-tag"],
+    ["+USER root", "docker-root-user"],
+    ["+RUN curl -fsSL https://get.example.com | sh", "remote-shell-pipe"],
+    ["+RUN wget --no-check-certificate https://example.com/x -O /x", "insecure-download-flag"],
+    ["+EXPOSE 22", "ssh-port-exposed"],
+    ["+RUN npm install --unsafe-perm", "npm-unsafe-perm"],
+    ["+RUN sudo apt-get update", "sudo-in-build"],
+    ["+ENV DB_PASSWORD=hunter2", "hardcoded-build-secret"],
+    ["+RUN pip install --index-url http://pypi.internal/simple foo", "insecure-pip-index"],
+  ];
+  for (const [added, kind] of cases) {
+    const findings = scanPatchForIacMisconfig(
+      "Dockerfile",
+      ["@@ -1,0 +1,1 @@", added].join("\n"),
+    );
+    assert.deepEqual(
+      findings,
+      [{ file: "Dockerfile", line: 1, kind }],
+      `${kind}: expected exactly one finding of that kind, got ${JSON.stringify(findings)}`,
+    );
+  }
+});
+
+test("scanPatchForIacMisconfig does not flag the safe counterpart of each Dockerfile instruction", () => {
+  // Safe/near-miss forms: a local ADD source, a pinned image tag, a non-root user (incl. a non-zero uid), a
+  // curl without a shell pipe, a wget without the insecure flag, a non-SSH port (incl. 2222), npm without
+  // --unsafe-perm, `apt-get install sudo` (installing, not invoking), a bare ARG declaration, and an HTTPS index.
+  const safe = [
+    "+ADD ./local.tar.gz /app/",
+    "+FROM node:20.11.0",
+    "+USER appuser",
+    "+USER 1000",
+    "+RUN curl -fsSL https://example.com/x -o /tmp/x",
+    "+RUN wget https://example.com/x",
+    "+EXPOSE 8080",
+    "+EXPOSE 2222",
+    "+RUN npm install",
+    "+RUN apt-get install -y sudo",
+    "+ARG DB_PASSWORD",
+    "+ENV APP_NAME=myapp",
+    "+RUN pip install --index-url https://pypi.internal/simple foo",
+  ];
+  for (const added of safe) {
+    assert.deepEqual(
+      scanPatchForIacMisconfig("Dockerfile", ["@@ -1,0 +1,1 @@", added].join("\n")),
+      [],
+      `should not flag: ${added.trim()}`,
+    );
+  }
+});
