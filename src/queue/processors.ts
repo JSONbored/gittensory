@@ -7879,6 +7879,10 @@ async function maybePublishPrPublicSurface(
             { checkRunId: pendingGateCheckRunId, gate: gateEvaluation },
             mode,
           );
+          /* v8 ignore next -- refreshedGateCheckResult is only ever null when advisory.headSha is falsy or the
+           * write is dry-run-suppressed; pendingGateCheckRunId !== undefined already proves headSha was truthy
+           * and mode was "live" for the earlier pending-check post in this SAME pass (mode/advisory are both
+           * immutable locals shared by both calls), so the nullish `?.` short-circuit here is unreachable. */
           if (refreshedGateCheckResult?.kind === "published") {
             await recordPublishedGateCheckSummary(env, {
               repoFullName,
