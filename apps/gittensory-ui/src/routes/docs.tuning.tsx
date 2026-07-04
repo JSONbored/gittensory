@@ -424,7 +424,10 @@ settings:
   commentMode: detected_contributors_only
   checkRunMode: enabled
   checkRunDetailLevel: standard
-  badgeEnabled: true`}
+  badgeEnabled: true
+  # Optional path holds. Omitted or [] means no path guardrails.
+  # hardGuardrailGlobs:
+  #   - "src/selfhost/**"`}
       />
 
       <Callout variant="warn" title="Roll forward one step at a time">

@@ -1165,8 +1165,8 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
     if (logins.length > 0) out.autoCloseExemptLogins = logins;
   }
   // Hard manual-review guardrails are config-as-code only. Arrays replace lower layers wholesale, so only an
-  // explicit [] or a non-empty valid list replaces a private global or built-in default. Null/malformed values are
-  // ignored instead of clearing.
+  // explicit [] or a non-empty valid list replaces a private global setting. Null/malformed values are ignored
+  // instead of clearing.
   if (Array.isArray(r.hardGuardrailGlobs)) {
     const hardGuardrailGlobs = normalizeStringList(r.hardGuardrailGlobs, "settings.hardGuardrailGlobs", warnings);
     if (r.hardGuardrailGlobs.length === 0 || hardGuardrailGlobs.length > 0) {

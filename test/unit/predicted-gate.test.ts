@@ -418,10 +418,10 @@ describe("buildPredictedGateVerdict", () => {
     expect(result.blockers).toHaveLength(0);
   });
 
-  it("REGRESSION: keeps built-in guardrails when hardGuardrailGlobs is omitted", () => {
+  it("does NOT predict a guardrail hold when hardGuardrailGlobs is omitted", () => {
     const result = verdict({ gate: { duplicates: "block" }, changedPaths: [".github/workflows/ci.yml"] });
-    expect(result.conclusion).toBe("neutral");
-    expect(result.warnings.some((w) => w.code === "guardrail_hold")).toBe(true);
+    expect(result.conclusion).toBe("success");
+    expect(result.warnings.some((w) => w.code === "guardrail_hold")).toBe(false);
   });
 
   it("does NOT predict a guardrail hold when hardGuardrailGlobs is explicitly empty", () => {

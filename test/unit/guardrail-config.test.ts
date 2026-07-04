@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_HARD_GUARDRAIL_GLOBS, resolveHardGuardrailGlobs } from "../../src/review/guardrail-config";
+import { resolveHardGuardrailGlobs } from "../../src/review/guardrail-config";
 
 describe("resolveHardGuardrailGlobs", () => {
-  it("defaults to built-in safety guardrails when effective settings omit hardGuardrailGlobs", () => {
-    expect(resolveHardGuardrailGlobs(undefined)).toEqual(DEFAULT_HARD_GUARDRAIL_GLOBS);
-    expect(resolveHardGuardrailGlobs(null)).toEqual(DEFAULT_HARD_GUARDRAIL_GLOBS);
-    expect(resolveHardGuardrailGlobs({})).toEqual(DEFAULT_HARD_GUARDRAIL_GLOBS);
-    expect(resolveHardGuardrailGlobs({ hardGuardrailGlobs: null })).toEqual(DEFAULT_HARD_GUARDRAIL_GLOBS);
+  it("does not invent path guardrails when effective settings omit hardGuardrailGlobs", () => {
+    expect(resolveHardGuardrailGlobs(undefined)).toEqual([]);
+    expect(resolveHardGuardrailGlobs(null)).toEqual([]);
+    expect(resolveHardGuardrailGlobs({})).toEqual([]);
+    expect(resolveHardGuardrailGlobs({ hardGuardrailGlobs: null })).toEqual([]);
   });
 
   it("returns a clone of the configured guardrail globs", () => {
@@ -20,7 +20,7 @@ describe("resolveHardGuardrailGlobs", () => {
     expect(configured).toEqual(["src/settings/**", ".github/workflows/**"]);
   });
 
-  it("preserves an explicit empty list as the only no-guardrail opt-out", () => {
+  it("preserves an explicit empty list as no path guardrails", () => {
     expect(resolveHardGuardrailGlobs({ hardGuardrailGlobs: [] })).toEqual([]);
   });
 });

@@ -48,8 +48,8 @@ settings:
   autoCloseExemptLogins:
     - your-admin-login
 
-  # Hard manual-review path guardrails use built-in safe defaults when omitted. A concrete list
-  # replaces those defaults, and this empty list is an explicit no-path-guardrail opt-out.
+  # Hard manual-review path guardrails are config-as-code only. Omit or use [] for no path
+  # guardrails; set a concrete list when you want otherwise-mergeable PRs held for a person.
   hardGuardrailGlobs: []
 
   # Disposition label names are config-as-code, not engine identity. Set any value to your repo's
