@@ -87,11 +87,49 @@ export async function fetchBrokeredInstallationToken(
 const ORB_RELAY_REGISTER_ERROR_BODY_MAX_BYTES = 2_000;
 const ORB_RELAY_REGISTER_ERROR_HINT_MAX_CHARS = 200;
 
+async function boundedResponseText(res: Response, maxBytes: number): Promise<string | undefined> {
+  const contentLength = res.headers.get("content-length");
+  if (contentLength && Number(contentLength) > maxBytes) {
+    await res.body?.cancel();
+    return undefined;
+  }
+  if (!res.body) return undefined;
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  try {
+    while (received < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = maxBytes - received;
+      const chunk = value.length > remaining ? value.slice(0, remaining) : value;
+      chunks.push(chunk);
+      received += chunk.length;
+      if (value.length > remaining || received >= maxBytes) {
+        await reader.cancel();
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (received === 0) return undefined;
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 async function safeOrbRelayRegisterErrorHint(res: Response): Promise<string | undefined> {
   try {
-    const text = await res.text();
+    const text = await boundedResponseText(res, ORB_RELAY_REGISTER_ERROR_BODY_MAX_BYTES);
     if (!text) return undefined;
-    const parsed = JSON.parse(text.slice(0, ORB_RELAY_REGISTER_ERROR_BODY_MAX_BYTES)) as { error?: unknown; message?: unknown };
+    const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
     const hint = typeof parsed.error === "string" ? parsed.error : typeof parsed.message === "string" ? parsed.message : undefined;
     return hint ? hint.slice(0, ORB_RELAY_REGISTER_ERROR_HINT_MAX_CHARS) : undefined;
   } catch {
