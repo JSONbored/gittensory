@@ -126,10 +126,9 @@ const DEFAULT_METRIC_META: readonly (readonly [string, MetricMeta])[] = [
 const metricMeta = new Map<string, MetricMeta>(DEFAULT_METRIC_META);
 
 // These public counters are scraped without auth on the shared CLOUD worker, so redact repo labels at the
-// counter call-site there. A self-hosted instance's /metrics endpoint is the operator's own Prometheus/Grafana
-// scrape target, not a publicly reachable one -- there is no other-tenant repo name to protect from itself, and
-// redacting `repo` there just breaks the operator's own per-repo dashboards (#terminal-outcome-audit gap: the
-// one label gittensory_gate_decisions_total carried was being dropped even for self-host, with no bypass).
+// counter call-site there. Self-hosted instances can opt out for established per-repo counters, but metrics
+// with labels derived from private queue internals stay redacted because /metrics may be exposed by an
+// operator's reverse proxy before application/session authentication.
 let selfHostedMetricsMode = false;
 
 /** Call ONCE at boot (self-host entrypoint only) to stop redacting `repo` from PRIVATE_REPO_LABEL_METRICS.
@@ -143,9 +142,21 @@ const PRIVATE_REPO_LABEL_METRICS = new Set([
   "gittensory_reviews_published_total",
   "gittensory_agent_disposition_total",
 ]);
+const ALWAYS_REDACT_REPO_LABEL_METRICS = new Set(["gittensory_queue_backlog_by_repo"]);
+const redactedRepoLabels = new Map<string, string>();
+
+function redactedRepoLabel(repo: string): string {
+  const existing = redactedRepoLabels.get(repo);
+  if (existing) return existing;
+  const label = `redacted-${redactedRepoLabels.size + 1}`;
+  redactedRepoLabels.set(repo, label);
+  return label;
+}
 
 function publicLabelsForMetric(name: string, labels?: Labels): Labels | undefined {
-  if (!labels || selfHostedMetricsMode || !PRIVATE_REPO_LABEL_METRICS.has(name) || !("repo" in labels)) return labels;
+  if (!labels || !("repo" in labels)) return labels;
+  if (ALWAYS_REDACT_REPO_LABEL_METRICS.has(name)) return { ...labels, repo: redactedRepoLabel(labels.repo) };
+  if (selfHostedMetricsMode || !PRIVATE_REPO_LABEL_METRICS.has(name)) return labels;
   const publicLabels = { ...labels };
   delete publicLabels.repo;
   return Object.keys(publicLabels).length > 0 ? publicLabels : undefined;
@@ -250,7 +261,7 @@ export async function renderMetrics(): Promise<string> {
       // it sees "no data" (not present) rather than a stale metric name lingering with no TYPE line at all.
       pushMetricMeta(lines, emittedMeta, name);
       for (const { labels, value } of values) {
-        lines.push(`${seriesKey(name, labels)} ${value}`);
+        lines.push(`${seriesKey(name, publicLabelsForMetric(name, labels))} ${value}`);
       }
     } catch {
       /* a failing sampler must not break the scrape */
@@ -276,5 +287,6 @@ export function resetMetrics(): void {
   gaugeVectors.clear();
   histograms.clear();
   metricMeta.clear();
+  redactedRepoLabels.clear();
   for (const [name, meta] of DEFAULT_METRIC_META) metricMeta.set(name, meta);
 }
