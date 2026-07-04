@@ -1825,7 +1825,7 @@ describe("queue processors", () => {
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     // Links issue #1 — the issue the "labeled" event below fires on.
-    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1", created_at: "2026-07-03T10:00:00.000Z" });
     let fetchCount = 0;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       fetchCount += 1;
@@ -1856,7 +1856,7 @@ describe("queue processors", () => {
     // staleness-ordered sweep.
     expect(fetchCount).toBe(0);
     expect(sent).toEqual([
-      { message: expect.objectContaining({ type: "agent-regate-pr", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 }) },
+      { message: expect.objectContaining({ type: "agent-regate-pr", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001, prCreatedAt: "2026-07-03T10:00:00.000Z" }) },
     ]);
     const webhookRow = await env.DB.prepare("select status from webhook_events where delivery_id = ?").bind("issue-label-wake").first<{ status: string }>();
     expect(webhookRow?.status).toBe("processed");
@@ -1898,7 +1898,7 @@ describe("queue processors", () => {
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
-    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1", created_at: "2026-07-03T10:00:00.000Z" });
     let checkRunsFetched = false;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
@@ -1968,7 +1968,7 @@ describe("queue processors", () => {
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
-    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1", created_at: "2026-07-03T10:00:00.000Z" });
     // A CI completion for this exact PR claimed the CI-completion window moments earlier — a wholly separate
     // trigger from the issue-side label change below.
     await env.SELFHOST_TRANSIENT_CACHE?.set("ci-coalesce:owner/agent-repo#7", "1", 60);
@@ -2020,7 +2020,7 @@ describe("queue processors", () => {
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
-    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1", created_at: "2026-07-03T10:00:00.000Z" });
     let fetchCallCount = 0;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       fetchCallCount += 1;
@@ -2058,9 +2058,9 @@ describe("queue processors", () => {
     // Second signal within the window coalesces — no GitHub interaction and one trailing job for the latest state.
     expect(fetchCallCount).toBe(fetchCallCountAfterFirst);
     expect(sent).toEqual([
-      { message: expect.objectContaining({ type: "agent-regate-pr", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 }) },
+      { message: expect.objectContaining({ type: "agent-regate-pr", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001, prCreatedAt: "2026-07-03T10:00:00.000Z" }) },
       {
-        message: expect.objectContaining({ type: "agent-regate-pr", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 }),
+        message: expect.objectContaining({ type: "agent-regate-pr", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001, prCreatedAt: "2026-07-03T10:00:00.000Z" }),
         options: { delaySeconds: 60 },
       },
     ]);
@@ -2170,6 +2170,8 @@ describe("queue processors", () => {
         options: { delaySeconds: 60 },
       },
     ]);
+    const trailingReReview = sent[1]!;
+    expect((trailingReReview.message as Extract<import("../../src/types").JobMessage, { type: "agent-regate-pr" }>).prCreatedAt).toBeUndefined();
 
     await processJob(env, event("issue-add-then-remove-3", "labeled"));
     // A THIRD coalesced event in the same window must not schedule a second, redundant trailing job.
@@ -2829,7 +2831,7 @@ describe("queue processors", () => {
       expect(aiCalls).toBe(firstRunAiCalls * 2); // a real state change bypasses the cooldown immediately, regardless of age
     });
 
-    it("#8: a rate-limit-deferred re-enqueue of a forced re-gate carries the force flag forward", async () => {
+    it("#8: a rate-limit-deferred re-enqueue of a forced re-gate carries the force flag and PR age forward", async () => {
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
       await seedRegateChurnRepo(env);
       await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 68, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a68" }, labels: [], body: "Closes #1" });
@@ -2841,10 +2843,10 @@ describe("queue processors", () => {
         return send(message, options);
       }) as typeof env.JOBS.send;
 
-      await processJob(env, { type: "agent-regate-pr", deliveryId: "rate-limited-force", repoFullName: "JSONbored/gittensory", prNumber: 68, installationId: 123, force: true });
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "rate-limited-force", repoFullName: "JSONbored/gittensory", prNumber: 68, installationId: 123, force: true, prCreatedAt: "2026-07-03T10:00:00.000Z" });
 
       rateLimitSpy.mockRestore();
-      expect(enqueued).toMatchObject({ type: "agent-regate-pr", prNumber: 68, force: true });
+      expect(enqueued).toMatchObject({ type: "agent-regate-pr", prNumber: 68, force: true, prCreatedAt: "2026-07-03T10:00:00.000Z" });
     });
 
     it("#8: a manual force re-gate bypasses the cache and cooldown, always paying for a fresh AI opinion", async () => {
@@ -19320,28 +19322,35 @@ describe("backlog-convergence sweep (#selfhost-backlog-convergence)", () => {
     await upsertInstallation(env, { action: "created", installation: { id: 9505, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9505);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" } });
-    // #7 never had its surface published; #8 was published at an OLDER head than its current one; #9 is fully converged.
-    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Never published", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "x" });
-    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 8, title: "Stale surface", state: "open", user: { login: "contributor" }, head: { sha: "b8" }, labels: [], body: "x" });
+    // #7 never had its surface published; #8 was published at an OLDER head than its current one; #9 is fully converged;
+    // #10 is a legacy/sparse row with no GitHub created_at, and still needs a re-gate without PR-age metadata.
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Never published", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "x", created_at: "2026-07-03T10:00:00.000Z" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 8, title: "Stale surface", state: "open", user: { login: "contributor" }, head: { sha: "b8" }, labels: [], body: "x", created_at: "2026-07-03T11:00:00.000Z" });
     await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 8, "old-b8");
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 9, title: "Converged", state: "open", user: { login: "contributor" }, head: { sha: "a9" }, labels: [], body: "x" });
     await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 9, "a9");
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 10, title: "Sparse legacy row", state: "open", user: { login: "contributor" }, head: { sha: "a10" }, labels: [], body: "x" });
 
     await processJob(env, { type: "backlog-convergence-sweep", requestedBy: "schedule", repoFullName: "owner/agent-repo" });
 
     const fanned = sent.filter((job): job is Extract<import("../../src/types").JobMessage, { type: "agent-regate-pr" }> => job.type === "agent-regate-pr");
-    expect(fanned.map((job) => job.prNumber).sort()).toEqual([7, 8]);
+    expect(fanned.map((job) => job.prNumber).sort((a, b) => a - b)).toEqual([7, 8, 10]);
     for (const job of fanned) {
       expect(job.deliveryId).toBe(`backlog-convergence:owner/agent-repo#${job.prNumber}`);
       expect(job.installationId).toBe(9505);
     }
+    expect(Object.fromEntries(fanned.map((job) => [job.prNumber, job.prCreatedAt]))).toEqual({
+      7: "2026-07-03T10:00:00.000Z",
+      8: "2026-07-03T11:00:00.000Z",
+      10: undefined,
+    });
     const audit = await env.DB.prepare("select outcome, detail, metadata_json from audit_events where event_type = ?")
       .bind("agent.sweep.backlog_convergence")
       .first<{ outcome: string; detail: string; metadata_json: string }>();
     expect(audit?.outcome).toBe("completed");
     const meta = JSON.parse(audit?.metadata_json ?? "{}");
-    expect(meta).toMatchObject({ repoFullName: "owner/agent-repo", openCount: 3, examined: 2 });
-    expect(meta.candidatePulls.sort()).toEqual([7, 8]);
+    expect(meta).toMatchObject({ repoFullName: "owner/agent-repo", openCount: 4, examined: 3 });
+    expect(meta.candidatePulls.sort((a: number, b: number) => a - b)).toEqual([7, 8, 10]);
   });
 });
 

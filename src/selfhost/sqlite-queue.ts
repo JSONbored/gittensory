@@ -25,6 +25,7 @@ import {
   jobCoalesceMergeKeyPrefix,
   jobCoalesceMergedPayload,
   jobCoalesceSupersededKeyPrefix,
+  jobClaimSortKey,
   jobPriority,
   parsePositiveIntEnv,
   queueBackgroundConcurrency,
@@ -84,7 +85,8 @@ CREATE TABLE IF NOT EXISTS ${TABLE} (
   created_at INTEGER NOT NULL,
   last_error TEXT,
   priority INTEGER NOT NULL DEFAULT 0,
-  job_key TEXT
+  job_key TEXT,
+  claim_sort_key INTEGER NOT NULL DEFAULT 0
 );`;
 const STATS_DDL = `
 CREATE TABLE IF NOT EXISTS ${STATS_TABLE} (
@@ -99,7 +101,7 @@ CREATE TABLE IF NOT EXISTS ${FAIRNESS_TABLE} (
 );`;
 const CLAIM_INDEX_DDL = `
 DROP INDEX IF EXISTS ${TABLE}_claim;
-CREATE INDEX ${TABLE}_claim ON ${TABLE}(status, run_after, priority);`;
+CREATE INDEX ${TABLE}_claim ON ${TABLE}(status, priority, claim_sort_key, run_after);`;
 const JOB_KEY_INDEX_DDL = `
 CREATE INDEX IF NOT EXISTS ${TABLE}_pending_job_key ON ${TABLE}(job_key, status);`;
 const LANE_INDEX_DDL = `
@@ -192,6 +194,11 @@ export function createSqliteQueue(
     /* column already present */
   }
   try {
+    driver.exec(`ALTER TABLE ${TABLE} ADD COLUMN claim_sort_key INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    /* column already present */
+  }
+  try {
     driver.exec(`ALTER TABLE ${TABLE} ADD COLUMN is_maintenance INTEGER NOT NULL DEFAULT 0`);
   } catch {
     /* column already present */
@@ -220,6 +227,14 @@ export function createSqliteQueue(
       JSON.stringify({
         event: "selfhost_queue_job_keys_backfilled",
         count: keyBackfilled,
+      }),
+    );
+  const sortKeysBackfilled = backfillJobClaimSortKeys(driver);
+  if (sortKeysBackfilled)
+    console.log(
+      JSON.stringify({
+        event: "selfhost_queue_claim_sort_keys_backfilled",
+        count: sortKeysBackfilled,
       }),
     );
   const maintenanceFlagsBackfilled = backfillJobMaintenanceFlags(driver);
@@ -403,6 +418,7 @@ export function createSqliteQueue(
     const key = jobCoalesceKey(payload);
     const lane = foregroundLaneForJob(message.type, payload);
     const runAfter = now + delaySeconds * 1000;
+    const claimSortKey = jobClaimSortKey(payload, runAfter);
     const absorbedByKey = jobCoalesceAbsorbedByKey(payload);
     if (absorbedByKey) {
       const existingFull = driver.query(
@@ -437,9 +453,11 @@ export function createSqliteQueue(
           const mergedKey = jobCoalesceKey(mergedPayload);
           driver.query(
             `UPDATE ${TABLE}
-               SET payload=?, run_after=max(run_after, ?), created_at=?, priority=max(priority, ?), job_key=?, last_error=NULL
+               SET payload=?, run_after=max(run_after, ?), created_at=?, priority=max(priority, ?), job_key=?,
+                   claim_sort_key=CASE WHEN claim_sort_key>0 THEN min(claim_sort_key, ?) ELSE ? END,
+                   last_error=NULL
              WHERE id=?`,
-            [mergedPayload, runAfter, now, priority, mergedKey, mergeCandidate.id],
+            [mergedPayload, runAfter, now, priority, mergedKey, claimSortKey, claimSortKey, mergeCandidate.id],
           );
           recordQueueMetric(driver, "gittensory_jobs_coalesced_total");
           kickOne();
@@ -464,9 +482,11 @@ export function createSqliteQueue(
         // (4h default) can keep re-arming the clock forever, and sustained pressure defers the job indefinitely.
         driver.query(
           `UPDATE ${TABLE}
-             SET payload=?, run_after=max(run_after, ?), priority=max(priority, ?), job_key=?, foreground_lane=?, last_error=NULL
+             SET payload=?, run_after=max(run_after, ?), priority=max(priority, ?), job_key=?, foreground_lane=?,
+                 claim_sort_key=CASE WHEN claim_sort_key>0 THEN min(claim_sort_key, ?) ELSE ? END,
+                 last_error=NULL
            WHERE id=?`,
-          [payload, runAfter, priority, key, lane, existing.id],
+          [payload, runAfter, priority, key, lane, claimSortKey, claimSortKey, existing.id],
         );
         driver.query(
           `DELETE FROM ${TABLE}
@@ -488,9 +508,11 @@ export function createSqliteQueue(
         // maintenance trickle clock reflects genuine wait time, not the most recent re-request.
         driver.query(
           `UPDATE ${TABLE}
-             SET payload=?, run_after=max(run_after, ?), priority=max(priority, ?), foreground_lane=?, last_error=NULL
+             SET payload=?, run_after=max(run_after, ?), priority=max(priority, ?), foreground_lane=?,
+                 claim_sort_key=CASE WHEN claim_sort_key>0 THEN min(claim_sort_key, ?) ELSE ? END,
+                 last_error=NULL
            WHERE id=?`,
-          [payload, runAfter, priority, lane, existing.id],
+          [payload, runAfter, priority, lane, claimSortKey, claimSortKey, existing.id],
         );
         recordQueueMetric(driver, "gittensory_jobs_coalesced_total");
         kickOne();
@@ -498,8 +520,8 @@ export function createSqliteQueue(
       }
     }
     driver.query(
-      `INSERT INTO ${TABLE} (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance, foreground_lane) VALUES (?, 'pending', 0, ?, ?, ?, ?, ?, ?)`,
-      [payload, runAfter, now, priority, key, isMaintenanceJobType(message.type) ? 1 : 0, lane],
+      `INSERT INTO ${TABLE} (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance, foreground_lane, claim_sort_key) VALUES (?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?)`,
+      [payload, runAfter, now, priority, key, isMaintenanceJobType(message.type) ? 1 : 0, lane, claimSortKey],
     );
     recordQueueMetric(driver, "gittensory_jobs_enqueued_total");
     kickOne();
@@ -507,13 +529,13 @@ export function createSqliteQueue(
 
   function claimNext(): JobRow | null {
     const now = Date.now();
-    const foreground = claimNextForegroundLane(now) ?? claimNextWhere(now, "priority>=?");
+    const foreground = claimNextForegroundLane(now) ?? claimNextWhere(now, "candidate.priority>=?");
     if (foreground) return foreground;
     if (activeBackground >= backgroundConcurrency) return null;
     activeBackground++;
     let background: JobRow | null;
     try {
-      background = claimNextWhere(now, "priority<?");
+      background = claimNextWhere(now, "candidate.priority<?");
     } catch (error) {
       // Release the reserved background slot if the claim query itself throws (a SQLite "database is locked" / I/O
       // error). claimNext() runs OUTSIDE processOne's try/finally, so without this rollback the reserved slot leaks
@@ -543,7 +565,7 @@ export function createSqliteQueue(
     const lane: ForegroundLane = nextForegroundLane(sequence);
     driver.query(`UPDATE ${FAIRNESS_TABLE} SET claim_sequence=claim_sequence+1 WHERE id='singleton'`, []);
     if (lane === "fresh") {
-      const freshRow = claimNextWhere(now, "priority>=?", { sql: "foreground_lane='fresh'", params: [] });
+      const freshRow = claimNextWhere(now, "candidate.priority>=?", { sql: "candidate.foreground_lane='fresh'", params: [] });
       if (freshRow) incr("gittensory_jobs_claimed_by_lane_total", { lane: "fresh" });
       return freshRow;
     }
@@ -560,8 +582,8 @@ export function createSqliteQueue(
     );
     const repo = pickBacklogRepo(candidates, fairness?.last_backlog_repo ?? null);
     if (!repo) return null;
-    const row = claimNextWhere(now, "priority>=?", {
-      sql: "foreground_lane='backlog' AND job_key LIKE ?",
+    const row = claimNextWhere(now, "candidate.priority>=?", {
+      sql: "candidate.foreground_lane='backlog' AND candidate.job_key LIKE ?",
       params: [`agent-regate-pr:${repo}#%`],
     });
     if (row) {
@@ -608,10 +630,16 @@ export function createSqliteQueue(
   ): JobRow | null {
     const extraSql = extra ? ` AND ${extra.sql}` : "";
     const { rows } = driver.query(
-      `SELECT id, payload, attempts, job_key, priority, created_at
-         FROM ${TABLE}
-        WHERE status='pending' AND run_after<=? AND ${priorityPredicate}${extraSql}
-        ORDER BY priority DESC, run_after, id
+      `SELECT candidate.id, candidate.payload, candidate.attempts, candidate.job_key, candidate.priority, candidate.created_at
+         FROM ${TABLE} AS candidate
+        WHERE candidate.status='pending' AND candidate.run_after<=? AND ${priorityPredicate}${extraSql}
+          AND (
+            candidate.job_key IS NULL OR NOT EXISTS (
+              SELECT 1 FROM ${TABLE} AS processing
+               WHERE processing.status='processing' AND processing.job_key=candidate.job_key
+            )
+          )
+        ORDER BY candidate.priority DESC, candidate.claim_sort_key, candidate.run_after, candidate.id
         LIMIT 1`,
       [now, FOREGROUND_QUEUE_PRIORITY_FLOOR, ...(extra?.params ?? [])],
     );
@@ -1070,6 +1098,24 @@ function backfillJobKeys(driver: SqliteDriver): number {
     const key = jobCoalesceKey(row.payload);
     if ((row.job_key ?? null) === key) continue;
     driver.query(`UPDATE ${TABLE} SET job_key=? WHERE id=?`, [key, row.id]);
+    changed += 1;
+  }
+  return changed;
+}
+
+function backfillJobClaimSortKeys(driver: SqliteDriver): number {
+  const { rows } = driver.query(
+    `SELECT id, payload, run_after, claim_sort_key FROM ${TABLE} WHERE status IN ('pending', 'processing')`,
+    [],
+  );
+  let changed = 0;
+  for (const row of rows as Array<{ id: number; payload: string; run_after: number; claim_sort_key: number }>) {
+    const sortKey = jobClaimSortKey(row.payload, row.run_after);
+    if (sortKey === Number(row.claim_sort_key)) continue;
+    driver.query(`UPDATE ${TABLE} SET claim_sort_key=? WHERE id=?`, [
+      sortKey,
+      row.id,
+    ]);
     changed += 1;
   }
   return changed;

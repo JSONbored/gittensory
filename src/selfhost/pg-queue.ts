@@ -24,6 +24,7 @@ import {
   jobCoalesceMergeKeyPrefix,
   jobCoalesceMergedPayload,
   jobCoalesceSupersededKeyPrefix,
+  jobClaimSortKey,
   jobPriority,
   parsePositiveIntEnv,
   queueBackgroundConcurrency,
@@ -168,13 +169,16 @@ CREATE TABLE IF NOT EXISTS ${TABLE} (
   created_at BIGINT NOT NULL,
   last_error TEXT,
   priority INTEGER NOT NULL DEFAULT 0,
-  job_key TEXT
+  job_key TEXT,
+  claim_sort_key BIGINT NOT NULL DEFAULT 0
 );
 ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS job_key TEXT;
+ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS claim_sort_key BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS is_maintenance INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS foreground_lane TEXT;
-CREATE INDEX IF NOT EXISTS ${TABLE}_claim ON ${TABLE}(status, run_after, priority);
+DROP INDEX IF EXISTS ${TABLE}_claim;
+CREATE INDEX IF NOT EXISTS ${TABLE}_claim ON ${TABLE}(status, priority, claim_sort_key, run_after);
 CREATE INDEX IF NOT EXISTS ${TABLE}_pending_job_key ON ${TABLE}(job_key, status);
 CREATE INDEX IF NOT EXISTS ${TABLE}_lane_claim ON ${TABLE}(status, foreground_lane, run_after);
 CREATE TABLE IF NOT EXISTS ${STATS_TABLE} (
@@ -289,6 +293,14 @@ export function createPgQueue(
           count: keyBackfilled,
         }),
       );
+    const sortKeysBackfilled = await backfillJobClaimSortKeys();
+    if (sortKeysBackfilled)
+      console.log(
+        JSON.stringify({
+          event: "selfhost_queue_claim_sort_keys_backfilled",
+          count: sortKeysBackfilled,
+        }),
+      );
     const maintenanceFlagsBackfilled = await backfillJobMaintenanceFlags();
     if (maintenanceFlagsBackfilled)
       console.log(
@@ -354,6 +366,23 @@ export function createPgQueue(
       if ((row.job_key ?? null) === key) continue;
       await pool.query(`UPDATE ${TABLE} SET job_key=$1 WHERE id=$2`, [
         key,
+        row.id,
+      ]);
+      changed += 1;
+    }
+    return changed;
+  }
+
+  async function backfillJobClaimSortKeys(): Promise<number> {
+    const res = await pool.query(
+      `SELECT id, payload, run_after, claim_sort_key FROM ${TABLE} WHERE status IN ('pending', 'processing')`,
+    );
+    let changed = 0;
+    for (const row of res.rows as Array<{ id: string; payload: string; run_after: number | string; claim_sort_key: number | string }>) {
+      const sortKey = jobClaimSortKey(row.payload, Number(row.run_after));
+      if (sortKey === Number(row.claim_sort_key)) continue;
+      await pool.query(`UPDATE ${TABLE} SET claim_sort_key=$1 WHERE id=$2`, [
+        sortKey,
         row.id,
       ]);
       changed += 1;
@@ -675,6 +704,7 @@ export function createPgQueue(
     const key = jobCoalesceKey(payload);
     const lane = foregroundLaneForJob(message.type, payload);
     const runAfter = now + delaySeconds * 1000;
+    const claimSortKey = jobClaimSortKey(payload, runAfter);
     const absorbedByKey = jobCoalesceAbsorbedByKey(payload);
     if (absorbedByKey) {
       const existingFull = (
@@ -715,9 +745,11 @@ export function createPgQueue(
           // race lets the normal supersede/coalesce/insert path below handle this job instead.
           const merged = await pool.query(
             `UPDATE ${TABLE}
-               SET payload=$1, run_after=GREATEST(run_after, $2), created_at=$3, priority=GREATEST(priority, $4), job_key=$5, last_error=NULL
+               SET payload=$1, run_after=GREATEST(run_after, $2), created_at=$3, priority=GREATEST(priority, $4), job_key=$5,
+                   claim_sort_key=CASE WHEN claim_sort_key>0 THEN LEAST(claim_sort_key, $8) ELSE $8 END,
+                   last_error=NULL
              WHERE id=$6 AND status='pending' AND job_key=$7`,
-            [mergedPayload, runAfter, now, priority, mergedKey, mergeCandidate.id, mergeCandidate.job_key],
+            [mergedPayload, runAfter, now, priority, mergedKey, mergeCandidate.id, mergeCandidate.job_key, claimSortKey],
           );
           if (merged.rowCount) {
             await recordQueueMetric("gittensory_jobs_coalesced_total");
@@ -745,9 +777,10 @@ export function createPgQueue(
         // (4h default) can keep re-arming the clock forever, and sustained pressure defers the job indefinitely.
         await pool.query(
           `UPDATE ${TABLE}
-             SET payload=$1, run_after=GREATEST(run_after, $2), priority=GREATEST(priority, $3), job_key=$4, foreground_lane=$5, last_error=NULL
+             SET payload=$1, run_after=GREATEST(run_after, $2), priority=GREATEST(priority, $3), job_key=$4,
+                 foreground_lane=$5, claim_sort_key=CASE WHEN claim_sort_key>0 THEN LEAST(claim_sort_key, $7) ELSE $7 END, last_error=NULL
            WHERE id=$6`,
-          [payload, runAfter, priority, key, lane, existing.id],
+          [payload, runAfter, priority, key, lane, existing.id, claimSortKey],
         );
         await pool.query(
           `DELETE FROM ${TABLE}
@@ -771,9 +804,10 @@ export function createPgQueue(
         // maintenance trickle clock reflects genuine wait time, not the most recent re-request.
         await pool.query(
           `UPDATE ${TABLE}
-             SET payload=$1, run_after=GREATEST(run_after, $2), priority=GREATEST(priority, $3), foreground_lane=$4, last_error=NULL
+             SET payload=$1, run_after=GREATEST(run_after, $2), priority=GREATEST(priority, $3),
+                 foreground_lane=$4, claim_sort_key=CASE WHEN claim_sort_key>0 THEN LEAST(claim_sort_key, $6) ELSE $6 END, last_error=NULL
            WHERE id=$5`,
-          [payload, runAfter, priority, lane, existing.id],
+          [payload, runAfter, priority, lane, existing.id, claimSortKey],
         );
         await recordQueueMetric("gittensory_jobs_coalesced_total");
         kickOne();
@@ -781,8 +815,8 @@ export function createPgQueue(
       }
     }
     await pool.query(
-      `INSERT INTO ${TABLE} (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance, foreground_lane) VALUES ($1,'pending',0,$2,$3,$4,$5,$6,$7)`,
-      [payload, runAfter, now, priority, key, isMaintenanceJobType(message.type) ? 1 : 0, lane],
+      `INSERT INTO ${TABLE} (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance, foreground_lane, claim_sort_key) VALUES ($1,'pending',0,$2,$3,$4,$5,$6,$7,$8)`,
+      [payload, runAfter, now, priority, key, isMaintenanceJobType(message.type) ? 1 : 0, lane, claimSortKey],
     );
     await recordQueueMetric("gittensory_jobs_enqueued_total");
     kickOne();
@@ -790,13 +824,13 @@ export function createPgQueue(
 
   async function claimNext(): Promise<JobRow | null> {
     const now = Date.now();
-    const foreground = (await claimNextForegroundLane(now)) ?? (await claimNextWhere(now, "priority >= $2"));
+    const foreground = (await claimNextForegroundLane(now)) ?? (await claimNextWhere(now, "candidate.priority >= $2"));
     if (foreground) return foreground;
     if (activeBackground >= backgroundConcurrency) return null;
     activeBackground++;
     let background: JobRow | null;
     try {
-      background = await claimNextWhere(now, "priority < $2");
+      background = await claimNextWhere(now, "candidate.priority < $2");
     } catch (error) {
       // Release the reserved background slot if the claim query itself throws (a dropped connection / lock
       // timeout — the exact raw pool failures pump() below is documented to catch). claimNext() runs OUTSIDE
@@ -830,7 +864,7 @@ export function createPgQueue(
     const sequence = fairness ? Number(fairness.claim_sequence) : 0;
     const lane: ForegroundLane = nextForegroundLane(sequence);
     if (lane === "fresh") {
-      const freshRow = await claimNextWhere(now, "priority >= $2", { sql: "foreground_lane='fresh'", params: [] });
+      const freshRow = await claimNextWhere(now, "candidate.priority >= $2", { sql: "candidate.foreground_lane='fresh'", params: [] });
       if (freshRow) incr("gittensory_jobs_claimed_by_lane_total", { lane: "fresh" });
       return freshRow;
     }
@@ -847,8 +881,8 @@ export function createPgQueue(
     );
     const repo = pickBacklogRepo(candidates, fairness?.last_backlog_repo ?? null);
     if (!repo) return null;
-    const row = await claimNextWhere(now, "priority >= $2", {
-      sql: "foreground_lane='backlog' AND job_key LIKE $3",
+    const row = await claimNextWhere(now, "candidate.priority >= $2", {
+      sql: "candidate.foreground_lane='backlog' AND candidate.job_key LIKE $3",
       params: [`agent-regate-pr:${repo}#%`],
     });
     if (row) {
@@ -865,13 +899,24 @@ export function createPgQueue(
   ): Promise<JobRow | null> {
     const extraSql = extra ? ` AND ${extra.sql}` : "";
     // Atomic, multi-instance-safe: lock + claim one due job, skipping rows another instance already locked.
+    // The advisory lock closes the same-job-key sibling race: a second worker can SKIP LOCKED past the row
+    // this statement is updating, but it cannot claim another pending row with the same semantic job key.
     const res = await pool.query(
       `UPDATE ${TABLE} SET status='processing', run_after=$1
        WHERE id = (
-         SELECT id
-           FROM ${TABLE}
-          WHERE status='pending' AND run_after<=$1 AND ${priorityPredicate}${extraSql}
-          ORDER BY priority DESC, run_after, id
+         SELECT candidate.id
+           FROM ${TABLE} AS candidate
+          WHERE candidate.status='pending' AND candidate.run_after<=$1 AND ${priorityPredicate}${extraSql}
+            AND (
+              candidate.job_key IS NULL OR (
+                pg_try_advisory_xact_lock(hashtextextended(candidate.job_key, 0))
+                AND NOT EXISTS (
+                  SELECT 1 FROM ${TABLE} AS processing
+                   WHERE processing.status='processing' AND processing.job_key=candidate.job_key
+                )
+              )
+            )
+          ORDER BY candidate.priority DESC, candidate.claim_sort_key, candidate.run_after, candidate.id
           FOR UPDATE SKIP LOCKED
           LIMIT 1
        )

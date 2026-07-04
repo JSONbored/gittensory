@@ -663,6 +663,7 @@ type CoalesceMessage = {
   requestedBy?: unknown;
   repoFullName?: unknown;
   prNumber?: unknown;
+  prCreatedAt?: unknown;
   attempt?: unknown;
   force?: unknown;
   mode?: unknown;
@@ -696,6 +697,30 @@ function ragIndexFullKey(repo: string): string {
 
 function ragIndexRepoKeyPrefix(repo: string): string {
   return keyOf("rag-index-repo", repo, "");
+}
+
+const LEGACY_AGENT_REGATE_SORT_BASE_MS = Date.parse("2000-01-01T00:00:00.000Z");
+
+export function jobClaimSortKey(payload: string, fallbackMs: number): number {
+  const message = parseCoalesceMessage(payload);
+  if (message?.type === "agent-regate-pr") {
+    const createdAtMs = normalizedTimeMs(message.prCreatedAt);
+    if (createdAtMs !== null) return createdAtMs;
+    const pr = normalizedNumber(message.prNumber);
+    if (pr !== null) return LEGACY_AGENT_REGATE_SORT_BASE_MS + pr;
+  }
+  return normalizedSortNumber(fallbackMs);
+}
+
+function normalizedTimeMs(value: unknown): number | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizedSortNumber(value: unknown): number {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
 }
 
 export function jobCoalesceSupersededKeyPrefix(payload: string): string | null {

@@ -1308,7 +1308,7 @@ describe("createSqliteQueue (durable #980)", () => {
       driver.query("PRAGMA index_info(_selfhost_jobs_claim)", []).rows.map(
         (row) => (row as { name: string }).name,
       ),
-    ).toEqual(["status", "run_after", "priority"]);
+    ).toEqual(["status", "priority", "claim_sort_key", "run_after"]);
   });
 
   it("rebuilds an old claim index so priority participates in future claims", async () => {
@@ -1332,7 +1332,7 @@ describe("createSqliteQueue (durable #980)", () => {
       driver.query("PRAGMA index_info(_selfhost_jobs_claim)", []).rows.map(
         (row) => (row as { name: string }).name,
       ),
-    ).toEqual(["status", "run_after", "priority"]);
+    ).toEqual(["status", "priority", "claim_sort_key", "run_after"]);
   });
 
   it("claims webhook work before regate work, and regate work before earlier background jobs", async () => {
@@ -1367,13 +1367,14 @@ describe("createSqliteQueue (durable #980)", () => {
   });
 
   describe("claim-time backlog-vs-fresh-intake fairness (#selfhost-backlog-convergence)", () => {
-    const backlogJob = (repo: string, prNumber: number): JobMessage =>
+    const backlogJob = (repo: string, prNumber: number, prCreatedAt?: string): JobMessage =>
       ({
         type: "agent-regate-pr",
         deliveryId: `backlog-convergence:${repo}#${prNumber}`,
         repoFullName: repo,
         prNumber,
         installationId: 1,
+        ...(prCreatedAt ? { prCreatedAt } : {}),
       }) as unknown as JobMessage;
 
     it("prefers 3 backlog-lane claims for every 1 fresh-intake claim (default ratio), deterministically", async () => {
@@ -1452,6 +1453,100 @@ describe("createSqliteQueue (durable #980)", () => {
         "backlog-convergence:owner/a#2",
         "backlog-convergence:owner/a#3",
       ]);
+    });
+
+    it("REGRESSION: drains one repo's backlog-convergence PR jobs by original PR age, not enqueue timing", async () => {
+      const driver = makeDriver();
+      const seen: string[] = [];
+      const q = createSqliteQueue(driver, async (m) => void seen.push((m as unknown as { deliveryId: string }).deliveryId), { concurrency: 1 });
+      await q.binding.send(backlogJob("owner/repo", 12, "2026-07-03T12:00:00.000Z"), { delaySeconds: 60 });
+      await q.binding.send(backlogJob("owner/repo", 10, "2026-07-03T10:00:00.000Z"), { delaySeconds: 60 });
+      await q.binding.send(backlogJob("owner/repo", 11, "2026-07-03T11:00:00.000Z"), { delaySeconds: 60 });
+      driver.query("UPDATE _selfhost_jobs SET run_after=0", []);
+
+      await q.drain();
+
+      expect(seen).toEqual([
+        "backlog-convergence:owner/repo#10",
+        "backlog-convergence:owner/repo#11",
+        "backlog-convergence:owner/repo#12",
+      ]);
+    });
+
+    it("backfills stale claim-sort keys and skips rows that already match the derived key", async () => {
+      const driver = makeDriver();
+      createSqliteQueue(driver, async () => undefined, { concurrency: 1 }); // create the durable schema first
+      const stale = backlogJob("owner/repo", 12, "2026-07-03T12:00:00.000Z");
+      const normalized = backlogJob("owner/repo", 13, "2026-07-03T13:00:00.000Z");
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, foreground_lane, claim_sort_key) VALUES (?, 'pending', 0, 0, ?, 9, ?, 'backlog', 0)",
+        [
+          JSON.stringify(stale),
+          1,
+          "agent-regate-pr:owner/repo#12",
+        ],
+      );
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, foreground_lane, claim_sort_key) VALUES (?, 'pending', 0, 0, ?, 9, ?, 'backlog', ?)",
+        [
+          JSON.stringify(normalized),
+          1,
+          "agent-regate-pr:owner/repo#13",
+          Date.parse("2026-07-03T13:00:00.000Z"),
+        ],
+      );
+
+      createSqliteQueue(driver, async () => undefined, { concurrency: 1 }); // startup backfill pass
+
+      const rows = driver.query("SELECT job_key, claim_sort_key FROM _selfhost_jobs ORDER BY job_key", []).rows as Array<{ job_key: string; claim_sort_key: number }>;
+      expect(rows).toEqual([
+        { job_key: "agent-regate-pr:owner/repo#12", claim_sort_key: Date.parse("2026-07-03T12:00:00.000Z") },
+        { job_key: "agent-regate-pr:owner/repo#13", claim_sort_key: Date.parse("2026-07-03T13:00:00.000Z") },
+      ]);
+    });
+
+    it("REGRESSION: does not claim a duplicate PR re-gate while the same job_key is already processing", async () => {
+      const driver = makeDriver();
+      const seen: string[] = [];
+      const q = createSqliteQueue(driver, async (m) => void seen.push((m as unknown as { deliveryId: string }).deliveryId), { concurrency: 1 });
+      const now = Date.now();
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, foreground_lane, claim_sort_key) VALUES (?, 'processing', 0, ?, ?, 9, ?, 'backlog', ?)",
+        [
+          JSON.stringify(backlogJob("owner/repo", 10, "2026-07-03T10:00:00.000Z")),
+          now,
+          now,
+          "agent-regate-pr:owner/repo#10",
+          Date.parse("2026-07-03T10:00:00.000Z"),
+        ],
+      );
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, foreground_lane, claim_sort_key) VALUES (?, 'pending', 0, 0, ?, 9, ?, 'backlog', ?)",
+        [
+          JSON.stringify(backlogJob("owner/repo", 10, "2026-07-03T10:00:00.000Z")),
+          now,
+          "agent-regate-pr:owner/repo#10",
+          Date.parse("2026-07-03T10:00:00.000Z"),
+        ],
+      );
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, foreground_lane, claim_sort_key) VALUES (?, 'pending', 0, 0, ?, 9, ?, 'backlog', ?)",
+        [
+          JSON.stringify(backlogJob("owner/repo", 11, "2026-07-03T11:00:00.000Z")),
+          now,
+          "agent-regate-pr:owner/repo#11",
+          Date.parse("2026-07-03T11:00:00.000Z"),
+        ],
+      );
+
+      await q.drain();
+
+      expect(seen).toEqual(["backlog-convergence:owner/repo#11"]);
+      const duplicate = driver.query(
+        "SELECT status FROM _selfhost_jobs WHERE job_key=? ORDER BY id DESC LIMIT 1",
+        ["agent-regate-pr:owner/repo#10"],
+      ).rows[0] as { status: string };
+      expect(duplicate.status).toBe("pending");
     });
 
     it("defaults the claim sequence to 0 when the fairness singleton row is missing (defensive, never crashes)", async () => {
@@ -2665,7 +2760,7 @@ describe("createSqliteQueue (durable #980)", () => {
     // Only claimNextWhere's SELECT starts with this exact column list — spreadDueJobsOnStartup (which already
     // ran during construction above) selects a different column set, so this doesn't clobber setup.
     vi.spyOn(driver, "query").mockImplementation((sql: string, params: unknown[]) => {
-      if (sql.includes("SELECT id, payload, attempts, job_key, priority")) throw new Error("database is locked");
+      if (sql.includes("SELECT candidate.id, candidate.payload, candidate.attempts")) throw new Error("database is locked");
       return realQuery(sql, params);
     });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);

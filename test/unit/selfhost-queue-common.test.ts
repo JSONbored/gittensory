@@ -22,6 +22,7 @@ import {
   jobCoalesceMergeKeyPrefix,
   jobCoalesceMergedPayload,
   jobCoalesceSupersededKeyPrefix,
+  jobClaimSortKey,
   jobPriority,
   matchesGitHubRateLimitAdmissionTarget,
   nonConsumingRetryDelayMs,
@@ -874,6 +875,42 @@ describe("self-host queue common helpers", () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it("orders per-PR re-gate jobs by GitHub PR creation time, with a deterministic legacy fallback", () => {
+    expect(
+      jobClaimSortKey(
+        payload({
+          type: "agent-regate-pr",
+          repoFullName: "owner/repo",
+          prNumber: 42,
+          prCreatedAt: "2026-07-03T12:34:56.000Z",
+        }),
+        999,
+      ),
+    ).toBe(Date.parse("2026-07-03T12:34:56.000Z"));
+    expect(
+      jobClaimSortKey(
+        payload({ type: "agent-regate-pr", repoFullName: "owner/repo", prNumber: 42 }),
+        999,
+      ),
+    ).toBe(Date.parse("2000-01-01T00:00:00.000Z") + 42);
+    expect(
+      jobClaimSortKey(
+        payload({
+          type: "agent-regate-pr",
+          repoFullName: "owner/repo",
+          prNumber: 43,
+          prCreatedAt: "not-a-date",
+        }),
+        999,
+      ),
+    ).toBe(Date.parse("2000-01-01T00:00:00.000Z") + 43);
+    expect(jobClaimSortKey(payload({ type: "agent-regate-pr", repoFullName: "owner/repo", prNumber: "x" }), "567.8" as unknown as number)).toBe(567);
+    expect(jobClaimSortKey(payload({ type: "rag-index-repo" }), 1234.9)).toBe(1234);
+    expect(jobClaimSortKey(payload({ type: "rag-index-repo" }), -5)).toBe(0);
+    expect(jobClaimSortKey(payload({ type: "rag-index-repo" }), {} as unknown as number)).toBe(0);
+    expect(jobClaimSortKey("not-json", Number.NaN)).toBe(0);
   });
 
   it("coalesces the event-driven jobs by their stable per-invocation id — and only true duplicates (#1942)", () => {
