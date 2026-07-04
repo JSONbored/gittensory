@@ -77,6 +77,25 @@ describe("rag: code-not-content filtering (free-tier cost guard)", () => {
     expect(classifyRepoFile("app.min.js")).toBe("skip");
   });
 
+  it("skips more build/cache/dependency output directories", () => {
+    for (const p of [
+      "target/release/app.rs",
+      ".venv/lib/site.py",
+      "venv/bin/thing.py",
+      "src/__pycache__/mod.cpython-312.pyc",
+      ".mypy_cache/3.12/foo.data.json",
+      ".pytest_cache/v/cache/lastfailed",
+      ".tox/py312/log.txt",
+      "web/.svelte-kit/generated/root.svelte",
+      "app/.nuxt/app.config.mjs",
+      ".gradle/caches/x.bin",
+      "backend/_build/dev/lib/app.beam",
+      "infra/.terraform/providers/plugin.go",
+    ]) {
+      expect(classifyRepoFile(p)).toBe("skip");
+    }
+  });
+
   it("skips oversized files and orders source before docs", () => {
     expect(isIndexablePath("src/a.ts")).toBe(true);
     expect(isIndexablePath("src/a.ts", 2_000_000)).toBe(false); // > 1MB

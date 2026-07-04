@@ -116,7 +116,7 @@ export function ragDimensionsFromEnv(value: string | undefined): number {
 
 // ── Filtering: index CODE, not content/data corpora (the primary free-tier cost guard) ───────────
 const SKIP_DIR_RE =
-  /(^|\/)(node_modules|dist|build|out|coverage|vendor|\.git|\.next|\.turbo|\.cache|content|data|fixtures|__snapshots__|__fixtures__|testdata|generated|public)\//i;
+  /(^|\/)(node_modules|dist|build|out|coverage|vendor|\.git|\.next|\.nuxt|\.svelte-kit|\.turbo|\.cache|target|\.gradle|_build|\.venv|venv|__pycache__|\.mypy_cache|\.pytest_cache|\.ruff_cache|\.tox|\.terraform|content|data|fixtures|__snapshots__|__fixtures__|testdata|generated|public)\//i;
 const SKIP_FILE_RE =
   /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|cargo\.lock|poetry\.lock|composer\.lock|go\.sum)$|\.(min\.(js|css)|map|lock|snap)$/i;
 const BINARY_EXT_RE =
