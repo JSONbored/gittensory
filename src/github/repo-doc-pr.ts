@@ -19,7 +19,7 @@ const CLAUDE_FILE_PATH = "CLAUDE.md";
 const PR_TITLE = "docs: generate AGENTS.md and CLAUDE.md from repo profile";
 
 export type RepoDocPullRequestResult =
-  | { opened: true; reused: boolean; pullNumber: number; url: string; claudeMode: "symlink" | "copy" }
+  | { opened: true; reused: boolean; pullNumber: number; url: string; claudeMode: "symlink" | "copy" | "unknown" }
   | { opened: false; reason: string };
 
 // Non-throwing split (mirrors repo-profile.ts's splitRepoFullName, not pr-actions.ts's throwing splitRepo):
@@ -99,7 +99,12 @@ export async function openRepoDocPullRequest(env: Env, repoFullName: string, mod
 
       const existingOpenPrs = await octokit.request("GET /repos/{owner}/{repo}/pulls", { owner, repo, state: "open", head: `${owner}:${REPO_DOC_BRANCH_NAME}`, base: baseBranch });
       const existing = (existingOpenPrs.data as Array<{ number: number; html_url: string }>)[0];
-      if (existing) return { opened: true, reused: true, pullNumber: existing.number, url: existing.html_url, claudeMode: "symlink" };
+      // "unknown", not "symlink": this short-circuit deliberately avoids a further tree/contents lookup (the
+      // whole point of reusing the existing PR instead of rebuilding it), so there is no real signal here for
+      // whether ITS CLAUDE.md landed as a symlink or the copy fallback (buildRepoDocTree only reports that for
+      // a tree IT just built). Reporting "symlink" unconditionally would misrepresent every reused PR that
+      // actually fell back to a copy.
+      if (existing) return { opened: true, reused: true, pullNumber: existing.number, url: existing.html_url, claudeMode: "unknown" };
 
       const branchInfo = await octokit.request("GET /repos/{owner}/{repo}/branches/{branch}", { owner, repo, branch: baseBranch });
       const baseCommitSha = branchInfo.data.commit.sha;

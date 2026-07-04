@@ -96,7 +96,10 @@ describe("openRepoDocPullRequest (#3000)", () => {
       return new Response("unexpected", { status: 500 });
     });
     const result = await openRepoDocPullRequest(env, REPO, "live");
-    expect(result).toEqual({ opened: true, reused: true, pullNumber: 7, url: "https://github.com/owner/widgets/pull/7", claudeMode: "symlink" });
+    // REGRESSION: claudeMode must be "unknown" here, not a guessed "symlink" — this short-circuit never looks
+    // at the existing PR's actual tree (that's the whole point of reusing it instead of rebuilding), so there
+    // is no real signal for whether that PR's CLAUDE.md landed as a symlink or the copy fallback.
+    expect(result).toEqual({ opened: true, reused: true, pullNumber: 7, url: "https://github.com/owner/widgets/pull/7", claudeMode: "unknown" });
     expect(calls.some((c) => c.url.includes("/git/trees"))).toBe(false);
   });
 
