@@ -476,6 +476,7 @@ const PR_PUBLIC_SURFACE_ACTIONS = new Set([
 ]);
 const PR_GATE_CLOSED_ACTIONS = new Set(["closed"]);
 const ISSUE_PLAN_COOLDOWN_MS = 10 * 60 * 1000;
+const NOTIFY_EVALUATE_EVENTS_PER_JOB = 100;
 
 interface LiveGithubFacts {
   requiredContexts: Map<string, Promise<Set<string> | null>>;
@@ -503,6 +504,14 @@ function liveFactTokenPart(token: string | undefined): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return `token:${token.length}:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function chunkNotificationEvents(events: DetectedNotificationEvent[]): DetectedNotificationEvent[][] {
+  const chunks: DetectedNotificationEvent[][] = [];
+  for (let start = 0; start < events.length; start += NOTIFY_EVALUATE_EVENTS_PER_JOB) {
+    chunks.push(events.slice(start, start + NOTIFY_EVALUATE_EVENTS_PER_JOB));
+  }
+  return chunks;
 }
 
 function githubAdmissionKeyForToken(
@@ -5528,15 +5537,13 @@ async function processGitHubWebhook(
         },
       });
     }
-    // Batched (#selfhost-maintenance-self-pin): every event this ONE webhook delivery detected rides in a
-    // single notify-evaluate job instead of one job per event -- the audit trail above still records each
-    // event individually, so nothing about observability changes, only how many maintenance-lane rows a
-    // multi-watcher issue (or a review event landing alongside issue-watch matches) creates.
-    if (notificationEvents.length > 0) {
+    // Batched, but bounded (#selfhost-maintenance-self-pin): a popular issue can have thousands of watchers,
+    // so keep queue payloads comfortably below backend message limits while still avoiding one row per event.
+    for (const events of chunkNotificationEvents(notificationEvents)) {
       await env.JOBS.send({
         type: "notify-evaluate",
         requestedBy: "webhook",
-        events: notificationEvents,
+        events,
       });
     }
 

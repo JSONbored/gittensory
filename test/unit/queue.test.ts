@@ -16898,8 +16898,10 @@ describe("queue processors", () => {
     const enqueued: Array<{ type: string; events?: Array<{ eventType: string; recipientLogin: string; pullNumber: number }> }> = [];
     const env = createTestEnv({ JOBS: { async send(message: { type: string }) { enqueued.push(message); } } as unknown as Queue });
     vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 })); // no .gittensory.yml → empty manifest
-    await upsertIssueWatchSubscription(env, { login: "watcher-one", repoFullName: "JSONbored/gittensory" });
-    await upsertIssueWatchSubscription(env, { login: "watcher-two", repoFullName: "JSONbored/gittensory" });
+    const watcherLogins = Array.from({ length: 205 }, (_, index) => `watcher-${String(index + 1).padStart(3, "0")}`);
+    for (const login of watcherLogins) {
+      await upsertIssueWatchSubscription(env, { login, repoFullName: "JSONbored/gittensory" });
+    }
     await upsertIssueWatchSubscription(env, { login: "maintainer", repoFullName: "JSONbored/gittensory" }); // the author — should be skipped
 
     await processJob(env, {
@@ -16914,17 +16916,16 @@ describe("queue processors", () => {
       },
     });
 
-    // Batched (#selfhost-maintenance-self-pin): both watcher matches from this ONE webhook delivery ride in a
-    // SINGLE notify-evaluate job, not one job per watcher -- that fan-out was flooding the self-host maintenance
-    // lane with a job per watcher on a popular issue.
+    // Batched but bounded (#selfhost-maintenance-self-pin): watcher matches from this ONE webhook delivery ride in
+    // chunked notify-evaluate jobs, not one job per watcher and not one unbounded queue payload.
     const evaluateJobs = enqueued.filter((m): m is { type: "notify-evaluate"; events: Array<{ eventType: string; recipientLogin: string; pullNumber: number }> } => m.type === "notify-evaluate");
-    expect(evaluateJobs).toHaveLength(1);
-    const watchEvents = evaluateJobs[0]!.events.filter((event) => event.eventType === "issue_watch_match");
-    expect(watchEvents.map((event) => event.recipientLogin).sort()).toEqual(["watcher-one", "watcher-two"]); // maintainer (author) skipped
+    expect(evaluateJobs.map((job) => job.events).map((events) => events.length)).toEqual([100, 100, 5]);
+    const watchEvents = evaluateJobs.flatMap((job) => job.events).filter((event) => event.eventType === "issue_watch_match");
+    expect(watchEvents.map((event) => event.recipientLogin).sort()).toEqual(watcherLogins); // maintainer (author) skipped
     expect(watchEvents.every((event) => event.pullNumber === 91)).toBe(true);
 
-    const detected = await env.DB.prepare("select metadata_json from audit_events where event_type = 'notification.event_detected' and target_key = ?").bind("watcher-one").first<{ metadata_json: string }>();
-    expect(JSON.parse(detected!.metadata_json)).toMatchObject({ eventType: "issue_watch_match", recipientLogin: "watcher-one", repoFullName: "JSONbored/gittensory" });
+    const detected = await env.DB.prepare("select metadata_json from audit_events where event_type = 'notification.event_detected' and target_key = ?").bind("watcher-001").first<{ metadata_json: string }>();
+    expect(JSON.parse(detected!.metadata_json)).toMatchObject({ eventType: "issue_watch_match", recipientLogin: "watcher-001", repoFullName: "JSONbored/gittensory" });
   });
 
   it("appends issue-side slop findings to the issue advisory only when slop is opted in (#533)", async () => {

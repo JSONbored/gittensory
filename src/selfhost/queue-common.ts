@@ -996,15 +996,15 @@ export function jobCoalesceKey(payload: string): string | null {
       }
       case "notify-evaluate": {
         // A batched job carries every event from one webhook delivery (#selfhost-maintenance-self-pin) --
-        // coalescing keys off the FULL sorted set of dedup keys, so a redelivery of the identical batch still
-        // coalesces (same events -> same key) while any batch with even one different event gets its own key.
+        // coalescing keys off a digest of the FULL sorted set of dedup keys, so a redelivery of the identical
+        // batch still coalesces without placing an attacker-sized concatenation into the indexed job_key column.
         // If ANY event is missing its dedup key (a malformed payload), the whole batch is left uncoalesced
         // (null) rather than keying off a partial set that could collide with an unrelated batch and silently
         // drop the malformed event's work -- same rule as the other event-id-keyed types above.
         if (!Array.isArray(message.events) || message.events.length === 0) return null;
         const dedupKeys = message.events.map((event) => normalizedId(event?.dedupKey));
         if (dedupKeys.some((dedupKey) => dedupKey === null)) return null;
-        return keyOf(type, [...(dedupKeys as string[])].sort().join(","));
+        return keyOf(type, stableStringDigest([...(dedupKeys as string[])].sort()));
       }
       case "submit-draft": {
         const draftId = normalizedId(message.draftId);
@@ -1116,6 +1116,10 @@ function normalizedPathScope(value: unknown): string | null {
   ].sort();
   if (paths.length === 0) return null;
   return `sha256:${createHash("sha256").update(JSON.stringify(paths)).digest("hex")}`;
+}
+
+function stableStringDigest(values: string[]): string {
+  return `sha256:${createHash("sha256").update(JSON.stringify(values)).digest("hex")}`;
 }
 
 function boolFlag(value: unknown): string {

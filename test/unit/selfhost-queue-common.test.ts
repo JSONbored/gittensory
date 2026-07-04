@@ -1068,7 +1068,7 @@ describe("self-host queue common helpers", () => {
     expect(jobCoalesceKey(payload({ type: "notify-evaluate", requestedBy: "test", events: [{}] }))).toBeNull();
   });
 
-  it("batches a notify-evaluate job's coalesce key off the FULL sorted set of dedup keys (#selfhost-maintenance-self-pin)", () => {
+  it("batches a notify-evaluate job's coalesce key off a fixed-length digest of the FULL sorted set of dedup keys (#selfhost-maintenance-self-pin)", () => {
     // Order-independent: the same two events in either order produce the same key, so a redelivery with the
     // events reordered still coalesces.
     const forward = jobCoalesceKey(
@@ -1085,7 +1085,7 @@ describe("self-host queue common helpers", () => {
         events: [{ dedupKey: "issue_watch_match:o/r#9:alice" }, { dedupKey: "review_requested:o/r#3:bob" }],
       }),
     );
-    expect(forward).toBe("notify-evaluate:issue_watch_match:o/r#9:alice,review_requested:o/r#3:bob");
+    expect(forward).toMatch(/^notify-evaluate:sha256:[a-f0-9]{64}$/);
     expect(reversed).toBe(forward);
     // A batch with even one different event gets a DIFFERENT key -- never silently merges with an unrelated batch.
     const differentBatch = jobCoalesceKey(
@@ -1096,6 +1096,18 @@ describe("self-host queue common helpers", () => {
       }),
     );
     expect(differentBatch).not.toBe(forward);
+    expect(differentBatch).toMatch(/^notify-evaluate:sha256:[a-f0-9]{64}$/);
+    const many = jobCoalesceKey(
+      payload({
+        type: "notify-evaluate",
+        requestedBy: "webhook",
+        events: Array.from({ length: 5_000 }, (_, index) => ({
+          dedupKey: `issue_watch_match:owner/repo#9:watcher-${String(index).padStart(4, "0")}`,
+        })),
+      }),
+    );
+    expect(many).toMatch(/^notify-evaluate:sha256:[a-f0-9]{64}$/);
+    expect(many!.length).toBe("notify-evaluate:sha256:".length + 64);
     // If ANY event in the batch is missing its dedup key, the whole batch is left uncoalesced (null) rather than
     // key off a partial set that could collide with -- and silently drop the malformed event from -- an
     // unrelated batch.
