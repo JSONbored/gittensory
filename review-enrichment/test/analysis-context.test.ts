@@ -42,6 +42,30 @@ test("collectAddedLines keeps added lines whose content starts with ++ (rendered
   );
 });
 
+test("collectAddedLines does not let a no-newline marker skew line numbers", () => {
+  // `\ No newline at end of file` is not a new-file line; advancing past it would cite every
+  // subsequent added line one too high (same class as the iac-misconfig / redos regression).
+  const files = [
+    {
+      path: "src/app.ts",
+      patch: [
+        "@@ -1,1 +1,2 @@",
+        "-const x = 1;",
+        "\\ No newline at end of file",
+        "+const x = 1;",
+        "+const y = 2;",
+      ].join("\n"),
+    },
+  ];
+  assert.deepEqual(
+    collectAddedLines(files).map((added) => [added.line, added.text]),
+    [
+      [1, "const x = 1;"],
+      [2, "const y = 2;"],
+    ],
+  );
+});
+
 test("createAnalysisContext parses common PR state once", () => {
   let now = 130;
   const syntheticGithubToken = ["ghp", "abcdefghijklmnopqrstuvwxyz1234567890"].join("_");
