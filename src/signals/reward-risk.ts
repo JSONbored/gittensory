@@ -768,7 +768,11 @@ function analysisRank(analysis: RepoRewardRisk): number {
 function bestFitLabels(repo: RepositoryRecord | null): string[] {
   const multipliers = repo?.registryConfig?.labelMultipliers ?? {};
   const labels = Object.entries(multipliers)
-    .filter(([label]) => !/status|source|contributor|verified|risk|codex/i.test(label))
+    // Exclude meta labels only at a keyword boundary (a real separator or end-of-string after the keyword),
+    // not mid-word — mirroring the anchored `suspiciousConfiguredLabels` matcher in engine.ts. The old
+    // unanchored regex over-matched substrings (e.g. "opensource" via "source", "risky-refactor" via "risk"),
+    // wrongly dropping a legitimate high-multiplier label from the best-fit suggestion.
+    .filter(([label]) => !/^(status|source|contributor|verified|risk|codex)([:/-]|$)/i.test(label))
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .map(([label]) => label);
   return labels.slice(0, 1);
@@ -915,5 +919,6 @@ function clamp(value: number, min: number, max: number): number {
 export const rewardRiskFreshnessInternals = {
   pickIssueTimestamp,
   issueAgeDays,
+  bestFitLabels,
 };
 /* v8 ignore stop */
