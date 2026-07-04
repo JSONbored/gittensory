@@ -55,7 +55,7 @@ import {
 } from "../../src/services/agent-action-executor";
 import type { PlannedAgentAction } from "../../src/settings/agent-actions";
 import { AGENT_LABEL_PENDING_CLOSURE } from "../../src/review/linked-issue-hard-rules";
-import { getGlobalContributorBlacklist, isGlobalAgentFrozen, setGlobalAgentFrozen, upsertGlobalModerationConfig, upsertPullRequestFromGitHub } from "../../src/db/repositories";
+import { clearProcessLocalGlobalAgentFrozenCacheForTest, getGlobalContributorBlacklist, isGlobalAgentFrozen, setGlobalAgentFrozen, upsertGlobalModerationConfig, upsertPullRequestFromGitHub } from "../../src/db/repositories";
 import * as repositoriesModule from "../../src/db/repositories";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 import { createTestEnv } from "../helpers/d1";
@@ -534,11 +534,13 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
   });
 
   it("isGlobalAgentFrozen fails open (false) on a read error — a D1 hiccup never freezes the fleet by itself", async () => {
+    clearProcessLocalGlobalAgentFrozenCacheForTest();
     const broken = { ...createTestEnv({}), DB: null } as unknown as Env;
     expect(await isGlobalAgentFrozen(broken)).toBe(false);
   });
 
   it("isGlobalAgentFrozen's fail-open is never SILENT — a read error is observable, not indistinguishable from a genuine unfrozen state (#2125)", async () => {
+    clearProcessLocalGlobalAgentFrozenCacheForTest();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const broken = { ...createTestEnv({}), DB: null } as unknown as Env;
     expect(await isGlobalAgentFrozen(broken)).toBe(false);
@@ -547,12 +549,33 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
   });
 
   it("isGlobalAgentFrozen also warns (but still fails open) when the table exists but the singleton row is absent (#2125)", async () => {
+    clearProcessLocalGlobalAgentFrozenCacheForTest();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const env = createTestEnv({});
     await env.DB.prepare("DELETE FROM global_agent_controls WHERE id = 'singleton'").run();
     expect(await isGlobalAgentFrozen(env)).toBe(false);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("global_kill_switch_row_missing"));
     warn.mockRestore();
+  });
+
+  it("REGRESSION: after operator freeze, a read error fail-closes on this process so agent actions stay halted (#2125)", async () => {
+    clearProcessLocalGlobalAgentFrozenCacheForTest();
+    const env = createTestEnv({});
+    await setGlobalAgentFrozen(env, true, "operator");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const broken = { ...env, DB: null } as unknown as Env;
+    expect(await isGlobalAgentFrozen(broken)).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("global_kill_switch_read_error_fail_closed"));
+    warn.mockRestore();
+  });
+
+  it("REGRESSION: after operator unfreeze, a read error fails open again on this process", async () => {
+    clearProcessLocalGlobalAgentFrozenCacheForTest();
+    const env = createTestEnv({});
+    await setGlobalAgentFrozen(env, true, "operator");
+    await setGlobalAgentFrozen(env, false, "operator");
+    const broken = { ...env, DB: null } as unknown as Env;
+    expect(await isGlobalAgentFrozen(broken)).toBe(false);
   });
 
   it("auto_with_approval: stages the action (queued) instead of executing", async () => {

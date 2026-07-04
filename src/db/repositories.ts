@@ -2309,15 +2309,23 @@ export async function getProductUsageRollupStatus(
 // this during an incident concurrent with a D1 hiccup (or on a self-host instance that never ran migration
 // 0059, or whose singleton row was later lost to a backup restore / manual cleanup) needs a visible signal that
 // the kill-switch may not have actually engaged, not silent normal-looking operation. (#2125)
+let processLocalGlobalAgentFrozen: boolean | null = null;
+export function clearProcessLocalGlobalAgentFrozenCacheForTest(): void { processLocalGlobalAgentFrozen = null; }
 export async function isGlobalAgentFrozen(env: Env): Promise<boolean> {
   try {
     const row = await env.DB.prepare("SELECT frozen FROM global_agent_controls WHERE id = 'singleton'").first<{ frozen: number }>();
     if (!row) {
       console.warn(JSON.stringify({ ev: "global_kill_switch_row_missing", message: "global_agent_controls has no singleton row — treating as unfrozen; re-run migrations or re-seed the row" }));
+      processLocalGlobalAgentFrozen = false;
+      return false;
     }
-    return row?.frozen === 1;
+    const frozen = row.frozen === 1;
+    processLocalGlobalAgentFrozen = frozen;
+    return frozen;
   } catch (error) {
-    console.warn(JSON.stringify({ ev: "global_kill_switch_read_error", message: errorMessage(error).slice(0, 200) }));
+    const message = error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200);
+    console.warn(JSON.stringify({ ev: "global_kill_switch_read_error", message }));
+    if (processLocalGlobalAgentFrozen === true) { console.warn(JSON.stringify({ ev: "global_kill_switch_read_error_fail_closed", message: "process-local cache shows frozen=1 — halting agent actions despite the read error" })); return true; }
     return false;
   }
 }
@@ -2350,6 +2358,7 @@ export async function setGlobalAgentFrozen(env: Env, frozen: boolean, updatedBy?
   )
     .bind(frozen ? 1 : 0, updatedBy ?? null)
     .run();
+  processLocalGlobalAgentFrozen = frozen;
 }
 
 /** Strict (non-fail-open) read of the kill-switch row, for the operator route's read-after-write verification
