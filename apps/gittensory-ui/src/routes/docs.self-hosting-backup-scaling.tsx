@@ -156,6 +156,30 @@ docker compose --profile backup run --rm backup sh /verify-backup.sh /backups/po
         can afford to drop. The script refuses to run when that URL equals the live backup source.
       </Callout>
 
+      <h2>Restore drill: what "restore-tested" actually verifies</h2>
+      <p>
+        This exact flow was run against a real production backup on a live instance (2026-07-04):
+        the newest Postgres dump was restored into a throwaway, network-isolated scratch database (a
+        separate container, never the live one), which the script's own identity check confirmed was
+        distinct from the backup source before touching anything. The restore completed cleanly and
+        repopulated all 84 application tables, including the largest operational tables with their
+        full row counts intact (hundreds of thousands of rows in the biggest tables) — not just an
+        empty schema.
+      </p>
+      <p>
+        This proves the backup content and the restore path both work end-to-end against real data.
+        It deliberately stops short of booting a full app instance against the scratch database and
+        polling <code>/ready</code>: that endpoint also gates on live Redis, Qdrant, the configured
+        AI provider, Codex auth, and a real GitHub App key (see{" "}
+        <Link to="/docs/self-hosting-operations">Operations</Link>'s health endpoints section) —
+        reproducing all of those for a disposable scratch instance would mean copying real
+        credentials into new, throwaway infrastructure, which is a bigger risk than the drill is
+        worth. In an actual disaster recovery, the restored database is loaded onto trusted
+        infrastructure the operator already controls, using their own real credentials, so once the
+        <code>db</code> readiness check passes (which this drill proves the restored data supports),
+        the remaining checks reflect the same subsystems' live state as any other boot.
+      </p>
+
       <p>
         After scaling, revisit <Link to="/docs/self-hosting-operations">Operations</Link> and{" "}
         <Link to="/docs/self-hosting-security">Security</Link> because network and credential
