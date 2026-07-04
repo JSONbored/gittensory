@@ -26,7 +26,7 @@ const RELAY_FORWARD_EVENTS = new Set([
   "issues",
 ]);
 
-export type RelayForwardOutcome = "forwarded" | "queued" | "skipped" | "failed";
+export type RelayForwardOutcome = "forwarded" | "queued" | "skipped" | "ignored" | "failed";
 
 /** Events brokered self-host containers need for review/actuation (excludes CI firehose + install lifecycle). */
 export function isRelayForwardableEvent(eventName: string): boolean {
@@ -35,7 +35,7 @@ export function isRelayForwardableEvent(eventName: string): boolean {
 
 /** A persisted `orb_relay_failures` row is terminal (delete) when delivery succeeded or the event can never be relayed. */
 export function isRelayFailureRetryTerminal(outcome: RelayForwardOutcome, eventName: string): boolean {
-  if (outcome === "forwarded" || outcome === "queued") return true;
+  if (outcome === "forwarded" || outcome === "queued" || outcome === "ignored") return true;
   // Permanently non-forwardable (e.g. check_run removed from the allowlist) — the row is obsolete.
   if (outcome === "skipped" && !isRelayForwardableEvent(eventName)) return true;
   return false;
@@ -49,8 +49,9 @@ export function shouldPersistRelayFailure(
 ): boolean {
   if (installationId == null) return false;
   if (!isRelayForwardableEvent(eventName)) return false;
-  // Push HTTP failure, or a forwardable event that is temporarily undeliverable (no relay_url yet,
-  // TOKEN_ENCRYPTION_SECRET absent during deploy, enrollment mid re-register, not-yet-enrolled install).
+  // Push HTTP failure, or an already-enrolled relay that is temporarily undeliverable (no relay_url yet,
+  // TOKEN_ENCRYPTION_SECRET absent during deploy, enrollment mid re-register). Terminal no-enrollment skips
+  // are reported as "ignored" so raw webhook bodies are not retained for installs with no brokered relay.
   return outcome === "failed" || outcome === "skipped";
 }
 
@@ -419,7 +420,7 @@ export async function forwardOrbEvent(
   env: Env,
   args: { eventName: string; installationId: number | null | undefined; deliveryId: string; rawBody: string },
   fetchImpl: typeof fetch = fetch,
-): Promise<"forwarded" | "queued" | "skipped" | "failed"> {
+): Promise<RelayForwardOutcome> {
   if (!args.installationId || !RELAY_FORWARD_EVENTS.has(args.eventName)) return "skipped";
   // issueOrbEnrollment INSERTs a new row per enrollment without revoking prior enrolled rows for the same
   // installation_id. Without ORDER BY, .first() is nondeterministic — a stale row (no relay / old URL) can win
@@ -433,7 +434,7 @@ export async function forwardOrbEvent(
     )
     .bind(args.installationId)
     .first<{ relay_mode: string; relay_url: string | null; relay_secret_enc: string | null; relay_secret_iv: string | null; relay_secret_salt: string | null }>();
-  if (!row) return "skipped"; // not a brokered self-host (or revoked) — nothing to relay to
+  if (!row) return "ignored"; // not a brokered self-host (or revoked) — nothing to relay to
   // Pull mode (#16): a tailnet container can't be pushed to, so ENQUEUE the event for it to drain outbound.
   if (row.relay_mode === "pull") {
     await enqueueRelayPending(env, { deliveryId: args.deliveryId, installationId: args.installationId, eventName: args.eventName, rawBody: args.rawBody });
