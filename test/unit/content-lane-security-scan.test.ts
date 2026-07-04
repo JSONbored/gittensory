@@ -34,6 +34,11 @@ describe("scanForSecrets", () => {
     expect(scanForSecrets(fakeJwt).kinds).toContain("jwt");
   });
 
+  it("flags a GitLab and an npm token (parity with the PR-diff gate)", () => {
+    expect(scanForSecrets("glpat-" + "aBcDeFgHiJkLmNoPqRsT").kinds).toContain("gitlab_token");
+    expect(scanForSecrets("npm_" + "a".repeat(36)).kinds).toContain("npm_token");
+  });
+
   it("flags a generic secret/password/token assignment with a high-entropy value", () => {
     expect(scanForSecrets(`secret = "${GENERIC_VALUE}"`).kinds).toContain("generic_secret_assignment");
     expect(scanForSecrets(`api_key: '${GENERIC_VALUE}'`).kinds).toContain("generic_secret_assignment");

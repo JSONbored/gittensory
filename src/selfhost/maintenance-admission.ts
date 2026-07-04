@@ -71,10 +71,27 @@ export function isMaintenanceJobType(type: string): boolean {
 export interface MaintenancePressureSignals {
   livePendingCount: number;
   oldestLivePendingAgeMs: number | null;
+  /** Foreground-priority pending jobs that are RUNNABLE right now (run_after<=now), i.e. not currently
+   *  deferred by any mechanism -- distinct from livePendingCount, which also includes deferred/processing
+   *  work. #selfhost-queue-liveness's own diagnostic: "queue large but intentionally deferred" (this count can
+   *  be 0 with livePendingCount > 0, transiently, and that is fine) vs. "queue stuck" (this count stays 0
+   *  while oldestLiveRunnableAgeMs -- once something IS runnable -- climbs, or while releaseStaleForegroundDeferrals
+   *  keeps finding stale work every sweep). */
+  liveRunnableNowCount: number;
+  /** Age in ms of the oldest RUNNABLE (run_after<=now) foreground pending job -- null when none is runnable
+   *  right now. Distinct from oldestLivePendingAgeMs, which is dominated by a job intentionally scheduled far
+   *  in the future and says nothing about how long already-due work has sat unclaimed. */
+  oldestLiveRunnableAgeMs: number | null;
   maintenancePendingCount: number;
   oldestMaintenancePendingAgeMs: number | null;
   /** Null when unavailable (see host-pressure.ts) -- a caller must treat null as "skip this check". */
   hostLoadAvg1PerCore: number | null;
+  /** #selfhost-backlog-convergence: pending+processing count of `agent-regate-pr` jobs tagged
+   *  `foreground_lane='backlog'` (queue-fairness.ts) -- the backlog-convergence sweeper's own output, DISTINCT
+   *  from `livePendingCount` (which is priority-gated, not lane-gated, and includes fresh webhook/foreground
+   *  work too). A high count here means a real, currently-unresolved PR-review backlog exists; generic
+   *  maintenance should yield to draining it, same as it already yields to live webhook pressure. */
+  backlogConvergencePendingCount: number;
 }
 
 export interface MaintenanceAdmissionConfig {
@@ -83,6 +100,7 @@ export interface MaintenanceAdmissionConfig {
   maxLiveJobAgeMs: number;
   maxMaintenancePendingCount: number;
   maxHostLoadAvg1PerCore: number;
+  maxBacklogConvergencePendingCount: number;
   deferMs: number;
   maxDeferAgeMs: number;
   maintenanceDrainAgeMs: number;
@@ -92,6 +110,11 @@ const DEFAULT_MAX_LIVE_PENDING_COUNT = 5;
 const DEFAULT_MAX_LIVE_JOB_AGE_MS = 2 * 60_000;
 const DEFAULT_MAX_MAINTENANCE_PENDING_COUNT = 15;
 const DEFAULT_MAX_HOST_LOAD_AVG1_PER_CORE = 1.5;
+// Deliberately more permissive than maxLivePendingCount (5): a real incident's backlog-convergence sweep can
+// legitimately queue several PRs across several repos at once (BACKLOG_CONVERGENCE_SWEEP_MAX_PRS=5 per repo per
+// sweep, selfhost/backlog-convergence.ts) without that alone meaning maintenance must fully yield -- only a
+// SUSTAINED backlog (this threshold exceeded) should compete with maintenance for admission.
+const DEFAULT_MAX_BACKLOG_CONVERGENCE_PENDING_COUNT = 10;
 const DEFAULT_DEFER_MS = 3 * 60_000;
 const DEFAULT_MAX_DEFER_AGE_MS = 4 * 60 * 60_000;
 const DEFAULT_MAINTENANCE_DRAIN_AGE_MS = 10 * 60_000;
@@ -138,6 +161,10 @@ export function resolveMaintenanceAdmissionConfig(): MaintenanceAdmissionConfig 
       "MAINTENANCE_ADMISSION_MAX_HOST_LOAD",
       DEFAULT_MAX_HOST_LOAD_AVG1_PER_CORE,
     ),
+    maxBacklogConvergencePendingCount: parsePositiveIntEnv("MAINTENANCE_ADMISSION_MAX_BACKLOG_CONVERGENCE_PENDING", {
+      min: 0,
+      fallback: DEFAULT_MAX_BACKLOG_CONVERGENCE_PENDING_COUNT,
+    }),
     deferMs: parsePositiveIntEnv("MAINTENANCE_ADMISSION_DEFER_MS", { min: 1_000, fallback: DEFAULT_DEFER_MS }),
     maxDeferAgeMs,
     // Never longer than the trickle backstop itself -- a misconfigured drain age above maxDeferAgeMs would be a
@@ -151,6 +178,7 @@ export type MaintenanceAdmissionReason =
   | "trickle_max_defer_age"
   | "live_pending_high"
   | "live_job_age_high"
+  | "backlog_convergence_high"
   | "maintenance_pending_high"
   | "maintenance_pending_high_drain"
   | "host_load_high"
@@ -185,6 +213,9 @@ export function evaluateMaintenanceAdmission(
   if (signals.livePendingCount > config.maxLivePendingCount) return { admit: false, reason: "live_pending_high" };
   if (signals.oldestLivePendingAgeMs !== null && signals.oldestLivePendingAgeMs > config.maxLiveJobAgeMs) {
     return { admit: false, reason: "live_job_age_high" };
+  }
+  if (signals.backlogConvergencePendingCount > config.maxBacklogConvergencePendingCount) {
+    return { admit: false, reason: "backlog_convergence_high" };
   }
   const hostLoadHigh =
     signals.hostLoadAvg1PerCore !== null && signals.hostLoadAvg1PerCore > config.maxHostLoadAvg1PerCore;

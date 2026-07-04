@@ -123,6 +123,18 @@ export function isGitHubBudgetBackgroundJob(message: JobMessage): boolean {
   return GITHUB_BUDGET_BACKGROUND_TYPES.has(message.type);
 }
 
+// The scheduled sweep's own per-PR fan-out (sweepRepoRegate, #audit-sweep-fanout) tags its synthetic delivery
+// id with this prefix -- the ONLY agent-regate-pr trigger that is genuinely stale/scheduled maintenance, not a
+// response to something happening on the PR right now. EVERY other agent-regate-pr producer (a trailing
+// coalesced re-review, an over-cap sibling wake, a linked-issue-change re-review, a reconciliation-repair
+// enqueue) carries the REAL webhook/event delivery id that caused it -- current-HEAD contributor-PR-review
+// work, not background maintenance (#selfhost-queue-liveness, VPS incident: agent-regate-pr jobs were treated
+// as background admission and parked behind a conservative maintenance floor even though they were reconciling
+// a live contributor PR someone was waiting on).
+export function isScheduledRegateSweepJob(deliveryId: string | null | undefined): boolean {
+  return typeof deliveryId === "string" && deliveryId.startsWith("regate-sweep:");
+}
+
 export function buildSelfHostQueueSnapshot(
   rows: Iterable<{ payload?: unknown; status?: unknown; run_after?: unknown; runAfter?: unknown }>,
   nowMs = Date.now(),
@@ -376,6 +388,18 @@ export function githubRateLimitAdmissionTargetForJob(
     return {
       kind: "webhook",
       admissionKey: githubRateLimitAdmissionKeyForJob(message),
+    };
+  }
+  // Current-head contributor-PR-review reconciliation (#selfhost-queue-liveness): every agent-regate-pr EXCEPT
+  // the scheduled sweep's own fan-out (isGitHubBudgetBackgroundJob already fully exempts the manual-regate
+  // operator override above that check) is a response to something happening on the PR right now, so it gets
+  // the SAME floor as a fresh webhook -- never the conservative maintenance floor a stale/scheduled sweep
+  // reserves. Checked BEFORE isGitHubBudgetBackgroundJob (which would otherwise classify it "background") so
+  // this branch wins for every non-sweep, non-manual agent-regate-pr job.
+  if (message.type === "agent-regate-pr" && isGitHubBudgetBackgroundJob(message) && !isScheduledRegateSweepJob(message.deliveryId)) {
+    return {
+      kind: "webhook",
+      admissionKey: githubRateLimitAdmissionKeyForJob(message) ?? githubRateLimitAdmissionKeyForPublicToken(),
     };
   }
   if (!isGitHubBudgetBackgroundJob(message)) return null;

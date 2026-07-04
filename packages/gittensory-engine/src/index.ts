@@ -40,6 +40,10 @@ export {
   computeMinerGoalLaneFit,
   isMinerRepoTargetable,
 } from "./miner-goal-lane-fit.js";
+export {
+  computeOpportunityFreshness,
+  type FreshnessIssue,
+} from "./opportunity-freshness.js";
 export { computeOpportunityCompetition } from "./opportunity-competition.js";
 export {
   classifyContributorFit,
@@ -47,10 +51,6 @@ export {
   type ContributorFitCheck,
   type ContributorFitProfile,
 } from "./contributor-fit.js";
-export {
-  computeOpportunityFreshness,
-  type FreshnessIssue,
-} from "./opportunity-freshness.js";
 export {
   buildMetadataRankInput,
   computeMetadataDupRisk,

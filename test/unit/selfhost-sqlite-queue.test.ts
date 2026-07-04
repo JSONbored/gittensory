@@ -210,7 +210,7 @@ describe("createSqliteQueue (durable #980)", () => {
       const seen: string[] = [];
       const q = createSqliteQueue(driver, async (m) => void seen.push(typeOf(m)));
 
-      await q.binding.send({ type: "agent-regate-pr", deliveryId: "sweep:owner/repo#7", repoFullName: "owner/repo", prNumber: 7, installationId: 123 });
+      await q.binding.send({ type: "agent-regate-pr", deliveryId: "regate-sweep:owner/repo#7", repoFullName: "owner/repo", prNumber: 7, installationId: 123 });
       await q.binding.send({ type: "rag-index-repo", requestedBy: "schedule", repoFullName: "owner/repo" });
       await q.binding.send({ type: "github-webhook", deliveryId: "fresh", eventName: "pull_request", payload: {} });
       await q.drain();
@@ -1668,6 +1668,319 @@ describe("createSqliteQueue (durable #980)", () => {
     });
   });
 
+  describe("releaseStaleForegroundDeferrals (#selfhost-queue-liveness)", () => {
+    afterEach(() => {
+      delete process.env.FOREGROUND_LIVENESS_ENABLED;
+      delete process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS;
+      delete process.env.FOREGROUND_LIVENESS_MAX_RELEASE_PER_SWEEP;
+    });
+
+    /** Directly inserts a foreground-priority (>=8 by default) pending row with an explicit created_at/run_after,
+     *  bypassing enqueue()'s own jitter/coalescing so the row's age and deferral are fully deterministic. Uses
+     *  "recapture-preview" by default -- a foreground type NOT in GITHUB_BUDGET_BACKGROUND_TYPES and not
+     *  "github-webhook"/"agent-regate-pr", so githubRateLimitAdmissionTargetForJob returns null for it and the
+     *  rate-limit-clear condition (isRateLimitAdmissionNowClear) is trivially/always true for these rows --
+     *  isolating the AGE-based condition cleanly for tests that aren't specifically about rate-limit clearing. */
+    function seedForegroundPendingRow(
+      driver: ReturnType<typeof makeDriver>,
+      opts: { createdAt: number; runAfter: number; priority?: number; type?: string },
+    ): void {
+      driver.query(
+        `INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance)
+         VALUES (?, 'pending', 0, ?, ?, ?, NULL, 0)`,
+        [
+          JSON.stringify({ type: opts.type ?? "recapture-preview", deliveryId: `seed:${opts.createdAt}`, repoFullName: "o/r", prNumber: 1, attempt: 1 }),
+          opts.runAfter,
+          opts.createdAt,
+          opts.priority ?? 9,
+        ],
+      );
+    }
+
+    /** Creates github_rate_limit_observations (mirrors the existing "pre-yields ..." tests' inline DDL) and seeds
+     *  ONE exhausted observation for the given admission key, so isRateLimitAdmissionNowClear() genuinely returns
+     *  false for a job routed to that key -- letting a test isolate the AGE-only release condition even for a
+     *  rate-limit-tracked job type (github-webhook / agent-regate-pr). */
+    function seedExhaustedRateLimitObservation(
+      driver: ReturnType<typeof makeDriver>,
+      admissionKey: string,
+      resetAtIso: string,
+    ): void {
+      driver.query(
+        `CREATE TABLE IF NOT EXISTS github_rate_limit_observations (
+          id TEXT PRIMARY KEY,
+          repo_full_name TEXT NOT NULL,
+          admission_key TEXT,
+          resource TEXT NOT NULL,
+          path TEXT NOT NULL,
+          status_code INTEGER NOT NULL,
+          limit_value INTEGER,
+          remaining INTEGER,
+          reset_at TEXT,
+          observed_at TEXT NOT NULL
+        )`,
+        [],
+      );
+      driver.query(
+        `INSERT INTO github_rate_limit_observations (id, repo_full_name, admission_key, resource, path, status_code, limit_value, remaining, reset_at, observed_at)
+         VALUES (?, 'o/r', ?, 'rest', '/x', 200, 5000, 1, ?, ?)`,
+        [`rl-${admissionKey}`, admissionKey, resetAtIso, new Date().toISOString()],
+      );
+    }
+
+    it("releases a foreground-priority pending row deferred far into the future once its created_at is stale", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "60000"; // 1m (parsePositiveIntEnv floor)
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      const now = Date.now();
+      seedForegroundPendingRow(driver, { createdAt: now - 5 * 60_000, runAfter: now + 60 * 60_000 });
+
+      const released = q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(1);
+      const row = driver.query("SELECT run_after FROM _selfhost_jobs", []).rows[0] as { run_after: number };
+      expect(row.run_after).toBeLessThanOrEqual(Date.now());
+      expect(await renderMetrics()).toContain("gittensory_jobs_foreground_liveness_released_total 1");
+    });
+
+    // Isolates the AGE condition from the OR'd rate-limit-clear condition: uses a github-webhook row (which IS
+    // rate-limit-tracked) with a genuinely exhausted, still-future-reset observation for its admission key, so
+    // isRateLimitAdmissionNowClear() returns false and only the age check governs release.
+    it("does NOT release a foreground row whose created_at is still recent (not yet stale) AND is still genuinely rate-limited", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "600000"; // default 10m
+      const driver = makeDriver();
+      const now = Date.now();
+      // Keyed to installation:123, matching the job's own payload.installation.id below -- githubRateLimitAdmissionKeyForJob
+      // only resolves an admission key for a github-webhook job from payload.installation.id (an unkeyed webhook
+      // payload resolves to a null admissionKey, which this exact/fallback-keyed observation would NOT match).
+      seedExhaustedRateLimitObservation(driver, "installation:123", new Date(now + 30 * 60_000).toISOString());
+      const q = createSqliteQueue(driver, async () => undefined);
+      const futureRunAfter = now + 60 * 60_000;
+      driver.query(
+        `INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance)
+         VALUES (?, 'pending', 0, ?, ?, 10, NULL, 0)`,
+        [
+          JSON.stringify({ type: "github-webhook", deliveryId: "still-blocked", eventName: "x", payload: { installation: { id: 123 } } }),
+          futureRunAfter,
+          now - 1_000,
+        ],
+      );
+
+      const released = q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(0);
+      const row = driver.query("SELECT run_after FROM _selfhost_jobs", []).rows[0] as { run_after: number };
+      expect(row.run_after).toBe(futureRunAfter);
+      expect(await renderMetrics()).not.toContain("gittensory_jobs_foreground_liveness_released_total");
+    });
+
+    // CONDITION-BASED recovery (the second OR arm): a foreground job whose created_at is nowhere near stale but
+    // whose rate-limit observation has since cleared (no blocking observation at all here) is released anyway --
+    // this is the whole point of pairing the age floor with a rate-limit-aware re-check (see the source's own
+    // doc comment on releaseStaleForegroundDeferrals).
+    it("releases a foreground row that is NOT yet age-stale once rate-limit admission for it reads clear", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "600000"; // default 10m -- nowhere near stale by age
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      const now = Date.now();
+      const futureRunAfter = now + 60 * 60_000;
+      // No github_rate_limit_observations table/row at all -- rateLimitAdmissionDelayMs degrades to "clear".
+      driver.query(
+        `INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance)
+         VALUES (?, 'pending', 0, ?, ?, 10, NULL, 0)`,
+        [JSON.stringify({ type: "github-webhook", deliveryId: "now-clear", eventName: "x", payload: {} }), futureRunAfter, now - 1_000],
+      );
+
+      const released = q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(1);
+      expect(await renderMetrics()).toContain("gittensory_jobs_foreground_liveness_released_total 1");
+    });
+
+    // The payload is unparseable -- isRateLimitAdmissionNowClear's own catch(){ return false } branch -- so ONLY
+    // the age condition can release it; while young, it must stay parked exactly like any other not-yet-stale,
+    // still-blocked row.
+    it("does NOT release a foreground row with an unparseable payload before it is age-stale", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "600000";
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      const now = Date.now();
+      const futureRunAfter = now + 60 * 60_000;
+      driver.query(
+        `INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance)
+         VALUES (?, 'pending', 0, ?, ?, 10, NULL, 0)`,
+        ["not valid json", futureRunAfter, now - 1_000],
+      );
+
+      const released = q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(0);
+    });
+
+    // The priority>=? filter is enforced by the candidate SELECT's own WHERE clause (bound to
+    // FOREGROUND_QUEUE_PRIORITY_FLOOR=8), not by any application-side check on the returned rows -- mirrors how
+    // the maintenance-admission pressure tests in this file seed real rows and rely on the actual SQL predicate
+    // rather than re-deriving it. A background-priority (<8) row, however old and however far-future its
+    // run_after, must never be touched by this sweep.
+    it("does NOT release a BACKGROUND-priority row even with an old created_at and future run_after", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "60000";
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      const now = Date.now();
+      const futureRunAfter = now + 60 * 60_000;
+      seedForegroundPendingRow(driver, {
+        createdAt: now - 5 * 60_000,
+        runAfter: futureRunAfter,
+        priority: 0, // background -- below FOREGROUND_QUEUE_PRIORITY_FLOOR (8)
+        type: "build-contributor-evidence",
+      });
+
+      const released = q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(0);
+      const row = driver.query("SELECT run_after FROM _selfhost_jobs", []).rows[0] as { run_after: number };
+      expect(row.run_after).toBe(futureRunAfter); // untouched
+    });
+
+    it("returns 0 immediately without releasing anything when FOREGROUND_LIVENESS_ENABLED=false", async () => {
+      process.env.FOREGROUND_LIVENESS_ENABLED = "false";
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined); // creates the table
+      const now = Date.now();
+      seedForegroundPendingRow(driver, { createdAt: now - 60 * 60_000, runAfter: now + 60 * 60_000 });
+
+      const released = q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(0);
+      const row = driver.query("SELECT run_after FROM _selfhost_jobs", []).rows[0] as { run_after: number };
+      expect(row.run_after).toBeGreaterThan(Date.now()); // still deferred -- the escape hatch never touched it
+      expect(await renderMetrics()).not.toContain("gittensory_jobs_foreground_liveness_released_total");
+    });
+
+    // REGRESSION (#selfhost-queue-liveness): the production incident this module exists to make structurally
+    // impossible -- a GitHub rate-limit sweep pushes MANY foreground-priority jobs' run_after far into the
+    // future at once (a shared REST budget drained by a post-deploy catch-up burst), and without this release
+    // path they'd sit deferred for up to the ~65-minute worst-case rate-limit window with zero runnable work,
+    // requiring manual intervention. Assert releaseStaleForegroundDeferrals() releases ALL stale rows in ONE
+    // sweep (not just the first) and records the metric as a SINGLE aggregate increment, not one per row --
+    // matching the source's own "logs + records a metric ONCE per sweep (aggregate count), not per row" doc
+    // comment, which exists specifically so a large release batch cannot spam the log/metric. Also asserts that
+    // kickAll()-driven pump activity actually finds the released rows runnable afterward.
+    it("releases every stale foreground deferral in one sweep and records one aggregate metric increment (regression for #selfhost-queue-liveness)", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "60000"; // 1m floor
+      const driver = makeDriver();
+      const started: string[] = [];
+      const q = createSqliteQueue(driver, async (m) => void started.push(typeOf(m)));
+      const now = Date.now();
+      const staleAge = now - 5 * 60_000; // 5m old -- well past the 1m ceiling
+      const farFuture = now + 60 * 60_000;
+      for (let i = 0; i < 3; i += 1) {
+        seedForegroundPendingRow(driver, { createdAt: staleAge, runAfter: farFuture });
+      }
+
+      const released = q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(3);
+      expect(await renderMetrics()).toContain("gittensory_jobs_foreground_liveness_released_total 3");
+      // kickAll() (called internally once released > 0) means pump activity picks these up without waiting for
+      // the next poll tick -- drain() confirms all three are now genuinely runnable.
+      await q.drain();
+      expect(started.length).toBe(3);
+    });
+
+    // Ramp-up cap (#selfhost-queue-liveness): a large inherited backlog (the production incident had ~190
+    // over-deferred rows) must not release ALL of it in one sweep -- that many jobs re-attempting GitHub reads
+    // at once can immediately re-trip the same rate-limit bucket they were deferred for. With the cap set below
+    // the eligible count, assert exactly `cap` rows release (not all of them), and that the OLDEST rows
+    // (smallest created_at) are the ones chosen -- the newest-of-the-batch row must still be pending afterward.
+    it("caps releases at FOREGROUND_LIVENESS_MAX_RELEASE_PER_SWEEP, releasing the oldest rows first", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "60000"; // 1m floor
+      process.env.FOREGROUND_LIVENESS_MAX_RELEASE_PER_SWEEP = "2";
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      const now = Date.now();
+      const farFuture = now + 60 * 60_000;
+      // 4 stale-eligible rows at distinct ages; only the 2 OLDEST should be released.
+      const ages = [10 * 60_000, 8 * 60_000, 6 * 60_000, 5 * 60_000]; // minutes-old, oldest first
+      for (const ageMs of ages) {
+        seedForegroundPendingRow(driver, { createdAt: now - ageMs, runAfter: farFuture });
+      }
+
+      const released = q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(2);
+      expect(await renderMetrics()).toContain("gittensory_jobs_foreground_liveness_released_total 2");
+      const remainingFuture = driver.query(
+        `SELECT COUNT(*) AS c FROM _selfhost_jobs WHERE status='pending' AND run_after>?`,
+        [now],
+      ).rows[0] as { c: number };
+      // 2 of the 4 seeded rows remain deferred into the future -- the 2 NEWEST (least stale) ones.
+      expect(remainingFuture.c).toBe(2);
+    });
+
+    // Mirrors reviveDeadLetterJobsSafely's own regression test: the foreground-liveness interval had no error
+    // handler of its own, so a thrown driver/metric failure on that tick would surface as an uncaught exception
+    // and could terminate the process -- exactly the failure mode pump()'s own try/catch already guards against
+    // for the main poll loop.
+    it("survives a releaseStaleForegroundDeferrals() driver failure on the interval tick instead of crashing the process", async () => {
+      process.env.FOREGROUND_LIVENESS_CHECK_INTERVAL_MS = "5000"; // parsePositiveIntEnv floor
+      vi.useFakeTimers();
+      try {
+        const driver = makeDriver();
+        // Let the boot-time self-heal call (inside createSqliteQueue's own constructor, unguarded) run against
+        // the real driver first -- only start throwing on the candidate SELECT once the queue is fully
+        // constructed, so this test isolates the INTERVAL tick's own error handling rather than a constructor-time
+        // crash (a distinct concern, already covered by the TDZ-crash tests elsewhere in this describe block).
+        let armed = false;
+        const realQuery = driver.query.bind(driver);
+        vi.spyOn(driver, "query").mockImplementation((sql: string, params: unknown[]) => {
+          if (armed && sql.includes("SELECT id, payload, created_at FROM") && sql.includes("priority>=? AND run_after>?")) {
+            throw new Error("disk I/O error");
+          }
+          return realQuery(sql, params);
+        });
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const q = createSqliteQueue(driver, async () => undefined);
+        armed = true;
+
+        q.start();
+        await vi.advanceTimersByTimeAsync(5000); // the foreground-liveness interval fires once -- would throw here if uncaught
+
+        const logged = errorSpy.mock.calls.map(([line]) => String(line));
+        expect(
+          logged.some(
+            (line) => line.includes("selfhost_queue_foreground_liveness_release_crashed") && line.includes("disk I/O error"),
+          ),
+        ).toBe(true);
+        await q.stop();
+      } finally {
+        delete process.env.FOREGROUND_LIVENESS_CHECK_INTERVAL_MS;
+      }
+    });
+  });
+
+  describe("processingCount (#selfhost-queue-liveness)", () => {
+    it("returns the count of status='processing' jobs", async () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'processing', 0, 0, 0, 0)",
+        [JSON.stringify(msg("x"))],
+      );
+      driver.query(
+        "INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority) VALUES (?, 'pending', 0, 0, 0, 0)",
+        [JSON.stringify(msg("y"))],
+      );
+      expect(q.processingCount()).toBe(1);
+    });
+
+    it("returns 0 when no job is processing", async () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      expect(q.processingCount()).toBe(0);
+    });
+  });
+
   it("reschedules GitHub rate-limit failures without consuming the dead-letter budget", async () => {
     const driver = makeDriver();
     let calls = 0;
@@ -2647,6 +2960,77 @@ describe("createSqliteQueue (durable #980)", () => {
       expect(signals.oldestLivePendingAgeMs).toBeNull();
       expect(signals.maintenancePendingCount).toBe(0);
       expect(signals.oldestMaintenancePendingAgeMs).toBeNull();
+      expect(signals.backlogConvergencePendingCount).toBe(0);
+      // Zero foreground rows at all -- SQLite's SUM(CASE...)/MIN(CASE...) return NULL (not 0) over a zero-row
+      // aggregate group, exercising the `?? 0` nullish arm on runnable_cnt (see maintenancePressureSignals).
+      expect(signals.liveRunnableNowCount).toBe(0);
+      expect(signals.oldestLiveRunnableAgeMs).toBeNull();
+    });
+
+    it("pressureSignals() reports the backlog-convergence lane pending count (#selfhost-backlog-convergence)", async () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      await q.binding.send({
+        type: "agent-regate-pr",
+        deliveryId: "backlog-convergence:owner/repo#1",
+        repoFullName: "owner/repo",
+        prNumber: 1,
+        installationId: 1,
+      } as unknown as JobMessage);
+      // A fresh-intake row (foreground_lane='fresh') must NOT count toward the backlog-convergence signal.
+      await q.binding.send(prWebhook("fresh-unrelated"));
+      const signals = q.pressureSignals();
+      expect(signals.backlogConvergencePendingCount).toBe(1);
+    });
+
+    // #selfhost-queue-liveness: liveRunnableNowCount/oldestLiveRunnableAgeMs must reflect only the SUBSET of
+    // live pending jobs that are currently DUE (run_after<=now) -- distinct from livePendingCount/
+    // oldestLivePendingAgeMs, which are dominated by whatever row is OLDEST by created_at regardless of
+    // whether it is runnable right now. Constructed so the OLDEST-by-created_at foreground row is NOT yet due
+    // (a large future run_after) while a NEWER foreground row IS due -- the oldest-runnable age must come from
+    // the newer, due row, not the older, not-due one.
+    it("pressureSignals() reports the runnable-now subset distinctly from the overall oldest-pending age", async () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      const now = Date.now();
+      // Oldest by created_at, but deferred far into the future -- NOT runnable now.
+      driver.query(
+        `INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance)
+         VALUES (?, 'pending', 0, ?, ?, 9, NULL, 0)`,
+        [JSON.stringify(msg("agent-regate-pr")), now + 3_600_000, now - 500_000],
+      );
+      // Newer by created_at, but already due -- runnable right now.
+      driver.query(
+        `INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance)
+         VALUES (?, 'pending', 0, ?, ?, 9, NULL, 0)`,
+        [JSON.stringify(msg("agent-regate-pr")), now - 1_000, now - 10_000],
+      );
+      const signals = q.pressureSignals();
+      expect(signals.livePendingCount).toBe(2);
+      expect(signals.oldestLivePendingAgeMs).toBeGreaterThanOrEqual(500_000);
+      expect(signals.liveRunnableNowCount).toBe(1);
+      expect(signals.oldestLiveRunnableAgeMs).toBeGreaterThanOrEqual(10_000);
+      expect(signals.oldestLiveRunnableAgeMs).toBeLessThan(signals.oldestLivePendingAgeMs as number);
+    });
+
+    it("pressureSignals() reports zero runnable-now with a null oldest-runnable age when foreground jobs exist but none are due yet", async () => {
+      const driver = makeDriver();
+      const q = createSqliteQueue(driver, async () => undefined);
+      const now = Date.now();
+      // Foreground rows exist (outer WHERE matches), but every one is deferred to the future -- the inner CASE
+      // never matches, so SUM(CASE...) is a real 0 here (a set exists, just none due), a DIFFERENT code path
+      // from the "zero foreground rows at all" NULL-aggregate case covered above.
+      for (let i = 0; i < 3; i += 1) {
+        driver.query(
+          `INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance)
+           VALUES (?, 'pending', 0, ?, ?, 9, NULL, 0)`,
+          [JSON.stringify(msg("agent-regate-pr")), now + 3_600_000, now - 60_000],
+        );
+      }
+      const signals = q.pressureSignals();
+      expect(signals.livePendingCount).toBe(3);
+      expect(signals.liveRunnableNowCount).toBe(0);
+      expect(signals.oldestLiveRunnableAgeMs).toBeNull();
     });
 
     it("backfills the is_maintenance flag on startup for jobs enqueued by an older version", async () => {

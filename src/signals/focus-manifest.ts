@@ -97,6 +97,11 @@ export type FocusManifestGateConfig = {
   /** `gate.cla.checkRunAppSlug`: the trusted GitHub App slug that must produce `checkRunName`. null (unset) ⇒
    *  check-run detection remains unresolved rather than trusting a spoofable name-only match. */
   claCheckRunAppSlug: string | null;
+  /** `gate.expectedCiContexts` (#selfhost-ci-verification): CI check/status context names to treat as
+   *  required when GitHub branch-protection required-status-checks are unreadable or unconfigured. null
+   *  (unset) ⇒ no generic fallback configured — the live-CI aggregate keeps today's fold-all behavior
+   *  when branch protection is also unreadable. See {@link RepositorySettings.expectedCiContexts}. */
+  expectedCiContexts: ReadonlyArray<string> | null;
 };
 
 // The converged per-PR review features a self-host operator toggles PER-REPO under `features:` in the private
@@ -383,6 +388,7 @@ const EMPTY_GATE_CONFIG: FocusManifestGateConfig = {
   claConsentPhrase: null,
   claCheckRunName: null,
   claCheckRunAppSlug: null,
+  expectedCiContexts: null,
 };
 
 const EMPTY_FEATURES_CONFIG: FocusManifestFeaturesConfig = {
@@ -481,6 +487,15 @@ function normalizeStringList(value: JsonValue | undefined, field: string, warnin
     }
   }
   return result;
+}
+
+/** Like {@link normalizeStringList}, but returns `null` (not `[]`) when unset or when nothing survives
+ *  validation — the convention every OTHER `FocusManifestGateConfig` field uses for "not configured", so
+ *  the resolver's `!== null` overlay checks work uniformly. */
+function normalizeOptionalStringList(value: JsonValue | undefined, field: string, warnings: string[]): ReadonlyArray<string> | null {
+  if (value === undefined || value === null) return null;
+  const list = normalizeStringList(value, field, warnings);
+  return list.length > 0 ? list : null;
 }
 
 function normalizeEnum<T extends string>(value: JsonValue | undefined, field: string, allowed: readonly T[], fallback: T, warnings: string[]): T {
@@ -662,6 +677,7 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     claConsentPhrase: parsePublicSafeText(claRecord?.consentPhrase, "gate.cla.consentPhrase", warnings),
     claCheckRunName: parsePublicSafeText(claRecord?.checkRunName, "gate.cla.checkRunName", warnings),
     claCheckRunAppSlug: parsePublicSafeText(claRecord?.checkRunAppSlug, "gate.cla.checkRunAppSlug", warnings),
+    expectedCiContexts: normalizeOptionalStringList(record.expectedCiContexts, "gate.expectedCiContexts", warnings),
   };
   // #2266: the flag is parsed, clamped, and threaded end-to-end, but the gate evaluator never reads it — a
   // maintainer who sets it to true believing it softens a blocker for newcomers gets no such effect. Surface
@@ -701,7 +717,8 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     gate.claMode !== null ||
     gate.claConsentPhrase !== null ||
     gate.claCheckRunName !== null ||
-    gate.claCheckRunAppSlug !== null;
+    gate.claCheckRunAppSlug !== null ||
+    gate.expectedCiContexts !== null;
   return gate;
 }
 
@@ -773,6 +790,7 @@ export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
     if (gate.claCheckRunAppSlug !== null) cla.checkRunAppSlug = gate.claCheckRunAppSlug;
     out.cla = cla;
   }
+  if (gate.expectedCiContexts !== null) out.expectedCiContexts = gate.expectedCiContexts as JsonValue;
   return out;
 }
 
@@ -1556,6 +1574,7 @@ export function resolveEffectiveSettings(
   if (gate.claConsentPhrase !== null) effective.claConsentPhrase = gate.claConsentPhrase;
   if (gate.claCheckRunName !== null) effective.claCheckRunName = gate.claCheckRunName;
   if (gate.claCheckRunAppSlug !== null) effective.claCheckRunAppSlug = gate.claCheckRunAppSlug;
+  if (gate.expectedCiContexts !== null) effective.expectedCiContexts = gate.expectedCiContexts;
   // The dashboard "Require linked issue" toggle must not silently diverge from gate blocking: when the
   // boolean is on but linkedIssueGateMode is still off, treat it as a block requirement (#797).
   if (effective.requireLinkedIssue && effective.linkedIssueGateMode === "off") {

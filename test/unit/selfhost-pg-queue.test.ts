@@ -69,12 +69,29 @@ interface MockPool {
    *  on a specific row (rowCount 0) while another succeeds (rowCount 1). */
   setReviveUpdateRowCounts(rowCounts: number[]): void;
   setRateLimitRows(rows: Array<{ admission_key?: string | null; repo_full_name?: string | null; remaining: number | string | null; reset_at: string | null; observed_at?: string | null }>): void;
-  /** Configures the two maintenance-admission pressure aggregate queries (live + maintenance lane). Defaults
-   *  to zero pending / null oldest in both lanes (pressure clear) until set. */
+  /** Configures the three maintenance-admission pressure aggregate queries (live + maintenance + backlog-
+   *  convergence lane). Defaults to zero pending / null oldest in all lanes (pressure clear) until set.
+   *  `runnableCnt`/`oldestRunnable` back the #selfhost-queue-liveness runnable-now split (see
+   *  maintenancePressureSignals's FILTER columns); they default to 0/null (nothing runnable) so existing tests
+   *  that never set them keep working. */
   setPressureSignals(signals: {
-    live?: { cnt: number; oldest: number | null };
+    live?: { cnt: number; oldest: number | null; runnableCnt?: number; oldestRunnable?: number | null };
     maintenance?: { cnt: number; oldest: number | null };
+    backlogConvergence?: { cnt: number };
   }): void;
+  /** Programs the exact rows returned by releaseStaleForegroundDeferrals' candidate SELECT
+   *  (`WHERE status='pending' AND priority>=$1 AND run_after>$2`), and the per-row rowCount its conditional
+   *  UPDATE reports (defaults to 1 -- the row still matched at UPDATE time -- when not otherwise queued).
+   *  `payload` defaults to a "recapture-preview" message -- a foreground type NOT in
+   *  GITHUB_BUDGET_BACKGROUND_TYPES / not "github-webhook"/"agent-regate-pr" -- so
+   *  githubRateLimitAdmissionTargetForJob returns null for it and the rate-limit-clear OR-condition is
+   *  trivially/always true, isolating the AGE condition cleanly for tests that aren't specifically about
+   *  rate-limit clearing. Pass an explicit `payload` (e.g. a github-webhook message) plus `setRateLimitRows`
+   *  to test the rate-limit-clear condition itself, or "not valid json" to test the unparseable-payload path. */
+  setForegroundLivenessCandidates(
+    rows: Array<{ id: string; created_at: number; payload?: string }>,
+    updateRowCounts?: number[],
+  ): void;
 }
 
 function makePool(): MockPool {
@@ -82,13 +99,58 @@ function makePool(): MockPool {
   let deferUpdateRowCount = 1;
   const reviveUpdateRowCounts: number[] = [];
   let rateLimitRows: Array<{ admission_key?: string | null; repo_full_name?: string | null; remaining: number | string | null; reset_at: string | null; observed_at?: string | null }> = [];
-  let pressureLive: { cnt: number; oldest: number | null } = { cnt: 0, oldest: null };
+  let pressureLive: { cnt: number; oldest: number | null; runnableCnt?: number; oldestRunnable?: number | null } = {
+    cnt: 0,
+    oldest: null,
+  };
   let pressureMaintenance: { cnt: number; oldest: number | null } = { cnt: 0, oldest: null };
+  let pressureBacklogConvergence: { cnt: number } = { cnt: 0 };
+  let foregroundLivenessCandidates: Array<{ id: string; created_at: number; payload?: string }> = [];
+  const foregroundLivenessUpdateRowCounts: number[] = [];
+  const DEFAULT_FOREGROUND_LIVENESS_PAYLOAD = JSON.stringify({
+    type: "recapture-preview",
+    deliveryId: "seed",
+    repoFullName: "o/r",
+    prNumber: 1,
+    attempt: 1,
+  });
   const fn = vi.fn().mockImplementation(async (sql: unknown, params?: unknown[]) => {
     const q = String(sql);
+    if (q.includes("SELECT id, payload, created_at FROM") && q.includes("priority>=$1 AND run_after>$2")) {
+      return {
+        rows: foregroundLivenessCandidates.map((row) => ({
+          id: row.id,
+          payload: row.payload ?? DEFAULT_FOREGROUND_LIVENESS_PAYLOAD,
+          created_at: row.created_at,
+        })),
+        rowCount: foregroundLivenessCandidates.length,
+      };
+    }
+    if (q.includes("SET run_after=$1 WHERE id=$2 AND status='pending' AND run_after>$1")) {
+      const rowCount =
+        foregroundLivenessUpdateRowCounts.length > 0 ? (foregroundLivenessUpdateRowCounts.shift() ?? 1) : 1;
+      return { rows: [], rowCount };
+    }
     if (q.includes("AS cnt, MIN(created_at) AS oldest")) {
       const signal = q.includes("is_maintenance=1") ? pressureMaintenance : pressureLive;
-      return { rows: [{ cnt: String(signal.cnt), oldest: signal.oldest }], rowCount: 1 };
+      return {
+        rows: [
+          {
+            cnt: String(signal.cnt),
+            oldest: signal.oldest,
+            ...(signal === pressureLive
+              ? {
+                  runnable_cnt: String(pressureLive.runnableCnt ?? 0),
+                  oldest_runnable: pressureLive.oldestRunnable ?? null,
+                }
+              : {}),
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    if (q.includes("AS cnt") && q.includes("foreground_lane='backlog'")) {
+      return { rows: [{ cnt: String(pressureBacklogConvergence.cnt) }], rowCount: 1 };
     }
     if (q.includes("FROM github_rate_limit_observations")) {
       const admissionKey = typeof params?.[0] === "string" ? params[0] : null;
@@ -150,9 +212,15 @@ function makePool(): MockPool {
     setPressureSignals(signals) {
       if (signals.live) pressureLive = signals.live;
       if (signals.maintenance) pressureMaintenance = signals.maintenance;
+      if (signals.backlogConvergence) pressureBacklogConvergence = signals.backlogConvergence;
     },
     setRateLimitRows(rows) {
       rateLimitRows = rows;
+    },
+    setForegroundLivenessCandidates(rows, updateRowCounts) {
+      foregroundLivenessCandidates = rows;
+      foregroundLivenessUpdateRowCounts.length = 0;
+      if (updateRowCounts) foregroundLivenessUpdateRowCounts.push(...updateRowCounts);
     },
   };
 }
@@ -1105,7 +1173,7 @@ describe("createPgQueue (durable #977)", () => {
       m.setRateLimitRows([{ admission_key: "installation:123", repo_full_name: "owner/other-repo", remaining: "120", reset_at: "2026-06-24T12:10:00.000Z", observed_at: "2026-06-24T11:59:30.000Z" }]);
       m.enqueueJob("background", {
         type: "agent-regate-pr",
-        deliveryId: "sweep:owner/repo#7",
+        deliveryId: "regate-sweep:owner/repo#7",
         repoFullName: "owner/repo",
         prNumber: 7,
         installationId: 123,
@@ -1145,7 +1213,7 @@ describe("createPgQueue (durable #977)", () => {
       m.setRateLimitRows([{ admission_key: "installation:123", repo_full_name: "owner/other-repo", remaining: "120", reset_at: "2026-06-24T12:10:00.000Z", observed_at: "2026-06-24T11:59:30.000Z" }]);
       m.enqueueJob("background", {
         type: "agent-regate-pr",
-        deliveryId: "sweep:owner/repo#7",
+        deliveryId: "regate-sweep:owner/repo#7",
         repoFullName: "owner/repo",
         prNumber: 7,
         installationId: 123,
@@ -1569,6 +1637,271 @@ describe("createPgQueue (durable #977)", () => {
       } finally {
         delete process.env.QUEUE_DEAD_LETTER_REVIVE_INTERVAL_MS;
       }
+    });
+  });
+
+  describe("releaseStaleForegroundDeferrals (#selfhost-queue-liveness)", () => {
+    afterEach(() => {
+      delete process.env.FOREGROUND_LIVENESS_ENABLED;
+      delete process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS;
+    });
+
+    it("releases a foreground-priority pending row deferred far into the future once its created_at is stale", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "60000"; // 1m (parsePositiveIntEnv floor)
+      const m = makePool();
+      const now = Date.now();
+      // priority>=8 (foreground), run_after far in the future, created_at old enough to cross the 1m ceiling.
+      m.setForegroundLivenessCandidates([{ id: "fg-1", created_at: now - 61_000 }]);
+      const q = createPgQueue(m.pool, async () => undefined);
+
+      const released = await q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(1);
+      expect(m.fn).toHaveBeenCalledWith(
+        expect.stringContaining("SELECT id, payload, created_at FROM _selfhost_jobs WHERE status='pending' AND priority>=$1 AND run_after>$2"),
+        expect.arrayContaining([8]),
+      );
+      expect(m.fn).toHaveBeenCalledWith(
+        expect.stringContaining("SET run_after=$1 WHERE id=$2 AND status='pending' AND run_after>$1"),
+        expect.arrayContaining(["fg-1"]),
+      );
+      expect(await renderMetrics()).toContain("gittensory_jobs_foreground_liveness_released_total 1");
+    });
+
+    // Isolates the AGE condition from the OR'd rate-limit-clear condition: the default candidate payload
+    // (recapture-preview) is always rate-limit-"clear" (see setForegroundLivenessCandidates' own doc comment),
+    // so this test uses a github-webhook payload WITH a genuinely exhausted, still-future-reset observation for
+    // its admission key, ensuring isRateLimitAdmissionNowClear() returns false and only the age check governs.
+    it("does NOT release a foreground row whose created_at is still recent (not yet stale) AND is still genuinely rate-limited", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "600000"; // default 10m
+      const m = makePool();
+      const now = Date.now();
+      m.setRateLimitRows([
+        {
+          admission_key: "installation:123",
+          remaining: 1,
+          reset_at: new Date(now + 30 * 60_000).toISOString(),
+          observed_at: new Date(now).toISOString(),
+        },
+      ]);
+      const payload = JSON.stringify({
+        type: "github-webhook",
+        deliveryId: "still-blocked",
+        eventName: "x",
+        payload: { installation: { id: 123 } },
+      });
+      // Same shape as the stale case (foreground priority, future run_after) but created_at is only 1s old.
+      m.setForegroundLivenessCandidates([{ id: "fg-fresh", created_at: now - 1_000, payload }]);
+      const q = createPgQueue(m.pool, async () => undefined);
+
+      const released = await q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(0);
+      expect(m.fn).not.toHaveBeenCalledWith(
+        expect.stringContaining("SET run_after=$1 WHERE id=$2 AND status='pending' AND run_after>$1"),
+        expect.arrayContaining(["fg-fresh"]),
+      );
+      expect(await renderMetrics()).not.toContain("gittensory_jobs_foreground_liveness_released_total");
+    });
+
+    // CONDITION-BASED recovery (the second OR arm): a foreground job whose created_at is nowhere near stale but
+    // whose rate-limit observation has since cleared (no blocking observation seeded here) is released anyway --
+    // the whole point of pairing the age floor with a rate-limit-aware re-check (see the source's own doc
+    // comment on releaseStaleForegroundDeferrals).
+    it("releases a foreground row that is NOT yet age-stale once rate-limit admission for it reads clear", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "600000"; // default 10m -- nowhere near stale by age
+      const m = makePool();
+      const now = Date.now();
+      const payload = JSON.stringify({
+        type: "github-webhook",
+        deliveryId: "now-clear",
+        eventName: "x",
+        payload: { installation: { id: 123 } },
+      });
+      // No rate-limit rows seeded at all -- rateLimitAdmissionDelayMs degrades to "clear".
+      m.setForegroundLivenessCandidates([{ id: "fg-clear", created_at: now - 1_000, payload }]);
+      const q = createPgQueue(m.pool, async () => undefined);
+
+      const released = await q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(1);
+      expect(await renderMetrics()).toContain("gittensory_jobs_foreground_liveness_released_total 1");
+    });
+
+    // The payload is unparseable -- isRateLimitAdmissionNowClear's own catch(){ return false } branch -- so ONLY
+    // the age condition can release it; while young, it must stay parked exactly like any other not-yet-stale,
+    // still-blocked row.
+    it("does NOT release a foreground row with an unparseable payload before it is age-stale", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "600000";
+      const m = makePool();
+      const now = Date.now();
+      m.setForegroundLivenessCandidates([{ id: "fg-bad-json", created_at: now - 1_000, payload: "not valid json" }]);
+      const q = createPgQueue(m.pool, async () => undefined);
+
+      const released = await q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(0);
+    });
+
+    // The priority>=$1 filter is enforced by the candidate SELECT's own WHERE clause (bound to
+    // FOREGROUND_QUEUE_PRIORITY_FLOOR=8), not by any application-side check on the returned rows -- mirrors how
+    // the maintenance-admission pressure tests in this file assert the is_maintenance=1 predicate is present in
+    // the issued SQL rather than re-deriving it from mock row shapes. Asserting the bind param here is the
+    // faithful way to prove a background-priority (<8) row is structurally excluded from ever being considered.
+    it("scopes the candidate SELECT to foreground priority via the FOREGROUND_QUEUE_PRIORITY_FLOOR bind param", async () => {
+      const m = makePool();
+      m.setForegroundLivenessCandidates([]); // the real WHERE priority>=8 excludes a background row; assert the bind param enforces it
+      const q = createPgQueue(m.pool, async () => undefined);
+
+      const released = await q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(0);
+      expect(m.fn).toHaveBeenCalledWith(
+        expect.stringContaining("priority>=$1"),
+        expect.arrayContaining([8]),
+      );
+    });
+
+    it("returns 0 immediately without issuing the candidate SELECT when FOREGROUND_LIVENESS_ENABLED=false", async () => {
+      process.env.FOREGROUND_LIVENESS_ENABLED = "false";
+      const m = makePool();
+      const now = Date.now();
+      m.setForegroundLivenessCandidates([{ id: "fg-1", created_at: now - 10 * 60_000 }]);
+      const q = createPgQueue(m.pool, async () => undefined);
+
+      const released = await q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(0);
+      expect(m.fn).not.toHaveBeenCalledWith(
+        expect.stringContaining("SELECT id, payload, created_at FROM _selfhost_jobs WHERE status='pending' AND priority>=$1 AND run_after>$2"),
+        expect.anything(),
+      );
+      expect(await renderMetrics()).not.toContain("gittensory_jobs_foreground_liveness_released_total");
+    });
+
+    // REGRESSION (#selfhost-queue-liveness): the production incident this module exists to make structurally
+    // impossible -- a GitHub rate-limit sweep pushes MANY foreground-priority jobs' run_after far into the
+    // future at once (a shared REST budget drained by a post-deploy catch-up burst), and without this release
+    // path they'd sit deferred for up to the ~65-minute worst-case rate-limit window with zero runnable work,
+    // requiring manual intervention. Assert releaseStaleForegroundDeferrals() releases ALL stale rows in ONE
+    // sweep (not just the first) and records the metric as a SINGLE aggregate increment, not one per row --
+    // matching the source's own "logs + records a metric ONCE per sweep (aggregate count), not per row" doc
+    // comment, which exists specifically so a large release batch cannot spam the log/metric.
+    it("releases every stale foreground deferral in one sweep and records one aggregate metric increment (regression for #selfhost-queue-liveness)", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "60000"; // 1m floor
+      const m = makePool();
+      const now = Date.now();
+      const staleAge = now - 5 * 60_000; // 5m old -- well past the 1m ceiling
+      m.setForegroundLivenessCandidates([
+        { id: "stuck-1", created_at: staleAge },
+        { id: "stuck-2", created_at: staleAge },
+        { id: "stuck-3", created_at: staleAge },
+      ]);
+      const q = createPgQueue(m.pool, async () => undefined);
+
+      const released = await q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(3);
+      for (const id of ["stuck-1", "stuck-2", "stuck-3"]) {
+        expect(m.fn).toHaveBeenCalledWith(
+          expect.stringContaining("SET run_after=$1 WHERE id=$2 AND status='pending' AND run_after>$1"),
+          expect.arrayContaining([id]),
+        );
+      }
+      // Exactly one aggregate increment of 3, not three separate increments of 1.
+      expect(await renderMetrics()).toContain("gittensory_jobs_foreground_liveness_released_total 3");
+    });
+
+    // Ramp-up cap (#selfhost-queue-liveness): a large inherited backlog (the production incident had ~190
+    // over-deferred rows) must not release ALL of it in one sweep -- that many jobs re-attempting GitHub reads
+    // at once can immediately re-trip the same rate-limit bucket they were deferred for. With the cap set
+    // below the eligible count, assert only `cap` rows get their UPDATE issued, and that the OLDEST rows
+    // (smallest created_at) are the ones chosen.
+    it("caps releases at FOREGROUND_LIVENESS_MAX_RELEASE_PER_SWEEP, releasing the oldest rows first", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "60000"; // 1m floor
+      process.env.FOREGROUND_LIVENESS_MAX_RELEASE_PER_SWEEP = "2";
+      const m = makePool();
+      const now = Date.now();
+      // 4 stale-eligible rows at distinct ages; only the 2 OLDEST should be released.
+      m.setForegroundLivenessCandidates([
+        { id: "oldest", created_at: now - 10 * 60_000 },
+        { id: "second-oldest", created_at: now - 8 * 60_000 },
+        { id: "newer", created_at: now - 6 * 60_000 },
+        { id: "newest", created_at: now - 5 * 60_000 },
+      ]);
+      const q = createPgQueue(m.pool, async () => undefined);
+
+      const released = await q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(2);
+      for (const id of ["oldest", "second-oldest"]) {
+        expect(m.fn).toHaveBeenCalledWith(
+          expect.stringContaining("SET run_after=$1 WHERE id=$2 AND status='pending' AND run_after>$1"),
+          expect.arrayContaining([id]),
+        );
+      }
+      for (const id of ["newer", "newest"]) {
+        expect(m.fn).not.toHaveBeenCalledWith(
+          expect.stringContaining("SET run_after=$1 WHERE id=$2 AND status='pending' AND run_after>$1"),
+          expect.arrayContaining([id]),
+        );
+      }
+      expect(await renderMetrics()).toContain("gittensory_jobs_foreground_liveness_released_total 2");
+      delete process.env.FOREGROUND_LIVENESS_MAX_RELEASE_PER_SWEEP;
+    });
+
+    // A stale candidate can lose the UPDATE race (another instance/tick already moved it) -- mirrors
+    // reviveDeadLetterJobs' own "AND status='dead'" re-check pattern: only rows whose UPDATE actually matched
+    // (rowCount 1) count toward the release total, never the raw SELECT candidate count.
+    it("counts only rows whose conditional UPDATE actually matched, not the raw candidate count", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "60000";
+      const m = makePool();
+      const now = Date.now();
+      const staleAge = now - 5 * 60_000;
+      m.setForegroundLivenessCandidates(
+        [
+          { id: "won-race", created_at: staleAge },
+          { id: "lost-race", created_at: staleAge },
+        ],
+        [1, 0], // second row's UPDATE matches zero rows -- already released/claimed by someone else
+      );
+      const q = createPgQueue(m.pool, async () => undefined);
+
+      const released = await q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(1);
+    });
+
+    it("handles a null rowCount from the release UPDATE (rowCount ?? 0 nullish arm)", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "60000";
+      const now = Date.now();
+      // pg's driver can report a null rowCount for some UPDATEs; the release count must tolerate it rather
+      // than propagate NaN (mirrors init()'s own "handles null rowCount from the recovery query" test).
+      const fn = vi.fn().mockImplementation(async (sql: unknown) => {
+        const q = String(sql);
+        if (q.includes("SELECT id, payload, created_at FROM") && q.includes("priority>=$1 AND run_after>$2")) {
+          return { rows: [{ id: "fg-null", created_at: now - 5 * 60_000 }], rowCount: 1 };
+        }
+        if (q.includes("SET run_after=$1 WHERE id=$2 AND status='pending' AND run_after>$1")) {
+          return { rows: [], rowCount: null };
+        }
+        return { rows: [], rowCount: 0 };
+      });
+      const q = createPgQueue({ query: fn } as unknown as Pool, async () => undefined);
+
+      const released = await q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(0); // null ?? 0 -- no metric recorded, no crash
+      expect(await renderMetrics()).not.toContain("gittensory_jobs_foreground_liveness_released_total");
+    });
+  });
+
+  describe("processingCount (#selfhost-queue-liveness)", () => {
+    it("returns the count of status='processing' jobs", async () => {
+      const { pool } = makePool();
+      // makePool returns { c: "3" } for any COUNT(*) query, including WHERE status='processing'.
+      const q = createPgQueue(pool, async () => undefined);
+      expect(await q.processingCount()).toBe(3);
     });
   });
 
@@ -2188,6 +2521,33 @@ describe("createPgQueue (durable #977)", () => {
       expect(started).not.toContain("build-contributor-evidence");
     });
 
+    it("defers a maintenance job when the backlog-convergence lane is high (#selfhost-backlog-convergence)", async () => {
+      const m = makePool();
+      m.setPressureSignals({ backlogConvergence: { cnt: 11 } }); // default threshold is 10
+      m.enqueueResult({ rows: [], rowCount: 0 });
+      m.enqueueResult({ rows: [maintenanceRow], rowCount: 1 });
+      const started: string[] = [];
+      const q = createPgQueue(m.pool, async (j) => void started.push(typeOf(j)));
+      await q.drain();
+      expect(started).not.toContain("build-contributor-evidence");
+      expect(await renderMetrics()).toContain(
+        'gittensory_jobs_maintenance_admission_deferred_by_reason_total{job_type="build-contributor-evidence",reason="backlog_convergence_high"} 1',
+      );
+    });
+
+    it("never defers a foreground job even under backlog-convergence-triggering pressure", async () => {
+      const m = makePool();
+      m.setPressureSignals({ backlogConvergence: { cnt: 11 } });
+      m.enqueueResult({
+        rows: [{ id: "w1", payload: JSON.stringify(msg("github-webhook")), attempts: 0, job_key: null, priority: 10, created_at: now }],
+        rowCount: 1,
+      });
+      const started: string[] = [];
+      const q = createPgQueue(m.pool, async (j) => void started.push(typeOf(j)));
+      await q.drain();
+      expect(started).toEqual(["github-webhook"]);
+    });
+
     // Regression (#selfhost-maintenance-self-pin): mirrors selfhost-sqlite-queue.test.ts exactly -- a large
     // backlog (well over threshold) no longer denies EVERY job forever; a job old enough for the drain age gets
     // admitted while a fresh job in the SAME backlog still defers.
@@ -2281,18 +2641,52 @@ describe("createPgQueue (durable #977)", () => {
       expect(await renderMetrics()).not.toContain("gittensory_jobs_maintenance_admission_granted_under_pressure_total");
     });
 
-    it("pressureSignals() surfaces the live and maintenance aggregate reads", async () => {
+    it("pressureSignals() surfaces the live, maintenance, and backlog-convergence aggregate reads", async () => {
       const m = makePool();
-      m.setPressureSignals({ live: { cnt: 2, oldest: now - 1_000 }, maintenance: { cnt: 4, oldest: now - 2_000 } });
+      m.setPressureSignals({
+        live: { cnt: 2, oldest: now - 1_000 },
+        maintenance: { cnt: 4, oldest: now - 2_000 },
+        backlogConvergence: { cnt: 3 },
+      });
       const q = createPgQueue(m.pool, async () => undefined);
       const signals = await q.pressureSignals();
       expect(signals).toEqual({
         livePendingCount: 2,
         oldestLivePendingAgeMs: expect.any(Number),
+        liveRunnableNowCount: 0,
+        oldestLiveRunnableAgeMs: null,
         maintenancePendingCount: 4,
         oldestMaintenancePendingAgeMs: expect.any(Number),
+        backlogConvergencePendingCount: 3,
         hostLoadAvg1PerCore: null,
       });
+    });
+
+    // #selfhost-queue-liveness: liveRunnableNowCount/oldestLiveRunnableAgeMs must reflect only the SUBSET of
+    // live pending jobs that are currently DUE (run_after<=now) -- distinct from livePendingCount/
+    // oldestLivePendingAgeMs, which are dominated by whatever row is OLDEST by created_at regardless of
+    // whether it is runnable right now. A stale/deferred oldest row must not mask a younger due row.
+    it("pressureSignals() reports the runnable-now subset distinctly from the overall oldest-pending age", async () => {
+      const m = makePool();
+      m.setPressureSignals({
+        live: { cnt: 3, oldest: now - 500_000, runnableCnt: 1, oldestRunnable: now - 10_000 },
+      });
+      const q = createPgQueue(m.pool, async () => undefined);
+      const signals = await q.pressureSignals();
+      expect(signals.livePendingCount).toBe(3);
+      expect(signals.oldestLivePendingAgeMs).toBeGreaterThanOrEqual(500_000);
+      expect(signals.liveRunnableNowCount).toBe(1);
+      expect(signals.oldestLiveRunnableAgeMs).toBeGreaterThanOrEqual(10_000);
+      expect(signals.oldestLiveRunnableAgeMs).toBeLessThan(signals.oldestLivePendingAgeMs as number);
+    });
+
+    it("pressureSignals() reports zero runnable-now and a null oldest-runnable age when every live row is deferred to the future", async () => {
+      const m = makePool();
+      m.setPressureSignals({ live: { cnt: 5, oldest: now - 100_000, runnableCnt: 0, oldestRunnable: null } });
+      const q = createPgQueue(m.pool, async () => undefined);
+      const signals = await q.pressureSignals();
+      expect(signals.liveRunnableNowCount).toBe(0);
+      expect(signals.oldestLiveRunnableAgeMs).toBeNull();
     });
   });
 });

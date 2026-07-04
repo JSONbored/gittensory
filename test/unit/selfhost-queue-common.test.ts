@@ -15,6 +15,7 @@ import {
   githubRateLimitRetryDelayMs,
   githubWebhookRateLimitDelayMs,
   isGitHubBudgetBackgroundJob,
+  isScheduledRegateSweepJob,
   isForegroundJobPriority,
   jobCoalesceAbsorbedByKey,
   jobCoalesceKey,
@@ -134,6 +135,30 @@ describe("self-host queue common helpers", () => {
     expect(isGitHubBudgetBackgroundJob({ type: "refresh-installation-health", requestedBy: "schedule" })).toBe(false);
   });
 
+  describe("isScheduledRegateSweepJob", () => {
+    it("returns true only for the scheduled sweep fan-out's own delivery id prefix", () => {
+      expect(isScheduledRegateSweepJob("regate-sweep:JSONbored/gittensory#42")).toBe(true);
+    });
+
+    it("returns false for the outage-repair priority prefix (a live-PR reconciliation, not stale/scheduled)", () => {
+      expect(isScheduledRegateSweepJob("regate-repair:JSONbored/gittensory#42")).toBe(false);
+    });
+
+    it("returns false for a real GitHub webhook delivery id", () => {
+      expect(isScheduledRegateSweepJob("a1b2c3d4-e5f6-7890-abcd-ef1234567890")).toBe(false);
+    });
+
+    it("returns false for the explicit manual-regate operator override prefix", () => {
+      expect(isScheduledRegateSweepJob("manual-regate:JSONbored/gittensory#42")).toBe(false);
+    });
+
+    it("returns false for undefined, null, and empty-string deliveryId", () => {
+      expect(isScheduledRegateSweepJob(undefined)).toBe(false);
+      expect(isScheduledRegateSweepJob(null)).toBe(false);
+      expect(isScheduledRegateSweepJob("")).toBe(false);
+    });
+  });
+
   it("normalizes GitHub rate-limit metric labels without leaking raw admission keys", () => {
     const webhookJob = {
       type: "github-webhook",
@@ -192,13 +217,126 @@ describe("self-host queue common helpers", () => {
       kind: "background",
       admissionKey: githubRateLimitAdmissionKeyForPublicToken(),
     });
-    expect(githubRateLimitAdmissionTargetForJob({ type: "agent-regate-pr", deliveryId: "sweep:owner/repo#1", repoFullName: "owner/repo", prNumber: 1, installationId: 123 })).toEqual({
+    expect(githubRateLimitAdmissionTargetForJob({ type: "agent-regate-pr", deliveryId: "regate-sweep:owner/repo#1", repoFullName: "owner/repo", prNumber: 1, installationId: 123 })).toEqual({
       kind: "background",
       admissionKey: "installation:123",
     });
     expect(githubRateLimitAdmissionTargetForJob({ type: "github-webhook", deliveryId: "d2", eventName: "pull_request", payload: {} })).toEqual({
       kind: "webhook",
       admissionKey: null,
+    });
+  });
+
+  describe("githubRateLimitAdmissionTargetForJob: agent-regate-pr classification (#selfhost-queue-liveness)", () => {
+    it("REGRESSION: manual-regate operator override stays a full admission bypass (null) — unchanged by the fix", () => {
+      expect(
+        githubRateLimitAdmissionTargetForJob({
+          type: "agent-regate-pr",
+          deliveryId: "manual-regate:repo#1",
+          repoFullName: "owner/repo",
+          prNumber: 1,
+          installationId: 123,
+        }),
+      ).toBeNull();
+    });
+
+    it("keeps the scheduled sweep fan-out on the conservative background floor — unchanged by the fix", () => {
+      expect(
+        githubRateLimitAdmissionTargetForJob({
+          type: "agent-regate-pr",
+          deliveryId: "regate-sweep:repo#1",
+          repoFullName: "owner/repo",
+          prNumber: 1,
+          installationId: 123,
+        }),
+      ).toEqual({
+        kind: "background",
+        admissionKey: "installation:123",
+      });
+    });
+
+    it("FIX: an outage-repair priority candidate now gets webhook-level admission, not the maintenance floor", () => {
+      expect(
+        githubRateLimitAdmissionTargetForJob({
+          type: "agent-regate-pr",
+          deliveryId: "regate-repair:repo#1",
+          repoFullName: "owner/repo",
+          prNumber: 1,
+          installationId: 123,
+        }),
+      ).toEqual({
+        kind: "webhook",
+        admissionKey: "installation:123",
+      });
+    });
+
+    it("FIX: a real webhook-originated delivery id (trailing re-review / sibling wake / linked-issue re-review) gets webhook-level admission", () => {
+      expect(
+        githubRateLimitAdmissionTargetForJob({
+          type: "agent-regate-pr",
+          deliveryId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          repoFullName: "owner/repo",
+          prNumber: 1,
+          installationId: 123,
+        }),
+      ).toEqual({
+        kind: "webhook",
+        admissionKey: "installation:123",
+      });
+    });
+
+    it("FIX: the webhook-level admissionKey falls back to the public-token key when no installationId resolves", () => {
+      // installationId is a required, non-optional `number` on the agent-regate-pr message shape, so the
+      // only way to reach githubRateLimitAdmissionKeyForJob's null result here (without violating the
+      // type) is a non-finite numeric value -- exactly what Number.isFinite in that helper rejects.
+      expect(
+        githubRateLimitAdmissionTargetForJob({
+          type: "agent-regate-pr",
+          deliveryId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          repoFullName: "owner/repo",
+          prNumber: 1,
+          installationId: Number.NaN,
+        }),
+      ).toEqual({
+        kind: "webhook",
+        admissionKey: githubRateLimitAdmissionKeyForPublicToken(),
+      });
+    });
+
+    it("leaves github-webhook jobs on their own first branch, not the new agent-regate-pr branch", () => {
+      expect(
+        githubRateLimitAdmissionTargetForJob({
+          type: "github-webhook",
+          deliveryId: "d3",
+          eventName: "pull_request",
+          payload: { installation: { id: 123 } },
+        }),
+      ).toEqual({
+        kind: "webhook",
+        admissionKey: "installation:123",
+      });
+    });
+
+    it("leaves other GITHUB_BUDGET_BACKGROUND_TYPES jobs on the background floor -- the new branch is guarded to agent-regate-pr only", () => {
+      expect(
+        githubRateLimitAdmissionTargetForJob({
+          type: "rag-index-repo",
+          repoFullName: "owner/repo",
+          requestedBy: "schedule",
+        } as JobMessage),
+      ).toEqual({
+        kind: "background",
+        admissionKey: githubRateLimitAdmissionKeyForPublicToken(),
+      });
+      expect(
+        githubRateLimitAdmissionTargetForJob({
+          type: "backfill-registered-repos",
+          requestedBy: "schedule",
+        } as JobMessage),
+      ).toEqual({
+        kind: "background",
+        admissionKey: githubRateLimitAdmissionKeyForPublicToken(),
+      });
     });
   });
 
@@ -411,6 +549,38 @@ describe("self-host queue common helpers", () => {
           now,
         ),
       ).toBeNull();
+    });
+
+    // The production VPS incident (#selfhost-queue-liveness) specifically involved mixed-freshness
+    // observations for the SAME admission key (not an exact-vs-fallback mismatch, which the tests
+    // above already cover) -- these two pin that newerRateLimitObservation's own same-key comparison
+    // picks the observation with the later observed_at correctly, regardless of array order.
+    it("REGRESSION: an older exact-key exhausted observation is superseded by a newer exact-key healthy observation for the SAME key", () => {
+      expect(
+        githubRateLimitAdmissionDelayMs(
+          "webhook",
+          key,
+          [
+            { admission_key: key, remaining: 0, reset_at: "2026-06-24T12:10:00.000Z", observed_at: "2026-06-24T11:59:00.000Z" },
+            { admission_key: key, remaining: 4000, reset_at: "2026-06-24T12:20:00.000Z", observed_at: "2026-06-24T12:00:00.000Z" },
+          ],
+          now,
+        ),
+      ).toBeNull();
+    });
+
+    it("REGRESSION: a newer exact-key exhausted observation supersedes an older exact-key healthy observation for the SAME key", () => {
+      expect(
+        githubRateLimitAdmissionDelayMs(
+          "webhook",
+          key,
+          [
+            { admission_key: key, remaining: 4000, reset_at: "2026-06-24T12:20:00.000Z", observed_at: "2026-06-24T11:59:00.000Z" },
+            { admission_key: key, remaining: 0, reset_at: "2026-06-24T12:10:00.000Z", observed_at: "2026-06-24T12:00:00.000Z" },
+          ],
+          now,
+        ),
+      ).toBe(615_000);
     });
   });
 
