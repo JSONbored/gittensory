@@ -112,10 +112,13 @@ export const DEFAULT_DENY_RULES = [
   { matcher: "*", pathPattern: "**/.env*", reason: "Never read or write environment files (.env*)." },
   { matcher: "*", pathPattern: "**/.dev.vars", reason: "Never read or write local Worker secrets (.dev.vars)." },
   { matcher: "*", pathPattern: "**/.npmrc", reason: "Never read or write npm credential files (.npmrc)." },
-  { matcher: "*", pathPattern: "**/*.pem", reason: "Never touch PEM key material (*.pem)." },
   { matcher: "*", pathPattern: "**/*secret*/**", reason: "Never touch secret-bearing directories (**/*secret*/**)." },
   { matcher: "*", pathPattern: "**/*secret*", reason: "Never touch secret-bearing paths (**/*secret*)." },
+  // Ordered before **/*.pem below: a file like id_private_key.pem matches both patterns, and
+  // evaluateDenyHooks returns the first matching rule's reason — this one is more specific
+  // (#2942, keeps the "private key material" reason for *private*key*.pem files).
   { matcher: "*", pathPattern: "**/*private*key*", reason: "Never touch private key material (**/*private*key*)." },
+  { matcher: "*", pathPattern: "**/*.pem", reason: "Never touch PEM key material (*.pem)." },
   { matcher: "*", inputIncludesAll: ["push", "--force"], reason: "Never force-push (git push --force)." },
 ];
 
