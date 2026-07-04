@@ -872,8 +872,16 @@ describe("moderation-rules engine escalation (#selfhost-mod-engine)", () => {
     expect(ensurePullRequestLabel).not.toHaveBeenCalledWith(env, 123, "owner/repo", 7, "mod:warning", expect.anything());
   });
 
-  it("per-repo moderationGateMode 'enabled' force-enables the layer even when the global config is disabled (the default)", async () => {
+  it("REGRESSION (security): per-repo moderationGateMode 'enabled' cannot override the disabled global master switch", async () => {
     const env = createTestEnv({});
+    await executeAgentMaintenanceActions(env, ctx({ authorLogin: "farmer99", moderationSettings: { moderationGateMode: "enabled" } }), [coupledClose, coupledLabel]);
+    expect(ensurePullRequestLabel).not.toHaveBeenCalledWith(env, 123, "owner/repo", 7, "mod:warning", expect.anything());
+    expect(await getGlobalContributorBlacklist(env)).toEqual([]);
+  });
+
+  it("per-repo moderationGateMode 'enabled' runs when the global master switch is enabled", async () => {
+    const env = createTestEnv({});
+    await upsertGlobalModerationConfig(env, { enabled: true });
     await executeAgentMaintenanceActions(env, ctx({ authorLogin: "farmer99", moderationSettings: { moderationGateMode: "enabled" } }), [coupledClose, coupledLabel]);
     expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "mod:warning", { createMissingLabel: true });
   });
