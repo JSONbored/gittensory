@@ -2933,8 +2933,14 @@ export async function recordAiUsageEvent(
     actor?: string | null | undefined;
     route?: string | null | undefined;
     model: string;
+    provider?: string | null | undefined;
+    effort?: string | null | undefined;
     status: string;
     estimatedNeurons: number;
+    inputTokens?: number | null | undefined;
+    outputTokens?: number | null | undefined;
+    totalTokens?: number | null | undefined;
+    costUsd?: number | null | undefined;
     detail?: string | null | undefined;
     metadata?: Record<string, unknown> | undefined;
   },
@@ -2946,8 +2952,14 @@ export async function recordAiUsageEvent(
     actor: event.actor ?? null,
     route: event.route ?? null,
     model: event.model,
+    provider: event.provider?.trim() || null,
+    effort: event.effort?.trim() || null,
     status: event.status,
     estimatedNeurons: Math.max(0, Math.round(event.estimatedNeurons)),
+    inputTokens: Math.max(0, Math.round(finiteNumber(event.inputTokens))),
+    outputTokens: Math.max(0, Math.round(finiteNumber(event.outputTokens))),
+    totalTokens: Math.max(0, Math.round(finiteNumber(event.totalTokens))),
+    costUsd: Math.max(0, finiteNumber(event.costUsd)),
     detail: event.detail ?? null,
     metadataJson: jsonString(event.metadata ?? {}),
     createdAt: nowIso(),
