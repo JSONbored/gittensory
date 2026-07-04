@@ -234,3 +234,27 @@ test("scanPatch still flags classic Slack bot tokens", () => {
   assert.equal(findings.length, 1);
   assert.equal(findings[0].kind, "slack_token");
 });
+
+test("scanPatch flags a DigitalOcean personal access token with high confidence", () => {
+  // `dop_v1_` + 64 hex chars. Built from fragments so push protection never sees a contiguous literal.
+  const token = ["dop_v1_", "a".repeat(64)].join("");
+  const findings = scanPatch("src/config.ts", hunk([`const doToken = "${token}";`]));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "digitalocean_token");
+  assert.equal(findings[0].confidence, "high");
+});
+
+test("scanPatch flags an uppercase-hex DigitalOcean token", () => {
+  // Hex body is case-insensitive (same class as action SHA pins).
+  const token = ["dop_v1_", "A".repeat(64)].join("");
+  const findings = scanPatch("src/config.ts", hunk([`const doToken = "${token}";`]));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "digitalocean_token");
+});
+
+test("scanPatch does not flag a truncated DigitalOcean token", () => {
+  // Body must be exactly 64 hex chars — shorter prefixes must not false-positive.
+  // Variable name avoids the generic `token`/`secret` assignment rule.
+  const short = ["dop_v1_", "a".repeat(32)].join("");
+  assert.equal(scanPatch("src/config.ts", hunk([`const doCred = "${short}";`])).length, 0);
+});

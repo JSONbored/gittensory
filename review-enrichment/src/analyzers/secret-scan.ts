@@ -76,6 +76,12 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // DigitalOcean personal access token: `dop_v1_` + 64 hex chars (case-insensitive).
+    kind: "digitalocean_token",
+    re: /\bdop_v1_[a-f0-9]{64}\b/i,
+    confidence: "high",
+  },
+  {
     kind: "private_key",
     re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/,
     confidence: "high",
