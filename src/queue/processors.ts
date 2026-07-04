@@ -9859,11 +9859,11 @@ const MONITORED_MENTION_PING_EVENT_TYPE = "github_app.monitored_mention_ping";
 
 /** Word-boundary, case-insensitive check for `@login` in a comment body — the SAME precision level as
  *  `parseGittensoryMentionCommand`'s own `@gittensory` detection (a literal match, not an intent classifier):
- *  conservative and testable, per the feature's design goal. `login` is only ever a value that already survived
- *  `normalizeAutoCloseExemptLogins`'s GitHub-login-format validation (alphanumeric + internal hyphens), so it
- *  is safe to embed directly in a RegExp without escaping. */
+ *  conservative and testable, per the feature's design goal. `login` already survived
+ *  `normalizeAutoCloseExemptLogins`'s GitHub-login-format validation, but bot-shaped logins contain `[bot]`;
+ *  escape before embedding so every configured login is matched literally. */
 function bodyMentionsLogin(body: string, login: string): boolean {
-  return new RegExp(`(?:^|\\s)@${login}(?:\\s|$|[^\\w-])`, "i").test(body);
+  return new RegExp(`(?:^|\\s)@${escapeRegExp(login)}(?:\\s|$|[^\\w-])`, "i").test(body);
 }
 
 /**

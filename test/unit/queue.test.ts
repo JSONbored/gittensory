@@ -15374,6 +15374,50 @@ describe("queue processors", () => {
       expect(seen.closed).toBe(false);
     });
 
+    it("REGRESSION: matches bot-shaped monitored logins literally", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "close", reviewNagMaxPings: 3, reviewNagMonitoredMentions: ["dependabot[bot]"] });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 312, title: "Bot mention", state: "open", user: { login: "chatty" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[], labels: [] as string[], closed: false };
+      stubMonitoredMentionFetch(312, seen);
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "mention-bot-shaped-literal",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          issue: { number: 312, title: "Bot mention", state: "open", pull_request: {}, user: { login: "chatty" }, author_association: "NONE" },
+          comment: { id: 1, body: "Please check this @dependabot[bot].", user: { login: "chatty", type: "User" }, author_association: "NONE" },
+        },
+      });
+      const pings = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.monitored_mention_ping'").first<{ n: number }>();
+      expect(pings?.n).toBe(1);
+    });
+
+    it("REGRESSION: does not treat bot-login metacharacters as a regex character class", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "close", reviewNagMonitoredMentions: ["dependabot[bot]"] });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 313, title: "Bot false positive", state: "open", user: { login: "chatty" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[], labels: [] as string[], closed: false };
+      stubMonitoredMentionFetch(313, seen);
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "mention-bot-shaped-false-positive",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          issue: { number: 313, title: "Bot false positive", state: "open", pull_request: {}, user: { login: "chatty" }, author_association: "NONE" },
+          comment: { id: 1, body: "This mentions @dependabotb, not the bot actor.", user: { login: "chatty", type: "User" }, author_association: "NONE" },
+        },
+      });
+      const pings = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.monitored_mention_ping'").first<{ n: number }>();
+      expect(pings?.n).toBe(0);
+    });
+
     it("case-insensitively matches a monitored login and ignores an unrelated mention", async () => {
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
       await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewNagPolicy: "close", reviewNagMonitoredMentions: ["JSONbored"] });
