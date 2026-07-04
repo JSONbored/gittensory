@@ -111,6 +111,14 @@ export interface HeavyDependencyFinding {
   dependencyCount: number | null;
 }
 
+/** A VCS merge-conflict marker (or diff3 base marker) left in an added diff line — an unresolved merge/rebase
+ *  leftover that should block a merge. `marker` is the seven-character marker token (e.g. `<<<<<<<`). */
+export interface ConflictMarkerFinding {
+  file: string;
+  line: number;
+  marker: string;
+}
+
 /** A third-party GitHub Action referenced by a mutable tag/branch instead of a pinned commit SHA. */
 export interface ActionPinFinding {
   file: string;
@@ -372,6 +380,7 @@ export interface BriefFindings {
   approvalIntegrity?: ApprovalIntegrityFinding[];
   ciCheckSignals?: CiCheckSignalFinding[];
   undocumentedExport?: UndocumentedExportFinding[];
+  conflictMarker?: ConflictMarkerFinding[];
 }
 
 /** A JSDoc/TSDoc block whose `@param` tags name parameters the adjacent function no longer declares — a

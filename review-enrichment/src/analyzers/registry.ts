@@ -6,6 +6,7 @@ import { scanBlameLink } from "./blame-link.js";
 import { scanCiCheckSignals } from "./ci-check-signals.js";
 import { scanCodeowners } from "./codeowners.js";
 import { scanCommitSignature } from "./commit-signature.js";
+import { scanConflictMarkers } from "./conflict-marker.js";
 import { dependencyAnalyzer } from "./dependency/descriptor.js";
 import { scanDocCommentDrift } from "./doc-comment-drift.js";
 import { scanDuplication } from "./duplication-scan.js";
@@ -584,6 +585,38 @@ export const ANALYZER_DESCRIPTORS = [
       return lines;
     },
     run: (req, { signal }) => scanUndocumentedExport(req, fetch, { signal }),
+  }),
+  descriptor({
+    name: "conflictMarker",
+    title: "Merge-conflict markers",
+    category: "quality",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: 25 },
+    docs: {
+      summary:
+        "Flags leftover VCS merge-conflict markers accidentally committed in a PR's added lines.",
+      looksAt:
+        "Added lines matching the seven-character git conflict markers: <<<<<<<, |||||||, =======, and >>>>>>>.",
+      reports: "File, line, and which conflict marker was left in place.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "The ambiguous ======= separator is not flagged in Markdown/AsciiDoc files, where a bare ======= line is a valid setext heading underline or section rule; the unambiguous <<<<<<< / >>>>>>> markers are flagged everywhere.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = [
+        "### Merge-conflict markers (unresolved merge/rebase leftovers — resolve before merging)",
+      ];
+      for (const item of findings) {
+        lines.push(
+          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} leaves a ${helpers.safeCodeSpan(item.marker)} conflict marker in place`,
+        );
+      }
+      return lines;
+    },
+    run: (req) => scanConflictMarkers(req),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 
