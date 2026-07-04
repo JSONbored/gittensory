@@ -2305,6 +2305,45 @@ describe("createSqliteQueue (durable #980)", () => {
       expect(remainingFuture.c).toBe(2);
     });
 
+    it("does not let older still-blocked stale rows consume the cap before a newer clear row", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "60000";
+      process.env.FOREGROUND_LIVENESS_MAX_RELEASE_PER_SWEEP = "2";
+      const driver = makeDriver();
+      const now = Date.now();
+      seedExhaustedRateLimitObservation(driver, "installation:111", new Date(now + 30 * 60_000).toISOString());
+      const q = createSqliteQueue(driver, async () => undefined);
+      const farFuture = now + 60 * 60_000;
+      const rows = [
+        { deliveryId: "blocked-oldest", installationId: 111, createdAt: now - 10 * 60_000 },
+        { deliveryId: "blocked-second", installationId: 111, createdAt: now - 9 * 60_000 },
+        { deliveryId: "clear-newer", installationId: 222, createdAt: now - 5 * 60_000 },
+      ];
+      for (const row of rows) {
+        driver.query(
+          `INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance)
+           VALUES (?, 'pending', 0, ?, ?, 10, NULL, 0)`,
+          [
+            JSON.stringify({
+              type: "github-webhook",
+              deliveryId: row.deliveryId,
+              eventName: "x",
+              payload: { installation: { id: row.installationId } },
+            }),
+            farFuture,
+            row.createdAt,
+          ],
+        );
+      }
+
+      const released = q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(2);
+      const releasedIds = driver.query(`SELECT payload FROM _selfhost_jobs WHERE run_after<?`, [farFuture]).rows.map((row) =>
+        JSON.parse((row as { payload: string }).payload).deliveryId,
+      );
+      expect(releasedIds).toEqual(["blocked-oldest", "clear-newer"]);
+    });
+
     // Mirrors reviveDeadLetterJobsSafely's own regression test: the foreground-liveness interval had no error
     // handler of its own, so a thrown driver/metric failure on that tick would surface as an uncaught exception
     // and could terminate the process -- exactly the failure mode pump()'s own try/catch already guards against

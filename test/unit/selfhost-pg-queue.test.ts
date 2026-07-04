@@ -2292,6 +2292,48 @@ describe("createPgQueue (durable #977)", () => {
       delete process.env.FOREGROUND_LIVENESS_MAX_RELEASE_PER_SWEEP;
     });
 
+    it("does not let older still-blocked stale rows consume the cap before a newer clear row", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "60000";
+      process.env.FOREGROUND_LIVENESS_MAX_RELEASE_PER_SWEEP = "2";
+      const m = makePool();
+      const now = Date.now();
+      m.setRateLimitRows([
+        {
+          admission_key: "installation:111",
+          remaining: 1,
+          reset_at: new Date(now + 30 * 60_000).toISOString(),
+          observed_at: new Date(now).toISOString(),
+        },
+      ]);
+      const payload = (deliveryId: string, installationId: number) =>
+        JSON.stringify({
+          type: "github-webhook",
+          deliveryId,
+          eventName: "x",
+          payload: { installation: { id: installationId } },
+        });
+      m.setForegroundLivenessCandidates([
+        { id: "blocked-oldest", created_at: now - 10 * 60_000, payload: payload("blocked-oldest", 111) },
+        { id: "blocked-second", created_at: now - 9 * 60_000, payload: payload("blocked-second", 111) },
+        { id: "clear-newer", created_at: now - 5 * 60_000, payload: payload("clear-newer", 222) },
+      ]);
+      const q = createPgQueue(m.pool, async () => undefined);
+
+      const released = await q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(2);
+      for (const id of ["clear-newer", "blocked-oldest"]) {
+        expect(m.fn).toHaveBeenCalledWith(
+          expect.stringContaining("SET run_after=$1 WHERE id=$2 AND status='pending' AND run_after>$1"),
+          expect.arrayContaining([id]),
+        );
+      }
+      expect(m.fn).not.toHaveBeenCalledWith(
+        expect.stringContaining("SET run_after=$1 WHERE id=$2 AND status='pending' AND run_after>$1"),
+        expect.arrayContaining(["blocked-second"]),
+      );
+    });
+
     // A stale candidate can lose the UPDATE race (another instance/tick already moved it) -- mirrors
     // reviveDeadLetterJobs' own "AND status='dead'" re-check pattern: only rows whose UPDATE actually matched
     // (rowCount 1) count toward the release total, never the raw SELECT candidate count.

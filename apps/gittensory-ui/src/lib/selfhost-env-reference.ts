@@ -7,7 +7,7 @@ export type SelfHostEnvReferenceRow = {
 export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   {
     name: "AI_COMBINE",
-    firstReference: "src/selfhost/ai.ts:968",
+    firstReference: "src/selfhost/ai.ts:982",
   },
   {
     name: "AI_EMBED_API_KEY",
@@ -19,11 +19,11 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   },
   {
     name: "AI_EMBED_MODEL",
-    firstReference: "src/selfhost/ai.ts:864",
+    firstReference: "src/selfhost/ai.ts:872",
   },
   {
     name: "AI_ON_MERGE",
-    firstReference: "src/selfhost/ai.ts:970",
+    firstReference: "src/selfhost/ai.ts:984",
   },
   {
     name: "AI_PROVIDER",
@@ -31,7 +31,7 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   },
   {
     name: "ANTHROPIC_AI_BASE_URL",
-    firstReference: "src/selfhost/ai.ts:868",
+    firstReference: "src/selfhost/ai.ts:876",
   },
   {
     name: "ANTHROPIC_AI_MODEL",
@@ -39,7 +39,7 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   },
   {
     name: "ANTHROPIC_API_KEY",
-    firstReference: "src/selfhost/ai.ts:867",
+    firstReference: "src/selfhost/ai.ts:875",
   },
   {
     name: "BACKUP_ACKNOWLEDGED",
@@ -195,11 +195,11 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   },
   {
     name: "OLLAMA_AI_API_KEY",
-    firstReference: "src/selfhost/ai.ts:861",
+    firstReference: "src/selfhost/ai.ts:869",
   },
   {
     name: "OLLAMA_AI_BASE_URL",
-    firstReference: "src/selfhost/ai.ts:857",
+    firstReference: "src/selfhost/ai.ts:865",
   },
   {
     name: "OLLAMA_AI_MODEL",
@@ -207,7 +207,7 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   },
   {
     name: "OPENAI_AI_BASE_URL",
-    firstReference: "src/selfhost/ai.ts:859",
+    firstReference: "src/selfhost/ai.ts:867",
   },
   {
     name: "OPENAI_AI_MODEL",
@@ -215,15 +215,15 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   },
   {
     name: "OPENAI_API_KEY",
-    firstReference: "src/selfhost/ai.ts:861",
+    firstReference: "src/selfhost/ai.ts:869",
   },
   {
     name: "OPENAI_COMPATIBLE_AI_API_KEY",
-    firstReference: "src/selfhost/ai.ts:861",
+    firstReference: "src/selfhost/ai.ts:869",
   },
   {
     name: "OPENAI_COMPATIBLE_AI_BASE_URL",
-    firstReference: "src/selfhost/ai.ts:860",
+    firstReference: "src/selfhost/ai.ts:868",
   },
   {
     name: "OPENAI_COMPATIBLE_AI_MODEL",
@@ -386,15 +386,15 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
 export const SELFHOST_ENV_REFERENCE_MARKDOWN = [
   "| Name | First reference |",
   "| --- | --- |",
-  "| `AI_COMBINE` | `src/selfhost/ai.ts:968` |",
+  "| `AI_COMBINE` | `src/selfhost/ai.ts:982` |",
   "| `AI_EMBED_API_KEY` | `src/server.ts:440` |",
   "| `AI_EMBED_BASE_URL` | `src/server.ts:437` |",
-  "| `AI_EMBED_MODEL` | `src/selfhost/ai.ts:864` |",
-  "| `AI_ON_MERGE` | `src/selfhost/ai.ts:970` |",
+  "| `AI_EMBED_MODEL` | `src/selfhost/ai.ts:872` |",
+  "| `AI_ON_MERGE` | `src/selfhost/ai.ts:984` |",
   "| `AI_PROVIDER` | `src/selfhost/ai-config.ts:43` |",
-  "| `ANTHROPIC_AI_BASE_URL` | `src/selfhost/ai.ts:868` |",
+  "| `ANTHROPIC_AI_BASE_URL` | `src/selfhost/ai.ts:876` |",
   "| `ANTHROPIC_AI_MODEL` | `src/selfhost/ai.ts:85` |",
-  "| `ANTHROPIC_API_KEY` | `src/selfhost/ai.ts:867` |",
+  "| `ANTHROPIC_API_KEY` | `src/selfhost/ai.ts:875` |",
   "| `BACKUP_ACKNOWLEDGED` | `src/server.ts:379` |",
   "| `BROWSER_WS_ENDPOINT` | `src/selfhost/stubs/puppeteer.ts:11` |",
   "| `CLAUDE_AI_EFFORT` | `src/selfhost/ai.ts:136` |",
@@ -433,14 +433,14 @@ export const SELFHOST_ENV_REFERENCE_MARKDOWN = [
   "| `MIGRATIONS_DIR` | `src/server.ts:392` |",
   "| `OBSERVABILITY_SMOKE_POLL_MS` | `scripts/smoke-observability-traces.mjs:8` |",
   "| `OBSERVABILITY_SMOKE_TIMEOUT_MS` | `scripts/smoke-observability-traces.mjs:6` |",
-  "| `OLLAMA_AI_API_KEY` | `src/selfhost/ai.ts:861` |",
-  "| `OLLAMA_AI_BASE_URL` | `src/selfhost/ai.ts:857` |",
+  "| `OLLAMA_AI_API_KEY` | `src/selfhost/ai.ts:869` |",
+  "| `OLLAMA_AI_BASE_URL` | `src/selfhost/ai.ts:865` |",
   "| `OLLAMA_AI_MODEL` | `src/selfhost/ai.ts:89` |",
-  "| `OPENAI_AI_BASE_URL` | `src/selfhost/ai.ts:859` |",
+  "| `OPENAI_AI_BASE_URL` | `src/selfhost/ai.ts:867` |",
   "| `OPENAI_AI_MODEL` | `src/selfhost/ai.ts:90` |",
-  "| `OPENAI_API_KEY` | `src/selfhost/ai.ts:861` |",
-  "| `OPENAI_COMPATIBLE_AI_API_KEY` | `src/selfhost/ai.ts:861` |",
-  "| `OPENAI_COMPATIBLE_AI_BASE_URL` | `src/selfhost/ai.ts:860` |",
+  "| `OPENAI_API_KEY` | `src/selfhost/ai.ts:869` |",
+  "| `OPENAI_COMPATIBLE_AI_API_KEY` | `src/selfhost/ai.ts:869` |",
+  "| `OPENAI_COMPATIBLE_AI_BASE_URL` | `src/selfhost/ai.ts:868` |",
   "| `OPENAI_COMPATIBLE_AI_MODEL` | `src/selfhost/ai.ts:91` |",
   "| `ORB_AIR_GAP` | `src/selfhost/orb-collector.ts:161` |",
   "| `ORB_ANONYMIZE` | `src/selfhost/orb-collector.ts:174` |",

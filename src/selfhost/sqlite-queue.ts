@@ -386,11 +386,12 @@ export function createSqliteQueue(
       `SELECT id, payload, created_at FROM ${TABLE} WHERE status='pending' AND priority>=? AND run_after>?`,
       [FOREGROUND_QUEUE_PRIORITY_FLOOR, now],
     );
-    const eligible: Array<{ id: number; pendingSinceMs: number; ageStale: boolean }> = [];
+    const eligible: Array<{ id: number; pendingSinceMs: number; ageStale: boolean; rateLimitClear: boolean }> = [];
     for (const row of rows as Array<{ id: number; payload: string; created_at: number }>) {
       const ageStale = isForegroundDeferralStale(foregroundLivenessConfig, row.created_at, now);
-      if (!ageStale && !isRateLimitAdmissionNowClear(row.payload)) continue;
-      eligible.push({ id: row.id, pendingSinceMs: row.created_at, ageStale });
+      const rateLimitClear = isRateLimitAdmissionNowClear(row.payload);
+      if (!ageStale && !rateLimitClear) continue;
+      eligible.push({ id: row.id, pendingSinceMs: row.created_at, ageStale, rateLimitClear });
     }
     const toRelease = selectForegroundDeferralsToRelease(eligible, foregroundLivenessConfig.maxReleasePerSweep);
     let released = 0;

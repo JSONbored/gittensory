@@ -698,12 +698,13 @@ export function createPgQueue(
       `SELECT id, payload, created_at FROM ${TABLE} WHERE status='pending' AND priority>=$1 AND run_after>$2`,
       [FOREGROUND_QUEUE_PRIORITY_FLOOR, now],
     );
-    const eligible: Array<{ id: string; pendingSinceMs: number; ageStale: boolean }> = [];
+    const eligible: Array<{ id: string; pendingSinceMs: number; ageStale: boolean; rateLimitClear: boolean }> = [];
     for (const row of res.rows as Array<{ id: string; payload: string; created_at: number | string }>) {
       const pendingSinceMs = Number(row.created_at);
       const ageStale = isForegroundDeferralStale(foregroundLivenessConfig, pendingSinceMs, now);
-      if (!ageStale && !(await isRateLimitAdmissionNowClear(row.payload))) continue;
-      eligible.push({ id: row.id, pendingSinceMs, ageStale });
+      const rateLimitClear = await isRateLimitAdmissionNowClear(row.payload);
+      if (!ageStale && !rateLimitClear) continue;
+      eligible.push({ id: row.id, pendingSinceMs, ageStale, rateLimitClear });
     }
     const toRelease = selectForegroundDeferralsToRelease(eligible, foregroundLivenessConfig.maxReleasePerSweep);
     let released = 0;
