@@ -357,6 +357,84 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // Discord webhook URL: discord.com/api/webhooks/<id>/<token>. Base64url token, lookahead terminator.
+    kind: "discord_webhook_url",
+    re: /\bhttps:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d{17,20}\/[A-Za-z0-9_-]{60,}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // Microsoft Teams incoming-webhook URL (webhook.office.com): a postable message-egress secret endpoint.
+    kind: "teams_webhook_url",
+    re: /\bhttps:\/\/[a-z0-9-]+\.webhook\.office\.com\/webhookb2\/[A-Za-z0-9@-]+\/IncomingWebhook\/[A-Za-z0-9]+\/[A-Za-z0-9-]+/,
+    confidence: "high",
+  },
+  {
+    // Figma personal access token: `figd_` + >=40 base64url (lookahead terminator).
+    kind: "figma_pat",
+    re: /\bfigd_[A-Za-z0-9_-]{40,}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // Docker Hub personal access token: `dckr_pat_` + 27 base64url (lookahead terminator).
+    kind: "dockerhub_pat",
+    re: /\bdckr_pat_[A-Za-z0-9_-]{27}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // GitLab feed token: `glft-` + 20 hex.
+    kind: "gitlab_feed_token",
+    re: /\bglft-[0-9a-f]{20}\b/,
+    confidence: "high",
+  },
+  {
+    // GitLab deploy token: `gldt-` + 20 base64url (lookahead terminator).
+    kind: "gitlab_deploy_token",
+    re: /\bgldt-[A-Za-z0-9_-]{20}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // Razorpay key id/secret: `rzp_test_`/`rzp_live_` + 14 base62.
+    kind: "razorpay_key",
+    re: /\brzp_(?:test|live)_[A-Za-z0-9]{14}\b/,
+    confidence: "high",
+  },
+  {
+    // Supabase access token: `sbp_` + 40 hex.
+    kind: "supabase_token",
+    re: /\bsbp_[a-f0-9]{40}\b/,
+    confidence: "high",
+  },
+  {
+    // Cloudinary URL: `cloudinary://<api-key>:<api-secret>@<cloud>` — the secret is embedded in the URL.
+    kind: "cloudinary_url",
+    re: /\bcloudinary:\/\/\d{15}:[A-Za-z0-9_-]{20,}@[A-Za-z0-9_-]+/,
+    confidence: "high",
+  },
+  {
+    // Brevo (Sendinblue) API key: `xkeysib-` + 64 hex + `-` + 16 base62.
+    kind: "brevo_api_key",
+    re: /\bxkeysib-[a-f0-9]{64}-[A-Za-z0-9]{16}\b/,
+    confidence: "high",
+  },
+  {
+    // Buildkite agent token: `bkua_` + 40 lowercase-hex/base36.
+    kind: "buildkite_token",
+    re: /\bbkua_[a-z0-9]{40}\b/,
+    confidence: "high",
+  },
+  {
+    // NuGet API key: `oy2` + 43 lowercase base36.
+    kind: "nuget_api_key",
+    re: /\boy2[a-z0-9]{43}\b/,
+    confidence: "high",
+  },
+  {
+    // HubSpot private-app access token: `pat-na1-`/`pat-eu1-` + a UUID (distinct from the Airtable `pat<id>.` shape).
+    kind: "hubspot_pat",
+    re: /\bpat-(?:na|eu)1-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b/,
+    confidence: "high",
+  },
+  {
     kind: "private_key",
     re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/,
     confidence: "high",

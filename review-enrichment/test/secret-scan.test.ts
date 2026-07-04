@@ -487,3 +487,46 @@ test("scanPatch does not flag near-miss variants of the new AI/SaaS credential f
     assert.equal(findings.length, 0, `near-miss should not match: ${nm}`);
   }
 });
+
+test("scanPatch flags webhook-URL, CI/CD, and payment/SaaS credential formats", () => {
+  // base64url-body formats deliberately END IN `-` to prove the rule terminates on a negative-lookahead, not `\b`.
+  const cases = [
+    ["discord_webhook_url", "https://discord.com/api/webhooks/123456789012345678/" + b62(69) + "-"],
+    ["teams_webhook_url", "https://acme.webhook.office.com/webhookb2/" + b62(20) + "@" + b62(20) + "/IncomingWebhook/" + b62(32) + "/" + b62(20)],
+    ["figma_pat", "figd_" + b62(42) + "-"],
+    ["dockerhub_pat", "dckr_pat_" + b62(26) + "-"],
+    ["gitlab_feed_token", "glft-" + hex(20)],
+    ["gitlab_deploy_token", "gldt-" + b62(19) + "-"],
+    ["razorpay_key", "rzp_test_" + b62(14)],
+    ["supabase_token", "sbp_" + hex(40)],
+    ["cloudinary_url", "cloudinary://123456789012345:" + b62(25) + "@mycloud"],
+    ["brevo_api_key", "xkeysib-" + hex(64) + "-" + b62(16)],
+    ["buildkite_token", "bkua_" + hex(40)],
+    ["nuget_api_key", "oy2" + hex(43)],
+    ["hubspot_pat", "pat-na1-" + hex(8) + "-" + hex(4) + "-" + hex(4) + "-" + hex(4) + "-" + hex(12)],
+  ];
+  for (const [kind, secret] of cases) {
+    const findings = scanPatch("src/config.ts", hunk([`const c = "${secret}";`]));
+    assert.equal(findings.length, 1, `${kind}: expected exactly one finding, got ${JSON.stringify(findings)}`);
+    assert.equal(findings[0].kind, kind, `${kind}: wrong kind`);
+    assert.equal(findings[0].confidence, "high", `${kind}: wrong confidence`);
+  }
+});
+
+test("scanPatch does not flag near-miss variants of the webhook/CI/SaaS formats", () => {
+  const nearMisses = [
+    "figd_" + b62(39),
+    "dckr_pat_" + b62(26),
+    "gldt-" + b62(19),
+    "glft-" + hex(19),
+    "sbp_" + hex(39),
+    "bkua_" + hex(39),
+    "oy2" + hex(42),
+    "rzp_test_" + b62(13),
+    "xkeysib-" + hex(63) + "-" + b62(16),
+  ];
+  for (const nm of nearMisses) {
+    const findings = scanPatch("src/config.ts", hunk([`const c = "${nm}";`]));
+    assert.equal(findings.length, 0, `near-miss should not match: ${nm}`);
+  }
+});
