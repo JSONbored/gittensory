@@ -277,3 +277,46 @@ test("scanPatch does not flag a truncated Shopify token", () => {
   const short = ["shpat_", "a".repeat(16)].join("");
   assert.equal(scanPatch("src/config.ts", hunk([`const shop = "${short}";`])).length, 0);
 });
+
+// Fixtures assembled at run time (never a contiguous secret literal in source) so push protection stays quiet.
+// `const c = "..."` uses a variable name that the generic keyword-assignment rule ignores, so each string can
+// only match its own format-specific rule — the assertion of exactly one finding is meaningful.
+const hex = (n) => "a".repeat(n);
+const b62 = (n) => "A".repeat(n);
+
+test("scanPatch flags additional high-confidence cloud/SaaS credential formats", () => {
+  const cases = [
+    ["postman_api_key", "PMAK-" + hex(24) + "-" + hex(34)],
+    ["doppler_token", "dp.pt." + b62(43)],
+    ["linear_api_key", "lin_api_" + b62(40)],
+    ["newrelic_user_key", "NRAK-" + b62(27)],
+    ["pypi_upload_token", "pypi-" + "AgEIcHlwaS5vcmc" + b62(50)],
+    ["grafana_service_account_token", "glsa_" + b62(32) + "_" + hex(8)],
+    ["dynatrace_token", "dt0c01." + b62(24) + "." + b62(64)],
+    ["age_secret_key", "AGE-SECRET-KEY-1" + "Q".repeat(58)],
+    ["clojars_token", "CLOJARS_" + b62(60)],
+    ["square_token", "sq0atp-" + hex(22)],
+  ];
+  for (const [kind, secret] of cases) {
+    const findings = scanPatch("src/config.ts", hunk([`const c = "${secret}";`]));
+    assert.equal(findings.length, 1, `${kind}: expected exactly one finding`);
+    assert.equal(findings[0].kind, kind, `${kind}: wrong kind`);
+    assert.equal(findings[0].confidence, "high", `${kind}: wrong confidence`);
+  }
+});
+
+test("scanPatch does not flag near-miss tokens with the wrong length as the new credential kinds", () => {
+  // Each is one char short of its rule's fixed length, plus a bare 40-hex blob (a SHA-1-shaped value that
+  // must NOT be mistaken for lin_api_'s 40-char body without the prefix).
+  const nearMisses = [
+    "lin_api_" + b62(39),
+    "CLOJARS_" + b62(59),
+    "NRAK-" + b62(26),
+    "PMAK-" + hex(24) + "-" + hex(33),
+    hex(40),
+  ];
+  for (const nm of nearMisses) {
+    const findings = scanPatch("src/config.ts", hunk([`const c = "${nm}";`]));
+    assert.equal(findings.length, 0, `near-miss should not match: ${nm}`);
+  }
+});
