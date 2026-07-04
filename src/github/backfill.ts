@@ -3088,6 +3088,25 @@ export async function fetchLivePullRequestHeadSha(
   return result?.data.head?.sha ?? undefined;
 }
 
+export type LivePullRequestFetchResult =
+  | { status: "ok"; data: GitHubPullRequestPayload }
+  | { status: "error"; error: string };
+
+export async function fetchLivePullRequestResult(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+  token: string | undefined,
+  admissionKey?: GitHubRateLimitAdmissionKey,
+): Promise<LivePullRequestFetchResult> {
+  try {
+    const result = await githubJsonWithHeaders<GitHubPullRequestPayload>(env, repoFullName, `/pulls/${prNumber}`, token, githubRateLimitOptions(admissionKey));
+    return { status: "ok", data: result.data };
+  } catch (error) {
+    return { status: "error", error: strippedErrorMessage(error, "GitHub live PR fetch failed").slice(0, 240) };
+  }
+}
+
 /** The PR's FULL live payload via REST `GET /pulls/{n}`, ready to feed `upsertPullRequestFromGitHub`. The scheduled
  *  re-gate sweep uses this to RESYNC a stored PR to its live head when a `synchronize` webhook was lost (e.g. the
  *  self-host relay was down), so the re-review runs on the current head + fresh files instead of a stale cached diff
@@ -3100,8 +3119,8 @@ export async function fetchLivePullRequest(
   token: string | undefined,
   admissionKey?: GitHubRateLimitAdmissionKey,
 ): Promise<GitHubPullRequestPayload | undefined> {
-  const result = await githubJsonWithHeaders<GitHubPullRequestPayload>(env, repoFullName, `/pulls/${prNumber}`, token, githubRateLimitOptions(admissionKey)).catch(() => undefined);
-  return result?.data ?? undefined;
+  const result = await fetchLivePullRequestResult(env, repoFullName, prNumber, token, admissionKey);
+  return result.status === "ok" ? result.data : undefined;
 }
 
 // #2537: durable, webhook-invalidated cache for the bare PR-state read (GET /pulls/{n}). Unlike the request-local

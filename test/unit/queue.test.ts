@@ -6451,19 +6451,25 @@ describe("queue processors", () => {
     expect(published.results).toEqual([]);
   });
 
-  it("suppresses public review output when live PR freshness cannot verify the reviewed head", async () => {
+  it("retries unavailable live PR freshness while suppressing terminal stale review output", async () => {
     const cases = [
       {
         pullNumber: 59,
         deliveryId: "unavailable-before-public-output",
         title: "Unavailable before publish",
-        freshness: classifyPullRequestFreshness(undefined, "oldsha"),
+        freshness: classifyPullRequestFreshness(undefined, "oldsha", {
+          unavailableSource: "pull_request_fetch",
+          unavailableDetail: "GitHub API failed for JSONbored/gittensory/pulls/59 (503)",
+        }),
+        expectRetry: true,
         expectedDetail: "live PR state could not be verified",
         expectedMetadata: {
           reason: "unavailable",
           expectedHeadSha: "oldsha",
           liveHeadSha: null,
           liveState: null,
+          unavailableSource: "pull_request_fetch",
+          unavailableDetail: "GitHub API failed for JSONbored/gittensory/pulls/59 (503)",
         },
       },
       {
@@ -6477,12 +6483,29 @@ describe("queue processors", () => {
           },
           "oldsha",
         ),
+        expectRetry: false,
         expectedDetail: "live PR head SHA could not be verified",
         expectedMetadata: {
           reason: "head_unresolved",
           expectedHeadSha: "oldsha",
           liveHeadSha: null,
           liveState: "open",
+        },
+      },
+      {
+        pullNumber: 61,
+        deliveryId: "unavailable-no-detail-before-public-output",
+        title: "Unavailable before publish without detail",
+        freshness: classifyPullRequestFreshness(undefined, "oldsha"),
+        expectRetry: true,
+        expectedDetail: "live PR state could not be verified",
+        expectedMetadata: {
+          reason: "unavailable",
+          expectedHeadSha: "oldsha",
+          liveHeadSha: null,
+          liveState: null,
+          unavailableSource: "unknown",
+          unavailableDetail: null,
         },
       },
     ] as const;
@@ -6523,7 +6546,7 @@ describe("queue processors", () => {
       });
       vi.mocked(fetchPullRequestFreshness).mockResolvedValue(scenario.freshness);
 
-      await processJob(env, {
+      const job = processJob(env, {
         type: "github-webhook",
         deliveryId: scenario.deliveryId,
         eventName: "pull_request",
@@ -6534,6 +6557,8 @@ describe("queue processors", () => {
           pull_request: { number: scenario.pullNumber, title: scenario.title, state: "open", user: { login: "contributor" }, head: { sha: "oldsha" }, labels: [], body: "Fixes #1" },
         },
       });
+      if (scenario.expectRetry) await expect(job).rejects.toThrow("live PR state unavailable");
+      else await expect(job).resolves.toBeUndefined();
 
       expect(commentPosts).toBe(0);
       const stale = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = ?")
