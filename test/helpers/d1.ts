@@ -102,7 +102,7 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
       async get(key: string) {
         return transientCache.get(key) ?? null;
       },
-      async set(key: string, value: string) {
+      async set(key: string, value: string, _ttlSeconds: number) {
         transientCache.set(key, value);
       },
       async del(key: string) {
@@ -115,6 +115,11 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
       async claim(key: string, value: string) {
         if (transientCache.has(key)) return false;
         transientCache.set(key, value);
+        return true;
+      },
+      async releaseIfValue(key: string, value: string) {
+        if (transientCache.get(key) !== value) return false;
+        transientCache.delete(key);
         return true;
       },
     },
