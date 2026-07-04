@@ -48,22 +48,28 @@ export function DeadLetterQueuePanel() {
 
   async function purgeAll() {
     setPurging(true);
-    const result = await apiFetch<{ ok: true; purged: number }>(
-      apiUrl(DEAD_LETTER_QUEUE_PURGE_PATH),
-      {
-        method: "DELETE",
-        label: "Purge dead-letter queue",
-        credentials: "include",
-      },
-    );
-    setPurging(false);
-    if (result.ok) {
-      toast.success("Dead-letter queue purged", {
-        description: `Purged ${result.data.purged} job${result.data.purged === 1 ? "" : "s"}.`,
-      });
-      resource.reload();
-    } else {
-      toast.error("Purge failed", { description: result.message });
+    try {
+      const result = await apiFetch<{ ok: true; purged: number }>(
+        apiUrl(DEAD_LETTER_QUEUE_PURGE_PATH),
+        {
+          method: "DELETE",
+          label: "Purge dead-letter queue",
+          credentials: "include",
+        },
+      );
+      if (result.ok) {
+        toast.success("Dead-letter queue purged", {
+          description: `Purged ${result.data.purged} job${result.data.purged === 1 ? "" : "s"}.`,
+        });
+        // Deliberately no step-back-a-page logic here (unlike runJobAction below): purge empties the ENTIRE
+        // queue, so any offset now legitimately returns zero items -- there's no earlier page with real data
+        // to redirect to, unlike a single-row action where other pages still have jobs.
+        resource.reload();
+      } else {
+        toast.error("Purge failed", { description: result.message });
+      }
+    } finally {
+      setPurging(false);
     }
   }
 
@@ -98,6 +104,7 @@ export function DeadLetterQueuePanel() {
                 <AlertDialogAction
                   className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   onClick={() => void purgeAll()}
+                  disabled={purging}
                 >
                   Purge all
                 </AlertDialogAction>
@@ -160,27 +167,43 @@ function DeadLetterQueueTable({
 
   async function runJobAction(id: number, action: "replay" | "delete") {
     setPendingRowIds((current) => new Set(current).add(id));
-    const result = await apiFetch<{ ok: true; id: number }>(
-      apiUrl(buildDeadLetterJobActionPath(id, action)),
-      {
-        method: action === "replay" ? "POST" : "DELETE",
-        label: action === "replay" ? "Replay dead-letter job" : "Delete dead-letter job",
-        credentials: "include",
-      },
-    );
-    setPendingRowIds((current) => {
-      const next = new Set(current);
-      next.delete(id);
-      return next;
-    });
-    if (result.ok) {
-      toast.success(action === "replay" ? "Job queued for replay" : "Job deleted", {
-        description: `Job #${id} ${action === "replay" ? "was requeued." : "was removed from the dead-letter queue."}`,
-      });
-      onReload();
-    } else {
-      toast.error(action === "replay" ? "Replay failed" : "Delete failed", {
-        description: result.message,
+    try {
+      const result = await apiFetch<{ ok: true; id: number }>(
+        apiUrl(buildDeadLetterJobActionPath(id, action)),
+        {
+          method: action === "replay" ? "POST" : "DELETE",
+          label: action === "replay" ? "Replay dead-letter job" : "Delete dead-letter job",
+          credentials: "include",
+        },
+      );
+      if (result.ok) {
+        toast.success(action === "replay" ? "Job queued for replay" : "Job deleted", {
+          description: `Job #${id} ${action === "replay" ? "was requeued." : "was removed from the dead-letter queue."}`,
+        });
+        // The row just acted on was the ONLY item on a non-first page -- reloading the SAME offset would
+        // return zero items there (even though earlier pages still have jobs), stranding the operator on a
+        // misleadingly-empty page. Step back a page instead; any other case just refetches in place.
+        // KNOWN LIMITATION: page.items.length is a snapshot from this render, shared by every in-flight
+        // action's closure -- if an operator fires two DIFFERENT rows' actions on the same 2-item page before
+        // either resolves, both closures see length===2 and neither steps back, even though together they
+        // empty the page. Recoverable (Previous still works) and narrow enough that fixing it would need a
+        // bigger redesign (e.g. tracking resolved-this-batch count instead of a static snapshot) -- left as a
+        // deliberate, documented gap rather than expanding this fix's scope.
+        if (page.items.length === 1 && page.offset > 0) {
+          onPageChange(Math.max(0, page.offset - page.limit));
+        } else {
+          onReload();
+        }
+      } else {
+        toast.error(action === "replay" ? "Replay failed" : "Delete failed", {
+          description: result.message,
+        });
+      }
+    } finally {
+      setPendingRowIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
       });
     }
   }
@@ -265,6 +288,7 @@ function DeadLetterQueueTable({
                             <AlertDialogAction
                               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                               onClick={() => void runJobAction(item.id, "delete")}
+                              disabled={pendingRowIds.has(item.id)}
                             >
                               Delete
                             </AlertDialogAction>

@@ -408,6 +408,127 @@ describe("DeadLetterQueuePanel row actions and purge", () => {
     await waitFor(() => expect(replayButtons[1].disabled).toBe(false));
   });
 
+  // Navigates from a real page-1 render to a real page-2 render by clicking Next, the same way a user
+  // would -- `offset` is component STATE (starts at 0), not something a mocked response body can fake, so
+  // reaching a genuine "offset=25" request requires actually driving the Next click.
+  async function navigateToPageTwo(pageTwoData: typeof SAMPLE_PAGE) {
+    apiFetch.mockResolvedValueOnce({
+      ok: true,
+      data: { ...SAMPLE_PAGE, total: pageTwoData.total },
+    }); // page 1
+    render(<DeadLetterQueuePanel />);
+    await screen.findByText("github-webhook");
+
+    apiFetch.mockResolvedValueOnce({ ok: true, data: pageTwoData }); // page 2
+    fireEvent.click(screen.getByRole("link", { name: /next/i }));
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith(
+        "https://api.test/v1/app/selfhost/queue/dead?limit=25&offset=25",
+        expect.any(Object),
+      ),
+    );
+  }
+
+  it("REGRESSION: replaying the only item on a non-first page steps back a page instead of reloading the same now-empty offset", async () => {
+    // A single row on page 2 (offset=25) of a 26-total queue. Reloading the SAME offset after removing it
+    // would fetch zero items there, even though page 1 still has 25 real jobs -- stranding the operator on a
+    // misleadingly-empty page instead of showing them the queue still has work.
+    const lastPageOfOne = {
+      generatedAt: SAMPLE_PAGE.generatedAt,
+      limit: 25,
+      offset: 25,
+      total: 26,
+      items: [
+        {
+          id: 50,
+          jobType: "agent-regate-pr",
+          attempts: 2,
+          lastError: null,
+          createdAtMs: 3_000,
+          deadAtMs: 8_000,
+        },
+      ],
+    };
+    await navigateToPageTwo(lastPageOfOne);
+    await screen.findByText("agent-regate-pr");
+
+    apiFetch.mockClear();
+    apiFetch.mockResolvedValueOnce({ ok: true, data: { ok: true, id: 50 } }); // replay call
+    apiFetch.mockResolvedValueOnce({ ok: true, data: SAMPLE_PAGE }); // the stepped-back page 1 fetch
+
+    fireEvent.click(screen.getByRole("button", { name: "Replay" }));
+
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith(
+        "https://api.test/v1/app/selfhost/queue/dead/50/replay",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    // Must step back to offset=0, NOT re-fetch the same now-empty offset=25.
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith(
+        "https://api.test/v1/app/selfhost/queue/dead?limit=25&offset=0",
+        expect.any(Object),
+      ),
+    );
+    expect(apiFetch).not.toHaveBeenCalledWith(
+      "https://api.test/v1/app/selfhost/queue/dead?limit=25&offset=25",
+      expect.any(Object),
+    );
+  });
+
+  it("does NOT step back a page when other items remain on the current (non-first) page", async () => {
+    const twoOnPageTwo = {
+      generatedAt: SAMPLE_PAGE.generatedAt,
+      limit: 25,
+      offset: 25,
+      total: 27,
+      items: [
+        {
+          id: 51,
+          jobType: "agent-regate-pr",
+          attempts: 1,
+          lastError: null,
+          createdAtMs: 3_000,
+          deadAtMs: 8_000,
+        },
+        {
+          id: 50,
+          jobType: "agent-regate-pr",
+          attempts: 2,
+          lastError: null,
+          createdAtMs: 2_000,
+          deadAtMs: 7_000,
+        },
+      ],
+    };
+    await navigateToPageTwo(twoOnPageTwo);
+    await screen.findAllByText("agent-regate-pr");
+
+    apiFetch.mockClear();
+    apiFetch.mockResolvedValueOnce({ ok: true, data: { ok: true, id: 51 } }); // replay call
+    apiFetch.mockResolvedValueOnce({
+      ok: true,
+      data: { ...twoOnPageTwo, total: 26, items: [twoOnPageTwo.items[1]] },
+    }); // in-place refetch
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Replay" })[0]);
+
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith(
+        "https://api.test/v1/app/selfhost/queue/dead/51/replay",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    // A sibling item remains on this page -- refetch the SAME offset, don't step back.
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith(
+        "https://api.test/v1/app/selfhost/queue/dead?limit=25&offset=25",
+        expect.any(Object),
+      ),
+    );
+  });
+
   it("Purge all opens a confirmation dialog with the expected warning text", async () => {
     apiFetch.mockResolvedValueOnce({ ok: true, data: SAMPLE_PAGE });
     render(<DeadLetterQueuePanel />);
