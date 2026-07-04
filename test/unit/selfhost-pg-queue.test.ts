@@ -2205,6 +2205,38 @@ describe("createPgQueue (durable #977)", () => {
       expect(await renderMetrics()).not.toContain("gittensory_jobs_foreground_liveness_released_total");
     });
 
+    it("caches foreground-liveness admission reads for candidates sharing the same rate-limit target", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "600000";
+      const m = makePool();
+      const now = Date.now();
+      m.setRateLimitRows([
+        {
+          admission_key: "installation:123",
+          remaining: 1,
+          reset_at: new Date(now + 30 * 60_000).toISOString(),
+          observed_at: new Date(now).toISOString(),
+        },
+      ]);
+      const payload = (deliveryId: string) =>
+        JSON.stringify({
+          type: "github-webhook",
+          deliveryId,
+          eventName: "x",
+          payload: { installation: { id: 123 } },
+        });
+      m.setForegroundLivenessCandidates([
+        { id: "fg-fresh-1", created_at: now - 1_000, payload: payload("fg-fresh-1") },
+        { id: "fg-fresh-2", created_at: now - 1_000, payload: payload("fg-fresh-2") },
+      ]);
+      const q = createPgQueue(m.pool, async () => undefined);
+
+      const released = await q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(0);
+      const admissionReads = (m.fn as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([sql]: unknown[]) => String(sql).includes("FROM github_rate_limit_observations"));
+      expect(admissionReads).toHaveLength(1);
+    });
+
     // CONDITION-BASED recovery (the second OR arm): a foreground job whose created_at is nowhere near stale but
     // whose rate-limit observation has since cleared (no blocking observation seeded here) is released anyway --
     // the whole point of pairing the age floor with a rate-limit-aware re-check (see the source's own doc
@@ -2335,6 +2367,10 @@ describe("createPgQueue (durable #977)", () => {
       const released = await q.releaseStaleForegroundDeferrals();
 
       expect(released).toBe(2);
+      expect(m.fn).toHaveBeenCalledWith(
+        expect.stringContaining("LIMIT $3"),
+        expect.arrayContaining([8, 4]),
+      );
       for (const id of ["oldest", "second-oldest"]) {
         expect(m.fn).toHaveBeenCalledWith(
           expect.stringContaining("SET run_after=$1 WHERE id=$2 AND status='pending' AND run_after>$1"),

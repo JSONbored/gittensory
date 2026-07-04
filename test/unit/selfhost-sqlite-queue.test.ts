@@ -2219,6 +2219,39 @@ describe("createSqliteQueue (durable #980)", () => {
       expect(await renderMetrics()).not.toContain("gittensory_jobs_foreground_liveness_released_total");
     });
 
+    it("caches foreground-liveness admission reads for candidates sharing the same rate-limit target", async () => {
+      process.env.FOREGROUND_LIVENESS_MAX_DEFER_MS = "600000";
+      const driver = makeDriver();
+      const now = Date.now();
+      seedExhaustedRateLimitObservation(driver, "installation:123", new Date(now + 30 * 60_000).toISOString());
+      const realQuery = driver.query.bind(driver);
+      const querySpy = vi.spyOn(driver, "query").mockImplementation((sql: string, params: unknown[]) => realQuery(sql, params));
+      const q = createSqliteQueue(driver, async () => undefined);
+      const futureRunAfter = now + 60 * 60_000;
+      for (const deliveryId of ["fg-fresh-1", "fg-fresh-2"]) {
+        driver.query(
+          `INSERT INTO _selfhost_jobs (payload, status, attempts, run_after, created_at, priority, job_key, is_maintenance)
+           VALUES (?, 'pending', 0, ?, ?, 10, NULL, 0)`,
+          [
+            JSON.stringify({
+              type: "github-webhook",
+              deliveryId,
+              eventName: "x",
+              payload: { installation: { id: 123 } },
+            }),
+            futureRunAfter,
+            now - 1_000,
+          ],
+        );
+      }
+
+      const released = q.releaseStaleForegroundDeferrals();
+
+      expect(released).toBe(0);
+      const admissionReads = querySpy.mock.calls.filter(([sql]) => String(sql).includes("FROM github_rate_limit_observations"));
+      expect(admissionReads).toHaveLength(1);
+    });
+
     // CONDITION-BASED recovery (the second OR arm): a foreground job whose created_at is nowhere near stale but
     // whose rate-limit observation has since cleared (no blocking observation at all here) is released anyway --
     // this is the whole point of pairing the age floor with a rate-limit-aware re-check (see the source's own

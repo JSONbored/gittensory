@@ -365,14 +365,21 @@ export function createSqliteQueue(
    *  against CURRENT observations, independent of how long ago it was deferred. Returns true when it would be
    *  admitted right now (no longer blocked); false when still blocked OR the payload is unparseable (best-
    *  effort -- an unparseable payload is left for the normal dead-letter path, never force-released here). */
-  function isRateLimitAdmissionNowClear(payload: string): boolean {
+  function isRateLimitAdmissionNowClear(payload: string, admissionCache: Map<string, boolean>): boolean {
     let message: JobMessage;
     try {
       message = JSON.parse(payload) as JobMessage;
     } catch {
       return false;
     }
-    return rateLimitAdmissionDelayMs(driver, message) === null;
+    const target = githubRateLimitAdmissionTargetForJob(message);
+    if (target === null) return true;
+    const cacheKey = `${target.kind}:${target.admissionKey ?? ""}`;
+    const cached = admissionCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+    const clear = rateLimitAdmissionDelayMs(driver, message) === null;
+    admissionCache.set(cacheKey, clear);
+    return clear;
   }
 
   /** See foreground-liveness.ts for the full rationale. A bounded candidate SELECT (foreground-priority, pending,
@@ -393,14 +400,16 @@ export function createSqliteQueue(
   function releaseStaleForegroundDeferrals(): number {
     if (!foregroundLivenessConfig.enabled) return 0;
     const now = Date.now();
+    const candidateLimit = foregroundLivenessConfig.maxReleasePerSweep * 2;
     const { rows } = driver.query(
-      `SELECT id, payload, created_at FROM ${TABLE} WHERE status='pending' AND priority>=? AND run_after>?`,
-      [FOREGROUND_QUEUE_PRIORITY_FLOOR, now],
+      `SELECT id, payload, created_at FROM ${TABLE} WHERE status='pending' AND priority>=? AND run_after>? ORDER BY created_at ASC, id ASC LIMIT ?`,
+      [FOREGROUND_QUEUE_PRIORITY_FLOOR, now, candidateLimit],
     );
     const eligible: Array<{ id: number; pendingSinceMs: number; ageStale: boolean; rateLimitClear: boolean }> = [];
+    const admissionCache = new Map<string, boolean>();
     for (const row of rows as Array<{ id: number; payload: string; created_at: number }>) {
       const ageStale = isForegroundDeferralStale(foregroundLivenessConfig, row.created_at, now);
-      const rateLimitClear = isRateLimitAdmissionNowClear(row.payload);
+      const rateLimitClear = isRateLimitAdmissionNowClear(row.payload, admissionCache);
       if (!ageStale && !rateLimitClear) continue;
       eligible.push({ id: row.id, pendingSinceMs: row.created_at, ageStale, rateLimitClear });
     }
