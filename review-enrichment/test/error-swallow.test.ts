@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   detectErrorSwallow,
+  parseCompleteCatchLine,
   scanErrorSwallow,
   scanPatchForErrorSwallow,
 } from "../dist/analyzers/error-swallow.js";
@@ -32,6 +33,20 @@ test("detectErrorSwallow: brace-balances nested blocks on one line", () => {
 
 test("detectErrorSwallow: flags unused bindings on single-line catches", () => {
   assert.equal(detectErrorSwallow("try { f(); } catch (err) { cleanup(); }"), "unused-binding");
+});
+
+test("parseCompleteCatchLine: returns the binding and the brace-delimited body", () => {
+  assert.deepEqual(parseCompleteCatchLine("catch (e) {}"), { binding: "e", body: "" });
+  assert.deepEqual(parseCompleteCatchLine("catch (err) { log(err) }"), { binding: "err", body: " log(err) " });
+});
+
+test("parseCompleteCatchLine: a binding-less (optional) catch yields a null binding, not the empty string", () => {
+  assert.deepEqual(parseCompleteCatchLine("catch {}"), { binding: null, body: "" });
+});
+
+test("parseCompleteCatchLine: returns null for a non-catch line and for an unbalanced (unclosed) body", () => {
+  assert.equal(parseCompleteCatchLine("if (x) { y(); }"), null); // not a catch
+  assert.equal(parseCompleteCatchLine("catch (e) { doThing();"), null); // never returns to brace depth 0
 });
 
 test("scanPatchForErrorSwallow: flags added lines with correct locations", () => {
