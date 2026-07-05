@@ -37,6 +37,18 @@ test("summarizeChurn + isHotspot: counts, fraction, and thresholds", () => {
   assert.equal(isHotspot({ commitCount: 20, fixFraction: 0.1 }), false); // too few fixes
 });
 
+test("summarizeChurn: an empty commit list is zero churn with no divide-by-zero", () => {
+  // The `commitCount ? fixCount / commitCount : 0` guard's else branch — fixFraction must be 0, not NaN.
+  assert.deepEqual(summarizeChurn([]), { commitCount: 0, fixCount: 0, fixFraction: 0 });
+});
+
+test("isHotspot: the `>=` thresholds are inclusive at the exact boundary (commits 8, fixFraction 0.3)", () => {
+  // Exactly at both thresholds → a hotspot (inclusive `>=`); one step below either → not.
+  assert.equal(isHotspot({ commitCount: 8, fixFraction: 0.3 }), true);
+  assert.equal(isHotspot({ commitCount: 7, fixFraction: 0.3 }), false); // one commit below the floor
+  assert.equal(isHotspot({ commitCount: 8, fixFraction: 0.29 }), false); // just under the fix-fraction floor
+});
+
 test("scanChurnHotspot: flags a high-churn, high-fix file", async () => {
   const findings = await scanChurnHotspot(req([{ path: "src/a.ts" }]), async () => jsonResponse(commits(12, 2)));
   assert.equal(findings.length, 1);
