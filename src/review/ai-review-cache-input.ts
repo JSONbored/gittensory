@@ -6,6 +6,16 @@ import { sha256Hex } from "../utils/crypto";
 
 export const AI_REVIEW_CACHE_INPUT_VERSION = "ai-review-input:v1";
 
+// #regate-churn (root cause, confirmed in production): this fingerprint USED to also hash the PR's live
+// `baseSha`, on the theory that a rebase/retarget can change the diff GitHub reports for an otherwise-unchanged
+// head SHA even though `changedPaths` (just the path list) stays the same. That reasoning already had a fix --
+// `reviewFiles` below hashes the actual per-file PATCH content (not just paths), which is the real signal for
+// "did the reviewed content change." Hashing raw `baseSha` on top of that was redundant when the patch is
+// unchanged and actively harmful when it isn't: `baseSha` is the live tip of the base branch, which advances on
+// EVERY unrelated merge to it, so on an active repo it differs on almost every evaluation regardless of whether
+// this PR's own diff changed at all -- causing a same-head PR to miss the cache (and re-spend a real AI call,
+// producing non-deterministic LLM output that can even flip the published verdict) on every scheduled re-gate
+// sweep. Removed entirely; `reviewFiles`' patch content is the sole source of truth for reviewed-content drift.
 export type AiReviewCacheInput = {
   // The PR title is threaded into the reviewer prompt (see runAiReviewForAdvisory's pr.title), so a same-head
   // `edited` event that changes only the title must miss the cache rather than replay a review generated for
@@ -70,12 +80,6 @@ export type AiReviewCacheInput = {
   repoInstructions: string | null | undefined;
   excludePaths: readonly string[];
   changedPaths: readonly string[];
-  // A rebase or retarget (new base branch, same head commit) can change the diff GitHub reports for an
-  // otherwise-unchanged head SHA -- changedPaths (just the path list) stays the same when the same files
-  // are touched against the new base, but the actual patch content reviewed differs. baseSha plus a
-  // per-file content digest (path/status/patch/additions/deletions -- the fields buildAiReviewDiff and the
-  // grounding/RAG paths actually read) closes that gap.
-  baseSha: string | null | undefined;
   reviewFiles: readonly {
     path: string;
     status?: string | null | undefined;
@@ -154,7 +158,6 @@ export async function aiReviewCacheInputFingerprint(input: AiReviewCacheInput): 
     repoInstructions: input.repoInstructions?.trim() || null,
     excludePaths: normalizeStringList(input.excludePaths),
     changedPaths: normalizeStringList(input.changedPaths),
-    baseSha: input.baseSha ?? null,
     reviewFiles: [...input.reviewFiles]
       .map((file) => ({
         path: file.path,

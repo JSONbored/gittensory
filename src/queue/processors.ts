@@ -45,7 +45,9 @@ import {
   markRepositoriesRemovedFromInstallation,
   persistAdvisory,
   getCachedAiReview,
+  getLatestPublishedAiReview,
   putCachedAiReview,
+  markAiReviewPublished,
   markPullRequestsRegated,
   markPullRequestReviewsInvalidated,
   markPullRequestSurfacePublished,
@@ -254,6 +256,7 @@ import {
 } from "../selfhost/queue-common";
 import { aiReviewCacheInputFingerprint } from "../review/ai-review-cache-input";
 import {
+  AGENT_LABEL_NEEDS_REVIEW,
   downgradeCloseToHold,
   downgradeMergeToHold,
   MAX_REVIEW_NAG_COOLDOWN_DAYS,
@@ -7492,6 +7495,11 @@ async function maybePublishPrPublicSurface(
     await markPullRequestSurfacePublished(env, repoFullName, pr.number, advisory.headSha).catch((error) => {
       console.error(JSON.stringify({ level: "warn", event: "surface_published_mark_failed", repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
     });
+    // #regate-churn: mark the AI review row for THIS head+fingerprint as durably published (a no-op when no fresh
+    // row was written this pass -- e.g. the frozen-reuse path above, or AI review off/skipped entirely).
+    await markAiReviewPublished(env, repoFullName, pr.number, advisory.headSha).catch((error) => {
+      console.error(JSON.stringify({ level: "warn", event: "ai_review_published_mark_failed", repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
+    });
     return gateEvaluation;
   };
   try {
@@ -7727,8 +7735,24 @@ async function maybePublishPrPublicSurface(
       author,
       settings.contributorBlacklist,
     );
+    // #regate-churn (maintainer-gated freeze): once a PR is held for manual review -- the manual-review label is
+    // already on it from a PRIOR pass -- a repeat contributor push must not buy a fresh, real AI review. That is
+    // exactly the gaming surface this closes: iterating pushes hoping to slip a green verdict past the bot (or
+    // just to see what the AI says next), at real LLM cost, instead of waiting for the human judgment the hold
+    // exists for. Only an explicit maintainer/collaborator retrigger (the PR-panel checkbox, which sets
+    // `webhook.forceAiReview`) may unfreeze it. CI/mergeable facts and label/assignee reconciliation are
+    // UNAFFECTED — both are recomputed fresh every pass below regardless of this flag; only the AI's own
+    // substantive verdict/findings are pinned. The very FIRST pass that establishes the hold is never frozen: the
+    // label is applied by the disposition executor AFTER this pass publishes, so `pr.labels` (read at the top of
+    // this sweep, before that write) does not carry it yet.
+    const manualReviewLabel = settings.manualReviewLabel === null ? null : (settings.manualReviewLabel ?? AGENT_LABEL_NEEDS_REVIEW);
+    const isFrozenForManualReview =
+      webhook.forceAiReview !== true &&
+      manualReviewLabel !== null &&
+      pr.labels.some((label) => label.toLowerCase() === manualReviewLabel.toLowerCase());
     const aiReviewWillRun =
       !authorBlacklisted &&
+      !isFrozenForManualReview &&
       (await shouldStartAiReviewForAdvisory(env, {
         settings,
         advisory,
@@ -7738,10 +7762,33 @@ async function maybePublishPrPublicSurface(
         skipAiReview: webhook.skipAiReview,
       }));
     aiReviewExpected = aiReviewWillRun;
+    if (isFrozenForManualReview) {
+      const frozenReview = await getLatestPublishedAiReview(env, repoFullName, pr.number, settings.aiReviewMode).catch(() => null);
+      if (frozenReview && hasPublicReviewAssessment(frozenReview.notes)) {
+        advisory.findings.push(...frozenReview.findings);
+        aiReview = frozenReview;
+        aiReviewWasReused = true;
+        incr("gittensory_ai_review_frozen_reuse_total");
+        await recordAuditEvent(env, {
+          eventType: "github_app.ai_review_frozen_reuse",
+          actor: author,
+          targetKey: `${repoFullName}#${pr.number}`,
+          outcome: "completed",
+          detail: "PR is held for manual review; reused the last published AI review instead of spending a fresh call",
+          /* v8 ignore next -- a truthy `frozenReview` means markAiReviewPublished previously stamped a row for
+           * a non-null head SHA (it no-ops on a nullish one), and an open PR does not lose its head SHA once
+           * set; the `?? null` is a type-level fallback for a practically-unreachable branch, mirroring the
+           * identical `advisory.headSha ?? null` fallbacks elsewhere in this function. */
+          metadata: { deliveryId: webhook.deliveryId, repoFullName, headSha: advisory.headSha ?? null },
+        }).catch(() => undefined);
+      }
+    }
     // Post a transient "🟪 reviewing…" placeholder BEFORE the review refresh runs so contributors never see a
     // stale green/yellow/red verdict while the current head is being recomputed. In-place upsert: once the final
     // verdict is ready it overwrites this comment. GitHub rate-limits still abort so the queue can retry instead
-    // of leaving a stale public surface visible.
+    // of leaving a stale public surface visible. `shouldPostPlaceholder` (unchanged) also gates the pre-publish
+    // staleness check below — that check is a general "has this pass already been superseded" abort, independent
+    // of the placeholder UI itself, so it must keep running whenever a placeholder would ever be eligible here.
     const shouldPostPlaceholder = shouldPostReviewingPlaceholder({
       reviewWillRun: true,
       mode,
@@ -7754,27 +7801,39 @@ async function maybePublishPrPublicSurface(
         )
       )
         return undefined;
-      const placeholderBody = `${PR_PANEL_COMMENT_MARKER}\n\n${renderReviewingPlaceholder()}`;
-      try {
-        await createOrUpdatePrIntelligenceComment(
-          env,
-          installationId,
-          repoFullName,
-          pr.number,
-          placeholderBody,
-          { mode },
-        );
-      } catch (error) {
-        /* v8 ignore next -- placeholder rate-limit propagation is covered by final-comment rate-limit tests. */
-        if (isGitHubRateLimitedError(error)) throw error;
-        await recordAuditEvent(env, {
-          eventType: "github_app.reviewing_placeholder_failed",
-          actor: author,
-          targetKey: `${repoFullName}#${pr.number}`,
-          outcome: "error",
-          detail: errorMessage(error),
-          metadata: { deliveryId: webhook.deliveryId, repoFullName },
-        }).catch(() => undefined);
+      // #regate-churn (req 4): only actually SHOW it when something is genuinely about to (re)run -- the PR
+      // already carries the exact published result for this head (a same-head scheduled sweep / CI-completion
+      // pass), or the review is frozen for manual review, so painting "reviewing" and then immediately
+      // overwriting it with the SAME final content would otherwise defeat createOrUpdatePrIntelligenceComment's
+      // own byte-identical no-op guard (it only ever compares against whatever is CURRENTLY posted).
+      // A nullish (no-head/ghost) advisory.headSha can never be "the same as last published" -- markPullRequestSurfacePublished
+      // itself no-ops without a real head SHA to key on, so a nullish headSha must never spuriously compare equal
+      // to a nullish (never-published) lastPublishedSurfaceSha -- that would wrongly suppress the placeholder on
+      // a genuinely first-time, no-head review (#regate-churn, no-head-ghost-pr regression).
+      const shouldShowPlaceholderNow = !isFrozenForManualReview && (webhook.forceAiReview === true || !advisory.headSha || advisory.headSha !== pr.lastPublishedSurfaceSha);
+      if (shouldShowPlaceholderNow) {
+        const placeholderBody = `${PR_PANEL_COMMENT_MARKER}\n\n${renderReviewingPlaceholder()}`;
+        try {
+          await createOrUpdatePrIntelligenceComment(
+            env,
+            installationId,
+            repoFullName,
+            pr.number,
+            placeholderBody,
+            { mode },
+          );
+        } catch (error) {
+          /* v8 ignore next -- placeholder rate-limit propagation is covered by final-comment rate-limit tests. */
+          if (isGitHubRateLimitedError(error)) throw error;
+          await recordAuditEvent(env, {
+            eventType: "github_app.reviewing_placeholder_failed",
+            actor: author,
+            targetKey: `${repoFullName}#${pr.number}`,
+            outcome: "error",
+            detail: errorMessage(error),
+            metadata: { deliveryId: webhook.deliveryId, repoFullName },
+          }).catch(() => undefined);
+        }
       }
     }
     if (aiReviewWillRun) {
@@ -7892,7 +7951,6 @@ async function maybePublishPrPublicSurface(
             repoInstructions: reviewInstructions,
             excludePaths: reviewExcludePaths,
             changedPaths,
-            baseSha: webhook.baseSha,
             reviewFiles: reviewFilesForAi.map((file) => ({
               path: file.path,
               status: file.status,

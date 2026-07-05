@@ -1277,6 +1277,10 @@ export const aiReviewCache = sqliteTable(
     // scheduled sweep pass at the identical head+fingerprint can reuse it for a bounded cooldown instead of
     // re-spending an LLM call on every tick, without ever being treated as a durable, indefinitely-trustworthy hit.
     cacheable: integer("cacheable").notNull().default(1),
+    // #regate-churn: NULL until the review is actually published to the PR (a real comment/check-run reached
+    // GitHub); once stamped, getCachedAiReview treats this row as indefinitely reusable for this exact
+    // head+fingerprint regardless of AI_REVIEW_NON_CACHEABLE_RETRY_COOLDOWN_MS -- see markAiReviewPublished.
+    publishedAt: text("published_at"),
     createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
   },
   (table) => ({

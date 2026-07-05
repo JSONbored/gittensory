@@ -4015,7 +4015,12 @@ export async function persistAdvisory(env: Env, advisory: Advisory): Promise<voi
  *  row is a miss here, same as before this column existed. Pass `options.allowNonCacheable` (with a bounded
  *  `options.maxAgeMs`) to ALSO accept a non-cacheable row when it is recent enough — this lets a scheduled re-gate
  *  reuse the last known (even disputed) verdict for a bounded cooldown instead of re-spending an LLM call on every
- *  sweep tick, while a stale non-cacheable row still correctly falls through to a fresh call. */
+ *  sweep tick, while a stale non-cacheable row still correctly falls through to a fresh call.
+ *
+ *  A PUBLISHED row (`published_at` set by markAiReviewPublished, once the review actually reached the PR) skips
+ *  the `maxAgeMs` staleness check entirely: the cooldown exists to bound reuse BEFORE the first publish (e.g. two
+ *  overlapping sweep passes racing the same head), not to force a periodic re-run of an already-surfaced verdict
+ *  for the SAME head+fingerprint — see the migration's doc comment for the production incident this closes. */
 export async function getCachedAiReview(
   env: Env,
   repoFullName: string,
@@ -4027,14 +4032,16 @@ export async function getCachedAiReview(
 ): Promise<{ notes: string; reviewerCount: number; findings: AdvisoryFinding[]; metadata?: Record<string, unknown> | undefined } | null> {
   if (!headSha) return null;
   const row = await env.DB
-    .prepare("SELECT notes, reviewer_count AS reviewerCount, ai_review_mode AS mode, findings_json AS findingsJson, metadata_json AS metadataJson, cacheable, created_at AS createdAt FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?")
+    .prepare("SELECT notes, reviewer_count AS reviewerCount, ai_review_mode AS mode, findings_json AS findingsJson, metadata_json AS metadataJson, cacheable, published_at AS publishedAt, created_at AS createdAt FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?")
     .bind(repoFullName, pullNumber, headSha)
-    .first<{ notes: string; reviewerCount: number; mode: string; findingsJson: string | null; metadataJson: string | null; cacheable: number; createdAt: string }>();
+    .first<{ notes: string; reviewerCount: number; mode: string; findingsJson: string | null; metadataJson: string | null; cacheable: number; publishedAt: string | null; createdAt: string }>();
   if (!row || row.mode !== mode) return null;
   if (row.cacheable !== 1) {
     if (!options?.allowNonCacheable) return null;
-    const ageMs = Date.now() - Date.parse(row.createdAt);
-    if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > (options.maxAgeMs ?? 0)) return null;
+    if (row.publishedAt == null) {
+      const ageMs = Date.now() - Date.parse(row.createdAt);
+      if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > (options.maxAgeMs ?? 0)) return null;
+    }
   }
   const metadata = parseJson<Record<string, unknown>>(row.metadataJson, {});
   if (
@@ -4050,10 +4057,41 @@ export async function getCachedAiReview(
   };
 }
 
+/** #regate-churn (maintainer-gated freeze): the most recently PUBLISHED AI review for this PR, regardless of
+ *  which head SHA it was computed against. Used ONLY when the PR is currently held for manual review — a repeat
+ *  contributor push must not buy a fresh, real AI call (or a chance to flip the published verdict via plain LLM
+ *  non-determinism) while the PR sits in that state; only an explicit maintainer retrigger (which bypasses this
+ *  entirely, see `webhook.forceAiReview`) may spend a new one. A nullish/never-published PR is a miss (the caller
+ *  falls through to a normal fresh review — this only ever REUSES an already-surfaced result, never invents one). */
+export async function getLatestPublishedAiReview(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number,
+  mode: string,
+): Promise<{ notes: string; reviewerCount: number; findings: AdvisoryFinding[]; metadata?: Record<string, unknown> | undefined } | null> {
+  const row = await env.DB
+    .prepare(
+      "SELECT notes, reviewer_count AS reviewerCount, findings_json AS findingsJson, metadata_json AS metadataJson FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND ai_review_mode = ? AND published_at IS NOT NULL ORDER BY published_at DESC LIMIT 1",
+    )
+    .bind(repoFullName, pullNumber, mode)
+    .first<{ notes: string; reviewerCount: number; findingsJson: string | null; metadataJson: string | null }>();
+  if (!row) return null;
+  const metadata = parseJson<Record<string, unknown>>(row.metadataJson, {});
+  return {
+    notes: row.notes,
+    reviewerCount: row.reviewerCount,
+    findings: parseJson<AdvisoryFinding[]>(row.findingsJson, []),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
+}
+
 /** Upsert the AI review for (repo, pull, head SHA). A nullish head SHA is a no-op.
  *  #regate-churn: `review.cacheable === false` still PERSISTS the attempt (so a repeated scheduled sweep pass at
  *  the identical head+fingerprint can find it via getCachedAiReview's bounded allowNonCacheable lookup) but marks
- *  it non-durable — omitted or any other value defaults to cacheable (1), the pre-existing behavior. */
+ *  it non-durable — omitted or any other value defaults to cacheable (1), the pre-existing behavior.
+ *  `published_at` is ALWAYS reset to NULL here: a write only ever happens for a genuinely fresh review (a cache
+ *  hit never reaches this function), so any prior publish marker belongs to different, now-superseded content and
+ *  must not leak onto it — markAiReviewPublished stamps it again once THIS content actually reaches the PR. */
 export async function putCachedAiReview(
   env: Env,
   repoFullName: string,
@@ -4067,12 +4105,31 @@ export async function putCachedAiReview(
   const cacheable = review.cacheable === false ? 0 : 1;
   await env.DB
     .prepare(
-      `INSERT INTO ai_review_cache (repo_full_name, pull_number, head_sha, ai_review_mode, notes, reviewer_count, findings_json, metadata_json, cacheable, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO ai_review_cache (repo_full_name, pull_number, head_sha, ai_review_mode, notes, reviewer_count, findings_json, metadata_json, cacheable, published_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
        ON CONFLICT(repo_full_name, pull_number, head_sha) DO UPDATE SET
-         ai_review_mode = excluded.ai_review_mode, notes = excluded.notes, reviewer_count = excluded.reviewer_count, findings_json = excluded.findings_json, metadata_json = excluded.metadata_json, cacheable = excluded.cacheable, created_at = excluded.created_at`,
+         ai_review_mode = excluded.ai_review_mode, notes = excluded.notes, reviewer_count = excluded.reviewer_count, findings_json = excluded.findings_json, metadata_json = excluded.metadata_json, cacheable = excluded.cacheable, published_at = NULL, created_at = excluded.created_at`,
     )
     .bind(repoFullName, pullNumber, headSha, mode, review.notes, review.reviewerCount, jsonString(review.findings ?? []), jsonString(review.metadata ?? {}), cacheable, createdAt)
+    .run();
+}
+
+/** #regate-churn: stamp the AI review row for (repo, pull, head SHA) as PUBLISHED — called once the review's
+ *  content has actually reached the PR (a comment/check-run publish completed), so a later lookup at this exact
+ *  head+fingerprint (getCachedAiReview) treats it as indefinitely reusable regardless of the non-cacheable
+ *  cooldown. `WHERE published_at IS NULL` keeps this idempotent and non-destructive: a later call for the same
+ *  already-published row is a no-op rather than rewriting the timestamp. A nullish head SHA or a missing row
+ *  (e.g. AI review was skipped/off this pass) is a harmless no-op — nothing to stamp. */
+export async function markAiReviewPublished(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number,
+  headSha: string | null | undefined,
+): Promise<void> {
+  if (!headSha) return;
+  await env.DB
+    .prepare("UPDATE ai_review_cache SET published_at = ? WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ? AND published_at IS NULL")
+    .bind(nowIso(), repoFullName, pullNumber, headSha)
     .run();
 }
 

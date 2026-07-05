@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { getCachedAiReview, putCachedAiReview } from "../../src/db/repositories";
+import { getCachedAiReview, getLatestPublishedAiReview, markAiReviewPublished, putCachedAiReview } from "../../src/db/repositories";
 import { aiReviewCacheInputFingerprint, type AiReviewCacheInput } from "../../src/review/ai-review-cache-input";
 import { createTestEnv } from "../helpers/d1";
 
@@ -17,7 +17,6 @@ const baseFingerprintInput = (): AiReviewCacheInput => ({
   gatePack: null,
   reviewerPlan: null,
   selfHostProviderConfig: null,
-  baseSha: null,
   reviewFiles: [],
   profile: null,
   securityFocus: false,
@@ -313,6 +312,156 @@ describe("AI review cache (#1)", () => {
         reviewerCount: 2,
         findings: [],
       });
+    });
+  });
+
+  describe("published_at — a published row is immune to the non-cacheable cooldown (#regate-churn)", () => {
+    it("bypasses maxAgeMs entirely once markAiReviewPublished stamps the row, even long past the cooldown", async () => {
+      const env = createTestEnv();
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-07-01T00:00:00.000Z"));
+        await putCachedAiReview(env, "o/r", 40, "sha1", "block", { notes: "dynamic-context review", reviewerCount: 1, cacheable: false });
+        await markAiReviewPublished(env, "o/r", 40, "sha1");
+
+        vi.setSystemTime(new Date("2026-07-01T05:00:00.000Z")); // 5 hours later — far past the 30-minute cooldown
+        expect(
+          await getCachedAiReview(env, "o/r", 40, "sha1", "block", undefined, { allowNonCacheable: true, maxAgeMs: 30 * 60 * 1000 }),
+        ).toEqual({ notes: "dynamic-context review", reviewerCount: 1, findings: [] });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still misses an UNPUBLISHED non-cacheable row past the cooldown (unchanged behavior)", async () => {
+      const env = createTestEnv();
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-07-01T00:00:00.000Z"));
+        await putCachedAiReview(env, "o/r", 41, "sha1", "block", { notes: "dynamic-context review", reviewerCount: 1, cacheable: false });
+
+        vi.setSystemTime(new Date("2026-07-01T00:31:00.000Z"));
+        expect(
+          await getCachedAiReview(env, "o/r", 41, "sha1", "block", undefined, { allowNonCacheable: true, maxAgeMs: 30 * 60 * 1000 }),
+        ).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still requires allowNonCacheable even when published — the caller's own opt-in is unaffected", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 42, "sha1", "block", { notes: "held", reviewerCount: 1, cacheable: false });
+      await markAiReviewPublished(env, "o/r", 42, "sha1");
+      expect(await getCachedAiReview(env, "o/r", 42, "sha1", "block")).toBeNull();
+    });
+
+    it("still enforces mode + input-fingerprint match on a published non-cacheable reuse", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 43, "sha1", "block", { notes: "held", reviewerCount: 1, cacheable: false, metadata: { inputFingerprint: "fp-v1" } });
+      await markAiReviewPublished(env, "o/r", 43, "sha1");
+      const opts = { allowNonCacheable: true, maxAgeMs: 30 * 60 * 1000 };
+      expect(await getCachedAiReview(env, "o/r", 43, "sha1", "advisory", undefined, opts)).toBeNull(); // mode mismatch
+      expect(await getCachedAiReview(env, "o/r", 43, "sha1", "block", "fp-v2", opts)).toBeNull(); // fingerprint mismatch (content actually changed)
+      expect(await getCachedAiReview(env, "o/r", 43, "sha1", "block", "fp-v1", opts)).toEqual({ notes: "held", reviewerCount: 1, findings: [], metadata: { inputFingerprint: "fp-v1" } });
+    });
+
+    it("is a no-op with no matching row (nullish head SHA, or a head that was never written)", async () => {
+      const env = createTestEnv();
+      await expect(markAiReviewPublished(env, "o/r", 44, null)).resolves.toBeUndefined();
+      await expect(markAiReviewPublished(env, "o/r", 44, "never-written-sha")).resolves.toBeUndefined();
+    });
+
+    it("is idempotent — a second call never rewrites an already-published timestamp", async () => {
+      const env = createTestEnv();
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-07-01T00:00:00.000Z"));
+        await putCachedAiReview(env, "o/r", 45, "sha1", "block", { notes: "held", reviewerCount: 1, cacheable: false });
+        await markAiReviewPublished(env, "o/r", 45, "sha1");
+        const first = await env.DB.prepare("SELECT published_at AS publishedAt FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?").bind("o/r", 45, "sha1").first<{ publishedAt: string }>();
+
+        vi.setSystemTime(new Date("2026-07-01T01:00:00.000Z"));
+        await markAiReviewPublished(env, "o/r", 45, "sha1");
+        const second = await env.DB.prepare("SELECT published_at AS publishedAt FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?").bind("o/r", 45, "sha1").first<{ publishedAt: string }>();
+
+        expect(second?.publishedAt).toBe(first?.publishedAt);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a fresh write (a real subject change) resets published_at back to unpublished", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 46, "sha1", "block", { notes: "held", reviewerCount: 1, cacheable: false });
+      await markAiReviewPublished(env, "o/r", 46, "sha1");
+      // Same head SHA, but a genuinely different review content overwrites the row (e.g. a corrected retry) —
+      // the NEW content has not been published yet, so the stale publish marker must not leak onto it.
+      await putCachedAiReview(env, "o/r", 46, "sha1", "block", { notes: "revised", reviewerCount: 1, cacheable: false });
+      const row = await env.DB.prepare("SELECT published_at AS publishedAt FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?").bind("o/r", 46, "sha1").first<{ publishedAt: string | null }>();
+      expect(row?.publishedAt).toBeNull();
+      expect(await getCachedAiReview(env, "o/r", 46, "sha1", "block", undefined, { allowNonCacheable: true, maxAgeMs: 30 * 60 * 1000 })).toEqual({ notes: "revised", reviewerCount: 1, findings: [] });
+    });
+  });
+
+  describe("getLatestPublishedAiReview — maintainer-gated freeze reuse across a head-SHA change (#regate-churn)", () => {
+    it("misses when nothing has ever been published for this PR", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 50, "sha1", "block", { notes: "unpublished", reviewerCount: 1 });
+      expect(await getLatestPublishedAiReview(env, "o/r", 50, "block")).toBeNull();
+    });
+
+    it("returns the most recently PUBLISHED review across DIFFERENT head SHAs (a contributor push while held)", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 51, "sha1", "block", { notes: "first review", reviewerCount: 1 });
+      await markAiReviewPublished(env, "o/r", 51, "sha1");
+      // A newer head SHA exists (the contributor pushed again), but was never independently published.
+      await putCachedAiReview(env, "o/r", 51, "sha2", "block", { notes: "never published", reviewerCount: 1 });
+
+      expect(await getLatestPublishedAiReview(env, "o/r", 51, "block")).toEqual({ notes: "first review", reviewerCount: 1, findings: [] });
+    });
+
+    it("respects the ai_review_mode filter, same as getCachedAiReview", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 52, "sha1", "advisory", { notes: "advisory mode", reviewerCount: 1 });
+      await markAiReviewPublished(env, "o/r", 52, "sha1");
+      expect(await getLatestPublishedAiReview(env, "o/r", 52, "block")).toBeNull();
+      expect(await getLatestPublishedAiReview(env, "o/r", 52, "advisory")).toEqual({ notes: "advisory mode", reviewerCount: 1, findings: [] });
+    });
+
+    it("round-trips findings and metadata like getCachedAiReview", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 53, "sha1", "block", {
+        notes: "held review",
+        reviewerCount: 2,
+        findings: [{ code: "ai_review_split", severity: "critical", title: "Split", detail: "One reviewer blocked." }],
+        metadata: { inputFingerprint: "fp-v1" },
+      });
+      await markAiReviewPublished(env, "o/r", 53, "sha1");
+      expect(await getLatestPublishedAiReview(env, "o/r", 53, "block")).toEqual({
+        notes: "held review",
+        reviewerCount: 2,
+        findings: [{ code: "ai_review_split", severity: "critical", title: "Split", detail: "One reviewer blocked." }],
+        metadata: { inputFingerprint: "fp-v1" },
+      });
+    });
+
+    it("picks the LATEST published head when more than one head was independently published", async () => {
+      const env = createTestEnv();
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-07-01T00:00:00.000Z"));
+        await putCachedAiReview(env, "o/r", 54, "sha1", "block", { notes: "older published review", reviewerCount: 1 });
+        await markAiReviewPublished(env, "o/r", 54, "sha1");
+
+        vi.setSystemTime(new Date("2026-07-01T01:00:00.000Z"));
+        await putCachedAiReview(env, "o/r", 54, "sha2", "block", { notes: "newer published review", reviewerCount: 1 });
+        await markAiReviewPublished(env, "o/r", 54, "sha2");
+
+        expect(await getLatestPublishedAiReview(env, "o/r", 54, "block")).toEqual({ notes: "newer published review", reviewerCount: 1, findings: [] });
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

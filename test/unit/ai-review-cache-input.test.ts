@@ -18,7 +18,6 @@ const baseInput = (): AiReviewCacheInput => ({
   gatePack: null,
   reviewerPlan: null,
   selfHostProviderConfig: null,
-  baseSha: null,
   reviewFiles: [],
   profile: null,
   securityFocus: false,
@@ -119,34 +118,22 @@ describe("aiReviewCacheInputFingerprint", () => {
     expect(sparse).toBe(explicit);
   });
 
-  it("changes when the patch content or base sha differs even though the same file paths are touched (retarget/rebase)", async () => {
-    // A retarget (new base branch, same head commit) or certain rebases can change the diff GitHub reports
-    // for an otherwise-unchanged head SHA -- changedPaths (just the path list) stays identical when the
-    // same files are touched against the new base, but the actual reviewed content differs.
+  it("changes when the patch content differs even though the same file paths are touched", async () => {
     const original = await aiReviewCacheInputFingerprint({
       ...baseInput(),
-      baseSha: "base1",
       reviewFiles: [{ path: "src/a.ts", status: "modified", patch: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1 }],
     });
     const samePathsDifferentPatch = await aiReviewCacheInputFingerprint({
       ...baseInput(),
-      baseSha: "base1",
       reviewFiles: [{ path: "src/a.ts", status: "modified", patch: "@@ -1 +1 @@\n-old\n+completely different", additions: 1, deletions: 1 }],
-    });
-    const samePatchDifferentBase = await aiReviewCacheInputFingerprint({
-      ...baseInput(),
-      baseSha: "base2",
-      reviewFiles: [{ path: "src/a.ts", status: "modified", patch: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1 }],
     });
     const repeated = await aiReviewCacheInputFingerprint({
       ...baseInput(),
-      baseSha: "base1",
       reviewFiles: [{ path: "src/a.ts", status: "modified", patch: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1 }],
     });
     // File order must not matter -- only content -- so a re-fetched diff in a different row order still hits.
     const reordered = await aiReviewCacheInputFingerprint({
       ...baseInput(),
-      baseSha: "base1",
       reviewFiles: [
         { path: "src/b.ts", status: "added", patch: "@@ -0,0 +1 @@\n+export {}", additions: 1, deletions: 0 },
         { path: "src/a.ts", status: "modified", patch: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1 },
@@ -154,7 +141,6 @@ describe("aiReviewCacheInputFingerprint", () => {
     });
     const reorderedAgain = await aiReviewCacheInputFingerprint({
       ...baseInput(),
-      baseSha: "base1",
       reviewFiles: [
         { path: "src/a.ts", status: "modified", patch: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1 },
         { path: "src/b.ts", status: "added", patch: "@@ -0,0 +1 @@\n+export {}", additions: 1, deletions: 0 },
@@ -162,10 +148,20 @@ describe("aiReviewCacheInputFingerprint", () => {
     });
 
     expect(samePathsDifferentPatch).not.toBe(original);
-    expect(samePatchDifferentBase).not.toBe(original);
     expect(repeated).toBe(original);
     expect(reordered).toBe(reorderedAgain);
   });
+
+  // #regate-churn (root cause, confirmed in production): `baseSha` is intentionally NOT a field on
+  // AiReviewCacheInput any more (see the type's own doc comment) -- the type system itself now guarantees no
+  // caller can (re-)introduce it. It used to be included, on the theory that a rebase/retarget can change the
+  // diff for an unchanged head SHA even when `changedPaths` stays the same -- but `reviewFiles`' patch content
+  // (asserted above) already IS that signal. Hashing raw `baseSha` on top of it was redundant when the patch is
+  // unchanged, and actively harmful when it isn't: it is the live tip of the base branch, which advances on
+  // every unrelated merge, so an active repo's same-head PR missed the cache on almost every scheduled re-gate
+  // sweep -- re-spending a real AI call whose non-deterministic output could even flip the published verdict,
+  // purely because SOME OTHER PR merged to main in between. The end-to-end "pure base movement" scenario is
+  // covered at the queue/sweep level in test/unit/queue.test.ts (#regate-churn).
 
   it("normalizes a file entry with no status/patch (e.g. a rename with no content change) deterministically", async () => {
     const omitted = await aiReviewCacheInputFingerprint({
