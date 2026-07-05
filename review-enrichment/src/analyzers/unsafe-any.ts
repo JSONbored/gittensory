@@ -20,8 +20,9 @@ function isTypeScriptPath(path: string): boolean {
 }
 
 function stripComments(code: string): string {
-  const slash = code.indexOf("//");
-  return slash >= 0 ? code.slice(0, slash) : code;
+  const noBlock = code.replace(/\/\*[\s\S]*?\*\//g, " ");
+  const slash = noBlock.indexOf("//");
+  return slash >= 0 ? noBlock.slice(0, slash) : noBlock;
 }
 
 /** Classify one added TS line for an unsafe-`any` pattern, or null. Pure. */

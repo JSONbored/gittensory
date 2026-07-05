@@ -44,6 +44,19 @@ test("scanPatchForUnsafeAny: flags added lines with correct locations", () => {
   ]);
 });
 
+test("detectUnsafeAny: ignores block comments after real code", () => {
+  assert.equal(detectUnsafeAny("const x = 1; /* as any */"), null);
+});
+
+test("scanPatchForUnsafeAny: accepts .mts and .cts extensions", () => {
+  assert.deepEqual(scanPatchForUnsafeAny("src/a.mts", patchOf(["const x: any = 1;"])), [
+    { file: "src/a.mts", line: 1, kind: "annotation" },
+  ]);
+  assert.deepEqual(scanPatchForUnsafeAny("src/b.cts", patchOf(["return value as any;"])), [
+    { file: "src/b.cts", line: 1, kind: "cast" },
+  ]);
+});
+
 test("scanPatchForUnsafeAny: skips non-TS files and test paths", () => {
   assert.deepEqual(scanPatchForUnsafeAny("src/widget.js", patchOf(["const x: any = 1;"])), []);
   assert.deepEqual(

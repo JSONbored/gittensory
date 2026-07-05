@@ -952,7 +952,7 @@ export const REES_ANALYZERS = [
       reports: "File, line, and kind: annotation, cast, or assertion.",
       network: "Pure local analyzer. No external network call.",
       notes:
-        "Structural regex only — no type-checker. String literals and full-line comments are ignored; inline comments after code are stripped before matching.",
+        "Structural regex only — no type-checker. String literals and full-line comments are ignored; inline `//` and `/* */` comments are stripped before matching.",
     },
   },
   {
