@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 
 import { DocsPage } from "@/components/site/docs-page";
 import { CodeBlock, Callout } from "@/components/site/primitives";
@@ -57,6 +57,13 @@ function Tuning() {
         read exactly how a verdict is reached. The settings above sit <em>on top</em> of that open
         algorithm and never reveal review <em>direction</em>, so a contributor cannot read them and
         game the gate.
+      </p>
+      <p>
+        This page covers those fields in depth, for the cloud service or a self-host alike. If
+        you're running your own instance, see{" "}
+        <Link to="/docs/self-hosting-configuration">Self-host configuration</Link> for the
+        environment layer (deployment-wide flags, secrets, and where config files can live) that
+        sits underneath everything below.
       </p>
 
       <Callout variant="safety" title="Defaults are safe and conservative">
@@ -494,7 +501,10 @@ settings:
       <p>
         For the privacy guarantees behind these surfaces, see{" "}
         <a href="/docs/privacy-security">Privacy &amp; security</a>. For the maintainer install and
-        trust flow, see <a href="/docs/maintainer-install-trust">Install &amp; trust</a>.
+        trust flow, see <a href="/docs/maintainer-install-trust">Install &amp; trust</a>. If you're
+        self-hosting, see <Link to="/docs/self-hosting-configuration">Self-host configuration</Link>{" "}
+        for the environment layer these settings sit on top of, plus the config-precedence rules and
+        a link to the fully-commented <code>.gittensory.yml.example</code>.
       </p>
     </DocsPage>
   );

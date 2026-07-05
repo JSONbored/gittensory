@@ -133,6 +133,42 @@ docker compose --profile postgres --profile observability --profile backup up -d
         watching for.
       </p>
 
+      <h2>Two different Discord/Slack integrations</h2>
+      <p>
+        Don&apos;t confuse these — they're unrelated features that happen to share the same two chat
+        platforms:
+      </p>
+      <FeatureRow
+        items={[
+          {
+            title: "Alertmanager → Discord/Slack (infra alerts)",
+            description:
+              "Covered above. System/stack health: dead jobs, queue backlog, Postgres pressure, and similar operational alerts, routed by alertmanager/alertmanager.yml.",
+          },
+          {
+            title: "DISCORD_WEBHOOK_URL / SLACK_WEBHOOK_URL (per-PR outcomes)",
+            description:
+              "A .env-configured webhook the review engine itself posts to whenever it publishes a review outcome (merged, closed, manual hold) on any repo you review — a product notification, not an infra alert.",
+          },
+        ]}
+      />
+      <p>
+        <code>DISCORD_WEBHOOK_URL</code> is a global fallback Discord channel for any repo without
+        its own webhook. <code>DISCORD_REPO_WEBHOOKS</code> is a per-repo override — a JSON map of{" "}
+        <code>owner/repo</code> to a webhook URL — for routing different repos' notifications to
+        different channels. Both are unset (no Discord notifications) by default.
+      </p>
+      <CodeBlock
+        filename=".env"
+        code={`DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+DISCORD_REPO_WEBHOOKS={"owner/repoA":"https://discord.com/api/webhooks/...","owner/repoB":"https://..."}`}
+      />
+      <p>
+        <code>SLACK_WEBHOOK_URL</code> posts the same per-action events (merged/closed/manual) as a
+        Block Kit section to one Slack channel. Unlike Discord there is no per-repo map today —
+        every repo shares this one webhook. Unset means no Slack notifications.
+      </p>
+
       <h2>Resource profiles</h2>
       <p>
         <strong>Measured</strong> rows below come from a real production instance running the full
@@ -419,6 +455,14 @@ services:
 volumes:
   runner-work-2:`}
       />
+
+      <h2>Sentry server name</h2>
+      <p>
+        <code>SENTRY_SERVER_NAME</code> sets a clean, human name for this instance in Sentry (for
+        example <code>gittensory-us-east</code>). Unset defaults to the OS hostname — never the
+        public-origin URL. Set this explicitly if you run more than one instance and want to tell
+        their Sentry events apart at a glance instead of matching container hostnames.
+      </p>
 
       <h2>Sentry tracing</h2>
       <p>

@@ -175,7 +175,7 @@ GITHUB_WEBHOOK_SECRET=<same-secret-configured-on-the-app>`}
           {
             title: "What's never exported",
             description:
-              "Repo/owner/PR names, commit SHAs, source code, diffs, comments, or logins. Repo/PR identifiers are HMAC-anonymized with a per-instance secret gittensory's own collector never holds.",
+              "Repo/owner/PR names, commit SHAs, source code, diffs, comments, or logins. Repo/PR identifiers are HMAC-anonymized by default with a per-instance secret gittensory's own collector never holds.",
           },
           {
             title: "Disabling it",
@@ -184,6 +184,22 @@ GITHUB_WEBHOOK_SECRET=<same-secret-configured-on-the-app>`}
           },
         ]}
       />
+      <Callout variant="warn" title="ORB_ANONYMIZE">
+        Repo/PR identifiers are HMAC-anonymized by <strong>default</strong> (
+        <code>ORB_ANONYMIZE=true</code>), not unconditionally — an operator can set{" "}
+        <code>ORB_ANONYMIZE=false</code> to export raw repo/PR names instead. There's no scenario
+        where gittensory's own hosted collector needs raw names; the toggle exists for an operator
+        running their <strong>own</strong> collector (see <code>ORB_COLLECTOR_URL</code> below) who
+        wants readable identifiers in their own infrastructure. Leave this at the default unless you
+        control the collector end.
+      </Callout>
+      <p>
+        <code>ORB_COLLECTOR_URL</code> overrides the export endpoint — default gittensory's hosted
+        collector, or point it at your own private collector if you're aggregating telemetry
+        yourself instead of sending it to gittensory. <code>ORB_COLLECTOR_TOKEN</code> is the bearer
+        credential for that private collector; leave it unset when using gittensory's own hosted
+        collector, which accepts unauthenticated, rate-limited, aggregate-only exports.
+      </p>
 
       <h2>Brokered Orb env</h2>
       <CodeBlock
@@ -192,6 +208,14 @@ GITHUB_WEBHOOK_SECRET=<same-secret-configured-on-the-app>`}
 ORB_BROKER_URL=https://gittensory-api.aethereal.dev
 ORB_RELAY_MODE=pull  # or omit for push (the default) -- see "Choosing a relay mode" below`}
       />
+      <p>
+        <code>ORB_APP_ID</code> overrides the seed used to derive this instance&apos;s stable,
+        anonymous <code>instance_id</code> in telemetry exports — normally derived from{" "}
+        <code>GITHUB_APP_ID</code>. A brokered instance holds no App ID of its own (it uses the
+        broker&apos;s tokens instead), so its identity falls back to the export secret unless you
+        set <code>ORB_APP_ID</code> explicitly. Most operators never need to set this; it exists so
+        a brokered instance's telemetry identity can be pinned independent of any App ID.
+      </p>
 
       <h2>Choosing a relay mode: pull vs. push</h2>
       <p>
