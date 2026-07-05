@@ -37,6 +37,7 @@ const EXPECTED_ANALYZERS = [
   "approvalIntegrity",
   "ciCheckSignals",
   "undocumentedExport",
+  "unusedExport",
   "staleBranch",
   "commitHygiene",
   "pendingReviewRequests",

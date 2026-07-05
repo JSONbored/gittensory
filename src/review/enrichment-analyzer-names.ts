@@ -31,6 +31,7 @@ export const REES_ANALYZER_NAMES = [
   "approvalIntegrity",
   "ciCheckSignals",
   "undocumentedExport",
+  "unusedExport",
   "staleBranch",
   "commitHygiene",
   "pendingReviewRequests",

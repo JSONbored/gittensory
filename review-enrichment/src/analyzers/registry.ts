@@ -44,6 +44,7 @@ import { scanTerminology } from "./terminology.js";
 import { scanTodoMarker } from "./todo-marker.js";
 import { scanTyposquat } from "./typosquat.js";
 import { scanUndocumentedExport } from "./undocumented-export.js";
+import { scanUnusedExport } from "./unused-export.js";
 import type {
   AnalyzerDescriptor,
   AnalyzerFn,
@@ -670,6 +671,38 @@ export const ANALYZER_DESCRIPTORS = [
       return lines;
     },
     run: (req, { signal }) => scanUndocumentedExport(req, fetch, { signal }),
+  }),
+  descriptor({
+    name: "unusedExport",
+    title: "Unused exports (dead-on-arrival)",
+    category: "quality",
+    cost: "github-light",
+    defaultEnabled: true,
+    requires: ["files", "github-token", "head-sha"],
+    limits: { maxSymbols: 20, maxSearches: 15, maxFindings: 25 },
+    docs: {
+      summary:
+        "Flags exports newly added by the PR that have zero non-declaration references anywhere in the repo.",
+      looksAt:
+        "Direct `export const/let/var/function/class/interface/type/enum` declarations added in changed source files, cross-checked via GitHub Code Search at headSha.",
+      reports: "File, line, and symbol name of each unreferenced added export — never file contents.",
+      network:
+        "One bounded GitHub code-search call per candidate symbol (repo-scoped). Requires GitHub token forwarding for private repos.",
+      notes:
+        "Conservative: re-export lists and `export *` are ignored; a search error or cap hit skips that symbol rather than flagging it. Changed/removed exports with callers are out of scope (#1509).",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### Unused exports (newly added exports with no references)"];
+      for (const item of findings) {
+        lines.push(
+          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} exports ${helpers.safeCodeSpan(item.symbol)} with no references found in the repo`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanUnusedExport(req, fetch, { signal, analysis, diagnostics }),
   }),
   descriptor({
     name: "staleBranch",

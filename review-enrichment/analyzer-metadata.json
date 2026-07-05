@@ -797,6 +797,34 @@
       }
     },
     {
+      "name": "unusedExport",
+      "title": "Unused exports (dead-on-arrival)",
+      "category": "quality",
+      "cost": "github-light",
+      "defaultEnabled": true,
+      "profiles": [
+        "balanced",
+        "deep"
+      ],
+      "requires": [
+        "files",
+        "github-token",
+        "head-sha"
+      ],
+      "limits": {
+        "maxSymbols": 20,
+        "maxSearches": 15,
+        "maxFindings": 25
+      },
+      "docs": {
+        "summary": "Flags exports newly added by the PR that have zero non-declaration references anywhere in the repo.",
+        "looksAt": "Direct `export const/let/var/function/class/interface/type/enum` declarations added in changed source files, cross-checked via GitHub Code Search at headSha.",
+        "reports": "File, line, and symbol name of each unreferenced added export — never file contents.",
+        "network": "One bounded GitHub code-search call per candidate symbol (repo-scoped). Requires GitHub token forwarding for private repos.",
+        "notes": "Conservative: re-export lists and `export *` are ignored; a search error or cap hit skips that symbol rather than flagging it. Changed/removed exports with callers are out of scope (#1509)."
+      }
+    },
+    {
       "name": "staleBranch",
       "title": "Stale branch signal",
       "category": "history",

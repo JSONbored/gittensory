@@ -360,6 +360,14 @@ export interface UndocumentedExportFinding {
   symbol: string;
 }
 
+/** An export newly ADDED by the PR that has zero non-declaration references anywhere in the repo — dead-on-arrival
+ *  surface. Reports the symbol + its line only, never file contents. (#2025) */
+export interface UnusedExportFinding {
+  file: string;
+  line: number;
+  symbol: string;
+}
+
 /** A review/approval integrity signal, read from structured PR-reviews API fields only (state, commit_id,
  *  user.login, submitted_at) — never diff/file content. `stale-approval`: the reviewer's latest APPROVED review
  *  predates the PR's current head commit. `self-approval`: the PR author approved their own PR.
@@ -593,6 +601,7 @@ export interface BriefFindings {
   approvalIntegrity?: ApprovalIntegrityFinding[];
   ciCheckSignals?: CiCheckSignalFinding[];
   undocumentedExport?: UndocumentedExportFinding[];
+  unusedExport?: UnusedExportFinding[];
   staleBranch?: StaleBranchFinding[];
   commitHygiene?: CommitHygieneFinding[];
   pendingReviewRequests?: PendingReviewRequestFinding[];
