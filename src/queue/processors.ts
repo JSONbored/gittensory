@@ -4011,12 +4011,12 @@ async function maybeReReviewOnLinkedIssueChange(
   if (isConvergenceRepoAllowed(env, repoFullName)) {
     const openPullRequests = await listOpenPullRequests(env, repoFullName);
     // Issue-side label/assignment changes can flip linked-issue hard-rule verdicts from mergeable to close.
-    // Keep this webhook-triggered wake bounded like the scheduled sweep: each re-gate is REST-expensive, and
-    // queued tail work is picked up by the normal stale-first sweep instead of letting one issue fan out widely.
+    // Wake every linked open PR immediately: silently dropping a tail here can leave stale passing gates on PRs
+    // that now violate deterministic issue hard rules. Stagger the jobs so the expensive re-gates do not run inline
+    // or stampede the queue consumer.
     const linkingPrs = openPullRequests
       .filter((pr) => pr.linkedIssues.includes(issueNumber))
-      .map((pr) => ({ number: pr.number, createdAt: pr.createdAt ?? null }))
-      .slice(0, SWEEP_MAX_PRS);
+      .map((pr) => ({ number: pr.number, createdAt: pr.createdAt ?? null }));
     for (const [index, pr] of linkingPrs.entries()) {
       const prNumber = pr.number;
       if (await issueLinkedPrReReviewCoalesced(env, repoFullName, prNumber)) {
