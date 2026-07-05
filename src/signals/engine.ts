@@ -26,7 +26,7 @@ import type { GittensorContributorSnapshot } from "../gittensor/api";
 import { nowIso } from "../utils/json";
 import { sanitizePublicComment } from "../queue-intelligence";
 import { labelMatchesPattern, projectLinkedIssueMultiplierForPlannedSolve, type LinkedIssueMultiplierStatus } from "../scoring/preview";
-import { hasLocalTestEvidence, isTestPath } from "./test-evidence";
+import { hasLocalTestEvidence, hasValidationNote, isTestPath } from "./test-evidence";
 import { isFailingCheckSummary } from "./local-branch";
 import { isDuplicateClusterWinnerByClaim } from "./duplicate-winner";
 import { PREFLIGHT_LIMITS } from "./preflight-limits";
@@ -1515,11 +1515,14 @@ export function buildContributorFit(
 ): ContributorFit {
   const opportunities = buildContributorOpportunities(profile, repositories, issues, pullRequests, bounties, issueQualityByRepo);
   const languageSet = new Set(profile.github.topLanguages.map((language) => language.toLowerCase()));
-  const syncByRepo = new Map(repoSyncStates.map((state) => [state.repoFullName, state]));
+  // Key by lowercased repo name: sync-state repoFullName (GitHub-canonical) and the registered repo.fullName
+  // can differ in case, and every other repo-keyed map in this module folds case for the same reason. Without
+  // it, a case mismatch misses the language lookup and emits a spurious no_language_fit.
+  const syncByRepo = new Map(repoSyncStates.map((state) => [state.repoFullName.toLowerCase(), state]));
   const languageFit = repositories
     .filter((repo) => repo.isRegistered)
     .map((repo) => {
-      const language = syncByRepo.get(repo.fullName)?.primaryLanguage ?? null;
+      const language = syncByRepo.get(repo.fullName.toLowerCase())?.primaryLanguage ?? null;
       return {
         repoFullName: repo.fullName,
         language,
@@ -5009,10 +5012,6 @@ export function hasClearNoIssueRationale(pr: Pick<PullRequestRecord, "title" | "
   return /\b(?:no issue\s*(?:because\b|:)|no linked issue\s*(?:because\b|:)|no ticket\s*(?:because\b|:)|(?:maintenance|docs?[\s-]+only|tests?[\s-]+only|ci[\s-]+only|refactor[\s-]+only|typo|chore|cleanup)\b)/i.test([pr.title, pr.body ?? ""].join(" "));
 }
 
-function hasValidationNote(value: string): boolean {
-  return /\b(test(?:ed|s|ing)?|validation|validated|verified|manual check|smoke|pytest|vitest|npm test|pnpm test|cargo test|go test)\b/i.test(value);
-}
-
 function gateStatus(gateEnabled: boolean, conclusion: PublicPrPanelGateEvaluation["conclusion"]): string {
   if (!gateEnabled) return "⚠️ Advisory only";
   if (conclusion === "success") return "✅ Passing";
@@ -5236,7 +5235,7 @@ function itemKey(item: CollisionItem): string {
   return `${item.type}-${item.number}`;
 }
 
-type CollisionTerms = {
+export type CollisionTerms = {
   terms: Set<string>;
   size: number;
 };
@@ -5267,7 +5266,7 @@ function plannedContributionTerms(input: PreflightInput): CollisionTerms {
   return { terms, size: terms.size };
 }
 
-function termOverlap(left: CollisionTerms, right: CollisionTerms): { score: number; shared: number } {
+export function termOverlap(left: CollisionTerms, right: CollisionTerms): { score: number; shared: number } {
   if (left.size === 0 || right.size === 0) return { score: 0, shared: 0 };
   let shared = 0;
   const [smaller, larger] = left.size <= right.size ? [left.terms, right.terms] : [right.terms, left.terms];
@@ -5295,7 +5294,10 @@ function truncateText(value: string, maxChars: number): string {
   return value.length > maxChars ? value.slice(0, maxChars) : value;
 }
 
-function tokenize(value: string): string[] {
+// Exported (#3183) so the project/milestone text matcher (src/integrations/project-tracker-adapter.ts) can
+// reuse the exact same term-overlap heuristic already proven here for duplicate-PR collision detection, rather
+// than re-implementing a second, subtly different tokenizer.
+export function tokenize(value: string): string[] {
   return value
     .toLowerCase()
     .split(/[^a-z0-9]+/g)
@@ -5530,12 +5532,15 @@ function sanitizeOutcomeDimensionKey(key: string): string {
 }
 
 function isCodeFile(file: string): boolean {
-  // Mirrors isCodeFile in local-branch.ts — kept in sync (cs/swift/groovy/php added
-  // so C#/Swift/Groovy/PHP source counts as code, matching the test conventions
-  // isTestPath already recognizes).
+  // Mirrors isCodeFile in local-branch.ts — kept in sync (cs/swift/groovy/php and C/C++/Objective-C added
+  // so native/C#/Swift/Groovy/PHP source counts as code, matching the test conventions
+  // isTestPath already recognizes; vue/svelte/astro match rag.ts, visual paths, and isCodePath;
+  // cc/hpp complete the C++ extension set alongside cpp/c/h; dart matches rag.ts and
+  // test-evidence's *_test.dart test convention).
   return (
-    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php)$/i.test(file) &&
-    !isTestFile(file)
+    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro|dart)$/i.test(
+      file,
+    ) && !isTestFile(file)
   );
 }
 

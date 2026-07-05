@@ -56,11 +56,17 @@ function normalizeOptionalRepoFullName(repoFullName) {
 
 /** Optional seq cursor for polling: omitted → undefined; otherwise a non-negative integer last-seen seq. */
 function normalizeOptionalSince(since) {
-  if (since === undefined) return undefined;
+  if (since === undefined || since === null) return undefined;
   if (typeof since !== "number" || !Number.isInteger(since) || since < 0) {
     throw new Error("invalid_since");
   }
   return since;
+}
+
+/** Read-filter repo scope: omitted/nullish → unscoped (all events); otherwise a validated `owner/repo`. */
+function normalizeReadRepoFilter(repoFullName) {
+  if (repoFullName === undefined || repoFullName === null) return undefined;
+  return normalizeOptionalRepoFullName(repoFullName);
 }
 
 // Serialize an audit payload, enforcing that it round-trips through JSON VERBATIM. A plain JSON.stringify would
@@ -159,9 +165,7 @@ export function initEventLedger(dbPath = resolveEventLedgerDbPath()) {
       }
     },
     readEvents(filter = {}) {
-      const repoFullName = filter.repoFullName === undefined
-        ? undefined
-        : normalizeOptionalRepoFullName(filter.repoFullName);
+      const repoFullName = normalizeReadRepoFilter(filter.repoFullName);
       // `since` returns events with a seq STRICTLY greater than it — the "give me everything after the last seq I
       // saw" polling shape.
       const since = normalizeOptionalSince(filter.since);

@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 
 import { DocsPage } from "@/components/site/docs-page";
-import { CodeBlock, FeatureRow } from "@/components/site/primitives";
+import { Callout, CodeBlock, FeatureRow } from "@/components/site/primitives";
 
 export const Route = createFileRoute("/docs/self-hosting-operations")({
   head: () => ({
@@ -10,13 +10,13 @@ export const Route = createFileRoute("/docs/self-hosting-operations")({
       {
         name: "description",
         content:
-          "Operate the self-hosted Gittensory review service: readiness, metrics, logs, dashboards, jobs, queues, and routine checks.",
+          "Operate the self-hosted Gittensory review service: readiness, metrics, logs, dashboards, jobs, queues, routine checks, safe updates/rollback, and clean uninstall/decommissioning.",
       },
       { property: "og:title", content: "Self-host operations — Gittensory docs" },
       {
         property: "og:description",
         content:
-          "Operate the self-hosted Gittensory review service: readiness, metrics, logs, dashboards, jobs, queues, and routine checks.",
+          "Operate the self-hosted Gittensory review service: readiness, metrics, logs, dashboards, jobs, queues, routine checks, safe updates/rollback, and clean uninstall/decommissioning.",
       },
       { property: "og:url", content: "/docs/self-hosting-operations" },
     ],
@@ -70,7 +70,9 @@ selfhost_embed_provider
 selfhost_vectorize
 selfhost_job_dead
 selfhost_cron_error
-review_context_fetch_failed`}
+review_context_fetch_failed
+selfhost_webhook_enqueue_failed
+selfhost_webhook_enqueue_binding_missing`}
       />
 
       <h2>Observability profile</h2>
@@ -129,6 +131,286 @@ docker compose --profile postgres --profile observability --profile backup up -d
         cycle, without needing direct database access. A job that keeps failing the same way
         eventually exhausts this budget and stays dead, which is exactly what the alert above is
         watching for.
+      </p>
+
+      <h2>Two different Discord/Slack integrations</h2>
+      <p>
+        Don&apos;t confuse these — they're unrelated features that happen to share the same two chat
+        platforms:
+      </p>
+      <FeatureRow
+        items={[
+          {
+            title: "Alertmanager → Discord/Slack (infra alerts)",
+            description:
+              "Covered above. System/stack health: dead jobs, queue backlog, Postgres pressure, and similar operational alerts, routed by alertmanager/alertmanager.yml.",
+          },
+          {
+            title: "DISCORD_WEBHOOK_URL / SLACK_WEBHOOK_URL (per-PR outcomes)",
+            description:
+              "A .env-configured webhook the review engine itself posts to whenever it publishes a review outcome (merged, closed, manual hold) on any repo you review — a product notification, not an infra alert.",
+          },
+        ]}
+      />
+      <p>
+        <code>DISCORD_WEBHOOK_URL</code> is a global fallback Discord channel for any repo without
+        its own webhook. <code>DISCORD_REPO_WEBHOOKS</code> is a per-repo override — a JSON map of{" "}
+        <code>owner/repo</code> to a webhook URL — for routing different repos' notifications to
+        different channels. Both are unset (no Discord notifications) by default.
+      </p>
+      <CodeBlock
+        filename=".env"
+        code={`DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+DISCORD_REPO_WEBHOOKS={"owner/repoA":"https://discord.com/api/webhooks/...","owner/repoB":"https://..."}`}
+      />
+      <p>
+        <code>SLACK_WEBHOOK_URL</code> posts the same per-action events (merged/closed/manual) as a
+        Block Kit section to one Slack channel. Unlike Discord there is no per-repo map today —
+        every repo shares this one webhook. Unset means no Slack notifications.
+      </p>
+
+      <h2>Resource profiles</h2>
+      <p>
+        <strong>Measured</strong> rows below come from a real production instance running the full
+        profile set (<code>qdrant</code> + <code>redis</code> + <code>observability</code> +{" "}
+        <code>backup</code> + <code>postgres</code> + <code>ollama</code>) at steady state —
+        <code>docker stats</code> and <code>docker system df</code> snapshots, not a lab benchmark.
+        <strong> Estimated</strong> rows are reasoned from that same baseline plus each
+        service&apos;s declared <code>deploy.resources.limits</code> and image size in{" "}
+        <code>docker-compose.yml</code> — they have not been measured directly and could be off,
+        especially for CPU under real load. Treat estimates as a starting point for capacity
+        planning, not a guarantee.
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-token-sm">
+          <thead>
+            <tr className="border-hairline text-left text-token-xs text-muted-foreground">
+              <th className="py-2 pr-4 font-medium">Profile</th>
+              <th className="py-2 pr-4 font-medium">CPU (steady state)</th>
+              <th className="py-2 pr-4 font-medium">Memory (steady state)</th>
+              <th className="py-2 font-medium">Basis</th>
+            </tr>
+          </thead>
+          <tbody className="divide-hairline">
+            <tr>
+              <td className="py-2 pr-4 align-top">
+                Minimal — app + <code>redis</code> only (no profile flags)
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">~3% of one core</td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">~400–600MiB</td>
+              <td className="py-2 align-top text-muted-foreground">
+                Estimated: app + redis measured in isolation from the full-profile snapshot (app
+                2.6% CPU / 365MiB; redis is idle-light and its 512MiB limit is never approached in
+                the full-profile run either).
+              </td>
+            </tr>
+            <tr>
+              <td className="py-2 pr-4 align-top">
+                + <code>--profile postgres</code>
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">
+                +14% of one core (highest single-service CPU consumer)
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">+~200MiB</td>
+              <td className="py-2 align-top text-muted-foreground">
+                Measured: 14.24% CPU / 196MiB of its 2GiB limit — comfortable headroom on memory,
+                but the largest CPU line item in the whole stack.
+              </td>
+            </tr>
+            <tr>
+              <td className="py-2 pr-4 align-top">
+                + <code>--profile qdrant</code>
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">Low single-digit %</td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">
+                Well under its 2GiB limit
+              </td>
+              <td className="py-2 align-top text-muted-foreground">
+                Measured (part of the full-profile snapshot's "everything else" low-CPU, under-limit
+                group). Grows with RAG corpus size — expect this to climb on installs with many
+                indexed repos.
+              </td>
+            </tr>
+            <tr>
+              <td className="py-2 pr-4 align-top">
+                + <code>--profile observability</code>
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">
+                Low single-digit % per service, except Grafana/Tempo below
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">
+                Grafana ~305MiB (60% of 512MiB); Tempo ~209MiB (20% of 1GiB); Prometheus/Loki/
+                Alertmanager/Promtail/otel-collector each well under their limits
+              </td>
+              <td className="py-2 align-top text-muted-foreground">
+                Measured. Grafana is the closest any service comes to its ceiling in production —
+                worth watching if you add many custom dashboards or panels, but not currently a
+                problem (40% headroom remains).
+              </td>
+            </tr>
+            <tr>
+              <td className="py-2 pr-4 align-top">
+                + <code>--profile ollama</code>
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">
+                Near-zero idle; spikes hard during inference
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">
+                Model-dependent, up to its 8GiB limit
+              </td>
+              <td className="py-2 align-top text-muted-foreground">
+                Estimated. Not part of the live production profile mix (that instance uses{" "}
+                <code>AI_PROVIDER=codex</code>, not Ollama) — the 8GiB default limit is sized for a
+                single loaded 7–8B quantized model per the compose comment, not measured against a
+                running model. Idle Ollama with no model pulled is cheap; a loaded model can
+                legitimately approach the limit, which is why it has the largest default ceiling in
+                the file.
+              </td>
+            </tr>
+            <tr>
+              <td className="py-2 pr-4 align-top">
+                + <code>--profile backup</code>
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">
+                Near-zero except during runs
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">
+                Low, bursts during dump/restore
+              </td>
+              <td className="py-2 align-top text-muted-foreground">
+                Measured as part of the full-profile snapshot (no dedicated resource limit is set
+                for <code>backup</code>/<code>backup-exporter</code> — both are short-lived or
+                idle-polling processes, not sustained consumers).
+              </td>
+            </tr>
+            <tr>
+              <td className="py-2 pr-4 align-top">
+                + <code>--profile runners</code>
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">
+                Unbounded by default — can starve the app under CI load
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">Unbounded by default</td>
+              <td className="py-2 align-top text-muted-foreground">
+                Estimated, and explicitly a known risk, not a guess about typical usage: the{" "}
+                <code>runner</code> service ships with no CPU/memory limit at all. Production
+                experience already documented in <code>docker-compose.override.yml.example</code>{" "}
+                found 3 uncapped runner containers starving the app for CPU on an 8-vCPU box under
+                real CI load — see that file for the <code>cpu_shares</code>/<code>cpus</code>{" "}
+                mitigation before co-locating runners with the review stack.
+              </td>
+            </tr>
+            <tr>
+              <td className="py-2 pr-4 align-top">
+                Full profile set (<code>qdrant</code> + <code>redis</code> +{" "}
+                <code>observability</code> + <code>backup</code> + <code>postgres</code> +{" "}
+                <code>ollama</code>, no active inference, no runners)
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">
+                Postgres (~14%) dominates; everything else low single-digit %
+              </td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">
+                No service near its limit except Grafana (~60%)
+              </td>
+              <td className="py-2 align-top text-muted-foreground">
+                Measured, in full, on a real production instance.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Disk</h3>
+      <p>
+        Measured on the same production instance: 48GB of 151GB used on the host root volume (32%)
+        at steady state. <code>docker system df</code> breakdown:
+      </p>
+      <FeatureRow
+        items={[
+          {
+            title: "Images",
+            description: "22.59GB total, 19.24GB (85%) reclaimable via prune.",
+          },
+          {
+            title: "Volumes",
+            description:
+              "20.57GB total, 5.4GB (26%) reclaimable — this is real application state (databases, vector index, backups), so most of it is never pruned.",
+          },
+          {
+            title: "Build cache",
+            description: "6.39GB total, 3.55GB (56%) reclaimable.",
+          },
+        ]}
+      />
+      <p>
+        The reclaimable image and build-cache space here is{" "}
+        <strong>expected steady state, not a leak</strong> — this instance runs{" "}
+        <code>scripts/deploy-selfhost-prebuilt.sh</code>, which rebuilds the image from the current
+        git checkout on every deploy and intentionally keeps prior layers around in the build cache
+        for faster rebuilds. The <code>gittensory-docker-safe-prune</code> systemd timer (below)
+        already runs daily against this exact instance and reclaims it on a schedule, so this is not
+        a number to chase down manually.
+      </p>
+
+      <h3>When a compose default might need to change</h3>
+      <p>
+        Every <code>deploy.resources.limits.memory</code> in <code>docker-compose.yml</code> is
+        operator-overridable via <code>.env</code> (see the <code>*_MEM_LIMIT</code> variables in{" "}
+        <code>.env.example</code>). Against the measured full-profile data above, none of the
+        current defaults look miscalibrated enough to change: nothing sits consistently near its
+        limit in a way that risks an OOM kill under normal load (Grafana&apos;s ~60% is the closest
+        and still has real headroom), and nothing is so oversized relative to plausible usage that
+        it should be lowered — including Ollama&apos;s comparatively large 8GiB ceiling, which is
+        sized for holding one quantized model in memory, not idle overhead. The one real gap is{" "}
+        <code>--profile runners</code>, which ships with no limit at all; that is a known,
+        documented tradeoff (see the table above and{" "}
+        <code>docker-compose.override.yml.example</code>) rather than an oversight, since the right
+        ceiling depends entirely on the host's core count and how many runner replicas you run.
+      </p>
+
+      <h3>Capacity planning: how much disk for N repos at M PRs/month</h3>
+      <p>
+        The 151GB host above is one measured point, not a formula. It says nothing about how disk
+        use grows as you register more repos or review more pull requests — for that you have to
+        reason about which tables and volumes actually grow with activity, versus which are fixed
+        overhead. Treat every number below as an order-of-magnitude estimate to plan around, not a
+        guarantee.
+      </p>
+      <FeatureRow
+        items={[
+          {
+            title: "review_audit (fixed overhead per PR, unbounded)",
+            description:
+              "Roughly 2 rows per PR — one finalized gate decision plus one realized merge/close outcome — each a few small text columns (well under 1KB/row). It has no retention policy in src/db/retention.ts, so it grows forever. Don't trust a blanket MB-per-thousand-PRs estimate here; measure your own instance's actual growth with pg_total_relation_size('review_audit') (or the equivalent SQLite page count) after a known number of PRs, then extrapolate from that.",
+          },
+          {
+            title: "webhook_events (fixed overhead per delivery, unbounded)",
+            description:
+              "One row per inbound GitHub webhook delivery — every push, comment, check-run update, and review event, not just PR opens — so it accrues considerably faster than review_audit for the same PR volume (commonly 5-15x, depending on how chatty a repo's CI and review activity are). Also absent from RETENTION_POLICY, so it also grows without bound. Still small per row; the growth to watch is row count over months, not any single row's size.",
+          },
+          {
+            title: "audit_events (bounded — 90-day retention)",
+            description:
+              "One row per privileged/security-relevant action (recordAuditEvent in src/db/repositories.ts), pruned automatically: RETENTION_POLICY in src/db/retention.ts keeps 90 days and the prune-retention job runs daily at 03:00 UTC (src/index.ts), so this table's steady-state size is capped regardless of how long the instance has been running — it will not be a long-term capacity driver the way the two tables above are.",
+          },
+          {
+            title: "Postgres/SQLite backup dumps (scales with live DB size x retained copies)",
+            description:
+              "scripts/backup.sh keeps the newest BACKUP_RETAIN copies per target (default 7 — see the backup and scaling doc's retention section), so total backup-volume usage is roughly (live database size) x (retained count), independent of repo count except through the database-size term. A growing, unpruned review_audit/webhook_events pair feeds directly into this multiplier: whatever they add to the live database, the backup volume carries N times over.",
+          },
+        ]}
+      />
+      <p>
+        Putting it together: for a small install (a handful of repos, tens of PRs/month), all of
+        this is noise against the ~20GB of fixed Docker/image/volume overhead measured above — you
+        will not notice review_audit or webhook_events growth for a long time. The estimate gets
+        real at higher volume: an install running hundreds of PRs/month across dozens of repos, left
+        unattended for a year or more, is a plausible case where the unbounded tables above (and the
+        backups that multiply them) become the dominant long-term disk driver rather than Docker
+        images and build cache. There is no first-party tool yet to prune review_audit or
+        webhook_events — if you operate at that scale, monitor their row counts directly (
+        <code>SELECT count(*) FROM review_audit</code>,{" "}
+        <code>SELECT count(*) FROM webhook_events</code>) rather than assuming steady state.
       </p>
 
       <h2>Docker resource hygiene</h2>
@@ -219,6 +501,14 @@ volumes:
   runner-work-2:`}
       />
 
+      <h2>Sentry server name</h2>
+      <p>
+        <code>SENTRY_SERVER_NAME</code> sets a clean, human name for this instance in Sentry (for
+        example <code>gittensory-us-east</code>). Unset defaults to the OS hostname — never the
+        public-origin URL. Set this explicitly if you run more than one instance and want to tell
+        their Sentry events apart at a glance instead of matching container hostnames.
+      </p>
+
       <h2>Sentry tracing</h2>
       <p>
         Leave <code>SENTRY_TRACES_SAMPLE_RATE</code> unset or blank to disable trace export, or set
@@ -248,6 +538,16 @@ volumes:
             description:
               "The pull-mode relay loop for installations that receive events outbound from Orb.",
           },
+          {
+            title: "Orb relay register",
+            description:
+              "The recurring retry loop that (re-)registers this instance with the relay broker.",
+          },
+          {
+            title: "Queue dead-letter revive",
+            description:
+              "The 30-minute (by default) sweep that retries dead-lettered jobs still under the auto-retry ceiling.",
+          },
         ]}
       />
       <p>
@@ -260,7 +560,7 @@ volumes:
       <ul>
         <li>Queue pending count is not growing without processing.</li>
         <li>Dead jobs stay at zero or are investigated promptly.</li>
-        <li>Webhook deliveries are recent and have 2xx responses.</li>
+        <li>Webhook deliveries are recent and have 2xx responses, with no enqueue failures.</li>
         <li>AI usage matches expected review volume and model/effort choices.</li>
         <li>REES and RAG failures are visible and bounded.</li>
         <li>
@@ -270,9 +570,245 @@ volumes:
         <li>Backups are recent and restore-tested.</li>
       </ul>
 
+      <h2>Updating and rolling back</h2>
+      <p>
+        Both update paths below only ever restart the <code>gittensory</code> app service (
+        <code>--no-deps</code>) — they never touch other compose-profile services or their state
+        (Postgres, Redis, Qdrant, and Grafana&apos;s own <code>grafana-data</code> volume), and they
+        never touch <code>.env</code> keys other than the one they persist for next time. That means{" "}
+        <code>.env</code>, the <code>gittensory-config/</code> mount, every data volume — including
+        the app&apos;s own <code>/data</code> volume where Codex/Claude Code auth material lives —
+        and any <code>docker-compose.override.yml</code> are preserved automatically across an
+        update. You don&apos;t need to back those up or re-supply them just to run either script,
+        and you only need to recreate a profile service yourself if you&apos;re deliberately
+        upgrading that service (its own image tag in <code>docker-compose.yml</code>, or a
+        Postgres/Redis/Qdrant major-version bump) rather than the app.
+      </p>
+
+      <h3>Path 1: pull a published image</h3>
+      <p>
+        <code>scripts/deploy-selfhost-image.sh</code> pulls a tag or digest, restarts only the{" "}
+        <code>gittensory</code> service, waits for it to report <code>healthy</code> via{" "}
+        <code>docker inspect</code>&apos;s health status (configurable timeout, default 180s), and
+        then persists the resolved image reference back to <code>GITTENSORY_IMAGE</code> in{" "}
+        <code>.env</code> so the next plain invocation reuses it.
+      </p>
+      <CodeBlock
+        lang="bash"
+        code={`# Re-pull whatever GITTENSORY_IMAGE already resolves to (safe no-op restart if the tag is unchanged
+# and nothing new was pushed under it)
+./scripts/deploy-selfhost-image.sh
+
+# Pin an exact release tag or content digest
+./scripts/deploy-selfhost-image.sh ghcr.io/jsonbored/gittensory-selfhost:orb-v0.1.0
+GITTENSORY_IMAGE=ghcr.io/jsonbored/gittensory-selfhost@sha256:... ./scripts/deploy-selfhost-image.sh`}
+      />
+      <p>
+        The pull always runs with <code>--policy always</code>, so re-running the script against an
+        unchanged tag is safe: if the registry has nothing new, it just restarts the same image and
+        the health-check wait passes immediately.
+      </p>
+
+      <h3>Path 2: build from the current git checkout</h3>
+      <p>
+        <code>scripts/deploy-selfhost-prebuilt.sh</code> is for a source-based deploy (this is how{" "}
+        <code>GITTENSORY_VERSION</code> ends up as a short git SHA instead of an image tag). It
+        builds the bundle inside a Dockerized Node container — the host itself never needs Node or
+        npm installed — then restarts only the <code>gittensory</code> service the same way as the
+        image path.
+      </p>
+      <CodeBlock
+        lang="bash"
+        code={`git pull
+./scripts/deploy-selfhost-prebuilt.sh`}
+      />
+      <p>
+        <code>SENTRY_RELEASE</code> defaults to{" "}
+        <code>gittensory-selfhost@&lt;short git SHA of the current HEAD&gt;</code> unless you
+        override it, so each deploy from a new commit gets a distinct release id automatically. When{" "}
+        <code>SENTRY_AUTH_TOKEN</code>, <code>SENTRY_ORG</code>, and <code>SENTRY_PROJECT</code> are
+        all configured, the script also injects and uploads Sentry source maps for that release
+        before restarting the service (set <code>SELFHOST_SKIP_SENTRY_UPLOAD=1</code> to skip this
+        even when those three are present).
+      </p>
+
+      <h3>Rollback: no dedicated command today</h3>
+      <p>
+        There is no <code>rollback</code> script. Rolling back means re-running one of the two
+        scripts above pointed at an older target:
+      </p>
+      <ul>
+        <li>
+          Image-based: re-run <code>deploy-selfhost-image.sh</code> with the prior tag or digest (
+          <code>docker inspect</code> on the running container, or your own deploy log, has the
+          digest you were on before the update).
+        </li>
+        <li>
+          Source-based: <code>git checkout</code> the prior commit, then re-run{" "}
+          <code>deploy-selfhost-prebuilt.sh</code>.
+        </li>
+      </ul>
+      <Callout variant="warn" title="Migrations are forward-only">
+        This repo has no down-migration convention — <code>scripts/check-migrations.mjs</code> only
+        enforces a contiguous, non-colliding numbering, not a reverse path. If a migration has
+        already run forward against the live database, rolling back the app code is{" "}
+        <strong>not safe in general</strong>: older code can break against a newer schema (a
+        dropped/renamed column, a NOT NULL column it never writes, a changed constraint), even
+        though the migration itself succeeded. Before rolling back across a migration boundary,
+        check whether everything the newer migration(s) did is purely additive (new nullable column,
+        new table, new index) and, specifically, whether the code you're rolling back to actually
+        still runs against that schema — additive is usually fine; anything the old code can't
+        tolerate is not. Take a fresh backup first regardless — see{" "}
+        <Link to="/docs/self-hosting-backup-scaling">Backup and scaling</Link> — and if in doubt,
+        restore that backup to a scratch database and boot the older code against it before doing
+        the same on the live instance.
+      </Callout>
+
+      <h3>Before and after any update</h3>
+      <p>Before updating:</p>
+      <ul>
+        <li>
+          Source-based deploys: <code>git status</code> is clean (no uncommitted local changes the
+          build would silently pick up or drop).
+        </li>
+        <li>
+          A current, verified backup exists if the update includes schema changes — see{" "}
+          <Link to="/docs/self-hosting-backup-scaling">Backup and scaling</Link>.
+        </li>
+      </ul>
+      <p>
+        After updating, work through the same checks as any other health pass — see{" "}
+        <strong>Health endpoints</strong> and <strong>Useful commands</strong> above: confirm{" "}
+        <code>/ready</code> returns 200, <code>docker compose ps</code> shows the service{" "}
+        <code>healthy</code>, and tail recent logs for startup errors or an unexpected absence of{" "}
+        <code>selfhost_listening</code> / <code>selfhost_migrations_applied</code>.
+      </p>
+      <p>
+        Neither <code>/health</code> nor <code>/ready</code> reports a version, so confirm the
+        deployed release directly — <code>GITTENSORY_IMAGE</code> or <code>SENTRY_RELEASE</code> in{" "}
+        <code>.env</code> records what the deploy script just resolved, and{" "}
+        <code>docker inspect</code> confirms what the running container actually has:
+      </p>
+      <CodeBlock
+        lang="bash"
+        code={`grep -E '^(GITTENSORY_IMAGE|GITTENSORY_VERSION|SENTRY_RELEASE)=' .env
+docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q gittensory)"`}
+      />
+
       <p>
         If an operating check fails, go to{" "}
         <Link to="/docs/self-hosting-troubleshooting">Self-host troubleshooting</Link>.
+      </p>
+
+      <h2>Uninstalling and decommissioning</h2>
+      <p>
+        Tearing an instance down cleanly touches four independent things: the GitHub App
+        installation, the data volumes, brokered-mode enrollment, and control-panel access. None of
+        this is scripted today — do each step deliberately, in this order, and decide what to keep
+        before you delete anything.
+      </p>
+
+      <h3>1. Revoke the GitHub App installation</h3>
+      <p>
+        Uninstalling stops GitHub from sending any further webhook events and immediately revokes
+        the App&apos;s installation tokens — nothing on the self-host side needs to be told; there
+        is no <code>installation</code> <code>deleted</code> webhook handler to run first. From the
+        repo or org: Settings → Integrations → GitHub Apps → your App → Uninstall. Do this before
+        stopping the container so you are not left with a dangling install pointed at a dead webhook
+        URL.
+      </p>
+      <p>
+        If you only want to pause reviews without losing the App&apos;s configuration (permissions,
+        webhook URL, private key), suspend the installation instead of uninstalling it — GitHub
+        stops delivering events to a suspended install but keeps everything else intact for a later
+        resume.
+      </p>
+
+      <h3>2. Decide what happens to the data volumes</h3>
+      <p>
+        Stopping the container does not delete anything — <code>docker compose stop</code> or{" "}
+        <code>docker compose down</code> (without <code>-v</code>) leaves every named volume (
+        <code>gittensory-data</code>, <code>gittensory-pg</code>, <code>qdrant-data</code>,{" "}
+        <code>gittensory-backups</code>, <code>grafana-data</code>, and the rest declared in{" "}
+        <code>docker-compose.yml</code>) on disk, along with the <code>./gittensory-config</code>{" "}
+        host directory (a bind mount, not a named volume, so it is never affected by <code>-v</code>{" "}
+        either way). Pick one:
+      </p>
+      <FeatureRow
+        items={[
+          {
+            title: "Keep (pause, don't decommission)",
+            description:
+              "docker compose stop. Volumes and .env stay as-is; restarting later resumes with the same data. Use this if you might come back.",
+          },
+          {
+            title: "Export, then delete",
+            description:
+              "Run the backup profile one last time (docker compose --profile backup up -d, then confirm with verify-backup.sh — see Backup and scaling) and copy the resulting archive off-host before removing anything.",
+          },
+          {
+            title: "Delete everything",
+            description:
+              "docker compose down -v removes every named volume permanently — the review database, vector index, Grafana dashboards state, and any local backup archives in gittensory-backups go with it. This does not touch ./gittensory-config (delete that host directory yourself if it should go too).",
+          },
+        ]}
+      />
+      <Callout variant="warn" title="down -v is irreversible without an existing backup">
+        If you have not exported a backup off-host first, <code>docker compose down -v</code>{" "}
+        permanently destroys review history, settings, and the vector index with no recovery path —
+        the volumes are the only copy. See{" "}
+        <Link to="/docs/self-hosting-backup-scaling">Backup and scaling</Link> before running it on
+        an instance you care about.
+      </Callout>
+
+      <h3>3. Deregister from the Orb broker (brokered mode only)</h3>
+      <p>
+        If this instance runs in brokered mode (<code>ORB_ENROLLMENT_SECRET</code> is set — see{" "}
+        <Link to="/docs/self-hosting-github-app">GitHub App and Orb</Link>), be aware there is{" "}
+        <strong>no self-service revocation endpoint today</strong> — the &quot;Minimum broker
+        safeguards&quot; checklist on that page lists a revocation path as a prerequisite for a
+        public brokered rollout that has not shipped yet. An enrollment record (
+        <code>orb_enrollments</code>) lives in gittensory&apos;s own central database, not your
+        container, and nothing in this codebase writes a <code>revoked_at</code> value to it outside
+        of tests. Practical steps until that exists:
+      </p>
+      <ul>
+        <li>
+          Uninstalling the GitHub App (step 1) stops new webhook traffic and installation-token
+          issuance from reaching your instance in practice, even though the enrollment row itself
+          stays marked enrolled centrally.
+        </li>
+        <li>
+          Stop the container and let <code>ORB_ENROLLMENT_SECRET</code> go with it — with nothing
+          polling or listening, the secret is inert even if it still resolves to a valid enrollment.
+        </li>
+        <li>
+          If the secret may have leaked or you want it invalidated outright rather than just
+          orphaned, treat this the same as any other suspected credential compromise: contact the
+          Orb operator to have the enrollment revoked centrally, since there is no in-product way to
+          do it yourself yet.
+        </li>
+      </ul>
+
+      <h3>4. Remove ADMIN_GITHUB_LOGINS access</h3>
+      <p>
+        <code>ADMIN_GITHUB_LOGINS</code> is read fresh from the environment on every control-panel
+        request (<code>isAuthorizedGitHubSessionLogin</code> in <code>src/auth/security.ts</code>) —
+        it is never cached at startup or baked into an issued session. To remove someone&apos;s
+        operator access, delete their login from the comma/whitespace-separated list in{" "}
+        <code>.env</code> and restart the <code>gittensory</code> service so the process picks up
+        the new value:
+      </p>
+      <CodeBlock
+        lang="bash"
+        code={`$EDITOR .env   # remove the login from ADMIN_GITHUB_LOGINS
+docker compose up -d --no-deps gittensory`}
+      />
+      <p>
+        This takes effect on their very next control-panel request after the restart — no signed-in
+        session is grandfathered in, because authorization is re-checked against the current
+        allowlist every time, not read from the session itself. If you are decommissioning the whole
+        instance rather than removing one operator, this step is moot once the container is stopped.
       </p>
     </DocsPage>
   );

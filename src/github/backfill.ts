@@ -1,5 +1,4 @@
 import {
-  getRepositorySettings,
   getRepository,
   getPullRequest,
   countOpenIssues,
@@ -43,6 +42,7 @@ import {
   extractLinkedIssueNumbers,
 } from "../db/repositories";
 import { agentRequiresContentsWrite, agentRequiresPrWrite } from "../settings/agent-execution";
+import { resolveRepositorySettings } from "../settings/repository-settings";
 import type {
   ContributorRepoStatRecord,
   GitHubRateLimitObservationRecord,
@@ -342,6 +342,14 @@ const PR_STATE_CACHE_METRIC = "gittensory_pr_state_cache_total";
 // Safety-net max age for a webhook-invalidated PR-state cache row (a dropped/missed webhook must not pin a stale
 // value forever). Short enough that a missed synchronize/closed/reopened event self-heals within one sweep tick.
 const PR_STATE_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+// #selfhost-ci-verification: durable-cache counter for the CI-state snapshot cache, sibling to PR_STATE_CACHE_METRIC.
+// Exported: the cache-check/hit/miss orchestration lives in queue/processors.ts (see writeThroughCiStateCache's
+// own doc comment for why), which needs this same metric name.
+export const CI_STATE_CACHE_METRIC = "gittensory_ci_state_cache_total";
+// Shorter than PR_STATE_CACHE_MAX_AGE_MS (5min): CI state changes faster and more consequentially than bare PR
+// state, and check_run/check_suite `completed` webhooks already invalidate this cache explicitly (see
+// invalidateCiStateCache below) -- this is purely the backstop for a delayed/missed webhook delivery.
+export const CI_STATE_CACHE_MAX_AGE_MS = 60 * 1000;
 const CURRENT_OPEN_SCAN_MARKER = "gittensory-current-open-scan-v1";
 const FRESH_TOTALS_SNAPSHOT_MS = 10 * 60 * 1000;
 const TOTALS_SNAPSHOT_LOOKBACK = 8;
@@ -373,7 +381,7 @@ export async function backfillRegisteredRepositories(
   const mode = options.mode ?? "light";
   const limits = { ...DEFAULT_LIMITS, ...MODE_LIMITS[mode], ...(options.limits ?? {}) };
   const repoResults = await mapWithConcurrency(repositories, limits.repoConcurrency, async (repo): Promise<RepoBackfillResult> => {
-    const settings = await getRepositorySettings(env, repo.fullName);
+    const settings = await resolveRepositorySettings(env, repo.fullName);
     if (!settings.backfillEnabled) {
       const completedAt = nowIso();
       await upsertSkippedSegments(env, repo, mode, completedAt, ["Backfill is disabled for this repository."]);
@@ -447,7 +455,7 @@ export async function enqueueRepositoryOpenDataBackfill(
   const repo = await getRepository(env, options.repoFullName);
   if (!repo?.isRegistered) return { ok: true, repoFullName: options.repoFullName, status: "skipped", warnings: ["Repository is not registered for Gittensory backfill."] };
   const mode = options.mode ?? "light";
-  const settings = await getRepositorySettings(env, repo.fullName);
+  const settings = await resolveRepositorySettings(env, repo.fullName);
   if (!settings.backfillEnabled) return { ok: true, repoFullName: repo.fullName, status: "skipped", warnings: ["Backfill is disabled for this repository."] };
   const token = await tokenForRepo(env, repo);
   const sourceKind: RepoSyncSegmentRecord["sourceKind"] = repo.installationId && token !== env.GITHUB_PUBLIC_TOKEN ? "installation" : "github";
@@ -950,7 +958,7 @@ export function enrichInstallationHealth(health: InstallationHealthRecord) {
 
 export async function buildInstallationRepairDiagnostics(env: Env, health: InstallationHealthRecord) {
   const installedRepos = (await listRepositories(env)).filter((repo) => repo.installationId === health.installationId && repo.isInstalled);
-  const installedSettings = await Promise.all(installedRepos.map((repo) => getRepositorySettings(env, repo.fullName)));
+  const installedSettings = await Promise.all(installedRepos.map((repo) => resolveRepositorySettings(env, repo.fullName)));
   const commentRepoCount = installedSettings.filter(usesCommentMode).length;
   const labelRepoCount = installedSettings.filter(usesLabelMode).length;
   const checkRunRepoCount = installedSettings.filter((settings) => settings.checkRunMode === "enabled").length;
@@ -1149,7 +1157,7 @@ async function refreshInstallationHealthRecords(env: Env, installations: Install
     const { installation: currentInstallation, errorSummary, authMode } = await refreshStoredInstallation(env, installation);
     const installedRepos = repositories.filter((repo) => repo.installationId === currentInstallation.id && repo.isInstalled);
     const registeredInstalled = installedRepos.filter((repo) => repo.isRegistered);
-    const installedSettings = await Promise.all(installedRepos.map((repo) => getRepositorySettings(env, repo.fullName)));
+    const installedSettings = await Promise.all(installedRepos.map((repo) => resolveRepositorySettings(env, repo.fullName)));
     const requiresChecks = installedSettings.some((settings) => settings.checkRunMode === "enabled");
     const requiresPrWrite = installedSettings.some((settings) => agentRequiresPrWrite(settings.autonomy));
     const requiresContentsWrite = installedSettings.some((settings) => agentRequiresContentsWrite(settings.autonomy));
@@ -2533,6 +2541,7 @@ export async function fetchRequiredStatusContexts(
   baseRef: string | null | undefined,
   token: string | undefined,
   admissionKey?: GitHubRateLimitAdmissionKey,
+  onFetchFailure: (error: unknown) => void = () => undefined,
 ): Promise<Set<string> | null> {
   if (!baseRef) return null;
   const result = await githubJsonWithHeaders<{ contexts?: Array<string | null> | null; checks?: Array<{ context?: string | null }> | null }>(
@@ -2543,6 +2552,7 @@ export async function fetchRequiredStatusContexts(
     githubRateLimitOptions(admissionKey),
   ).catch((error) => {
     recordBranchProtectionFetchFailure(error);
+    onFetchFailure(error);
     return undefined;
   });
   if (!result) return null; // 404 / 403 (no admin:read) / error → conservative fold-all.
@@ -3080,6 +3090,25 @@ export async function fetchLivePullRequestHeadSha(
   return result?.data.head?.sha ?? undefined;
 }
 
+export type LivePullRequestFetchResult =
+  | { status: "ok"; data: GitHubPullRequestPayload }
+  | { status: "error"; error: string };
+
+export async function fetchLivePullRequestResult(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+  token: string | undefined,
+  admissionKey?: GitHubRateLimitAdmissionKey,
+): Promise<LivePullRequestFetchResult> {
+  try {
+    const result = await githubJsonWithHeaders<GitHubPullRequestPayload>(env, repoFullName, `/pulls/${prNumber}`, token, githubRateLimitOptions(admissionKey));
+    return { status: "ok", data: result.data };
+  } catch (error) {
+    return { status: "error", error: strippedErrorMessage(error, "GitHub live PR fetch failed").slice(0, 240) };
+  }
+}
+
 /** The PR's FULL live payload via REST `GET /pulls/{n}`, ready to feed `upsertPullRequestFromGitHub`. The scheduled
  *  re-gate sweep uses this to RESYNC a stored PR to its live head when a `synchronize` webhook was lost (e.g. the
  *  self-host relay was down), so the re-review runs on the current head + fresh files instead of a stale cached diff
@@ -3092,8 +3121,8 @@ export async function fetchLivePullRequest(
   token: string | undefined,
   admissionKey?: GitHubRateLimitAdmissionKey,
 ): Promise<GitHubPullRequestPayload | undefined> {
-  const result = await githubJsonWithHeaders<GitHubPullRequestPayload>(env, repoFullName, `/pulls/${prNumber}`, token, githubRateLimitOptions(admissionKey)).catch(() => undefined);
-  return result?.data ?? undefined;
+  const result = await fetchLivePullRequestResult(env, repoFullName, prNumber, token, admissionKey);
+  return result.status === "ok" ? result.data : undefined;
 }
 
 // #2537: durable, webhook-invalidated cache for the bare PR-state read (GET /pulls/{n}). Unlike the request-local
@@ -3276,6 +3305,115 @@ export async function invalidatePrStateCache(env: Env, repoFullName: string, pul
     prMergeableState: null,
     prState: null,
     prStateFetchedAt: null,
+  });
+}
+
+// #selfhost-ci-verification: durable, webhook-invalidated cache for the CI-state aggregate (fetchLiveCiAggregate/
+// fetchLiveCiAggregateViaGraphQl), sibling to the #2537 PR-state cache above. Unlike the request-local
+// LiveGithubFacts memo (queue/processors.ts), this survives ACROSS webhook deliveries / job re-checks, cutting
+// repeat check-runs/status/check-suites reads for an unchanged (repo, pr, head_sha, expectedCiContexts) tuple.
+// NEVER used by the act-boundary merge/close decision (services/agent-approval-queue.ts,
+// services/agent-action-executor.ts) -- those call fetchLiveCiAggregate/fetchLiveCiAggregatePreferGraphQl
+// directly, by design, and must keep doing so (this cache is a distinct, separately-exported function these two
+// call sites simply never import).
+export function isCiStateCacheFresh(
+  cached: Pick<PullRequestDetailSyncStateRecord, "ciHeadSha" | "ciRequiredContextsKey" | "ciStateFetchedAt"> | null | undefined,
+  headSha: string | null | undefined,
+  requiredContextsKey: string,
+): boolean {
+  if (!cached?.ciStateFetchedAt) return false;
+  const fetchedAtMs = Date.parse(cached.ciStateFetchedAt);
+  if (!Number.isFinite(fetchedAtMs)) return false;
+  if (Date.now() - fetchedAtMs >= CI_STATE_CACHE_MAX_AGE_MS) return false;
+  // A stale head_sha (a new commit since this row was cached) or a changed expectedCiContexts config is an
+  // automatic miss regardless of TTL -- mirrors the files-cache's own headSha-matching discipline.
+  if ((cached.ciHeadSha ?? null) !== (headSha ?? null)) return false;
+  if ((cached.ciRequiredContextsKey ?? "") !== requiredContextsKey) return false;
+  return true;
+}
+
+/** Reconstruct a LiveCiAggregate from a cached row, or null on any parse failure / missing ciState (fail-open:
+ *  the caller treats null as a cache miss and falls through to a live fetch, never throws). */
+export function deserializeCachedCiAggregate(
+  cached: Pick<
+    PullRequestDetailSyncStateRecord,
+    "ciState" | "ciHasPending" | "ciHasVisiblePending" | "ciHasMissingRequiredContext" | "ciFailingDetailsJson" | "ciNonRequiredFailingDetailsJson" | "ciCompletenessWarning"
+  >,
+): LiveCiAggregate | null {
+  if (!cached.ciState) return null;
+  try {
+    const failingDetails = JSON.parse(cached.ciFailingDetailsJson ?? "[]");
+    const nonRequiredFailingDetails = JSON.parse(cached.ciNonRequiredFailingDetailsJson ?? "[]");
+    // A corrupted/malformed row (e.g. hand-edited D1 row, or a future schema change that leaves an old JSON
+    // shape behind) must fail OPEN as a cache miss, not hand callers a wrong shape -- never trust the parse
+    // result's type just because JSON.parse didn't throw.
+    if (!Array.isArray(failingDetails) || !Array.isArray(nonRequiredFailingDetails)) return null;
+    return {
+      ciState: cached.ciState,
+      hasPending: cached.ciHasPending ?? false,
+      hasVisiblePending: cached.ciHasVisiblePending ?? false,
+      hasMissingRequiredContext: cached.ciHasMissingRequiredContext ?? false,
+      failingDetails,
+      nonRequiredFailingDetails,
+      ciCompletenessWarning: cached.ciCompletenessWarning ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Best-effort write-through for the CI-state cache fields (mirrors writeThroughPrStateCache's fail-open,
+ *  preserve-status contract). Always stamps ciStateFetchedAt = now on a successful live read.
+ *
+ *  Exported (not orchestrated in this module) because the actual cache-check-then-live-fetch-then-write-through
+ *  sequence lives in queue/processors.ts's cachedFetchLiveCiAggregate, alongside cachedLiveCiAggregate/
+ *  refreshLiveCiAggregate -- NOT here, even though this is the natural file for #2537's PR-state cache sibling.
+ *  A same-module call from THIS file to fetchLiveCiAggregatePreferGraphQl (below) would be invisible to
+ *  `vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl")`, which many existing tests already rely on to
+ *  intercept the cross-module call processors.ts has always made -- moving the orchestration there preserves
+ *  that exact call shape. */
+export async function writeThroughCiStateCache(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+  previousState: Pick<PullRequestDetailSyncStateRecord, "status"> | null | undefined,
+  headSha: string | null | undefined,
+  requiredContextsKey: string,
+  aggregate: LiveCiAggregate,
+): Promise<void> {
+  incr(CI_STATE_CACHE_METRIC, { field: "write", result: "set" });
+  await upsertPullRequestDetailSyncState(env, {
+    repoFullName,
+    pullNumber: prNumber,
+    status: previousState?.status ?? "never_synced",
+    ciHeadSha: headSha ?? null,
+    ciState: aggregate.ciState,
+    ciHasPending: aggregate.hasPending,
+    ciHasVisiblePending: aggregate.hasVisiblePending,
+    ciHasMissingRequiredContext: aggregate.hasMissingRequiredContext,
+    ciFailingDetailsJson: JSON.stringify(aggregate.failingDetails),
+    ciNonRequiredFailingDetailsJson: JSON.stringify(aggregate.nonRequiredFailingDetails),
+    ciCompletenessWarning: aggregate.ciCompletenessWarning,
+    ciRequiredContextsKey: requiredContextsKey,
+    ciStateFetchedAt: nowIso(),
+  }).catch(() => undefined);
+}
+
+/** Invalidate the durable CI-state cache (mirrors invalidatePrStateCache) -- called from
+ *  maybeReReviewOnCiCompletion on every check_run/check_suite `completed` webhook, best-effort. Explicit null
+ *  (not omitted) so the PARTIAL-UPDATE CONTRACT actually clears the stale value rather than leaving it. */
+export async function invalidateCiStateCache(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+): Promise<void> {
+  const existing = await getPullRequestDetailSyncState(env, repoFullName, prNumber).catch(() => null);
+  await upsertPullRequestDetailSyncState(env, {
+    repoFullName,
+    pullNumber: prNumber,
+    status: existing?.status ?? "never_synced",
+    ciState: null,
+    ciStateFetchedAt: null,
   });
 }
 

@@ -104,6 +104,15 @@ describe("gittensory-miner claim ledger (#2314)", () => {
     expect(ledger.listClaims({ repoFullName: "o/a", status: "released" }).map((c) => c.issueNumber)).toEqual([2]);
   });
 
+  it("treats null listClaims filters as unscoped", () => {
+    const ledger = tempLedger();
+    ledger.recordClaim({ repoFullName: "o/a", issueNumber: 1 });
+    ledger.recordClaim({ repoFullName: "o/b", issueNumber: 2 });
+    expect(ledger.listClaims({ repoFullName: null })).toHaveLength(2);
+    expect(ledger.listClaims({ status: null })).toHaveLength(2);
+    expect(ledger.listClaims({ repoFullName: null, status: null })).toHaveLength(2);
+  });
+
   it("rejects malformed inputs rather than persisting them", () => {
     const ledger = tempLedger();
     expect(() => ledger.recordClaim({ repoFullName: "no-slash", issueNumber: 1 })).toThrow("invalid_repo_full_name");

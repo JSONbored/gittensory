@@ -15,7 +15,6 @@ describe("lintManifestText (#2079)", () => {
   it("reports every recognized focus field without echoing values", () => {
     const result = lintManifestText(`
 wantedPaths: [src/private-policy/]
-blockedPaths: [dist/]
 preferredLabels: [operator-only]
 linkedIssuePolicy: required
 testExpectations: [unit coverage]
@@ -33,6 +32,8 @@ features:
 contentLane:
   entryFileGlob: data/*.json
   collectionField: records
+repoDocGeneration:
+  enabled: true
 `);
 
     expect(result.ok).toBe(true);
@@ -40,7 +41,6 @@ contentLane:
     expect(result.summary).toBe("Manifest parsed 13 recognized fields.");
     expect(result.recognizedFields).toEqual([
       "wantedPaths",
-      "blockedPaths",
       "preferredLabels",
       "linkedIssuePolicy",
       "testExpectations",
@@ -52,9 +52,38 @@ contentLane:
       "review",
       "features",
       "contentLane",
+      "repoDocGeneration",
     ]);
     expect(JSON.stringify(result)).not.toContain("private maintainer note");
     expect(JSON.stringify(result)).not.toContain("operator-only");
+  });
+
+  it("REGRESSION: recognizes a standalone repoDocGeneration: block instead of flagging it as unknown", () => {
+    // repoDocGeneration is a fully real, actively-parsed top-level manifest field (#3002) that was missing from
+    // this linter's TOP_LEVEL_FIELDS allowlist -- a self-host operator using it got a false "unknown top-level
+    // field" warning even though the field works correctly.
+    const result = lintManifestText("repoDocGeneration:\n  enabled: true\n  scope: [agents]\n");
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(result.recognizedFields).toEqual(["repoDocGeneration"]);
+  });
+
+  it("flags legacy blockedPaths with a migration-specific warning, not the generic unknown-field message", () => {
+    const result = lintManifestText("wantedPaths: [src/]\nblockedPaths: [dist/]\n");
+
+    expect(result.ok).toBe(false);
+    expect(result.recognizedFields).toEqual(["wantedPaths"]);
+    expect(result.warnings).toEqual(["blockedPaths is retired; use settings.hardGuardrailGlobs for path holds."]);
+  });
+
+  it("flags legacy blockedPaths AND an unrelated unknown field with separate, distinct warnings", () => {
+    const result = lintManifestText("wantedPaths: [src/]\nblockedPaths: [dist/]\nunknownSecretKey: [x]\n");
+
+    expect(result.warnings).toEqual([
+      "blockedPaths is retired; use settings.hardGuardrailGlobs for path holds.",
+      "Manifest contains unknown top-level field: unknownSecretKey.",
+    ]);
   });
 
   it("flags empty or fieldless manifests as not ok", () => {

@@ -178,3 +178,22 @@ describe("reward-risk freshness parity with gittensory-engine", () => {
     expect(issueAgeDays("2026-07-03T00:00:00.000Z")).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe("bestFitLabels keyword anchoring", () => {
+  const pick = (labelMultipliers: Record<string, number>) => {
+    const base = repo("owner/repo");
+    return rewardRiskFreshnessInternals.bestFitLabels({ ...base, registryConfig: { ...base.registryConfig!, labelMultipliers } });
+  };
+  it("excludes meta labels only at a keyword boundary, keeping mid-word matches", () => {
+    // Bare keyword and prefix forms are excluded...
+    expect(pick({ status: 5, bug: 2 })).toEqual(["bug"]);
+    expect(pick({ "risk:high": 5, bug: 2 })).toEqual(["bug"]);
+    // ...but a substring match must NOT drop a legitimate higher-multiplier label.
+    expect(pick({ opensource: 5, bug: 2 })).toEqual(["opensource"]);
+    expect(pick({ "risky-refactor": 5, docs: 1 })).toEqual(["risky-refactor"]);
+  });
+  it("returns no label when there are none, or the repo is null", () => {
+    expect(pick({})).toEqual([]);
+    expect(rewardRiskFreshnessInternals.bestFitLabels(null)).toEqual([]);
+  });
+});

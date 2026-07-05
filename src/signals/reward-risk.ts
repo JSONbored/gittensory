@@ -430,7 +430,10 @@ export function buildMaintainerNoiseReport(
   const queueHealth = buildQueueHealth(repo, issues, pullRequests, collisions);
   const intake = buildContributorIntakeHealth(repo, issues, pullRequests, fullName, collisions);
   const unlinked = pullRequests.filter((pr) => pr.state === "open" && pr.linkedIssues.length === 0).length;
-  const broadDiffSignals = pullRequests.filter((pr) => pr.title.length > 120 || /refactor|cleanup|misc|various/i.test(pr.title)).length;
+  // Only OPEN PRs are live maintainer-queue noise. Without the state guard (which the sibling `unlinked`
+  // count above already applies), already-merged/closed PRs with common churn titles ("refactor", "cleanup",
+  // "various", …) are miscounted as active noise, inflating noiseSources and depressing the score.
+  const broadDiffSignals = pullRequests.filter((pr) => pr.state === "open" && (pr.title.length > 120 || /refactor|cleanup|misc|various/i.test(pr.title))).length;
   const noiseSources = [
     ...(unlinked > 0 ? [`${unlinked} open PR(s) lack linked issue context.`] : []),
     ...(collisions.summary.highRiskCount > 0 ? [`${collisions.summary.highRiskCount} high-risk duplicate/WIP cluster(s).`] : []),
@@ -768,7 +771,11 @@ function analysisRank(analysis: RepoRewardRisk): number {
 function bestFitLabels(repo: RepositoryRecord | null): string[] {
   const multipliers = repo?.registryConfig?.labelMultipliers ?? {};
   const labels = Object.entries(multipliers)
-    .filter(([label]) => !/status|source|contributor|verified|risk|codex/i.test(label))
+    // Exclude meta labels only at a keyword boundary (a real separator or end-of-string after the keyword),
+    // not mid-word — mirroring the anchored `suspiciousConfiguredLabels` matcher in engine.ts. The old
+    // unanchored regex over-matched substrings (e.g. "opensource" via "source", "risky-refactor" via "risk"),
+    // wrongly dropping a legitimate high-multiplier label from the best-fit suggestion.
+    .filter(([label]) => !/^(status|source|contributor|verified|risk|codex)([:/-]|$)/i.test(label))
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .map(([label]) => label);
   return labels.slice(0, 1);
@@ -915,5 +922,6 @@ function clamp(value: number, min: number, max: number): number {
 export const rewardRiskFreshnessInternals = {
   pickIssueTimestamp,
   issueAgeDays,
+  bestFitLabels,
 };
 /* v8 ignore stop */

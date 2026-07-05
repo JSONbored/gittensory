@@ -87,6 +87,31 @@ describe("gittensory-miner event ledger (#2290)", () => {
     ]);
   });
 
+  it("treats a null repo filter as unscoped and returns all events", () => {
+    const ledger = tempLedger();
+    ledger.appendEvent({ type: "plan_built", payload: {} });
+    ledger.appendEvent({ type: "discovered_issue", repoFullName: "o/a", payload: {} });
+    ledger.appendEvent({ type: "pr_prepared", repoFullName: "o/b", payload: {} });
+    const events = ledger.readEvents({ repoFullName: null });
+    expect(events).toHaveLength(3);
+    expect(events.map((entry) => entry.type)).toEqual(["plan_built", "discovered_issue", "pr_prepared"]);
+  });
+
+  it("treats a null since filter as unscoped", () => {
+    const ledger = tempLedger();
+    ledger.appendEvent({ type: "discovered_issue", payload: {} }); // seq 1
+    ledger.appendEvent({ type: "plan_built", payload: {} }); // seq 2
+    expect(ledger.readEvents({ since: null }).map((entry) => entry.seq)).toEqual([1, 2]);
+  });
+
+  it("keeps a null repo filter unscoped when combined with since", () => {
+    const ledger = tempLedger();
+    ledger.appendEvent({ type: "discovered_issue", repoFullName: "o/a", payload: {} }); // seq 1
+    ledger.appendEvent({ type: "plan_built", payload: {} }); // seq 2
+    ledger.appendEvent({ type: "pr_prepared", repoFullName: "o/a", payload: {} }); // seq 3
+    expect(ledger.readEvents({ repoFullName: null, since: 1 }).map((entry) => entry.seq)).toEqual([2, 3]);
+  });
+
   it("filters by `since` (strictly greater seq), and combines with repoFullName", () => {
     const ledger = tempLedger();
     ledger.appendEvent({ type: "discovered_issue", repoFullName: "o/a", payload: {} }); // seq 1

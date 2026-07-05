@@ -89,6 +89,8 @@ describe("Gittensory Self-Host Grafana dashboard", () => {
     expect(targets.some((target) => target.expr === "sum by (kind, key_scope, job_type) (rate(gittensory_jobs_rate_limit_admission_deferred_total[5m])) or vector(0)")).toBe(true);
     expect(targets.some((target) => target.expr === "sum by (kind, key_scope, job_type) (rate(gittensory_jobs_rate_limit_budget_deferred_total[5m])) or vector(0)")).toBe(true);
     expect(targets.some((target) => target.expr === "sum by (kind, key_scope, job_type) (rate(gittensory_jobs_rate_limited_by_type_total[5m])) or vector(0)")).toBe(true);
+    expect(targets.some((target) => target.expr === "sum by (primary, fallback) (increase(gittensory_ai_review_model_fallback_total[1h]))")).toBe(true);
+    expect(targets.some((target) => target.legendFormat === "fallback {{primary}}→{{fallback}}")).toBe(true);
   });
 
   it("keeps Orb dashboard panels zero-safe when telemetry counters are absent", () => {
@@ -149,6 +151,22 @@ describe("Gittensory Self-Host Grafana dashboard", () => {
     expect(alerts).toContain('time() - gittensory_backup_latest_timestamp_seconds{target=~"postgres|sqlite"} > 93600');
   });
 
+  it("surfaces a Maintenance Admission Deferrals (total) panel alongside the by-reason breakdown", () => {
+    const dashboard = readDashboard(selfhostDashboardPath);
+    const targets = dashboard.panels.flatMap((panel) => panel.targets ?? []);
+    const titles = dashboard.panels.map((panel) => panel.title);
+
+    expect(titles).toEqual(
+      expect.arrayContaining([
+        "Runtime Pressure & Maintenance",
+        "Maintenance Admission Deferrals by Reason",
+        "Maintenance Admission Deferrals (total)",
+      ]),
+    );
+    expect(targets.some((target) => target.expr === "sum by (reason, job_type) (rate(gittensory_jobs_maintenance_admission_deferred_by_reason_total[5m])) or vector(0)")).toBe(true);
+    expect(targets.some((target) => target.expr === "sum(rate(gittensory_jobs_maintenance_admission_deferred_total[5m])) or vector(0)")).toBe(true);
+  });
+
   it("surfaces self-host runtime-drift signal panels, every counter query fleet-aggregated", () => {
     const dashboard = readDashboard(selfhostDashboardPath);
     const targets = dashboard.panels.flatMap((panel) => panel.targets ?? []);
@@ -163,6 +181,7 @@ describe("Gittensory Self-Host Grafana dashboard", () => {
         "Agent Permission-Denied Actions (total)",
         "Agent Permission-Denied Actions by Class (denied vs suppressed-repeat rate)",
         "Orb Relay Registration Attempts by Mode/Result (rate)",
+        "Orb Relay Registration: Streak vs Drain Progress (one hiccup vs actually stuck)",
       ]),
     );
     // Every stat-panel counter is sum()-wrapped, matching its siblings -- a multi-instance self-host scrape
@@ -177,6 +196,15 @@ describe("Gittensory Self-Host Grafana dashboard", () => {
     expect(targets.some((target) => target.expr === "sum by (actionClass) (rate(gittensory_agent_action_permission_denied_total[5m]))")).toBe(true);
     expect(targets.some((target) => target.expr === "sum by (actionClass) (rate(gittensory_agent_action_permission_denied_suppressed_total[5m]))")).toBe(true);
     expect(targets.some((target) => target.expr === "sum by (mode, result) (rate(gittensory_orb_relay_register_total[5m]))")).toBe(true);
+    // #selfhost-runtime-drift follow-up: the streak-vs-drain-progress panel is the dashboard-visible
+    // counterpart to isOrbRelayRegistrationAlerting's gate -- a lone registration timeout must not read as
+    // a dashboard error on its own as long as the drain loop is still making progress.
+    expect(targets.some((target) => target.expr === "gittensory_orb_relay_register_consecutive_failures or vector(0)")).toBe(true);
+    expect(targets.some((target) => target.expr === "gittensory_orb_relay_drain_seconds_since_last or vector(0)")).toBe(true);
+
+    const alerts = readFileSync(selfhostAlertsPath, "utf8");
+    expect(alerts).toContain("alert: GittensoryOrbRelayRegistrationStuck");
+    expect(alerts).toContain("gittensory_orb_relay_register_consecutive_failures >= 3 or gittensory_orb_relay_drain_seconds_since_last > 1800");
   });
 
   it("surfaces the backlog-vs-fresh-intake lane fairness panels (#selfhost-lane-observability)", () => {

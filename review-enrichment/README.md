@@ -49,6 +49,7 @@ inside the operator's trust boundary. The engine prefers a short-lived installat
 | `iacMisconfig`  | Risky IaC/config changes like public buckets, open ingress, or insecure CORS. | Pure local.                                                 |
 | `nativeBuild`   | Newly-added dependencies that compile native code or ship sdist-only builds. | Calls npm/PyPI registries.                                  |
 | `history`       | Author track record, same-file PR history, and linked-issue alignment.       | Calls GitHub API with bounded fanout; needs author/token for private repos. |
+| `magicNumber`   | Non-trivial numeric literals newly added in non-test source.                 | Pure local.                                                  |
 
 The engine can send `analyzers: ["secret", "actionPin"]` to run a subset. If the field is omitted, REES runs the
 full registry. An explicit empty array runs no analyzers; the engine uses that fail-closed shape when an
@@ -75,6 +76,69 @@ classes, per-analyzer limits, and self-host configuration. When adding or migrat
   config values.
 - Make external-call analyzers fail open and respect the orchestrator abort signal when the scanner supports it.
 - Prefer a focused analyzer test file instead of expanding the shared `enrichment.test.ts` mega-test.
+
+### Magic-number analyzer
+
+`magicNumber` is a precision-first local analyzer for unexplained numeric literals added by a PR. It is intended to
+surface values that look like policy, timing, sizing, retry, threshold, or scoring decisions hidden directly inside an
+expression, where a named constant would make intent and future review safer.
+
+The analyzer scans only added diff lines in non-test source files. It never fetches repository content, never
+evaluates code, and never returns source snippets. Findings carry only `{ file, line, value }`, so the review brief can
+say that `src/retry.ts:42` added `37` without copying the surrounding line.
+
+What it reports:
+
+- Numeric literals in expressions, such as `attempt * 37`, `timeout + 250`, `ratio > 0.73`, or `0xff` masks.
+- Signed and fractional forms when they are part of the literal, such as `-42`, `.75`, `6e-3`, or `99n`.
+- Multiple reportable values on one added line, capped by the analyzer-level finding limit.
+- Added content whose source text begins with plus signs, matching the unified-diff edge cases covered by sibling
+  analyzers.
+
+What it suppresses:
+
+- Test files and snapshot paths, because assertion literals are usually expected examples rather than production
+  policy.
+- Documentation, JSON/YAML, lockfiles, fixtures, and other non-source files.
+- String literals and inline comments before numeric scanning, so prose like `"wait 37 seconds"` or `// retry in 42`
+  does not generate a finding.
+- Common sentinel and scale values: `0`, `1`, `-1`, `2`, `100`, `1000`, and powers of ten.
+- Named constant declarations, including common language forms such as `const MAX_BATCH = 250`, `static readonly
+  RETRY_WINDOW = 30`, `public static final int LIMIT = 50`, `final DEFAULT_LIMIT = 50`, and `val MAX_PAGE_SIZE = 250`.
+- Array indexes like `rows[3]`, numeric object keys like `{ 404: handler }`, and enum-like member initializers like
+  `PENDING = 3`.
+
+The goal is not to ban numeric literals. It is to highlight newly-added non-obvious values that can silently encode
+review-critical behavior. The analyzer favors false negatives over noisy findings: if a literal looks named,
+structural, test-only, or conventional, it stays silent.
+
+Example outcomes:
+
+| Added source line | Analyzer result | Rationale |
+| ----------------- | --------------- | --------- |
+| `const timeoutMs = attempts * 37;` | Reports `37`. | The value is embedded in behavior and is not self-describing. |
+| `const RETRY_WINDOW_MS = 37;` | Suppressed. | The uppercase declaration gives the literal a reviewable name. |
+| `if (ratio > 0.73) return true;` | Reports `0.73`. | Fractional thresholds are usually policy choices. |
+| `return rows[3];` | Suppressed. | Small positional array indexes are structural. |
+| `return items[:37];` | Reports `37`. | Slice bounds can encode a batch or display limit. |
+| `{ 404: handleMissing }` | Suppressed. | Numeric object keys are commonly protocol or lookup labels. |
+| `enum State { Pending = 3 }` | Suppressed. | Enum-like member initializers are named states. |
+| `const mask = flags & 0xff;` | Reports `0xff`. | Radix literals can hide bitmask decisions. |
+| `const sample = 1_337;` | Reports `1_337`. | Numeric separators keep the original literal readable in findings. |
+| `const scale = 1000;` | Suppressed. | Powers and common scales are intentionally quiet. |
+
+Operational notes:
+
+- Keep findings public-safe: report the file, line, and literal only, never the surrounding source text.
+- Use the diff hunk line number, not a best-effort grep against the repository checkout.
+- Scan added lines only. Removed or context lines should never create findings.
+- Apply the source-path filter before scanning content so generated metadata and docs stay quiet.
+- Respect the abort signal both before and during patch scanning.
+- Keep line-level work bounded; very long added lines are skipped to avoid pathological input.
+- Preserve deterministic ordering by scanning files, hunks, and literals in diff order.
+- Cap per-line and per-request findings so one generated file cannot dominate the brief.
+- Add tests for both the reported and suppressed side of every new heuristic.
+- Regenerate analyzer metadata whenever the registry descriptor changes.
 
 ## Shared analysis context
 

@@ -126,7 +126,10 @@ describe("isForegroundDeferralStale", () => {
 
 describe("selectForegroundDeferralsToRelease (#selfhost-queue-liveness ramp-up)", () => {
   it("returns every candidate unchanged when the count is at or below the cap", () => {
-    const candidates = [{ id: "a", pendingSinceMs: 100 }, { id: "b", pendingSinceMs: 50 }];
+    const candidates = [
+      { id: "a", pendingSinceMs: 100, rateLimitClear: true },
+      { id: "b", pendingSinceMs: 50, rateLimitClear: true },
+    ];
     expect(selectForegroundDeferralsToRelease(candidates, 2)).toEqual(candidates);
     expect(selectForegroundDeferralsToRelease(candidates, 5)).toEqual(candidates);
   });
@@ -137,9 +140,9 @@ describe("selectForegroundDeferralsToRelease (#selfhost-queue-liveness ramp-up)"
 
   it("picks the OLDEST (smallest pendingSinceMs) candidates first when count exceeds the cap", () => {
     const candidates = [
-      { id: "newest", pendingSinceMs: 300 },
-      { id: "oldest", pendingSinceMs: 100 },
-      { id: "middle", pendingSinceMs: 200 },
+      { id: "newest", pendingSinceMs: 300, rateLimitClear: true },
+      { id: "oldest", pendingSinceMs: 100, rateLimitClear: true },
+      { id: "middle", pendingSinceMs: 200, rateLimitClear: true },
     ];
     const selected = selectForegroundDeferralsToRelease(candidates, 2);
     expect(selected.map((c) => c.id)).toEqual(["oldest", "middle"]);
@@ -147,16 +150,31 @@ describe("selectForegroundDeferralsToRelease (#selfhost-queue-liveness ramp-up)"
 
   it("breaks ties by original array order (stable) when pendingSinceMs is equal", () => {
     const candidates = [
-      { id: "first", pendingSinceMs: 100 },
-      { id: "second", pendingSinceMs: 100 },
-      { id: "third", pendingSinceMs: 100 },
+      { id: "first", pendingSinceMs: 100, rateLimitClear: true },
+      { id: "second", pendingSinceMs: 100, rateLimitClear: true },
+      { id: "third", pendingSinceMs: 100, rateLimitClear: true },
     ];
     const selected = selectForegroundDeferralsToRelease(candidates, 2);
     expect(selected.map((c) => c.id)).toEqual(["first", "second"]);
   });
 
   it("a cap of exactly the candidate count releases all of them", () => {
-    const candidates = [{ id: "a", pendingSinceMs: 1 }, { id: "b", pendingSinceMs: 2 }];
+    const candidates = [
+      { id: "a", pendingSinceMs: 1, rateLimitClear: true },
+      { id: "b", pendingSinceMs: 2, rateLimitClear: true },
+    ];
     expect(selectForegroundDeferralsToRelease(candidates, 2).length).toBe(2);
+  });
+
+  it("prefers rate-limit-clear candidates before older still-blocked stale candidates", () => {
+    const candidates = [
+      { id: "blocked-oldest", pendingSinceMs: 100, rateLimitClear: false },
+      { id: "clear-newer", pendingSinceMs: 300, rateLimitClear: true },
+      { id: "blocked-middle", pendingSinceMs: 200, rateLimitClear: false },
+    ];
+
+    const selected = selectForegroundDeferralsToRelease(candidates, 2);
+
+    expect(selected.map((c) => c.id)).toEqual(["clear-newer", "blocked-oldest"]);
   });
 });

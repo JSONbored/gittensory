@@ -269,6 +269,18 @@ describe("api routes", () => {
     await expect(response.json()).resolves.toMatchObject({ repoFullName: "acme/badged", badgeEnabled: true });
   });
 
+  it("REGRESSION (#2907): defaults checkRunDetailLevel to minimal, matching the DB column's own default, when omitted", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    const response = await app.request(
+      "/v1/internal/repos/acme/detail-level-default/settings",
+      { method: "POST", headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ checkRunMode: "enabled" }) },
+      env,
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ checkRunMode: "enabled", checkRunDetailLevel: "minimal" });
+  });
+
   it("downgrades qualityGateMode: block to advisory through the internal settings write endpoint too (#2267)", async () => {
     // Readiness/quality can never hard-block a PR — the internal full-settings write path (used by tooling,
     // not just the maintainer dashboard) gets the identical downgrade so it can't persist "block" either.
@@ -2187,8 +2199,8 @@ describe("api routes", () => {
     });
     expect(JSON.stringify(unknownSessionBody)).not.toMatch(/wallet|hotkey|raw trust|payout|reward estimate|farming|private reviewability|public score estimate|\/Users|github_pat|ghp_/i);
     const unknownOverview = await app.request("/v1/app/overview", { headers: unknownHeaders }, unknownEnv);
-    expect(unknownOverview.status).toBe(200);
-    await expect(unknownOverview.json()).resolves.toMatchObject({ roleSummary: { roles: [], onboarding: { status: "needs_setup" } } });
+    expect(unknownOverview.status).toBe(403);
+    await expect(unknownOverview.json()).resolves.toMatchObject({ error: "insufficient_role" });
     expect((await app.request("/v1/app/operator-dashboard", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
     expect((await app.request("/v1/app/maintainer-dashboard", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
     expect((await app.request("/v1/app/commands/usefulness", { headers: unknownHeaders }, unknownEnv)).status).toBe(403);
@@ -5737,7 +5749,6 @@ describe("api routes", () => {
     });
 
     await upsertRepoFocusManifest(env, "entrius/allways-ui", {
-      blockedPaths: ["dist/"],
       linkedIssuePolicy: "optional",
       issueDiscoveryPolicy: "discouraged",
       maintainerNotes: [
@@ -5755,14 +5766,12 @@ describe("api routes", () => {
         previewOnly: true,
         present: true,
         publicWarnings: expect.arrayContaining([
-          expect.objectContaining({ code: "blocked_work_without_wanted_scope" }),
+          expect.objectContaining({ code: "contribution_scope_unclear" }),
           expect.objectContaining({ code: "linked_issue_policy_mismatch" }),
           expect.objectContaining({ code: "validation_expectations_missing" }),
         ]),
       },
-      warnings: expect.arrayContaining([
-        expect.stringContaining("Blocked work lacks a positive lane"),
-      ]),
+      warnings: expect.arrayContaining([expect.stringContaining("Contribution scope is unclear")]),
     });
     expect(policyPayload.policyReadiness).not.toHaveProperty("ownerContext");
     expect(JSON.stringify(policyPayload.policyReadiness.publicWarnings)).not.toMatch(FORBIDDEN_PUBLIC_REPORT_TERMS);
@@ -6280,7 +6289,6 @@ describe("api routes", () => {
         headers: internalHeaders(env),
         body: JSON.stringify({
           wantedPaths: ["src/"],
-          blockedPaths: ["dist/"],
           preferredLabels: ["bug"],
           linkedIssuePolicy: "required",
           issueDiscoveryPolicy: "discouraged",
@@ -6303,7 +6311,6 @@ describe("api routes", () => {
         present: true,
         source: "api_record",
         wantedPaths: ["src/"],
-        blockedPaths: ["dist/"],
         maintainerNotes: [privateNote],
       },
       policy: {
@@ -6316,7 +6323,7 @@ describe("api routes", () => {
               id: "direct-pr",
               preference: "preferred",
               preferredPaths: ["src/"],
-              discouragedPaths: ["dist/"],
+              discouragedPaths: [],
               validationExpectations: ["Run npm run test:ci."],
               publicNotes: ["Prefer small, focused PRs."],
             }),
@@ -6324,7 +6331,7 @@ describe("api routes", () => {
               id: "issue-discovery",
               preference: "discouraged",
               preferredPaths: [],
-              discouragedPaths: ["dist/"],
+              discouragedPaths: [],
             }),
           ],
           labelPolicy: { preferredLabels: ["bug"], required: true },

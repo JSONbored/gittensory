@@ -23,6 +23,23 @@ export const REES_ANALYZER_NAMES = [
   "nativeBuild",
   "history",
   "docCommentDrift",
+  "duplication",
+  "churnHotspot",
+  "blameLink",
+  "approvalIntegrity",
+  "ciCheckSignals",
+  "undocumentedExport",
+  "staleBranch",
+  "commitHygiene",
+  "pendingReviewRequests",
+  "testRatio",
+  "migrationSafety",
+  "looseRange",
+  "terminology",
+  "todoMarker",
+  "magicNumber",
+  "conflictMarker",
+  "commitLint",
 ] as const;
 
 export type ReesAnalyzerName = (typeof REES_ANALYZER_NAMES)[number];

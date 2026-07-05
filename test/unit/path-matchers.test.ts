@@ -38,10 +38,21 @@ describe("isGeneratedFile", () => {
     }
   });
 
-  it("matches source maps for every first-class JS/TS bundle extension", () => {
+  it("matches source maps for every first-class JS/TS and front-end framework extension", () => {
     // `.mjs`/`.cjs` are recognized code extensions (isCodeFile), so their bundlers' source
     // maps are generated output too — the same as `.js.map` / `.tsx.map`.
-    for (const path of ["dist/bundle.mjs.map", "dist/bundle.cjs.map", "lib/index.jsx.map"]) {
+    for (const path of [
+      "dist/bundle.mjs.map",
+      "dist/bundle.cjs.map",
+      "lib/index.jsx.map",
+      "dist/loader.mts.map",
+      "dist/setup.cts.map",
+      "dist/App.vue.map",
+      "dist/Card.svelte.map",
+      "dist/page.astro.map",
+      "dist/styles.scss.map",
+      "dist/theme.less.map",
+    ]) {
       expect(isGeneratedFile(path)).toBe(true);
     }
   });
@@ -320,6 +331,10 @@ describe("isConfigFile", () => {
       ".github/workflows/ci.yml",
       ".github/workflows/release.yaml",
       ".circleci/config.yml",
+      "native/CMakeLists.txt",
+      "libs/core/meson.build",
+      "services/api/BUILD.bazel",
+      "MODULE.bazel",
     ]) {
       expect(isConfigFile(path)).toBe(true);
     }
@@ -410,6 +425,10 @@ describe("classifyChangedFile", () => {
       ["skaffold.yaml", "config"],
       ["Earthfile", "config"],
       ["Procfile", "config"],
+      ["native/CMakeLists.txt", "config"],
+      ["libs/meson.build", "config"],
+      ["services/BUILD.bazel", "config"],
+      ["MODULE.bazel", "config"],
       [".codecov.yml", "config"],
       ["codecov.yml", "config"],
       ["codecov.yaml", "config"],
