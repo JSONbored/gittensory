@@ -24,8 +24,7 @@ ${GITTENSORY_REPO_CONFIG_DIR}/.gittensory.yml               # 4. global default,
 `.yaml` and `.json` are accepted everywhere `.yml` is. Every one of these files uses the **exact
 same schema** as the public `.gittensory.yml` — see [`.gittensory.yml.example`](../../.gittensory.yml.example)
 at the repo root for the exhaustive, field-by-field reference (not duplicated here, so the two
-never drift out of sync). For the smallest safe starter, copy [`.gittensory.minimal.yml`](../../.gittensory.minimal.yml)
-instead and rename it to `.gittensory.yml` at your repo root.
+never drift out of sync).
 
 ## Precedence chain
 
