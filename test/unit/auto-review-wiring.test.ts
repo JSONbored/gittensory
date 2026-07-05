@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { auditPullRequestAutoReviewSkip } from "../../src/queue/processors";
+import {
+  auditPullRequestAutoReviewSkip,
+  resolveAutoReviewSkipForPullRequest,
+  resolveReviewManifestForAiReview,
+} from "../../src/queue/processors";
 import { parseFocusManifest, resolvePullRequestAutoReviewSkipReason } from "../../src/signals/focus-manifest";
+import * as focusManifestLoader from "../../src/signals/focus-manifest-loader";
 import * as repositoriesModule from "../../src/db/repositories";
 
 describe("review.auto_review wiring (#1954)", () => {
@@ -62,5 +67,84 @@ describe("review.auto_review wiring (#1954)", () => {
       }),
     ).resolves.toBeUndefined();
     auditSpy.mockRestore();
+  });
+
+  it("resolveAutoReviewSkipForPullRequest skips manifest load when author is blacklisted or frozen", async () => {
+    const loadSpy = vi.spyOn(focusManifestLoader, "loadRepoFocusManifest");
+    await expect(
+      resolveAutoReviewSkipForPullRequest({} as Env, {
+        authorBlacklisted: true,
+        isFrozenForManualReview: false,
+        repoFullName: "acme/widgets",
+        pr: { number: 1, title: "feat", baseRef: "main", isDraft: false },
+        author: "alice",
+        deliveryId: "d1",
+        headSha: "sha1",
+      }),
+    ).resolves.toEqual({ skipReason: null, reviewManifest: null });
+    await expect(
+      resolveAutoReviewSkipForPullRequest({} as Env, {
+        authorBlacklisted: false,
+        isFrozenForManualReview: true,
+        repoFullName: "acme/widgets",
+        pr: { number: 2, title: "feat", baseRef: "main", isDraft: false },
+        author: "alice",
+        deliveryId: "d2",
+        headSha: "sha2",
+      }),
+    ).resolves.toEqual({ skipReason: null, reviewManifest: null });
+    expect(loadSpy).not.toHaveBeenCalled();
+    loadSpy.mockRestore();
+  });
+
+  it("resolveAutoReviewSkipForPullRequest loads manifest, audits skip reasons, and fail-opens on load errors", async () => {
+    const manifest = parseFocusManifest({ review: { auto_review: { skip_drafts: true } } });
+    const loadSpy = vi.spyOn(focusManifestLoader, "loadRepoFocusManifest").mockResolvedValue(manifest);
+    const auditSpy = vi.spyOn(repositoriesModule, "recordAuditEvent").mockResolvedValue(undefined);
+
+    await expect(
+      resolveAutoReviewSkipForPullRequest({} as Env, {
+        authorBlacklisted: false,
+        isFrozenForManualReview: false,
+        repoFullName: "acme/widgets",
+        pr: { number: 3, title: "WIP", baseRef: "main", isDraft: true },
+        author: "alice",
+        deliveryId: "d3",
+        headSha: "sha3",
+      }),
+    ).resolves.toEqual({ skipReason: "review skipped (draft)", reviewManifest: manifest });
+    expect(auditSpy).toHaveBeenCalled();
+
+    loadSpy.mockRejectedValueOnce(new Error("manifest unavailable"));
+    await expect(
+      resolveAutoReviewSkipForPullRequest({} as Env, {
+        authorBlacklisted: false,
+        isFrozenForManualReview: false,
+        repoFullName: "acme/widgets",
+        pr: { number: 4, title: "ok", baseRef: "main", isDraft: false },
+        author: "alice",
+        deliveryId: "d4",
+        headSha: "sha4",
+      }),
+    ).resolves.toEqual({ skipReason: null, reviewManifest: null });
+
+    loadSpy.mockRestore();
+    auditSpy.mockRestore();
+  });
+
+  it("resolveReviewManifestForAiReview reuses cached manifest or loads fail-safely", async () => {
+    const manifest = parseFocusManifest({ review: { auto_review: { skip_drafts: true } } });
+    const loadSpy = vi.spyOn(focusManifestLoader, "loadRepoFocusManifest");
+
+    await expect(resolveReviewManifestForAiReview({} as Env, "acme/widgets", manifest)).resolves.toBe(manifest);
+    expect(loadSpy).not.toHaveBeenCalled();
+
+    loadSpy.mockResolvedValueOnce(manifest);
+    await expect(resolveReviewManifestForAiReview({} as Env, "acme/widgets", null)).resolves.toBe(manifest);
+
+    loadSpy.mockRejectedValueOnce(new Error("manifest unavailable"));
+    await expect(resolveReviewManifestForAiReview({} as Env, "acme/widgets", null)).resolves.toBeNull();
+
+    loadSpy.mockRestore();
   });
 });

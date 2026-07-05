@@ -2715,6 +2715,7 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
       "review skipped (base branch out of scope)",
     );
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDrafts: false }, { ...input, isDraft: true })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, ignoreAuthors: ["*[bot]"] }, { ...input, author: null })).toBeNull();
   });
 
   it("serializes explicit skip_drafts: false and drops unsafe title keywords", () => {
@@ -2723,6 +2724,26 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
     expect(m.review.autoReview.ignoreTitleKeywords).toEqual(["WIP"]);
     expect(m.warnings.some((w) => /ignore_title_keywords\[1\]/.test(w))).toBe(true);
     expect(parseFocusManifest({ review: reviewConfigToJson(m.review) }).review.autoReview.skipDrafts).toBe(false);
+  });
+
+  it("round-trips individual auto_review fields through reviewConfigToJson", () => {
+    const authorsOnly = parseFocusManifest({ review: { auto_review: { ignore_authors: ["*[bot]"] } } });
+    expect(reviewConfigToJson(authorsOnly.review)).toEqual({ auto_review: { ignore_authors: ["*[bot]"] } });
+    const keywordsOnly = parseFocusManifest({ review: { auto_review: { ignore_title_keywords: ["DRAFT"] } } });
+    expect(reviewConfigToJson(keywordsOnly.review)).toEqual({ auto_review: { ignore_title_keywords: ["DRAFT"] } });
+    const basesOnly = parseFocusManifest({ review: { auto_review: { base_branches: ["main"] } } });
+    expect(reviewConfigToJson(basesOnly.review)).toEqual({ auto_review: { base_branches: ["main"] } });
+  });
+
+  it("warns on invalid ignore_title_keywords list shapes and caps entries", () => {
+    const bad = parseFocusManifest({ review: { auto_review: { ignore_title_keywords: "WIP" } } });
+    expect(bad.review.autoReview.ignoreTitleKeywords).toEqual([]);
+    expect(bad.warnings.some((w) => /ignore_title_keywords.*must be a list/.test(w))).toBe(true);
+    const many = parseFocusManifest({
+      review: { auto_review: { ignore_title_keywords: Array.from({ length: 60 }, (_, i) => `kw${i}`) } },
+    });
+    expect(many.review.autoReview.ignoreTitleKeywords).toHaveLength(50);
+    expect(many.warnings.some((w) => /ignore_title_keywords.*capped/.test(w))).toBe(true);
   });
 });
 
