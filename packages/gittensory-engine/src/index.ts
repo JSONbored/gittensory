@@ -151,6 +151,7 @@ export { isPlanProgressComplete } from "./plan-progress-complete.js";
 export { resolvePlanOverallStatus, type PlanOverallStatus } from "./plan-overall-status.js";
 export { hasPlanReadySteps } from "./plan-ready.js";
 export { isPlanTerminated } from "./plan-terminated.js";
+export { summarizePlanProgress, type PlanProgressSummary } from "./plan-progress-summary.js";
 export * from "./plan-templates.js";
 export * from "./portfolio/queue.js";
 export {

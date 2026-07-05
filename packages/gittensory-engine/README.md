@@ -541,6 +541,7 @@ dashboard progress summaries:
 - `resolvePlanOverallStatus(plan)` — coarse status (`pending` | `running` | `completed` | `failed` | `blocked`); mirrors `planProgress`'s `status`
 - `hasPlanReadySteps(plan)` — any step is runnable now (`pending` with satisfied dependencies; mirrors `nextReadySteps(plan).length > 0`)
 - `isPlanTerminated(plan)` — plan reached a terminal outcome (`failed` step or every step `completed`/`skipped`; empty plans are not terminated)
+- `summarizePlanProgress(plan)` — per-status counts plus overall `status`; mirrors hosted `planProgress`
 
 ## Opportunity competition
 
