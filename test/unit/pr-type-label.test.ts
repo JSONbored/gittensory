@@ -270,6 +270,21 @@ describe("normalizeTypeLabelSet (#priority-linked-issue-gate)", () => {
       expect(warnings.some((w) => w.includes("more than 32 categories") && w.includes("custom29"))).toBe(true);
     });
 
+    it("silently drops an overflow entry whose value is undefined, without warning", () => {
+      const warnings: string[] = [];
+      // 3 built-ins + 29 valid customs exactly fill the 32-category cap; a further key present with an
+      // explicit `undefined` value hits the overflow branch but must not warn, mirroring how an absent
+      // built-in value is dropped silently elsewhere in this function.
+      const input: Record<string, unknown> = Object.fromEntries(Array.from({ length: MAX_TYPE_LABEL_CATEGORIES - 3 }, (_, index) => [`custom${index}`, `area:${index}`]));
+      input.overflowUndefined = undefined;
+
+      const result = normalizeTypeLabelSet(input, warnings);
+
+      expect(Object.keys(result)).toHaveLength(MAX_TYPE_LABEL_CATEGORIES);
+      expect(result.overflowUndefined).toBeUndefined();
+      expect(warnings.some((w) => w.includes("overflowUndefined"))).toBe(false);
+    });
+
     it("rejects overlong label names and warns", () => {
       const warnings: string[] = [];
       const overlong = "x".repeat(MAX_TYPE_LABEL_NAME_LENGTH + 1);
