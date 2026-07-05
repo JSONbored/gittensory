@@ -77,11 +77,17 @@ describe("isGeneratedFile", () => {
     }
   });
 
-  it("matches Ruby protobuf and gRPC stubs alongside the other protoc plugins", () => {
-    for (const path of ["gen/service_pb.rb", "gen/service_services_pb.rb", "proto/messages.pb.rs"]) {
+  it("matches Ruby, PHP, and Rust protobuf stubs alongside the other protoc plugins", () => {
+    for (const path of [
+      "gen/service_pb.rb",
+      "gen/service_services_pb.rb",
+      "gen/service_pb.php",
+      "gen/service_grpc_pb.php",
+      "proto/messages.pb.rs",
+    ]) {
       expect(isGeneratedFile(path)).toBe(true);
     }
-    for (const path of ["lib/service.rb", "src/main.rs"]) {
+    for (const path of ["lib/service.rb", "src/api.php", "src/main.rs"]) {
       expect(isGeneratedFile(path)).toBe(false);
     }
   });

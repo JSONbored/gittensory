@@ -63,6 +63,8 @@ function isGeneratedFileFrom(parts: NormalizedPath): boolean {
     /_pb2(_grpc)?\.pyi?$/.test(norm) ||
     // Ruby protobuf: message stubs are `*_pb.rb`; the gRPC plugin emits sibling `*_services_pb.rb`.
     /_pb\.rb$/.test(norm) ||
+    // PHP protobuf: message stubs are `*_pb.php`; the gRPC plugin emits sibling `*_grpc_pb.php`.
+    /_pb\.php$/.test(norm) ||
     // Dart codegen: build_runner (`.g.dart`), freezed (`.freezed.dart`), and
     // retrofit/injectable (`.gr.dart`) all emit generated part files.
     /\.(g|freezed|gr)\.dart$/.test(norm) ||
