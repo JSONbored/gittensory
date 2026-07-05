@@ -10162,6 +10162,7 @@
                   "surface_off",
                   "missing_author",
                   "bot_author",
+                  "ignored_author",
                   "maintainer_author",
                   "miner_detection_unavailable",
                   "not_official_gittensor_miner",
@@ -10456,6 +10457,7 @@
                   "surface_off",
                   "missing_author",
                   "bot_author",
+                  "ignored_author",
                   "maintainer_author",
                   "miner_detection_unavailable",
                   "not_official_gittensor_miner",
@@ -15715,6 +15717,7 @@
                 "surface_off",
                 "missing_author",
                 "bot_author",
+                "ignored_author",
                 "maintainer_author",
                 "miner_detection_unavailable",
                 "not_official_gittensor_miner"

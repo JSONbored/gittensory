@@ -307,6 +307,25 @@ gate:
 # ----------------------------------------------------------------------------
 # Everything a maintainer can toggle in the dashboard can be set here as code.
 # All values shown are the safe defaults; delete any line to inherit it.
+#
+# Review output controls. These tune review output without changing the
+# deterministic gate policy above. Omit the block to keep the byte-identical
+# defaults.
+review:
+  # Skip AI/public review output for matching PR author logins. Useful for dependency
+  # bump or release automation that already has separate policy/CI. This is a quiet
+  # skip, not a gate failure: when the Orb review check is enabled it is completed as
+  # "skipped" with an ignored-author reason.
+  #
+  # Glob list. `*` and `**` both match any run of characters; `**/name` also matches
+  # `name` at the root. Matching is case-insensitive against the GitHub login.
+  # Default: [] (every author remains review-eligible).
+  auto_review:
+    ignore_authors:
+      - "*[bot]"
+      - dependabot
+      - renovate
+
 settings:
   # Who receives the public PR comment.
   # off | detected_contributors_only | all_prs. Default: detected_contributors_only.

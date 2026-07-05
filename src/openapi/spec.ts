@@ -855,7 +855,7 @@ export function buildOpenApiSpec() {
           param: { description: "Optional repository filter. Browser sessions must have control-panel access to this repo." },
           example: "JSONbored/gittensory",
         }),
-        reason: z.enum(["surface_off", "missing_author", "bot_author", "maintainer_author", "miner_detection_unavailable", "not_official_gittensor_miner"]).optional().openapi({
+        reason: z.enum(["surface_off", "missing_author", "bot_author", "ignored_author", "maintainer_author", "miner_detection_unavailable", "not_official_gittensor_miner"]).optional().openapi({
           param: { description: "Optional PR skip reason filter." },
           example: "not_official_gittensor_miner",
         }),

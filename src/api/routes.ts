@@ -389,6 +389,7 @@ const PR_VISIBILITY_SKIP_REASONS = [
   "surface_off",
   "missing_author",
   "bot_author",
+  "ignored_author",
   "maintainer_author",
   "miner_detection_unavailable",
   "not_official_gittensor_miner",
@@ -5365,6 +5366,8 @@ function skippedPrAuditRemediation(reason: string): string {
       return "Retry after GitHub provides a resolvable pull request author.";
     case "bot_author":
       return "No action needed; bot-authored pull requests are intentionally kept quiet.";
+    case "ignored_author":
+      return "No action needed; the repository manifest explicitly skips review output for this author.";
     case "maintainer_author":
       return "Enable maintainer-authored PRs in repository settings only if those PRs should receive public GitHub App output.";
     case "miner_detection_unavailable":

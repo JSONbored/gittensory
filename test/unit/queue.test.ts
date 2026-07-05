@@ -11842,6 +11842,136 @@ describe("queue processors", () => {
     expect(audit?.detail).toBe("bot_author");
   });
 
+  it("publishes a skipped review check and no gate failure for ignored authors", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "block",
+    });
+    const calls = { skippedChecks: 0, comments: 0, minerList: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        calls.minerList += 1;
+        return Response.json([]);
+      }
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/commits/ignoredauthor123/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/issues/56/comments")) {
+        calls.comments += 1;
+        return Response.json([]);
+      }
+      if (url.includes("/check-runs") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string; output?: { title?: string; summary?: string } };
+        expect(body).toMatchObject({
+          status: "completed",
+          conclusion: "skipped",
+          output: {
+            title: "Gittensory Orb Review Agent skipped",
+            summary: "Review skipped: ignored author.",
+          },
+        });
+        calls.skippedChecks += 1;
+        return Response.json({ id: 930 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", {
+      gate: { linkedIssue: "block" },
+      review: { auto_review: { ignore_authors: ["renovate*"] } },
+    });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "ignored-author-skip",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 56, title: "Automated dependency update", state: "open", user: { login: "renovate-release" }, head: { sha: "ignoredauthor123" }, labels: [], body: "No issue link." },
+      },
+    });
+
+    expect(calls).toEqual({ skippedChecks: 1, comments: 0, minerList: 0 });
+    const visibilitySkip = await env.DB.prepare("select detail from audit_events where event_type = ? and target_key = ?")
+      .bind("github_app.pr_visibility_skipped", "JSONbored/gittensory#56")
+      .first<{ detail: string }>();
+    expect(visibilitySkip?.detail).toBe("ignored_author");
+    const publicSkip = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = ? and target_key = ?")
+      .bind("github_app.pr_public_surface_skipped", "JSONbored/gittensory#56")
+      .first<{ detail: string; metadata_json: string }>();
+    expect(publicSkip?.detail).toBe("ignored_author");
+    expect(JSON.parse(publicSkip?.metadata_json ?? "{}")).toMatchObject({ matchedPattern: "renovate*" });
+  });
+
+  it("audits ignored authors without a skipped check when review checks are disabled", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "off",
+      reviewCheckMode: "disabled",
+      linkedIssueGateMode: "off",
+    });
+    const calls = { github: 0, minerList: 0 };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === "https://api.gittensor.io/miners") calls.minerList += 1;
+      if (url.includes("api.github.com")) calls.github += 1;
+      return new Response("not found", { status: 404 });
+    });
+
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", {
+      review: { auto_review: { ignore_authors: ["release-please*"] } },
+    });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "ignored-author-no-check",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 57, title: "Automated release", state: "open", user: { login: "release-please-bot" }, head: { sha: "ignorednocheck123" }, labels: [], body: "No issue link." },
+      },
+    });
+
+    expect(calls).toEqual({ github: 0, minerList: 0 });
+    const skipped = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = ? and target_key = ?")
+      .bind("github_app.pr_public_surface_skipped", "JSONbored/gittensory#57")
+      .first<{ detail: string; metadata_json: string }>();
+    expect(skipped?.detail).toBe("ignored_author");
+    expect(JSON.parse(skipped?.metadata_json ?? "{}")).toMatchObject({ matchedPattern: "release-please*" });
+  });
+
   it("publishes an enabled gate when Gittensor-only public output is skipped for an unconfirmed miner", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(

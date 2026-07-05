@@ -805,7 +805,7 @@ export const RepoSettingsPreviewSchema = z
       willLabel: z.boolean(),
       willCheckRun: z.boolean(),
       skipped: z.boolean(),
-      skipReason: z.enum(["surface_off", "missing_author", "bot_author", "maintainer_author", "miner_detection_unavailable", "not_official_gittensor_miner"]).nullable(),
+      skipReason: z.enum(["surface_off", "missing_author", "bot_author", "ignored_author", "maintainer_author", "miner_detection_unavailable", "not_official_gittensor_miner"]).nullable(),
       actions: z.array(z.enum(["skip", "comment", "label", "check_run", "none"])),
       summary: z.string(),
     }),
@@ -861,7 +861,7 @@ export const SkippedPrAuditExportSchema = z
     filters: z.object({
       repoFullName: z.string().nullable(),
       reason: z
-        .enum(["surface_off", "missing_author", "bot_author", "maintainer_author", "miner_detection_unavailable", "not_official_gittensor_miner"])
+        .enum(["surface_off", "missing_author", "bot_author", "ignored_author", "maintainer_author", "miner_detection_unavailable", "not_official_gittensor_miner"])
         .nullable(),
       since: z.string().nullable(),
     }),

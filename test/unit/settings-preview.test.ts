@@ -87,6 +87,7 @@ describe("decidePublicSurface", () => {
     expect(decidePublicSurface({ settings: settings(), authorLogin: null, minerStatus: "confirmed" }).skipReason).toBe("missing_author");
     expect(decidePublicSurface({ settings: settings(), authorLogin: "robot", authorType: "Bot", minerStatus: "confirmed" }).skipReason).toBe("bot_author");
     expect(decidePublicSurface({ settings: settings(), authorLogin: "app[bot]", minerStatus: "confirmed" }).skipReason).toBe("bot_author");
+    expect(decidePublicSurface({ settings: settings(), authorLogin: "renovate", ignoredAuthorPatterns: ["renovate"], minerStatus: "confirmed" }).skipReason).toBe("ignored_author");
     expect(decidePublicSurface({ settings: settings(), authorLogin: "owner", authorAssociation: "OWNER", minerStatus: "confirmed" }).skipReason).toBe("maintainer_author");
     expect(decidePublicSurface({ settings: settings({ publicAudienceMode: "gittensor_only" }), authorLogin: "x", minerStatus: "not_found" }).skipReason).toBe("not_official_gittensor_miner");
     expect(decidePublicSurface({ settings: settings({ publicAudienceMode: "gittensor_only" }), authorLogin: "x", minerStatus: "unavailable" }).skipReason).toBe("miner_detection_unavailable");
@@ -97,6 +98,24 @@ describe("decidePublicSurface", () => {
   it("includes maintainer authors when configured", () => {
     const decision = decidePublicSurface({ settings: settings({ includeMaintainerAuthors: true }), authorLogin: "owner", authorAssociation: "OWNER", minerStatus: "confirmed" });
     expect(decision.skipped).toBe(false);
+  });
+
+  it("applies ignored-author globs before maintainer inclusion and miner checks", () => {
+    expect(
+      decidePublicSurface({
+        settings: settings({ includeMaintainerAuthors: true, publicAudienceMode: "gittensor_only" }),
+        authorLogin: "renovate[botless]",
+        ignoredAuthorPatterns: ["renovate*"],
+        authorAssociation: "OWNER",
+        minerStatus: "not_found",
+      }),
+    ).toMatchObject({
+      skipped: true,
+      skipReason: "ignored_author",
+      willComment: false,
+      willLabel: false,
+      willCheckRun: false,
+    });
   });
 
   it("supports a check-run-only surface even when public comments are off", () => {

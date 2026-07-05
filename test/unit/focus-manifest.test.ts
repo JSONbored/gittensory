@@ -14,6 +14,7 @@ import {
   resolveEffectiveSettings,
   excludeReviewPaths,
   resolveReviewPathInstructions,
+  resolveReviewAutoReviewConfig,
   resolveReviewPreMergeChecks,
   composeRepoReviewContext,
   resolveReviewPromptOverrides,
@@ -541,7 +542,7 @@ describe("compileFocusManifestPolicy", () => {
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
       gate: { present: false, enabled: null, checkMode: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, lockfileIntegrityMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null, claMode: null, claConsentPhrase: null, claCheckRunName: null, claCheckRunAppSlug: null, expectedCiContexts: null },
       settings: {},
-      review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
+      review: { present: false, footerText: null, note: null, fields: {}, autoReview: { ignoreAuthors: [] }, enrichmentAnalyzers: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
       features: { present: false, rag: null, reputation: null, unifiedComment: null, safety: null },
       contentLane: { present: false, entryFileGlob: null, providerFileGlob: null, artifactGlob: null, collectionField: null, maxAppendedEntries: null, duplicateKeyFields: [], validatorId: null },
       repoDocGeneration: { present: false, enabled: false, scope: ["agents"], allowOverwriteExisting: false, refreshIntervalDays: 7 },
@@ -2453,6 +2454,60 @@ describe("parseFocusManifest review config", () => {
     expect(m.review.securityFocus).toBe(true);
     expect(m.review.present).toBe(true);
     expect(parseFocusManifest({ review: reviewConfigToJson(m.review) }).review).toEqual(m.review);
+  });
+});
+
+describe("review.auto_review.ignore_authors (#2060)", () => {
+  it("parses ignore_authors, marks present, and round-trips", () => {
+    const manifest = parseFocusManifest({
+      review: {
+        auto_review: {
+          ignore_authors: [" dependabot ", "*[bot]", "RENOVATE", "renovate", "", 42],
+        },
+      },
+    });
+    expect(manifest.present).toBe(true);
+    expect(manifest.review.present).toBe(true);
+    expect(manifest.review.autoReview.ignoreAuthors).toEqual(["dependabot", "*[bot]", "RENOVATE"]);
+    expect(manifest.warnings.some((warning) => /ignore_authors\[4\]/.test(warning))).toBe(true);
+    expect(manifest.warnings.some((warning) => /ignore_authors\[5\]/.test(warning))).toBe(true);
+    expect(parseFocusManifest({ review: reviewConfigToJson(manifest.review) }).review).toEqual(manifest.review);
+  });
+
+  it("keeps an absent auto_review block as the byte-identical default", () => {
+    const manifest = parseFocusManifest({ review: { footer: { text: "Custom." } } });
+    expect(manifest.review.autoReview.ignoreAuthors).toEqual([]);
+    expect(reviewConfigToJson(manifest.review)).toEqual({ footer: { text: "Custom." } });
+    expect(resolveReviewAutoReviewConfig(manifest)).toEqual({ ignoreAuthors: [] });
+    expect(resolveReviewAutoReviewConfig(null)).toEqual({ ignoreAuthors: [] });
+  });
+
+  it("warns for malformed auto_review and caps ignore_authors", () => {
+    const malformed = parseFocusManifest({ review: { auto_review: ["dependabot"] } });
+    expect(malformed.review.autoReview.ignoreAuthors).toEqual([]);
+    expect(malformed.warnings.some((warning) => /review\.auto_review.*mapping/.test(warning))).toBe(true);
+
+    const tooMany = parseFocusManifest({
+      review: {
+        auto_review: {
+          ignore_authors: Array.from({ length: 60 }, (_, index) => `bot-${index}`),
+        },
+      },
+    });
+    expect(tooMany.review.autoReview.ignoreAuthors).toHaveLength(50);
+    expect(tooMany.warnings.some((warning) => /ignore_authors.*capped/.test(warning))).toBe(true);
+  });
+
+  it("drops over-long ignore_authors globs", () => {
+    const manifest = parseFocusManifest({
+      review: {
+        auto_review: {
+          ignore_authors: [`${"a".repeat(400)}*`, "release-please*"],
+        },
+      },
+    });
+    expect(manifest.review.autoReview.ignoreAuthors).toEqual(["release-please*"]);
+    expect(manifest.warnings.some((warning) => /ignore_authors\[0\].*exceeds/.test(warning))).toBe(true);
   });
 });
 

@@ -15,6 +15,7 @@ import {
 } from "./engine";
 import { REQUIRED_INSTALLATION_PERMISSIONS } from "../github/backfill";
 import { GITTENSORY_GATE_CHECK_NAME, shouldPublishReviewCheck } from "../review/check-names";
+import { decideReviewEligibility } from "../review/review-eligibility";
 import { requiredAgentActionPermissions } from "../settings/agent-execution";
 
 export function hasVisiblePrSurface(settings: RepositorySettings): boolean {
@@ -39,6 +40,7 @@ export type PublicSurfaceSkipReason =
   | "surface_off"
   | "missing_author"
   | "bot_author"
+  | "ignored_author"
   | "maintainer_author"
   | "miner_detection_unavailable"
   | "not_official_gittensor_miner";
@@ -50,6 +52,7 @@ export type PublicSurfaceDecisionInput = {
   authorLogin?: string | null | undefined;
   authorType?: string | null | undefined;
   authorAssociation?: string | null | undefined;
+  ignoredAuthorPatterns?: readonly string[] | null | undefined;
   minerStatus: PublicSurfaceMinerStatus;
 };
 
@@ -67,6 +70,7 @@ const SKIP_SUMMARY: Record<PublicSurfaceSkipReason, string> = {
   surface_off: "Public surface and check runs are both disabled for this repo; nothing would be posted.",
   missing_author: "The pull request has no resolvable author login; Gittensory would skip it.",
   bot_author: "The author is a bot account; Gittensory would skip it.",
+  ignored_author: "The author matches review.auto_review.ignore_authors; Gittensory would skip it.",
   maintainer_author: "The author is a maintainer (owner/member/collaborator) and maintainer authors are excluded by this repo's settings.",
   miner_detection_unavailable: "Official Gittensor miner detection is unavailable, so Gittensory would skip rather than guess.",
   not_official_gittensor_miner: "The author is not a confirmed Gittensor miner; Gittensory would stay quiet.",
@@ -86,6 +90,7 @@ export function decidePublicSurface(input: PublicSurfaceDecisionInput): PublicSu
   if (!hasVisiblePrSurface(settings)) return skipDecision("surface_off");
   if (!input.authorLogin) return skipDecision("missing_author");
   if (input.authorType === "Bot" || /\[bot\]$/i.test(input.authorLogin)) return skipDecision("bot_author");
+  if (!decideReviewEligibility({ authorLogin: input.authorLogin, ignoreAuthors: input.ignoredAuthorPatterns }).eligible) return skipDecision("ignored_author");
   if (!settings.includeMaintainerAuthors && input.authorAssociation && ["OWNER", "MEMBER", "COLLABORATOR"].includes(input.authorAssociation)) {
     return skipDecision("maintainer_author");
   }

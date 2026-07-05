@@ -292,6 +292,11 @@ export type FocusManifestReviewConfig = {
   footerText: string | null;
   note: string | null;
   fields: Partial<Record<ReviewFieldKey, boolean>>;
+  /** `review.auto_review.ignore_authors`: login glob list for authors whose PRs should stay quiet. This is an
+   *  operator noise-control knob for dependency-bump and other automation accounts; empty (default) keeps review
+   *  eligibility byte-identical. The runtime decision lives in review/review-eligibility.ts so the parser only
+   *  owns normalization, capping, de-duping, and cache round-tripping. (#2060) */
+  autoReview: ReviewAutoReviewConfig;
   /** `review.enrichment`: per-repo REES enrichment-analyzer toggles (analyzer name → on/off). Only known analyzer
    *  keys are kept (unknown keys warn + drop at parse). Empty (default, absent) ⇒ the operator's default analyzer
    *  set runs unchanged (byte-identical). (#2050) */
@@ -326,6 +331,10 @@ export type FocusManifestReviewConfig = {
    *  advisory finding; a check with `enforce: true` becomes a hard gate blocker. Empty (default) ⇒ no finding
    *  (byte-identical). No AI judgment is involved. (#review-pre-merge-checks) */
   preMergeChecks: PreMergeCheck[];
+};
+
+export type ReviewAutoReviewConfig = {
+  ignoreAuthors: string[];
 };
 
 /** One `review.path_instructions[]` entry: a manifest path glob + the public-safe instructions to apply when a
@@ -487,7 +496,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicNotes: [],
   gate: { ...EMPTY_GATE_CONFIG },
   settings: {},
-  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
+  review: { present: false, footerText: null, note: null, fields: {}, autoReview: { ignoreAuthors: [] }, enrichmentAnalyzers: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
   features: { ...EMPTY_FEATURES_CONFIG },
   contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
   repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
@@ -517,7 +526,7 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     warnings,
     gate: { ...EMPTY_GATE_CONFIG },
     settings: {},
-    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
+    review: { present: false, footerText: null, note: null, fields: {}, autoReview: { ignoreAuthors: [] }, enrichmentAnalyzers: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
     features: { ...EMPTY_FEATURES_CONFIG },
     contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
     repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
@@ -1410,13 +1419,14 @@ function parsePublicSafeText(value: JsonValue | undefined, field: string, warnin
  * throws; invalid/unsafe values are dropped with warnings.
  */
 function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestReviewConfig {
-  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] };
+  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, autoReview: { ignoreAuthors: [] }, enrichmentAnalyzers: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] };
   if (value === undefined || value === null) return empty;
   if (typeof value !== "object" || Array.isArray(value)) {
     warnings.push(`Manifest field "review" must be a mapping; ignoring it.`);
     return empty;
   }
   const r = value as Record<string, JsonValue>;
+  const autoReview = parseReviewAutoReviewConfig(r.auto_review, warnings);
   const footerRecord = r.footer !== null && typeof r.footer === "object" && !Array.isArray(r.footer) ? (r.footer as Record<string, JsonValue>) : undefined;
   if (r.footer !== undefined && r.footer !== null && footerRecord === undefined) warnings.push(`Manifest "review.footer" must be a mapping; ignoring it.`);
   const fieldsRecord = r.fields !== null && typeof r.fields === "object" && !Array.isArray(r.fields) ? (r.fields as Record<string, JsonValue>) : undefined;
@@ -1461,11 +1471,13 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
       instructions !== null ||
       excludePaths.length > 0 ||
       preMergeChecks.length > 0 ||
+      autoReview.ignoreAuthors.length > 0 ||
       Object.keys(fields).length > 0 ||
       Object.keys(enrichmentAnalyzers).length > 0,
     footerText,
     note,
     fields,
+    autoReview,
     enrichmentAnalyzers,
     profile,
     securityFocus,
@@ -1474,6 +1486,18 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
     instructions,
     excludePaths,
     preMergeChecks,
+  };
+}
+
+function parseReviewAutoReviewConfig(value: JsonValue | undefined, warnings: string[]): ReviewAutoReviewConfig {
+  if (value === undefined || value === null) return { ignoreAuthors: [] };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push(`Manifest "review.auto_review" must be a mapping; ignoring it.`);
+    return { ignoreAuthors: [] };
+  }
+  const record = value as Record<string, JsonValue>;
+  return {
+    ignoreAuthors: parseManifestGlobList(record.ignore_authors, "review.auto_review.ignore_authors", warnings),
   };
 }
 
@@ -1529,11 +1553,8 @@ function parseManifestGlobList(value: JsonValue | undefined, fieldLabel: string,
     return [];
   }
   const out: string[] = [];
+  const seen = new Set<string>();
   for (const [index, entry] of value.entries()) {
-    if (out.length >= MAX_PATH_INSTRUCTIONS) {
-      warnings.push(`Manifest "${fieldLabel}" is capped at ${MAX_PATH_INSTRUCTIONS} entries; dropping the rest.`);
-      break;
-    }
     const glob = typeof entry === "string" ? entry.trim() : "";
     if (!glob) {
       warnings.push(`Manifest "${fieldLabel}[${index}]" must be a non-empty string; ignoring it.`);
@@ -1543,6 +1564,13 @@ function parseManifestGlobList(value: JsonValue | undefined, fieldLabel: string,
       warnings.push(`Manifest "${fieldLabel}[${index}]" exceeds ${MAX_ITEM_LENGTH} chars; ignoring it.`);
       continue;
     }
+    const key = glob.toLowerCase();
+    if (seen.has(key)) continue;
+    if (out.length >= MAX_PATH_INSTRUCTIONS) {
+      warnings.push(`Manifest "${fieldLabel}" is capped at ${MAX_PATH_INSTRUCTIONS} entries; dropping the rest.`);
+      break;
+    }
+    seen.add(key);
     out.push(glob);
   }
   return out;
@@ -1612,6 +1640,7 @@ function parseReviewProfile(value: JsonValue | undefined, warnings: string[]): R
 export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue {
   if (!review.present) return null;
   const out: Record<string, JsonValue> = {};
+  if (review.autoReview.ignoreAuthors.length > 0) out.auto_review = { ignore_authors: [...review.autoReview.ignoreAuthors] };
   if (review.footerText !== null) out.footer = { text: review.footerText };
   if (review.note !== null) out.note = review.note;
   if (review.profile !== null) out.profile = review.profile;
@@ -1672,6 +1701,13 @@ export function resolveReviewPreMergeChecks(manifest: FocusManifest | null): Pre
 /** Resolve `review.enrichment` analyzer toggles from a possibly-null manifest (null = load failure ⇒ no toggles ⇒
  *  the operator's default analyzer set runs unchanged). Centralized so the enrichment caller threads them in one
  *  place with the null-manifest branch covered here (unit-tested) rather than inline in the processor. (#2050) */
+/** Resolve `review.auto_review` from a possibly-null manifest (null = load failure => no ignored authors). The
+ *  runtime eligibility check then fails open instead of suppressing review output on an ambiguous manifest read.
+ *  (#2060) */
+export function resolveReviewAutoReviewConfig(manifest: FocusManifest | null): ReviewAutoReviewConfig {
+  return { ignoreAuthors: manifest?.review.autoReview.ignoreAuthors ?? [] };
+}
+
 export function resolveEnrichmentAnalyzerToggles(manifest: FocusManifest | null): Partial<Record<ReesAnalyzerName, boolean>> {
   return manifest?.review.enrichmentAnalyzers ?? {};
 }

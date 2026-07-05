@@ -345,6 +345,7 @@ import {
   composeRepoReviewContext,
   excludeReviewPaths,
   resolveRepoEnrichmentToggles,
+  resolveReviewAutoReviewConfig,
   resolveReviewPathInstructions,
   resolveReviewPreMergeChecks,
   resolveReviewPromptOverrides,
@@ -352,6 +353,7 @@ import {
   type ReviewPathInstruction,
   type ReviewProfile,
 } from "../signals/focus-manifest";
+import { decideReviewEligibility } from "../review/review-eligibility";
 import {
   loadRepoFocusManifest,
   loadRepoFocusManifests,
@@ -7043,6 +7045,58 @@ async function maybePublishPrPublicSurface(
   // override) is gated on this, NOT on gateEnabled alone — gateEnabled stays scoped to the check-run PUBLISH
   // calls (createOrUpdate*GateCheckRun), which must still never fire when reviewCheckMode is disabled.
   const shouldEvaluateGate = gateEnabled || autonomyNeedsGateEvaluation;
+  const reviewManifest = await loadRepoFocusManifest(env, repoFullName).catch(() => null);
+  const autoReviewConfig = resolveReviewAutoReviewConfig(reviewManifest);
+  const reviewEligibility = decideReviewEligibility({
+    authorLogin: author,
+    ignoreAuthors: autoReviewConfig.ignoreAuthors,
+  });
+  if (!reviewEligibility.eligible) {
+    await auditPrVisibilitySkip(
+      env,
+      repoFullName,
+      pr.number,
+      author,
+      reviewEligibility.skipReason,
+      webhook.deliveryId,
+    );
+    if (gateEnabled) {
+      const gateCheckResult = await createOrUpdateSkippedGateCheckRun(
+        env,
+        installationId,
+        repoFullName,
+        advisory,
+        "Review skipped: ignored author.",
+        mode,
+      );
+      /* v8 ignore next -- permission-missing audit behavior mirrors the existing skipped-check path above. */
+      if (gateCheckResult?.kind === "permission_missing") {
+        await auditGateCheckPermissionMissing(
+          env,
+          author,
+          repoFullName,
+          pr.number,
+          webhook.deliveryId,
+          gateCheckResult.warning,
+        );
+      }
+    }
+    await recordAuditEvent(env, {
+      eventType: "github_app.pr_public_surface_skipped",
+      actor: author,
+      targetKey: `${repoFullName}#${pr.number}`,
+      outcome: "completed",
+      detail: reviewEligibility.skipReason,
+      metadata: {
+        deliveryId: webhook.deliveryId,
+        repoFullName,
+        matchedPattern: reviewEligibility.matchedPattern,
+        gateCheckMode: settings.gateCheckMode,
+        reviewCheckMode: settings.reviewCheckMode,
+      },
+    }).catch(() => undefined);
+    return undefined;
+  }
   if (
     !gateEnabled &&
     !autonomyNeedsGateEvaluation &&
@@ -7788,7 +7842,6 @@ async function maybePublishPrPublicSurface(
           agent: "dual-ai",
         },
         async () => {
-          const reviewManifest = await loadRepoFocusManifest(env, repoFullName).catch(() => null);
           // `.gittensory.yml` review.profile + review.security_focus + review.path_instructions +
           // review.exclude_paths (#review-profile / #review-security-focus / #review-path-instructions /
           // #review-exclude-paths): resolve from the manifest (cached from settings resolution, so a cheap cache
