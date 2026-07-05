@@ -358,6 +358,8 @@ export async function buildReviewEnrichment(
           path: file.path,
           status: file.status ?? undefined,
           previousPath: file.previousFilename ?? undefined,
+          additions: file.additions,
+          deletions: file.deletions,
           patch:
             typeof file.payload?.patch === "string"
               ? file.payload.patch

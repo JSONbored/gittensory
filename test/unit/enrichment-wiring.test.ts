@@ -46,9 +46,9 @@ async function seedRepoFile(env: Env, repo: string) {
       7,
       "src/a.ts",
       "modified",
-      1,
-      0,
-      1,
+      25,
+      3,
+      28,
       JSON.stringify({ patch: "@@\n+export const A = 1;" }),
     )
     .run();
@@ -107,6 +107,7 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
         body?: string;
         githubToken?: string;
         linkedIssue?: { number: number; title?: string; body?: string };
+        files?: Array<{ path: string; additions?: number; deletions?: number; patch?: string }>;
       };
     } = {};
     const fetchSpy = vi
@@ -122,6 +123,7 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
             body?: string;
             githubToken?: string;
             linkedIssue?: { number: number; title?: string; body?: string };
+            files?: Array<{ path: string; additions?: number; deletions?: number; patch?: string }>;
           };
           return new Response(
             JSON.stringify({
@@ -165,6 +167,15 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
         title: "Linked bug",
         body: "Issue context for history analyzer.",
       });
+      expect(reesRequest.body?.files).toEqual([
+        {
+          path: "src/a.ts",
+          status: "modified",
+          additions: 25,
+          deletions: 3,
+          patch: "@@\n+export const A = 1;",
+        },
+      ]);
       // The brief's content flows into the user prompt, but the system prompt carries our FIXED
       // enrichment suffix — the REES-supplied systemSuffix is untrusted and is never spliced in.
       expect(seenUser[0] ?? "").toContain("## EXTERNAL REVIEW BRIEF");
