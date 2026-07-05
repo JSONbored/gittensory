@@ -131,6 +131,9 @@ describe("isCodeFile", () => {
       "src/native/add.cpp",
       "include/native/add.h",
       "src/objc/View.m",
+      // Alternate C++ spellings indexed by rag.ts but previously missing here.
+      "native/src/parser.cc",
+      "libs/core/types.hpp",
       // Front-end framework source — already indexed as code by rag.ts and flagged
       // as visual paths, but must count as code for slop/missing-tests signals.
       "src/App.vue",

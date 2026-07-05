@@ -1779,6 +1779,11 @@ describe("local MCP git metadata collection", () => {
       expect(isTestFile(file)).toBe(false);
       expect(isCodeFile(file)).toBe(true);
     }
+    // Alternate C++ spellings (.cc/.hpp) must mirror server isCodeFile too.
+    for (const file of ["native/src/parser.cc", "libs/core/types.hpp"]) {
+      expect(isTestFile(file)).toBe(false);
+      expect(isCodeFile(file)).toBe(true);
+    }
   });
 
   it("extracts linked issues only from standalone closing keywords, not keyword substrings", async () => {

@@ -290,7 +290,7 @@ function severityToAnnotationLevel(severity: AdvisorySeverity): CheckRunAnnotati
 }
 
 function isCodePath(path: string): boolean {
-  return /\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|cs|cpp|c|h|swift|kt|m|sql|yaml|yml|json|toml|md|vue|svelte|astro)$/i.test(path);
+  return /\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|cs|cpp|cc|c|h|hpp|swift|kt|m|sql|yaml|yml|json|toml|md|vue|svelte|astro)$/i.test(path);
 }
 
 function collisionClustersForPull(collisions: CollisionReport, pullNumber: number): CollisionCluster[] {

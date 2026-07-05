@@ -610,7 +610,7 @@ export function isTestFile(file) {
 }
 
 export function isCodeFile(file) {
-  return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|c|h|m|vue|svelte|astro)$/i.test(file) && !isTestFile(file);
+  return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro)$/i.test(file) && !isTestFile(file);
 }
 
 function numberValue(value) {

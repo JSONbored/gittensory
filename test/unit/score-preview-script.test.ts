@@ -41,9 +41,11 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
       { path: "src/native/add.c", additions: 2, deletions: 0 },
       { path: "src/native/add.cpp", additions: 3, deletions: 0 },
       { path: "include/native/add.h", additions: 4, deletions: 0 },
+      { path: "native/src/parser.cc", additions: 5, deletions: 0 },
+      { path: "libs/core/types.hpp", additions: 7, deletions: 0 },
       { path: "src/objc/View.m", additions: 6, deletions: 0 },
     ]);
-    expect(out.sourceTokenScore).toBe(25); // src/loader.mts + native source extensions
+    expect(out.sourceTokenScore).toBe(37); // src/loader.mts + native source extensions
     expect(out.testTokenScore).toBe(SAMPLE_TEST_LINES + 7); // cy + pytest + root snapshot + JVM tests
     expect(out.nonCodeTokenScore).toBe(0); // the .mts is no longer misfiled as non-code
   });
@@ -73,6 +75,8 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
       { path: "src/native/add.c", additions: 2, deletions: 0 },
       { path: "src/native/add.cpp", additions: 3, deletions: 0 },
       { path: "include/native/add.h", additions: 4, deletions: 0 },
+      { path: "native/src/parser.cc", additions: 5, deletions: 0 },
+      { path: "libs/core/types.hpp", additions: 7, deletions: 0 },
       { path: "src/objc/View.m", additions: 6, deletions: 0 },
     ];
     const env = { ...process.env };
@@ -80,7 +84,7 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
     const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: nativeFiles }), encoding: "utf8", env });
     expect(res.status, res.stderr).toBe(0);
     const out = JSON.parse(res.stdout);
-    expect(out.sourceTokenScore).toBe(15); // 2 + 3 + 4 + 6
+    expect(out.sourceTokenScore).toBe(27); // 2 + 3 + 4 + 5 + 7 + 6
     expect(out.testTokenScore).toBe(0);
     expect(out.nonCodeTokenScore).toBe(0);
   });
@@ -92,9 +96,11 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
     const upperCaseFiles = [
       { path: "src/native/Foo.C", additions: 2, deletions: 0 },
       { path: "include/native/Foo.H", additions: 4, deletions: 0 },
+      { path: "native/src/Parser.CC", additions: 5, deletions: 0 },
+      { path: "libs/core/Types.HPP", additions: 3, deletions: 0 },
     ];
     const mjs = runPreview(upperCaseFiles);
-    expect(mjs.sourceTokenScore).toBe(6);
+    expect(mjs.sourceTokenScore).toBe(14);
     expect(mjs.nonCodeTokenScore).toBe(0);
 
     const python = findPython();
@@ -104,7 +110,7 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
     const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: upperCaseFiles }), encoding: "utf8", env });
     expect(res.status, res.stderr).toBe(0);
     const py = JSON.parse(res.stdout);
-    expect(py.sourceTokenScore).toBe(6);
+    expect(py.sourceTokenScore).toBe(14);
     expect(py.nonCodeTokenScore).toBe(0);
   });
 

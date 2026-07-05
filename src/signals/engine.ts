@@ -5538,9 +5538,10 @@ function sanitizeOutcomeDimensionKey(key: string): string {
 function isCodeFile(file: string): boolean {
   // Mirrors isCodeFile in local-branch.ts — kept in sync (cs/swift/groovy/php and C/C++/Objective-C added
   // so native/C#/Swift/Groovy/PHP source counts as code, matching the test conventions
-  // isTestPath already recognizes; vue/svelte/astro match rag.ts, visual paths, and isCodePath).
+  // isTestPath already recognizes; vue/svelte/astro match rag.ts, visual paths, and isCodePath;
+  // cc/hpp complete the C++ extension set alongside cpp/c/h).
   return (
-    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|c|h|m|vue|svelte|astro)$/i.test(
+    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro)$/i.test(
       file,
     ) && !isTestFile(file)
   );

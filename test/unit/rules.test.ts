@@ -812,6 +812,27 @@ describe("advisory rules", () => {
     }
   });
 
+  it("flags Missing test evidence for .cc/.hpp C++ source via isCodePath + isCodeFile parity", () => {
+    const advisory = buildPullRequestAdvisory(repo, {
+      repoFullName: repo.fullName, number: 24, title: "Add C++ modules without tests", state: "open",
+      authorLogin: "contributor", authorAssociation: "NONE", labels: [], linkedIssues: [],
+    });
+    const sourcePaths = ["native/src/parser.cc", "libs/core/types.hpp"];
+    const files: PullRequestFileRecord[] = sourcePaths.map((path) => ({
+      repoFullName: repo.fullName, pullNumber: 24, path, additions: 10, deletions: 0, changes: 10, payload: {},
+    }));
+    const collisions: CollisionReport = {
+      repoFullName: repo.fullName, generatedAt: "2026-06-10T00:00:00.000Z",
+      summary: { clusterCount: 0, highRiskCount: 0, itemsReviewed: 0 }, clusters: [],
+    };
+
+    const { annotations } = buildCheckRunAnnotations(advisory, { files, collisions, pullNumber: 24 }, "standard");
+
+    for (const path of sourcePaths) {
+      expect(annotations.some((entry) => entry.title === "Missing test evidence" && entry.path === path)).toBe(true);
+    }
+  });
+
   it("buildCheckRunAnnotations uses notice level for medium-risk collisions and critical public finding text", () => {
     const advisory = {
       ...buildPullRequestAdvisory(repo, null),

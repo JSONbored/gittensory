@@ -1272,8 +1272,9 @@ export function isCodeFile(file: string): boolean {
   // count as code too — otherwise a C#/Swift/Groovy/PHP/native source file is neither test
   // nor code in the local scorer. vue/svelte/astro align with review/rag.ts CODE_EXT_RE,
   // review/visual/paths.ts, and rules/advisory.ts isCodePath so every classifier agrees.
+  // cc/hpp round out the C++ set alongside cpp/c/h (rag.ts already indexes all four).
   return (
-    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|c|h|m|vue|svelte|astro)$/i.test(
+    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro)$/i.test(
       file,
     ) && !isTestFile(file)
   );
