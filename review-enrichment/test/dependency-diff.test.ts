@@ -69,6 +69,23 @@ test("extractDependencyInventoryChanges: respects the findings cap", () => {
   assert.equal(extractDependencyInventoryChanges(files, {}, 3).length, 3);
 });
 
+test("extractDependencyInventoryChanges: keeps add/remove separate across manifest files", () => {
+  const files = [
+    {
+      path: "apps/a/package.json",
+      patch: npmPatch(['-"axios": "1.6.0",']),
+    },
+    {
+      path: "apps/b/package.json",
+      patch: npmPatch(['+"axios": "1.6.0",']),
+    },
+  ];
+  assert.deepEqual(extractDependencyInventoryChanges(files), [
+    { ecosystem: "npm", package: "axios", from: "1.6.0", to: null, direction: "remove" },
+    { ecosystem: "npm", package: "axios", from: null, to: "1.6.0", direction: "add" },
+  ]);
+});
+
 test("scanDependencyDiffInventory: renders a public-safe brief", async () => {
   const findings = await scanDependencyDiffInventory({
     files: [

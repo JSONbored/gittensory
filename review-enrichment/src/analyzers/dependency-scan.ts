@@ -91,6 +91,7 @@ const ECOSYSTEM: Record<string, string> = {
 function collectManifestDependencyEntries(
   files: NonNullable<EnrichRequest["files"]>,
   limits: ScanLimits = {},
+  keyByFile = false,
 ): Map<string, { ecosystem: string; package: string; added?: string; removed?: string }> {
   const byKey = new Map<
     string,
@@ -112,7 +113,9 @@ function collectManifestDependencyEntries(
         continue;
       const parsed = parseLine(manifest, line.slice(1).trim());
       if (!parsed) continue;
-      const key = ecosystem + "::" + parsed.name;
+      const key = keyByFile
+        ? `${file.path}::${ecosystem}::${parsed.name}`
+        : `${ecosystem}::${parsed.name}`;
       const entry = byKey.get(key) ?? { ecosystem, package: parsed.name };
       if (sign === "+") entry.added = parsed.version;
       else entry.removed = parsed.version;
@@ -158,7 +161,7 @@ export function extractDependencyInventoryChanges(
   maxFindings = 25,
 ): DependencyInventoryChange[] {
   const findings: DependencyInventoryChange[] = [];
-  for (const entry of collectManifestDependencyEntries(files, limits).values()) {
+  for (const entry of collectManifestDependencyEntries(files, limits, true).values()) {
     if (findings.length >= maxFindings) break;
     if (entry.added && entry.removed && entry.added !== entry.removed) {
       findings.push({
