@@ -63,6 +63,7 @@ const EXPECTED_ANALYZERS = [
   "deprecatedDep",
   "revertRecurrence",
   "coverageDelta",
+  "callerImpact",
 ];
 
 test("analyzer descriptors cover the runtime registry in stable order", () => {

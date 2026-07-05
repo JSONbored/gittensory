@@ -51,6 +51,7 @@ import { scanApiBreak } from "./api-break.js";
 import { scanDeprecatedDependencies } from "./deprecated-dep.js";
 import { scanRevertRecurrence } from "./revert-recurrence.js";
 import { scanCoverageDelta } from "./coverage-delta.js";
+import { scanCallerImpact } from "./caller-impact.js";
 import type {
   AnalyzerDescriptor,
   AnalyzerFn,
@@ -1534,6 +1535,50 @@ export const ANALYZER_DESCRIPTORS = [
     },
     run: (req, { signal, analysis, diagnostics }) =>
       scanCoverageDelta(req, fetch, { signal, analysis, diagnostics }),
+  }),
+  descriptor({
+    name: "callerImpact",
+    title: "Caller impact of removed exports",
+    category: "quality",
+    cost: "github-heavy",
+    defaultEnabled: true,
+    requires: ["files", "github-token", "head-sha"],
+    limits: {
+      maxSymbols: 6,
+      maxSearches: 6,
+      maxFileFetches: 12,
+      maxCallersPerFinding: 5,
+      maxFindings: 25,
+    },
+    docs: {
+      summary:
+        "Flags an exported symbol the PR removes or renames away from an internal source file that unchanged in-repo files still import — a hidden cross-file compile/runtime break the diff-only reviewer cannot see.",
+      looksAt:
+        "Exported declarations dropped on removed (-) diff lines of changed non-entrypoint TS/JS source files, cross-referenced against callers resolved by repo-scoped GitHub Code Search on the default branch and confirmed by fetching each candidate file at headSha.",
+      reports:
+        "The removed symbol, its old-file line, and the unchanged caller file paths that still import it — never file contents.",
+      network:
+        "One bounded GitHub Code Search query per removed symbol plus bounded contents fetches at headSha to confirm each candidate caller. Requires headSha and GitHub token forwarding for private repos.",
+      notes:
+        "Distinct from api-break (entrypoint→downstream, no network) and unused-export (added→dead): this is a removed export that still has callers. A symbol re-added anywhere in the PR is never flagged; only a candidate confirmed to import the symbol from an internal module path counts (a comment, property, or third-party same-named import does not). Fail-safe: any search/fetch error, rate-limit, incomplete or malformed response, or aborted signal yields no finding rather than a fabricated one.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = [
+        "### Removed exports with live callers (hidden cross-file break in unchanged files)",
+      ];
+      for (const item of findings) {
+        const callers = item.callers
+          .map((caller) => helpers.safeCodeSpan(caller))
+          .join(", ");
+        lines.push(
+          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} removes ${helpers.safeCodeSpan(item.symbol)}, still imported by ${callers}`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanCallerImpact(req, fetch, { signal, analysis, diagnostics }),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 

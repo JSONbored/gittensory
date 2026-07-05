@@ -502,6 +502,7 @@ export function renderBrief(
   lines.push(...renderDescriptorSection("deprecatedDep", findings.deprecatedDep));
   lines.push(...renderDescriptorSection("revertRecurrence", findings.revertRecurrence));
   lines.push(...renderDescriptorSection("coverageDelta", findings.coverageDelta));
+  lines.push(...renderDescriptorSection("callerImpact", findings.callerImpact));
 
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 

@@ -640,6 +640,21 @@ export interface CoverageDeltaFinding {
   uncoveredLines: number[];
 }
 
+/** An exported symbol the PR REMOVES (or renames away) from an INTERNAL source file that UNCHANGED in-repo files
+ *  still import — a hidden cross-file compile/runtime break the no-checkout reviewer cannot see (#1509, part of
+ *  #1499). Callers are resolved on the default branch via repo-scoped GitHub Code Search, filtered to files the PR
+ *  did not touch, and each is CONFIRMED to genuinely import the symbol from an internal module (never a text/
+ *  comment/property hit). Distinct from api-break (#1510, entrypoint→downstream) and unused-export (#2025, added→
+ *  dead). Reports the removed symbol, its old-file line, and the unchanged caller file paths only — never code. */
+export interface CallerImpactFinding {
+  file: string;
+  /** Old-file line of the removed export declaration in the changed file. */
+  line: number;
+  symbol: string;
+  /** Unchanged in-repo files confirmed to still import the removed symbol (capped). */
+  callers: string[];
+}
+
 export interface BriefFindings {
   dependency?: DependencyFinding[];
   dependencyDiff?: DependencyDiffFinding[];
@@ -694,6 +709,7 @@ export interface BriefFindings {
   deprecatedDep?: DeprecatedDependencyFinding[];
   revertRecurrence?: RevertRecurrenceFinding[];
   coverageDelta?: CoverageDeltaFinding[];
+  callerImpact?: CallerImpactFinding[];
 }
 
 /** A JSDoc/TSDoc block whose `@param` tags name parameters the adjacent function no longer declares — a
