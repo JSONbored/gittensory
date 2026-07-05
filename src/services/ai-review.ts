@@ -887,7 +887,10 @@ type ProviderReviewOutcome = {
 /** Static USD-per-million-token pricing for BYOK models. Anthropic/OpenAI responses report token counts but
  *  never a dollar figure, so this table is the only source for a BYOK call's `costUsd`. A model absent here
  *  (e.g. a maintainer-configured override this table hasn't been updated for) leaves `costUsd` undefined —
- *  never fabricated — matching how every other unavailable usage field already degrades in this file. */
+ *  never fabricated — matching how every other unavailable usage field already degrades in this file.
+ *  Last verified 2026-07-05 against platform.claude.com/docs/en/about-claude/models/overview (Anthropic) and
+ *  platform.openai.com/docs/pricing (OpenAI) — re-verify against those pages before trusting this table for
+ *  billing reconciliation, since providers reprice and rename models without notice. */
 const BYOK_MODEL_PRICING_USD_PER_MTOK: Record<
   AiReviewProviderKey["provider"],
   Record<string, { input: number; output: number }>
@@ -927,7 +930,9 @@ function priceByokUsageUsd(
  *  the already-camelCase envelope `coerceAiUsage` reads from `env.AI.run()`. Anthropic's `usage` can also
  *  carry `cache_creation_input_tokens`/`cache_read_input_tokens`, priced differently than `input_tokens` —
  *  intentionally not read here, since `callAiProvider` never sends `cache_control`, so Anthropic never
- *  populates them on this path. */
+ *  populates them on this path. Private to this file, but not private in effect: `ai-slop.ts`'s BYOK branch
+ *  depends on this normalization too, indirectly, via `callAiProvider`'s returned `usage` field — if this
+ *  ever moves, update both call sites. */
 function coerceByokUsage(
   providerKey: AiReviewProviderKey,
   model: string,

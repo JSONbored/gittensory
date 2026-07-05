@@ -1054,6 +1054,44 @@ describe("BYOK provider dispatch", () => {
     ]);
   });
 
+  it("sums OpenAI's prompt_tokens + completion_tokens toward totalTokens when total_tokens is absent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: reviewJson({ assessment: "BYOK review." }) } }],
+              usage: { prompt_tokens: 60, completion_tokens: 15 },
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+    const env = createTestEnv({
+      AI: { run: vi.fn() } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    const result = await runGittensoryAiReview(env, {
+      ...baseInput,
+      providerKey: { provider: "openai", key: "sk-secret", model: "gpt-5.4" },
+    });
+    expect(result.status === "ok" && result.reviewDiagnostics).toEqual([
+      expect.objectContaining({
+        usage: {
+          provider: "openai",
+          model: "gpt-5.4",
+          inputTokens: 60,
+          outputTokens: 15,
+          totalTokens: 75,
+          costUsd: 0.000375,
+        },
+      }),
+    ]);
+  });
+
   it("treats a non-object BYOK response body as empty output with no usage", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("null", { status: 200 })));
     const env = createTestEnv({
