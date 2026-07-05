@@ -8,6 +8,7 @@ import { scanCodeowners } from "./codeowners.js";
 import { scanCommitHygiene } from "./commit-hygiene.js";
 import { scanCommitSignature } from "./commit-signature.js";
 import { dependencyAnalyzer } from "./dependency/descriptor.js";
+import { scanDependencyDiffInventory } from "./dependency-diff.js";
 import { scanDocCommentDrift } from "./doc-comment-drift.js";
 import { scanDuplication } from "./duplication-scan.js";
 import { scanEol } from "./eol-check.js";
@@ -52,6 +53,41 @@ function descriptor<Name extends AnalyzerName>(
 
 export const ANALYZER_DESCRIPTORS = [
   dependencyAnalyzer,
+  descriptor({
+    name: "dependencyDiff",
+    title: "Dependency inventory changes",
+    category: "supply-chain",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: 25, maxManifestFiles: 20, maxPatchLinesPerFile: 500 },
+    docs: {
+      summary:
+        "Summarizes direct dependency add/remove/version-change deltas in changed manifest patches — informational, not a CVE scan.",
+      looksAt: "Added/removed lines in package.json, requirements.txt, and go.mod diffs.",
+      reports: "Ecosystem, package name, direction (add/remove/change), and from/to versions.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Distinct from the dependency CVE analyzer: this is the neutral inventory delta only. Reuses the same manifest line parsers.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### Dependency inventory changes (direct manifest delta)"];
+      for (const item of findings) {
+        const detail =
+          item.direction === "add"
+            ? `added @ ${helpers.safeCodeSpan(item.to ?? "?")}`
+            : item.direction === "remove"
+              ? `removed (was ${helpers.safeCodeSpan(item.from ?? "?")})`
+              : `${helpers.safeCodeSpan(item.from ?? "?")} → ${helpers.safeCodeSpan(item.to ?? "?")}`;
+        lines.push(
+          `- ${helpers.safeCodeSpan(item.package)} (${helpers.safeCodeSpan(item.ecosystem)}) — ${helpers.safeCodeSpan(item.direction)}: ${detail}`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal }) => scanDependencyDiffInventory(req, signal),
+  }),
   descriptor({
     name: "lockfileDrift",
     title: "Lockfile drift",

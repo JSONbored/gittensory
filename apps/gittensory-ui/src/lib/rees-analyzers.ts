@@ -120,6 +120,29 @@ export const REES_ANALYZERS = [
     },
   },
   {
+    name: "dependencyDiff",
+    title: "Dependency inventory changes",
+    category: "supply-chain",
+    cost: "local",
+    defaultEnabled: true,
+    profiles: ["fast", "balanced", "deep"],
+    requires: ["files"],
+    limits: {
+      maxFindings: 25,
+      maxManifestFiles: 20,
+      maxPatchLinesPerFile: 500,
+    },
+    docs: {
+      summary:
+        "Summarizes direct dependency add/remove/version-change deltas in changed manifest patches — informational, not a CVE scan.",
+      looksAt: "Added/removed lines in package.json, requirements.txt, and go.mod diffs.",
+      reports: "Ecosystem, package name, direction (add/remove/change), and from/to versions.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Distinct from the dependency CVE analyzer: this is the neutral inventory delta only. Reuses the same manifest line parsers.",
+    },
+  },
+  {
     name: "lockfileDrift",
     title: "Lockfile drift",
     category: "supply-chain",

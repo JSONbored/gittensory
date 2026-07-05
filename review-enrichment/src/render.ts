@@ -28,6 +28,7 @@ export function renderBrief(
   const lines: string[] = [];
 
   lines.push(...renderDescriptorSection("dependency", findings.dependency));
+  lines.push(...renderDescriptorSection("dependencyDiff", findings.dependencyDiff));
 
   const lockfileDrift = findings.lockfileDrift ?? [];
   if (lockfileDrift.length) {

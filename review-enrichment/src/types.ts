@@ -57,6 +57,16 @@ export interface DependencyFinding {
   cves: Cve[];
 }
 
+/** Neutral direct-dependency inventory delta from manifest patches (#2020, part of #1499).
+ *  Reports add/remove/version-change only — no CVE or registry data. */
+export interface DependencyDiffFinding {
+  ecosystem: string;
+  package: string;
+  from: string | null;
+  to: string | null;
+  direction: "add" | "remove" | "change";
+}
+
 /** A vulnerable lockfile-only dependency resolution. The package was not changed in a top-level manifest diff,
  *  so it is treated as transitive lockfile drift and reported with the lockfile location that introduced it. */
 export interface LockfileDriftFinding {
@@ -493,6 +503,7 @@ export interface CommitLintFinding {
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
+  dependencyDiff?: DependencyDiffFinding[];
   lockfileDrift?: LockfileDriftFinding[];
   secret?: SecretFinding[];
   license?: LicenseFinding[];

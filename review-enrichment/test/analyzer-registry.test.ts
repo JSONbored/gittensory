@@ -11,6 +11,7 @@ import { renderBrief } from "../dist/render.js";
 
 const EXPECTED_ANALYZERS = [
   "dependency",
+  "dependencyDiff",
   "lockfileDrift",
   "secret",
   "license",
