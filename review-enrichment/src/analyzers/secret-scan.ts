@@ -416,6 +416,18 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // Sourcegraph access token (v2, deprecated): `sgp_` + 40 hex (no middle segment).
+    kind: "sourcegraph_legacy_access_token",
+    re: /\bsgp_(?!local_)[a-fA-F0-9]{40}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // ClickHouse Cloud API secret key: `4b1d` + 38 base62 chars.
+    kind: "clickhouse_cloud_api_secret_key",
+    re: /\b4b1d[A-Za-z0-9]{38}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
     // Google OAuth 2.0 client secret: `GOCSPX-` + 28 base64url chars.
     kind: "google_oauth_client_secret",
     re: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/,

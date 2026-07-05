@@ -1245,6 +1245,57 @@ test("scanPatch does not flag truncated Mixedbread/Sourcegraph local tokens or i
   );
 });
 
+test("scanPatch flags Sourcegraph legacy and ClickHouse Cloud API secret keys with high confidence", () => {
+  const fakeSourcegraphLegacyToken = ["sgp_", hex(40)].join("");
+  const legacyFindings = scanPatch("src/config.ts", hunk([`const sg = "${fakeSourcegraphLegacyToken}";`]));
+  assert.equal(legacyFindings.length, 1);
+  assert.equal(legacyFindings[0].kind, "sourcegraph_legacy_access_token");
+  assert.equal(legacyFindings[0].confidence, "high");
+
+  const fakeClickhouseKey = ["4b1d", b62(38)].join("");
+  const clickhouseFindings = scanPatch("src/config.ts", hunk([`const ch = "${fakeClickhouseKey}";`]));
+  assert.equal(clickhouseFindings.length, 1);
+  assert.equal(clickhouseFindings[0].kind, "clickhouse_cloud_api_secret_key");
+  assert.equal(clickhouseFindings[0].confidence, "high");
+});
+
+test("scanPatch does not flag truncated Sourcegraph legacy/ClickHouse keys or identifier continuation", () => {
+  const shortLegacyToken = ["sgp_", hex(39)].join("");
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const sg = "${shortLegacyToken}";`])).some((f) => f.kind === "sourcegraph_legacy_access_token"),
+    false,
+  );
+  const legacySuffixToken = ["sgp_", hex(40), "-suffix"].join("");
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const sg = "${legacySuffixToken}";`])).some((f) => f.kind === "sourcegraph_legacy_access_token"),
+    false,
+  );
+  const legacyUnderscoreToken = ["sgp_", hex(40), "_suffix"].join("");
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const sg = "${legacyUnderscoreToken}";`])).some((f) => f.kind === "sourcegraph_legacy_access_token"),
+    false,
+  );
+  const legacyAlphaSuffixToken = ["sgp_", hex(40), "z"].join("");
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const sg = "${legacyAlphaSuffixToken}";`])).some((f) => f.kind === "sourcegraph_legacy_access_token"),
+    false,
+  );
+
+  assert.equal(scanPatch("src/config.ts", hunk([`const ch = "4b1d${b62(37)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const ch = "4b1d${b62(38)}-suffix";`])).some((f) => f.kind === "clickhouse_cloud_api_secret_key"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const ch = "4b1d${b62(38)}_suffix";`])).some((f) => f.kind === "clickhouse_cloud_api_secret_key"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const ch = "4b1d${b62(38)}z";`])).some((f) => f.kind === "clickhouse_cloud_api_secret_key"),
+    false,
+  );
+});
+
 test("scanPatch flags additional high-confidence SaaS/cloud/CI credential formats", () => {
   const cases = [
     ["google_oauth_client_secret", "GOCSPX-" + b62(28)],
