@@ -25,15 +25,25 @@ export interface AnalyzerRenderHelpers {
   bytesLabel(value: number | null): string;
 }
 
+// safeCodeSpan/promptText sit at the analyzer-output boundary: their signature promises `string`, but analyzer
+// findings are loosely-typed data flowing through `as never` casts (registry.ts render()), not values this module
+// controls -- a descriptor whose finding shape drifts (or a future config-driven table) can hand either helper a
+// non-string. Coercing defensively here mirrors bytesLabel's own `value: number | null` guard below: never let a
+// render helper throw into the brief pipeline (GITTENSORY-15, `value.replace is not a function`).
+function asRenderableString(value: string): string {
+  return typeof value === "string" ? value : String(value ?? "");
+}
+
 export function safeCodeSpan(value: string): string {
-  return `\`${value.replace(
+  const safe = asRenderableString(value);
+  return `\`${safe.replace(
     CODE_SPAN_UNSAFE,
     (char) => CODE_SPAN_REPLACEMENTS[char] ?? "\ufffd",
   )}\``;
 }
 
 export function promptText(value: string): string {
-  return value
+  return asRenderableString(value)
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\\/g, "\\\\")
     .replace(/`/g, "\\`")
