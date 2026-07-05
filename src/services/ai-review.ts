@@ -5,17 +5,20 @@
 //
 //   • Advisory notes — a concise maintainer-style write-up (assessment + suggestions + risks). When the
 //     repo has BYOK configured, the maintainer's own frontier model (Anthropic/OpenAI) writes it;
-//     otherwise free Cloudflare Workers AI does. Advisory only — never blocks.
-//   • Consensus defect — a conservative gate signal. The free Workers-AI model PAIR each independently
+//     otherwise the configured free/default reviewer does (self-host: the AI_PROVIDER chain — Codex
+//     primary, Claude Code fallback, etc; unconfigured/hosted: the legacy Workers-AI pair below).
+//     Advisory only — never blocks.
+//   • Consensus defect — a conservative gate signal. The configured reviewer PAIR each independently
 //     reviews the diff; a defect is reported ONLY when BOTH models flag a high-confidence critical defect
 //     (bug / security / data-loss / build break). BYOK never changes this path, so it never changes who
 //     can be blocked. The resulting finding is honored by the gate only in `block` mode AND only for
 //     confirmed Gittensor contributors (the gate enforces that downstream).
 //
 // Every public string (notes + defect title/detail) is forced through `sanitizePublicComment`; anything
-// that trips the public/private boundary is dropped, not published. Free Workers-AI calls are metered against
-// the shared daily neuron budget; maintainer-paid BYOK calls have a separate repo/day cap. All calls
-// are audited via `recordAiUsageEvent`.
+// that trips the public/private boundary is dropped, not published. Free/default-reviewer calls are metered
+// against the shared daily neuron budget; maintainer-paid BYOK calls have a separate repo/day cap. All calls
+// are audited via `recordAiUsageEvent` (with real provider/token/cost usage when the configured provider
+// reports it, per migration 0109 — see `coerceAiUsage`/`aggregateActualUsage`).
 import {
   countByokAiEventsForRepoSince,
   recordAiUsageEvent,
@@ -33,15 +36,18 @@ import { isTestPath } from "../signals/test-evidence";
 import type { CombineStrategy, OnMerge } from "../types";
 
 /**
- * The best free Workers-AI model pair for review accuracy — two different families for independence,
- * both probe-verified in reviewbot to emit clean JSON. The consensus blocker always uses this pair.
+ * The legacy free Workers-AI model pair — used ONLY when neither a self-host `AI_REVIEW_PLAN` reviewer
+ * pair nor any configured provider (`AI_PROVIDER`) is present (see `reviewerModelLabel`). No `ai` binding
+ * exists in the deployed Worker today (Workers AI is fully retired — see CONVERGENCE_RUNBOOK.md), so this
+ * pair is inert in every current deployment; it stays only as the last-resort default these model ids
+ * were originally probe-verified against (both families independently clean-JSON in reviewbot).
  */
 export const BEST_REVIEW_MODELS: readonly [string, string] = [
   "@cf/openai/gpt-oss-120b",
   "@cf/nvidia/nemotron-3-120b-a12b",
 ];
 
-/** Reliable per-slot fallbacks (non-reasoning, clean JSON) so a slot never comes back empty. */
+/** Reliable per-slot fallbacks for the legacy pair above (non-reasoning, clean JSON) so a slot never comes back empty. */
 export const RELIABLE_FALLBACK_MODELS: readonly [string, string] = [
   "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
   "@cf/mistralai/mistral-small-3.1-24b-instruct",
@@ -475,7 +481,11 @@ function stringField(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function coerceAiUsage(result: unknown): AiReviewActualUsage | undefined {
+/** Extract a provider's real usage (tokens/cost/effort) from an `env.AI.run()` result, when the configured
+ *  provider reports one (self-host CLI/HTTP providers do; the legacy Workers-AI binding never did). Shared
+ *  by every AI feature's `recordAiUsageEvent` call so migration 0109's columns get real data, not just the
+ *  estimated-neurons proxy, whenever it's available. */
+export function coerceAiUsage(result: unknown): AiReviewActualUsage | undefined {
   if (!result || typeof result !== "object") return undefined;
   const usage = (result as Record<string, unknown>).usage;
   if (!usage || typeof usage !== "object" || Array.isArray(usage)) return undefined;
@@ -616,8 +626,9 @@ function buildUserPrompt(input: GittensoryAiReviewInput): string {
       : "Description: (none)",
     "",
     "Unified diff (truncated if large):",
-    // Widened 60k→120k so a large multi-file PR is actually reviewed in full (the 120B Workers-AI models have a
-    // 128k context window; pairing this with the higher output ceiling gives a thorough review). (#extensive-reviews)
+    // Widened 60k→120k so a large multi-file PR is actually reviewed in full (tuned against the legacy 120B
+    // Workers-AI pair's 128k context window; pairing this with the higher output ceiling gives a thorough
+    // review — self-host reviewers are configured with at least as much room). (#extensive-reviews)
     input.diff.slice(0, 120000),
   ];
   // Convergence (grounding): append the FINISHED CI status + FULL file content when the caller supplied them
@@ -708,7 +719,8 @@ function buildRepoInstructionsSystemAppend(repoInstructions: string | null | und
     : "";
 }
 
-/** One Workers-AI opinion with a per-slot reliable fallback and a 3× retry on the primary. */
+/** One reviewer opinion (whichever provider `env.AI` resolves to — self-host Codex/Claude Code/etc, or the
+ *  legacy Workers-AI pair) with a per-slot reliable fallback and a 3× retry on the primary. */
 async function runWorkersOpinion(
   env: Env,
   primary: string,
@@ -1192,12 +1204,13 @@ export async function runGittensoryAiReview(
   if (!env.AI)
     return {
       status: "unavailable",
-      reason: "Workers AI binding is not configured.",
+      reason: "AI provider is not configured.",
     };
 
   // Output ceiling for the review. The old 1024 cap forced a shallow "no blockers" scorecard across large diffs;
-  // a thorough finding-by-finding review needs real room. Default 4096, max 8192 (the free Workers-AI 120B models
-  // support it); an explicit env value still wins, clamped. (#extensive-reviews)
+  // a thorough finding-by-finding review needs real room. Default 4096, max 8192 (the configured reviewer —
+  // self-host Codex/Claude Code or the legacy free Workers-AI 120B pair — supports it); an explicit env value
+  // still wins, clamped. (#extensive-reviews)
   const maxTokens = clampNumber(
     Number(env.AI_MAX_OUTPUT_TOKENS) || 4096,
     512,
@@ -1223,11 +1236,11 @@ export async function runGittensoryAiReview(
   // unchanged (byte-identical). Computed from `promptInput` so it travels with the (possibly defanged) input.
   const system = buildSystemPrompt(promptInput);
   const repoInstructionsSystemAppend = buildRepoInstructionsSystemAppend(promptInput.repoInstructions);
-  // The daily neuron budget governs FREE Workers-AI spend only. BYOK advisory calls bill the maintainer's
+  // The daily neuron budget governs FREE/default-reviewer spend only. BYOK advisory calls bill the maintainer's
   // own provider account, so they are not counted here (and a BYOK advisory still runs when the free
-  // budget is exhausted). Free calls = the consensus pair in block mode (always Workers AI), plus the
-  // advisory leg only when it is NOT BYOK.
-  // Reviewers + combine strategy (#dual-ai-combiner). DEFAULT = the free Workers-AI pair (per-slot fallbacks)
+  // budget is exhausted). Free calls = the consensus pair in block mode (the configured self-host reviewers,
+  // or the legacy Workers-AI pair when none is configured), plus the advisory leg only when it is NOT BYOK.
+  // Reviewers + combine strategy (#dual-ai-combiner). DEFAULT = the legacy Workers-AI pair (per-slot fallbacks)
   // combined by `consensus` — byte-identical to today. The self-host boot plan (`env.AI_REVIEW_PLAN`) supplies
   // named providers (e.g. claude-code + codex) and a strategy; an explicit `input` field overrides it. `single`
   // (or a single configured reviewer) runs ONE opinion; consensus/synthesis run two.
