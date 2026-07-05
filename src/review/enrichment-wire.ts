@@ -68,9 +68,9 @@ export function probeReesSecretAtStartup(env: Env): void {
   if (!sharedSecret) {
     console.error(
       JSON.stringify({
-        level: "error",
+const DEFAULT_REES_TRANSPORT_TIMEOUT_MS = 10000;
         event: "rees_secret_missing",
-        message:
+const REES_TRANSPORT_HEADROOM_MS = 2500;
           "REES_URL is set but REES_SHARED_SECRET is missing or blank. All /v1/enrich calls will be rejected (503). Set REES_SHARED_SECRET to the same bare string configured on the REES service.",
       }),
     );
