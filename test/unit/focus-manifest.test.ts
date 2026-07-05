@@ -26,7 +26,9 @@ import {
   composeManifestReviewInstructions,
   EMPTY_AUTO_REVIEW_CONFIG,
   EMPTY_SELF_HOST_AI_MODEL_CONFIG,
+  EMPTY_VISUAL_CONFIG,
   resolveReviewSelfHostAiModel,
+  resolveReviewVisualConfig,
   repoDocGenerationConfigToJson,
   reviewConfigToJson,
   settingsOverrideToJson,
@@ -358,6 +360,7 @@ describe(".gittensory.yml.example field-exhaustiveness (#1670)", () => {
     autoReview: "auto_review:",
     labelingRules: "labeling_rules:",
     aiModel: "ai_model:",
+    visual: "visual:",
   } satisfies Record<Exclude<keyof FocusManifestReviewConfig, "present">, string>;
 
   it.each(Object.entries(REVIEW_FIELD_TOKENS))("documents review.%s", (_field, token) => {
@@ -758,7 +761,7 @@ describe("compileFocusManifestPolicy", () => {
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
       gate: { present: false, enabled: null, checkMode: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, lockfileIntegrityMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null, claMode: null, claConsentPhrase: null, claCheckRunName: null, claCheckRunAppSlug: null, expectedCiContexts: null },
       settings: {},
-      review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, findingCategories: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG } },
+      review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, findingCategories: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG } },
       features: { present: false, rag: null, reputation: null, unifiedComment: null, safety: null },
       contentLane: { present: false, entryFileGlob: null, providerFileGlob: null, artifactGlob: null, collectionField: null, maxAppendedEntries: null, duplicateKeyFields: [], validatorId: null },
       repoDocGeneration: { present: false, enabled: false, scope: ["agents"], allowOverwriteExisting: false, refreshIntervalDays: 7 },
@@ -3230,6 +3233,111 @@ describe("review.ai_model (#selfhost-ai-model-override)", () => {
     const manifest = parseFocusManifest({ review: { ai_model: { claude_effort: "xhigh" } } });
     const overrides: SelfHostAiModelConfig = resolveReviewPromptOverrides(manifest).selfHostAiModel;
     expect(overrides).toEqual({ ...EMPTY_SELF_HOST_AI_MODEL_CONFIG, claudeEffort: "xhigh" });
+  });
+});
+
+describe("review.visual (#3609 preview.url_template / #3610 routes)", () => {
+  it("parses preview.url_template + routes, marks present, and round-trips", () => {
+    const m = parseFocusManifest({
+      review: {
+        visual: {
+          preview: { url_template: "https://pr-{number}.preview.example.com" },
+          routes: { paths: ["/pricing", "/docs"], max_routes: 3 },
+        },
+      },
+    });
+    expect(m.review.visual).toEqual({
+      preview: { urlTemplate: "https://pr-{number}.preview.example.com" },
+      routes: { paths: ["/pricing", "/docs"], maxRoutes: 3 },
+    });
+    expect(m.review.present).toBe(true);
+    expect(parseFocusManifest({ review: reviewConfigToJson(m.review) }).review.visual).toEqual(m.review.visual);
+  });
+
+  it("absent/null visual yields the empty defaults and does not mark review present on its own", () => {
+    expect(parseFocusManifest({}).review.visual).toEqual({ ...EMPTY_VISUAL_CONFIG });
+    expect(parseFocusManifest({ review: { visual: null } }).review.visual).toEqual({ ...EMPTY_VISUAL_CONFIG });
+    expect(parseFocusManifest({}).review.present).toBe(false);
+  });
+
+  it("ignores a non-mapping review.visual with a warning", () => {
+    const bad = parseFocusManifest({ review: { visual: "on" } });
+    expect(bad.review.visual).toEqual({ ...EMPTY_VISUAL_CONFIG });
+    expect(bad.warnings.some((w) => /review\.visual.*must be a mapping/.test(w))).toBe(true);
+  });
+
+  it("ignores a non-mapping review.visual array with a warning", () => {
+    const bad = parseFocusManifest({ review: { visual: ["preview"] } });
+    expect(bad.review.visual).toEqual({ ...EMPTY_VISUAL_CONFIG });
+    expect(bad.warnings.some((w) => /review\.visual.*must be a mapping/.test(w))).toBe(true);
+  });
+
+  it("ignores a non-mapping review.visual.preview with a warning but keeps routes", () => {
+    const bad = parseFocusManifest({ review: { visual: { preview: "https://pr.example.com", routes: { paths: ["/app"] } } } });
+    expect(bad.review.visual.preview).toEqual({ urlTemplate: null });
+    expect(bad.review.visual.routes.paths).toEqual(["/app"]);
+    expect(bad.warnings.some((w) => /review\.visual\.preview.*must be a mapping/.test(w))).toBe(true);
+  });
+
+  it("ignores a non-mapping review.visual.routes with a warning but keeps preview", () => {
+    const bad = parseFocusManifest({ review: { visual: { preview: { url_template: "https://pr.example.com" }, routes: "everything" } } });
+    expect(bad.review.visual.routes).toEqual({ paths: [], maxRoutes: null });
+    expect(bad.review.visual.preview.urlTemplate).toBe("https://pr.example.com");
+    expect(bad.warnings.some((w) => /review\.visual\.routes.*must be a mapping/.test(w))).toBe(true);
+  });
+
+  it("rejects a non-HTTPS url_template with a warning", () => {
+    const bad = parseFocusManifest({ review: { visual: { preview: { url_template: "http://pr-{number}.example.com" } } } });
+    expect(bad.review.visual.preview.urlTemplate).toBeNull();
+    expect(bad.warnings.some((w) => /review\.visual\.preview\.url_template.*valid HTTPS URL/.test(w))).toBe(true);
+  });
+
+  it("rejects a url_template resolving to a private/internal host with a warning", () => {
+    const bad = parseFocusManifest({ review: { visual: { preview: { url_template: "https://pr-{number}.internal" } } } });
+    expect(bad.review.visual.preview.urlTemplate).toBeNull();
+    expect(bad.warnings.some((w) => /review\.visual\.preview\.url_template.*valid HTTPS URL/.test(w))).toBe(true);
+  });
+
+  it("rejects a malformed url_template (unparseable even with placeholders substituted) with a warning", () => {
+    const bad = parseFocusManifest({ review: { visual: { preview: { url_template: "not-a-url-at-all" } } } });
+    expect(bad.review.visual.preview.urlTemplate).toBeNull();
+    expect(bad.warnings.some((w) => /review\.visual\.preview\.url_template.*valid HTTPS URL/.test(w))).toBe(true);
+  });
+
+  it("accepts a url_template with no placeholders at all (a fixed preview host)", () => {
+    const m = parseFocusManifest({ review: { visual: { preview: { url_template: "https://staging.example.com" } } } });
+    expect(m.review.visual.preview.urlTemplate).toBe("https://staging.example.com");
+  });
+
+  it("rejects max_routes of zero or a negative number with a warning", () => {
+    const zero = parseFocusManifest({ review: { visual: { routes: { max_routes: 0 } } } });
+    expect(zero.review.visual.routes.maxRoutes).toBeNull();
+    expect(zero.warnings.some((w) => /review\.visual\.routes\.max_routes.*positive whole number/.test(w))).toBe(true);
+    const negative = parseFocusManifest({ review: { visual: { routes: { max_routes: -1 } } } });
+    expect(negative.review.visual.routes.maxRoutes).toBeNull();
+  });
+
+  it("marks present via routes.paths alone (preview + max_routes both empty)", () => {
+    const m = parseFocusManifest({ review: { visual: { routes: { paths: ["/app"] } } } });
+    expect(m.review.present).toBe(true);
+    expect(reviewConfigToJson(m.review)).toEqual({ visual: { routes: { paths: ["/app"] } } });
+  });
+
+  it("marks present via routes.max_routes alone (preview + paths both empty)", () => {
+    const m = parseFocusManifest({ review: { visual: { routes: { max_routes: 5 } } } });
+    expect(m.review.present).toBe(true);
+    expect(reviewConfigToJson(m.review)).toEqual({ visual: { routes: { max_routes: 5 } } });
+  });
+
+  it("round-trips a preview-only config through reviewConfigToJson without an empty routes block", () => {
+    const m = parseFocusManifest({ review: { visual: { preview: { url_template: "https://pr-{number}.example.com" } } } });
+    expect(reviewConfigToJson(m.review)).toEqual({ visual: { preview: { url_template: "https://pr-{number}.example.com" } } });
+  });
+
+  it("resolveReviewVisualConfig: null manifest yields empty defaults; a set manifest passes through", () => {
+    expect(resolveReviewVisualConfig(null)).toEqual({ ...EMPTY_VISUAL_CONFIG });
+    const manifest = parseFocusManifest({ review: { visual: { routes: { paths: ["/app"] } } } });
+    expect(resolveReviewVisualConfig(manifest)).toEqual({ preview: { urlTemplate: null }, routes: { paths: ["/app"], maxRoutes: null } });
   });
 });
 

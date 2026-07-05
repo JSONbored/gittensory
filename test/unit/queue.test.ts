@@ -15506,6 +15506,155 @@ describe("queue processors", () => {
     }
   });
 
+  // #3609/#3610: same fixture as the unified-comment test above (screenshotsAllowed needs both the global flag
+  // AND the repo cutover allowlist — createTestEnv already defaults GITTENSORY_REVIEW_REPOS to include this
+  // repo), but the changed file is WEB-VISIBLE (isVisualPath) so the capture pipeline actually fires, proving
+  // resolveVisualCaptureConfig / buildCapture's config-threading (review.visual) is reached end to end from the
+  // real webhook path, not just from the pure-function unit tests in visual-capture.test.ts.
+  it("threads review.visual config into the capture pipeline and renders a Visual preview section (#3609 / #3610)", async () => {
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      GITTENSORY_REVIEW_UNIFIED_COMMENT: "1",
+      GITTENSORY_REVIEW_SCREENSHOTS: "true",
+    });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "detected_contributors_only",
+      publicAudienceMode: "gittensor_only",
+      publicSignalLevel: "standard",
+      publicSurface: "comment_and_label",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      gateCheckMode: "enabled",
+      backfillEnabled: true,
+      privateTrustEnabled: true,
+      autonomy: { update_branch: "auto" },
+    });
+    let postedBody = "";
+    const liveCiSpy = vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl").mockResolvedValue({
+      ciState: "passed",
+      hasPending: false,
+      hasVisiblePending: false,
+      hasMissingRequiredContext: false,
+      failingDetails: [],
+      nonRequiredFailingDetails: [],
+      ciCompletenessWarning: null,
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          {
+            uid: 7,
+            githubUsername: "oktofeesh1",
+            githubId: "123",
+            totalPrs: 4,
+            totalMergedPrs: 3,
+            totalOpenPrs: 1,
+            totalClosedPrs: 0,
+            totalOpenIssues: 0,
+            totalClosedIssues: 0,
+            totalSolvedIssues: 0,
+            totalValidSolvedIssues: 0,
+            isEligible: true,
+            credibility: 1,
+            eligibleRepoCount: 1,
+            hotkey: "must-not-leak",
+          },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({
+          repositories: [
+            {
+              repositoryFullName: "JSONbored/gittensory",
+              totalPrs: "4",
+              totalMergedPrs: "3",
+              totalOpenPrs: "1",
+              totalClosedPrs: "0",
+              totalOpenIssues: "0",
+              totalClosedIssues: "0",
+              isEligible: true,
+              credibility: "1.000000",
+            },
+          ],
+        });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
+      if (url.includes("/access_tokens")) {
+        return Response.json({ token: "installation-token", expires_at: "2026-05-28T00:04:00.000Z" });
+      }
+      // A web-visible route file (isVisualPath) — the ONLY difference from the sibling unified-comment fixture —
+      // so screenshotsAllowed's file-touch gate opens and buildCapture actually runs for this PR.
+      if (url.includes("/pulls/3/files")) {
+        return Response.json([{ filename: "apps/gittensory-ui/src/routes/app.index.tsx", additions: 5, deletions: 1, status: "modified" }]);
+      }
+      if (/\/pulls\/3(?:\?|$)/.test(url)) return Response.json({ number: 3, mergeable_state: "clean" });
+      if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 901 }, { status: 201 });
+      if (url.includes("/check-runs/901") && method === "PATCH") return Response.json({ id: 901 });
+      if (url.includes("/issues/3/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/3/comments") && method === "POST") {
+        postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        return Response.json({ id: 1, html_url: "https://github.com/comment/1" }, { status: 201 });
+      }
+      // Preview discovery (deployments / commit checks / PR comments): none configured for this fixture, so
+      // buildCapture's discovery chain finds nothing and falls back to placeholders — it's wrapped in its own
+      // try/catch, so a 404 here degrades to "no preview" rather than failing the capture or the review.
+      return new Response("not found", { status: 404 });
+    });
+
+    try {
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "pr-visual-config-wiring",
+        eventName: "pull_request",
+        payload: {
+          action: "synchronize",
+          installation: {
+            id: 123,
+            account: { login: "JSONbored", id: 1, type: "User" },
+            repository_selection: "selected",
+            permissions: { metadata: "read", pull_requests: "read", issues: "write", checks: "write" },
+            events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+          },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: {
+            number: 3,
+            title: "Update the app index route",
+            state: "open",
+            user: { login: "oktofeesh1" },
+            head: { sha: "visualcfg123" },
+            labels: [{ name: "bug" }],
+            body: "Fixes #1\n\nValidation: npm test",
+          },
+        },
+      });
+
+      // The capture pipeline ran (resolveVisualCaptureConfig -> buildCapture, both reached only through this
+      // webhook path) and produced at least a placeholder-backed route, so the collapsible renders.
+      expect(postedBody).toContain("Visual preview");
+      expect(postedBody).toContain("`/app`");
+      // Public-safe by construction — no internal trust/economics fields leak through the shot URLs either.
+      expect(postedBody).not.toMatch(/wallet|hotkey|reward|trust score/i);
+    } finally {
+      liveCiSpy.mockRestore();
+    }
+  });
+
   // #1957: with the unified comment on AND `.gittensory.yml` opting into `review.changed_files_summary`, the
   // rendered comment gains the deterministic "Changed files" collapsible built from the SAME PR-files fetch the
   // unified branch already does for the readiness chip — no separate call, no AI. Mirrors the base unified-comment

@@ -777,6 +777,28 @@ settings:
 #     claude_effort: null  # Overrides CLAUDE_AI_EFFORT for this repo. String or null. Default (env unset): medium.
 #     codex_model: null    # Overrides CODEX_AI_MODEL for this repo. String or null.
 #     codex_effort: null   # Overrides CODEX_AI_EFFORT for this repo. String or null. Default (env unset): medium.
+#   # Per-repo before/after screenshot-capture config (#3609 preview / #3610 routes). Only takes effect when
+#   # the operator has ALSO enabled GITTENSORY_REVIEW_SCREENSHOTS + this repo's cutover allowlist -- this
+#   # config narrows/redirects that feature, it never turns it on by itself. All-null/empty/default ⇒
+#   # byte-identical to today (GitHub-native preview discovery, automatic file-to-route inference).
+#   visual:
+#     preview:
+#       # The repo's "after" preview URL, with {number}/{head_sha}/{head_sha_short} placeholders substituted
+#       # at capture time. ALWAYS wins over GitHub-native preview discovery (Deployments API / commit checks /
+#       # cloudflare-bot PR comment) when set -- the only option for a provider (e.g. Cloudflare Workers
+#       # Builds' non-production branch builds) that never surfaces a GitHub-visible deployment at all. Must
+#       # resolve to a valid HTTPS URL targeting a public host. String or null. Default: null (discovery unchanged).
+#       url_template: "https://pr-{number}.myapp.workers.dev"
+#     routes:
+#       # An explicit, always-screenshotted route list. When non-empty, REPLACES automatic file-to-route
+#       # inference entirely -- for a repo whose routing convention isn't gittensory-ui's TanStack file-based
+#       # one. Empty/default ⇒ automatic inference (falling back to "/" when nothing matches).
+#       paths:
+#         - "/pricing"
+#         - "/docs"
+#       # Overrides the built-in cap (2) on how many routes get screenshotted per PR, whether they come from
+#       # `paths` above or automatic inference. Positive integer or null. Default: null (built-in default).
+#       max_routes: 3
 #   # Maintainer overrides for the public review-panel CONTENT (not what gittensory measures). The
 #   # Gittensor attribution + register link is always appended to the footer regardless; maintainer text
 #   # failing the public-safe filter is dropped, never published.

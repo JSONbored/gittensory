@@ -366,11 +366,13 @@ import {
   resolveReviewPathInstructions,
   resolveReviewPreMergeChecks,
   resolveReviewPromptOverrides,
+  resolveReviewVisualConfig,
   type FocusManifestFinding,
   type FocusManifest,
   type ReviewPathInstruction,
   type ReviewProfile,
   type SelfHostAiModelConfig,
+  type VisualConfig,
 } from "../signals/focus-manifest";
 import { decideReviewEligibility } from "../review/review-eligibility";
 import {
@@ -6367,6 +6369,15 @@ export async function resolveReviewManifestForAiReview(
   return cachedManifest ?? (await loadRepoFocusManifest(env, repoFullName).catch(() => null));
 }
 
+/** Resolve `review.visual` (#3609 preview.url_template / #3610 routes) for the before/after capture pipeline —
+ *  a deterministic, non-AI feature, so it's resolved independently rather than reusing the AI-review manifest
+ *  cache above. Fail-safe: a manifest-load error yields the empty defaults (byte-identical to no config
+ *  configured), matching every other `resolveReview*` accessor's null-manifest behavior. */
+export async function resolveVisualCaptureConfig(env: Env, repoFullName: string): Promise<VisualConfig> {
+  const manifest = await loadRepoFocusManifest(env, repoFullName).catch(() => null);
+  return resolveReviewVisualConfig(manifest);
+}
+
 async function resolveReviewEnrichmentGithubToken(
   env: Env,
   repoFullName: string,
@@ -9225,6 +9236,10 @@ async function maybePublishPrPublicSurface(
       if (screenshotsAllowed(env, repoFullName) && visualFiles.length > 0) {
         try {
           const token = await createInstallationToken(env, installationId);
+          // review.visual (#3609 / #3610): an explicit per-repo preview-URL template / route list. Absent config
+          // (the default for every repo today) ⇒ EMPTY_VISUAL_CONFIG ⇒ buildCapture's discovery/inference
+          // behavior is byte-identical to pre-#3609.
+          const reviewVisualConfig = await resolveVisualCaptureConfig(env, repoFullName);
           const capture = await buildCapture(
             env,
             token,
@@ -9237,6 +9252,7 @@ async function maybePublishPrPublicSurface(
             },
             visualFiles,
             githubRateLimitAdmissionKeyForInstallation(installationId),
+            reviewVisualConfig,
           );
           beforeAfter = capture.routes;
           // Visual self-poll: the FIRST capture returns a "loading" placeholder for the AFTER shot when the

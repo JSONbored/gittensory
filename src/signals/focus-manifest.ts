@@ -12,6 +12,7 @@ import { normalizeModerationLabel, normalizeModerationRules } from "../settings/
 import { REES_ANALYZER_NAME_SET, type ReesAnalyzerName } from "../review/enrichment-analyzer-names";
 import { hasUnsafeWildcardCount } from "./change-guardrail";
 import { PUBLIC_LOCAL_PATH_INLINE } from "./redaction";
+import { isSafeHttpUrl } from "../review/content-lane/safe-url";
 
 export type FocusManifestSource = "repo_file" | "api_record" | "none";
 export type FocusManifestLinkedIssuePolicy = "required" | "preferred" | "optional";
@@ -371,6 +372,12 @@ export type FocusManifestReviewConfig = {
    *  CLAUDE_AI_MODEL/CLAUDE_AI_EFFORT/CODEX_AI_MODEL/CODEX_AI_EFFORT env vars apply unchanged (byte-identical).
    *  (#selfhost-ai-model-override) */
   aiModel: SelfHostAiModelConfig;
+  /** `review.visual`: per-repo before/after screenshot-capture config (#3609 preview / #3610 routes).
+   *  All-empty (default, absent) ⇒ byte-identical to today (GitHub-native preview discovery, automatic
+   *  file-to-route inference, built-in route cap). Only takes effect when the operator has also enabled
+   *  GITTENSORY_REVIEW_SCREENSHOTS + the repo cutover allowlist — this config narrows/redirects that
+   *  feature, it never turns it on by itself. */
+  visual: VisualConfig;
 };
 
 /** One `review.labeling_rules[]` entry: a non-reserved `label` plus the deterministic `when` criteria that must ALL
@@ -426,6 +433,45 @@ export const EMPTY_SELF_HOST_AI_MODEL_CONFIG: SelfHostAiModelConfig = {
   claudeEffort: null,
   codexModel: null,
   codexEffort: null,
+};
+
+/** Per-repo before/after screenshot-capture config under `review.visual` (#3609 / #3610). Generic by design —
+ *  every self-hoster wires their OWN repo's preview-deploy setup and route shape with config, not code. */
+export type VisualConfig = {
+  preview: VisualPreviewConfig;
+  routes: VisualRoutesConfig;
+};
+
+export type VisualPreviewConfig = {
+  /** `review.visual.preview.url_template`: the repo's "after" preview URL, with `{number}` (PR number),
+   *  `{head_sha}` (full commit SHA), and `{head_sha_short}` (first 7 chars) placeholders substituted at
+   *  capture time — e.g. `https://pr-{number}.myapp.workers.dev`. ALWAYS wins over GitHub-native preview
+   *  discovery (the Deployments API / commit checks / cloudflare-bot PR comment) when set — an explicit,
+   *  maintainer-configured template is a stronger signal than inference, and is the only option for a
+   *  provider (e.g. Cloudflare Workers Builds' non-production branch builds) that doesn't surface a
+   *  GitHub-visible deployment at all. null (default) ⇒ byte-identical to today (discovery unchanged).
+   *  Validated at parse time against the same SSRF guard the renderer itself applies (isSafeHttpUrl) with
+   *  placeholders substituted for a dummy value, so a malformed template warns at config-read time instead
+   *  of only failing silently at render time — this is redundant with (not a replacement for) the
+   *  renderer's own unconditional isSafeHttpUrl check on every resolved URL, regardless of source. */
+  urlTemplate: string | null;
+};
+
+export type VisualRoutesConfig = {
+  /** `review.visual.routes.paths`: an explicit, always-screenshotted route list. When non-empty, this
+   *  REPLACES automatic file-to-route inference entirely — for repos whose routing convention isn't
+   *  gittensory-ui's TanStack file-based one, an explicit list is simpler and more robust than trying to
+   *  infer one. Empty (default) ⇒ automatic inference (falling back to "/" when nothing matches). */
+  paths: string[];
+  /** `review.visual.routes.max_routes`: overrides the built-in cap (2) on how many routes get screenshotted
+   *  per PR. null (default) ⇒ built-in default. Applies whether routes come from `paths` above or from
+   *  automatic inference. */
+  maxRoutes: number | null;
+};
+
+export const EMPTY_VISUAL_CONFIG: VisualConfig = {
+  preview: { urlTemplate: null },
+  routes: { paths: [], maxRoutes: null },
 };
 
 /** One `review.path_instructions[]` entry: a manifest path glob + the public-safe instructions to apply when a
@@ -587,7 +633,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicNotes: [],
   gate: { ...EMPTY_GATE_CONFIG },
   settings: {},
-  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, findingCategories: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG } },
+  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, findingCategories: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG } },
   features: { ...EMPTY_FEATURES_CONFIG },
   contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
   repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
@@ -617,7 +663,7 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     warnings,
     gate: { ...EMPTY_GATE_CONFIG },
     settings: {},
-    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, findingCategories: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG } },
+    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, findingCategories: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG } },
     features: { ...EMPTY_FEATURES_CONFIG },
     contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
     repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
@@ -1548,7 +1594,7 @@ function parsePublicSafeText(value: JsonValue | undefined, field: string, warnin
  * throws; invalid/unsafe values are dropped with warnings.
  */
 function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestReviewConfig {
-  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, findingCategories: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG } };
+  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, findingCategories: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG } };
   if (value === undefined || value === null) return empty;
   if (typeof value !== "object" || Array.isArray(value)) {
     warnings.push(`Manifest field "review" must be a mapping; ignoring it.`);
@@ -1596,6 +1642,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
   const autoReview = parseAutoReviewConfig(r.auto_review, warnings);
   const labelingRules = parseReviewLabelingRules(r.labeling_rules, warnings);
   const aiModel = parseSelfHostAiModelConfig(r.ai_model, warnings);
+  const visual = parseVisualConfig(r.visual, warnings);
   return {
     present:
       footerText !== null ||
@@ -1615,6 +1662,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
       autoReviewPresent(autoReview) ||
       labelingRules.length > 0 ||
       selfHostAiModelPresent(aiModel) ||
+      visualConfigPresent(visual) ||
       Object.keys(fields).length > 0 ||
       Object.keys(enrichmentAnalyzers).length > 0,
     footerText,
@@ -1622,6 +1670,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
     fields,
     autoReview,
     aiModel,
+    visual,
     enrichmentAnalyzers,
     profile,
     tone,
@@ -1744,6 +1793,64 @@ function parseSelfHostAiModelConfig(value: JsonValue | undefined, warnings: stri
     codexModel: parsePublicSafeText(record.codex_model, "review.ai_model.codex_model", warnings),
     codexEffort: parsePublicSafeText(record.codex_effort, "review.ai_model.codex_effort", warnings),
   };
+}
+
+function visualConfigPresent(config: VisualConfig): boolean {
+  return config.preview.urlTemplate !== null || config.routes.paths.length > 0 || config.routes.maxRoutes !== null;
+}
+
+// `{number}`/`{head_sha}`/`{head_sha_short}` are GitHub-controlled facts about the PR (never attacker-supplied
+// free text), so substitution itself carries no injection risk. The dummy values here exist only to make the
+// TEMPLATE STRING (which a maintainer authored, and could still typo) validate as a well-formed HTTPS URL
+// before it's ever used — see parseVisualUrlTemplate below.
+const VISUAL_URL_TEMPLATE_DUMMY_VARS: Record<string, string> = {
+  "{number}": "1",
+  "{head_sha_short}": "0000000",
+  "{head_sha}": "0000000000000000000000000000000000000000",
+};
+
+/** Parse `review.visual.preview.url_template` — validated at CONFIG-READ time against the exact same SSRF
+ *  guard (`isSafeHttpUrl`) the renderer itself unconditionally applies to every URL it navigates to,
+ *  regardless of source (`src/review/visual/shot.ts`). This is deliberately redundant with that runtime
+ *  check, not a replacement for it — it exists so a maintainer sees a warning immediately for a malformed
+ *  template (e.g. a typo'd scheme, or an accidental internal host) instead of only discovering it later as
+ *  a silently-blank "after" cell. Placeholders are substituted with dummy values before validation since the
+ *  raw template (e.g. `https://pr-{number}.example.com`) is not itself a parseable URL. */
+function parseVisualUrlTemplate(value: JsonValue | undefined, warnings: string[]): string | null {
+  const template = parsePublicSafeText(value, "review.visual.preview.url_template", warnings);
+  if (template === null) return null;
+  let probe = template;
+  for (const [placeholder, dummy] of Object.entries(VISUAL_URL_TEMPLATE_DUMMY_VARS)) probe = probe.split(placeholder).join(dummy);
+  if (!isSafeHttpUrl(probe)) {
+    warnings.push(`Manifest "review.visual.preview.url_template" must be a valid HTTPS URL (with {number}/{head_sha}/{head_sha_short} placeholders substituted) targeting a public host; ignoring it.`);
+    return null;
+  }
+  return template;
+}
+
+/** Parse `review.visual` — per-repo before/after screenshot-capture config (#3609 preview / #3610 routes). */
+function parseVisualConfig(value: JsonValue | undefined, warnings: string[]): VisualConfig {
+  if (value === undefined || value === null) return { preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null } };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push(`Manifest field "review.visual" must be a mapping; ignoring it.`);
+    return { preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null } };
+  }
+  const record = value as Record<string, JsonValue>;
+
+  const previewRecord = record.preview !== null && typeof record.preview === "object" && !Array.isArray(record.preview) ? (record.preview as Record<string, JsonValue>) : undefined;
+  if (record.preview !== undefined && record.preview !== null && previewRecord === undefined) {
+    warnings.push(`Manifest "review.visual.preview" must be a mapping; ignoring it.`);
+  }
+  const urlTemplate = previewRecord ? parseVisualUrlTemplate(previewRecord.url_template, warnings) : null;
+
+  const routesRecord = record.routes !== null && typeof record.routes === "object" && !Array.isArray(record.routes) ? (record.routes as Record<string, JsonValue>) : undefined;
+  if (record.routes !== undefined && record.routes !== null && routesRecord === undefined) {
+    warnings.push(`Manifest "review.visual.routes" must be a mapping; ignoring it.`);
+  }
+  const paths = routesRecord ? parseManifestGlobList(routesRecord.paths, "review.visual.routes.paths", warnings) : [];
+  const maxRoutes = routesRecord ? normalizeOptionalPositiveInteger(routesRecord.max_routes, "review.visual.routes.max_routes", warnings) : null;
+
+  return { preview: { urlTemplate }, routes: { paths, maxRoutes } };
 }
 
 function parseAutoReviewTitleKeywords(value: JsonValue | undefined, warnings: string[]): string[] {
@@ -1995,6 +2102,17 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
     if (review.aiModel.codexEffort !== null) aiModel.codex_effort = review.aiModel.codexEffort;
     out.ai_model = aiModel;
   }
+  if (visualConfigPresent(review.visual)) {
+    const visual: Record<string, JsonValue> = {};
+    if (review.visual.preview.urlTemplate !== null) visual.preview = { url_template: review.visual.preview.urlTemplate };
+    if (review.visual.routes.paths.length > 0 || review.visual.routes.maxRoutes !== null) {
+      const routes: Record<string, JsonValue> = {};
+      if (review.visual.routes.paths.length > 0) routes.paths = [...review.visual.routes.paths];
+      if (review.visual.routes.maxRoutes !== null) routes.max_routes = review.visual.routes.maxRoutes;
+      visual.routes = routes;
+    }
+    out.visual = visual;
+  }
   return out;
 }
 
@@ -2124,6 +2242,14 @@ export function resolveReviewAutoReviewConfig(manifest: FocusManifest | null): A
  *  that one pass. (#selfhost-ai-model-override) */
 export function resolveReviewSelfHostAiModel(manifest: FocusManifest | null): SelfHostAiModelConfig {
   return manifest?.review.aiModel ?? { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG };
+}
+
+/** Resolve `review.visual` from a possibly-null manifest (null = load failure ⇒ no per-repo override). The
+ *  capture pipeline then falls back to GitHub-native preview discovery + automatic route inference, same as
+ *  an explicit all-empty config — a manifest read failure never blocks a review or a capture attempt, it
+ *  just loses the per-repo override for that one pass. (#3609 / #3610) */
+export function resolveReviewVisualConfig(manifest: FocusManifest | null): VisualConfig {
+  return manifest?.review.visual ?? { ...EMPTY_VISUAL_CONFIG };
 }
 
 export function resolveEnrichmentAnalyzerToggles(manifest: FocusManifest | null): Partial<Record<ReesAnalyzerName, boolean>> {
