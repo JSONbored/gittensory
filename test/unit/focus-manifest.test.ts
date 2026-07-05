@@ -927,6 +927,44 @@ describe("parseFocusManifest gate config", () => {
     expect(bad.warnings.some((w) => /gate\.slop\.aiAdvisory/.test(w))).toBe(true);
   });
 
+  it("clamps and rounds the slop minScore to 0-100", () => {
+    expect(parseFocusManifest({ gate: { slop: { minScore: 250 } } }).gate.slopMinScore).toBe(100);
+    expect(parseFocusManifest({ gate: { slop: { minScore: -10 } } }).gate.slopMinScore).toBe(0);
+    expect(parseFocusManifest({ gate: { slop: { minScore: 59.6 } } }).gate.slopMinScore).toBe(60);
+  });
+
+  it("sets gate.present when only gate.slop.minScore is configured", () => {
+    const m = parseFocusManifest({ gate: { slop: { minScore: 55 } } });
+    expect(m.gate.present).toBe(true);
+    expect(m.gate.slopMode).toBeNull();
+    expect(m.gate.slopMinScore).toBe(55);
+  });
+
+  it("round-trips gate.slop.minScore through gateConfigToJson unchanged", () => {
+    for (const minScore of [0, 1, 42, 99, 100]) {
+      const original = parseFocusManifest({ gate: { slop: { minScore } } });
+      const json = gateConfigToJson(original.gate) as { slop: { minScore: number } };
+      expect(json.slop.minScore).toBe(minScore);
+      expect(parseFocusManifest({ gate: json }).gate).toEqual(original.gate);
+    }
+  });
+
+  it("warns and ignores invalid gate.slop.minScore values", () => {
+    for (const bad of ["high", NaN, Infinity, -Infinity]) {
+      const m = parseFocusManifest({ gate: { slop: { minScore: bad as unknown as number } } });
+      expect(m.gate.slopMinScore).toBeNull();
+      expect(m.warnings.some((w) => /gate\.slop\.minScore.*must be a number between 0 and 100/.test(w))).toBe(true);
+    }
+  });
+
+  it("leaves gate.slop.minScore null when omitted and omits it from gateConfigToJson", () => {
+    const m = parseFocusManifest({ gate: { slop: { mode: "block" } } });
+    expect(m.gate.slopMinScore).toBeNull();
+    const json = gateConfigToJson(m.gate) as { slop: Record<string, unknown> };
+    expect(json.slop).toEqual({ mode: "block" });
+    expect(json.slop).not.toHaveProperty("minScore");
+  });
+
   it("parses gate.pack and ignores an unknown pack with a warning (#692)", () => {
     expect(parseFocusManifest({ gate: { pack: "oss-anti-slop" } }).gate.pack).toBe("oss-anti-slop");
     expect(parseFocusManifest({ gate: { pack: "gittensor" } }).gate.pack).toBe("gittensor");
