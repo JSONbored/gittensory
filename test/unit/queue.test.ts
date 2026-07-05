@@ -2949,6 +2949,46 @@ describe("queue processors", () => {
     stampSpy.mockRestore();
   });
 
+  it("#regate-churn: a failing markAiReviewPublished stamp is swallowed (fail-open) — the publish still completes", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commentMode: "all_prs", publicSurface: "comment_only", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", aiReviewMode: "off", gatePack: "oss-anti-slop" });
+    const markSpy = vi.spyOn(repositoriesModule, "markAiReviewPublished").mockRejectedValueOnce(new Error("D1 stamp failed"));
+    let commentPosted = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/pulls/7/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.endsWith("/pulls/7")) return Response.json({ number: 7, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+      if (url.includes("/commits/a7/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a7/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/issues/7/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/7/comments") && method === "POST") { commentPosted = true; return Response.json({ id: 1 }, { status: 201 }); }
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+
+    await expect(
+      processJob(env, {
+        type: "github-webhook",
+        deliveryId: "ai-review-published-stamp-failopen",
+        eventName: "pull_request",
+        payload: {
+          action: "opened",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: { number: 7, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" },
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(commentPosted).toBe(true); // the surface published despite the ai_review_cache marker write throwing
+    expect(markSpy).toHaveBeenCalled();
+    markSpy.mockRestore();
+  });
+
   describe("#regate-churn: scheduled re-gate idempotency", () => {
     async function seedRegateChurnRepo(env: Env, overrides: Partial<Parameters<typeof upsertRepositorySettings>[1]> = {}) {
       await persistRegistrySnapshot(
