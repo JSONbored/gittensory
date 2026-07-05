@@ -404,6 +404,18 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // Mixedbread API key: `mxb_` + base62 body.
+    kind: "mixedbread_api_key",
+    re: /\bmxb_[A-Za-z0-9]{20,}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // Sourcegraph local access token: `sgp_local_` + 40 hex (v3 local format).
+    kind: "sourcegraph_local_access_token",
+    re: /\bsgp_local_[a-fA-F0-9]{40}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
     // Google OAuth 2.0 client secret: `GOCSPX-` + 28 base64url chars.
     kind: "google_oauth_client_secret",
     re: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/,

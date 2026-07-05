@@ -1192,6 +1192,53 @@ test("scanPatch does not flag truncated Statsig/Paddle keys or identifier contin
   );
 });
 
+test("scanPatch flags Mixedbread and Sourcegraph local access tokens with high confidence", () => {
+  const fakeMixedbreadKey = "mxb_" + "a".repeat(20);
+  const mixedbreadFindings = scanPatch("src/config.ts", hunk([`const mxb = "${fakeMixedbreadKey}";`]));
+  assert.equal(mixedbreadFindings.length, 1);
+  assert.equal(mixedbreadFindings[0].kind, "mixedbread_api_key");
+  assert.equal(mixedbreadFindings[0].confidence, "high");
+
+  const fakeSourcegraphLocalToken = ["sgp_", "local", "_", hex(40)].join("");
+  const sourcegraphLocalFindings = scanPatch("src/config.ts", hunk([`const sg = "${fakeSourcegraphLocalToken}";`]));
+  assert.equal(sourcegraphLocalFindings.length, 1);
+  assert.equal(sourcegraphLocalFindings[0].kind, "sourcegraph_local_access_token");
+  assert.equal(sourcegraphLocalFindings[0].confidence, "high");
+});
+
+test("scanPatch does not flag truncated Mixedbread/Sourcegraph local tokens or identifier continuation", () => {
+  assert.equal(scanPatch("src/config.ts", hunk([`const mxb = "mxb_${"a".repeat(19)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const mxb = "mxb_${"a".repeat(20)}_suffix";`])).some((f) => f.kind === "mixedbread_api_key"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const mxb = "mxb_${"a".repeat(20)}-suffix";`])).some((f) => f.kind === "mixedbread_api_key"),
+    false,
+  );
+
+  const shortSourcegraphLocalToken = ["sgp_", "local", "_", hex(39)].join("");
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const sg = "${shortSourcegraphLocalToken}";`])).some((f) => f.kind === "sourcegraph_local_access_token"),
+    false,
+  );
+  const sourcegraphLocalSuffixToken = ["sgp_", "local", "_", hex(40), "-suffix"].join("");
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const sg = "${sourcegraphLocalSuffixToken}";`])).some((f) => f.kind === "sourcegraph_local_access_token"),
+    false,
+  );
+  const sourcegraphLocalUnderscoreToken = ["sgp_", "local", "_", hex(40), "_suffix"].join("");
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const sg = "${sourcegraphLocalUnderscoreToken}";`])).some((f) => f.kind === "sourcegraph_local_access_token"),
+    false,
+  );
+  const sourcegraphLocalAlphaSuffixToken = ["sgp_", "local", "_", hex(40), "z"].join("");
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const sg = "${sourcegraphLocalAlphaSuffixToken}";`])).some((f) => f.kind === "sourcegraph_local_access_token"),
+    false,
+  );
+});
+
 test("scanPatch flags additional high-confidence SaaS/cloud/CI credential formats", () => {
   const cases = [
     ["google_oauth_client_secret", "GOCSPX-" + b62(28)],
