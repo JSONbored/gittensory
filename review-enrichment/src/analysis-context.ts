@@ -440,7 +440,12 @@ function categorizeFile(path: string): FileCategory {
   ) {
     return { path, extension, category: "config" };
   }
-  if ([".md", ".mdx", ".rst", ".txt"].includes(extension)) {
+  // Long-form doc spellings (.markdown/.adoc/.asciidoc) are docs too, matching the canonical
+  // DOCS_EXTENSIONS set in src/signals/path-matchers.ts and rag.ts's DOC_EXT_RE; without them a
+  // NOTES.markdown or guide.adoc file fell through to the source category.
+  if (
+    [".md", ".markdown", ".mdx", ".rst", ".adoc", ".asciidoc", ".txt"].includes(extension)
+  ) {
     return { path, extension, category: "docs" };
   }
   if (

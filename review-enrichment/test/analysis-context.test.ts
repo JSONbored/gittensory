@@ -545,6 +545,31 @@ test("createAnalysisContext classifies Zstandard archives as assets for schedule
   assert.deepEqual(plan.skipped.map((item) => [item.name, item.skipReason]), []);
 });
 
+test("createAnalysisContext classifies long-form doc extensions as docs", () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 3264,
+    files: [
+      { path: "GUIDE.markdown", patch: "@@ -1,0 +1,1 @@\n+# guide" },
+      { path: "docs/manual.adoc", patch: "@@ -1,0 +1,1 @@\n+= Manual" },
+      { path: "docs/spec.asciidoc", patch: "@@ -1,0 +1,1 @@\n+= Spec" },
+      { path: "README.ADOC", patch: "@@ -1,0 +1,1 @@\n+= Readme" },
+      { path: "src/index.ts", patch: "@@ -1,0 +1,1 @@\n+export {};" },
+    ],
+  });
+
+  assert.deepEqual(
+    context.fileCategories.map((file) => [file.path, file.category]),
+    [
+      ["GUIDE.markdown", "docs"],
+      ["docs/manual.adoc", "docs"],
+      ["docs/spec.asciidoc", "docs"],
+      ["README.ADOC", "docs"],
+      ["src/index.ts", "source"],
+    ],
+  );
+});
+
 test("createAnalysisContext classifies lockfile paths case-insensitively", () => {
   const context = createAnalysisContext({
     repoFullName: "JSONbored/gittensory",
