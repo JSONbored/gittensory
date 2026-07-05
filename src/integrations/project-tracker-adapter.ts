@@ -1,6 +1,7 @@
 import { createInstallationToken } from "../github/app";
 import { githubRateLimitAdmissionKeyForInstallation, makeInstallationOctokit } from "../github/client";
 import { createIssueComment } from "../github/pr-actions";
+import { findLinearNativeLink, LinearAdapter } from "./linear-adapter";
 import { termOverlap, tokenize, type CollisionTerms } from "../signals/engine";
 import { errorMessage } from "../utils/json";
 
@@ -254,6 +255,9 @@ const TRACKER_MATCH_MIN_SHARED = 3;
 
 export type ProjectTrackerMatch = {
   item: ProjectTrackerRef;
+  // "native" (#3186): a CONFIRMED link (e.g. Linear's own GitHub integration already linked this PR), not a
+  // guess -- score is fixed at 1 and shared is not applicable (0). "fuzzy": the tokenize/termOverlap heuristic.
+  source: "fuzzy" | "native";
   score: number;
   shared: number;
 };
@@ -279,7 +283,7 @@ export function matchOpenTrackerItems(prTitle: string, prBody: string | null | u
   const best = candidates[0];
   /* v8 ignore next -- defensive: candidates.length === 1 above guarantees index 0 exists. */
   if (!best) return null;
-  return { item: best.item, score: best.score, shared: best.shared };
+  return { item: best.item, source: "fuzzy", score: best.score, shared: best.shared };
 }
 
 export const PROJECT_TRACKER_SUGGEST_COMMENT_MARKER = "<!-- gittensory-milestone-suggest:v1 -->";
@@ -296,14 +300,17 @@ type ProjectTrackerMatches = {
   project: ProjectTrackerMatch | null;
 };
 
+function describeMatch(match: ProjectTrackerMatch, noun: "milestone" | "project"): string {
+  if (match.source === "native") {
+    return `This PR is linked to the ${codeFormat(match.item.title)} ${noun} (confirmed via Linear's GitHub integration).`;
+  }
+  return `This PR looks like it's part of the ${codeFormat(match.item.title)} ${noun} (${Math.round(match.score * 100)}% title/body term overlap).`;
+}
+
 function renderSuggestionComment(matches: ProjectTrackerMatches): string {
   const lines = [PROJECT_TRACKER_SUGGEST_COMMENT_MARKER];
-  if (matches.milestone) {
-    lines.push(`This PR looks like it's part of the ${codeFormat(matches.milestone.item.title)} milestone (${Math.round(matches.milestone.score * 100)}% title/body term overlap).`);
-  }
-  if (matches.project) {
-    lines.push(`This PR looks like it's part of the ${codeFormat(matches.project.item.title)} project (${Math.round(matches.project.score * 100)}% title/body term overlap).`);
-  }
+  if (matches.milestone) lines.push(describeMatch(matches.milestone, "milestone"));
+  if (matches.project) lines.push(describeMatch(matches.project, "project"));
   lines.push("", "This is an advisory suggestion only — nothing has been attached automatically.");
   return lines.join("\n");
 }
@@ -313,23 +320,54 @@ type IssueComment = {
   user?: { type?: string; login?: string } | null;
 };
 
+/** Only knows "github" vs. "linear" -- kept as a standalone alias (mirroring {@link ProjectMilestoneMatchModeInput}
+ *  below) rather than importing RepositorySettings, so this integrations module has no dependency on the
+ *  settings type. */
+type ProjectMilestoneMatchBackendInput = "github" | "linear" | null | undefined;
+
 /**
- * Best-effort, idempotent suggest-mode comment (#3183/#3184): checks BOTH open Milestones and open Projects v2
- * (independently, via each adapter) and posts ONE comment naming whichever matched, ONCE per PR (never updates
- * or reposts), so a repeated sweep/webhook pass never spams the thread. Never calls attachToMilestone/
- * attachToProject -- suggest mode only ever comments; #3185 wires the real attach path behind "auto".
+ * Resolves this PR's milestone/project matches against whichever backend the repo configured (#3186). The
+ * Linear path tries {@link findLinearNativeLink} FIRST (a confirmed link via Linear's own GitHub integration
+ * beats any guess) and only falls back to {@link matchOpenTrackerItems} fuzzy-matching against Linear's open
+ * projects when no native link is found for either project or milestone. The GitHub path (default, #3183/#3184)
+ * has no native-link concept -- it always fuzzy-matches both open Milestones and open Projects v2.
  */
-export async function maybeSuggestProjectOrMilestoneMatch(ctx: ProjectTrackerContext, pullNumber: number, prTitle: string, prBody: string | null | undefined): Promise<{ suggested: boolean }> {
+async function resolveTrackerMatches(ctx: ProjectTrackerContext, backend: ProjectMilestoneMatchBackendInput, prTitle: string, prBody: string | null | undefined, prUrl: string): Promise<ProjectTrackerMatches> {
+  if (backend === "linear") {
+    const nativeLink = await findLinearNativeLink(ctx, prUrl);
+    if (nativeLink.project || nativeLink.milestone) return nativeLink;
+    const linearAdapter = new LinearAdapter();
+    const projects = await linearAdapter.listOpenProjects(ctx);
+    return { milestone: null, project: matchOpenTrackerItems(prTitle, prBody, projects) };
+  }
   const milestonesAdapter = new GitHubMilestonesAdapter();
   const projectsAdapter = new GitHubProjectsAdapter();
   // Fail-open, independently, for each tracker type (mirrors this repo's established best-effort pattern):
   // a transient milestone REST error must never suppress a valid Projects v2 match, and vice versa -- either
   // lookup degrading to an empty list is a missed suggestion, not a broken one, matching the doc comment above.
   const [milestones, projects] = await Promise.all([milestonesAdapter.listOpenMilestones(ctx).catch(() => []), projectsAdapter.listOpenProjects(ctx).catch(() => [])]);
-  const matches: ProjectTrackerMatches = {
+  return {
     milestone: matchOpenTrackerItems(prTitle, prBody, milestones),
     project: matchOpenTrackerItems(prTitle, prBody, projects),
   };
+}
+
+/**
+ * Best-effort, idempotent suggest-mode comment (#3183/#3184/#3186): resolves matches against the repo's
+ * configured backend (GitHub by default, Linear when opted in) and posts ONE comment naming whichever
+ * matched, ONCE per PR (never updates or reposts), so a repeated sweep/webhook pass never spams the thread.
+ * Never calls attachToMilestone/attachToProject -- suggest mode only ever comments; #3185 wires the real
+ * attach path behind "auto".
+ */
+export async function maybeSuggestProjectOrMilestoneMatch(
+  ctx: ProjectTrackerContext,
+  pullNumber: number,
+  prTitle: string,
+  prBody: string | null | undefined,
+  backend: ProjectMilestoneMatchBackendInput,
+  prUrl: string,
+): Promise<{ suggested: boolean }> {
+  const matches = await resolveTrackerMatches(ctx, backend, prTitle, prBody, prUrl);
   if (!matches.milestone && !matches.project) return { suggested: false };
 
   const { owner, repo } = parseRepoFullName(ctx.repoFullName);
@@ -370,13 +408,22 @@ export async function maybeSuggestMilestoneMatchForPr(args: {
   prState: string;
   prTitle: string;
   prBody: string | null | undefined;
+  prUrl: string | null | undefined;
   mode: ProjectMilestoneMatchModeInput;
+  backend: ProjectMilestoneMatchBackendInput;
   deliveryId: string;
 }): Promise<void> {
   if (!args.installationId) return;
   if (args.prState !== "open") return;
   if (!args.mode || args.mode === "off") return;
-  await maybeSuggestProjectOrMilestoneMatch({ env: args.env, installationId: args.installationId, repoFullName: args.repoFullName }, args.pullNumber, args.prTitle, args.prBody).catch((error) => {
+  await maybeSuggestProjectOrMilestoneMatch(
+    { env: args.env, installationId: args.installationId, repoFullName: args.repoFullName },
+    args.pullNumber,
+    args.prTitle,
+    args.prBody,
+    args.backend,
+    args.prUrl ?? "",
+  ).catch((error) => {
     console.error(
       JSON.stringify({
         level: "warn",

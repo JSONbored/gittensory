@@ -53,6 +53,7 @@ export const repositorySettings = sqliteTable("repository_settings", {
   gateCheckMode: text("gate_check_mode").notNull().default("off"),
   reviewCheckMode: text("review_check_mode").notNull().default("disabled"),
   projectMilestoneMatchMode: text("project_milestone_match_mode").notNull().default("off"),
+  autoProjectMilestoneMatchBackend: text("auto_project_milestone_match_backend").notNull().default("github"),
   gatePack: text("gate_pack").notNull().default("gittensor"),
   // Missing a linked issue is advisory-only by default -- issues aren't always available, so it only
   // blocks when a repo explicitly opts in (linkedIssueGateMode: "block" or the requireLinkedIssue toggle;
@@ -164,6 +165,21 @@ export const repositoryAiKeys = sqliteTable("repository_ai_keys", {
   // upsert overwrites in place; there is no rotation history. See src/utils/crypto.ts.
   keyVersion: integer("key_version").notNull().default(1),
   model: text("model"),
+  last4: text("last4").notNull(),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
+});
+
+// Linear personal API key (#3186), encrypted at rest with AES-256-GCM -- same envelope as repositoryAiKeys
+// above (see src/utils/crypto.ts), isolated in its own table for the same reason: never serialized by the
+// repository-settings GET surface. The plaintext key is never stored; `last4` is a display-only hint.
+export const repositoryLinearKeys = sqliteTable("repository_linear_keys", {
+  repoFullName: text("repo_full_name").primaryKey(),
+  ciphertext: text("ciphertext").notNull(),
+  iv: text("iv").notNull(),
+  salt: text("salt"),
+  keyVersion: integer("key_version").notNull().default(1),
   last4: text("last4").notNull(),
   createdBy: text("created_by"),
   createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),

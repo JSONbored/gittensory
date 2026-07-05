@@ -392,6 +392,8 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       4,
       "Improve self-host reliability roadmap convergence",
       "Follow-up on the self-host reliability roadmap work",
+      "github",
+      "https://github.com/JSONbored/gittensory/pull/4",
     );
     expect(result).toEqual({ suggested: true });
     expect(posted).toHaveLength(1);
@@ -427,6 +429,8 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       4,
       "Improve self-host reliability roadmap convergence",
       "Follow-up on the self-host reliability roadmap work",
+      "github",
+      "https://github.com/JSONbored/gittensory/pull/4",
     );
     expect(result).toEqual({ suggested: true });
     expect(posted).toHaveLength(1);
@@ -460,6 +464,8 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       4,
       "Improve self-host reliability roadmap convergence",
       "Follow-up on the self-host reliability roadmap work",
+      "github",
+      "https://github.com/JSONbored/gittensory/pull/4",
     );
     expect(result).toEqual({ suggested: true });
     expect(posted[0]).toContain("milestone (");
@@ -489,6 +495,8 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       4,
       "Improve self-host reliability roadmap convergence",
       "Follow-up on the self-host reliability roadmap work",
+      "github",
+      "https://github.com/some-org/gittensory/pull/4",
     );
     expect(result).toEqual({ suggested: true });
     expect(posted).toHaveLength(1);
@@ -523,6 +531,8 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       4,
       "Improve self-host reliability roadmap convergence",
       "Follow-up on the self-host reliability roadmap work",
+      "github",
+      "https://github.com/some-org/gittensory/pull/4",
     );
     expect(result).toEqual({ suggested: true });
     expect(posted).toHaveLength(1);
@@ -552,6 +562,8 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       4,
       "self host reliability roadmap convergence",
       "self host reliability roadmap convergence work",
+      "github",
+      "https://github.com/JSONbored/gittensory/pull/4",
     );
     expect(posted).toHaveLength(1);
     // The rendered title is wrapped in a single code span with every literal backtick stripped -- no unescaped
@@ -589,6 +601,8 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       4,
       "Improve self-host reliability roadmap convergence",
       "Follow-up on the self-host reliability roadmap work",
+      "github",
+      "https://github.com/JSONbored/gittensory/pull/4",
     );
     expect(requestedPages).toEqual([1, 2]);
     expect(result).toEqual({ suggested: false });
@@ -610,7 +624,10 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       return new Response("unexpected", { status: 500 });
     });
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
-    const result = await maybeSuggestProjectOrMilestoneMatch({ env, installationId: 123, repoFullName: "JSONbored/gittensory" }, 4, "unrelated typo fix", null);
+    const result = await maybeSuggestProjectOrMilestoneMatch({ env, installationId: 123, repoFullName: "JSONbored/gittensory" }, 4, "unrelated typo fix", null,
+      "github",
+      "https://github.com/JSONbored/gittensory/pull/4",
+    );
     expect(result).toEqual({ suggested: false });
     expect(posted).toBe(false);
   });
@@ -638,6 +655,8 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       4,
       "Improve self-host reliability roadmap convergence",
       "Follow-up on the self-host reliability roadmap work",
+      "github",
+      "https://github.com/JSONbored/gittensory/pull/4",
     );
     expect(result).toEqual({ suggested: false });
     expect(posted).toBe(false);
@@ -666,6 +685,8 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       4,
       "Improve self-host reliability roadmap convergence",
       "Follow-up on the self-host reliability roadmap work",
+      "github",
+      "https://github.com/JSONbored/gittensory/pull/4",
     );
     expect(result).toEqual({ suggested: true });
     expect(posted).toBe(true);
@@ -686,7 +707,9 @@ describe("maybeSuggestMilestoneMatchForPr (#3183 webhook-level gating)", () => {
       prState: "open",
       prTitle: "Improve self-host reliability roadmap convergence",
       prBody: "Follow-up on the self-host reliability roadmap work",
+      prUrl: "https://github.com/JSONbored/gittensory/pull/4",
       mode: "suggest" as const,
+      backend: "github" as const,
       deliveryId: "test-delivery",
       ...overrides,
     };
@@ -750,6 +773,27 @@ describe("maybeSuggestMilestoneMatchForPr (#3183 webhook-level gating)", () => {
       return new Response("unexpected", { status: 500 });
     });
     await maybeSuggestMilestoneMatchForPr(baseArgs());
+    expect(milestonesFetched).toBe(true);
+  });
+
+  it("coerces a missing prUrl to an empty string rather than passing null/undefined through", async () => {
+    let milestonesFetched = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/milestones")) {
+        milestonesFetched = true;
+        return Response.json([]);
+      }
+      if (url.endsWith("/graphql")) return Response.json(noOpenProjectsGraphQlBody());
+      if (url.includes("/comments") && method === "GET") return Response.json([]);
+      return new Response("unexpected", { status: 500 });
+    });
+    await maybeSuggestMilestoneMatchForPr(baseArgs({ prUrl: null }));
+    expect(milestonesFetched).toBe(true);
+    milestonesFetched = false;
+    await maybeSuggestMilestoneMatchForPr(baseArgs({ prUrl: undefined }));
     expect(milestonesFetched).toBe(true);
   });
 

@@ -194,6 +194,7 @@ export type FocusManifestSettings = Partial<
     | "gateCheckMode"
     | "reviewCheckMode"
     | "autoProjectMilestoneMatch"
+    | "autoProjectMilestoneMatchBackend"
     | "linkedIssueGateMode"
     | "duplicatePrGateMode"
     | "selfAuthoredLinkedIssueGateMode"
@@ -1073,6 +1074,8 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   if (reviewCheckMode !== null) out.reviewCheckMode = reviewCheckMode;
   const autoProjectMilestoneMatch = normalizeOptionalEnum(r.autoProjectMilestoneMatch, "settings.autoProjectMilestoneMatch", ["off", "suggest", "auto"] as const, warnings);
   if (autoProjectMilestoneMatch !== null) out.autoProjectMilestoneMatch = autoProjectMilestoneMatch;
+  const autoProjectMilestoneMatchBackend = normalizeOptionalEnum(r.autoProjectMilestoneMatchBackend, "settings.autoProjectMilestoneMatchBackend", ["github", "linear"] as const, warnings);
+  if (autoProjectMilestoneMatchBackend !== null) out.autoProjectMilestoneMatchBackend = autoProjectMilestoneMatchBackend;
   const linkedIssueGateMode = normalizeOptionalGateMode(r.linkedIssueGateMode, "settings.linkedIssueGateMode", warnings);
   if (linkedIssueGateMode !== null) out.linkedIssueGateMode = linkedIssueGateMode;
   const duplicatePrGateMode = normalizeOptionalGateMode(r.duplicatePrGateMode, "settings.duplicatePrGateMode", warnings);

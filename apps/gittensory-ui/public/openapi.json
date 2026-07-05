@@ -3646,6 +3646,13 @@
                   "suggest",
                   "auto"
                 ]
+              },
+              "autoProjectMilestoneMatchBackend": {
+                "type": "string",
+                "enum": [
+                  "github",
+                  "linear"
+                ]
               }
             },
             "required": [
@@ -9191,6 +9198,13 @@
               "suggest",
               "auto"
             ]
+          },
+          "autoProjectMilestoneMatchBackend": {
+            "type": "string",
+            "enum": [
+              "github",
+              "linear"
+            ]
           }
         },
         "required": [
@@ -9307,6 +9321,13 @@
                         "off",
                         "suggest",
                         "auto"
+                      ]
+                    },
+                    "autoProjectMilestoneMatchBackend": {
+                      "type": "string",
+                      "enum": [
+                        "github",
+                        "linear"
                       ]
                     }
                   },
@@ -9894,6 +9915,13 @@
                   "off",
                   "suggest",
                   "auto"
+                ]
+              },
+              "autoProjectMilestoneMatchBackend": {
+                "type": "string",
+                "enum": [
+                  "github",
+                  "linear"
                 ]
               }
             },

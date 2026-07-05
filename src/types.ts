@@ -558,6 +558,12 @@ export type ReviewCheckMode = "required" | "visible" | "disabled";
  *  degrading to the safe, visible suggest behavior. */
 export type ProjectMilestoneMatchMode = "off" | "suggest" | "auto";
 
+/** Which backend {@link ProjectMilestoneMatchMode} matches against (#3186). `"github"` (default) uses the
+ *  installed App's own GitHub Milestones/Projects v2 access; `"linear"` matches against a Linear workspace
+ *  instead, using a per-repo encrypted API key (see `getDecryptedRepositoryLinearKey` in db/repositories.ts) --
+ *  the key itself is never set here or via `.gittensory.yml`, only this backend CHOICE is config-as-code. */
+export type ProjectMilestoneMatchBackend = "github" | "linear";
+
 /** Which policy pack the gate runs under (#692). `gittensor` = the full Gittensor policy: registry/emissions-
  *  aware, and it threads the author's confirmed status for on-chain scoring (the gate verdict itself blocks
  *  every author the same — confirmed status no longer changes it, #gate-nonconfirmed). `oss-anti-slop` = a
@@ -598,6 +604,10 @@ export type RepositorySettings = {
   /** Auto-project/milestone matching (#3183). See {@link ProjectMilestoneMatchMode}. Always populated by the DB
    *  layer (default `"off"`); optional so existing settings fixtures/callers need not be touched. */
   autoProjectMilestoneMatch?: ProjectMilestoneMatchMode | undefined;
+  /** Which backend {@link ProjectMilestoneMatchMode} matches against (#3186). See {@link ProjectMilestoneMatchBackend}.
+   *  Always populated by the DB layer (default `"github"`); optional so existing settings fixtures/callers need
+   *  not be touched. */
+  autoProjectMilestoneMatchBackend?: ProjectMilestoneMatchBackend | undefined;
   /** Policy pack the gate evaluates under (#692). Default `gittensor` (registry-aware; threads confirmed
    *  status for scoring only). `oss-anti-slop` runs the deterministic rules against any author on any repo. */
   gatePack: GatePolicyPack;

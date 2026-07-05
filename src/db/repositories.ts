@@ -48,6 +48,7 @@ import {
   repoSyncSegments,
   repoSyncState,
   repositoryAiKeys,
+  repositoryLinearKeys,
   repositorySettings,
   scorePreviews,
   scoringModelSnapshots,
@@ -481,6 +482,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       gateCheckMode: "off",
       reviewCheckMode: "disabled",
       autoProjectMilestoneMatch: "off",
+      autoProjectMilestoneMatchBackend: "github",
       gatePack: "gittensor",
       linkedIssueGateMode: "advisory",
       duplicatePrGateMode: "block",
@@ -552,6 +554,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     gateCheckMode: parseGateCheckMode(row.gateCheckMode),
     reviewCheckMode: parseReviewCheckMode(row.reviewCheckMode),
     autoProjectMilestoneMatch: parseProjectMilestoneMatchMode(row.projectMilestoneMatchMode),
+    autoProjectMilestoneMatchBackend: parseProjectMilestoneMatchBackend(row.autoProjectMilestoneMatchBackend),
     gatePack: parseGatePack(row.gatePack),
     linkedIssueGateMode: parseGateRuleMode(row.linkedIssueGateMode),
     duplicatePrGateMode: parseGateRuleMode(row.duplicatePrGateMode),
@@ -666,6 +669,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     // only fires for callers that never cared about reviewCheckMode at all.
     reviewCheckMode: settings.reviewCheckMode ?? (settings.gateCheckMode === "enabled" ? "required" : "disabled"),
     autoProjectMilestoneMatch: settings.autoProjectMilestoneMatch ?? "off",
+    autoProjectMilestoneMatchBackend: settings.autoProjectMilestoneMatchBackend ?? "github",
     gatePack: parseGatePack(settings.gatePack),
     linkedIssueGateMode: settings.linkedIssueGateMode ?? "advisory",
     duplicatePrGateMode: settings.duplicatePrGateMode ?? "block",
@@ -738,6 +742,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       gateCheckMode: resolved.gateCheckMode,
       reviewCheckMode: resolved.reviewCheckMode,
       projectMilestoneMatchMode: resolved.autoProjectMilestoneMatch,
+      autoProjectMilestoneMatchBackend: resolved.autoProjectMilestoneMatchBackend,
       gatePack: resolved.gatePack,
       linkedIssueGateMode: resolved.linkedIssueGateMode,
       duplicatePrGateMode: resolved.duplicatePrGateMode,
@@ -809,6 +814,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         gateCheckMode: resolved.gateCheckMode,
         reviewCheckMode: resolved.reviewCheckMode,
       projectMilestoneMatchMode: resolved.autoProjectMilestoneMatch,
+      autoProjectMilestoneMatchBackend: resolved.autoProjectMilestoneMatchBackend,
         gatePack: resolved.gatePack,
         linkedIssueGateMode: resolved.linkedIssueGateMode,
         duplicatePrGateMode: resolved.duplicatePrGateMode,
@@ -975,6 +981,90 @@ export async function getDecryptedRepositoryAiKey(env: Env, fullName: string): P
   try {
     const key = await decryptSecret(row.ciphertext, row.iv, secret, row.salt);
     return { provider: normalizeAiKeyProvider(row.provider), key, model: row.model ?? null };
+  } catch {
+    return null;
+  }
+}
+
+// ─── Linear personal API key (#3186) ────────────────────────────────────────────────────────────
+// Same isolated-table, encrypted-at-rest shape as the BYOK provider keys above (reuses the same
+// TOKEN_ENCRYPTION_SECRET + encryptSecret/decryptSecret envelope) -- never serialized by the
+// repository-settings GET surface, never settable via `.gittensory.yml`, never logged in plaintext.
+
+export type RepositoryLinearKeyStatus = { configured: true; last4: string; createdBy: string | null; updatedAt: string | null } | { configured: false };
+
+/** Read the secret-free status of a repo's configured Linear API key (for the dashboard/API). */
+export async function getRepositoryLinearKeyStatus(env: Env, fullName: string): Promise<RepositoryLinearKeyStatus> {
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(repositoryLinearKeys).where(eq(repositoryLinearKeys.repoFullName, fullName)).limit(1);
+  if (!row) return { configured: false };
+  return { configured: true, last4: row.last4, createdBy: row.createdBy, updatedAt: row.updatedAt };
+}
+
+/**
+ * Store (or replace) a repo's Linear API key, encrypted at rest. Returns the secret-free status.
+ * Throws `missing_encryption_secret` when TOKEN_ENCRYPTION_SECRET is not configured — callers must
+ * surface that rather than store a key in the clear.
+ */
+export async function upsertRepositoryLinearKey(env: Env, input: { repoFullName: string; key: string; createdBy?: string | null }): Promise<RepositoryLinearKeyStatus> {
+  const secret = env.TOKEN_ENCRYPTION_SECRET;
+  if (!secret) throw new Error("missing_encryption_secret");
+  const trimmedKey = input.key.trim();
+  const existing = await getRepositoryLinearKeyStatus(env, input.repoFullName);
+  const { ciphertext, iv, salt, version } = await encryptSecret(trimmedKey, secret);
+  const last4 = trimmedKey.slice(-4);
+  const createdBy = input.createdBy ?? null;
+  const updatedAt = nowIso();
+  const db = getDb(env.DB);
+  await db
+    .insert(repositoryLinearKeys)
+    .values({ repoFullName: input.repoFullName, ciphertext, iv, salt, keyVersion: version, last4, createdBy, updatedAt })
+    .onConflictDoUpdate({
+      target: repositoryLinearKeys.repoFullName,
+      set: { ciphertext, iv, salt, keyVersion: version, last4, createdBy, updatedAt },
+    });
+  await recordAuditEvent(env, {
+    eventType: "linear_key_change",
+    actor: createdBy,
+    targetKey: input.repoFullName,
+    outcome: "completed",
+    detail: `linear key ${existing.configured ? "replace" : "set"}`,
+    metadata: { repoFullName: input.repoFullName, action: existing.configured ? "replace" : "set", last4 },
+  });
+  return { configured: true, last4, createdBy, updatedAt };
+}
+
+/** Remove a repo's Linear API key. Records a lifecycle audit event when a key was actually present. */
+export async function deleteRepositoryLinearKey(env: Env, fullName: string, actor?: string | null): Promise<void> {
+  const existing = await getRepositoryLinearKeyStatus(env, fullName);
+  const db = getDb(env.DB);
+  await db.delete(repositoryLinearKeys).where(eq(repositoryLinearKeys.repoFullName, fullName));
+  if (existing.configured) {
+    await recordAuditEvent(env, {
+      eventType: "linear_key_change",
+      actor: actor ?? null,
+      targetKey: fullName,
+      outcome: "completed",
+      detail: "linear key delete",
+      metadata: { repoFullName: fullName, action: "delete", last4: existing.last4 },
+    });
+  }
+}
+
+/**
+ * Decrypt a repo's Linear API key for a Linear API call. Returns null when no key is configured OR the
+ * encryption secret is unavailable OR decryption fails -- so the caller silently degrades (no Linear match
+ * attempted) and a misconfiguration never blocks the PR-webhook pipeline. The plaintext key must be used
+ * immediately and never cached.
+ */
+export async function getDecryptedRepositoryLinearKey(env: Env, fullName: string): Promise<string | null> {
+  const secret = env.TOKEN_ENCRYPTION_SECRET;
+  if (!secret) return null;
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(repositoryLinearKeys).where(eq(repositoryLinearKeys.repoFullName, fullName)).limit(1);
+  if (!row) return null;
+  try {
+    return await decryptSecret(row.ciphertext, row.iv, secret, row.salt);
   } catch {
     return null;
   }
@@ -6255,6 +6345,10 @@ function parseReviewCheckMode(value: string): RepositorySettings["reviewCheckMod
 
 function parseProjectMilestoneMatchMode(value: string): RepositorySettings["autoProjectMilestoneMatch"] {
   return value === "suggest" || value === "auto" ? value : "off";
+}
+
+function parseProjectMilestoneMatchBackend(value: string): RepositorySettings["autoProjectMilestoneMatchBackend"] {
+  return value === "linear" ? "linear" : "github";
 }
 
 function parseGatePack(value: string | null | undefined): RepositorySettings["gatePack"] {

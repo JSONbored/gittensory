@@ -5323,7 +5323,9 @@ async function processGitHubWebhook(
         prState: pr.state,
         prTitle: pr.title,
         prBody: pr.body,
+        prUrl: pr.htmlUrl,
         mode: settings.autoProjectMilestoneMatch,
+        backend: settings.autoProjectMilestoneMatchBackend,
         deliveryId,
       });
       // Draft-dodge guard (#converted-to-draft): a contributor converting an OPEN PR to draft cannot use

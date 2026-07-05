@@ -118,6 +118,7 @@ describe("private-beta auth and rate limiting", () => {
     // Maintainer BYOK config writes run PBKDF2 + an encrypted upsert; they are rate-limited as expensive.
     expect(routeClassForPath("/v1/repos/acme/widgets/ai-key")).toBe("expensive");
     expect(routeClassForPath("/v1/repos/acme/widgets/ai-review")).toBe("expensive");
+    expect(routeClassForPath("/v1/repos/acme/widgets/linear-key")).toBe("expensive");
     expect(routeClassForPath("/v1/repos")).toBe("normal");
   });
 

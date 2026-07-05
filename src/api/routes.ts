@@ -101,6 +101,9 @@ import {
   getRepositoryAiKeyStatus,
   upsertRepositoryAiKey,
   deleteRepositoryAiKey,
+  getRepositoryLinearKeyStatus,
+  upsertRepositoryLinearKey,
+  deleteRepositoryLinearKey,
   getGlobalAgentFrozenState,
   setGlobalAgentFrozen,
 } from "../db/repositories";
@@ -755,6 +758,12 @@ const repositoryAiKeySchema = z
     message: "API key does not match the selected provider (Anthropic keys start with sk-ant-, OpenAI keys start with sk-).",
     path: ["key"],
   });
+
+// Linear personal API key (#3186) -- no provider-prefix assertion (unlike the AI-key schema above): Linear's
+// key format is not a stable enough public contract to hard-validate against, so only a length bound applies.
+const repositoryLinearKeySchema = z.object({
+  key: z.string().trim().min(20).max(400),
+});
 
 // Maintainer-settable AI-review config (the non-secret subset of settings). The secret key is set
 // separately via the ai-key route; never here.
@@ -2516,6 +2525,41 @@ export function createApp() {
     return c.json({ configured: false });
   });
 
+  // Maintainer self-serve Linear API key (#3186). Write-only + live GitHub write-access scoped, mirroring the
+  // ai-key routes above. GET returns only {configured, last4}; the key is never returned, logged, or surfaced.
+  app.get("/v1/repos/:owner/:repo/linear-key", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoWriteAccess(c, fullName);
+    if (gate instanceof Response) return gate;
+    return c.json(await getRepositoryLinearKeyStatus(c.env, fullName));
+  });
+
+  app.post("/v1/repos/:owner/:repo/linear-key", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoWriteAccess(c, fullName);
+    if (gate instanceof Response) return gate;
+    const parsed = repositoryLinearKeySchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "invalid_linear_key", issues: parsed.error.issues }, 400);
+    const createdBy = gate.identity?.kind === "session" ? gate.identity.actor : null;
+    try {
+      return c.json(await upsertRepositoryLinearKey(c.env, { repoFullName: fullName, key: parsed.data.key, createdBy }));
+    } catch (error) {
+      if (error instanceof Error && error.message === "missing_encryption_secret") {
+        return c.json({ error: "encryption_unavailable", detail: "Key storage is not configured on the server." }, 503);
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/v1/repos/:owner/:repo/linear-key", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoWriteAccess(c, fullName);
+    if (gate instanceof Response) return gate;
+    const actor = gate.identity?.kind === "session" ? gate.identity.actor : null;
+    await deleteRepositoryLinearKey(c.env, fullName, actor);
+    return c.json({ configured: false });
+  });
+
   app.post("/v1/repos/:owner/:repo/settings-preview", async (c) => {
     const identity = await authenticateRequestIdentity(c);
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
@@ -3735,6 +3779,35 @@ export function createApp() {
   app.delete("/v1/internal/repos/:owner/:repo/ai-key", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     await deleteRepositoryAiKey(c.env, fullName);
+    return c.json({ configured: false });
+  });
+
+  // Linear API key (#3186). GET returns secret-free status only; POST stores it encrypted at rest;
+  // DELETE removes it. The plaintext key is never logged and never returned.
+  app.get("/v1/internal/repos/:owner/:repo/linear-key", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    return c.json(await getRepositoryLinearKeyStatus(c.env, fullName));
+  });
+
+  app.post("/v1/internal/repos/:owner/:repo/linear-key", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = repositoryLinearKeySchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_linear_key", issues: parsed.error.issues }, 400);
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    try {
+      const status = await upsertRepositoryLinearKey(c.env, { repoFullName: fullName, key: parsed.data.key });
+      return c.json(status);
+    } catch (error) {
+      if (error instanceof Error && error.message === "missing_encryption_secret") {
+        return c.json({ error: "encryption_unavailable", detail: "TOKEN_ENCRYPTION_SECRET is not configured." }, 503);
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/v1/internal/repos/:owner/:repo/linear-key", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    await deleteRepositoryLinearKey(c.env, fullName);
     return c.json({ configured: false });
   });
 
@@ -5054,6 +5127,7 @@ function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: 
   if (isRepoOnboardingPackPreviewPath(path)) return true;
   if (isRepoFocusManifestPath(path)) return true;
   if (isRepoAiConfigPath(path)) return true;
+  if (isRepoLinearConfigPath(path)) return true;
   if (isRepoCheckBeforeStartPath(path)) return true;
   if (isRepoValidateLinkedIssuePath(path)) return true;
   if (isRepoAgentAuditFeedPath(path)) return true; // route's requireRepoMaintainer enforces per-repo authority (contributors → 403)
@@ -5118,6 +5192,13 @@ function isRepoFocusManifestPath(path: string): boolean {
 
 function isRepoAiConfigPath(path: string): boolean {
   return /^\/v1\/repos\/[^/]+\/[^/]+\/ai-(?:review|key)$/.test(path);
+}
+
+// #3186: without this, a session (browser) caller hits the coarse-grained "insufficient_role" 403 from this
+// module's own broad path-allowlist BEFORE ever reaching the route's own requireRepoWriteAccess check --
+// same shape as isRepoAiConfigPath above, just for the new Linear key route.
+function isRepoLinearConfigPath(path: string): boolean {
+  return /^\/v1\/repos\/[^/]+\/[^/]+\/linear-key$/.test(path);
 }
 
 async function authenticateRequestIdentity(c: ProtectedRouteContext): Promise<AuthIdentity | null> {
