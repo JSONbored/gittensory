@@ -4,10 +4,10 @@
   "tags": ["gittensory", "codex", "ai"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": { "from": "now-7d", "to": "now" },
-  "description": "Codex review observability for the self-hosted stack. Prometheus panels are subscription-CLI attempt counters for the selected range; durable review records come from ai_usage_events and must be read with their status. USD cost appears only when the Codex CLI emits a cost field.",
+  "description": "Codex review observability for the self-hosted stack. Prometheus panels are subscription-CLI attempt counters for the selected range; durable review records come from ai_usage_events, filtered by provider='codex' (migration 0109), and must be read with their status. Token/cost columns are populated whenever the Codex CLI reports real usage; estimated_neurons is a heuristic budget proxy, not billing-grade accounting.",
   "panels": [
     {
       "id": 1,
@@ -61,8 +61,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT count(*) AS reviews FROM ai_usage_events WHERE feature = 'ai_review_pr' AND status = 'ok' AND (('+' || model || '+') LIKE '%+codex+%' OR ('+' || model || '+') LIKE '%+codex:%')",
-          "rawQueryText": "SELECT count(*) AS reviews FROM ai_usage_events WHERE feature = 'ai_review_pr' AND status = 'ok' AND (('+' || model || '+') LIKE '%+codex+%' OR ('+' || model || '+') LIKE '%+codex:%')"
+          "queryText": "SELECT count(*) AS reviews FROM ai_usage_events WHERE feature = 'ai_review_pr' AND status = 'ok' AND provider = 'codex'",
+          "rawQueryText": "SELECT count(*) AS reviews FROM ai_usage_events WHERE feature = 'ai_review_pr' AND status = 'ok' AND provider = 'codex'"
         }
       ]
     },
@@ -118,18 +118,19 @@
     {
       "id": 10,
       "type": "timeseries",
-      "title": "Estimated neuron usage by day",
+      "title": "Durable token usage by day",
+      "description": "Real input/output tokens from ai_usage_events (migration 0109), populated when the Codex CLI reports usage. Replaces the old estimated-neuron-only proxy for this panel.",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
-      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1 } } },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "stacking": { "mode": "normal" } } } },
       "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         {
           "refId": "A",
           "queryType": "time series",
           "timeColumns": ["time"],
-          "queryText": "SELECT date(created_at) AS time, sum(estimated_neurons) AS estimated_neurons FROM ai_usage_events WHERE feature = 'ai_review_pr' AND (('+' || model || '+') LIKE '%+codex+%' OR ('+' || model || '+') LIKE '%+codex:%') GROUP BY date(created_at) ORDER BY time",
-          "rawQueryText": "SELECT date(created_at) AS time, sum(estimated_neurons) AS estimated_neurons FROM ai_usage_events WHERE feature = 'ai_review_pr' AND (('+' || model || '+') LIKE '%+codex+%' OR ('+' || model || '+') LIKE '%+codex:%') GROUP BY date(created_at) ORDER BY time"
+          "queryText": "SELECT date(created_at) AS time, sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY date(created_at) ORDER BY time",
+          "rawQueryText": "SELECT date(created_at) AS time, sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY date(created_at) ORDER BY time"
         }
       ]
     },
@@ -145,8 +146,27 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT status, count(*) AS count FROM ai_usage_events WHERE feature = 'ai_review_pr' AND (('+' || model || '+') LIKE '%+codex+%' OR ('+' || model || '+') LIKE '%+codex:%') GROUP BY status ORDER BY count DESC",
-          "rawQueryText": "SELECT status, count(*) AS count FROM ai_usage_events WHERE feature = 'ai_review_pr' AND (('+' || model || '+') LIKE '%+codex+%' OR ('+' || model || '+') LIKE '%+codex:%') GROUP BY status ORDER BY count DESC"
+          "queryText": "SELECT status, count(*) AS count FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY status ORDER BY count DESC",
+          "rawQueryText": "SELECT status, count(*) AS count FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY status ORDER BY count DESC"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Durable cost by day",
+      "description": "Real USD cost from ai_usage_events (migration 0109), populated when the Codex CLI reports a cost field.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4, "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1 } } },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "time series",
+          "timeColumns": ["time"],
+          "queryText": "SELECT date(created_at) AS time, sum(cost_usd) AS cost_usd FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY date(created_at) ORDER BY time",
+          "rawQueryText": "SELECT date(created_at) AS time, sum(cost_usd) AS cost_usd FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY date(created_at) ORDER BY time"
         }
       ]
     },
@@ -154,7 +174,7 @@
       "id": 12,
       "type": "table",
       "title": "Recent Codex-attributed review events",
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 24 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 32 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
       "options": { "showHeader": true, "cellHeight": "sm", "sortBy": [{ "displayName": "created_at", "desc": true }] },
       "fieldConfig": { "defaults": { "custom": { "filterable": true } } },
@@ -162,8 +182,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT created_at, model, status, estimated_neurons, detail, json_extract(metadata_json, '$.repoFullName') AS repo, json_extract(metadata_json, '$.pullNumber') AS pr FROM ai_usage_events WHERE feature = 'ai_review_pr' AND (('+' || model || '+') LIKE '%+codex+%' OR ('+' || model || '+') LIKE '%+codex:%') ORDER BY created_at DESC LIMIT 100",
-          "rawQueryText": "SELECT created_at, model, status, estimated_neurons, detail, json_extract(metadata_json, '$.repoFullName') AS repo, json_extract(metadata_json, '$.pullNumber') AS pr FROM ai_usage_events WHERE feature = 'ai_review_pr' AND (('+' || model || '+') LIKE '%+codex+%' OR ('+' || model || '+') LIKE '%+codex:%') ORDER BY created_at DESC LIMIT 100"
+          "queryText": "SELECT created_at, model, effort, status, input_tokens, output_tokens, total_tokens, cost_usd, estimated_neurons, detail, json_extract(metadata_json, '$.repoFullName') AS repo, json_extract(metadata_json, '$.pullNumber') AS pr FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' ORDER BY created_at DESC LIMIT 100",
+          "rawQueryText": "SELECT created_at, model, effort, status, input_tokens, output_tokens, total_tokens, cost_usd, estimated_neurons, detail, json_extract(metadata_json, '$.repoFullName') AS repo, json_extract(metadata_json, '$.pullNumber') AS pr FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' ORDER BY created_at DESC LIMIT 100"
         }
       ]
     }
