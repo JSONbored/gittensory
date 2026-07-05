@@ -71,9 +71,11 @@ function SelfHostingSecurity() {
           <code>127.0.0.1</code> or only reachable on the compose network) — but{" "}
           <strong>Grafana is the exception</strong>. Its compose entry publishes{" "}
           <code>3000:3000</code>, which binds every interface, not just localhost. Bind it yourself
-          (<code>127.0.0.1:3000:3000</code> in a compose override) or put it behind the Caddy or
-          Tailscale profile described below before running the <code>observability</code> profile
-          anywhere it isn't already firewalled.
+          (<code>127.0.0.1:3000:3000</code> in a compose override) — the reliable fix — before
+          running the <code>observability</code> profile anywhere it isn't already firewalled.
+          Running Tailscale alongside it does <strong>not</strong> narrow this on its own (see "TLS
+          termination" below); combining the two safely still needs the same firewall or{" "}
+          <code>tailscale serve</code> step.
         </li>
         <li>Put an auth layer in front of dashboards and internal admin routes.</li>
         <li>
@@ -148,7 +150,7 @@ function SelfHostingSecurity() {
           {
             title: "Tailscale (--profile tailscale)",
             description:
-              "A private-network sidecar — no public port at all, but also not reachable by GitHub's own webhook delivery. Use this for team/CI-only access, or alongside brokered pull mode.",
+              "Adds private tailnet reachability, but with the default port mapping left in place (required — see below), the app stays reachable on every host interface too, not just the tailnet; firewall the host or use tailscale serve for real no-public-port isolation. Also not reachable by GitHub's own webhook delivery — use this for team/CI-only access, or alongside brokered pull mode.",
           },
           {
             title: "Bring your own reverse proxy",
@@ -242,11 +244,12 @@ function SelfHostingSecurity() {
         client IP the same way the shipped Caddyfile does.
       </p>
 
-      <h3>Tailscale: private-network access, no public port</h3>
+      <h3>Tailscale: adds tailnet reachability</h3>
       <p>
-        The <code>tailscale</code> profile joins the stack to your tailnet instead of exposing
-        anything to the public internet. It runs with <code>network_mode: host</code> — Tailscale
-        needs host networking to advertise this machine's address on the tailnet.
+        The <code>tailscale</code> profile joins the stack to your tailnet. It runs with{" "}
+        <code>network_mode: host</code> — Tailscale needs host networking to advertise this
+        machine's address on the tailnet. On its own, this only <em>adds</em> a reachable address;
+        see the callout below before assuming it also removes public reachability.
       </p>
       <CodeBlock
         filename=".env"
