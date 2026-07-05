@@ -61,7 +61,14 @@ test("scanChurnHotspot: marks the count capped when the page is full", async () 
 test("scanChurnHotspot: skips lockfiles, binaries, and newly-added files without fetching", async () => {
   let called = false;
   const out = await scanChurnHotspot(
-    req([{ path: "package-lock.json" }, { path: "assets/logo.png" }, { path: "src/new.ts", status: "added" }]),
+    req([
+      { path: "package-lock.json" },
+      { path: "assets/logo.png" },
+      // Broader shared-inventory skips: a heavy binary and a Cargo lockfile the original narrow regex missed.
+      { path: "models/llama.safetensors" },
+      { path: "crates/api/Cargo.lock" },
+      { path: "src/new.ts", status: "added" },
+    ]),
     async () => {
       called = true;
       return jsonResponse(commits(50, 2));
