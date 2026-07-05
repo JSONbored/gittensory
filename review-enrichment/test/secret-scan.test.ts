@@ -963,6 +963,42 @@ test("scanPatch does not flag truncated Langfuse/Hyperbolic keys or identifier c
   );
 });
 
+test("scanPatch flags Gladia and WorkOS legacy API keys with high confidence", () => {
+  const fakeGladiaKey = "gla_" + "a".repeat(20);
+  const gladiaFindings = scanPatch("src/config.ts", hunk([`const gladia = "${fakeGladiaKey}";`]));
+  assert.equal(gladiaFindings.length, 1);
+  assert.equal(gladiaFindings[0].kind, "gladia_api_key");
+  assert.equal(gladiaFindings[0].confidence, "high");
+
+  const fakeWorkosKey = "wos_api_key_" + "b".repeat(20);
+  const workosFindings = scanPatch("src/config.ts", hunk([`const workos = "${fakeWorkosKey}";`]));
+  assert.equal(workosFindings.length, 1);
+  assert.equal(workosFindings[0].kind, "workos_legacy_api_key");
+  assert.equal(workosFindings[0].confidence, "high");
+});
+
+test("scanPatch does not flag truncated Gladia/WorkOS keys or identifier continuation", () => {
+  assert.equal(scanPatch("src/config.ts", hunk([`const gladia = "gla_${"a".repeat(19)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const gladia = "gla_${"a".repeat(20)}_suffix";`])).some((f) => f.kind === "gladia_api_key"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const gladia = "gla_${"a".repeat(20)}-suffix";`])).some((f) => f.kind === "gladia_api_key"),
+    false,
+  );
+
+  assert.equal(scanPatch("src/config.ts", hunk([`const workos = "wos_api_key_${"b".repeat(19)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const workos = "wos_api_key_${"b".repeat(20)}_suffix";`])).some((f) => f.kind === "workos_legacy_api_key"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const workos = "wos_api_key_${"b".repeat(20)}-suffix";`])).some((f) => f.kind === "workos_legacy_api_key"),
+    false,
+  );
+});
+
 test("scanPatch flags additional high-confidence SaaS/cloud/CI credential formats", () => {
   const cases = [
     ["google_oauth_client_secret", "GOCSPX-" + b62(28)],

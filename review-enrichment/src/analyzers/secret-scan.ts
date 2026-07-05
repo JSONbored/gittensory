@@ -344,6 +344,18 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // Gladia API key: `gla_` + base62 body.
+    kind: "gladia_api_key",
+    re: /\bgla_[A-Za-z0-9]{20,}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // WorkOS legacy API key: `wos_api_key_` + base62 body.
+    kind: "workos_legacy_api_key",
+    re: /\bwos_api_key_[A-Za-z0-9]{20,}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
     // Google OAuth 2.0 client secret: `GOCSPX-` + 28 base64url chars.
     kind: "google_oauth_client_secret",
     re: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/,
