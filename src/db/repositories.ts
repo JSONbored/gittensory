@@ -4101,6 +4101,16 @@ export async function getLatestPublishedAiReview(
   };
 }
 
+/** Count distinct PR head SHAs that already received a published AI review — used by `review.auto_review.auto_pause_after_reviewed_commits`. (#2042) */
+export async function countPublishedAiReviewHeads(env: Env, repoFullName: string, pullNumber: number): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(DISTINCT head_sha) AS cnt FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND published_at IS NOT NULL",
+  )
+    .bind(repoFullName, pullNumber)
+    .first<{ cnt: number }>();
+  return row?.cnt ?? 0;
+}
+
 /** Upsert the AI review for (repo, pull, head SHA). A nullish head SHA is a no-op.
  *  #regate-churn: `review.cacheable === false` still PERSISTS the attempt (so a repeated scheduled sweep pass at
  *  the identical head+fingerprint can find it via getCachedAiReview's bounded allowNonCacheable lookup) but marks

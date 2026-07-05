@@ -349,6 +349,9 @@ export type AutoReviewConfig = {
   ignoreTitleKeywords: string[];
   /** `review.auto_review.base_branches`: base-ref globs whose PRs ARE reviewed; empty/unset ⇒ every base. (#2041) */
   baseBranches: string[];
+  /** `review.auto_review.auto_pause_after_reviewed_commits`: after N published AI reviews on this PR, pause further
+   *  re-reviews. null/0 ⇒ byte-identical (re-review every sync). (#2042) */
+  autoPauseAfterReviewedCommits: number | null;
 };
 
 export const EMPTY_AUTO_REVIEW_CONFIG: AutoReviewConfig = {
@@ -356,6 +359,7 @@ export const EMPTY_AUTO_REVIEW_CONFIG: AutoReviewConfig = {
   ignoreAuthors: [],
   ignoreTitleKeywords: [],
   baseBranches: [],
+  autoPauseAfterReviewedCommits: null,
 };
 
 /** One `review.path_instructions[]` entry: a manifest path glob + the public-safe instructions to apply when a
@@ -647,6 +651,15 @@ function normalizeOptionalScore(value: JsonValue | undefined, field: string, war
     return null;
   }
   return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function normalizeOptionalNonNegativeInt(value: JsonValue | undefined, field: string, warnings: string[]): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    warnings.push(`Manifest field "${field}" must be a non-negative integer; ignoring it.`);
+    return null;
+  }
+  return value;
 }
 
 /** Normalize an optional confidence threshold in [0,1] (#7) — a fractional value (NOT a 0-100 score), so it is
@@ -1527,7 +1540,13 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
 }
 
 function autoReviewPresent(config: AutoReviewConfig): boolean {
-  return config.skipDrafts !== null || config.ignoreAuthors.length > 0 || config.ignoreTitleKeywords.length > 0 || config.baseBranches.length > 0;
+  return (
+    config.skipDrafts !== null ||
+    config.ignoreAuthors.length > 0 ||
+    config.ignoreTitleKeywords.length > 0 ||
+    config.baseBranches.length > 0 ||
+    config.autoPauseAfterReviewedCommits !== null
+  );
 }
 
 /** Parse `review.auto_review` — deterministic AI review eligibility filters. (#1954 / #2038–#2041) */
@@ -1543,6 +1562,11 @@ function parseAutoReviewConfig(value: JsonValue | undefined, warnings: string[])
     ignoreAuthors: parseManifestGlobList(record.ignore_authors, "review.auto_review.ignore_authors", warnings),
     ignoreTitleKeywords: parseAutoReviewTitleKeywords(record.ignore_title_keywords, warnings),
     baseBranches: parseManifestGlobList(record.base_branches, "review.auto_review.base_branches", warnings),
+    autoPauseAfterReviewedCommits: normalizeOptionalNonNegativeInt(
+      record.auto_pause_after_reviewed_commits,
+      "review.auto_review.auto_pause_after_reviewed_commits",
+      warnings,
+    ),
   };
 }
 
@@ -1752,6 +1776,9 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
     if (review.autoReview.ignoreAuthors.length > 0) autoReview.ignore_authors = [...review.autoReview.ignoreAuthors];
     if (review.autoReview.ignoreTitleKeywords.length > 0) autoReview.ignore_title_keywords = [...review.autoReview.ignoreTitleKeywords];
     if (review.autoReview.baseBranches.length > 0) autoReview.base_branches = [...review.autoReview.baseBranches];
+    if (review.autoReview.autoPauseAfterReviewedCommits !== null) {
+      autoReview.auto_pause_after_reviewed_commits = review.autoReview.autoPauseAfterReviewedCommits;
+    }
     out.auto_review = autoReview;
   }
   if (review.preMergeChecks.length > 0) {
@@ -1793,6 +1820,7 @@ export type AutoReviewEligibilityInput = {
   author: string | null;
   title: string;
   baseRef: string | null;
+  reviewedCommitCount: number;
 };
 
 /** Evaluate `review.auto_review` eligibility. Returns a quiet skip reason string, or null when AI review should proceed. (#1954) */
@@ -1816,6 +1844,11 @@ export function evaluateAutoReviewSkipReason(config: AutoReviewConfig, input: Au
       return "review skipped (base branch out of scope)";
     }
   }
+  if (config.autoPauseAfterReviewedCommits !== null && config.autoPauseAfterReviewedCommits > 0) {
+    if (input.reviewedCommitCount >= config.autoPauseAfterReviewedCommits) {
+      return "review paused (commit threshold)";
+    }
+  }
   return null;
 }
 
@@ -1826,6 +1859,7 @@ export function resolvePullRequestAutoReviewSkipReason(args: {
   author: string | null;
   title: string;
   baseRef: string | null;
+  reviewedCommitCount?: number | undefined;
 }): string | null {
   if (args.forceAiReview === true) return null;
   return evaluateAutoReviewSkipReason(resolveAutoReviewConfig(args.manifest), {
@@ -1833,6 +1867,7 @@ export function resolvePullRequestAutoReviewSkipReason(args: {
     author: args.author,
     title: args.title,
     baseRef: args.baseRef,
+    reviewedCommitCount: args.reviewedCommitCount ?? 0,
   });
 }
 

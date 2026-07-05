@@ -2667,6 +2667,7 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
       ignoreAuthors: ["*[bot]", "dependabot[bot]"],
       ignoreTitleKeywords: ["WIP", "draft"],
       baseBranches: ["main", "release/**"],
+      autoPauseAfterReviewedCommits: null,
     });
     expect(m.review.present).toBe(true);
     expect(parseFocusManifest({ review: reviewConfigToJson(m.review) }).review.autoReview).toEqual(m.review.autoReview);
@@ -2696,7 +2697,7 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
 
   it("evaluateAutoReviewSkipReason: byte-identical when unset; skips with deterministic reasons when configured", () => {
     const empty = { ...EMPTY_AUTO_REVIEW_CONFIG };
-    const input = { isDraft: true, author: "dependabot[bot]", title: "WIP: bump deps", baseRef: "develop" };
+    const input = { isDraft: true, author: "dependabot[bot]", title: "WIP: bump deps", baseRef: "develop", reviewedCommitCount: 0 };
     expect(evaluateAutoReviewSkipReason(empty, input)).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDrafts: true }, { ...input, isDraft: true })).toBe("review skipped (draft)");
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDrafts: true }, { ...input, isDraft: false })).toBeNull();
@@ -2716,6 +2717,27 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
     );
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDrafts: false }, { ...input, isDraft: true })).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, ignoreAuthors: ["*[bot]"] }, { ...input, author: null })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, autoPauseAfterReviewedCommits: 2 }, { ...input, reviewedCommitCount: 1 })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, autoPauseAfterReviewedCommits: 2 }, { ...input, reviewedCommitCount: 2 })).toBe(
+      "review paused (commit threshold)",
+    );
+    expect(evaluateAutoReviewSkipReason({ ...empty, autoPauseAfterReviewedCommits: 0 }, { ...input, reviewedCommitCount: 99 })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, autoPauseAfterReviewedCommits: null }, { ...input, reviewedCommitCount: 99 })).toBeNull();
+  });
+
+  it("parses auto_pause_after_reviewed_commits with bounds validation (#2042)", () => {
+    const ok = parseFocusManifest({ review: { auto_review: { auto_pause_after_reviewed_commits: 3 } } });
+    expect(ok.review.autoReview.autoPauseAfterReviewedCommits).toBe(3);
+    expect(ok.review.present).toBe(true);
+    const zero = parseFocusManifest({ review: { auto_review: { auto_pause_after_reviewed_commits: 0 } } });
+    expect(zero.review.autoReview.autoPauseAfterReviewedCommits).toBe(0);
+    const bad = parseFocusManifest({ review: { auto_review: { auto_pause_after_reviewed_commits: -1 } } });
+    expect(bad.review.autoReview.autoPauseAfterReviewedCommits).toBeNull();
+    expect(bad.warnings.some((w) => /auto_pause_after_reviewed_commits.*non-negative integer/.test(w))).toBe(true);
+    const floatBad = parseFocusManifest({ review: { auto_review: { auto_pause_after_reviewed_commits: 1.5 } } });
+    expect(floatBad.review.autoReview.autoPauseAfterReviewedCommits).toBeNull();
+    expect(reviewConfigToJson(ok.review)).toEqual({ auto_review: { auto_pause_after_reviewed_commits: 3 } });
+    expect(reviewConfigToJson(zero.review)).toEqual({ auto_review: { auto_pause_after_reviewed_commits: 0 } });
   });
 
   it("serializes explicit skip_drafts: false and drops unsafe title keywords", () => {

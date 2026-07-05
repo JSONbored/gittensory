@@ -46,6 +46,7 @@ import {
   persistAdvisory,
   getCachedAiReview,
   getLatestPublishedAiReview,
+  countPublishedAiReviewHeads,
   putCachedAiReview,
   markAiReviewPublished,
   markPullRequestsRegated,
@@ -6283,6 +6284,7 @@ export async function resolveAutoReviewSkipForPullRequest(
     return { skipReason: null, reviewManifest: null };
   }
   const reviewManifest = await loadRepoFocusManifest(env, args.repoFullName).catch(() => null);
+  const reviewedCommitCount = await countPublishedAiReviewHeads(env, args.repoFullName, args.pr.number).catch(() => 0);
   const skipReason = resolvePullRequestAutoReviewSkipReason({
     forceAiReview: args.forceAiReview,
     manifest: reviewManifest,
@@ -6290,6 +6292,7 @@ export async function resolveAutoReviewSkipForPullRequest(
     author: args.author,
     title: args.pr.title,
     baseRef: args.pr.baseRef ?? null,
+    reviewedCommitCount,
   });
   if (skipReason) {
     await auditPullRequestAutoReviewSkip(env, {

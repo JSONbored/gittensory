@@ -10,7 +10,7 @@ import * as repositoriesModule from "../../src/db/repositories";
 
 describe("review.auto_review wiring (#1954)", () => {
   it("resolvePullRequestAutoReviewSkipReason: forceAiReview bypasses every filter", () => {
-    const manifest = parseFocusManifest({ review: { auto_review: { skip_drafts: true } } });
+    const manifest = parseFocusManifest({ review: { auto_review: { skip_drafts: true, auto_pause_after_reviewed_commits: 1 } } });
     expect(
       resolvePullRequestAutoReviewSkipReason({
         forceAiReview: true,
@@ -19,6 +19,7 @@ describe("review.auto_review wiring (#1954)", () => {
         author: "dependabot[bot]",
         title: "WIP: bump",
         baseRef: "develop",
+        reviewedCommitCount: 99,
       }),
     ).toBeNull();
   });
@@ -129,6 +130,59 @@ describe("review.auto_review wiring (#1954)", () => {
     ).resolves.toEqual({ skipReason: null, reviewManifest: null });
 
     loadSpy.mockRestore();
+  });
+
+  it("resolveAutoReviewSkipForPullRequest pauses when published review count reaches the commit threshold (#2042)", async () => {
+    const manifest = parseFocusManifest({ review: { auto_review: { auto_pause_after_reviewed_commits: 2 } } });
+    const loadSpy = vi.spyOn(focusManifestLoader, "loadRepoFocusManifest").mockResolvedValue(manifest);
+    const countSpy = vi.spyOn(repositoriesModule, "countPublishedAiReviewHeads").mockResolvedValue(2);
+    const auditSpy = vi.spyOn(repositoriesModule, "recordAuditEvent").mockResolvedValue(undefined);
+
+    await expect(
+      resolveAutoReviewSkipForPullRequest({} as Env, {
+        authorBlacklisted: false,
+        isFrozenForManualReview: false,
+        repoFullName: "acme/widgets",
+        pr: { number: 5, title: "feat", baseRef: "main", isDraft: false },
+        author: "alice",
+        deliveryId: "d5",
+        headSha: "sha5",
+      }),
+    ).resolves.toEqual({ skipReason: "review paused (commit threshold)", reviewManifest: manifest });
+    expect(countSpy).toHaveBeenCalledWith(expect.anything(), "acme/widgets", 5);
+    expect(auditSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ detail: "review paused (commit threshold)" }),
+    );
+
+    countSpy.mockResolvedValueOnce(1);
+    await expect(
+      resolveAutoReviewSkipForPullRequest({} as Env, {
+        authorBlacklisted: false,
+        isFrozenForManualReview: false,
+        repoFullName: "acme/widgets",
+        pr: { number: 6, title: "feat", baseRef: "main", isDraft: false },
+        author: "alice",
+        deliveryId: "d6",
+        headSha: "sha6",
+      }),
+    ).resolves.toEqual({ skipReason: null, reviewManifest: manifest });
+
+    countSpy.mockRejectedValueOnce(new Error("DB down"));
+    await expect(
+      resolveAutoReviewSkipForPullRequest({} as Env, {
+        authorBlacklisted: false,
+        isFrozenForManualReview: false,
+        repoFullName: "acme/widgets",
+        pr: { number: 7, title: "feat", baseRef: "main", isDraft: false },
+        author: "alice",
+        deliveryId: "d7",
+        headSha: "sha7",
+      }),
+    ).resolves.toEqual({ skipReason: null, reviewManifest: manifest });
+
+    loadSpy.mockRestore();
+    countSpy.mockRestore();
     auditSpy.mockRestore();
   });
 

@@ -587,6 +587,7 @@ settings:
 #     base_branches:
 #       - main
 #       - release/**
+#     auto_pause_after_reviewed_commits: 3  # after 3 published AI reviews on this PR, pause further re-reviews (0/unset = off)
 
 # Per-repo activation overrides for the converged review features that ship behind a deployment-wide
 # GITTENSORY_REVIEW_* env kill-switch (rag/reputation/unifiedComment/safety). Each key is `true` (force on
