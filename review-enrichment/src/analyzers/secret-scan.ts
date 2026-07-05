@@ -910,6 +910,52 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // Tailscale auth key / API access token: `tskey-auth-` or `tskey-api-` + base64url body. The body can end
+    // in `-`, so a negative-lookahead terminator (not `\b`), matching the SendGrid/Anthropic rules.
+    kind: "tailscale_auth_key",
+    re: /\btskey-(?:auth|api)-[A-Za-z0-9-]{20,}(?![A-Za-z0-9-])/,
+    confidence: "high",
+  },
+  {
+    // NVIDIA NGC / build.nvidia.com API key: `nvapi-` + base64url body (lookahead terminator, as above).
+    kind: "nvidia_api_key",
+    re: /\bnvapi-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // Flutterwave secret key: `FLWSECK-` / `FLWSECK_TEST-` + body ending in the `-X` marker. Case-sensitive
+    // prefix so a lowercase word never matches; body can end in `-`, so a negative-lookahead terminator.
+    kind: "flutterwave_secret_key",
+    re: /\bFLWSECK(?:_TEST)?-[A-Za-z0-9-]{12,}(?![A-Za-z0-9-])/,
+    confidence: "high",
+  },
+  {
+    // Zapier catch-hook URL — the trailing path segment is a shared secret granting trigger access, like the
+    // Slack/Discord/Teams webhook rules above. A committed webhook URL leaks that capability.
+    kind: "zapier_webhook_url",
+    re: /https:\/\/hooks\.zapier\.com\/hooks\/catch\/[0-9]+\/[A-Za-z0-9]+/,
+    confidence: "high",
+  },
+  {
+    // Make.com (formerly Integromat) webhook URL — `hook[s].<region>.make.com/<token>`; the token triggers the
+    // scenario. The optional region label must sit directly before `make.com`, so a look-alike host never matches.
+    kind: "make_webhook_url",
+    re: /https:\/\/hooks?\.(?:[a-z0-9-]+\.)?make\.com\/[A-Za-z0-9]+/,
+    confidence: "high",
+  },
+  {
+    // IFTTT Webhooks (Maker) key, exposed in the `/use/<key>` or `/trigger/<event>/with/key/<key>` URL forms.
+    kind: "ifttt_webhook_url",
+    re: /https:\/\/maker\.ifttt\.com\/(?:use\/|trigger\/[A-Za-z0-9_-]+\/with\/key\/)[A-Za-z0-9_-]+/,
+    confidence: "high",
+  },
+  {
+    // Google Chat incoming-webhook URL — the `key=` (and `token=`) query params are the send credential.
+    kind: "google_chat_webhook_url",
+    re: /https:\/\/chat\.googleapis\.com\/v1\/spaces\/[A-Za-z0-9_-]+\/messages\?[^\s"']*key=/,
+    confidence: "high",
+  },
+  {
     kind: "private_key",
     re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/,
     confidence: "high",

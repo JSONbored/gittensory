@@ -1533,3 +1533,43 @@ test("scanPatch does not flag near-miss variants of the developer-platform forma
     assert.equal(findings.length, 0, `near-miss should not match: ${nm}`);
   }
 });
+
+test("scanPatch flags webhook-URL and additional API-token credential formats", () => {
+  const cases = [
+    // Token: ends in `-` to exercise the negative-lookahead terminator (a `\b` would miss a dash tail).
+    ["tailscale_auth_key", "tskey-auth-" + b62(20) + "-"],
+    ["nvidia_api_key", "nvapi-" + b62(60)],
+    ["flutterwave_secret_key", "FLWSECK-" + hex(32) + "-X"],
+    ["zapier_webhook_url", "https://hooks.zapier.com/hooks/catch/" + "1234567" + "/" + b62(16)],
+    ["make_webhook_url", "https://hook.eu2.make.com/" + b62(24)],
+    ["ifttt_webhook_url", "https://maker.ifttt.com/use/" + b62(20)],
+    [
+      "google_chat_webhook_url",
+      "https://chat.googleapis.com/v1/spaces/" + b62(11) + "/messages?key=" + b62(20),
+    ],
+  ];
+  for (const [kind, secret] of cases) {
+    const findings = scanPatch("src/config.ts", hunk([`const c = "${secret}";`]));
+    assert.equal(findings.length, 1, `${kind}: expected exactly one finding, got ${JSON.stringify(findings)}`);
+    assert.equal(findings[0].kind, kind, `${kind}: wrong kind`);
+    assert.equal(findings[0].confidence, "high", `${kind}: wrong confidence`);
+  }
+});
+
+test("scanPatch does not flag near-misses of the webhook-URL and token formats", () => {
+  const nearMisses = [
+    // Non-secret vendor URLs (docs / marketing / homepages) carry no catch-hook or key path — nothing to leak.
+    "https://zapier.com/apps",
+    "https://www.make.com/en/pricing",
+    "https://ifttt.com/maker_webhooks",
+    // A look-alike host that is not the vendor's real webhook host must not match.
+    "https://hook.notmake.com/" + b62(24),
+    // Prefix present but the body is far too short to be a real token.
+    "tskey-auth-" + b62(5),
+    "nvapi-" + b62(5),
+  ];
+  for (const nm of nearMisses) {
+    const findings = scanPatch("src/config.ts", hunk([`const c = "${nm}";`]));
+    assert.equal(findings.length, 0, `near-miss should not match: ${nm}`);
+  }
+});
