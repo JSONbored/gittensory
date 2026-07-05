@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import type { InlineFinding } from "../../src/services/ai-review";
-import { isInlineCommentsEnabled, maybePostInlineComments, postInlineReviewComments, rightSideLinesFromPatch, selectInlineComments, shouldRenderSuggestions, shouldRequestInlineFindings } from "../../src/review/inline-comments";
+import { isInlineCommentsEnabled, maybePostInlineComments, postInlineReviewComments, rightSideLinesFromPatch, selectInlineComments, shouldRenderFindingCategories, shouldRenderSuggestions, shouldRequestInlineFindings } from "../../src/review/inline-comments";
 import { createTestEnv } from "../helpers/d1";
 
 function envWithKey() {
@@ -38,6 +38,16 @@ describe("shouldRenderSuggestions (#1956)", () => {
     expect(shouldRenderSuggestions(true, undefined)).toBe(false); // manifest toggle absent
     expect(shouldRenderSuggestions(false, true)).toBe(false); // inline comments themselves are off
     expect(shouldRenderSuggestions(false, false)).toBe(false);
+  });
+});
+
+describe("shouldRenderFindingCategories (#1958)", () => {
+  it("requires the manifest toggle AND inline comments already being enabled — a category has nothing to categorize otherwise", () => {
+    expect(shouldRenderFindingCategories(true, true)).toBe(true);
+    expect(shouldRenderFindingCategories(true, false)).toBe(false); // manifest toggle off
+    expect(shouldRenderFindingCategories(true, undefined)).toBe(false); // manifest toggle absent
+    expect(shouldRenderFindingCategories(false, true)).toBe(false); // inline comments themselves are off
+    expect(shouldRenderFindingCategories(false, false)).toBe(false);
   });
 });
 
@@ -126,6 +136,37 @@ describe("selectInlineComments (#inline-comments)", () => {
       const out = selectInlineComments([breaksFence], files, true);
       expect(out[0]?.body).toBe("**Blocker:** Fix this.");
       expect(out[0]?.body).not.toContain("escape attempt");
+    });
+  });
+
+  describe("category tags (#1958)", () => {
+    const withCategory: InlineFinding = { path: "src/a.ts", line: 2, severity: "nit", body: "Use const.", category: "style" };
+
+    it("defaults to OFF (backward compatible) — no category tag when the fourth argument is omitted", () => {
+      const out = selectInlineComments([withCategory], files);
+      expect(out).toEqual([{ path: "src/a.ts", line: 2, side: "RIGHT", body: "**Nit:** Use const." }]);
+    });
+
+    it("does not render a category tag when explicitly disabled, even if the finding carries one", () => {
+      const out = selectInlineComments([withCategory], files, false, false);
+      expect(out[0]?.body).not.toContain("(style)");
+    });
+
+    it("renders the model's own category when enabled and the finding carries one", () => {
+      const out = selectInlineComments([withCategory], files, false, true);
+      expect(out[0]?.body).toBe("**Nit (style):** Use const.");
+    });
+
+    it("falls back to the deterministic classifier when enabled but the finding has no category (safe default, never omitted)", () => {
+      const noCategory: InlineFinding = { path: "src/app.test.ts", line: 2, severity: "nit", body: "Use const." };
+      const out = selectInlineComments([noCategory], [fileWith("src/app.test.ts", "@@ -1,1 +1,2 @@\n ctx\n+added2")], false, true);
+      expect(out[0]?.body).toBe("**Nit (tests):** Use const.");
+    });
+
+    it("composes with a suggestion block — both the category tag and the suggestion render together", () => {
+      const both: InlineFinding = { path: "src/a.ts", line: 2, severity: "blocker", body: "Missing null check.", category: "correctness", suggestion: "if (!x) return;" };
+      const out = selectInlineComments([both], files, true, true);
+      expect(out[0]?.body).toBe("**Blocker (correctness):** Missing null check.\n\n```suggestion\nif (!x) return;\n```");
     });
   });
 });
@@ -253,6 +294,36 @@ describe("maybePostInlineComments (#inline-comments, review-path entry)", () => 
       return new Response("unexpected", { status: 500 });
     });
     await maybePostInlineComments(envWithKey(), { ...base, aiReview: { inlineFindings: withSuggestion }, getFiles });
+    expect(calls[0]?.body).toMatchObject({ comments: [{ path: "src/a.ts", line: 2, side: "RIGHT", body: "**Nit:** guard this" }] });
+  });
+
+  it("renders a category tag end-to-end when categoriesEnabled is threaded through (#1958)", async () => {
+    const getFiles = vi.fn(async () => files);
+    const withCategory: InlineFinding[] = [{ path: "src/a.ts", line: 2, severity: "nit", body: "guard this", category: "maintainability" }];
+    const calls: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (url.endsWith("/pulls/3/reviews")) return Response.json({ id: 12 });
+      return new Response("unexpected", { status: 500 });
+    });
+    await maybePostInlineComments(envWithKey(), { ...base, aiReview: { inlineFindings: withCategory }, getFiles, categoriesEnabled: true });
+    expect(calls[0]?.body).toMatchObject({ comments: [{ path: "src/a.ts", line: 2, side: "RIGHT", body: "**Nit (maintainability):** guard this" }] });
+  });
+
+  it("omits the category tag end-to-end when categoriesEnabled is not passed (default off, backward compatible)", async () => {
+    const getFiles = vi.fn(async () => files);
+    const withCategory: InlineFinding[] = [{ path: "src/a.ts", line: 2, severity: "nit", body: "guard this", category: "maintainability" }];
+    const calls: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (url.endsWith("/pulls/3/reviews")) return Response.json({ id: 13 });
+      return new Response("unexpected", { status: 500 });
+    });
+    await maybePostInlineComments(envWithKey(), { ...base, aiReview: { inlineFindings: withCategory }, getFiles });
     expect(calls[0]?.body).toMatchObject({ comments: [{ path: "src/a.ts", line: 2, side: "RIGHT", body: "**Nit:** guard this" }] });
   });
 });

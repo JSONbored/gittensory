@@ -40,6 +40,7 @@ type InlineFinding = {
   severity: "blocker" | "nit";
   body: string;
   suggestion?: string;
+  category?: "security" | "correctness" | "performance" | "maintainability" | "tests" | "style";
 };
 type ModelReviewShape = {
   assessment: string;
@@ -466,6 +467,33 @@ describe("review.profile shapes the reviewer system prompt (#review-profile)", (
     // Absent / false ⇒ byte-identical prompt (no inline instruction).
     expect(await runInline(false)).not.toContain("INLINE FINDINGS");
     expect(await runInline(undefined)).not.toContain("INLINE FINDINGS");
+  });
+
+  it("the finding-category instruction is appended to the system prompt ONLY when BOTH inlineFindings and findingCategories are requested (#1958)", async () => {
+    const systemPromptOf = (run: ReturnType<typeof vi.fn>): string =>
+      (run.mock.calls[0]?.[1] as { messages?: Array<{ content?: string }> })
+        ?.messages?.[0]?.content ?? "";
+    const runWith = async (inlineFindings: boolean | undefined, findingCategories: boolean | undefined) => {
+      const run = vi.fn(async () => ({ response: reviewJson() }));
+      const env = createTestEnv({
+        AI: { run } as unknown as Ai,
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+        AI_DAILY_NEURON_BUDGET: "100000",
+      });
+      await runGittensoryAiReview(env, { ...baseInput, inlineFindings, findingCategories });
+      return systemPromptOf(run);
+    };
+    const withBoth = await runWith(true, true);
+    expect(withBoth).toContain("INLINE FINDINGS");
+    expect(withBoth).toContain('"category"');
+    // findingCategories alone (inlineFindings off) has nothing to categorize — byte-identical, no category text.
+    expect(await runWith(false, true)).not.toContain('"category"');
+    // inlineFindings on but findingCategories absent/false ⇒ byte-identical (no category instruction).
+    const inlineOnly = await runWith(true, false);
+    expect(inlineOnly).toContain("INLINE FINDINGS");
+    expect(inlineOnly).not.toContain('"category"');
+    expect(await runWith(true, undefined)).not.toContain('"category"');
   });
 });
 
@@ -2887,6 +2915,25 @@ describe("pure helpers", () => {
     ]);
   });
 
+  it("parseModelReview parses a valid category, drops one outside the fixed enum, and leaves it absent when omitted (#1958)", () => {
+    const json = JSON.stringify({
+      assessment: "ok",
+      blockers: [],
+      nits: [],
+      suggestions: [],
+      inlineFindings: [
+        { path: "src/a.ts", line: 2, severity: "nit", body: "SQL injection risk.", category: "security" },
+        { path: "src/b.ts", line: 4, severity: "nit", body: "Made up category.", category: "readability" },
+        { path: "src/c.ts", line: 6, severity: "nit", body: "No category at all." },
+      ],
+    });
+    expect(parseModelReview(json)?.inlineFindings).toEqual([
+      { path: "src/a.ts", line: 2, severity: "nit", body: "SQL injection risk.", category: "security" },
+      { path: "src/b.ts", line: 4, severity: "nit", body: "Made up category." },
+      { path: "src/c.ts", line: 6, severity: "nit", body: "No category at all." },
+    ]);
+  });
+
   it("parseModelReview keeps findings but drops empty, whitespace-only, and malformed suggestions (#2138)", () => {
     const json = JSON.stringify({
       assessment: "ok",
@@ -2991,6 +3038,19 @@ describe("pure helpers", () => {
         suggestion: "const renamed = first;",
       },
       { path: "src/b.ts", line: 9, severity: "blocker", body: "Keep me." },
+    ]);
+  });
+
+  it("composeInlineFindings carries a finding's category through verbatim (a fixed enum literal, not scrubbed like body/suggestion) (#1958)", () => {
+    const out = composeInlineFindings([
+      reviewWithFindings([
+        { path: "src/a.ts", line: 1, severity: "nit", body: "SQL injection risk.", category: "security" },
+        { path: "src/b.ts", line: 2, severity: "nit", body: "No category on this one." },
+      ]),
+    ]);
+    expect(out).toEqual([
+      { path: "src/a.ts", line: 1, severity: "nit", body: "SQL injection risk.", category: "security" },
+      { path: "src/b.ts", line: 2, severity: "nit", body: "No category on this one." },
     ]);
   });
 

@@ -28,6 +28,7 @@ import type { CaptureRoute } from "./visual/capture";
 import { PR_PANEL_COMMENT_MARKER } from "../github/comments";
 import { GITTENSORY_GATE_CHECK_NAME } from "./check-names";
 import { classifyChangedFile, type ReviewFileClass } from "./changed-files-classify";
+import { classifyFindingCategory, FINDING_CATEGORIES, type FindingCategory } from "./finding-category-classify";
 import {
   buildUnifiedReviewInput,
   renderUnifiedReviewComment,
@@ -313,6 +314,12 @@ export type UnifiedCommentBridgeArgs = {
    *  passes this only when the manifest opts in — see `resolveReviewPromptOverrides`'s `changedFilesSummary`).
    *  (#1957) */
   changedFilesSummary?: ChangedFileSummaryInput[] | undefined;
+  /** Line-anchored AI findings, one entry per inline finding (review.finding_categories port). When present +
+   *  non-empty, a "Finding categories" collapsible (a count per security/correctness/performance/maintainability/
+   *  tests/style category) is appended. A finding missing its own `category` falls back to
+   *  `classifyFindingCategory` — never omitted from the count. Default OFF (the processor passes this only when
+   *  the manifest opts in — see `resolveReviewPromptOverrides`'s `findingCategories`). (#1958) */
+  findingCategories?: FindingCategoryInput[] | undefined;
   /** The disposition holds this PR for owner review because its diff touches a hard-guardrail path — so an
    *  otherwise-ready comment renders "held for review" instead of "safe to merge". (#guarded-hold-comment) */
   heldForReview?: boolean | undefined;
@@ -417,6 +424,43 @@ export function buildChangedFilesSummaryCollapsible(files: ChangedFileSummaryInp
   return { title: "Changed files", body };
 }
 
+/** A finding's path + body — everything `buildFindingCategoryCollapsible` needs to use the finding's own
+ *  `category` when present, or fall back to `classifyFindingCategory` when it isn't. Deliberately narrower than
+ *  `InlineFinding` (no line/severity/suggestion) so the bridge's pure-rendering surface stays minimal. */
+export type FindingCategoryInput = { path: string; body: string; category?: FindingCategory | undefined };
+
+const FINDING_CATEGORY_LABEL: Record<FindingCategory, string> = {
+  security: "Security",
+  correctness: "Correctness",
+  performance: "Performance",
+  maintainability: "Maintainability",
+  tests: "Tests",
+  style: "Style",
+};
+
+/**
+ * Build the "Finding categories" collapsible: a count per category (security/correctness/performance/
+ * maintainability/tests/style) across this review's line-anchored AI findings. A finding missing its own
+ * `category` (the model omitted it) falls back to the deterministic `classifyFindingCategory` — every finding
+ * is counted exactly once, never dropped. No AI, no network. Returns null when there are no findings, so the
+ * caller can unconditionally chain this alongside the other optional collapsibles.
+ */
+export function buildFindingCategoryCollapsible(findings: FindingCategoryInput[]): UnifiedCollapsible | null {
+  if (findings.length === 0) return null;
+  const counts = new Map<FindingCategory, number>();
+  for (const finding of findings) {
+    const category = finding.category ?? classifyFindingCategory(finding);
+    counts.set(category, (counts.get(category) ?? 0) + 1);
+  }
+  const rows = FINDING_CATEGORIES.flatMap((category) => {
+    const count = counts.get(category);
+    if (!count) return [];
+    return [`| ${FINDING_CATEGORY_LABEL[category]} | ${count} |`];
+  });
+  const body = ["| Category | Findings |", "| --- | --- |", ...rows].join("\n");
+  return { title: "Finding categories", body };
+}
+
 /**
  * Build the unified PR-review comment body from gittensory's live data. Returns a string that STARTS with
  * the panel marker (so the existing upsert updates in place) followed by the rendered unified comment.
@@ -479,11 +523,21 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
       : null;
   const withChangedFiles =
     changedFilesCollapsible !== null ? [...(args.extraCollapsibles ?? []), changedFilesCollapsible] : args.extraCollapsibles;
+  // review.finding_categories port: when the manifest opts in, the processor hands us this review's line-anchored
+  // AI findings here; append the "Finding categories" collapsible right after Changed files (both are structural
+  // review-shape summaries, ahead of the visual preview). Flag-OFF (the processor passes undefined) ⇒
+  // extraCollapsibles is unchanged. (#1958)
+  const findingCategoryCollapsible =
+    args.findingCategories && args.findingCategories.length > 0
+      ? buildFindingCategoryCollapsible(args.findingCategories)
+      : null;
+  const withFindingCategories =
+    findingCategoryCollapsible !== null ? [...(withChangedFiles ?? []), findingCategoryCollapsible] : withChangedFiles;
   // Visual-capture port: when before/after routes are present, append a "Visual preview" collapsible to the
   // extra sections. Flag-OFF (the processor passes no beforeAfter) ⇒ extraCollapsibles is unchanged.
   const visualCollapsible = args.beforeAfter && args.beforeAfter.length > 0 ? buildBeforeAfterCollapsible(args.beforeAfter) : null;
   const extraCollapsibles =
-    visualCollapsible !== null ? [...(withChangedFiles ?? []), visualCollapsible] : withChangedFiles;
+    visualCollapsible !== null ? [...(withFindingCategories ?? []), visualCollapsible] : withFindingCategories;
 
   const body = renderUnifiedReviewComment(input, {
     brand: args.brand ?? "Gittensory review",

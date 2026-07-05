@@ -10,6 +10,7 @@
 
 import { createPullRequestReviewComments } from "../github/pr-actions";
 import { isConvergenceRepoAllowed } from "./cutover-gate";
+import { classifyFindingCategory } from "./finding-category-classify";
 import type { InlineFinding } from "../services/ai-review";
 import type { AgentActionMode } from "../settings/agent-execution";
 import type { PullRequestFileRecord } from "../types";
@@ -39,6 +40,16 @@ export function shouldRequestInlineFindings(
  *  suggestion has nothing to attach to without the inline comment it rides on, so it can never be true when
  *  `inlineCommentsEnabled` is false, regardless of the manifest toggle. */
 export function shouldRenderSuggestions(
+  inlineCommentsEnabled: boolean,
+  manifestToggle: boolean | undefined,
+): boolean {
+  return inlineCommentsEnabled && manifestToggle === true;
+}
+
+/** PURE (#1958): should an inline finding's `category` be rendered? An ADDITIONAL opt-in (`review.finding_categories`)
+ *  layered on top of inline comments being enabled at all — mirrors {@link shouldRenderSuggestions} exactly, since
+ *  a category has nothing to categorize without the inline comment it rides on. */
+export function shouldRenderFindingCategories(
   inlineCommentsEnabled: boolean,
   manifestToggle: boolean | undefined,
 ): boolean {
@@ -88,14 +99,18 @@ function safeSuggestionBlock(suggestion: string | undefined): string {
   return `\n\n\`\`\`suggestion\n${suggestion}\n\`\`\``;
 }
 
-/** The inline comment body: a compact severity label + the finding, plus a one-click GitHub suggested-change
- *  block when the finding carries a `suggestion` AND the caller has suggestions enabled (#1956). Public-safe by
- *  construction — both the body and the suggestion were already run through the public-safe filter by
- *  composeInlineFindings before they reached here. */
-function formatInlineBody(finding: InlineFinding, suggestionsEnabled: boolean): string {
+/** The inline comment body: a compact severity (+ optional category) label + the finding, plus a one-click GitHub
+ *  suggested-change block when the finding carries a `suggestion` AND the caller has suggestions enabled (#1956).
+ *  When `categoriesEnabled` (#1958), the label gets a parenthetical category tag — the model's own `category` when
+ *  it emitted one in the fixed enum, else the deterministic fallback (`classifyFindingCategory`), so the tag is
+ *  never sometimes-present. Public-safe by construction — both the body and the suggestion were already run
+ *  through the public-safe filter by composeInlineFindings before they reached here; `category` is a fixed enum
+ *  literal, never free text. */
+function formatInlineBody(finding: InlineFinding, suggestionsEnabled: boolean, categoriesEnabled = false): string {
   const label = finding.severity === "blocker" ? "Blocker" : "Nit";
+  const categoryTag = categoriesEnabled ? ` (${finding.category ?? classifyFindingCategory(finding)})` : "";
   const suggestionBlock = suggestionsEnabled ? safeSuggestionBlock(finding.suggestion) : "";
-  return `**${label}:** ${finding.body}${suggestionBlock}`;
+  return `**${label}${categoryTag}:** ${finding.body}${suggestionBlock}`;
 }
 
 /** PURE: turn the model's line-anchored findings into GitHub inline review comments, dropping any whose
@@ -103,8 +118,9 @@ function formatInlineBody(finding: InlineFinding, suggestionsEnabled: boolean): 
  *  no usable patch. Dedupes by path+line (first wins) and caps the total. Empty in / nothing anchorable ⇒ [].
  *  `suggestionsEnabled` (#1956) gates whether a finding's `suggestion` is rendered as a committable GitHub
  *  suggested-change block — a suggestion is anchored to the SAME single line as its parent finding, so the
- *  existing line-validity check above already covers "drop it if the range can't be anchored". */
-export function selectInlineComments(findings: InlineFinding[], files: Pick<PullRequestFileRecord, "path" | "payload">[], suggestionsEnabled = false): ReviewInlineComment[] {
+ *  existing line-validity check above already covers "drop it if the range can't be anchored". `categoriesEnabled`
+ *  (#1958) gates whether the label carries a category tag. */
+export function selectInlineComments(findings: InlineFinding[], files: Pick<PullRequestFileRecord, "path" | "payload">[], suggestionsEnabled = false, categoriesEnabled = false): ReviewInlineComment[] {
   const rightLinesByPath = new Map<string, Set<number>>();
   for (const file of files) {
     const patch = typeof file.payload?.patch === "string" ? file.payload.patch : "";
@@ -119,7 +135,7 @@ export function selectInlineComments(findings: InlineFinding[], files: Pick<Pull
     const key = `${finding.path}:${finding.line}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ path: finding.path, line: finding.line, side: "RIGHT", body: formatInlineBody(finding, suggestionsEnabled) });
+    out.push({ path: finding.path, line: finding.line, side: "RIGHT", body: formatInlineBody(finding, suggestionsEnabled, categoriesEnabled) });
   }
   return out;
 }
@@ -139,9 +155,10 @@ export async function postInlineReviewComments(
     files: Pick<PullRequestFileRecord, "path" | "payload">[];
     mode: AgentActionMode;
     suggestionsEnabled?: boolean | undefined;
+    categoriesEnabled?: boolean | undefined;
   },
 ): Promise<{ posted: number }> {
-  const comments = selectInlineComments(args.findings, args.files, args.suggestionsEnabled);
+  const comments = selectInlineComments(args.findings, args.files, args.suggestionsEnabled, args.categoriesEnabled);
   if (comments.length === 0 || !args.commitId) return { posted: 0 };
   try {
     await createPullRequestReviewComments(env, args.installationId, args.repoFullName, args.pullNumber, args.commitId, comments, args.mode);
@@ -170,6 +187,7 @@ export async function maybePostInlineComments(
     mode: AgentActionMode;
     inlineCommentsEnabled: boolean;
     suggestionsEnabled?: boolean | undefined;
+    categoriesEnabled?: boolean | undefined;
   },
 ): Promise<void> {
   if (!args.inlineCommentsEnabled) return;
@@ -184,5 +202,6 @@ export async function maybePostInlineComments(
     files: await args.getFiles(),
     mode: args.mode,
     suggestionsEnabled: args.suggestionsEnabled,
+    categoriesEnabled: args.categoriesEnabled,
   });
 }

@@ -15680,6 +15680,95 @@ describe("queue processors", () => {
     }
   });
 
+  // #1958: with inline comments AND finding categories both on in .gittensory.yml (finding_categories rides on
+  // inline_comments, exactly like suggestions did for #1956), the model is asked to self-categorize each
+  // inlineFindings item, and BOTH surfaces render it — the posted inline review comment label AND the unified
+  // comment's new "Finding categories" collapsible.
+  it("renders finding categories in the inline comment label and the unified comment's Finding categories section when review.finding_categories is on", async () => {
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      GITTENSORY_REVIEW_UNIFIED_COMMENT: "1",
+      GITTENSORY_REVIEW_INLINE_COMMENTS: "true",
+      GITTENSORY_REVIEW_REPOS: "JSONbored/gittensory",
+      AI: {
+        run: async () =>
+          ({
+            response: JSON.stringify({
+              assessment: "Looks fine overall.",
+              blockers: [],
+              nits: [],
+              suggestions: [],
+              inlineFindings: [
+                { path: "src/db.ts", line: 2, severity: "nit", body: "This query is vulnerable to SQL injection.", category: "security" },
+              ],
+            }),
+          }) as { response: string },
+      } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      aiReviewMode: "block",
+      gatePack: "oss-anti-slop",
+    });
+    let inlineReviewComments: Array<{ body: string }> = [];
+    let unifiedCommentBody = "";
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      // .gittensory.yml opts into inline comments AND finding categories together.
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+        return new Response("review:\n  inline_comments: true\n  finding_categories: true\n");
+      }
+      if (url.includes("/pulls/8/files"))
+        return Response.json([{ filename: "src/db.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@ -1,1 +1,2 @@\n ctx\n+export const ok = true;" }]);
+      if (url.endsWith("/pulls/8")) return Response.json({ number: 8, title: "Add query helper", state: "open", user: { login: "contributor" }, head: { sha: "a8" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+      if (url.includes("/commits/a8/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a8/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      // The separate, quiet inline-review post (event: COMMENT) — distinct from the sticky unified issue comment.
+      if (url.endsWith("/pulls/8/reviews") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { comments?: Array<{ body: string }> };
+        inlineReviewComments = body.comments ?? [];
+        return Response.json({ id: 55 });
+      }
+      if (url.includes("/issues/8/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/8/comments") && method === "POST") {
+        unifiedCommentBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        return Response.json({ id: 1 }, { status: 201 });
+      }
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "pr-finding-categories",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 8, title: "Add query helper", state: "open", user: { login: "contributor" }, head: { sha: "a8" }, labels: [], body: "Closes #1" },
+      },
+    });
+
+    // The inline PR-review comment label carries the category tag.
+    expect(inlineReviewComments[0]?.body).toBe("**Nit (security):** This query is vulnerable to SQL injection.");
+    // The unified comment's new collapsible counts it too.
+    expect(unifiedCommentBody).toContain("Finding categories");
+    expect(unifiedCommentBody).toContain("| Security | 1 |");
+  });
+
   // FIX B + FIX D3 at the processor call site: a unified comment for a PR whose CI has a FAILED check, with the
   // PR's files only available from GitHub (stored rows empty) — proves (B) the inline file fetch populates the
   // real diff/changed-file count on the first review, and (D3) the failing check name + its per-check WHY render

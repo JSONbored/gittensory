@@ -33,6 +33,7 @@ import { errorMessage } from "../utils/json";
 import type { ReviewProfile } from "../signals/focus-manifest";
 import { isCodeFile } from "../signals/local-branch";
 import { isTestPath } from "../signals/test-evidence";
+import { isFindingCategory, type FindingCategory } from "../review/finding-category-classify";
 import type { CombineStrategy, OnMerge } from "../types";
 
 /**
@@ -282,6 +283,13 @@ export type GittensoryAiReviewInput = {
    */
   inlineFindings?: boolean | undefined;
   /**
+   * `.gittensory.yml` `review.finding_categories` (#1958) — when true (the caller has already ANDed this with
+   * `inlineFindings` being requested, since a category has nothing to categorize otherwise), the reviewer is
+   * additionally asked to tag each `inlineFindings` item with a `category`. Absent/false (the default) ⇒ no
+   * instruction is appended, so the prompt is byte-identical and the model emits no category.
+   */
+  findingCategories?: boolean | undefined;
+  /**
    * This PR's changed file paths (#2558) — reused to splice a concise "changed code files with zero
    * test-path evidence" section into the user prompt via the engine's own deterministic classifier
    * (src/signals/test-evidence.ts), so the reviewer can name specific untested files instead of guessing
@@ -337,6 +345,11 @@ export type InlineFinding = {
   severity: "blocker" | "nit";
   body: string;
   suggestion?: string | undefined;
+  /** `.gittensory.yml` `review.finding_categories` (#1958): the kind of issue (security/correctness/performance/
+   *  maintainability/tests/style), when the model was asked to self-categorize and emitted a value in the fixed
+   *  enum. Absent when the feature is off (the model was never asked) OR the model's value didn't parse — callers
+   *  that render categories fall back to `classifyFindingCategory` in that case rather than treating it as absent. */
+  category?: FindingCategory | undefined;
 };
 
 export type ModelReview = {
@@ -583,6 +596,9 @@ export function parseModelReview(text: string): ModelReview | null {
     // Fail-safe: a malformed/absent inlineFindings field degrades to []; each item missing a usable path / a
     // positive line / a body is skipped, never partial. Severity defaults to "nit" unless it's exactly "blocker";
     // a bad/blank suggestion is simply dropped while keeping the finding itself. (#2138)
+    // `category` (#1958) is parsed ONLY when it's one of the fixed enum values — an absent/mis-emitted category
+    // is left OFF the finding (not defaulted here) so a caller that didn't ask for categories at all sees no
+    // field, and a caller that DID ask can apply its own deterministic fallback (classifyFindingCategory).
     const toInlineFindings = (value: unknown): InlineFinding[] =>
       Array.isArray(value)
         ? value
@@ -598,6 +614,7 @@ export function parseModelReview(text: string): ModelReview | null {
                 typeof o.suggestion === "string" ? o.suggestion.trim() : "";
               const severity: "blocker" | "nit" =
                 o.severity === "blocker" ? "blocker" : "nit";
+              const category = isFindingCategory(o.category) ? o.category : undefined;
               return path && line > 0 && body
                 ? [
                     {
@@ -606,6 +623,7 @@ export function parseModelReview(text: string): ModelReview | null {
                       severity,
                       body,
                       ...(suggestion ? { suggestion } : {}),
+                      ...(category ? { category } : {}),
                     },
                   ]
                 : [];
@@ -705,6 +723,14 @@ const SECURITY_FOCUS_SUFFIX =
 const INLINE_FINDINGS_SUFFIX =
   '\n\nINLINE FINDINGS: ALSO include an additional top-level field "inlineFindings" in the SAME JSON object — an array (possibly empty) of your most important findings, each anchored to a specific changed line, for inline PR comments. Each item: {"path": the changed file path EXACTLY as shown in the diff, "line": the 1-based line number in the NEW file (count forward from the "+" start in the nearest "@@ -old +new @@" hunk header) of an ADDED ("+") line you are commenting on, "severity": "blocker" or "nit", "body": the one-sentence finding, "suggestion": optional replacement text for that line}. Include ONLY findings you can place on a specific added line; OMIT any you cannot anchor precisely (a wrong line is worse than none). If a suggestion is blank or you are not confident in an exact replacement, omit the suggestion field and keep the finding. At most ~10 items.';
 
+// `.gittensory.yml` review.finding_categories → an appended instruction that ALSO asks for a `category` on each
+// inlineFindings item (#1958). Only meaningful once INLINE_FINDINGS_SUFFIX is already appended (a category has
+// nothing to categorize otherwise) — the caller ANDs this with inlineFindings before setting the input flag.
+// Absent/off appends nothing (byte-identical); a parser-side fallback (classifyFindingCategory) covers whatever
+// the model omits or mis-emits, so this suffix only needs to ask, never enforce.
+const FINDING_CATEGORY_SUFFIX =
+  ' Each inlineFindings item must ALSO include "category": one of exactly "security", "correctness", "performance", "maintainability", "tests", "style" — the KIND of issue, not its severity.';
+
 /** The effective reviewer SYSTEM prompt. Appends the grounding-discipline suffix when the caller supplied one
  *  (flag GITTENSORY_REVIEW_GROUNDING on), the `review.profile` tone suffix when set, the `review.security_focus`
  *  prioritization suffix when on, then the inline-findings instruction when the caller asked for them; all absent
@@ -727,7 +753,9 @@ function buildSystemPrompt(input: GittensoryAiReviewInput): string {
   const repoInstructionsAppend = buildRepoInstructionsSystemAppend(input.repoInstructions);
   const repoInstructionsSuffix = repoInstructionsAppend ? ` ${repoInstructionsAppend}` : "";
   const inlineSuffix = input.inlineFindings ? INLINE_FINDINGS_SUFFIX : "";
-  return `${REVIEW_SYSTEM_PROMPT}${groundingSuffix}${enrichmentSuffix}${profileSuffix}${securityFocusSuffix}${pathSuffix}${repoInstructionsSuffix}${inlineSuffix}`;
+  // review.finding_categories (#1958) only makes sense layered on top of inlineFindings itself being requested.
+  const categorySuffix = input.inlineFindings && input.findingCategories ? FINDING_CATEGORY_SUFFIX : "";
+  return `${REVIEW_SYSTEM_PROMPT}${groundingSuffix}${enrichmentSuffix}${profileSuffix}${securityFocusSuffix}${pathSuffix}${repoInstructionsSuffix}${inlineSuffix}${categorySuffix}`;
 }
 
 function buildRepoInstructionsSystemAppend(repoInstructions: string | null | undefined): string {
@@ -1190,6 +1218,9 @@ export function composeInlineFindings(reviews: ModelReview[]): InlineFinding[] {
       severity: finding.severity,
       body: safeBody,
       ...(safeSuggestion ? { suggestion: safeSuggestion } : {}),
+      // `category` is a fixed enum literal (never free text), so it carries through as-is — no public-safe
+      // scrubbing needed, unlike body/suggestion.
+      ...(finding.category ? { category: finding.category } : {}),
     });
   }
   return out;

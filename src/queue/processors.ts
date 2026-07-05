@@ -390,6 +390,7 @@ import {
 } from "../services/ai-review";
 import {
   maybePostInlineComments,
+  shouldRenderFindingCategories,
   shouldRenderSuggestions,
   shouldRequestInlineFindings,
 } from "../review/inline-comments";
@@ -6426,6 +6427,10 @@ export async function runAiReviewForAdvisory(
     // (the per-repo toggle). ANDed here with the operator flag + cutover allowlist to decide whether to ASK the
     // model for line-anchored inline findings. Absent/false ⇒ the reviewer prompt is byte-identical (no findings).
     reviewInlineComments?: boolean | undefined;
+    // `.gittensory.yml` review.finding_categories (#1958), resolved by the caller from the cached manifest. ANDed
+    // here with reviewInlineComments (a category has nothing to categorize without an inline finding) to decide
+    // whether to ASK the model to self-categorize each inlineFindings item. Absent/false ⇒ byte-identical prompt.
+    reviewFindingCategories?: boolean | undefined;
     // `.gittensory.yml` review.ai_model (#selfhost-ai-model-override), resolved by the caller from the cached
     // manifest. Self-host only — overrides that repo's claude-code/codex model+effort, taking priority over the
     // operator's global env vars. Absent/all-null ⇒ byte-identical (global env var, then provider default).
@@ -6654,6 +6659,13 @@ export async function runAiReviewForAdvisory(
             diff: enrichmentDiff,
           })
         : undefined;
+    // Resolved once and reused for BOTH inlineFindings itself and the finding-categories opt-in layered on top
+    // of it (#1958) — a category has nothing to categorize without an inline finding to attach it to.
+    const inlineFindingsRequested = shouldRequestInlineFindings(
+      env,
+      args.repoFullName,
+      args.reviewInlineComments,
+    );
     const result = await runGittensoryAiReview(env, {
       repoFullName: args.repoFullName,
       prNumber: args.pr.number,
@@ -6686,11 +6698,10 @@ export async function runAiReviewForAdvisory(
       codexEffort: args.reviewSelfHostAiModel?.codexEffort ?? null,
       // Inline comments (#inline-comments): ask the model for line-anchored findings only when the operator flag,
       // the cutover allowlist, AND the per-repo manifest toggle all pass. Otherwise the prompt is byte-identical.
-      inlineFindings: shouldRequestInlineFindings(
-        env,
-        args.repoFullName,
-        args.reviewInlineComments,
-      ),
+      inlineFindings: inlineFindingsRequested,
+      // review.finding_categories (#1958): ask the model to ALSO self-categorize each inlineFindings item, only
+      // when inline findings themselves are being requested (a category has nothing to categorize otherwise).
+      findingCategories: shouldRenderFindingCategories(inlineFindingsRequested, args.reviewFindingCategories),
       pathGuidance: resolveReviewPathInstructions(
         args.reviewPathInstructions ?? [],
         files.map((file) => file.path),
@@ -7640,6 +7651,7 @@ async function maybePublishPrPublicSurface(
   let inlineCommentsEnabledForReview = false;
   let suggestionsEnabledForReview = false;
   let changedFilesSummaryEnabledForReview = false;
+  let findingCategoriesEnabledForReview = false;
   let aiReviewExpected = false;
   let aiReviewWasReused = false;
   let gateFinalized = false;
@@ -8247,6 +8259,7 @@ async function maybePublishPrPublicSurface(
             securityFocus: reviewSecurityFocus,
             inlineComments: reviewInlineComments,
             suggestions: reviewSuggestions,
+            findingCategories: reviewFindingCategories,
             pathInstructions: reviewPathInstructions,
             instructions: manifestReviewInstructions,
             tone: reviewTone,
@@ -8262,6 +8275,10 @@ async function maybePublishPrPublicSurface(
           suggestionsEnabledForReview = shouldRenderSuggestions(
             inlineCommentsEnabledForReview,
             reviewSuggestions,
+          );
+          findingCategoriesEnabledForReview = shouldRenderFindingCategories(
+            inlineCommentsEnabledForReview,
+            reviewFindingCategories,
           );
           const reviewFilesForAi = await getReviewFiles();
           const changedPaths = reviewFilesForAi.map((file) => file.path);
@@ -8453,6 +8470,7 @@ async function maybePublishPrPublicSurface(
               reviewExcludePaths,
               reviewPathFilters,
               reviewInlineComments,
+              reviewFindingCategories,
               reviewSelfHostAiModel,
               deliveryId: webhook.deliveryId,
             });
@@ -9311,6 +9329,9 @@ async function maybePublishPrPublicSurface(
               })),
             }
           : {}),
+        ...(findingCategoriesEnabledForReview && aiReview?.inlineFindings?.length
+          ? { findingCategories: aiReview.inlineFindings }
+          : {}),
       });
     } else {
       deterministicBody = buildPublicPrIntelligenceComment(commentArgs);
@@ -9366,6 +9387,7 @@ async function maybePublishPrPublicSurface(
       mode,
       inlineCommentsEnabled: inlineCommentsEnabledForReview,
       suggestionsEnabled: suggestionsEnabledForReview,
+      categoriesEnabled: findingCategoriesEnabledForReview,
     });
   }
   if (decision.willLabel) {
