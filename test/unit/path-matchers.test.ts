@@ -320,6 +320,10 @@ describe("isConfigFile", () => {
       ".github/workflows/ci.yml",
       ".github/workflows/release.yaml",
       ".circleci/config.yml",
+      "native/CMakeLists.txt",
+      "libs/core/meson.build",
+      "services/api/BUILD.bazel",
+      "MODULE.bazel",
     ]) {
       expect(isConfigFile(path)).toBe(true);
     }
@@ -410,6 +414,10 @@ describe("classifyChangedFile", () => {
       ["skaffold.yaml", "config"],
       ["Earthfile", "config"],
       ["Procfile", "config"],
+      ["native/CMakeLists.txt", "config"],
+      ["libs/meson.build", "config"],
+      ["services/BUILD.bazel", "config"],
+      ["MODULE.bazel", "config"],
       [".codecov.yml", "config"],
       ["codecov.yml", "config"],
       ["codecov.yaml", "config"],

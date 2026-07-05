@@ -264,6 +264,11 @@ const CONFIG_FILE_NAMES: ReadonlySet<string> = new Set([
   "azure-pipelines.yml",
   "buf.yaml",
   "buf.gen.yaml",
+  // Native/C++ build system definitions (siblings to Makefile/Dockerfile above).
+  "cmakelists.txt",
+  "meson.build",
+  "build.bazel",
+  "module.bazel",
 ]);
 
 // Filename prefixes that identify build, lint, test-runner, and environment config files.
