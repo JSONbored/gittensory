@@ -195,21 +195,20 @@ if pg_enabled; then
     fi
   fi
 
-  if pg_table_exists "pull_requests" && pg_table_exists "advisories"; then
+  if pg_table_exists "pull_requests" && pg_table_exists "review_audit"; then
     PR_CSV="$(csv_temp_file "pull-requests")"
     pg_copy_csv "
-WITH latest_advisories AS (
+WITH latest_gate_decisions AS (
   SELECT
-    repo_full_name,
-    pull_number,
-    conclusion,
-    updated_at,
+    target_id,
+    decision,
+    created_at,
     ROW_NUMBER() OVER (
-      PARTITION BY repo_full_name, pull_number
-      ORDER BY updated_at DESC, id DESC
+      PARTITION BY target_id
+      ORDER BY created_at DESC, id DESC
     ) AS rn
-  FROM advisories
-  WHERE pull_number IS NOT NULL
+  FROM review_audit
+  WHERE event_type = 'gate_decision' AND source = 'gittensory-native'
 ),
 current_pull_requests AS (
   SELECT
@@ -219,34 +218,37 @@ current_pull_requests AS (
     CASE
       WHEN lower(p.state) = 'closed' AND p.merged_at IS NOT NULL THEN 'merged'
       WHEN lower(p.state) = 'closed' THEN 'closed'
-      WHEN a.conclusion IN ('failure', 'action_required', 'neutral') THEN 'manual'
-      WHEN a.conclusion IS NOT NULL THEN 'commented'
+      WHEN g.decision = 'hold' THEN 'manual'
+      WHEN g.decision = 'close' THEN 'manual'
+      WHEN g.decision = 'merge' THEN 'commented'
       ELSE 'manual'
     END AS status,
     -- The terminal PR outcome (state/merged_at) is the source of truth and takes precedence, exactly like
-    -- status above -- otherwise a merged/closed PR whose advisories.conclusion happens to read
-    -- neutral/action_required (the only two values GitHub Checks reports for the gate's own check run today)
-    -- reports verdict='manual' forever, even though the PR is long since merged/closed (#3511 dashboard bug).
+    -- status above. For a still-open PR, the live gate's own last recorded decision is the real signal:
+    -- review_audit (source='gittensory-native', written by recordNativeGateDecision) is the ONLY writer of
+    -- gate_decision rows and is ALWAYS ON for a self-host instance. The older advisories table never carried
+    -- this signal at all -- it only ever holds a PRE-gate rules-severity summary (buildPullRequestAdvisory),
+    -- which is unrelated to the gate's own merge/close/hold decision and reads neutral/action_required for
+    -- essentially every PR, which is why a still-open PR's verdict was an eternal 'manual' placeholder
+    -- regardless of the gate's actual decision (#3511 follow-up).
     CASE
       WHEN lower(p.state) = 'closed' AND p.merged_at IS NOT NULL THEN 'merge'
       WHEN lower(p.state) = 'closed' THEN 'close'
-      WHEN a.conclusion = 'success' THEN 'merge'
-      WHEN a.conclusion = 'failure' THEN 'close'
-      WHEN a.conclusion IN ('action_required', 'neutral') THEN 'manual'
-      WHEN a.conclusion = 'skipped' THEN 'ignore'
+      WHEN g.decision = 'merge' THEN 'merge'
+      WHEN g.decision = 'close' THEN 'close'
+      WHEN g.decision = 'hold' THEN 'manual'
       ELSE NULL
     END AS verdict,
     p.title AS title,
     p.created_at AS created_at,
     CASE
-      WHEN a.updated_at IS NOT NULL AND a.updated_at > p.updated_at THEN a.updated_at
+      WHEN g.created_at IS NOT NULL AND g.created_at > p.updated_at THEN g.created_at
       ELSE p.updated_at
     END AS updated_at
   FROM pull_requests p
-  LEFT JOIN latest_advisories a
-    ON a.repo_full_name = p.repo_full_name
-   AND a.pull_number = p.number
-   AND a.rn = 1
+  LEFT JOIN latest_gate_decisions g
+    ON g.target_id = p.repo_full_name || '#' || p.number
+   AND g.rn = 1
 )
 SELECT
   repo,
@@ -355,21 +357,20 @@ if ! source_table_exists "pull_requests" &&
   fi
 fi
 
-if source_table_exists "pull_requests" && source_table_exists "advisories"; then
+if source_table_exists "pull_requests" && source_table_exists "review_audit"; then
   sqlite3 -cmd ".timeout 5000" "$APP_DB" "
 ATTACH '$TMP_DB_SQL' AS report;
-WITH latest_advisories AS (
+WITH latest_gate_decisions AS (
   SELECT
-    repo_full_name,
-    pull_number,
-    conclusion,
-    updated_at,
+    target_id,
+    decision,
+    created_at,
     ROW_NUMBER() OVER (
-      PARTITION BY repo_full_name, pull_number
-      ORDER BY updated_at DESC, rowid DESC
+      PARTITION BY target_id
+      ORDER BY created_at DESC, rowid DESC
     ) AS rn
-  FROM main.advisories
-  WHERE pull_number IS NOT NULL
+  FROM main.review_audit
+  WHERE event_type = 'gate_decision' AND source = 'gittensory-native'
 ),
 current_pull_requests AS (
   SELECT
@@ -379,33 +380,32 @@ current_pull_requests AS (
     CASE
       WHEN lower(p.state) = 'closed' AND p.merged_at IS NOT NULL THEN 'merged'
       WHEN lower(p.state) = 'closed' THEN 'closed'
-      WHEN a.conclusion IN ('failure', 'action_required', 'neutral') THEN 'manual'
-      WHEN a.conclusion IS NOT NULL THEN 'commented'
+      WHEN g.decision = 'hold' THEN 'manual'
+      WHEN g.decision = 'close' THEN 'manual'
+      WHEN g.decision = 'merge' THEN 'commented'
       ELSE 'manual'
     END AS status,
     -- Mirrors status's precedence above (see the matching comment in the Postgres-source block): the terminal
-    -- PR outcome wins over advisories.conclusion, or a merged/closed PR reports verdict='manual' forever
-    -- (#3511).
+    -- PR outcome wins, and a still-open PR's verdict comes from review_audit's live gate_decision rows, not the
+    -- (pre-gate, always neutral/action_required) advisories table (#3511 follow-up).
     CASE
       WHEN lower(p.state) = 'closed' AND p.merged_at IS NOT NULL THEN 'merge'
       WHEN lower(p.state) = 'closed' THEN 'close'
-      WHEN a.conclusion = 'success' THEN 'merge'
-      WHEN a.conclusion = 'failure' THEN 'close'
-      WHEN a.conclusion IN ('action_required', 'neutral') THEN 'manual'
-      WHEN a.conclusion = 'skipped' THEN 'ignore'
+      WHEN g.decision = 'merge' THEN 'merge'
+      WHEN g.decision = 'close' THEN 'close'
+      WHEN g.decision = 'hold' THEN 'manual'
       ELSE NULL
     END AS verdict,
     p.title AS title,
     p.created_at AS created_at,
     CASE
-      WHEN a.updated_at IS NOT NULL AND a.updated_at > p.updated_at THEN a.updated_at
+      WHEN g.created_at IS NOT NULL AND g.created_at > p.updated_at THEN g.created_at
       ELSE p.updated_at
     END AS updated_at
   FROM main.pull_requests p
-  LEFT JOIN latest_advisories a
-    ON a.repo_full_name = p.repo_full_name
-   AND a.pull_number = p.number
-   AND a.rn = 1
+  LEFT JOIN latest_gate_decisions g
+    ON g.target_id = p.repo_full_name || '#' || p.number
+   AND g.rn = 1
 )
 INSERT INTO report.review_targets (
   repo,

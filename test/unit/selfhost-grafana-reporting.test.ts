@@ -71,7 +71,7 @@ case "$args" in
     echo 'unexpected psql meta-command copy' >&2
     exit 9
     ;;
-  *"information_schema.tables"*"pull_requests"*|*"information_schema.tables"*"advisories"*|*"information_schema.tables"*"review_targets"*|*"information_schema.tables"*"ai_usage_events"*)
+  *"information_schema.tables"*"pull_requests"*|*"information_schema.tables"*"advisories"*|*"information_schema.tables"*"review_targets"*|*"information_schema.tables"*"ai_usage_events"*|*"information_schema.tables"*"review_audit"*)
     printf '1\\n'
     ;;
   *"information_schema.columns"*"ai_usage_events"*"estimated_neurons"*|\
@@ -180,7 +180,7 @@ function failingCopyPsql(root: string): string {
     `#!/bin/sh
 args="$*"
 case "$args" in
-  *"information_schema.tables"*"pull_requests"*|*"information_schema.tables"*"advisories"*|*"information_schema.tables"*"review_targets"*|*"information_schema.tables"*"ai_usage_events"*)
+  *"information_schema.tables"*"pull_requests"*|*"information_schema.tables"*"advisories"*|*"information_schema.tables"*"review_targets"*|*"information_schema.tables"*"ai_usage_events"*|*"information_schema.tables"*"review_audit"*)
     printf '1\\n'
     ;;
   *"information_schema.columns"*"ai_usage_events"*"estimated_neurons"*)
@@ -234,26 +234,27 @@ esac
         ('JSONbored/gittensory', 1690, 'fresh advisory PR', 'open', 'JSONbored', NULL, '2026-06-28T21:00:00Z', '2026-06-28T21:39:58Z'),
         ('JSONbored/gittensory', 1691, 'fresh merged PR', 'closed', 'tmimmanuel', '2026-06-28T21:46:51Z', '2026-06-28T21:30:00Z', '2026-06-28T21:47:36Z');
 
-      CREATE TABLE advisories (
-        repo_full_name TEXT NOT NULL,
-        pull_number INTEGER,
-        conclusion TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        decision TEXT,
+        source TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
-      INSERT INTO advisories (repo_full_name, pull_number, conclusion, updated_at)
+      INSERT INTO review_audit (id, target_id, event_type, decision, source, created_at)
       VALUES
-        ('JSONbored/gittensory', 1690, 'failure', '2026-06-28T21:25:00Z'),
-        ('JSONbored/gittensory', 1690, 'neutral', '2026-06-28T21:40:00Z'),
-        ('JSONbored/gittensory', 1691, 'success', '2026-06-28T21:47:40Z');
+        ('g1', 'JSONbored/gittensory#1690', 'gate_decision', 'close', 'gittensory-native', '2026-06-28T21:25:00Z'),
+        ('g2', 'JSONbored/gittensory#1690', 'gate_decision', 'hold', 'gittensory-native', '2026-06-28T21:40:00Z'),
+        ('g3', 'JSONbored/gittensory#1691', 'gate_decision', 'merge', 'gittensory-native', '2026-06-28T21:47:40Z');
     `);
 
     runExporter(root, appDb, outDb);
 
     expect(sqlite(outDb, "PRAGMA quick_check;")).toBe("ok");
     expect(sqlite(outDb, "SELECT count(*) FROM review_targets;")).toBe("3");
-    // Latest advisory conclusion for #1690 is 'neutral' -- counted as 'manual' (matches gateHeld's held-for-review
-    // definition in src/signals/engine.ts, not 'commented'/'comment') so the dashboard's manual-review panel
-    // reflects the same held state the live app itself surfaces via the configured manual-review label.
+    // #1690's latest gate_decision is 'hold' (superseding the earlier 'close') -- the ROW_NUMBER "latest wins"
+    // ordering is exercised here, not just a single-row join.
     expect(sqlite(outDb, "SELECT submitter || '|' || status || '|' || verdict || '|' || updated_at FROM review_targets WHERE repo='JSONbored/gittensory' AND number=1690;")).toBe(
       "JSONbored|manual|manual|2026-06-28T21:40:00Z",
     );
@@ -263,7 +264,7 @@ esac
     expect(sqlite(outDb, "SELECT title FROM review_targets WHERE repo='JSONbored/gittensory' AND number=1049;")).toBe("historical PR");
   });
 
-  it("REGRESSION (#3511 dashboard bug): a merged/closed PR reports its OWN verdict, not 'manual', even though advisories.conclusion is stuck at neutral/action_required", () => {
+  it("REGRESSION (#3511 dashboard bug): a merged/closed PR reports its OWN verdict, not 'manual', regardless of what review_audit's live gate_decision says", () => {
     const root = tmpRoot();
     const appDb = join(root, "app.sqlite");
     const outDb = join(root, "reporting.sqlite");
@@ -280,24 +281,27 @@ esac
       );
       INSERT INTO pull_requests (repo_full_name, number, title, state, author_login, merged_at, created_at, updated_at)
       VALUES
-        ('JSONbored/gittensory', 2001, 'merged despite a stuck neutral advisory', 'closed', 'JSONbored', '2026-07-05T09:43:12Z', '2026-07-05T09:30:00Z', '2026-07-05T09:43:12Z'),
-        ('JSONbored/gittensory', 2002, 'closed (not merged) despite a stuck action_required advisory', 'closed', 'JSONbored', NULL, '2026-07-05T09:30:00Z', '2026-07-05T09:43:12Z'),
-        ('JSONbored/gittensory', 2003, 'still open, genuinely held for manual review', 'open', 'JSONbored', NULL, '2026-07-05T09:30:00Z', '2026-07-05T09:43:12Z');
+        ('JSONbored/gittensory', 2001, 'merged despite a stale held gate_decision', 'closed', 'JSONbored', '2026-07-05T09:43:12Z', '2026-07-05T09:30:00Z', '2026-07-05T09:43:12Z'),
+        ('JSONbored/gittensory', 2002, 'closed (not merged) despite a stale held gate_decision', 'closed', 'JSONbored', NULL, '2026-07-05T09:30:00Z', '2026-07-05T09:43:12Z'),
+        ('JSONbored/gittensory', 2003, 'still open, genuinely held for manual review', 'open', 'JSONbored', NULL, '2026-07-05T09:30:00Z', '2026-07-05T09:43:12Z'),
+        ('JSONbored/gittensory', 2004, 'still open, no gate_decision recorded yet', 'open', 'JSONbored', NULL, '2026-07-05T09:30:00Z', '2026-07-05T09:43:12Z');
 
-      CREATE TABLE advisories (
-        repo_full_name TEXT NOT NULL,
-        pull_number INTEGER,
-        conclusion TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        decision TEXT,
+        source TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
-      INSERT INTO advisories (repo_full_name, pull_number, conclusion, updated_at)
+      INSERT INTO review_audit (id, target_id, event_type, decision, source, created_at)
       VALUES
-        -- Reproduces the live production data: the gate's own advisories.conclusion is stuck at
-        -- neutral/action_required for every PR (a separate, unrelated pipeline gap) -- a merged/closed PR must
-        -- not be forced through those branches into verdict='manual' just because this column never resolved.
-        ('JSONbored/gittensory', 2001, 'neutral', '2026-07-05T09:31:00Z'),
-        ('JSONbored/gittensory', 2002, 'action_required', '2026-07-05T09:31:00Z'),
-        ('JSONbored/gittensory', 2003, 'neutral', '2026-07-05T09:31:00Z');
+        -- Reproduces the reported production shape: the gate held these PRs (a live, real 'hold' decision) at
+        -- some point in the past -- a merged/closed PR must not be forced into verdict='manual' forever just
+        -- because ITS OWN last-recorded live decision, before the terminal outcome, happened to be a hold.
+        ('g1', 'JSONbored/gittensory#2001', 'gate_decision', 'hold', 'gittensory-native', '2026-07-05T09:31:00Z'),
+        ('g2', 'JSONbored/gittensory#2002', 'gate_decision', 'hold', 'gittensory-native', '2026-07-05T09:31:00Z'),
+        ('g3', 'JSONbored/gittensory#2003', 'gate_decision', 'hold', 'gittensory-native', '2026-07-05T09:31:00Z');
     `);
 
     runExporter(root, appDb, outDb);
@@ -305,10 +309,89 @@ esac
     expect(sqlite(outDb, "PRAGMA quick_check;")).toBe("ok");
     expect(sqlite(outDb, "SELECT status || '|' || verdict FROM review_targets WHERE repo='JSONbored/gittensory' AND number=2001;")).toBe("merged|merge");
     expect(sqlite(outDb, "SELECT status || '|' || verdict FROM review_targets WHERE repo='JSONbored/gittensory' AND number=2002;")).toBe("closed|close");
-    // A genuinely still-open PR is unaffected by the fix -- it has no terminal state/merged_at to take
-    // precedence, so it still falls through to the (separately broken, out of scope here) advisories.conclusion
-    // mapping, exactly as before.
+    // A genuinely still-open PR reflects its live gate_decision verbatim (#3511 follow-up: this is the real fix
+    // -- a still-open PR now reports the gate's ACTUAL current decision instead of an eternal placeholder).
     expect(sqlite(outDb, "SELECT status || '|' || verdict FROM review_targets WHERE repo='JSONbored/gittensory' AND number=2003;")).toBe("manual|manual");
+    // No gate_decision row at all (e.g. a brand-new PR the gate hasn't evaluated yet) fails safe: status='manual'
+    // (something needs a look), verdict=NULL (no real signal to report, never fabricated).
+    expect(sqlite(outDb, "SELECT status || '|' || (verdict IS NULL) FROM review_targets WHERE repo='JSONbored/gittensory' AND number=2004;")).toBe("manual|1");
+  });
+
+  it("a still-open PR whose live gate_decision is 'merge' or 'close' reports that verdict directly, with a distinct status from a genuine 'hold'", () => {
+    const root = tmpRoot();
+    const appDb = join(root, "app.sqlite");
+    const outDb = join(root, "reporting.sqlite");
+    sqlite(appDb, `
+      CREATE TABLE pull_requests (
+        repo_full_name TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        state TEXT NOT NULL,
+        author_login TEXT,
+        merged_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO pull_requests (repo_full_name, number, title, state, author_login, merged_at, created_at, updated_at)
+      VALUES
+        ('JSONbored/gittensory', 3001, 'gate says merge, GitHub has not caught up yet', 'open', 'JSONbored', NULL, '2026-07-05T09:30:00Z', '2026-07-05T09:43:12Z'),
+        ('JSONbored/gittensory', 3002, 'gate says close, GitHub has not caught up yet', 'open', 'JSONbored', NULL, '2026-07-05T09:30:00Z', '2026-07-05T09:43:12Z');
+
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        decision TEXT,
+        source TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO review_audit (id, target_id, event_type, decision, source, created_at)
+      VALUES
+        ('g1', 'JSONbored/gittensory#3001', 'gate_decision', 'merge', 'gittensory-native', '2026-07-05T09:31:00Z'),
+        ('g2', 'JSONbored/gittensory#3002', 'gate_decision', 'close', 'gittensory-native', '2026-07-05T09:31:00Z');
+    `);
+
+    runExporter(root, appDb, outDb);
+
+    expect(sqlite(outDb, "PRAGMA quick_check;")).toBe("ok");
+    expect(sqlite(outDb, "SELECT status || '|' || verdict FROM review_targets WHERE repo='JSONbored/gittensory' AND number=3001;")).toBe("commented|merge");
+    expect(sqlite(outDb, "SELECT status || '|' || verdict FROM review_targets WHERE repo='JSONbored/gittensory' AND number=3002;")).toBe("manual|close");
+  });
+
+  it("ignores a gate_decision row from another source (e.g. 'reviewbot', the parity harness's authoritative side) so a shadow-comparison row never masquerades as the live verdict", () => {
+    const root = tmpRoot();
+    const appDb = join(root, "app.sqlite");
+    const outDb = join(root, "reporting.sqlite");
+    sqlite(appDb, `
+      CREATE TABLE pull_requests (
+        repo_full_name TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        state TEXT NOT NULL,
+        author_login TEXT,
+        merged_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO pull_requests (repo_full_name, number, title, state, author_login, merged_at, created_at, updated_at)
+      VALUES ('JSONbored/gittensory', 4001, 'only a reviewbot shadow row exists', 'open', 'JSONbored', NULL, '2026-07-05T09:30:00Z', '2026-07-05T09:43:12Z');
+
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        decision TEXT,
+        source TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO review_audit (id, target_id, event_type, decision, source, created_at)
+      VALUES ('g1', 'JSONbored/gittensory#4001', 'gate_decision', 'merge', 'reviewbot', '2026-07-05T09:31:00Z');
+    `);
+
+    runExporter(root, appDb, outDb);
+
+    expect(sqlite(outDb, "PRAGMA quick_check;")).toBe("ok");
+    expect(sqlite(outDb, "SELECT status || '|' || (verdict IS NULL) FROM review_targets WHERE repo='JSONbored/gittensory' AND number=4001;")).toBe("manual|1");
   });
 
   it("falls back to legacy review_targets when the current PR cache is absent", () => {
