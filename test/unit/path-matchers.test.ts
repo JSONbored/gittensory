@@ -144,6 +144,20 @@ describe("isGeneratedFile", () => {
     expect(classifyChangedFile("gen/GreeterGrpcKt.kt")).toBe("generated");
   });
 
+  it("matches JavaScript and TypeScript grpc-node protobuf stubs alongside the other protoc plugins", () => {
+    expect(isGeneratedFile("gen/service_pb.js")).toBe(true);
+    expect(isGeneratedFile("gen/service_grpc_pb.js")).toBe(true);
+    expect(isGeneratedFile("gen/service_pb.ts")).toBe(true);
+    expect(isGeneratedFile("gen/service_grpc_pb.ts")).toBe(true);
+    expect(isGeneratedFile("gen/service_pb.d.ts")).toBe(true);
+    expect(isGeneratedFile("gen/service_grpc_pb.d.ts")).toBe(true);
+    expect(isGeneratedFile("src/app.js")).toBe(false);
+    expect(isGeneratedFile("src/app.ts")).toBe(false);
+    expect(isGeneratedFile("src/types.d.ts")).toBe(false);
+    expect(classifyChangedFile("gen/service_grpc_pb.js")).toBe("generated");
+    expect(classifyChangedFile("gen/service_pb.d.ts")).toBe("generated");
+  });
+
   it("matches Swift protobuf, Dart freezed/retrofit, C# designer/XAML, and Objective-C protoc output", () => {
     for (const path of [
       "proto/messages.pb.swift",
@@ -474,6 +488,8 @@ describe("classifyChangedFile", () => {
       ["gen/service_pb.nim", "generated"],
       ["gen/service_pb.lua", "generated"],
       ["gen/GreeterGrpcKt.kt", "generated"],
+      ["gen/service_grpc_pb.js", "generated"],
+      ["gen/service_pb.d.ts", "generated"],
       ["vendor/lib.go", "vendored"],
       ["package-lock.json", "lockfile"],
       ["bun.lock", "lockfile"],

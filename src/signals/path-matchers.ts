@@ -74,6 +74,10 @@ function isGeneratedFileFrom(parts: NormalizedPath): boolean {
     /_pb\.nim$/.test(norm) ||
     // Lua protobuf: message stubs are `*_pb.lua`.
     /_pb\.lua$/.test(norm) ||
+    // JavaScript/TypeScript grpc-node protobuf: message stubs are `*_pb.{js,ts,d.ts}`; gRPC emits
+    // sibling `*_grpc_pb.{js,ts,d.ts}` service stubs (underscore form, not `.pb.js`).
+    /_pb\.(js|ts)$/.test(norm) ||
+    /_pb\.d\.ts$/.test(norm) ||
     // Dart codegen: build_runner (`.g.dart`), freezed (`.freezed.dart`), and
     // retrofit/injectable (`.gr.dart`) all emit generated part files.
     /\.(g|freezed|gr)\.dart$/.test(norm) ||
