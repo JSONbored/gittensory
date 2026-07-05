@@ -981,6 +981,18 @@ describe("downgradeMergeToHold — accuracy circuit-breaker (#self-improve / GAP
     const plan = wouldMerge();
     expect(downgradeMergeToHold(plan, false)).toBe(plan);
   });
+
+  it("REGRESSION: the substitute manual-review label is authorized by `merge` autonomy, not `review_state_label` — it must still post when review_state_label is OFF (the default)", () => {
+    // Deliberately autonomy: { merge: "auto" } ONLY — review_state_label is left unset (default OFF), unlike
+    // every other test in this block. Before the fix, the pushed label carried autonomyClass: "review_state_label",
+    // so the executor's autonomy re-check (agent-action-executor.ts) would DENY it here even though merge autonomy
+    // is fully "auto" — the circuit breaker would correctly drop the merge but silently fail to label the PR.
+    const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, pr: { labels: [], mergeableState: "clean" } }));
+    expect(classes(plan)).toEqual(["merge"]); // sanity: review_state_label OFF means no disposition label is planned
+    const held = downgradeMergeToHold(plan, true);
+    const label = held.find((a) => a.actionClass === "label" && a.label === AGENT_LABEL_NEEDS_REVIEW && a.labelOp === "add");
+    expect(label?.autonomyClass).toBe("merge");
+  });
 });
 
 describe("downgradeCloseToHold — close-precision circuit-breaker (#close-precision-breaker)", () => {
@@ -1078,6 +1090,17 @@ describe("downgradeCloseToHold — close-precision circuit-breaker (#close-preci
     const nullishClose = { actionClass: "close", reason: "CI failing", closeKind: "heuristic" } as unknown as PlannedAgentAction;
     const heldNullish = downgradeCloseToHold([nullishClose], true);
     expect(heldNullish.find((a) => a.actionClass === "label" && a.label === AGENT_LABEL_NEEDS_REVIEW)?.requiresApproval).toBe(false);
+  });
+
+  it("REGRESSION: the substitute manual-review label is authorized by `close` autonomy, not `review_state_label` — it must still post when review_state_label is OFF (the default)", () => {
+    // Deliberately autonomy: { close: "auto" } ONLY — review_state_label is left unset (default OFF), mirroring
+    // downgradeMergeToHold's own regression test above. Before the fix, the pushed label carried
+    // autonomyClass: "review_state_label" and the executor would deny it even though `close` autonomy is "auto".
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "passed", blockerTitles: ["readiness score too low"], pr: { labels: [] } }));
+    expect(plan.some((a) => a.actionClass === "close" && a.closeKind === "heuristic")).toBe(true);
+    const held = downgradeCloseToHold(plan, true);
+    const label = held.find((a) => a.actionClass === "label" && a.label === AGENT_LABEL_NEEDS_REVIEW && a.labelOp === "add");
+    expect(label?.autonomyClass).toBe("close");
   });
 });
 

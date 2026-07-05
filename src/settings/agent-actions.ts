@@ -378,7 +378,10 @@ export function downgradeMergeToHold(planned: PlannedAgentAction[], holdOnly: bo
   if (labels.manualReview !== null && !alreadyNeedsReview) {
     next.push({
       actionClass: "label",
-      autonomyClass: "review_state_label",
+      // Authorized by `merge` (the class actually being downgraded here), NOT `review_state_label` — mirrors
+      // the guardrail-hold label above (#label-scoping) so this hold label posts whenever merge autonomy is
+      // acting, independent of whether the repo has separately opted into the advisory review_state_label class.
+      autonomyClass: "merge",
       requiresApproval: stagedMerge?.requiresApproval ?? false,
       reason: "accuracy circuit-breaker engaged (merge precision dropped) — would-merge held for human review",
       label: labels.manualReview,
@@ -428,7 +431,9 @@ export function downgradeCloseToHold(planned: PlannedAgentAction[], closeHoldOnl
   if (labels.manualReview !== null && !alreadyNeedsReview) {
     next.push({
       actionClass: "label",
-      autonomyClass: "review_state_label",
+      // Authorized by `close` (the class actually being downgraded here), NOT `review_state_label` — same
+      // reasoning as downgradeMergeToHold's own manual-review label above (#label-scoping).
+      autonomyClass: "close",
       requiresApproval: droppedClose?.requiresApproval ?? false,
       reason: "close-precision circuit-breaker engaged — would-close held for human review",
       label: labels.manualReview,
