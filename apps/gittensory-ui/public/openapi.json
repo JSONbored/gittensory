@@ -9205,6 +9205,27 @@
               "github",
               "linear"
             ]
+          },
+          "unlinkedIssueGuardrail": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "hold",
+                  "off"
+                ]
+              },
+              "minConfidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "required": [
+              "mode",
+              "minConfidence"
+            ]
           }
         },
         "required": [
