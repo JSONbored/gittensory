@@ -77,6 +77,14 @@ SELFHOST_SETUP_TOKEN=change-this-long-random-value  # unlocks /setup for a fresh
         header instead; never place the setup token in the URL.
       </p>
       <Callout variant="note">
+        <code>https://reviews.example.com</code> above is a placeholder — it assumes you already
+        have a real domain terminating TLS. If you don't yet, see{" "}
+        <Link to="/docs/self-hosting-security">Security</Link>'s TLS termination section for the two
+        shipped ways to get one: the <code>caddy</code> profile (a public domain with automatic
+        Let's Encrypt certs) or the <code>tailscale</code> profile (a private tailnet address, no
+        public port needed).
+      </Callout>
+      <Callout variant="note">
         Manual App creation (below) is still fully supported — for an air-gapped instance, a
         stricter change-review process, or simply a preference for reviewing every permission by
         hand before it exists. Whichever path you take, the resulting App needs the SAME
@@ -243,7 +251,11 @@ ORB_RELAY_MODE=pull  # or omit for push (the default) -- see "Choosing a relay m
         outage more gracefully (see the release checklist's known-warnings table below). Use push
         only once you already have a stable, publicly reachable HTTPS origin for this instance — the
         Direct App setup wizard, for instance, always requires one anyway, so an operator running
-        Direct App today has it available for brokered push mode too.
+        Direct App today has it available for brokered push mode too. See{" "}
+        <Link to="/docs/self-hosting-security">Security</Link>'s TLS termination section for how to
+        stand one up: the <code>caddy</code> profile for a public domain, or note that{" "}
+        <code>tailscale</code>'s private tailnet address does not satisfy push mode's
+        internet-reachable requirement — pull mode is the right fit for a Tailscale-only instance.
       </Callout>
       <Callout variant="warn" title="Brokered mode operational risks">
         Before enabling this for anyone outside a controlled managed-beta cohort, weigh: (1){" "}
@@ -299,6 +311,13 @@ ORB_RELAY_MODE=pull  # or omit for push (the default) -- see "Choosing a relay m
         code={`curl https://reviews.example.com/health
 curl https://reviews.example.com/ready`}
       />
+      <p>
+        <code>reviews.example.com</code> here stands in for whatever fronts the app on real HTTPS —
+        the <code>caddy</code> profile's domain, an existing reverse proxy, or (for Tailscale
+        instances) the tailnet address on port 8787 instead of a public domain at all. See{" "}
+        <Link to="/docs/self-hosting-security">Security</Link>'s TLS termination section if you
+        haven't set one of those up yet.
+      </p>
       <p>
         After installing the App on a test repo, open a small PR and confirm the webhook delivery
         appears in GitHub and a job appears in self-host logs. Continue with{" "}

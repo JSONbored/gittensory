@@ -213,6 +213,13 @@ OPT-IN, NOT REQUIRED FOR A TRIAL INSTANCE
         contract, not a flag you turn on. The one way to disable it is the explicit air-gap flag:
         set <code>ORB_AIR_GAP=true</code> for an instance that sends nothing.
       </Callout>
+      <p>
+        <code>--profile caddy</code> and <code>--profile tailscale</code> are the two shipped ways
+        to get real HTTPS or a private, no-public-port address — see{" "}
+        <Link to="/docs/self-hosting-security">Security</Link>'s TLS termination section for the
+        full walkthrough of each (Caddyfile setup, DNS prerequisites, and when to pick one over the
+        other).
+      </p>
     </DocsPage>
   );
 }
