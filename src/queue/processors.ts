@@ -404,6 +404,7 @@ import {
 } from "../review/grounding-wire";
 import {
   enrichSecretScanFilesWithPatchFallback,
+  hasPatchLessSecretScanCandidates,
   incompletePatchLessSecretScanFinding,
   markEligiblePatchLessFilesIncomplete,
 } from "./patchless-secret-scan";
@@ -6760,7 +6761,7 @@ export async function maybeAddSecretLeakFinding(
       args.files ??
       (await listPullRequestFiles(env, args.repoFullName, args.pullNumber));
     let scanFiles = files;
-    if (args.headSha) {
+    if (args.headSha && hasPatchLessSecretScanCandidates(files, args.baseSha)) {
       try {
         const fetcher = await makeGithubFileFetcher(env, args.repoFullName, args.installationId);
         scanFiles = await enrichSecretScanFilesWithPatchFallback(files, {

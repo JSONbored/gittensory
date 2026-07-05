@@ -9,6 +9,8 @@ export const SECRET_SCAN_PATCH_FALLBACK_MAX_CHARS = 512_000;
 const SECRET_SCAN_FETCH_PROBE_CHARS = SECRET_SCAN_PATCH_FALLBACK_MAX_CHARS + 1;
 /** Bound concurrent Contents API reads during patch-less secret-scan enrichment. */
 const SECRET_SCAN_PATCH_FALLBACK_MAX_CONCURRENT = 4;
+/** Max patch-less paths listed in the fail-closed advisory detail (title still reports the full count). */
+export const INCOMPLETE_PATCH_LESS_PATH_DETAIL_MAX = 5;
 
 /** Lines present in `head` but not in `base` (multiset), for scanning only the additions on a modified file. */
 export function addedLinesForSecretScan(base: string, head: string): string[] {
@@ -54,6 +56,18 @@ export function shouldAttemptPatchLessSecretScan(
   return status === "added";
 }
 
+export function hasPatchLessSecretScanCandidates(
+  files: PullRequestFileRecord[],
+  baseSha?: string | null | undefined,
+): boolean {
+  return files.some((file) => {
+    const existingPatch = typeof file.payload?.patch === "string" ? file.payload.patch : "";
+    if (existingPatch) return false;
+    const status = file.status ?? "modified";
+    return shouldAttemptPatchLessSecretScan(file, status, baseSha);
+  });
+}
+
 export function markEligiblePatchLessFilesIncomplete(
   files: PullRequestFileRecord[],
   baseSha?: string | null | undefined,
@@ -69,6 +83,7 @@ export function markEligiblePatchLessFilesIncomplete(
 
 /** @internal Exported for patch-less secret-scan unit tests only. */
 export const patchlessSecretScanInternals = {
+  hasPatchLessSecretScanCandidates,
   markEligiblePatchLessFilesIncomplete,
   shouldAttemptPatchLessSecretScan,
   syntheticSecretScanPatch,
@@ -83,11 +98,16 @@ export function incompletePatchLessSecretScanFinding(
     .filter((file) => file.payload?.secretScanIncomplete === true)
     .map((file) => file.path);
   if (paths.length === 0) return null;
+  const listedPaths = paths.slice(0, INCOMPLETE_PATCH_LESS_PATH_DETAIL_MAX);
+  const pathSummary =
+    paths.length > INCOMPLETE_PATCH_LESS_PATH_DETAIL_MAX
+      ? `${listedPaths.join(", ")}, and ${paths.length - INCOMPLETE_PATCH_LESS_PATH_DETAIL_MAX} more`
+      : listedPaths.join(", ");
   return {
     code: "secret_leak",
     severity: "critical",
     title: `Patch-less file(s) could not be fully scanned for secrets (${paths.length})`,
-    detail: `GitHub omitted inline diff for: ${paths.join(", ")}. Fetched content exceeded the ${SECRET_SCAN_PATCH_FALLBACK_MAX_CHARS}-char scan cap or could not be retrieved completely, so leaked-secret verification is incomplete. Shrink the change, split the file, or ensure the diff is reviewable before merge.`,
+    detail: `GitHub omitted inline diff for: ${pathSummary}. Fetched content exceeded the ${SECRET_SCAN_PATCH_FALLBACK_MAX_CHARS}-char scan cap or could not be retrieved completely, so leaked-secret verification is incomplete. Shrink the change, split the file, or ensure the diff is reviewable before merge.`,
     action: "Ensure patch-less files are within scan limits or split the change so secrets can be verified.",
   };
 }

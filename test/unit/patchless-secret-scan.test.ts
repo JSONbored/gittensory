@@ -423,6 +423,25 @@ describe("enrichSecretScanFilesWithPatchFallback", () => {
     expect(finding?.detail).toContain("b.env");
   });
 
+  it("caps the incomplete-path detail list while the title keeps the full count", () => {
+    const files = Array.from({ length: 7 }, (_, index) => ({
+      repoFullName: "acme/widgets",
+      pullNumber: 7,
+      path: `file-${index}.env`,
+      status: "added",
+      additions: 1,
+      deletions: 0,
+      changes: 1,
+      payload: { secretScanIncomplete: true },
+    }));
+    const finding = incompletePatchLessSecretScanFinding(files);
+    expect(finding?.title).toContain("(7)");
+    expect(finding?.detail).toContain("file-0.env");
+    expect(finding?.detail).toContain("file-4.env");
+    expect(finding?.detail).not.toContain("file-5.env");
+    expect(finding?.detail).toContain("and 2 more");
+  });
+
   it("marks a renamed file incomplete when base content cannot be fetched", async () => {
     const fetcher: FileFetcher = {
       async getFileContent(path, ref) {
@@ -807,12 +826,66 @@ describe("enrichSecretScanFilesWithPatchFallback", () => {
 
 describe("patchlessSecretScanInternals", () => {
   const {
+    hasPatchLessSecretScanCandidates,
     markEligiblePatchLessFilesIncomplete,
     shouldAttemptPatchLessSecretScan,
     syntheticSecretScanPatch,
     isOverSecretScanContentLimit,
     markPatchLessSecretScanIncomplete,
   } = patchlessSecretScanInternals;
+
+  it("hasPatchLessSecretScanCandidates ignores inline patches and ineligible statuses", () => {
+    const files = [
+      {
+        repoFullName: "acme/widgets",
+        pullNumber: 7,
+        path: "inline.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        payload: { patch: "@@\n+const ok = 1;" },
+      },
+      {
+        repoFullName: "acme/widgets",
+        pullNumber: 7,
+        path: "unchanged.env",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        payload: {},
+      },
+      {
+        repoFullName: "acme/widgets",
+        pullNumber: 7,
+        path: "added.env",
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        payload: {},
+      },
+    ];
+    expect(hasPatchLessSecretScanCandidates(files, null)).toBe(true);
+    expect(
+      hasPatchLessSecretScanCandidates(
+        [
+          {
+            repoFullName: "acme/widgets",
+            pullNumber: 7,
+            path: "inline.ts",
+            status: "added",
+            additions: 1,
+            deletions: 0,
+            changes: 1,
+            payload: { patch: "+x" },
+          },
+        ],
+        null,
+      ),
+    ).toBe(false);
+  });
 
   it("shouldAttemptPatchLessSecretScan only allows added files without baseSha", () => {
     expect(shouldAttemptPatchLessSecretScan({}, "added", null)).toBe(true);
@@ -1122,6 +1195,37 @@ describe("maybeAddSecretLeakFinding patch-less fallback wiring", () => {
       files,
       installationId: 1,
       headSha: "",
+    });
+    spy.mockRestore();
+    expect(spy).not.toHaveBeenCalled();
+    expect(adv.findings).toHaveLength(0);
+  });
+
+  it("skips makeGithubFileFetcher when every file already has an inline patch", async () => {
+    const env = createTestEnv();
+    const adv = advisory();
+    const files = [
+      {
+        repoFullName: "acme/widgets",
+        pullNumber: 7,
+        path: "src/app.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        payload: { patch: "@@\n+const ok = 1;" },
+      },
+    ];
+    const groundingWire = await import("../../src/review/grounding-wire");
+    const spy = vi.spyOn(groundingWire, "makeGithubFileFetcher");
+    await maybeAddSecretLeakFinding(env, {
+      advisory: adv,
+      repoFullName: "acme/widgets",
+      pullNumber: 7,
+      files,
+      installationId: 1,
+      headSha: "head-sha",
+      baseSha: "base-sha",
     });
     spy.mockRestore();
     expect(spy).not.toHaveBeenCalled();
