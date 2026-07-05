@@ -3,6 +3,10 @@ import type { AdvisoryFinding, PullRequestFileRecord } from "../types";
 
 /** Per-file cap when synthesizing a patch for GitHub's patch-less (binary/large) PR files. */
 export const SECRET_SCAN_PATCH_FALLBACK_MAX_CHARS = 512_000;
+/** Fetch probe limit passed to {@link FileFetcher.getFileContent}: the grounding fetcher returns `maxChars+1`
+ *  bytes when the file exceeds `maxChars - 1`, so `content.length > SECRET_SCAN_PATCH_FALLBACK_MAX_CHARS` reliably
+ *  detects truncation instead of scanning a clipped prefix. Mirrors review-grounding's `+ 1` probe. */
+const SECRET_SCAN_FETCH_PROBE_CHARS = SECRET_SCAN_PATCH_FALLBACK_MAX_CHARS + 1;
 /** Bound concurrent Contents API reads during patch-less secret-scan enrichment. */
 const SECRET_SCAN_PATCH_FALLBACK_MAX_CONCURRENT = 4;
 
@@ -135,7 +139,7 @@ export async function enrichSecretScanFilesWithPatchFallback(
         const headContent = await args.fetcher.getFileContent(
           file.path,
           headSha,
-          SECRET_SCAN_PATCH_FALLBACK_MAX_CHARS,
+          SECRET_SCAN_FETCH_PROBE_CHARS,
         );
         if (headContent == null) return markPatchLessSecretScanIncomplete(file);
         if (isOverSecretScanContentLimit(headContent)) return markPatchLessSecretScanIncomplete(file);
@@ -148,7 +152,7 @@ export async function enrichSecretScanFilesWithPatchFallback(
           const baseContent = await args.fetcher.getFileContent(
             previousPath,
             baseSha,
-            SECRET_SCAN_PATCH_FALLBACK_MAX_CHARS,
+            SECRET_SCAN_FETCH_PROBE_CHARS,
           );
           if (baseContent == null) return markPatchLessSecretScanIncomplete(file);
           if (isOverSecretScanContentLimit(baseContent)) return markPatchLessSecretScanIncomplete(file);
@@ -157,7 +161,7 @@ export async function enrichSecretScanFilesWithPatchFallback(
           const baseContent = await args.fetcher.getFileContent(
             file.path,
             args.baseSha!.trim(),
-            SECRET_SCAN_PATCH_FALLBACK_MAX_CHARS,
+            SECRET_SCAN_FETCH_PROBE_CHARS,
           );
           if (baseContent == null) return markPatchLessSecretScanIncomplete(file);
           if (isOverSecretScanContentLimit(baseContent)) return markPatchLessSecretScanIncomplete(file);
