@@ -80,6 +80,15 @@ export type ReplayScoringKey = {
   groundTruth: unknown;
 };
 
+// generateReplayScoringKey never lints/scrubs frozen context (it doesn't touch context text at all), so
+// unlike ReplayTaskRejected it can only ever reject on selection -- narrower than reusing ReplayTaskRejected,
+// which would advertise an "unscrubbable_forward_reference" branch this function can never actually produce.
+export type ReplayScoringKeyRejected = {
+  eligible: false;
+  rejected: "selection";
+  reasons: string[];
+};
+
 export function detectForwardReferences(
   text: unknown,
   context: ForwardRefContext | null | undefined,
@@ -114,4 +123,4 @@ export function generateReplayTask(
 export function generateReplayScoringKey(
   candidate: FreezePointCandidate | null | undefined,
   options: ReplayTaskOptions | null | undefined,
-): ReplayScoringKey | ReplayTaskRejected;
+): ReplayScoringKey | ReplayScoringKeyRejected;

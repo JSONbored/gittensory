@@ -222,5 +222,27 @@ describe("gittensory-miner leakage-safe replay task generation (#3011)", () => {
         reasons: ["insufficient_prior_history", "insufficient_revealed_history"],
       });
     });
+
+    // REGRESSION: pins the intentional eligibility asymmetry documented on generateReplayScoringKey itself --
+    // it never lints/scrubs frozen context, so a candidate generateReplayTask rejects for an unscrubbable
+    // forward reference still yields a scoring key here. A caller must not assume the two are a matched pair
+    // without checking generateReplayTask's own result (see the same candidate's rejection above).
+    it("still returns a scoring key for a candidate whose frozen context generateReplayTask rejects as unscrubbable", () => {
+      const candidate = { ...eligible, frozenContextTexts: ["the tally hit 250 last month"] };
+
+      const replayTask = generateReplayTask(candidate, CONTEXT, options);
+      expect(replayTask).toEqual({
+        eligible: false,
+        rejected: "unscrubbable_forward_reference",
+        residual: [{ kind: "bare-issue-number", value: 250 }],
+      });
+
+      const scoringKey = generateReplayScoringKey(candidate, options);
+      expect(scoringKey).toEqual({
+        eligible: true,
+        commitCount: 10,
+        groundTruth: { merged: true, approach: "refactor" },
+      });
+    });
   });
 });
