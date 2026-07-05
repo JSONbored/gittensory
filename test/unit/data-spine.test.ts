@@ -512,4 +512,43 @@ describe("listLatestSignalSnapshotsForTargets (#3202 — bulk latest-per-target 
     expect(result.get("owner/b")).toMatchObject({ id: "b-only", generatedAt: "2026-03-01T00:00:00.000Z" });
     expect(result.has("owner/c")).toBe(false);
   });
+
+  it("batches target-key lookups to stay under D1 bound-parameter limits", async () => {
+    const env = createTestEnv();
+    const targetKeys = Array.from({ length: 95 }, (_, index) => `owner/repo-${index}`);
+    for (const [index, targetKey] of targetKeys.entries()) {
+      await persistSignalSnapshot(env, {
+        id: `batched-${index}`,
+        signalType: "repo-doc-refresh-attempt",
+        targetKey,
+        payload: {},
+        generatedAt: `2026-06-01T00:${String(index).padStart(2, "0")}:00.000Z`,
+      });
+    }
+    const db = env.DB;
+    const boundCounts: number[] = [];
+    env.DB = {
+      ...db,
+      prepare(sql: string) {
+        const statement = db.prepare(sql);
+        return {
+          ...statement,
+          bind(...values: Parameters<typeof statement.bind>) {
+            if (sql.includes("FROM signal_snapshots") && sql.includes("target_key IN")) {
+              boundCounts.push(values.length);
+              if (values.length > 91) throw new Error(`too many bound parameters: ${values.length}`);
+            }
+            return statement.bind(...values);
+          },
+        };
+      },
+    } as D1Database;
+
+    const result = await listLatestSignalSnapshotsForTargets(env, "repo-doc-refresh-attempt", targetKeys);
+
+    expect(result.size).toBe(95);
+    expect(result.get("owner/repo-0")?.id).toBe("batched-0");
+    expect(result.get("owner/repo-94")?.id).toBe("batched-94");
+    expect(boundCounts).toEqual([91, 6]);
+  });
 });
