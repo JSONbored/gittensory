@@ -27,6 +27,7 @@ import type { CaptureRoute } from "./visual/capture";
 // verbatim or `createOrUpdatePrIntelligenceComment` posts a DUPLICATE instead of updating in place.
 import { PR_PANEL_COMMENT_MARKER } from "../github/comments";
 import { GITTENSORY_GATE_CHECK_NAME } from "./check-names";
+import { classifyChangedFile, type ReviewFileClass } from "./changed-files-classify";
 import {
   buildUnifiedReviewInput,
   renderUnifiedReviewComment,
@@ -306,6 +307,12 @@ export type UnifiedCommentBridgeArgs = {
    *  Public-safe: only URLs + route paths — no private terms. Default OFF (the processor passes this only
    *  when screenshotsAllowed + the PR touches web-visible files). */
   beforeAfter?: CaptureRoute[] | undefined;
+  /** Changed-file path + additions/deletions, one entry per file (review.changed_files_summary port). When
+   *  present + non-empty, a "Changed files" collapsible (one row per source/test/docs/config/generated
+   *  category, with file counts and +/- totals) is appended. Deterministic, no AI. Default OFF (the processor
+   *  passes this only when the manifest opts in — see `resolveReviewPromptOverrides`'s `changedFilesSummary`).
+   *  (#1957) */
+  changedFilesSummary?: ChangedFileSummaryInput[] | undefined;
   /** The disposition holds this PR for owner review because its diff touches a hard-guardrail path — so an
    *  otherwise-ready comment renders "held for review" instead of "safe to merge". (#guarded-hold-comment) */
   heldForReview?: boolean | undefined;
@@ -361,6 +368,55 @@ export function buildBeforeAfterCollapsible(routes: CaptureRoute[]): UnifiedColl
   return { title: "Visual preview", body, rawHtml: true };
 }
 
+/** A changed file's path + line deltas — everything `buildChangedFilesSummaryCollapsible` needs to group and
+ *  total. Deliberately narrower than `PullRequestFileRecord` (path/additions/deletions only) so the bridge
+ *  doesn't drag GitHub's full file-record shape into its pure-rendering surface. */
+export type ChangedFileSummaryInput = { path: string; additions: number; deletions: number };
+
+/** Display order for the "Changed files" table — SOURCE FIRST, mirroring the same source-first priority this
+ *  codebase already applies to the AI reviewer's own diff ordering (`diffFilePriority`,
+ *  `src/review/review-diff.ts`): the code a maintainer most needs to read leads, generated/mechanical output
+ *  trails. A category absent from the PR's changed files is simply omitted (no zero rows). */
+const CHANGED_FILE_CATEGORY_ORDER: ReviewFileClass[] = ["source", "test", "docs", "config", "generated"];
+
+const CHANGED_FILE_CATEGORY_LABEL: Record<ReviewFileClass, string> = {
+  source: "Source",
+  test: "Test",
+  docs: "Docs",
+  config: "Config",
+  generated: "Generated",
+};
+
+/**
+ * Build the "Changed files" collapsible: one row per file category (source/test/docs/config/generated, via
+ * the deterministic `classifyChangedFile`), with a file count and +/- totals — collapsing an arbitrarily large
+ * same-category group into a single row so a big PR doesn't turn into a wall of per-file lines. No AI, no
+ * network — pure grouping over data the caller already has. Returns null when there are no files (nothing to
+ * summarize), so the caller can unconditionally chain this alongside the other optional collapsibles.
+ */
+export function buildChangedFilesSummaryCollapsible(files: ChangedFileSummaryInput[]): UnifiedCollapsible | null {
+  if (files.length === 0) return null;
+  const totals = new Map<ReviewFileClass, { count: number; additions: number; deletions: number }>();
+  for (const file of files) {
+    const category = classifyChangedFile(file.path);
+    const entry = totals.get(category);
+    if (entry) {
+      entry.count += 1;
+      entry.additions += file.additions;
+      entry.deletions += file.deletions;
+    } else {
+      totals.set(category, { count: 1, additions: file.additions, deletions: file.deletions });
+    }
+  }
+  const rows = CHANGED_FILE_CATEGORY_ORDER.flatMap((category) => {
+    const entry = totals.get(category);
+    if (!entry) return [];
+    return [`| ${CHANGED_FILE_CATEGORY_LABEL[category]} | ${entry.count} | +${entry.additions} | -${entry.deletions} |`];
+  });
+  const body = ["| Category | Files | Added | Removed |", "| --- | --- | --- | --- |", ...rows].join("\n");
+  return { title: "Changed files", body };
+}
+
 /**
  * Build the unified PR-review comment body from gittensory's live data. Returns a string that STARTS with
  * the panel marker (so the existing upsert updates in place) followed by the rendered unified comment.
@@ -414,11 +470,20 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
   const visibleRows = args.panelRows.filter((row) => args.reviewFields?.[row.key] !== false);
   const signals = panelRowsToSignalRows(visibleRows);
 
+  // review.changed_files_summary port: when the manifest opts in, the processor hands us every changed file's
+  // path + deltas here; append the grouped "Changed files" collapsible ahead of the visual preview (structure
+  // before pixels). Flag-OFF (the processor passes undefined) ⇒ extraCollapsibles is unchanged. (#1957)
+  const changedFilesCollapsible =
+    args.changedFilesSummary && args.changedFilesSummary.length > 0
+      ? buildChangedFilesSummaryCollapsible(args.changedFilesSummary)
+      : null;
+  const withChangedFiles =
+    changedFilesCollapsible !== null ? [...(args.extraCollapsibles ?? []), changedFilesCollapsible] : args.extraCollapsibles;
   // Visual-capture port: when before/after routes are present, append a "Visual preview" collapsible to the
   // extra sections. Flag-OFF (the processor passes no beforeAfter) ⇒ extraCollapsibles is unchanged.
   const visualCollapsible = args.beforeAfter && args.beforeAfter.length > 0 ? buildBeforeAfterCollapsible(args.beforeAfter) : null;
   const extraCollapsibles =
-    visualCollapsible !== null ? [...(args.extraCollapsibles ?? []), visualCollapsible] : args.extraCollapsibles;
+    visualCollapsible !== null ? [...(withChangedFiles ?? []), visualCollapsible] : withChangedFiles;
 
   const body = renderUnifiedReviewComment(input, {
     brand: args.brand ?? "Gittensory review",

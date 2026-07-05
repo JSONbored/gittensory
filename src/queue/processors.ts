@@ -7639,6 +7639,7 @@ async function maybePublishPrPublicSurface(
     | undefined;
   let inlineCommentsEnabledForReview = false;
   let suggestionsEnabledForReview = false;
+  let changedFilesSummaryEnabledForReview = false;
   let aiReviewExpected = false;
   let aiReviewWasReused = false;
   let gateFinalized = false;
@@ -8104,6 +8105,13 @@ async function maybePublishPrPublicSurface(
       deliveryId: webhook.deliveryId,
       headSha: advisory.headSha ?? null,
     }));
+    // review.changed_files_summary (#1957): deterministic, no-AI — resolve it here, UNCONDITIONALLY, rather than
+    // inside the aiReviewWillRun-gated closure below. This table must still render whenever the manifest opts
+    // in even when the AI review itself is skipped this pass (author blacklisted, frozen for manual review, or
+    // AI review disabled for the repo) — it has nothing to do with the AI pipeline. Captured into the
+    // outer-scoped `changedFilesSummaryEnabledForReview` (mirroring inlineCommentsEnabledForReview/
+    // suggestionsEnabledForReview) so it survives past this try block to the publish step below.
+    changedFilesSummaryEnabledForReview = resolveReviewPromptOverrides(reviewManifestForAutoReview).changedFilesSummary;
     const aiReviewWillRun =
       !authorBlacklisted &&
       !isFrozenForManualReview &&
@@ -9294,6 +9302,15 @@ async function maybePublishPrPublicSurface(
         }),
         reRunLabel: `${PR_PANEL_RETRIGGER_MARKER} Re-run Gittensory review`,
         ...(beforeAfter.length > 0 ? { beforeAfter } : {}),
+        ...(changedFilesSummaryEnabledForReview
+          ? {
+              changedFilesSummary: unifiedFiles.map((file) => ({
+                path: file.path,
+                additions: file.additions,
+                deletions: file.deletions,
+              })),
+            }
+          : {}),
       });
     } else {
       deterministicBody = buildPublicPrIntelligenceComment(commentArgs);
