@@ -7,6 +7,7 @@ import {
   opportunityMetadataInternals,
   rankMetadataOpportunities,
 } from "../../packages/gittensory-engine/src/opportunity-metadata";
+import { pickTopMetadataOpportunities } from "../../packages/gittensory-engine/src/metadata-top-pick";
 import { DEFAULT_MINER_GOAL_SPEC } from "../../packages/gittensory-engine/src/miner-goal-spec";
 import { computeOpportunityCompetition } from "../../packages/gittensory-engine/src/opportunity-competition";
 import { computeOpportunityFreshness } from "../../packages/gittensory-engine/src/opportunity-freshness";
@@ -118,6 +119,50 @@ describe("opportunity metadata signals", () => {
       { nowMs: NOW },
     );
     expect(ranked.map((entry) => entry.issueNumber)).toEqual([1, 2]);
+  });
+
+  it("pickTopMetadataOpportunities returns the highest-scoring metadata candidates up to the limit", () => {
+    const candidates = [
+      { ...base, issueNumber: 1, labels: ["wontfix"] },
+      { ...base, issueNumber: 2, labels: ["help wanted"] },
+      { ...base, issueNumber: 3, labels: ["help wanted", "bug"] },
+    ];
+    const topTwo = pickTopMetadataOpportunities(candidates, { nowMs: NOW }, 2);
+    expect(topTwo.map((entry) => entry.issueNumber)).toEqual([3, 2]);
+    expect(topTwo[0]!.rankScore).toBeGreaterThan(topTwo[1]!.rankScore);
+  });
+
+  it("pickTopMetadataOpportunities skips miner-disabled repos before slicing", () => {
+    const candidates = [
+      { ...base, issueNumber: 1, repoFullName: "acme/disabled" },
+      { ...base, issueNumber: 2, labels: ["help wanted"] },
+    ];
+    const ranked = pickTopMetadataOpportunities(candidates, {
+      nowMs: NOW,
+      goalSpecsByRepo: {
+        "acme/disabled": { ...DEFAULT_MINER_GOAL_SPEC, minerEnabled: false },
+      },
+    }, 5);
+    expect(ranked.map((entry) => entry.issueNumber)).toEqual([2]);
+  });
+
+  it("pickTopMetadataOpportunities returns an empty list for invalid limits or no candidates", () => {
+    const candidates = [{ ...base, issueNumber: 1 }];
+    expect(pickTopMetadataOpportunities(candidates, { nowMs: NOW }, 0)).toEqual([]);
+    expect(pickTopMetadataOpportunities(candidates, { nowMs: NOW }, -1)).toEqual([]);
+    expect(pickTopMetadataOpportunities(candidates, { nowMs: NOW }, Number.NaN)).toEqual([]);
+    expect(pickTopMetadataOpportunities([], { nowMs: NOW }, 3)).toEqual([]);
+  });
+
+  it("pickTopMetadataOpportunities is exported from the package barrel", async () => {
+    const barrel = await import("../../packages/gittensory-engine/src/index");
+    expect(typeof barrel.pickTopMetadataOpportunities).toBe("function");
+    const top = barrel.pickTopMetadataOpportunities(
+      [{ ...base, issueNumber: 9, labels: ["help wanted"] }],
+      { nowMs: NOW },
+      1,
+    );
+    expect(top.map((entry) => entry.issueNumber)).toEqual([9]);
   });
 
   it("freshness and competition helpers stay pure with injected clocks and safe inputs", () => {

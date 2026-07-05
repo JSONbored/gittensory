@@ -163,3 +163,4 @@ export {
   type MetadataCandidateIssue,
   type MetadataRankContext,
 } from "./opportunity-metadata.js";
+export { pickTopMetadataOpportunities } from "./metadata-top-pick.js";
