@@ -34,6 +34,7 @@ import { scanTerminology } from "./terminology.js";
 import { scanTodoMarker } from "./todo-marker.js";
 import { scanTyposquat } from "./typosquat.js";
 import { scanUndocumentedExport } from "./undocumented-export.js";
+import { scanUnsafeAny } from "./unsafe-any.js";
 import type {
   AnalyzerDescriptor,
   AnalyzerFn,
@@ -958,6 +959,36 @@ export const ANALYZER_DESCRIPTORS = [
     },
     run: (req, { signal, analysis, diagnostics }) =>
       scanCommitLint(req, fetch, { signal, analysis, diagnostics }),
+  }),
+  descriptor({
+    name: "unsafeAny",
+    title: "Unsafe `any` usage",
+    category: "quality",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: 50, maxLineChars: 2000 },
+    docs: {
+      summary: "Counts and locates explicit `any` usages (`: any`, `as any`, `<any>`) newly added in TypeScript diffs.",
+      looksAt: "Added lines of changed .ts/.tsx files (ambient .d.ts skipped); string- and comment-only occurrences are stripped.",
+      reports: "File, line, and the `any` kind (annotation / cast / assertion) — never surrounding contents.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Structural regex only — no type-checker — so it is a type-safety-erosion hint, not a definitive count.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const byKind = { annotation: 0, cast: 0, assertion: 0 };
+      for (const item of findings) byKind[item.kind] += 1;
+      const lines = [
+        `### New unsafe \`any\` usages (type-safety erosion) — ${byKind.annotation} \`: any\`, ${byKind.cast} \`as any\`, ${byKind.assertion} \`<any>\``,
+      ];
+      for (const item of findings) {
+        lines.push(`- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} — ${item.kind} \`any\``);
+      }
+      return lines;
+    },
+    run: (req) => scanUnsafeAny(req),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 

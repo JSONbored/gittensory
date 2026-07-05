@@ -348,6 +348,15 @@ export interface UndocumentedExportFinding {
   symbol: string;
 }
 
+/** An explicit `any` usage newly ADDED in a TypeScript diff — a type-safety-erosion signal. `annotation` = `: any`,
+ *  `cast` = `as any`, `assertion` = `<any>`. Structural (regex) only; reports the file + line + kind, never
+ *  surrounding contents. (#2017) */
+export interface UnsafeAnyFinding {
+  file: string;
+  line: number;
+  kind: "annotation" | "cast" | "assertion";
+}
+
 /** A review/approval integrity signal, read from structured PR-reviews API fields only (state, commit_id,
  *  user.login, submitted_at) — never diff/file content. `stale-approval`: the reviewer's latest APPROVED review
  *  predates the PR's current head commit. `self-approval`: the PR author approved their own PR.
@@ -511,6 +520,7 @@ export interface BriefFindings {
   magicNumber?: MagicNumberFinding[];
   conflictMarker?: ConflictMarkerFinding[];
   commitLint?: CommitLintFinding[];
+  unsafeAny?: UnsafeAnyFinding[];
 }
 
 /** A JSDoc/TSDoc block whose `@param` tags name parameters the adjacent function no longer declares — a

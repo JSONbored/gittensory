@@ -909,6 +909,30 @@ export const REES_ANALYZERS = [
         "Structured-fields-only: reads commit.message subjects, linted independently, never cross-line state. Fail-safe on missing token/fetch error.",
     },
   },
+  {
+    name: "unsafeAny",
+    title: "Unsafe `any` usage",
+    category: "quality",
+    cost: "local",
+    defaultEnabled: true,
+    profiles: ["fast", "balanced", "deep"],
+    requires: ["files"],
+    limits: {
+      maxFindings: 50,
+      maxLineChars: 2000,
+    },
+    docs: {
+      summary:
+        "Counts and locates explicit `any` usages (`: any`, `as any`, `<any>`) newly added in TypeScript diffs.",
+      looksAt:
+        "Added lines of changed .ts/.tsx files (ambient .d.ts skipped); string- and comment-only occurrences are stripped.",
+      reports:
+        "File, line, and the `any` kind (annotation / cast / assertion) — never surrounding contents.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Structural regex only — no type-checker — so it is a type-safety-erosion hint, not a definitive count.",
+    },
+  },
 ] as const satisfies readonly ReesAnalyzerDoc[];
 
 export const REES_ANALYZER_NAMES = REES_ANALYZERS.map((analyzer) => analyzer.name);

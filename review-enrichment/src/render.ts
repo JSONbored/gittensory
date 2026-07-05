@@ -481,6 +481,7 @@ export function renderBrief(
   lines.push(...renderDescriptorSection("magicNumber", findings.magicNumber));
   lines.push(...renderDescriptorSection("conflictMarker", findings.conflictMarker));
   lines.push(...renderDescriptorSection("commitLint", findings.commitLint));
+  lines.push(...renderDescriptorSection("unsafeAny", findings.unsafeAny));
 
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 
