@@ -526,6 +526,12 @@ test("scanPatch does not flag truncated Cohere/Intercom tokens or identifier con
     false,
   );
   assert.equal(scanPatch("src/config.ts", hunk([`const intercom = "dG9rOm${"a".repeat(29)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const intercom = "dG9rOm${"a".repeat(30)}_suffix";`])).some(
+      (f) => f.kind === "intercom_access_token",
+    ),
+    false,
+  );
 });
 
 test("scanPatch flags Together AI and Fireworks API keys with high confidence", () => {

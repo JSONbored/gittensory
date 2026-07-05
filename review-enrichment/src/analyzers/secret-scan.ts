@@ -208,7 +208,7 @@ const RULES: Rule[] = [
   {
     // Intercom access token: base64 `tok:` prefix (`dG9rOm`) + opaque body.
     kind: "intercom_access_token",
-    re: /\bdG9rOm[A-Za-z0-9+/=]{30,}(?![A-Za-z0-9+/=])/,
+    re: /\bdG9rOm[A-Za-z0-9+/=]{30,}(?![A-Za-z0-9_+/=])/,
     confidence: "high",
   },
   {
