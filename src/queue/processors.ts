@@ -400,7 +400,13 @@ import {
   buildReviewGroundingText,
   checkSummaryText as checkFailureSummaryText,
   isGroundingEnabled,
+  makeGithubFileFetcher,
 } from "../review/grounding-wire";
+import {
+  enrichSecretScanFilesWithPatchFallback,
+  incompletePatchLessSecretScanFinding,
+  markEligiblePatchLessFilesIncomplete,
+} from "./patchless-secret-scan";
 import {
   attributeReviewRagTelemetry,
   buildReviewRagContextWithMetrics,
@@ -6155,6 +6161,9 @@ export function buildAiReviewDiff(
  * Build the complete inline patch corpus for deterministic secret scanning. Unlike {@link buildAiReviewDiff},
  * this is intentionally unbudgeted and does not reorder files or drop hunks: security controls must inspect
  * every raw patch GitHub returned instead of the lossy AI-review prompt view.
+ *
+ * GitHub omits inline `patch` for binary/large files; {@link enrichSecretScanFilesWithPatchFallback} recovers
+ * scannable `+` lines for those files before this runs (see {@link maybeAddSecretLeakFinding}).
  */
 export function buildSecretScanDiff(
   files: Awaited<ReturnType<typeof listPullRequestFiles>>,
@@ -6734,6 +6743,9 @@ export async function maybeAddSecretLeakFinding(
     repoFullName: string;
     pullNumber: number;
     files: Awaited<ReturnType<typeof listPullRequestFiles>> | null;
+    installationId?: number | null | undefined;
+    headSha?: string | null | undefined;
+    baseSha?: string | null | undefined;
   },
 ): Promise<void> {
   // UNCONDITIONAL (#audit-3.4): a CONCRETE, real-format committed credential (github_token, aws_access_key, …)
@@ -6744,7 +6756,31 @@ export async function maybeAddSecretLeakFinding(
     const files =
       args.files ??
       (await listPullRequestFiles(env, args.repoFullName, args.pullNumber));
-    const finding = secretLeakFinding(buildSecretScanDiff(files));
+    let scanFiles = files;
+    if (args.headSha) {
+      try {
+        const fetcher = await makeGithubFileFetcher(env, args.repoFullName, args.installationId);
+        scanFiles = await enrichSecretScanFilesWithPatchFallback(files, {
+          headSha: args.headSha,
+          baseSha: args.baseSha,
+          fetcher,
+        });
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            level: "error",
+            event: "secret_scan_patch_fallback_failed",
+            repository: args.repoFullName,
+            pullNumber: args.pullNumber,
+            error: errorMessage(error),
+          }),
+        );
+        scanFiles = markEligiblePatchLessFilesIncomplete(files, args.baseSha);
+      }
+    }
+    const incompleteFinding = incompletePatchLessSecretScanFinding(scanFiles);
+    if (incompleteFinding) args.advisory.findings.push(incompleteFinding);
+    const finding = secretLeakFinding(buildSecretScanDiff(scanFiles));
     if (finding) args.advisory.findings.push(finding);
   } catch (error) {
     /* v8 ignore next -- fail-safe: a file-load error never destabilizes the gate. */
@@ -8272,6 +8308,9 @@ async function maybePublishPrPublicSurface(
       repoFullName,
       pullNumber: pr.number,
       files: await getReviewFiles(),
+      installationId,
+      headSha: advisory.headSha,
+      baseSha: webhook.baseSha ?? null,
     });
 
     // Lockfile-tamper-risk scan (#2563): opt-in via `lockfileIntegrityGateMode` (default off — the scan is
