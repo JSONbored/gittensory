@@ -4819,6 +4819,13 @@ async function isBelowAccountAgeThreshold(
   return ageDays < accountAgeThresholdDays;
 }
 
+function repoOwnerLoginFromFullName(fullName: string): string {
+  const slashIdx = fullName.indexOf("/");
+  /* v8 ignore next 2 -- defensive: GitHub always uses owner/repo form */
+  if (slashIdx === -1) return "";
+  return fullName.slice(0, slashIdx);
+}
+
 async function maybeCloseIssueOverContributorCap(
   env: Env,
   args: { installationId: number; repoFullName: string; issue: IssueRecord; settings: RepositorySettings },
@@ -4831,10 +4838,7 @@ async function maybeCloseIssueOverContributorCap(
   const globalCap = resolveGlobalContributorOpenItemCap(env);
   if ((typeof cap !== "number" && globalCap === null) || !authorLogin) return;
 
-  const repoOwner = repoFullName.includes("/")
-    ? repoFullName.slice(0, repoFullName.indexOf("/"))
-    /* v8 ignore next -- defensive: GitHub always uses owner/repo form; empty repoOwner means authorIsOwner is always false */
-    : "";
+  const repoOwner = repoOwnerLoginFromFullName(repoFullName);
   const authorIsOwner = authorLogin.toLowerCase() === repoOwner.toLowerCase();
   const authorIsAdmin = parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(authorLogin.toLowerCase());
   const authorIsAutomationBot = isProtectedAutomationAuthor(authorLogin);
@@ -5644,10 +5648,7 @@ async function processGitHubWebhook(
       // Account-age visibility (#2561 issue-path parity): label newly opened issues from below-threshold
       // accounts when review_state_label autonomy is auto — same contract as the PR maintenance path.
       if (payload.action === "opened" && installationId && issue.authorLogin) {
-        const repoOwner = payload.repository.full_name.includes("/")
-          ? payload.repository.full_name.slice(0, payload.repository.full_name.indexOf("/"))
-          /* v8 ignore next -- defensive: GitHub webhooks always use owner/repo form; empty repoOwner means authorIsOwner is always false */
-          : "";
+        const repoOwner = repoOwnerLoginFromFullName(payload.repository.full_name);
         const authorLogin = issue.authorLogin;
         const authorIsOwner = authorLogin.toLowerCase() === repoOwner.toLowerCase();
         const authorIsAdmin = parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(authorLogin.toLowerCase());
@@ -5666,14 +5667,12 @@ async function processGitHubWebhook(
                 agentPaused: issueSettings.agentPaused,
                 agentDryRun: issueSettings.agentDryRun,
               });
-              const newAccountLabel = issueSettings.newAccountLabel
-                ?? /* v8 ignore next -- settings resolution always supplies new-account before this handler runs */ "new-account";
               await ensurePullRequestLabel(
                 env,
                 installationId,
                 payload.repository.full_name,
                 issue.number,
-                newAccountLabel,
+                issueSettings.newAccountLabel!,
                 { createMissingLabel: issueSettings.createMissingLabel, mode: newAccountMode },
               ).catch(
                 /* v8 ignore next -- fail-safe: a label-application failure must never block the rest of the handler */
