@@ -88,6 +88,23 @@ test("codeOnly strips string messages but keeps interpolation bodies as code", (
   );
 });
 
+test("codeOnly: an escaped quote does not end a string early", () => {
+  // If the `\"` were treated as a real closing quote, `secret" + tail` would leak as code.
+  const out = codeOnly('a = "x\\"secret" + tail');
+  assert.equal(out.includes("secret"), false); // whole string body (incl. the escaped quote) is stripped
+  assert.equal(out.includes("+ tail"), true); // code after the string survives
+});
+
+test("codeOnly: a `${…}` interpolation body is kept even with nested braces", () => {
+  // Depth tracking must not stop at the inner object literal's `}`.
+  assert.equal(codeOnly("`${ {k: 1} }`").includes("{k: 1}"), true);
+});
+
+test("codeOnly: an escaped `\\${` in a template is not treated as an interpolation", () => {
+  // `\${b}` is an escaped literal, so `b` is dropped like any other template char (not kept as code).
+  assert.equal(codeOnly("`a\\${b}c`").includes("b"), false);
+});
+
 test("scanPatchForSecretLog cites the added line via the hunk header", () => {
   const patch = [
     "@@ -1,0 +42,2 @@",
