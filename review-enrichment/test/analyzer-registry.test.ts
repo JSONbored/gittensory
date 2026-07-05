@@ -53,6 +53,7 @@ const EXPECTED_ANALYZERS = [
   "deepNesting",
   "errorSwallow",
   "commitLint",
+  "a11y",
 ];
 
 test("analyzer descriptors cover the runtime registry in stable order", () => {

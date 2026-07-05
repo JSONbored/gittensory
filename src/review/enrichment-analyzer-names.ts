@@ -47,6 +47,7 @@ export const REES_ANALYZER_NAMES = [
   "deepNesting",
   "errorSwallow",
   "commitLint",
+  "a11y",
 ] as const;
 
 export type ReesAnalyzerName = (typeof REES_ANALYZER_NAMES)[number];
