@@ -1,7 +1,7 @@
 import { fetchLinkedIssueFacts, type LinkedIssueFactsFetch } from "../github/backfill";
 import { githubRateLimitAdmissionKeyForToken } from "../github/client";
 import { createInstallationToken } from "../github/app";
-import { extractLinkedIssueNumbersWithOverflow } from "../db/repositories";
+import { extractLinkedIssueNumbersWithOverflow, MAX_LINKED_ISSUE_NUMBERS } from "../db/repositories";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import { DEFAULT_LINKED_ISSUE_HARD_RULES } from "./linked-issue-hard-rules-config";
 import type { LinkedIssueHardRulesConfig } from "../types";
@@ -225,6 +225,12 @@ export async function resolveLinkedIssueHasOpenReference(args: {
   installationId?: number | null | undefined;
 }): Promise<boolean> {
   if (args.linkedIssues.length === 0) return true;
+  // Fail open (mirrors hasVerifiableOpenLinkedIssueReference's own ambiguity philosophy above) rather than
+  // firing an unbounded per-issue fan-out for a body citing more references than can be safely verified in
+  // one pass -- the same cap resolveLinkedIssueHardRule's own extractLinkedIssueNumbersWithOverflow enforces
+  // on the sibling gate, reused here instead of a second bound so a noisy body can't create surprise API
+  // pressure on this path.
+  if (args.linkedIssues.length > MAX_LINKED_ISSUE_NUMBERS) return true;
   const ciToken = args.installationId ? await createInstallationToken(args.env, args.installationId).catch(() => undefined) : undefined;
   const token = ciToken ?? args.env.GITHUB_PUBLIC_TOKEN;
   const admissionKey = githubRateLimitAdmissionKeyForToken(args.env, token, args.installationId);

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestEnv } from "../helpers/d1";
 import * as backfillModule from "../../src/github/backfill";
+import { MAX_LINKED_ISSUE_NUMBERS } from "../../src/db/repositories";
 import {
   DEFAULT_LINKED_ISSUE_HARD_RULES,
   evaluateLinkedIssueHardRules,
@@ -541,6 +542,24 @@ describe("resolveLinkedIssueHasOpenReference (#unlinked-issue-guardrail-followup
     const result = await resolveLinkedIssueHasOpenReference({ env: createTestEnv({}), repoFullName: "owner/repo", linkedIssues: [] });
     expect(result).toBe(true);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("fails open (true) and fetches nothing when the linked-issue count exceeds the safe-verification cap (#bounded-fanout)", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const tooMany = Array.from({ length: MAX_LINKED_ISSUE_NUMBERS + 1 }, (_, i) => i + 1);
+    const result = await resolveLinkedIssueHasOpenReference({ env: createTestEnv({}), repoFullName: "owner/repo", linkedIssues: tooMany });
+    expect(result).toBe(true);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("still fans out normally at exactly the cap", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+      input.toString().includes("/issues/") ? Response.json({ number: 1, state: "open", labels: [], assignees: [] }) : new Response("missing", { status: 404 }),
+    );
+    const atCap = Array.from({ length: MAX_LINKED_ISSUE_NUMBERS }, (_, i) => i + 1);
+    const result = await resolveLinkedIssueHasOpenReference({ env: createTestEnv({}), repoFullName: "owner/repo", linkedIssues: atCap });
+    expect(result).toBe(true);
   });
 
   it("returns true when the linked issue is confirmed open", async () => {

@@ -121,7 +121,7 @@ describe("buildUserPrompt", () => {
   it("truncates a diff over the char budget", () => {
     const bigDiff = "x".repeat(7_000);
     const prompt = buildUserPrompt({ prTitle: "t", prBody: null, diff: bigDiff, candidate: { number: 1, title: "i", body: null, labels: [] } });
-    expect(prompt).toContain("… (diff truncated)");
+    expect(prompt).toContain("... (diff truncated)");
     expect(prompt.length).toBeLessThan(bigDiff.length + 500);
   });
 });

@@ -917,9 +917,17 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     // independently wants manualReview and may re-add it later in this SAME pass) — removing it here would
     // race against that later add.
     const dispositionLabelSiblings = [labels.readyToMerge, labels.manualReview, labels.migrationCollision, labels.changesRequested];
+    const livePrLabels = new Set(input.pr.labels.map((l) => l.toLowerCase()));
+    // Dedupe defensively: if a repo ever misconfigures two of the four settings to the identical label
+    // string, only clear it once (still correct — the label either belongs here or it doesn't — just
+    // avoids a redundant duplicate remove action for the same name).
+    const alreadyHandled = new Set<string>();
     for (const stale of dispositionLabelSiblings) {
-      if (stale === null || stale === label || !hasLabel(input.pr.labels, stale)) continue;
+      if (stale === null || stale === label) continue;
+      const staleLower = stale.toLowerCase();
+      if (alreadyHandled.has(staleLower) || !livePrLabels.has(staleLower)) continue;
       if (stale === labels.manualReview && manualHoldReason !== null) continue;
+      alreadyHandled.add(staleLower);
       actions.push({
         actionClass: "label",
         autonomyClass: "review_state_label",

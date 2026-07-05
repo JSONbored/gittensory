@@ -45,7 +45,7 @@ const MIN_TOKEN_LENGTH = 4;
 // the token-overlap score and swamp genuinely distinctive words.
 const STOPWORDS = new Set([
   "this", "that", "with", "from", "have", "when", "where", "which", "there", "their",
-  "issue", "issues", "should", "would", "could", "about", "would", "into", "your", "were",
+  "issue", "issues", "should", "would", "could", "about", "into", "your", "were",
   "then", "than", "will", "does", "doesn", "cannot", "currently", "instead", "because",
   "these", "those", "being", "only", "also", "still", "even", "some", "each", "such",
 ]);
@@ -60,14 +60,21 @@ function tokenize(text: string): Set<string> {
 
 /** True when an issue's body names one of the PR's changed files — either the full repo-relative path or
  *  just its basename (issues commonly reference "the X.ts file" without the full path). Basenames shorter
- *  than {@link MIN_TOKEN_LENGTH} are skipped as too generic (e.g. `db.ts`, `index.ts` collide across repos). */
+ *  than {@link MIN_TOKEN_LENGTH} are skipped as too generic (e.g. `db.ts`, `index.ts` collide across repos).
+ *  The full-path check stays a plain substring match (a repo-relative path is already distinctive enough
+ *  that a coincidental false positive is not realistic). The basename check instead matches against
+ *  path-like TOKENS extracted from the body, requiring an exact token match (or a longer path token ending
+ *  in `/basename`) rather than raw substring containment — a naive `.includes()` would let a basename like
+ *  `reader.ts` match inside an unrelated, longer filename such as `csv-reader.ts`. */
 function issueMentionsChangedPath(issueBody: string, changedPaths: string[]): boolean {
   const lowerBody = issueBody.toLowerCase();
+  const bodyPathTokens = lowerBody.match(/[a-z0-9_\-./]+/g) ?? [];
   return changedPaths.some((path) => {
     const lowerPath = path.toLowerCase();
     if (lowerBody.includes(lowerPath)) return true;
     const basename = lowerPath.slice(lowerPath.lastIndexOf("/") + 1);
-    return basename.length >= MIN_TOKEN_LENGTH && lowerBody.includes(basename);
+    if (basename.length < MIN_TOKEN_LENGTH) return false;
+    return bodyPathTokens.some((token) => token === basename || token.endsWith(`/${basename}`));
   });
 }
 

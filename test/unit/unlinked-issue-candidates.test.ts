@@ -57,6 +57,28 @@ describe("findUnlinkedIssueCandidates", () => {
     expect(result[0]?.pathMentioned).toBe(true);
   });
 
+  it("does NOT false-positive when a basename is a substring of a longer, unrelated filename (#boundary-matching)", () => {
+    // "reader.ts" must not match merely because it is a substring of "csv-reader.ts" -- a different file.
+    const result = findUnlinkedIssueCandidates({
+      prTitle: "xyz",
+      prBody: "abc",
+      changedPaths: ["src/utils/reader.ts"],
+      openIssues: [issue({ number: 7, title: "bug", body: "something is wrong in csv-reader.ts specifically" })],
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("still matches a basename embedded in a longer PATH token (same file, fuller path mentioned)", () => {
+    const result = findUnlinkedIssueCandidates({
+      prTitle: "xyz",
+      prBody: "abc",
+      changedPaths: ["other/reader.ts"],
+      openIssues: [issue({ number: 8, title: "bug", body: "reproduced after editing src/utils/reader.ts" })],
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.pathMentioned).toBe(true);
+  });
+
   it("does not match on a too-short basename, regardless of body content", () => {
     // basename "db" is only 2 chars (< MIN_TOKEN_LENGTH), so the length check short-circuits the match
     // before ever scanning the body for it — too generic a fragment to trust as evidence.
@@ -65,6 +87,18 @@ describe("findUnlinkedIssueCandidates", () => {
       prBody: "abc",
       changedPaths: ["src/db"],
       openIssues: [issue({ number: 4, title: "bug", body: "db might be involved" })],
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("does not path-match (and does not crash) when a non-empty body has no path-like characters at all", () => {
+    // A body of pure punctuation/whitespace never matches the path-token regex at all, so the `?? []`
+    // fallback is exercised instead of the usual non-empty match array.
+    const result = findUnlinkedIssueCandidates({
+      prTitle: "xyz",
+      prBody: "abc",
+      changedPaths: ["src/queue/processors.ts"],
+      openIssues: [issue({ number: 9, title: "bug", body: "??? !!!" })],
     });
     expect(result).toEqual([]);
   });

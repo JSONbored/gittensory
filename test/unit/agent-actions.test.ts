@@ -178,6 +178,11 @@ describe("planAgentMaintenanceActions (#778)", () => {
       // the new sibling-cleanup loop (which does not include pendingClosure in its sibling set at all).
       expect(plan.filter((a) => a.label === AGENT_LABEL_PENDING_CLOSURE && a.labelOp === "remove")).toHaveLength(1);
     });
+
+    it("dedupes when two disposition-label settings are misconfigured to the identical string", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" }, manualReviewLabel: "shared-label", migrationCollisionLabel: "shared-label", pr: { labels: ["shared-label"] } }));
+      expect(plan.filter((a) => a.actionClass === "label" && a.label === "shared-label" && a.labelOp === "remove")).toHaveLength(1);
+    });
   });
 
   it("approves a passing verdict and never re-approves; a failing one closes (never approves, never requests changes)", () => {

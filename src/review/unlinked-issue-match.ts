@@ -37,7 +37,7 @@ function buildSystemPrompt(): string {
 }
 
 function buildUserPrompt(input: { prTitle: string; prBody: string | null | undefined; diff: string; candidate: CandidateOpenIssue }): string {
-  const diff = input.diff.length > DIFF_CHAR_BUDGET ? `${input.diff.slice(0, DIFF_CHAR_BUDGET)}\n… (diff truncated)` : input.diff;
+  const diff = input.diff.length > DIFF_CHAR_BUDGET ? `${input.diff.slice(0, DIFF_CHAR_BUDGET)}\n... (diff truncated)` : input.diff;
   return [
     `PULL REQUEST TITLE: ${input.prTitle}`,
     `PULL REQUEST BODY: ${input.prBody?.trim() || "(empty)"}`,
