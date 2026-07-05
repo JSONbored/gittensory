@@ -77,6 +77,7 @@ describe("isGeneratedFile", () => {
     for (const path of [
       "proto/messages.pb.swift",
       "proto/messages.pb.dart",
+      "proto/messages.pb.kt",
       "lib/user.freezed.dart",
       "lib/api_client.gr.dart",
       "ui/MainForm.Designer.cs",
@@ -85,7 +86,7 @@ describe("isGeneratedFile", () => {
       expect(isGeneratedFile(path)).toBe(true);
     }
     // hand-written siblings must NOT match (the codegen infix is required).
-    for (const path of ["src/MainForm.cs", "lib/user.dart", "net/message.swift"]) {
+    for (const path of ["src/MainForm.cs", "lib/user.dart", "src/service.kt", "net/message.swift"]) {
       expect(isGeneratedFile(path)).toBe(false);
     }
   });
