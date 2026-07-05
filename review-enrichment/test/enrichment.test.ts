@@ -671,6 +671,7 @@ test("buildBrief: analyzer throw → degraded + partial, still returns a brief",
     const brief = await buildBrief({
       repoFullName: "o/r",
       prNumber: 8,
+      analyzers: ["dependency"],
       files: [{ path: "package.json", patch: '+    "lodash": "4.17.20",' }],
     });
     assert.equal(brief.partial, true);
