@@ -37,6 +37,7 @@ export const REES_ANALYZER_NAMES = [
   "looseRange",
   "terminology",
   "todoMarker",
+  "unsafeAny",
 ] as const;
 
 export type ReesAnalyzerName = (typeof REES_ANALYZER_NAMES)[number];

@@ -29,6 +29,7 @@ import { scanMigrationSafety } from "./migration-safety.js";
 import { scanLooseRanges } from "./loose-range.js";
 import { scanTerminology } from "./terminology.js";
 import { scanTodoMarker } from "./todo-marker.js";
+import { scanUnsafeAny } from "./unsafe-any.js";
 import { scanTyposquat } from "./typosquat.js";
 import { scanUndocumentedExport } from "./undocumented-export.js";
 import type {
@@ -854,6 +855,45 @@ export const ANALYZER_DESCRIPTORS = [
       return lines;
     },
     run: (req, { signal }) => scanTodoMarker(req, signal),
+  }),
+  descriptor({
+    name: "unsafeAny",
+    title: "Unsafe `any` usage",
+    category: "quality",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: 25, maxLineChars: 2000 },
+    docs: {
+      summary:
+        "Counts and locates explicit `any` usage a PR adds in TypeScript: `: any` annotations, `as any` casts, and `<any>` assertions.",
+      looksAt: "Added lines in .ts/.tsx/.mts/.cts files (string literals and same-line comments blanked first).",
+      reports: "File, line, and the `any`-usage kind — never line content.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Structural regex only, no type-checker; a cheap best-effort string/comment strip keeps a mention of `any` in prose or a string out, so the signal reflects real type-safety erosion.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const explain = (kind: (typeof findings)[number]["kind"]): string => {
+        switch (kind) {
+          case "annotation":
+            return "a `: any` type annotation opts the value out of type checking";
+          case "cast":
+            return "an `as any` cast discards the checked type";
+          case "assertion":
+            return "an `<any>` assertion/type-argument erases the type";
+        }
+      };
+      const lines = ["### Unsafe `any` usage (type-safety erosion)"];
+      for (const item of findings) {
+        lines.push(
+          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} — ${explain(item.kind)}`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal }) => scanUnsafeAny(req, signal),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 

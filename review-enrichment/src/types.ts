@@ -438,6 +438,14 @@ export interface TodoMarkerFinding {
   note?: string;
 }
 
+/** An explicit `any` usage a PR added in TypeScript — a `: any` annotation, an `as any` cast, or an `<any>`
+ *  assertion/type-argument (#2017, part of #1499). A type-safety-erosion signal; reports the location + kind. */
+export interface UnsafeAnyFinding {
+  file: string;
+  line: number;
+  kind: "annotation" | "cast" | "assertion";
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -473,6 +481,7 @@ export interface BriefFindings {
   looseRange?: LooseRangeFinding[];
   terminology?: TerminologyFinding[];
   todoMarker?: TodoMarkerFinding[];
+  unsafeAny?: UnsafeAnyFinding[];
 }
 
 /** A JSDoc/TSDoc block whose `@param` tags name parameters the adjacent function no longer declares — a
