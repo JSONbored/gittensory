@@ -10472,6 +10472,10 @@ const REVIEW_EVASION_CLOSED_EVENT_TYPE = "github_app.review_evasion_closed";
 // mirrors recloseDisallowedReopenIfNeeded's identical `hasMaintainerPermission` closure (kept as a standalone
 // function here since the two guards below do not share an enclosing scope to close over).
 async function hasMaintainerOrOwnerPermission(env: Env, installationId: number, repoFullName: string, login: string): Promise<boolean> {
+  // The ": \"\"" fallback is unreachable via the real webhook path: repoFullName is always the
+  // "owner/repo"-formatted payload.repository.full_name, and the surrounding pipeline already requires a
+  // repository match on that exact format before any review-evasion handler runs.
+  /* v8 ignore next */
   const repoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")).toLowerCase() : "";
   if (login === repoOwner || parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(login)) return true;
   const permission = await getRepositoryCollaboratorPermission(env, installationId, repoFullName, login).catch(() => null);
@@ -10637,18 +10641,24 @@ async function closeReviewEvasionSelfCloseIfActive(
       actor: "gittensory",
       targetKey,
       outcome: "error",
-      detail: `FAILED to re-close review-evasion self-close by ${pr.authorLogin} -- the close API call did not succeed; the PR may still be open`,
+      detail: `FAILED to re-close review-evasion self-close by ${pr.authorLogin} -- the reopen already succeeded, so the PR is live on GitHub as OPEN; retrying via the queue rather than leaving it that way`,
       metadata: { deliveryId, repoFullName, headSha: pr.headSha, error: errorMessage(closeError) },
     }).catch(
       /* v8 ignore next -- fail-safe: an audit write failure never blocks the handler. */
       () => undefined,
     );
-    return; // the strike only counts once the enforcement close actually succeeds.
+    // Deliberately UNCAUGHT: the reopen above already succeeded, so returning normally here would silently
+    // leave the PR OPEN on GitHub -- worse than the contributor's original close, and the whole point of
+    // this enforcement. Propagate so the queue's own retry/backoff re-processes this job; on retry, the live
+    // freshness check earlier in this function will see the PR as open (current, since we just reopened it)
+    // and this handler will attempt the re-close again, converging once closePullRequest actually succeeds.
+    throw closeError instanceof Error ? closeError : new Error(errorMessage(closeError));
   }
 
   // The close succeeded: post the public explanation, apply the configured label, record the strike -- in
   // that order, after the enforcement close is confirmed (never before).
-  if (settings.reviewEvasionComment ?? true) {
+  const shouldPostSelfCloseComment = settings.reviewEvasionComment ?? true;
+  if (shouldPostSelfCloseComment) {
     await createIssueComment(
       env,
       installationId,
@@ -10676,6 +10686,10 @@ async function closeReviewEvasionSelfCloseIfActive(
     () => undefined,
   );
   await terminalizeActiveReviewTracking(env, repoFullName, pr.number, { onlyIfHeadSha: pr.headSha }).catch(() => undefined);
+  // unreachable implicit-else: the actor guard above already proved pr.authorLogin is a non-empty string
+  // (closer/authorLogin are both derived from it and must be truthy to reach this point); the check only
+  // exists to narrow the type for applyModerationEscalationForRule's non-nullable authorLogin param.
+  /* v8 ignore else */
   if (pr.authorLogin) {
     await applyModerationEscalationForRule(env, {
       installationId,
@@ -10844,7 +10858,8 @@ async function closeReviewEvasionDraftConversionIfActive(
     return; // the strike only counts once the enforcement close actually succeeds.
   }
 
-  if (settings.reviewEvasionComment ?? true) {
+  const shouldPostDraftConversionComment = settings.reviewEvasionComment ?? true;
+  if (shouldPostDraftConversionComment) {
     await createIssueComment(
       env,
       installationId,
@@ -10872,6 +10887,10 @@ async function closeReviewEvasionDraftConversionIfActive(
     () => undefined,
   );
   await terminalizeActiveReviewTracking(env, repoFullName, pr.number, { onlyIfHeadSha: pr.headSha }).catch(() => undefined);
+  // unreachable implicit-else: the actor guard above already proved pr.authorLogin is a non-empty string
+  // (converter/authorLogin are both derived from it and must be truthy to reach this point); the check only
+  // exists to narrow the type for applyModerationEscalationForRule's non-nullable authorLogin param.
+  /* v8 ignore else */
   if (pr.authorLogin) {
     await applyModerationEscalationForRule(env, {
       installationId,
