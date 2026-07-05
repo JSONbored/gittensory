@@ -46,6 +46,7 @@ const EXPECTED_ANALYZERS = [
   "magicNumber",
   "conflictMarker",
   "commitLint",
+  "testSkipGaming",
 ];
 
 test("analyzer descriptors cover the runtime registry in stable order", () => {
