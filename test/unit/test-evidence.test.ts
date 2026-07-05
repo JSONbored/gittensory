@@ -81,6 +81,20 @@ describe("test evidence helpers", () => {
     expect(hasValidationNote("Validated with npm run test:ci and a smoke run.")).toBe(true);
     expect(hasValidationNote("Manual check passed for the dashboard.")).toBe(true);
     expect(hasValidationNote("Refactors the route naming only.")).toBe(false);
+    expect(hasValidationNote("Adds retry logic to the fetch helper. Tested with npm run test:ci — all 142 tests pass.")).toBe(true);
+  });
+
+  // REGRESSION (#3304): a body that merely MENTIONS testing without affirming it was actually done must not
+  // satisfy a configured manifest test expectation. Covers both negation-before-noun and noun-before-negation
+  // word orders, since only guarding one direction still let the other slip through.
+  it("rejects PR-body text that mentions tests/validation without affirming they passed", () => {
+    expect(hasValidationNote("No tests run.")).toBe(false);
+    expect(hasValidationNote("Tests not run.")).toBe(false);
+    expect(hasValidationNote("I did not run tests for this change.")).toBe(false);
+    expect(hasValidationNote("Tests were not run due to a broken CI runner.")).toBe(false);
+    expect(hasValidationNote("Skipped tests for this one.")).toBe(false);
+    expect(hasValidationNote("Tests failed locally but I'm opening this anyway.")).toBe(false);
+    expect(hasValidationNote("No validation was performed.")).toBe(false);
   });
 });
 

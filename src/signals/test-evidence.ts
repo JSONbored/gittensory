@@ -20,7 +20,15 @@ export function hasLocalTestEvidence(input: { tests?: string[] | undefined; test
   return (input.tests ?? []).length > 0 || (input.testFiles ?? []).some((file) => isTestPath(file));
 }
 
+// A body can mention testing without having actually done it ("No tests run", "Tests not run", "did not
+// run tests") -- the affirmative keyword match below would otherwise treat that as passing evidence and
+// let a configured manifest test expectation silently disappear. Reject both negation-before-noun and
+// noun-before-negation orderings before falling through to the affirmative match.
+const NEGATES_BEFORE_TEST_NOUN = /\b(?:no|not|without|skip(?:ped)?|did not|haven't|have not|never)\s+(?:run\s+|passing\s+|passed\s+)?(?:tests?|validation|manual check|smoke(?: tests?)?)\b/i;
+const NEGATES_AFTER_TEST_NOUN = /\b(?:tests?|validation|manual check|smoke(?: tests?)?)\s+(?:not\s+run|not\s+passed|not\s+passing|not\s+included|failed|failing|skipped|were\s+not\s+run|was\s+not\s+run)\b/i;
+
 export function hasValidationNote(value: string): boolean {
+  if (NEGATES_BEFORE_TEST_NOUN.test(value) || NEGATES_AFTER_TEST_NOUN.test(value)) return false;
   return /\b(test(?:ed|s|ing)?|validation|validated|verified|manual check|smoke|pytest|vitest|npm test|pnpm test|cargo test|go test)\b/i.test(value);
 }
 

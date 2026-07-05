@@ -20,7 +20,7 @@ const OSS_ANTI_SLOP_FUNNEL = {
   registerUrl: GITTENSOR_HOME_URL,
 } as const;
 import { buildPullRequestAdvisory, evaluateGateCheck, type GateCheckConclusion } from "./advisory";
-import { isTestPath } from "../signals/test-evidence";
+import { hasValidationNote, isTestPath } from "../signals/test-evidence";
 import { evaluateClaCheck } from "../review/cla-check";
 import { evaluatePreMergeChecks } from "../review/pre-merge-checks";
 
@@ -236,7 +236,10 @@ export function buildPredictedGateVerdict(args: {
       labels: syntheticPr.labels,
       linkedIssueCount: syntheticPr.linkedIssues.length,
       testFileCount: changedPaths.filter((path) => isTestPath(path)).length,
-      passedValidationCount: 0,
+      // Parity with the live gate (queue/processors.ts's manifestPolicyGateMode block): the predictor
+      // already has the same PR body available via input.body, so a manifest_missing_tests prediction must
+      // not stay stuck at "no validation evidence" when the real gate would already treat the body as evidence.
+      passedValidationCount: hasValidationNote(input.body ?? "") ? 1 : 0,
     });
     const policyCodes = new Set(["manifest_linked_issue_required", "manifest_missing_tests"]);
     for (const finding of guidance.findings) {

@@ -627,7 +627,10 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // never auto-merge, auto-approve, or auto-close a PR whose diff we don't know. Repos with no guardrails
   // configured stay permissive.
   const guardrailHit = isGuardrailHit(input.changedPaths, input.hardGuardrailGlobs);
-  const guardrailReason = guardrailHit ? guardrailHoldReason(input.changedPaths, input.hardGuardrailGlobs) : null;
+  // Every read site below is itself gated on guardrailHit being true, so this default is never actually
+  // read -- it exists only so guardrailReason stays a plain string instead of forcing a `?? fallback` at
+  // every call site (each of which would be an untestable, permanently-unreachable branch).
+  const guardrailReason = guardrailHit ? guardrailHoldReason(input.changedPaths, input.hardGuardrailGlobs) : "guarded path -> manual review";
   // Manual review is the RARE exception (the operator's minimize-manual goal): the ONLY things that hold a PR
   // for a human instead of merge/close are an auto-merge-ready PR that touches a hard-guardrail path, or a
   // live migration-number collision detected against the CURRENT tip of the base branch (#2550 — a sibling PR
@@ -710,7 +713,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       actionClass: "label",
       autonomyClass: "merge",
       requiresApproval: false,
-      reason: `verdict=${conclusion}; ${guardrailReason ?? "guarded path -> manual review"}`,
+      reason: `verdict=${conclusion}; ${guardrailReason}`,
       label: labels.manualReview,
       labelOp: "add",
     });
@@ -735,7 +738,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
         : input.migrationCollisionHold !== undefined
           ? `verdict=${conclusion}; ${input.migrationCollisionHold.reason}`
           : heldForManualReview
-            ? `verdict=${conclusion}; ${guardrailReason ?? "guarded path -> manual review"}`
+            ? `verdict=${conclusion}; ${guardrailReason}`
             : `verdict=${conclusion}; CI green`;
     if (label !== null && !hasLabelOrPlanned(input.pr.labels, actions, label)) {
       actions.push({
@@ -921,7 +924,7 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // review-good-but-not-yet-mergeable → held briefly (rebase/approve resolves it next pass).
   const manualHoldReason =
     guardrailHit
-      ? `verdict=${conclusion}; ${guardrailReason ?? "guarded path -> manual review"}`
+      ? `verdict=${conclusion}; ${guardrailReason}`
       : ciUnverified
         ? "CI could not be verified"
         : conclusion === "action_required"

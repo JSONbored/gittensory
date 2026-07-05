@@ -371,6 +371,39 @@ describe("buildPredictedGateVerdict", () => {
     expect(result.warnings.some((w) => w.code === "manifest_blocked_path")).toBe(false);
   });
 
+  it("predicts manifest_missing_tests when testExpectations are configured and neither test files nor a validation note are present (#3304)", () => {
+    const result = verdict({
+      gate: { manifestPolicy: "block" },
+      manifestExtra: { testExpectations: ["Run npm run test:ci."] },
+      changedPaths: ["src/feature.ts"],
+      input: { body: "Closes #7" },
+    });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.some((b) => b.code === "manifest_missing_tests")).toBe(true);
+  });
+
+  it("REGRESSION (#3304): does NOT predict manifest_missing_tests when the PR body includes validation evidence (parity with the live gate)", () => {
+    const result = verdict({
+      gate: { manifestPolicy: "block" },
+      manifestExtra: { testExpectations: ["Run npm run test:ci."] },
+      changedPaths: ["src/feature.ts"],
+      input: { body: "Closes #7\n\nValidated with npm run test:ci." },
+    });
+    expect(result.conclusion).not.toBe("failure");
+    expect(result.blockers.some((b) => b.code === "manifest_missing_tests")).toBe(false);
+  });
+
+  it("still predicts manifest_missing_tests when the PR body only claims NOT to have tested (negative evidence) (#3304)", () => {
+    const result = verdict({
+      gate: { manifestPolicy: "block" },
+      manifestExtra: { testExpectations: ["Run npm run test:ci."] },
+      changedPaths: ["src/feature.ts"],
+      input: { body: "Closes #7\n\nNo tests run." },
+    });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.some((b) => b.code === "manifest_missing_tests")).toBe(true);
+  });
+
   it("ignores non-policy guidance findings (e.g. off-focus) — only enforceable policy codes are threaded (#12)", () => {
     // The path isn't blocked but it's outside the wanted areas → guidance emits the NON-policy `manifest_off_focus`.
     // The predictor must skip it (only linked-issue-required / missing-tests are gateable).
