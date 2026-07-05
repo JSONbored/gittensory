@@ -14171,7 +14171,7 @@ describe("queue processors", () => {
     expect(audit?.detail).toMatch(/Checks: write permission is missing/i);
   });
 
-  it("audits advisory context check publish failures without blocking webhook processing", async () => {
+  it("audits advisory context check publish failures AND retries the job (GitHub 5xx is transient, GITTENSORY-5)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
       env,
@@ -14212,7 +14212,7 @@ describe("queue processors", () => {
           pull_request: { number: 25, title: "Context check", state: "open", user: { login: "contributor" }, head: { sha: "context500" }, labels: [], body: "No issue needed." },
         },
       }),
-    ).resolves.toBeUndefined();
+    ).rejects.toMatchObject({ retryKind: "public_surface_publish_transient" });
 
     const outputFailure = await env.DB.prepare("select event_type, detail from audit_events where event_type = ?")
       .bind("github_app.pr_check_run_publish_failed")
@@ -14224,7 +14224,9 @@ describe("queue processors", () => {
       .first<{ detail: string; metadata_json: string }>();
     expect(aggregate).toMatchObject({ detail: "check_run" });
     expect(aggregate?.metadata_json).toContain('"output":"check_run"');
-    // The total publish failure (nothing reached the PR) escalates to Sentry at error level, not just the ledger.
+    expect(aggregate?.metadata_json).toContain('"transient":true');
+    // The total publish failure (nothing reached the PR) escalates to Sentry at error level, not just the ledger —
+    // this still fires BEFORE the retryable throw, so the failure stays observable even though the job also retries.
     expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ kind: "publish", repo: "JSONbored/gittensory" }));
     captureSpy.mockRestore();
   });
@@ -14357,7 +14359,7 @@ describe("queue processors", () => {
     expect(published?.metadata_json).toContain('"output":"comment"');
   });
 
-  it("records an aggregate public-surface failure when no configured output publishes", async () => {
+  it("records an aggregate public-surface failure when no configured output publishes (permanent failure, no retry)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
       env,
@@ -14384,29 +14386,150 @@ describe("queue processors", () => {
       if (url.includes("/users/oktofeesh1/repos")) return Response.json([]);
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.includes("/issues/31/comments") && method === "GET") return Response.json([]);
-      if (url.includes("/issues/31/comments") && method === "POST") return new Response("comment failed", { status: 503 });
+      // A 403 with no rate-limit signal (permissions revoked, not a burst limit) is PERMANENT: retrying forever
+      // would never converge, so this must keep today's swallow-and-audit behavior, not throw a retryable error.
+      if (url.includes("/issues/31/comments") && method === "POST") return new Response(JSON.stringify({ message: "Resource not accessible by integration" }), { status: 403 });
       return new Response("not found", { status: 404 });
     });
 
-    await processJob(env, {
-      type: "github-webhook",
-      deliveryId: "all-public-outputs-failed",
-      eventName: "pull_request",
-      payload: {
-        action: "opened",
-        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
-        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } },
-        pull_request: { number: 31, title: "Miner work", state: "open", user: { login: "oktofeesh1" }, labels: [], body: "Fixes #1" },
-      },
-    });
+    await expect(
+      processJob(env, {
+        type: "github-webhook",
+        deliveryId: "all-public-outputs-failed",
+        eventName: "pull_request",
+        payload: {
+          action: "opened",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } },
+          pull_request: { number: 31, title: "Miner work", state: "open", user: { login: "oktofeesh1" }, labels: [], body: "Fixes #1" },
+        },
+      }),
+    ).resolves.toBeUndefined();
 
     const aggregate = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = ?")
       .bind("github_app.pr_public_surface_failed")
       .first<{ detail: string; metadata_json: string }>();
     expect(aggregate).toMatchObject({ detail: "comment" });
     expect(aggregate?.metadata_json).toContain('"output":"comment"');
+    expect(aggregate?.metadata_json).toContain('"transient":false');
     const published = await env.DB.prepare("select event_type from audit_events where event_type = ?").bind("github_app.pr_public_surface_published").all();
     expect(published.results).toEqual([]);
+    const webhookRow = await env.DB.prepare("select status from webhook_events where delivery_id = ?").bind("all-public-outputs-failed").first<{ status: string }>();
+    expect(webhookRow?.status).toBe("processed");
+  });
+
+  it("retries the whole job when a transient GitHub 5xx drops every public-surface output (GITTENSORY-5)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "detected_contributors_only",
+      publicSurface: "comment_only",
+      checkRunMode: "off",
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([{ githubUsername: "oktofeesh1", githubId: "123", totalPrs: 2, totalMergedPrs: 2, isEligible: true, credibility: 1 }]);
+      if (url === "https://api.gittensor.io/miners/123") return Response.json({ repositories: [] });
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1" });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/issues/32/comments") && method === "GET") return Response.json([]);
+      // GitHub 5xx during publish: momentary, not the caller's fault — the job must retry, not silently drop the
+      // review the same way JSONbored/awesome-claude#4251 did (Sentry GITTENSORY-5).
+      if (url.includes("/issues/32/comments") && method === "POST") return new Response("upstream unavailable", { status: 502 });
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(
+      processJob(env, {
+        type: "github-webhook",
+        deliveryId: "transient-publish-failure",
+        eventName: "pull_request",
+        payload: {
+          action: "opened",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } },
+          pull_request: { number: 32, title: "Miner work", state: "open", user: { login: "oktofeesh1" }, labels: [], body: "Fixes #1" },
+        },
+      }),
+    ).rejects.toMatchObject({ retryKind: "public_surface_publish_transient" });
+
+    // The failure IS still audited (observability doesn't regress) — it just also throws so the queue retries.
+    const aggregate = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = ?")
+      .bind("github_app.pr_public_surface_failed")
+      .first<{ detail: string; metadata_json: string }>();
+    expect(aggregate).toMatchObject({ detail: "comment" });
+    expect(aggregate?.metadata_json).toContain('"transient":true');
+    const published = await env.DB.prepare("select event_type from audit_events where event_type = ?").bind("github_app.pr_public_surface_published").all();
+    expect(published.results).toEqual([]);
+    // The webhook row is marked "error", not "processed" — a thrown job is exactly what lets the queue retry it.
+    const webhookRow = await env.DB.prepare("select status from webhook_events where delivery_id = ?").bind("transient-publish-failure").first<{ status: string }>();
+    expect(webhookRow?.status).toBe("error");
+  });
+
+  it("leaves a fully successful public-surface publish unaffected by the transient-retry check", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "detected_contributors_only",
+      publicSurface: "comment_only",
+      checkRunMode: "off",
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([{ githubUsername: "oktofeesh1", githubId: "123", totalPrs: 2, totalMergedPrs: 2, isEligible: true, credibility: 1 }]);
+      if (url === "https://api.gittensor.io/miners/123") return Response.json({ repositories: [] });
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1" });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/issues/33/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/33/comments") && method === "POST") return Response.json({ id: 1 }, { status: 201 });
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(
+      processJob(env, {
+        type: "github-webhook",
+        deliveryId: "public-surface-clean-publish",
+        eventName: "pull_request",
+        payload: {
+          action: "opened",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } },
+          pull_request: { number: 33, title: "Miner work", state: "open", user: { login: "oktofeesh1" }, labels: [], body: "Fixes #1" },
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    const webhookRow = await env.DB.prepare("select status from webhook_events where delivery_id = ?").bind("public-surface-clean-publish").first<{ status: string }>();
+    expect(webhookRow?.status).toBe("processed");
+    const failed = await env.DB.prepare("select event_type from audit_events where event_type = ?").bind("github_app.pr_public_surface_failed").all();
+    expect(failed.results).toEqual([]);
+    const published = await env.DB.prepare("select metadata_json from audit_events where event_type = ?").bind("github_app.pr_public_surface_published").first<{ metadata_json: string }>();
+    expect(published?.metadata_json).toContain('"publishedOutputs":["comment"]');
+    expect(published?.metadata_json).toContain('"failedOutputs":[]');
   });
 
   it("keeps repository and PR webhook processing internal when installation context is absent", async () => {
@@ -14561,7 +14684,9 @@ describe("queue processors", () => {
       if (url.includes("/labels") && method === "GET") return Response.json([]);
       if (url.includes("/labels") && method === "POST") {
         calls.labels += 1;
-        return new Response("label failed", { status: 503 });
+        // A permanent failure (permissions gap, not a momentary blip) — this test is about duplicate-comment
+        // suppression on a label-only surface, not about retry classification, so it must stay non-transient.
+        return new Response(JSON.stringify({ message: "Resource not accessible by integration" }), { status: 403 });
       }
       return new Response("not found", { status: 404 });
     });
@@ -14580,13 +14705,14 @@ describe("queue processors", () => {
       }),
     ).resolves.toBeUndefined();
 
-    // gittensor context-label apply (fails 503, recorded) + the best-effort type-label create attempt (also 503,
+    // gittensor context-label apply (fails 403, recorded) + the best-effort type-label create attempt (also 403,
     // swallowed). The context-label failure is still recorded below; the type label never drops the recording.
     expect(calls).toEqual({ comments: 0, labels: 2 });
     const outputFailure = await env.DB.prepare("select event_type, detail from audit_events where event_type = ?")
       .bind("github_app.pr_label_publish_failed")
       .first<{ event_type: string; detail: string }>();
-    expect(outputFailure).toMatchObject({ event_type: "github_app.pr_label_publish_failed", detail: "label failed" });
+    expect(outputFailure?.event_type).toBe("github_app.pr_label_publish_failed");
+    expect(outputFailure?.detail).toMatch(/Resource not accessible by integration/);
     const aggregate = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = ?")
       .bind("github_app.pr_public_surface_failed")
       .first<{ detail: string; metadata_json: string }>();

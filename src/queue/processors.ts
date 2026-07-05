@@ -129,6 +129,7 @@ import {
   getGithubUserCreatedAt,
   getInstallationId,
   getRepositoryCollaboratorPermission,
+  githubErrorStatus,
   GITTENSORY_GATE_CHECK_NAME,
   isGitHubRateLimitedError,
   isForeignAppInstallation,
@@ -5716,7 +5717,20 @@ type PublicSurfaceOutput = "comment" | "label" | "check_run" | "gate_check_run";
 type PublicSurfaceOutputFailure = {
   output: PublicSurfaceOutput;
   error: string;
+  // Captured AT CATCH TIME, not reconstructed later: errorMessage() already reduces `error` to a plain string by
+  // the time it lands here, discarding the `.status`/`.response` shape isGitHubTransientPublishError needs. A
+  // permission_missing check-run push (no live error object) is correctly "false" via the default below.
+  transient: boolean;
 };
+
+// A revoked/expired installation token mid-request, a GitHub 5xx, or a rate-limit blip are all momentary — the
+// job should retry, not silently drop a computed review. A 4xx auth/permission/not-found error is not: retrying
+// forever would never converge, so it keeps today's swallow-and-audit behavior.
+function isGitHubTransientPublishError(error: unknown): boolean {
+  if (isGitHubRateLimitedError(error)) return true;
+  const status = githubErrorStatus(error);
+  return status !== null && status >= 500;
+}
 
 // Intentionally writes to check_summaries only, not audit_events (#2908): this fires on every successful gate-
 // check publish, which is a very high-frequency event (every review pass, potentially several times per PR as
@@ -6926,6 +6940,22 @@ export async function enrichOpenPullRequestsWithChangedFiles(env: Env, repoFullN
   });
 }
 
+// GITTENSORY-5: a transient publish failure (rate limit / GitHub 5xx / momentary token issue) used to be
+// swallowed and only audited — the job still completed "successfully" from the queue's point of view, so a
+// review that computed real output silently never reached the PR, with no retry. Extending RetryableJobError
+// (same shape as RetryablePullRequestFreshnessUnavailableError / PrActuationLockContendedError above) makes the
+// queue retry the whole job instead. Thrown only when NOTHING published at all (see finishPublicSurfacePublication)
+// and at least one failure was transient — a permanent 4xx keeps today's swallow-and-audit behavior.
+class RetryablePublicSurfacePublishFailedError extends RetryableJobError {
+  constructor(repoFullName: string, prNumber: number) {
+    super(`public-surface publish failed transiently for ${repoFullName}#${prNumber}; retrying`, {
+      retryAfterMs: 60_000,
+      retryKind: "public_surface_publish_transient",
+    });
+    this.name = "RetryablePublicSurfacePublishFailedError";
+  }
+}
+
 async function maybePublishPrPublicSurface(
   env: Env,
   installationId: number,
@@ -7367,6 +7397,13 @@ async function maybePublishPrPublicSurface(
           head_sha: advisory.headSha,
           failedOutputs: failedOutputs.map((failure) => failure.output),
         });
+        // At least one output failed for a reason that can plausibly clear on its own (rate limit / 5xx / momentary
+        // token issue) — retry the whole job instead of leaving the review permanently unposted. A mix of transient
+        // and permanent failures still retries: the permanent one re-fails identically next pass and re-audits, but
+        // the transient one gets the chance it needs, and nothing here is published twice (publishedOutputs is empty).
+        if (failedOutputs.some((failure) => failure.transient)) {
+          throw new RetryablePublicSurfacePublishFailedError(repoFullName, pr.number);
+        }
       }
       if (gateSurfaceIncomplete) {
         await recordAuditEvent(env, {
@@ -8524,6 +8561,7 @@ async function maybePublishPrPublicSurface(
         failedOutputs.push({
           output: "check_run",
           error: checkRunResult.warning,
+          transient: false,
         });
         await recordAuditEvent(env, {
           eventType: "github_app.check_run_permission_missing",
@@ -8539,7 +8577,7 @@ async function maybePublishPrPublicSurface(
       }
     } catch (error) {
       const message = errorMessage(error);
-      failedOutputs.push({ output: "check_run", error: message });
+      failedOutputs.push({ output: "check_run", error: message, transient: isGitHubTransientPublishError(error) });
       await recordPublicSurfaceOutputFailure(
         env,
         "check_run",
@@ -8824,7 +8862,7 @@ async function maybePublishPrPublicSurface(
       incr("gittensory_reviews_published_total", { repo: repoFullName });
     } catch (error) {
       const message = errorMessage(error);
-      failedOutputs.push({ output: "comment", error: message });
+      failedOutputs.push({ output: "comment", error: message, transient: isGitHubTransientPublishError(error) });
       await recordPublicSurfaceOutputFailure(
         env,
         "comment",
@@ -8879,7 +8917,7 @@ async function maybePublishPrPublicSurface(
       publishedOutputs.push("label");
     } catch (error) {
       const message = errorMessage(error);
-      failedOutputs.push({ output: "label", error: message });
+      failedOutputs.push({ output: "label", error: message, transient: isGitHubTransientPublishError(error) });
       await recordPublicSurfaceOutputFailure(
         env,
         "label",
