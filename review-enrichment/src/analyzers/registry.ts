@@ -32,6 +32,7 @@ import { scanLooseRanges } from "./loose-range.js";
 import { scanMagicNumbers } from "./magic-number.js";
 import { scanConflictMarkers } from "./conflict-marker.js";
 import { scanDebugLeftover } from "./debug-leftover.js";
+import { scanErrorSwallow } from "./error-swallow.js";
 import { scanCommitLint } from "./commit-lint.js";
 import { scanTerminology } from "./terminology.js";
 import { scanTodoMarker } from "./todo-marker.js";
@@ -1012,6 +1013,35 @@ export const ANALYZER_DESCRIPTORS = [
       return lines;
     },
     run: (req, { signal }) => scanDebugLeftover(req, signal),
+  }),
+  descriptor({
+    name: "errorSwallow",
+    title: "Error swallowing",
+    category: "quality",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: 25, maxLineChars: 2000 },
+    docs: {
+      summary:
+        "Flags newly added catch/except blocks that silently discard errors — empty bodies, unused bindings, or a lone return null.",
+      looksAt: "Added lines in changed JS/TS/Python source files (non-test).",
+      reports: "File, line, and kind: empty-catch, unused-binding, or return-null.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Python `except: pass` is allowed. Catch blocks that log, rethrow, or reference the caught binding are not flagged.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### Error swallowing (silent catch/except added by this PR)"];
+      for (const item of findings) {
+        lines.push(
+          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} — ${helpers.safeCodeSpan(item.kind)}`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal }) => scanErrorSwallow(req, signal),
   }),
   descriptor({
     name: "commitLint",

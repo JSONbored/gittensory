@@ -483,6 +483,13 @@ export interface DebugLeftoverFinding {
   kind: "debugger" | "console" | "print";
 }
 
+/** A catch/except block a PR added that swallows an error without logging, rethrowing, or using the binding (#2014). */
+export interface ErrorSwallowFinding {
+  file: string;
+  line: number;
+  kind: "empty-catch" | "unused-binding" | "return-null";
+}
+
 /** An absolute HTTP(S) URL or raw IP:port endpoint hardcoded in non-test, non-config source (#2027, part of #1499).
  *  Reports location, kind, and a redacted/truncated host — never full paths or query strings. */
 export interface HardcodedUrlFinding {
@@ -539,6 +546,7 @@ export interface BriefFindings {
   magicNumber?: MagicNumberFinding[];
   conflictMarker?: ConflictMarkerFinding[];
   debugLeftover?: DebugLeftoverFinding[];
+  errorSwallow?: ErrorSwallowFinding[];
   hardcodedUrl?: HardcodedUrlFinding[];
   commitLint?: CommitLintFinding[];
 }

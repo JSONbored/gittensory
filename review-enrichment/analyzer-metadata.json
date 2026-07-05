@@ -1080,6 +1080,32 @@
       }
     },
     {
+      "name": "errorSwallow",
+      "title": "Error swallowing",
+      "category": "quality",
+      "cost": "local",
+      "defaultEnabled": true,
+      "profiles": [
+        "fast",
+        "balanced",
+        "deep"
+      ],
+      "requires": [
+        "files"
+      ],
+      "limits": {
+        "maxFindings": 25,
+        "maxLineChars": 2000
+      },
+      "docs": {
+        "summary": "Flags newly added catch/except blocks that silently discard errors — empty bodies, unused bindings, or a lone return null.",
+        "looksAt": "Added lines in changed JS/TS/Python source files (non-test).",
+        "reports": "File, line, and kind: empty-catch, unused-binding, or return-null.",
+        "network": "Pure local analyzer. No external network call.",
+        "notes": "Python `except: pass` is allowed. Catch blocks that log, rethrow, or reference the caught binding are not flagged."
+      }
+    },
+    {
       "name": "commitLint",
       "title": "Conventional-commit subjects",
       "category": "quality",
