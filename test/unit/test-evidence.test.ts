@@ -131,6 +131,38 @@ describe("test evidence helpers", () => {
   it("still rejects a body whose only test/validation mentions are all negated across clauses", () => {
     expect(hasValidationNote("No tests run. Not validated. Untested change.")).toBe(false);
   });
+
+  // REGRESSION (#3304, round 4): a label-style status line glues its separator directly onto the stem
+  // or negation word with no surrounding whitespace ("Tests: not run."). The proximity checks previously
+  // required a literal space next to the stem/negation word, so the colon/semicolon/dash broke that
+  // adjacency, the negation went undetected, and the bare "Tests"/"Validation" keyword fell through to
+  // the affirmative check instead.
+  it("detects a negation glued to the stem or negation word by a colon, semicolon, or dash", () => {
+    expect(hasValidationNote("Tests: not run.")).toBe(false);
+    expect(hasValidationNote("Validation: not run.")).toBe(false);
+    expect(hasValidationNote("Tests: not run")).toBe(false);
+    expect(hasValidationNote("Validation: Not Run.")).toBe(false);
+    expect(hasValidationNote("Test: skipped.")).toBe(false);
+    expect(hasValidationNote("Tests:not run.")).toBe(false);
+    expect(hasValidationNote("Tests - not run.")).toBe(false);
+    expect(hasValidationNote("Tests — not run.")).toBe(false); // em dash
+    expect(hasValidationNote("Tests – not run.")).toBe(false); // en dash
+    expect(hasValidationNote("Tests; not run.")).toBe(false);
+    expect(hasValidationNote("Validation; not run.")).toBe(false);
+    expect(hasValidationNote("Skipped: tests were not run.")).toBe(false); // negation word as the label
+  });
+
+  // REGRESSION (#3304, round 4): the label-separator gap must stay bounded to the junction touching the
+  // stem/negation word -- it must not let a colon/semicolon/dash elsewhere in a longer sentence bridge a
+  // negation across unrelated filler words, and a genuine colon/semicolon-glued negated clause still
+  // must not suppress a separate, later real affirmative clause.
+  it("does not let a label separator elsewhere in the sentence bridge an unrelated negation", () => {
+    expect(hasValidationNote("No documentation issues; tests pass regardless.")).toBe(true);
+    expect(hasValidationNote("Not sure if this fully works; tests pass regardless.")).toBe(true);
+    expect(hasValidationNote("No changes needed here; validated with npm test.")).toBe(true);
+    expect(hasValidationNote("Tests: not run. Validated with npm run test:ci.")).toBe(true);
+    expect(hasValidationNote("Tests; not run. Validated with npm run test:ci.")).toBe(true);
+  });
 });
 
 describe("classifyTestCoverage", () => {
