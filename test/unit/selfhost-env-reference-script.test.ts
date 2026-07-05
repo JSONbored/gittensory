@@ -51,6 +51,8 @@ function fixtureRoot(): string {
     [
       "const serviceOnly = process.env.SERVICE_ONLY;",
       "const helperOnly = envString(env, 'SERVICE_HELPER_ONLY');",
+      "const casted = (env as unknown as Record<string, unknown>).CASTED_ONLY;",
+      "const parsedInt = parsePositiveIntEnv('PARSED_INT_ONLY', { min: 1, fallback: 4 });",
       "",
     ].join("\n"),
   );
@@ -62,6 +64,7 @@ describe("gen-selfhost-env-reference (#2081)", () => {
     expect(collectSelfHostEnvVars({ rootDir: fixtureRoot() })).toEqual([
       { name: "ALIASED_ENV", firstReference: "src/selfhost/a.ts:5" },
       { name: "BRACKET_ONLY", firstReference: "src/selfhost/a.ts:4" },
+      { name: "CASTED_ONLY", firstReference: "src/services/notify-discord.ts:3" },
       { name: "CTX_ONLY", firstReference: "src/selfhost/a.ts:10" },
       { name: "DEFAULTED_ENV", firstReference: "src/selfhost/a.ts:5" },
       { name: "DESTRUCTURED", firstReference: "src/selfhost/a.ts:5" },
@@ -71,6 +74,7 @@ describe("gen-selfhost-env-reference (#2081)", () => {
       { name: "OBJECT_ALIASED", firstReference: "src/selfhost/a.ts:9" },
       { name: "OBJECT_BRACKET", firstReference: "src/selfhost/a.ts:8" },
       { name: "OBJECT_DESTRUCTURED", firstReference: "src/selfhost/a.ts:9" },
+      { name: "PARSED_INT_ONLY", firstReference: "src/services/notify-discord.ts:4" },
       { name: "SECOND", firstReference: "src/selfhost/a.ts:2" },
       { name: "SERVER_ONLY", firstReference: "src/server.ts:1" },
       { name: "SERVICE_HELPER_ONLY", firstReference: "src/services/notify-discord.ts:2" },

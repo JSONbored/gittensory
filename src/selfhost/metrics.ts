@@ -36,6 +36,7 @@ const histograms = new Map<string, HistogramState>();
 const DEFAULT_METRIC_META: readonly (readonly [string, MetricMeta])[] = [
   ["gittensory_queue_pending", { help: "Current in-process queue depth.", type: "gauge" }],
   ["gittensory_queue_dead", { help: "Current in-process dead queue depth.", type: "gauge" }],
+  ["gittensory_dlq_dead_lettered_recent", { help: "DLQ messages dead-lettered within the recent trailing window, sampled at scrape.", type: "gauge" }],
   ["gittensory_queue_processing", { help: "Jobs currently claimed and mid-flight.", type: "gauge" }],
   ["gittensory_queue_runnable_now", { help: "Pending jobs, any priority, currently due (run_after<=now).", type: "gauge" }],
   ["gittensory_queue_live_pending", { help: "Current live-work queue depth.", type: "gauge" }],
@@ -77,6 +78,8 @@ const DEFAULT_METRIC_META: readonly (readonly [string, MetricMeta])[] = [
   ["gittensory_jobs_rate_limit_budget_deferred_total", { help: "Jobs deferred by rate-limit budget checks.", type: "counter" }],
   ["gittensory_jobs_rate_limited_by_type_total", { help: "Jobs rate-limited by job type.", type: "counter" }],
   ["gittensory_jobs_maintenance_admission_deferred_by_reason_total", { help: "Maintenance jobs deferred by reason.", type: "counter" }],
+  ["gittensory_jobs_installation_concurrency_deferred_total", { help: "Background jobs deferred by per-installation GitHub-fetch concurrency admission.", type: "counter" }],
+  ["gittensory_jobs_installation_concurrency_deferred_by_reason_total", { help: "Per-installation GitHub-fetch concurrency deferrals by reason and job type.", type: "counter" }],
   ["gittensory_jobs_dead_letter_revived_total", { help: "Dead-letter jobs revived for retry.", type: "counter" }],
   ["gittensory_jobs_foreground_liveness_released_total", { help: "Foreground-priority jobs force-released from a stale deferral by the liveness sweep.", type: "counter" }],
   ["gittensory_jobs_foreground_liveness_released_by_reason_total", { help: "Foreground liveness releases by reason (age vs rate_limit_cleared).", type: "counter" }],
@@ -94,6 +97,8 @@ const DEFAULT_METRIC_META: readonly (readonly [string, MetricMeta])[] = [
   ["gittensory_orb_events_exported_total", { help: "Orb events exported from the self-host runtime.", type: "counter" }],
   ["gittensory_orb_export_errors_total", { help: "Orb event export errors.", type: "counter" }],
   ["gittensory_orb_relay_drains_total", { help: "Orb relay drain outcomes.", type: "counter" }],
+  ["gittensory_orb_relay_register_consecutive_failures", { help: "Current consecutive orb relay registration failure streak, reset to 0 on any success.", type: "gauge" }],
+  ["gittensory_orb_relay_drain_seconds_since_last", { help: "Seconds since the pull-mode orb relay drain loop last completed successfully, or -1 if never (or in push mode).", type: "gauge" }],
   ["gittensory_orb_webhook_total", { help: "Orb webhook outcomes.", type: "counter" }],
   ["gittensory_ai_requests_total", { help: "AI provider request outcomes.", type: "counter" }],
   ["gittensory_ai_cost_usd_total", { help: "Estimated AI provider cost in USD.", type: "counter" }],
@@ -109,6 +114,7 @@ const DEFAULT_METRIC_META: readonly (readonly [string, MetricMeta])[] = [
   ["gittensory_ai_review_force_bypass_total", { help: "AI review cache force-bypass events.", type: "counter" }],
   ["gittensory_ai_review_inconclusive_total", { help: "AI review inconclusive outcomes.", type: "counter" }],
   ["gittensory_ai_review_onmerge_clamped_total", { help: "AI review on-merge mode clamp events.", type: "counter" }],
+  ["gittensory_ai_review_model_fallback_total", { help: "AI review model fallback attempts by primary and fallback model.", type: "counter" }],
   ["gittensory_regate_ai_skipped_current_total", { help: "Regate requests skipped because AI state is current.", type: "counter" }],
   ["gittensory_public_surface_publish_skipped_current_total", { help: "Public surface publishes skipped because state is current.", type: "counter" }],
   ["gittensory_gate_decisions_total", { help: "Gate decisions by conclusion.", type: "counter" }],
@@ -118,14 +124,14 @@ const DEFAULT_METRIC_META: readonly (readonly [string, MetricMeta])[] = [
   ["gittensory_github_branch_protection_permission_denied_total", { help: "GitHub branch-protection reads denied by permissions.", type: "counter" }],
   ["gittensory_github_pr_files_fetch_total", { help: "GitHub pull-request file fetch attempts.", type: "counter" }],
   ["gittensory_pr_state_cache_total", { help: "Pull-request state cache outcomes.", type: "counter" }],
+  ["gittensory_ci_state_cache_total", { help: "CI-state snapshot cache outcomes.", type: "counter" }],
 ];
 const metricMeta = new Map<string, MetricMeta>(DEFAULT_METRIC_META);
 
 // These public counters are scraped without auth on the shared CLOUD worker, so redact repo labels at the
-// counter call-site there. A self-hosted instance's /metrics endpoint is the operator's own Prometheus/Grafana
-// scrape target, not a publicly reachable one -- there is no other-tenant repo name to protect from itself, and
-// redacting `repo` there just breaks the operator's own per-repo dashboards (#terminal-outcome-audit gap: the
-// one label gittensory_gate_decisions_total carried was being dropped even for self-host, with no bypass).
+// counter call-site there. Self-hosted instances can opt out for established per-repo counters, but metrics
+// with labels derived from private queue internals stay redacted because /metrics may be exposed by an
+// operator's reverse proxy before application/session authentication.
 let selfHostedMetricsMode = false;
 
 /** Call ONCE at boot (self-host entrypoint only) to stop redacting `repo` from PRIVATE_REPO_LABEL_METRICS.
@@ -139,9 +145,21 @@ const PRIVATE_REPO_LABEL_METRICS = new Set([
   "gittensory_reviews_published_total",
   "gittensory_agent_disposition_total",
 ]);
+const ALWAYS_REDACT_REPO_LABEL_METRICS = new Set(["gittensory_queue_backlog_by_repo"]);
+const redactedRepoLabels = new Map<string, string>();
+
+function redactedRepoLabel(repo: string): string {
+  const existing = redactedRepoLabels.get(repo);
+  if (existing) return existing;
+  const label = `redacted-${redactedRepoLabels.size + 1}`;
+  redactedRepoLabels.set(repo, label);
+  return label;
+}
 
 function publicLabelsForMetric(name: string, labels?: Labels): Labels | undefined {
-  if (!labels || selfHostedMetricsMode || !PRIVATE_REPO_LABEL_METRICS.has(name) || !("repo" in labels)) return labels;
+  if (!labels || !("repo" in labels)) return labels;
+  if (ALWAYS_REDACT_REPO_LABEL_METRICS.has(name)) return { ...labels, repo: redactedRepoLabel(labels.repo) };
+  if (selfHostedMetricsMode || !PRIVATE_REPO_LABEL_METRICS.has(name)) return labels;
   const publicLabels = { ...labels };
   delete publicLabels.repo;
   return Object.keys(publicLabels).length > 0 ? publicLabels : undefined;
@@ -246,7 +264,7 @@ export async function renderMetrics(): Promise<string> {
       // it sees "no data" (not present) rather than a stale metric name lingering with no TYPE line at all.
       pushMetricMeta(lines, emittedMeta, name);
       for (const { labels, value } of values) {
-        lines.push(`${seriesKey(name, labels)} ${value}`);
+        lines.push(`${seriesKey(name, publicLabelsForMetric(name, labels))} ${value}`);
       }
     } catch {
       /* a failing sampler must not break the scrape */
@@ -272,5 +290,6 @@ export function resetMetrics(): void {
   gaugeVectors.clear();
   histograms.clear();
   metricMeta.clear();
+  redactedRepoLabels.clear();
   for (const [name, meta] of DEFAULT_METRIC_META) metricMeta.set(name, meta);
 }

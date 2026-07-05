@@ -48,6 +48,7 @@ import {
   repoSyncSegments,
   repoSyncState,
   repositoryAiKeys,
+  repositoryLinearKeys,
   repositorySettings,
   scorePreviews,
   scoringModelSnapshots,
@@ -167,6 +168,7 @@ import { DEFAULT_GLOBAL_MODERATION_CONFIG, MAX_MODERATION_VIOLATION_DECAY_DAYS, 
 import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy, DEFAULT_AUTO_MAINTAIN_POLICY } from "../settings/autonomy";
 import { DEFAULT_TYPE_LABELS, normalizeTypeLabelSet } from "../settings/pr-type-label";
 import { DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, normalizeLinkedIssueLabelPropagationConfig } from "../review/linked-issue-label-propagation";
+import { DEFAULT_LINKED_ISSUE_HARD_RULES } from "../review/linked-issue-hard-rules-config";
 import { decryptSecret, encryptSecret, sha256Hex } from "../utils/crypto";
 import { errorMessage, jsonString, nowIso, parseJson, repoParts } from "../utils/json";
 import { PUBLIC_LOCAL_PATH_SCRUB_PATTERN } from "../signals/redaction";
@@ -479,6 +481,8 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       checkRunDetailLevel: "minimal",
       gateCheckMode: "off",
       reviewCheckMode: "disabled",
+      autoProjectMilestoneMatch: "off",
+      autoProjectMilestoneMatchBackend: "github",
       gatePack: "gittensor",
       linkedIssueGateMode: "advisory",
       duplicatePrGateMode: "block",
@@ -501,6 +505,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       typeLabelsEnabled: true,
       typeLabels: { ...DEFAULT_TYPE_LABELS },
       linkedIssueLabelPropagation: { ...DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, mappings: [] },
+      linkedIssueHardRules: { ...DEFAULT_LINKED_ISSUE_HARD_RULES, pointBearingLabels: [], maintainerOnlyLabels: [] },
       gittensorLabel: "gittensor",
       blacklistLabel: "slop",
       createMissingLabel: true,
@@ -548,6 +553,8 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     checkRunDetailLevel: parseCheckRunDetailLevel(row.checkRunDetailLevel),
     gateCheckMode: parseGateCheckMode(row.gateCheckMode),
     reviewCheckMode: parseReviewCheckMode(row.reviewCheckMode),
+    autoProjectMilestoneMatch: parseProjectMilestoneMatchMode(row.projectMilestoneMatchMode),
+    autoProjectMilestoneMatchBackend: parseProjectMilestoneMatchBackend(row.autoProjectMilestoneMatchBackend),
     gatePack: parseGatePack(row.gatePack),
     linkedIssueGateMode: parseGateRuleMode(row.linkedIssueGateMode),
     duplicatePrGateMode: parseGateRuleMode(row.duplicatePrGateMode),
@@ -570,6 +577,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     typeLabelsEnabled: row.typeLabelsEnabled,
     typeLabels: parseTypeLabelSet(row.typeLabelsJson),
     linkedIssueLabelPropagation: parseLinkedIssueLabelPropagationConfig(row.linkedIssueLabelPropagationJson),
+    linkedIssueHardRules: { ...DEFAULT_LINKED_ISSUE_HARD_RULES, pointBearingLabels: [], maintainerOnlyLabels: [] },
     gittensorLabel: row.gittensorLabel,
     blacklistLabel: row.blacklistLabel,
     createMissingLabel: row.createMissingLabel,
@@ -660,6 +668,8 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     // calling this, so `settings.reviewCheckMode` is never actually undefined for that path -- this fallback
     // only fires for callers that never cared about reviewCheckMode at all.
     reviewCheckMode: settings.reviewCheckMode ?? (settings.gateCheckMode === "enabled" ? "required" : "disabled"),
+    autoProjectMilestoneMatch: settings.autoProjectMilestoneMatch ?? "off",
+    autoProjectMilestoneMatchBackend: settings.autoProjectMilestoneMatchBackend ?? "github",
     gatePack: parseGatePack(settings.gatePack),
     linkedIssueGateMode: settings.linkedIssueGateMode ?? "advisory",
     duplicatePrGateMode: settings.duplicatePrGateMode ?? "block",
@@ -731,6 +741,8 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       checkRunDetailLevel: resolved.checkRunDetailLevel,
       gateCheckMode: resolved.gateCheckMode,
       reviewCheckMode: resolved.reviewCheckMode,
+      projectMilestoneMatchMode: resolved.autoProjectMilestoneMatch,
+      autoProjectMilestoneMatchBackend: resolved.autoProjectMilestoneMatchBackend,
       gatePack: resolved.gatePack,
       linkedIssueGateMode: resolved.linkedIssueGateMode,
       duplicatePrGateMode: resolved.duplicatePrGateMode,
@@ -801,6 +813,8 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         checkRunDetailLevel: resolved.checkRunDetailLevel,
         gateCheckMode: resolved.gateCheckMode,
         reviewCheckMode: resolved.reviewCheckMode,
+      projectMilestoneMatchMode: resolved.autoProjectMilestoneMatch,
+      autoProjectMilestoneMatchBackend: resolved.autoProjectMilestoneMatchBackend,
         gatePack: resolved.gatePack,
         linkedIssueGateMode: resolved.linkedIssueGateMode,
         duplicatePrGateMode: resolved.duplicatePrGateMode,
@@ -954,8 +968,9 @@ async function recordAiKeyChange(
 
 /**
  * Decrypt a repo's BYOK key for an AI call. Returns null when no key is configured OR the encryption
- * secret is unavailable OR decryption fails — so the caller silently falls back to free Workers AI and
- * a misconfiguration never blocks the review. The plaintext key must be used immediately and never cached.
+ * secret is unavailable OR decryption fails — so the caller silently falls back to the free/default
+ * reviewer and a misconfiguration never blocks the review. The plaintext key must be used immediately
+ * and never cached.
  */
 export async function getDecryptedRepositoryAiKey(env: Env, fullName: string): Promise<DecryptedRepositoryAiKey | null> {
   const secret = env.TOKEN_ENCRYPTION_SECRET;
@@ -966,6 +981,90 @@ export async function getDecryptedRepositoryAiKey(env: Env, fullName: string): P
   try {
     const key = await decryptSecret(row.ciphertext, row.iv, secret, row.salt);
     return { provider: normalizeAiKeyProvider(row.provider), key, model: row.model ?? null };
+  } catch {
+    return null;
+  }
+}
+
+// ─── Linear personal API key (#3186) ────────────────────────────────────────────────────────────
+// Same isolated-table, encrypted-at-rest shape as the BYOK provider keys above (reuses the same
+// TOKEN_ENCRYPTION_SECRET + encryptSecret/decryptSecret envelope) -- never serialized by the
+// repository-settings GET surface, never settable via `.gittensory.yml`, never logged in plaintext.
+
+export type RepositoryLinearKeyStatus = { configured: true; last4: string; createdBy: string | null; updatedAt: string | null } | { configured: false };
+
+/** Read the secret-free status of a repo's configured Linear API key (for the dashboard/API). */
+export async function getRepositoryLinearKeyStatus(env: Env, fullName: string): Promise<RepositoryLinearKeyStatus> {
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(repositoryLinearKeys).where(eq(repositoryLinearKeys.repoFullName, fullName)).limit(1);
+  if (!row) return { configured: false };
+  return { configured: true, last4: row.last4, createdBy: row.createdBy, updatedAt: row.updatedAt };
+}
+
+/**
+ * Store (or replace) a repo's Linear API key, encrypted at rest. Returns the secret-free status.
+ * Throws `missing_encryption_secret` when TOKEN_ENCRYPTION_SECRET is not configured — callers must
+ * surface that rather than store a key in the clear.
+ */
+export async function upsertRepositoryLinearKey(env: Env, input: { repoFullName: string; key: string; createdBy?: string | null }): Promise<RepositoryLinearKeyStatus> {
+  const secret = env.TOKEN_ENCRYPTION_SECRET;
+  if (!secret) throw new Error("missing_encryption_secret");
+  const trimmedKey = input.key.trim();
+  const existing = await getRepositoryLinearKeyStatus(env, input.repoFullName);
+  const { ciphertext, iv, salt, version } = await encryptSecret(trimmedKey, secret);
+  const last4 = trimmedKey.slice(-4);
+  const createdBy = input.createdBy ?? null;
+  const updatedAt = nowIso();
+  const db = getDb(env.DB);
+  await db
+    .insert(repositoryLinearKeys)
+    .values({ repoFullName: input.repoFullName, ciphertext, iv, salt, keyVersion: version, last4, createdBy, updatedAt })
+    .onConflictDoUpdate({
+      target: repositoryLinearKeys.repoFullName,
+      set: { ciphertext, iv, salt, keyVersion: version, last4, createdBy, updatedAt },
+    });
+  await recordAuditEvent(env, {
+    eventType: "linear_key_change",
+    actor: createdBy,
+    targetKey: input.repoFullName,
+    outcome: "completed",
+    detail: `linear key ${existing.configured ? "replace" : "set"}`,
+    metadata: { repoFullName: input.repoFullName, action: existing.configured ? "replace" : "set", last4 },
+  });
+  return { configured: true, last4, createdBy, updatedAt };
+}
+
+/** Remove a repo's Linear API key. Records a lifecycle audit event when a key was actually present. */
+export async function deleteRepositoryLinearKey(env: Env, fullName: string, actor?: string | null): Promise<void> {
+  const existing = await getRepositoryLinearKeyStatus(env, fullName);
+  const db = getDb(env.DB);
+  await db.delete(repositoryLinearKeys).where(eq(repositoryLinearKeys.repoFullName, fullName));
+  if (existing.configured) {
+    await recordAuditEvent(env, {
+      eventType: "linear_key_change",
+      actor: actor ?? null,
+      targetKey: fullName,
+      outcome: "completed",
+      detail: "linear key delete",
+      metadata: { repoFullName: fullName, action: "delete", last4: existing.last4 },
+    });
+  }
+}
+
+/**
+ * Decrypt a repo's Linear API key for a Linear API call. Returns null when no key is configured OR the
+ * encryption secret is unavailable OR decryption fails -- so the caller silently degrades (no Linear match
+ * attempted) and a misconfiguration never blocks the PR-webhook pipeline. The plaintext key must be used
+ * immediately and never cached.
+ */
+export async function getDecryptedRepositoryLinearKey(env: Env, fullName: string): Promise<string | null> {
+  const secret = env.TOKEN_ENCRYPTION_SECRET;
+  if (!secret) return null;
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(repositoryLinearKeys).where(eq(repositoryLinearKeys.repoFullName, fullName)).limit(1);
+  if (!row) return null;
+  try {
+    return await decryptSecret(row.ciphertext, row.iv, secret, row.salt);
   } catch {
     return null;
   }
@@ -1262,6 +1361,16 @@ export async function upsertPullRequestDetailSyncState(env: Env, state: PullRequ
       prMergeableState: state.prMergeableState,
       prState: state.prState,
       prStateFetchedAt: state.prStateFetchedAt,
+      ciHeadSha: state.ciHeadSha,
+      ciState: state.ciState,
+      ciHasPending: state.ciHasPending,
+      ciHasVisiblePending: state.ciHasVisiblePending,
+      ciHasMissingRequiredContext: state.ciHasMissingRequiredContext,
+      ciFailingDetailsJson: state.ciFailingDetailsJson,
+      ciNonRequiredFailingDetailsJson: state.ciNonRequiredFailingDetailsJson,
+      ciCompletenessWarning: state.ciCompletenessWarning,
+      ciRequiredContextsKey: state.ciRequiredContextsKey,
+      ciStateFetchedAt: state.ciStateFetchedAt,
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -1278,6 +1387,16 @@ export async function upsertPullRequestDetailSyncState(env: Env, state: PullRequ
         prMergeableState: state.prMergeableState,
         prState: state.prState,
         prStateFetchedAt: state.prStateFetchedAt,
+        ciHeadSha: state.ciHeadSha,
+        ciState: state.ciState,
+        ciHasPending: state.ciHasPending,
+        ciHasVisiblePending: state.ciHasVisiblePending,
+        ciHasMissingRequiredContext: state.ciHasMissingRequiredContext,
+        ciFailingDetailsJson: state.ciFailingDetailsJson,
+        ciNonRequiredFailingDetailsJson: state.ciNonRequiredFailingDetailsJson,
+        ciCompletenessWarning: state.ciCompletenessWarning,
+        ciRequiredContextsKey: state.ciRequiredContextsKey,
+        ciStateFetchedAt: state.ciStateFetchedAt,
         updatedAt: nowIso(),
       },
     });
@@ -2286,15 +2405,23 @@ export async function getProductUsageRollupStatus(
 // this during an incident concurrent with a D1 hiccup (or on a self-host instance that never ran migration
 // 0059, or whose singleton row was later lost to a backup restore / manual cleanup) needs a visible signal that
 // the kill-switch may not have actually engaged, not silent normal-looking operation. (#2125)
+let processLocalGlobalAgentFrozen: boolean | null = null;
+export function clearProcessLocalGlobalAgentFrozenCacheForTest(): void { processLocalGlobalAgentFrozen = null; }
 export async function isGlobalAgentFrozen(env: Env): Promise<boolean> {
   try {
     const row = await env.DB.prepare("SELECT frozen FROM global_agent_controls WHERE id = 'singleton'").first<{ frozen: number }>();
     if (!row) {
       console.warn(JSON.stringify({ ev: "global_kill_switch_row_missing", message: "global_agent_controls has no singleton row — treating as unfrozen; re-run migrations or re-seed the row" }));
+      if (processLocalGlobalAgentFrozen === null) processLocalGlobalAgentFrozen = false;
+      return processLocalGlobalAgentFrozen === true;
     }
-    return row?.frozen === 1;
+    const frozen = row.frozen === 1;
+    processLocalGlobalAgentFrozen = frozen;
+    return frozen;
   } catch (error) {
-    console.warn(JSON.stringify({ ev: "global_kill_switch_read_error", message: errorMessage(error).slice(0, 200) }));
+    const message = error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200);
+    console.warn(JSON.stringify({ ev: "global_kill_switch_read_error", message }));
+    if (processLocalGlobalAgentFrozen === true) { console.warn(JSON.stringify({ ev: "global_kill_switch_read_error_fail_closed", message: "process-local cache shows frozen=1 — halting agent actions despite the read error" })); return true; }
     return false;
   }
 }
@@ -2327,6 +2454,7 @@ export async function setGlobalAgentFrozen(env: Env, frozen: boolean, updatedBy?
   )
     .bind(frozen ? 1 : 0, updatedBy ?? null)
     .run();
+  processLocalGlobalAgentFrozen = frozen;
 }
 
 /** Strict (non-fail-open) read of the kill-switch row, for the operator route's read-after-write verification
@@ -2901,8 +3029,14 @@ export async function recordAiUsageEvent(
     actor?: string | null | undefined;
     route?: string | null | undefined;
     model: string;
+    provider?: string | null | undefined;
+    effort?: string | null | undefined;
     status: string;
     estimatedNeurons: number;
+    inputTokens?: number | null | undefined;
+    outputTokens?: number | null | undefined;
+    totalTokens?: number | null | undefined;
+    costUsd?: number | null | undefined;
     detail?: string | null | undefined;
     metadata?: Record<string, unknown> | undefined;
   },
@@ -2914,8 +3048,14 @@ export async function recordAiUsageEvent(
     actor: event.actor ?? null,
     route: event.route ?? null,
     model: event.model,
+    provider: event.provider?.trim() || null,
+    effort: event.effort?.trim() || null,
     status: event.status,
     estimatedNeurons: Math.max(0, Math.round(event.estimatedNeurons)),
+    inputTokens: Math.max(0, Math.round(finiteNumber(event.inputTokens))),
+    outputTokens: Math.max(0, Math.round(finiteNumber(event.outputTokens))),
+    totalTokens: Math.max(0, Math.round(finiteNumber(event.totalTokens))),
+    costUsd: Math.max(0, finiteNumber(event.costUsd)),
     detail: event.detail ?? null,
     metadataJson: jsonString(event.metadata ?? {}),
     createdAt: nowIso(),
@@ -3987,6 +4127,47 @@ export async function listSignalSnapshots(env: Env, signalType: string, targetKe
   return rows.map(toSignalSnapshotRecord);
 }
 
+/** Bulk variant of `listSignalSnapshots` for callers that need the LATEST snapshot per target key across many
+ *  keys in one round trip (#3202 review finding: a per-repo loop here made the daily repo-doc refresh sweep
+ *  scale linearly in DB round trips with the installed-repo count). Keyed by the exact `targetKey` string, same
+ *  casing convention as `listSignalSnapshots` -- callers that key by lowercased repo name must lowercase both
+ *  the input and the returned map's keys themselves. */
+export async function listLatestSignalSnapshotsForTargets(
+  env: Env,
+  signalType: string,
+  targetKeys: readonly string[],
+): Promise<Map<string, SignalSnapshotRecord>> {
+  const result = new Map<string, SignalSnapshotRecord>();
+  if (targetKeys.length === 0) return result;
+  const placeholders = targetKeys.map(() => "?").join(", ");
+  const { results } = await env.DB.prepare(
+    `
+      SELECT id, signal_type, target_key, repo_full_name, generated_at
+      FROM (
+        SELECT
+          id, signal_type, target_key, repo_full_name, generated_at,
+          row_number() OVER (PARTITION BY target_key ORDER BY generated_at DESC, id DESC) AS snapshot_rank
+        FROM signal_snapshots
+        WHERE signal_type = ? AND target_key IN (${placeholders})
+      )
+      WHERE snapshot_rank = 1
+    `,
+  )
+    .bind(signalType, ...targetKeys)
+    .all<{ id: string; signal_type: string; target_key: string; repo_full_name: string | null; generated_at: string }>();
+  for (const row of results) {
+    result.set(row.target_key, {
+      id: row.id,
+      signalType: row.signal_type,
+      targetKey: row.target_key,
+      repoFullName: row.repo_full_name,
+      payload: {},
+      generatedAt: row.generated_at,
+    });
+  }
+  return result;
+}
+
 export async function listLatestSignalSnapshotsByTarget(
   env: Env,
   options: { limit?: number; generatedAfter?: string; maxTargetKeyChars?: number } = {},
@@ -4403,6 +4584,19 @@ export async function getPendingAgentAction(env: Env, id: string): Promise<Agent
   return row ? toAgentPendingActionRecord(row) : null;
 }
 
+/** Atomically transition a pending approval-queue row to a decided status: the `WHERE status='pending'` only
+ *  matches (and updates) a row still awaiting a decision, so of two concurrent callers deciding the SAME row,
+ *  exactly one update actually changes a row. Returns whether THIS call was the one that won the claim -- a
+ *  `false` return means another decision already landed first, and the caller must not execute the action. */
+export async function claimPendingAgentActionDecision(env: Env, id: string, update: { status: AgentPendingActionStatus; decidedBy: string }): Promise<boolean> {
+  const result = await getDb(env.DB)
+    .update(agentPendingActions)
+    .set({ status: update.status, decidedBy: update.decidedBy, decidedAt: nowIso(), updatedAt: nowIso() })
+    .where(and(eq(agentPendingActions.id, id), eq(agentPendingActions.status, "pending")));
+  /* v8 ignore next -- D1 update metadata normally includes changes; the ?? 0 fallback protects driver anomalies. */
+  return Number(result.meta.changes ?? 0) === 1;
+}
+
 /** Mark a staged action accepted/rejected. Idempotency is the caller's concern (it checks status === pending). */
 export async function setPendingAgentActionStatus(env: Env, id: string, update: { status: AgentPendingActionStatus; decidedBy: string | null }): Promise<void> {
   await getDb(env.DB)
@@ -4703,6 +4897,16 @@ function toPullRequestDetailSyncStateRecord(row: typeof pullRequestDetailSyncSta
     prMergeableState: row.prMergeableState,
     prState: row.prState,
     prStateFetchedAt: row.prStateFetchedAt,
+    ciHeadSha: row.ciHeadSha,
+    ciState: parseCiState(row.ciState),
+    ciHasPending: row.ciHasPending,
+    ciHasVisiblePending: row.ciHasVisiblePending,
+    ciHasMissingRequiredContext: row.ciHasMissingRequiredContext,
+    ciFailingDetailsJson: row.ciFailingDetailsJson,
+    ciNonRequiredFailingDetailsJson: row.ciNonRequiredFailingDetailsJson,
+    ciCompletenessWarning: row.ciCompletenessWarning,
+    ciRequiredContextsKey: row.ciRequiredContextsKey,
+    ciStateFetchedAt: row.ciStateFetchedAt,
     updatedAt: row.updatedAt,
   };
 }
@@ -5414,9 +5618,9 @@ function redactProductUsageActor(value: string | null, actorRedactor: ProductUsa
   if (!value || !actorRedactor) return value;
   return value.replace(actorRedactor.pattern, (match, offset: number, source: string) => {
     const previous = offset > 0 ? source[offset - 1] : undefined;
-    const next = source[offset + match.length];
+    const next = source[offset + match.length] ?? "";
     const hasLeftBoundary = isProductUsageActorTokenBoundary(previous) || isProductUsageCamelBoundaryBefore(previous, match);
-    const hasRightBoundary = isProductUsageActorTokenBoundary(next) || isProductUsageCamelBoundaryAfter(next);
+    const hasRightBoundary = isProductUsageActorTokenBoundary(next) || isProductUsageCamelBoundaryAfter(next, match);
     return hasLeftBoundary && hasRightBoundary ? "<redacted-actor>" : match;
   });
 }
@@ -5433,8 +5637,12 @@ function isProductUsageCamelBoundaryBefore(previous: string | undefined, match: 
   return Boolean(previous && /[a-z0-9]/.test(previous) && /^[A-Z]/.test(match));
 }
 
-function isProductUsageCamelBoundaryAfter(next: string | undefined): boolean {
-  return Boolean(next && /[A-Z]/.test(next));
+function isProductUsageCamelBoundaryAfter(next: string, match: string): boolean {
+  // Mirror of isProductUsageCamelBoundaryBefore: a camelCase boundary after the match requires the match
+  // to END in a lowercase/digit and the next char to be uppercase (a real `bob`→`Key` hump). Without the
+  // `match` end check, an uppercase→uppercase transition inside an all-caps word (e.g. `bob` matched in
+  // `BOBCAT`) is mistaken for a boundary and the surrounding word is wrongly redacted.
+  return /[A-Z]/.test(next) && /[a-z0-9]$/.test(match);
 }
 
 async function upsertProductUsageDailyRollup(env: Env, day: string, generatedAt: string): Promise<ProductUsageDailyRollupRecord> {
@@ -5790,6 +5998,7 @@ function normalizeProductUsageRole(value: string): ProductUsageRole | null {
     case "maintainer":
     case "maintainers":
     case "reviewer":
+    case "reviewers":
       return "maintainer";
     case "owner":
     case "owners":
@@ -5974,7 +6183,7 @@ const PRODUCT_USAGE_SENSITIVE_VALUE =
 // Compose from the canonical scrubber in redaction.ts so this surface cannot drift from the boundary;
 // it already covered /root/ and /var/, and now unifies the Windows form (also accepts `C:/Users/`).
 const PRODUCT_USAGE_LOCAL_PATH = PUBLIC_LOCAL_PATH_SCRUB_PATTERN;
-const PRODUCT_USAGE_TOKEN_VALUE = /\b(?:ghp_|github_pat_|gts_|glpat-|sk-)[A-Za-z0-9_=-]{8,}/g;
+const PRODUCT_USAGE_TOKEN_VALUE = /\b(?:ghp_|github_pat_|gts_|orbenr_|orbsec_|glpat-|sk-)[A-Za-z0-9_=-]{8,}/g;
 const PRODUCT_USAGE_BEARER_VALUE = /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi;
 
 function sanitizeProductUsageMetadata(value: Record<string, unknown> | null | undefined, actorRedactor: ProductUsageActorRedactor | null): Record<string, JsonValue> {
@@ -6132,6 +6341,14 @@ function parseGateCheckMode(value: string): RepositorySettings["gateCheckMode"] 
 
 function parseReviewCheckMode(value: string): RepositorySettings["reviewCheckMode"] {
   return value === "required" || value === "visible" ? value : "disabled";
+}
+
+function parseProjectMilestoneMatchMode(value: string): RepositorySettings["autoProjectMilestoneMatch"] {
+  return value === "suggest" || value === "auto" ? value : "off";
+}
+
+function parseProjectMilestoneMatchBackend(value: string): RepositorySettings["autoProjectMilestoneMatchBackend"] {
+  return value === "linear" ? "linear" : "github";
 }
 
 function parseGatePack(value: string | null | undefined): RepositorySettings["gatePack"] {
@@ -6351,6 +6568,13 @@ function parseScorePreviewTargetType(value: string): ScorePreviewRecord["targetT
 function parsePullRequestDetailSyncStatus(value: string): PullRequestDetailSyncStateRecord["status"] {
   if (value === "running" || value === "complete" || value === "partial" || value === "waiting_rate_limit" || value === "error") return value;
   return "never_synced";
+}
+
+// Unlike parsePullRequestDetailSyncStatus above, `ci_state` has no sensible non-null default -- absent/invalid
+// genuinely means "never cached", so this returns null rather than coercing to a fake status.
+function parseCiState(value: string | null): PullRequestDetailSyncStateRecord["ciState"] {
+  if (value === "passed" || value === "failed" || value === "pending" || value === "unverified") return value;
+  return null;
 }
 
 function loginMatches(column: unknown, login: string) {

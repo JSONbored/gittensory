@@ -5,17 +5,20 @@
 //
 //   • Advisory notes — a concise maintainer-style write-up (assessment + suggestions + risks). When the
 //     repo has BYOK configured, the maintainer's own frontier model (Anthropic/OpenAI) writes it;
-//     otherwise free Cloudflare Workers AI does. Advisory only — never blocks.
-//   • Consensus defect — a conservative gate signal. The free Workers-AI model PAIR each independently
+//     otherwise the configured free/default reviewer does (self-host: the AI_PROVIDER chain — Codex
+//     primary, Claude Code fallback, etc; unconfigured/hosted: the legacy Workers-AI pair below).
+//     Advisory only — never blocks.
+//   • Consensus defect — a conservative gate signal. The configured reviewer PAIR each independently
 //     reviews the diff; a defect is reported ONLY when BOTH models flag a high-confidence critical defect
 //     (bug / security / data-loss / build break). BYOK never changes this path, so it never changes who
 //     can be blocked. The resulting finding is honored by the gate only in `block` mode AND only for
 //     confirmed Gittensor contributors (the gate enforces that downstream).
 //
 // Every public string (notes + defect title/detail) is forced through `sanitizePublicComment`; anything
-// that trips the public/private boundary is dropped, not published. Free Workers-AI calls are metered against
-// the shared daily neuron budget; maintainer-paid BYOK calls have a separate repo/day cap. All calls
-// are audited via `recordAiUsageEvent`.
+// that trips the public/private boundary is dropped, not published. Free/default-reviewer calls are metered
+// against the shared daily neuron budget; maintainer-paid BYOK calls have a separate repo/day cap. All calls
+// are audited via `recordAiUsageEvent` (with real provider/token/cost usage when the configured provider
+// reports it, per migration 0109 — see `coerceAiUsage`/`aggregateActualUsage`).
 import {
   countByokAiEventsForRepoSince,
   recordAiUsageEvent,
@@ -33,15 +36,18 @@ import { isTestPath } from "../signals/test-evidence";
 import type { CombineStrategy, OnMerge } from "../types";
 
 /**
- * The best free Workers-AI model pair for review accuracy — two different families for independence,
- * both probe-verified in reviewbot to emit clean JSON. The consensus blocker always uses this pair.
+ * The legacy free Workers-AI model pair — used ONLY when neither a self-host `AI_REVIEW_PLAN` reviewer
+ * pair nor any configured provider (`AI_PROVIDER`) is present (see `reviewerModelLabel`). No `ai` binding
+ * exists in the deployed Worker today (Workers AI is fully retired — see CONVERGENCE_RUNBOOK.md), so this
+ * pair is inert in every current deployment; it stays only as the last-resort default these model ids
+ * were originally probe-verified against (both families independently clean-JSON in reviewbot).
  */
 export const BEST_REVIEW_MODELS: readonly [string, string] = [
   "@cf/openai/gpt-oss-120b",
   "@cf/nvidia/nemotron-3-120b-a12b",
 ];
 
-/** Reliable per-slot fallbacks (non-reasoning, clean JSON) so a slot never comes back empty. */
+/** Reliable per-slot fallbacks for the legacy pair above (non-reasoning, clean JSON) so a slot never comes back empty. */
 export const RELIABLE_FALLBACK_MODELS: readonly [string, string] = [
   "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
   "@cf/mistralai/mistral-small-3.1-24b-instruct",
@@ -185,9 +191,9 @@ export type GittensoryAiReviewInput = {
   onMerge?: OnMerge | null | undefined;
   /**
    * The reviewer(s) to run (#dual-ai-combiner). Absent/empty ⇒ the free Workers-AI pair with per-slot fallbacks
-   * (byte-identical to today). A self-host plan supplies named providers instead — `{ model: "claude-code" }`,
-   * `{ model: "codex" }` — addressed by the self-host AI router; `fallback` is Workers-AI-only (a self-host
-   * provider has none). `single` (or a single entry) runs reviewer[0]; consensus/synthesis run [0] and [1].
+   * (byte-identical to today). A self-host plan supplies named providers instead — `{ model: "codex",
+   * fallback: "claude-code" }` — addressed by the self-host AI router. `single` (or a single entry) runs
+   * reviewer[0]; consensus/synthesis run [0] and [1].
    */
   reviewers?:
     | ReadonlyArray<{ model: string; fallback?: string | null | undefined }>
@@ -272,6 +278,13 @@ export type GittensoryAiReviewInput = {
    * has ANY test-path changes ⇒ no section is appended (byte-identical to today).
    */
   changedFiles?: ReadonlyArray<{ path: string }> | null | undefined;
+  /**
+   * The inbound webhook delivery id that triggered this review (#codex-timeout-fields) — the closest thing this
+   * queue has to a job id. Forwarded to a self-host provider's `selfhost_ai_provider_failed` log purely for
+   * operator correlation; never read by any review logic. Absent (e.g. a sweep/repair fan-out with no single
+   * originating delivery, or a unit test) ⇒ the log line omits it, byte-identical to before this field existed.
+   */
+  jobId?: string | undefined;
 };
 
 /** A consensus critical defect, already public-safe, ready to become a gate blocker finding. */
@@ -339,6 +352,17 @@ export type AiReviewDiagnostic = {
   responseChars?: number | undefined;
   hasJsonObject?: boolean | undefined;
   error?: string | undefined;
+  usage?: AiReviewActualUsage | undefined;
+};
+
+export type AiReviewActualUsage = {
+  provider?: string | undefined;
+  model?: string | undefined;
+  effort?: string | undefined;
+  inputTokens?: number | undefined;
+  outputTokens?: number | undefined;
+  totalTokens?: number | undefined;
+  costUsd?: number | undefined;
 };
 
 type ReviewerOpinionOutcome = {
@@ -354,6 +378,13 @@ type AiRunner = {
     extra?: AiGatewayOptions,
   ) => Promise<unknown>;
 };
+
+function selfHostCliSystemAppend(model: string, systemAppend: string): string | undefined {
+  const trimmed = systemAppend.trim();
+  if (!trimmed) return undefined;
+  const [provider = ""] = model.trim().toLowerCase().split(":");
+  return provider === "claude-code" || provider === "codex" ? trimmed : undefined;
+}
 
 // Exported so the sibling AI-advisory features (e.g. the slop advisory in `./ai-slop`) share ONE budget
 // window + neuron estimator and never drift from the review path's accounting.
@@ -442,6 +473,39 @@ export function coerceAiText(result: unknown): string {
       return obj.output_text;
   }
   return "";
+}
+
+function finiteUsageNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function finiteUsageInteger(value: unknown): number | undefined {
+  const n = finiteUsageNumber(value);
+  return n === undefined ? undefined : Math.max(0, Math.round(n));
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Extract a provider's real usage (tokens/cost/effort) from an `env.AI.run()` result, when the configured
+ *  provider reports one (self-host CLI/HTTP providers do; the legacy Workers-AI binding never did). Shared
+ *  by every AI feature's `recordAiUsageEvent` call so migration 0109's columns get real data, not just the
+ *  estimated-neurons proxy, whenever it's available. */
+export function coerceAiUsage(result: unknown): AiReviewActualUsage | undefined {
+  if (!result || typeof result !== "object") return undefined;
+  const usage = (result as Record<string, unknown>).usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return undefined;
+  const record = usage as Record<string, unknown>;
+  return {
+    provider: stringField(record.provider),
+    model: stringField(record.model),
+    effort: stringField(record.effort),
+    inputTokens: finiteUsageInteger(record.inputTokens),
+    outputTokens: finiteUsageInteger(record.outputTokens),
+    totalTokens: finiteUsageInteger(record.totalTokens),
+    costUsd: finiteUsageNumber(record.costUsd),
+  };
 }
 
 /**
@@ -569,8 +633,9 @@ function buildUserPrompt(input: GittensoryAiReviewInput): string {
       : "Description: (none)",
     "",
     "Unified diff (truncated if large):",
-    // Widened 60k→120k so a large multi-file PR is actually reviewed in full (the 120B Workers-AI models have a
-    // 128k context window; pairing this with the higher output ceiling gives a thorough review). (#extensive-reviews)
+    // Widened 60k→120k so a large multi-file PR is actually reviewed in full (tuned against the legacy 120B
+    // Workers-AI pair's 128k context window; pairing this with the higher output ceiling gives a thorough
+    // review — self-host reviewers are configured with at least as much room). (#extensive-reviews)
     input.diff.slice(0, 120000),
   ];
   // Convergence (grounding): append the FINISHED CI status + FULL file content when the caller supplied them
@@ -648,14 +713,30 @@ function buildSystemPrompt(input: GittensoryAiReviewInput): string {
   const pathSuffix = input.pathGuidance?.trim() ? input.pathGuidance : "";
   // `.gittensory.yml` review.instructions (#review-instructions): a repo-level maintainer brief appended to every
   // review; empty ⇒ nothing appended (byte-identical).
-  const repoInstructionsSuffix = input.repoInstructions?.trim()
-    ? ` REPOSITORY REVIEW INSTRUCTIONS (maintainer conventions for this repo — honor them unless they conflict with a real defect): ${input.repoInstructions.trim()}`
-    : "";
+  const repoInstructionsAppend = buildRepoInstructionsSystemAppend(input.repoInstructions);
+  const repoInstructionsSuffix = repoInstructionsAppend ? ` ${repoInstructionsAppend}` : "";
   const inlineSuffix = input.inlineFindings ? INLINE_FINDINGS_SUFFIX : "";
   return `${REVIEW_SYSTEM_PROMPT}${groundingSuffix}${enrichmentSuffix}${profileSuffix}${securityFocusSuffix}${pathSuffix}${repoInstructionsSuffix}${inlineSuffix}`;
 }
 
-/** One Workers-AI opinion with a per-slot reliable fallback and a 3× retry on the primary. */
+function buildRepoInstructionsSystemAppend(repoInstructions: string | null | undefined): string {
+  const trimmed = repoInstructions?.trim();
+  return trimmed
+    ? `REPOSITORY REVIEW INSTRUCTIONS (maintainer conventions for this repo — honor them unless they conflict with a real defect): ${trimmed}`
+    : "";
+}
+
+/** Correlation context for a self-host provider-failure log (#codex-timeout-fields): forwarded to `env.AI.run`'s
+ *  options purely for observability, never read by any provider's own request logic. `jobId` is the inbound
+ *  webhook delivery id that triggered this review — the closest thing this queue has to a job id. */
+type AiRunCorrelation = {
+  jobId?: string | undefined;
+  repoFullName?: string | undefined;
+  pullNumber?: number | undefined;
+};
+
+/** One reviewer opinion (whichever provider `env.AI` resolves to — self-host Codex/Claude Code/etc, or the
+ *  legacy Workers-AI pair) with a per-slot reliable fallback and a 3× retry on the primary. */
 async function runWorkersOpinion(
   env: Env,
   primary: string,
@@ -664,6 +745,8 @@ async function runWorkersOpinion(
   user: string,
   maxTokens: number,
   diagnostics: AiReviewDiagnostic[] = [],
+  systemAppend = "",
+  correlation?: AiRunCorrelation,
 ): Promise<ReviewerOpinionOutcome> {
   const ai = env.AI as unknown as AiRunner | undefined;
   if (!ai || typeof ai.run !== "function") return { review: null };
@@ -680,11 +763,14 @@ async function runWorkersOpinion(
   let lastUnparseable:
     | { model: string; attempt: number; responseChars: number; hasJsonObject: boolean }
     | undefined;
-  for (const model of fallback && fallback !== primary
-    ? [primary, fallback]
-    : [primary]) {
+  const models = fallback && fallback !== primary ? [primary, fallback] : [primary];
+  for (const [modelIndex, model] of models.entries()) {
+    if (modelIndex > 0) {
+      incr("gittensory_ai_review_model_fallback_total", { primary, fallback: model });
+    }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
+        const cliSystemAppend = selfHostCliSystemAppend(model, systemAppend);
         const result = await ai.run(
           model,
           {
@@ -694,18 +780,25 @@ async function runWorkersOpinion(
               { role: "system", content: system },
               { role: "user", content: user },
             ],
+            ...(cliSystemAppend ? { systemAppend: cliSystemAppend } : {}),
+            ...(correlation?.jobId !== undefined ? { jobId: correlation.jobId } : {}),
+            ...(correlation?.repoFullName !== undefined ? { repoFullName: correlation.repoFullName } : {}),
+            ...(correlation?.pullNumber !== undefined ? { pullNumber: correlation.pullNumber } : {}),
+            attempt,
           },
           extra,
         );
         const text = coerceAiText(result);
+        const usage = coerceAiUsage(result);
+        const usageFields = usage ? { usage } : {};
         const parsed = parseModelReview(text);
         if (parsed) {
-          diagnostics.push({ model, attempt, status: "parsed", responseChars: text.length, hasJsonObject: Boolean(extractLastJsonObject(text)) });
+          diagnostics.push({ model, attempt, status: "parsed", responseChars: text.length, hasJsonObject: Boolean(extractLastJsonObject(text)), ...usageFields });
           return { review: parsed };
         }
         const hasJsonObject = Boolean(extractLastJsonObject(text));
         const status = text.trim() ? "unparseable_output" : "empty_output";
-        diagnostics.push({ model, attempt, status, responseChars: text.length, hasJsonObject });
+        diagnostics.push({ model, attempt, status, responseChars: text.length, hasJsonObject, ...usageFields });
         if (text.trim()) {
           lastUnparseable = { model, attempt, responseChars: text.length, hasJsonObject };
           console.warn(
@@ -791,17 +884,95 @@ type ProviderReviewOutcome = {
   diagnostic?: AiReviewDiagnostic | undefined;
 };
 
+/** Static USD-per-million-token pricing for BYOK models. Anthropic/OpenAI responses report token counts but
+ *  never a dollar figure, so this table is the only source for a BYOK call's `costUsd`. A model absent here
+ *  (e.g. a maintainer-configured override this table hasn't been updated for) leaves `costUsd` undefined —
+ *  never fabricated — matching how every other unavailable usage field already degrades in this file. */
+const BYOK_MODEL_PRICING_USD_PER_MTOK: Record<
+  AiReviewProviderKey["provider"],
+  Record<string, { input: number; output: number }>
+> = {
+  anthropic: {
+    "claude-opus-4-8": { input: 5, output: 25 },
+    "claude-opus-4-7": { input: 5, output: 25 },
+    "claude-opus-4-6": { input: 5, output: 25 },
+    "claude-sonnet-5": { input: 3, output: 15 },
+    "claude-sonnet-4-6": { input: 3, output: 15 },
+    "claude-haiku-4-5": { input: 1, output: 5 },
+  },
+  openai: {
+    "gpt-5.5": { input: 5, output: 30 },
+    "gpt-5.5-pro": { input: 30, output: 180 },
+    "gpt-5.4": { input: 2.5, output: 15 },
+    "gpt-5.4-mini": { input: 0.75, output: 4.5 },
+    "gpt-5.4-nano": { input: 0.2, output: 1.25 },
+  },
+};
+
+function priceByokUsageUsd(
+  provider: AiReviewProviderKey["provider"],
+  model: string,
+  inputTokens: number | undefined,
+  outputTokens: number | undefined,
+): number | undefined {
+  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+  const pricing = BYOK_MODEL_PRICING_USD_PER_MTOK[provider][model];
+  if (!pricing) return undefined;
+  return (inputTokens * pricing.input + outputTokens * pricing.output) / 1_000_000;
+}
+
+/** Normalize a BYOK provider's native usage envelope into the same shape `coerceAiUsage` produces for the
+ *  free/self-host path. Anthropic reports `usage: {input_tokens, output_tokens}`; OpenAI reports
+ *  `usage: {prompt_tokens, completion_tokens, total_tokens}` — both snake_case and provider-specific, unlike
+ *  the already-camelCase envelope `coerceAiUsage` reads from `env.AI.run()`. Anthropic's `usage` can also
+ *  carry `cache_creation_input_tokens`/`cache_read_input_tokens`, priced differently than `input_tokens` —
+ *  intentionally not read here, since `callAiProvider` never sends `cache_control`, so Anthropic never
+ *  populates them on this path. */
+function coerceByokUsage(
+  providerKey: AiReviewProviderKey,
+  model: string,
+  rawResult: unknown,
+): AiReviewActualUsage | undefined {
+  if (!rawResult || typeof rawResult !== "object") return undefined;
+  const usage = (rawResult as Record<string, unknown>).usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return undefined;
+  const record = usage as Record<string, unknown>;
+  const inputTokens =
+    providerKey.provider === "anthropic"
+      ? finiteUsageInteger(record.input_tokens)
+      : finiteUsageInteger(record.prompt_tokens);
+  const outputTokens =
+    providerKey.provider === "anthropic"
+      ? finiteUsageInteger(record.output_tokens)
+      : finiteUsageInteger(record.completion_tokens);
+  const totalTokens =
+    providerKey.provider === "openai" ? finiteUsageInteger(record.total_tokens) : undefined;
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined)
+    return undefined;
+  // The `?? 0` fallback below is always safe: the guard above guarantees that whenever totalTokens is
+  // undefined, at least one of inputTokens/outputTokens is defined.
+  return {
+    provider: providerKey.provider,
+    model,
+    inputTokens,
+    outputTokens,
+    totalTokens: totalTokens ?? (inputTokens ?? 0) + (outputTokens ?? 0),
+    costUsd: priceByokUsageUsd(providerKey.provider, model, inputTokens, outputTokens),
+  };
+}
+
 /**
- * POST to the maintainer's BYOK provider and return the raw response text (or null + a failure reason).
- * Never throws. Shared by every BYOK AI path (review, slop, …) so the endpoint/timeout/error handling
- * lives in one place; callers parse the returned text into their own shape.
+ * POST to the maintainer's BYOK provider and return the raw response text (or null + a failure reason),
+ * plus real usage (tokens/cost) when the response body included a parseable `usage` field. Never throws.
+ * Shared by every BYOK AI path (review, slop, …) so the endpoint/timeout/error/usage handling lives in one
+ * place; callers parse the returned text into their own shape.
  */
 export async function callAiProvider(
   providerKey: AiReviewProviderKey,
   system: string,
   user: string,
   maxTokens: number,
-): Promise<{ text: string | null; failure?: ProviderFailure }> {
+): Promise<{ text: string | null; usage?: AiReviewActualUsage | undefined; failure?: ProviderFailure }> {
   const model =
     providerKey.model || PROVIDER_DEFAULT_MODEL[providerKey.provider];
   try {
@@ -841,7 +1012,8 @@ export async function callAiProvider(
       });
     }
     if (!response.ok) return { text: null, failure: "http_error" };
-    return { text: coerceAiText(await response.json()) };
+    const body = await response.json();
+    return { text: coerceAiText(body), usage: coerceByokUsage(providerKey, model, body) };
   } catch (error) {
     // AbortSignal.timeout rejects with a TimeoutError; everything else is a network/parse exception.
     const failure: ProviderFailure =
@@ -860,7 +1032,7 @@ async function runProviderReview(
   user: string,
   maxTokens: number,
 ): Promise<ProviderReviewOutcome> {
-  const { text, failure } = await callAiProvider(
+  const { text, usage, failure } = await callAiProvider(
     providerKey,
     system,
     user,
@@ -879,6 +1051,7 @@ async function runProviderReview(
       status: review ? "parsed" : textValue ? "unparseable_output" : "empty_output",
       responseChars: textValue.length,
       hasJsonObject: Boolean(textValue && extractLastJsonObject(textValue)),
+      usage,
     },
   };
 }
@@ -1132,12 +1305,13 @@ export async function runGittensoryAiReview(
   if (!env.AI)
     return {
       status: "unavailable",
-      reason: "Workers AI binding is not configured.",
+      reason: "AI provider is not configured.",
     };
 
   // Output ceiling for the review. The old 1024 cap forced a shallow "no blockers" scorecard across large diffs;
-  // a thorough finding-by-finding review needs real room. Default 4096, max 8192 (the free Workers-AI 120B models
-  // support it); an explicit env value still wins, clamped. (#extensive-reviews)
+  // a thorough finding-by-finding review needs real room. Default 4096, max 8192 (the configured reviewer —
+  // self-host Codex/Claude Code or the legacy free Workers-AI 120B pair — supports it); an explicit env value
+  // still wins, clamped. (#extensive-reviews)
   const maxTokens = clampNumber(
     Number(env.AI_MAX_OUTPUT_TOKENS) || 4096,
     512,
@@ -1162,11 +1336,12 @@ export async function runGittensoryAiReview(
   // reviewers are told to verify claims against the attached CI/files; otherwise this is REVIEW_SYSTEM_PROMPT
   // unchanged (byte-identical). Computed from `promptInput` so it travels with the (possibly defanged) input.
   const system = buildSystemPrompt(promptInput);
-  // The daily neuron budget governs FREE Workers-AI spend only. BYOK advisory calls bill the maintainer's
+  const repoInstructionsSystemAppend = buildRepoInstructionsSystemAppend(promptInput.repoInstructions);
+  // The daily neuron budget governs FREE/default-reviewer spend only. BYOK advisory calls bill the maintainer's
   // own provider account, so they are not counted here (and a BYOK advisory still runs when the free
-  // budget is exhausted). Free calls = the consensus pair in block mode (always Workers AI), plus the
-  // advisory leg only when it is NOT BYOK.
-  // Reviewers + combine strategy (#dual-ai-combiner). DEFAULT = the free Workers-AI pair (per-slot fallbacks)
+  // budget is exhausted). Free calls = the consensus pair in block mode (the configured self-host reviewers,
+  // or the legacy Workers-AI pair when none is configured), plus the advisory leg only when it is NOT BYOK.
+  // Reviewers + combine strategy (#dual-ai-combiner). DEFAULT = the legacy Workers-AI pair (per-slot fallbacks)
   // combined by `consensus` — byte-identical to today. The self-host boot plan (`env.AI_REVIEW_PLAN`) supplies
   // named providers (e.g. claude-code + codex) and a strategy; an explicit `input` field overrides it. `single`
   // (or a single configured reviewer) runs ONE opinion; consensus/synthesis run two.
@@ -1266,6 +1441,12 @@ export async function runGittensoryAiReview(
   let advisoryReview: ModelReview | null;
   const reviewDiagnostics: AiReviewDiagnostic[] = [];
   const fallbackNotes: string[] = [];
+  // Forwarded to a self-host provider's failure log (#codex-timeout-fields) — never anything BYOK-billed reads.
+  const aiRunCorrelation: AiRunCorrelation = {
+    jobId: input.jobId,
+    repoFullName: input.repoFullName,
+    pullNumber: input.prNumber,
+  };
   if (input.providerKey) {
     const outcome = await runProviderReview(
       input.providerKey,
@@ -1286,6 +1467,8 @@ export async function runGittensoryAiReview(
       user,
       maxTokens,
       reviewDiagnostics,
+      repoInstructionsSystemAppend,
+      aiRunCorrelation,
     );
     advisoryReview = outcome.review;
     if (outcome.fallbackNote) fallbackNotes.push(outcome.fallbackNote);
@@ -1311,6 +1494,8 @@ export async function runGittensoryAiReview(
               user,
               maxTokens,
               reviewDiagnostics,
+              repoInstructionsSystemAppend,
+              aiRunCorrelation,
             )
           : Promise.resolve<ReviewerOpinionOutcome>({ review: advisoryReview }),
         runWorkersOpinion(
@@ -1321,6 +1506,8 @@ export async function runGittensoryAiReview(
           user,
           maxTokens,
           reviewDiagnostics,
+          repoInstructionsSystemAppend,
+          aiRunCorrelation,
         ),
       ]);
       if (a.fallbackNote) fallbackNotes.push(a.fallbackNote);
@@ -1345,6 +1532,8 @@ export async function runGittensoryAiReview(
             user,
             maxTokens,
             reviewDiagnostics,
+            repoInstructionsSystemAppend,
+            aiRunCorrelation,
           )
         : ({ review: advisoryReview } as ReviewerOpinionOutcome);
       if (a.fallbackNote) fallbackNotes.push(a.fallbackNote);
@@ -1400,6 +1589,7 @@ export async function runGittensoryAiReview(
       inconclusive,
       ...(byokFailure ? { byokFailure } : {}),
     },
+    aggregateActualUsage(reviewDiagnostics),
   );
   return {
     status: "ok",
@@ -1429,6 +1619,54 @@ function reviewerModelLabel(env: Env, input: GittensoryAiReviewInput): string {
   return BEST_REVIEW_MODELS.join("+");
 }
 
+function joinedUnique(values: Iterable<string | undefined>): string | undefined {
+  const unique = [...new Set([...values].filter((value): value is string => Boolean(value)))];
+  return unique.length > 0 ? unique.join("+") : undefined;
+}
+
+function sumUsageField(
+  usages: readonly AiReviewActualUsage[],
+  key: "inputTokens" | "outputTokens" | "totalTokens" | "costUsd",
+): number | undefined {
+  let sawValue = false;
+  let total = 0;
+  for (const usage of usages) {
+    const value = usage[key];
+    if (value === undefined) continue;
+    sawValue = true;
+    total += value;
+  }
+  return sawValue ? total : undefined;
+}
+
+function aggregateActualUsage(diagnostics: readonly AiReviewDiagnostic[]): AiReviewActualUsage | undefined {
+  const usages = diagnostics.map((diagnostic) => diagnostic.usage).filter((usage): usage is AiReviewActualUsage => Boolean(usage));
+  if (usages.length === 0) return undefined;
+  const inputTokens = sumUsageField(usages, "inputTokens");
+  const outputTokens = sumUsageField(usages, "outputTokens");
+  let sawTotalTokens = false;
+  let totalTokensSum = 0;
+  for (const usage of usages) {
+    const total =
+      usage.totalTokens ??
+      (usage.inputTokens !== undefined || usage.outputTokens !== undefined
+        ? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)
+        : undefined);
+    if (total === undefined) continue;
+    sawTotalTokens = true;
+    totalTokensSum += total;
+  }
+  return {
+    provider: joinedUnique(usages.map((usage) => usage.provider)),
+    model: joinedUnique(usages.map((usage) => usage.model)),
+    effort: joinedUnique(usages.map((usage) => usage.effort)),
+    inputTokens,
+    outputTokens,
+    totalTokens: sawTotalTokens ? totalTokensSum : undefined,
+    costUsd: sumUsageField(usages, "costUsd"),
+  };
+}
+
 async function record(
   env: Env,
   input: GittensoryAiReviewInput,
@@ -1436,6 +1674,7 @@ async function record(
   estimatedNeurons: number,
   detail: string,
   metadata?: Record<string, unknown>,
+  actualUsage?: AiReviewActualUsage | undefined,
 ): Promise<void> {
   // NEVER include provider key material in usage/audit metadata.
   await recordAiUsageEvent(env, {
@@ -1447,6 +1686,12 @@ async function record(
       : reviewerModelLabel(env, input),
     status,
     estimatedNeurons,
+    provider: actualUsage?.provider,
+    effort: actualUsage?.effort,
+    inputTokens: actualUsage?.inputTokens,
+    outputTokens: actualUsage?.outputTokens,
+    totalTokens: actualUsage?.totalTokens,
+    costUsd: actualUsage?.costUsd,
     detail,
     metadata: {
       repoFullName: input.repoFullName,
@@ -1469,4 +1714,6 @@ export const __aiReviewInternals = {
   toPublicSafe,
   estimateNeurons,
   runWorkersOpinion,
+  coerceAiUsage,
+  aggregateActualUsage,
 };

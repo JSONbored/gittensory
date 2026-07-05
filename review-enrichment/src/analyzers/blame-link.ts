@@ -12,15 +12,13 @@ import type {
 } from "../types.js";
 import type { AnalysisContext } from "../analysis-context.js";
 import { boundedFetchJson } from "../external-fetch.js";
+import { isHistoryUninformativePath } from "./history-path.js";
 
 const GITHUB_API = "https://api.github.com";
 const SLUG_RE = /^[A-Za-z0-9._-]+$/;
 const MAX_FILES_PROBED = 6; // bound the files we probe, matching the other history-class analyzers
 const MAX_LOOKUPS = 12; // hard cap on total GitHub round-trips (each file costs up to 2: commits + pulls)
 const SHA_PREFIX_LEN = 12;
-// Files whose commit history is not a useful "who introduced this" signal — lockfiles, generated output, binaries.
-const SKIP_RE =
-  /(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|go\.sum)$|\.(?:lock|min\.js|map|snap|png|jpe?g|gif|svg|ico|pdf|zip|gz|woff2?)$|(?:^|\/)(?:dist|build|vendor)\//i;
 
 interface ScanOptions {
   signal?: AbortSignal;
@@ -159,7 +157,7 @@ export async function scanBlameLink(
   // additions (a patch with no deletion line has no prior author to attribute).
   const candidates: Array<{ lookupPath: string; displayPath: string; line: number }> = [];
   for (const file of files) {
-    if (file.status === "added" || SKIP_RE.test(file.path)) continue;
+    if (file.status === "added" || isHistoryUninformativePath(file.path)) continue;
     let line = file.patch ? firstTouchedOldLine(file.patch) : null;
     // A removed OR renamed file resolves against the base tree even without a usable patch (binary/truncated, or a
     // pure rename with no content change). Anchor to line 1 as the representative point.

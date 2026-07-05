@@ -24,6 +24,7 @@ describe("orb relay delivery policy", () => {
     it("does not persist success outcomes or permanently non-forwardable events", () => {
       expect(shouldPersistRelayFailure("forwarded", "pull_request", 42)).toBe(false);
       expect(shouldPersistRelayFailure("queued", "pull_request", 42)).toBe(false);
+      expect(shouldPersistRelayFailure("ignored", "pull_request", 42)).toBe(false);
       expect(shouldPersistRelayFailure("skipped", "check_run", 42)).toBe(false);
       expect(shouldPersistRelayFailure("failed", "check_run", 42)).toBe(false);
     });
@@ -38,6 +39,7 @@ describe("orb relay delivery policy", () => {
     it("deletes rows after successful delivery", () => {
       expect(isRelayFailureRetryTerminal("forwarded", "pull_request")).toBe(true);
       expect(isRelayFailureRetryTerminal("queued", "pull_request")).toBe(true);
+      expect(isRelayFailureRetryTerminal("ignored", "pull_request")).toBe(true);
     });
 
     it("deletes skipped rows only when the event is permanently non-forwardable", () => {

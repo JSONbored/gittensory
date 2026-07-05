@@ -939,6 +939,39 @@ describe("GitHub backfill", () => {
     );
   });
 
+  it("REGRESSION (#2912): repair diagnostics honor a .gittensory.yml-only checkRunMode: enabled override (DB row left at off)", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);
+    // DB row explicitly says checkRunMode: off; only the yml manifest turns it on, so this only passes if the
+    // resolver (not the raw DB accessor) is consulted for the installed-repo settings scan.
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", checkRunMode: "off" });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.endsWith("/.gittensory.yml")) return new Response("settings:\n  checkRunMode: enabled\n", { status: 200 });
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const repair = await buildInstallationRepairDiagnostics(env, {
+      installationId: 123,
+      accountLogin: "JSONbored",
+      repositorySelection: "selected",
+      installedReposCount: 1,
+      registeredInstalledCount: 0,
+      status: "healthy",
+      missingPermissions: [],
+      missingEvents: [],
+      permissions: { metadata: "read", pull_requests: "read", issues: "write" },
+      events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+      checkedAt: "2026-05-28T00:00:00.000Z",
+      authMode: "local",
+    });
+
+    expect(repair.requiredPermissions).toHaveProperty("checks");
+    expect(repair.modeImpacts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ mode: "check_run", enabled: true, affectedRepoCount: 1 })]),
+    );
+  });
+
   it("repair diagnostics require contents:write for merge autonomy (#audit-install-health display)", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);
@@ -1115,6 +1148,22 @@ describe("GitHub backfill", () => {
       checkRunDetailLevel: "standard",
       backfillEnabled: false,
       privateTrustEnabled: true,
+    });
+
+    const result = await backfillRegisteredRepositories(env);
+
+    expect(result.repos[0]).toMatchObject({ status: "skipped", warnings: ["Backfill is disabled for this repository."] });
+  });
+
+  it("REGRESSION (#2912): honors a .gittensory.yml-only backfillEnabled: false override (DB row left at its true default)", async () => {
+    const env = createTestEnv();
+    await seedRegisteredRepo(env);
+    // No upsertRepositorySettings call: the DB row stays at its default (backfillEnabled: true). Only the
+    // yml manifest disables it, so this only passes if the resolver (not the raw DB accessor) is consulted.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.endsWith("/.gittensory.yml")) return new Response("settings:\n  backfillEnabled: false\n", { status: 200 });
+      return new Response("Not Found", { status: 404 });
     });
 
     const result = await backfillRegisteredRepositories(env);

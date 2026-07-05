@@ -35,8 +35,17 @@ function findPython(): string | null {
 
 describe("gittensor-score-preview.mjs classifier parity with the server", () => {
   it("counts module-ext source as code and pytest-prefix/Cypress files as tests, matching isTestPath/isCodeFile", () => {
-    const out = runPreview([...SAMPLE, { path: "app/FooTests.java", additions: 7, deletions: 0 }]); // + JVM test control
-    expect(out.sourceTokenScore).toBe(10); // only src/loader.mts is source now
+    const out = runPreview([
+      ...SAMPLE,
+      { path: "app/FooTests.java", additions: 7, deletions: 0 }, // + JVM test control
+      { path: "src/native/add.c", additions: 2, deletions: 0 },
+      { path: "src/native/add.cpp", additions: 3, deletions: 0 },
+      { path: "include/native/add.h", additions: 4, deletions: 0 },
+      { path: "native/src/parser.cc", additions: 5, deletions: 0 },
+      { path: "libs/core/types.hpp", additions: 7, deletions: 0 },
+      { path: "src/objc/View.m", additions: 6, deletions: 0 },
+    ]);
+    expect(out.sourceTokenScore).toBe(37); // src/loader.mts + native source extensions
     expect(out.testTokenScore).toBe(SAMPLE_TEST_LINES + 7); // cy + pytest + root snapshot + JVM tests
     expect(out.nonCodeTokenScore).toBe(0); // the .mts is no longer misfiled as non-code
   });
@@ -54,6 +63,130 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
     expect(out.sourceTokenScore).toBe(10);
     expect(out.testTokenScore).toBe(SAMPLE_TEST_LINES);
     expect(out.nonCodeTokenScore).toBe(0);
+  });
+
+  it("the .py fallback classifier also counts native source extensions as code, matching the .mjs (skipped when no python is available)", () => {
+    // Regression coverage for the native-extension addition (.c/.cpp/.h/.m): the earlier .py assertion above only
+    // exercised SAMPLE, which carries no native files, so it never actually covered metadata_fallback's native
+    // branch. Mirror the .mjs native-extension case here so drift between the two mirrors is caught.
+    const python = findPython();
+    if (!python) return;
+    const nativeFiles = [
+      { path: "src/native/add.c", additions: 2, deletions: 0 },
+      { path: "src/native/add.cpp", additions: 3, deletions: 0 },
+      { path: "include/native/add.h", additions: 4, deletions: 0 },
+      { path: "native/src/parser.cc", additions: 5, deletions: 0 },
+      { path: "libs/core/types.hpp", additions: 7, deletions: 0 },
+      { path: "src/objc/View.m", additions: 6, deletions: 0 },
+    ];
+    const env = { ...process.env };
+    delete env.GITTENSOR_ROOT;
+    const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: nativeFiles }), encoding: "utf8", env });
+    expect(res.status, res.stderr).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.sourceTokenScore).toBe(27); // 2 + 3 + 4 + 5 + 7 + 6
+    expect(out.testTokenScore).toBe(0);
+    expect(out.nonCodeTokenScore).toBe(0);
+  });
+
+  it("classifies upper-case native source extensions as code identically in the .mjs and .py previews", () => {
+    // Regression test: gittensor-score-preview.py's metadata_fallback used a case-SENSITIVE path.endswith(...)
+    // tuple while the .mjs/.ts classifiers are case-insensitive (`/i` flag), so an upper-case native path like
+    // `Foo.C` or `Foo.H` was miscounted as non-code by the Python preview only. Both previews must agree.
+    const upperCaseFiles = [
+      { path: "src/native/Foo.C", additions: 2, deletions: 0 },
+      { path: "include/native/Foo.H", additions: 4, deletions: 0 },
+      { path: "native/src/Parser.CC", additions: 5, deletions: 0 },
+      { path: "libs/core/Types.HPP", additions: 3, deletions: 0 },
+    ];
+    const mjs = runPreview(upperCaseFiles);
+    expect(mjs.sourceTokenScore).toBe(14);
+    expect(mjs.nonCodeTokenScore).toBe(0);
+
+    const python = findPython();
+    if (!python) return;
+    const env = { ...process.env };
+    delete env.GITTENSOR_ROOT;
+    const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: upperCaseFiles }), encoding: "utf8", env });
+    expect(res.status, res.stderr).toBe(0);
+    const py = JSON.parse(res.stdout);
+    expect(py.sourceTokenScore).toBe(14);
+    expect(py.nonCodeTokenScore).toBe(0);
+  });
+
+  it("classifies Dart/Flutter source and *_test.dart tests in both .mjs and .py previews", () => {
+    // Parity with src/signals/test-evidence.ts: co-located `foo_test.dart` must count as test evidence,
+    // while hand-authored `.dart` source counts as code (rag.ts already indexes .dart).
+    const files = [
+      { path: "lib/models/user_test.dart", additions: 8, deletions: 0 },
+      { path: "lib/models/user.dart", additions: 3, deletions: 0 },
+    ];
+    const mjs = runPreview(files);
+    expect(mjs.testTokenScore).toBe(8);
+    expect(mjs.sourceTokenScore).toBe(3);
+    expect(mjs.nonCodeTokenScore).toBe(0);
+
+    const python = findPython();
+    if (!python) return;
+    const env = { ...process.env };
+    delete env.GITTENSOR_ROOT;
+    const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: files }), encoding: "utf8", env });
+    expect(res.status, res.stderr).toBe(0);
+    const py = JSON.parse(res.stdout);
+    expect(py.testTokenScore).toBe(8);
+    expect(py.sourceTokenScore).toBe(3);
+    expect(py.nonCodeTokenScore).toBe(0);
+  });
+
+  it("classifies Vue/Svelte/Astro source as code in both .mjs and .py previews", () => {
+    // Parity with review/rag.ts CODE_EXT_RE and review/visual/paths.ts: front-end framework
+    // source must count as code, not non-code, in every mirrored classifier.
+    const files = [
+      { path: "src/App.vue", additions: 6, deletions: 0 },
+      { path: "src/Widget.svelte", additions: 4, deletions: 0 },
+      { path: "src/pages/index.astro", additions: 5, deletions: 0 },
+      { path: "README.md", additions: 2, deletions: 0 }, // non-code control
+    ];
+    const mjs = runPreview(files);
+    expect(mjs.sourceTokenScore).toBe(15);
+    expect(mjs.testTokenScore).toBe(0);
+    expect(mjs.nonCodeTokenScore).toBe(2);
+
+    const python = findPython();
+    if (!python) return;
+    const env = { ...process.env };
+    delete env.GITTENSOR_ROOT;
+    const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: files }), encoding: "utf8", env });
+    expect(res.status, res.stderr).toBe(0);
+    const py = JSON.parse(res.stdout);
+    expect(py.sourceTokenScore).toBe(15);
+    expect(py.testTokenScore).toBe(0);
+    expect(py.nonCodeTokenScore).toBe(2);
+  });
+
+  it("classifies PascalCase PHP test files as tests in both .mjs and .py previews", () => {
+    // Parity with src/signals/test-evidence.ts: PHPUnit/PHPSpec class-suffix files must not be counted as
+    // PHP source simply because they live outside a conventional tests/ directory.
+    const files = [
+      { path: "app/Domain/FooTest.php", additions: 8, deletions: 0 },
+      { path: "app/Domain/FooSpec.php", additions: 5, deletions: 0 },
+      { path: "app/Domain/Latest.php", additions: 3, deletions: 0 }, // source control: suffix is not a test token
+    ];
+    const mjs = runPreview(files);
+    expect(mjs.testTokenScore).toBe(13);
+    expect(mjs.sourceTokenScore).toBe(3);
+    expect(mjs.nonCodeTokenScore).toBe(0);
+
+    const python = findPython();
+    if (!python) return;
+    const env = { ...process.env };
+    delete env.GITTENSOR_ROOT;
+    const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: files }), encoding: "utf8", env });
+    expect(res.status, res.stderr).toBe(0);
+    const py = JSON.parse(res.stdout);
+    expect(py.testTokenScore).toBe(13);
+    expect(py.sourceTokenScore).toBe(3);
+    expect(py.nonCodeTokenScore).toBe(0);
   });
 
   it("does not misclassify a *.test.mjs.map source-map as a test (extension anchored to end-of-path, matching the server)", () => {

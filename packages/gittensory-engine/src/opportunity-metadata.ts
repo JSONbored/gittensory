@@ -1,4 +1,4 @@
-import { computeMinerGoalLaneFit } from "./miner-goal-lane-fit.js";
+import { computeMetadataLaneFit, isMinerRepoTargetable } from "./miner-goal-lane-fit.js";
 import { DEFAULT_MINER_GOAL_SPEC, type MinerGoalSpec } from "./miner-goal-spec.js";
 import { computeOpportunityCompetition } from "./opportunity-competition.js";
 import { computeOpportunityFreshness } from "./opportunity-freshness.js";
@@ -13,6 +13,8 @@ export type MetadataCandidateIssue = {
   issueNumber: number;
   title: string;
   labels: readonly string[];
+  /** When present, lane fit uses path+label goal matching instead of labels alone. */
+  candidatePaths?: readonly string[] | undefined;
   commentsCount: number;
   createdAt?: string | null | undefined;
   updatedAt?: string | null | undefined;
@@ -78,13 +80,16 @@ const STALE_AGE_DAYS = 9999;
 
 /* v8 ignore start -- Internal timestamp helpers mirror freshness semantics; exercised via exported ranker paths. */
 function pickMetadataTimestamp(issue: MetadataCandidateIssue): string {
+  // Mirror freshness semantics (opportunity-freshness's pickTimestamp): only commit to a timestamp that actually
+  // parses. Without the guard, a present-but-unparseable updatedAt shadows a valid createdAt, so issueAgeDays
+  // hits the STALE_AGE_DAYS sentinel and a genuinely fresh issue is scored as maximally stale.
   if (typeof issue.updatedAt === "string") {
     const updated = issue.updatedAt.trim();
-    if (updated) return updated;
+    if (updated && Number.isFinite(Date.parse(updated))) return updated;
   }
   if (typeof issue.createdAt === "string") {
     const created = issue.createdAt.trim();
-    if (created) return created;
+    if (created && Number.isFinite(Date.parse(created))) return created;
   }
   return "";
 }
@@ -204,7 +209,7 @@ export function buildMetadataRankInput(
   return {
     potential: computeMetadataPotential(issue),
     feasibility: computeMetadataFeasibility(issue, context.nowMs),
-    laneFit: computeMinerGoalLaneFit(issue, goalSpec),
+    laneFit: computeMetadataLaneFit(issue, goalSpec),
     freshness: computeOpportunityFreshness(
       /* v8 ignore next */
       [{ state: "open", updatedAt: issue.updatedAt ?? null, createdAt: issue.createdAt ?? null }],
@@ -220,9 +225,12 @@ export function rankMetadataOpportunities<T extends MetadataCandidateIssue>(
   candidates: readonly T[],
   context: MetadataRankContext,
 ): Array<T & OpportunityRankInput & { rankScore: number }> {
-  const annotated = candidates.map((candidate) => ({
+  const targetableCandidates = candidates.filter((candidate) =>
+    isMinerRepoTargetable(resolveGoalSpec(candidate.repoFullName, context)),
+  );
+  const annotated = targetableCandidates.map((candidate) => ({
     ...candidate,
-    ...buildMetadataRankInput(candidate, candidates, context),
+    ...buildMetadataRankInput(candidate, targetableCandidates, context),
   }));
   /* v8 ignore next */
   return rankOpportunities(annotated) as Array<T & OpportunityRankInput & { rankScore: number }>;

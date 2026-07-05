@@ -61,6 +61,11 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
     expect(typeof entry.enqueuedAt).toBe("string");
   });
 
+  it("treats a null priority as the default 0", () => {
+    const entry = tempStore().enqueue({ repoFullName: "o/a", identifier: "x", priority: null });
+    expect(entry.priority).toBe(0);
+  });
+
   it("dequeues highest-priority first, then by insertion order within a priority band", () => {
     // Freeze the clock so same-priority items share enqueued_at — proving the rowid FIFO tie-break, not a timestamp.
     vi.useFakeTimers();
@@ -111,6 +116,7 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
     expect(store.listQueue("o/a").map((entry) => entry.identifier)).toEqual(["2", "1"]); // priority DESC
     expect(store.listQueue("o/b").map((entry) => entry.repoFullName)).toEqual(["o/b"]);
     expect(store.listQueue().length).toBe(3);
+    expect(store.listQueue(null).length).toBe(3);
   });
 
   it("re-enqueue re-activates a done item and refreshes its placeholder priority", () => {
@@ -154,6 +160,7 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
     expect(() => store.enqueue({ repoFullName: "o/a", identifier: "1", priority: Number.NaN })).toThrow(
       "invalid_priority",
     );
+    expect(() => store.enqueue({ repoFullName: "o/a", identifier: "1", priority: -1 })).toThrow("invalid_priority");
     // listQueue and markDone enforce the same repo/identifier validation as enqueue.
     expect(() => store.listQueue("no-slash")).toThrow("invalid_repo_full_name");
     expect(() => store.markDone("no-slash", "1")).toThrow("invalid_repo_full_name");

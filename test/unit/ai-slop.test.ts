@@ -205,6 +205,17 @@ describe("runGittensoryAiSlopAdvisory gating + fail-safe", () => {
     expect(result.estimatedNeurons).toBeGreaterThanOrEqual(6);
   });
 
+  it("degrades to no finding when env.AI is present but not a valid runner (no .run function)", async () => {
+    const env = createTestEnv({
+      AI: {} as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    const result = await runGittensoryAiSlopAdvisory(env, baseInput);
+    expect(result).toMatchObject({ status: "ok", finding: null, band: null });
+  });
+
   it("returns an advisory finding when the model flags an elevated band", async () => {
     const run = vi.fn(async () => ({ response: slopJson({ band: "elevated" }) }));
     const result = await runGittensoryAiSlopAdvisory(enabledEnv(run), baseInput);
@@ -254,6 +265,47 @@ describe("runGittensoryAiSlopAdvisory gating + fail-safe", () => {
     expect(result.status).toBe("quota_exceeded");
     expect(fetchMock).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it("records real BYOK usage (tokens + cost) on the durable audit row", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              content: [{ type: "text", text: slopJson({ band: "elevated" }) }],
+              usage: { input_tokens: 500, output_tokens: 50 },
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+    const env = enabledEnv(vi.fn());
+    const result = await runGittensoryAiSlopAdvisory(env, {
+      ...baseInput,
+      providerKey: { provider: "anthropic", key: "sk-ant-x", model: "claude-sonnet-5" },
+    });
+    expect(result.status).toBe("ok");
+    const row = await env.DB.prepare(
+      `select provider, input_tokens, output_tokens, total_tokens, cost_usd
+       from ai_usage_events where feature = ? order by rowid desc limit 1`,
+    )
+      .bind("ai_slop_pr")
+      .first<{
+        provider: string | null;
+        input_tokens: number;
+        output_tokens: number;
+        total_tokens: number;
+        cost_usd: number;
+      }>();
+    expect(row).toMatchObject({
+      provider: "anthropic",
+      input_tokens: 500,
+      output_tokens: 50,
+      total_tokens: 550,
+      cost_usd: 0.00225,
+    });
   });
 });
 

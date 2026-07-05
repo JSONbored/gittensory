@@ -77,6 +77,18 @@ SELFHOST_SETUP_TOKEN=change-this-long-random-value  # unlocks /setup for a fresh
         header instead; never place the setup token in the URL.
       </p>
       <Callout variant="note">
+        <code>https://reviews.example.com</code> above is a placeholder — it assumes you already
+        have a real domain terminating TLS. GitHub delivers webhooks to whatever{" "}
+        <code>PUBLIC_API_ORIGIN</code> you set here, so it must be an address GitHub's servers can
+        actually reach: the <code>caddy</code> profile (see{" "}
+        <Link to="/docs/self-hosting-security">Security</Link>'s TLS termination section) is the
+        shipped way to get one, or bring your own public reverse proxy. The <code>tailscale</code>{" "}
+        profile's private tailnet address does <strong>not</strong> work here — GitHub cannot
+        deliver webhooks to it. A Tailscale-only instance should use brokered pull mode instead (it
+        polls for work rather than receiving pushed webhooks) — see "Pull vs. push relay mode"
+        below.
+      </Callout>
+      <Callout variant="note">
         Manual App creation (below) is still fully supported — for an air-gapped instance, a
         stricter change-review process, or simply a preference for reviewing every permission by
         hand before it exists. Whichever path you take, the resulting App needs the SAME
@@ -175,7 +187,7 @@ GITHUB_WEBHOOK_SECRET=<same-secret-configured-on-the-app>`}
           {
             title: "What's never exported",
             description:
-              "Repo/owner/PR names, commit SHAs, source code, diffs, comments, or logins. Repo/PR identifiers are HMAC-anonymized with a per-instance secret gittensory's own collector never holds.",
+              "Repo/owner/PR names, commit SHAs, source code, diffs, comments, or logins. Repo/PR identifiers are HMAC-anonymized by default with a per-instance secret gittensory's own collector never holds.",
           },
           {
             title: "Disabling it",
@@ -184,16 +196,70 @@ GITHUB_WEBHOOK_SECRET=<same-secret-configured-on-the-app>`}
           },
         ]}
       />
+      <Callout variant="warn" title="ORB_ANONYMIZE">
+        Repo/PR identifiers are HMAC-anonymized by <strong>default</strong> (
+        <code>ORB_ANONYMIZE=true</code>), not unconditionally — an operator can set{" "}
+        <code>ORB_ANONYMIZE=false</code> to export raw repo/PR names instead. There's no scenario
+        where gittensory's own hosted collector needs raw names; the toggle exists for an operator
+        running their <strong>own</strong> collector (see <code>ORB_COLLECTOR_URL</code> below) who
+        wants readable identifiers in their own infrastructure. Leave this at the default unless you
+        control the collector end.
+      </Callout>
+      <p>
+        <code>ORB_COLLECTOR_URL</code> overrides the export endpoint — default gittensory's hosted
+        collector, or point it at your own private collector if you're aggregating telemetry
+        yourself instead of sending it to gittensory. <code>ORB_COLLECTOR_TOKEN</code> is the bearer
+        credential for that private collector; leave it unset when using gittensory's own hosted
+        collector, which accepts unauthenticated, rate-limited, aggregate-only exports.
+      </p>
 
       <h2>Brokered Orb env</h2>
       <CodeBlock
         filename=".env"
         code={`ORB_ENROLLMENT_SECRET=<issued-once-by-orb>
-ORB_BROKER_URL=https://gittensory-api.aethereal.dev`}
+ORB_BROKER_URL=https://gittensory-api.aethereal.dev
+ORB_RELAY_MODE=pull  # or omit for push (the default) -- see "Choosing a relay mode" below`}
+      />
+      <p>
+        <code>ORB_APP_ID</code> overrides the seed used to derive this instance&apos;s stable,
+        anonymous <code>instance_id</code> in telemetry exports — normally derived from{" "}
+        <code>GITHUB_APP_ID</code>. A brokered instance holds no App ID of its own (it uses the
+        broker&apos;s tokens instead), so its identity falls back to the export secret unless you
+        set <code>ORB_APP_ID</code> explicitly. Most operators never need to set this; it exists so
+        a brokered instance's telemetry identity can be pinned independent of any App ID.
+      </p>
+
+      <h2>Choosing a relay mode: pull vs. push</h2>
+      <p>
+        Brokered mode still needs a way for GitHub webhook events to reach your self-host through
+        the broker. <code>ORB_RELAY_MODE</code> picks how:
+      </p>
+      <FeatureRow
+        items={[
+          {
+            title: "pull (recommended for NAT/tailnet — no public ingress needed)",
+            description:
+              "The container polls the broker outbound on a short interval and drains queued events -- no inbound endpoint is ever exposed, and PUBLIC_API_ORIGIN is not required. A failed registration attempt is non-fatal (logged as a warning, not an error): the drain loop keeps retrying on its own schedule and events still arrive once it succeeds.",
+          },
+          {
+            title: "push (the default — requires a stable public origin)",
+            description:
+              "The broker calls your self-host directly at PUBLIC_API_ORIGIN, which must be a real, internet-reachable, TLS-terminated URL -- the broker validates it server-side at registration time and rejects a loopback or private address outright. A failed registration is fatal: the container looks healthy but never receives an event, since there's no fallback delivery path.",
+          },
+        ]}
       />
       <Callout variant="note">
-        Brokered mode is useful when the self-host should not hold a GitHub App private key. It
-        still needs a reachable webhook path or relay mode, depending on the network setup.
+        If you're not behind a stable public ingress — a home connection, a NAT without port
+        forwarding, a tailnet-only deployment — set <code>ORB_RELAY_MODE=pull</code>. It needs no
+        DNS record, TLS certificate, or firewall rule of its own, and tolerates a transient broker
+        outage more gracefully (see the release checklist's known-warnings table below). Use push
+        only once you already have a stable, publicly reachable HTTPS origin for this instance — the
+        Direct App setup wizard, for instance, always requires one anyway, so an operator running
+        Direct App today has it available for brokered push mode too. See{" "}
+        <Link to="/docs/self-hosting-security">Security</Link>'s TLS termination section for how to
+        stand one up: the <code>caddy</code> profile for a public domain, or note that{" "}
+        <code>tailscale</code>'s private tailnet address does not satisfy push mode's
+        internet-reachable requirement — pull mode is the right fit for a Tailscale-only instance.
       </Callout>
       <Callout variant="warn" title="Brokered mode operational risks">
         Before enabling this for anyone outside a controlled managed-beta cohort, weigh: (1){" "}
@@ -239,19 +305,32 @@ ORB_BROKER_URL=https://gittensory-api.aethereal.dev`}
       <p>
         See <Link to="/docs/self-hosting-troubleshooting">Troubleshooting</Link> for what a degraded
         brokered relay looks like in logs today, and{" "}
-        <Link to="/docs/self-hosting-release-checklist">the beta release checklist</Link>'s
-        brokered-mode scenario for the smoke test that exercises this path.
+        <Link to="/docs/self-hosting-release-checklist">the release checklist</Link>'s brokered-mode
+        scenario for the smoke tests that exercise both relay modes.
       </p>
 
-      <h2>Webhook checks</h2>
+      <h2>Connectivity checks</h2>
+      <p>
+        Confirm you can reach the instance at all before checking GitHub's own webhook delivery:
+      </p>
       <CodeBlock
         lang="bash"
         code={`curl https://reviews.example.com/health
 curl https://reviews.example.com/ready`}
       />
       <p>
+        <code>reviews.example.com</code> here stands in for whatever you're checking from — the{" "}
+        <code>caddy</code> profile's domain, an existing reverse proxy, or (if you're on the same
+        tailnet) a Tailscale instance's tailnet address on port 8787. This only confirms{" "}
+        <em>you</em> can reach the instance, not that <em>GitHub</em> can — a Tailscale-only
+        instance in push mode will pass this check and still never receive a real webhook, since
+        GitHub itself cannot reach a private tailnet address (see the callout above on{" "}
+        <code>PUBLIC_API_ORIGIN</code>).
+      </p>
+      <p>
         After installing the App on a test repo, open a small PR and confirm the webhook delivery
-        appears in GitHub and a job appears in self-host logs. Continue with{" "}
+        appears in GitHub and a job appears in self-host logs — this is the check that actually
+        proves GitHub can reach you. Continue with{" "}
         <Link to="/docs/self-hosting-operations">Operations</Link> for log and metric checks.
       </p>
     </DocsPage>

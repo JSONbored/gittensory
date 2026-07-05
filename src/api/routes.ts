@@ -101,6 +101,9 @@ import {
   getRepositoryAiKeyStatus,
   upsertRepositoryAiKey,
   deleteRepositoryAiKey,
+  getRepositoryLinearKeyStatus,
+  upsertRepositoryLinearKey,
+  deleteRepositoryLinearKey,
   getGlobalAgentFrozenState,
   setGlobalAgentFrozen,
 } from "../db/repositories";
@@ -132,7 +135,13 @@ import { handleOrbIngest, readOrbIngestBody } from "../orb/ingest";
 import { handleOrbWebhook } from "../orb/webhook";
 import { handleOrbOAuthCallback } from "../orb/oauth";
 import { brokerOrbToken, isOrbBrokerEnabled, issueOrbEnrollment } from "../orb/broker";
-import { pullRelayPending, readOrbRelayRegisterBody, registerValidatedOrbRelay, validateOrbRelayEnrollment } from "../orb/relay";
+import {
+  MAX_ORB_RELAY_REGISTER_BODY_BYTES,
+  pullRelayPending,
+  readOrbRelayRegisterBody,
+  registerValidatedOrbRelay,
+  validateOrbRelayEnrollment,
+} from "../orb/relay";
 import { computeFleetAnalytics } from "../orb/analytics";
 import { handleMcpRequest } from "../mcp/server";
 import { buildOpenApiSpec } from "../openapi/spec";
@@ -271,6 +280,12 @@ import type {
   RepositorySettings,
 } from "../types";
 import { errorMessage, nowIso } from "../utils/json";
+import {
+  queueDeadLetterPageFromBinding,
+  queueDeleteDeadLetterJobViaBinding,
+  queuePurgeDeadLetterJobsViaBinding,
+  queueReplayDeadLetterJobViaBinding,
+} from "../selfhost/queue-common";
 
 type AppBindings = { Bindings: Env };
 type AppContext = Context<AppBindings>;
@@ -282,6 +297,10 @@ type AppContext = Context<AppBindings>;
 async function loadPublicRepoBadge(env: Env, owner: string, repo: string): Promise<PublicRepoQuality | null> {
   const repository = await getRepository(env, `${owner}/${repo}`);
   if (!repository || repository.isPrivate || !repository.isInstalled) return null;
+  // Intentionally the raw DB row, not resolveRepositorySettings: this is an unauthenticated, high-frequency
+  // public route (a README-embedded badge image), so it deliberately trades honoring a yml-only `badgeEnabled`
+  // override for avoiding a manifest-cache lookup (and a possible cold-cache GitHub fetch) on every image load.
+  // `badgeEnabled` is normally set via the dashboard/API, which persists straight to this same DB row (#2912).
   const settings = await getRepositorySettings(env, repository.fullName);
   if (!settings.badgeEnabled) return null;
   const pullRequests = await listPullRequests(env, repository.fullName);
@@ -435,6 +454,13 @@ const issueSlopSchema = z.object({
   body: z.string().max(40000).optional(),
 });
 
+const selfhostDeadLetterQueueQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().optional(),
+    offset: z.coerce.number().int().optional(),
+  })
+  .strict();
+
 const skippedPrAuditQuerySchema = z
   .object({
     limit: z.coerce.number().int().optional(),
@@ -507,7 +533,7 @@ const focusManifestInputSchema = z
     message: `focusManifest must serialize to ${MAX_FOCUS_MANIFEST_BYTES} bytes or fewer`,
   });
 
-const localBranchAnalysisSchema = z
+export const localBranchAnalysisSchema = z
   .object({
     login: z.string().min(1).max(MAX_LOCAL_BRANCH_REF_CHARS),
     repoFullName: z.string().min(3).max(SCENARIO_MAX_REPO_FULL_NAME_CHARS),
@@ -607,7 +633,10 @@ const repositorySettingsSchema = z.object({
   publicAudienceMode: z.enum(["oss_maintainer", "gittensor_only"]).default("oss_maintainer"),
   publicSignalLevel: z.enum(["minimal", "standard"]).default("standard"),
   checkRunMode: z.enum(["off", "enabled"]).default("off"),
-  checkRunDetailLevel: z.enum(["minimal", "standard", "deep"]).default("standard"),
+  // Matches repository_settings.check_run_detail_level's own column default (#2907) -- the Context check's
+  // public output is intentionally minimal by design (see formatCheckRunOutput's doc comment), so a caller of
+  // this full-replace route that omits this field must land on the same safe default as a never-configured row.
+  checkRunDetailLevel: z.enum(["minimal", "standard", "deep"]).default("minimal"),
   gateCheckMode: z.enum(["off", "enabled"]).default("off"),
   // #2852: deliberately NO `.default()` here (unlike every sibling field above) -- this is a non-partial,
   // full-replace schema (see upsertRepositorySettings call below, which passes every parsed field straight
@@ -729,6 +758,12 @@ const repositoryAiKeySchema = z
     message: "API key does not match the selected provider (Anthropic keys start with sk-ant-, OpenAI keys start with sk-).",
     path: ["key"],
   });
+
+// Linear personal API key (#3186) -- no provider-prefix assertion (unlike the AI-key schema above): Linear's
+// key format is not a stable enough public contract to hard-validate against, so only a length bound applies.
+const repositoryLinearKeySchema = z.object({
+  key: z.string().trim().min(20).max(400),
+});
 
 // Maintainer-settable AI-review config (the non-secret subset of settings). The secret key is set
 // separately via the ai-key route; never here.
@@ -1120,6 +1155,8 @@ export function createApp() {
   });
 
   app.get("/v1/app/overview", async (c) => {
+    const forbidden = await requireAppRole(c, ["maintainer", "owner", "operator"]);
+    if (forbidden) return forbidden;
     const identity = await authenticateRequestIdentity(c);
     const login = identity?.kind === "session" ? identity.actor : undefined;
     const [repositories, installations, health, registry, scoring, upstreamDrift, rateLimits, runs, roleSummary] = await Promise.all([
@@ -1365,6 +1402,104 @@ export function createApp() {
     const forbidden = await requireAppRole(c, ["operator"]);
     if (forbidden) return forbidden;
     return c.json(await buildOperatorDashboardPayload(c.env));
+  });
+
+  // Dead-letter-queue table view (#2214), read-only: the self-host queue backend's admin surface is mirrored
+  // onto `env.JOBS` (see queueDeadLetterPageFromBinding) rather than a new Env field -- absent entirely on
+  // Cloudflare, where the plain Queue binding has neither method.
+  app.get("/v1/app/selfhost/queue/dead", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const parsed = selfhostDeadLetterQueueQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) return c.json({ error: "invalid_query", issues: parsed.error.issues }, 400);
+    const limit = clampInteger(parsed.data.limit ?? 25, 1, 100);
+    const offset = Math.max(0, parsed.data.offset ?? 0);
+    const page = await queueDeadLetterPageFromBinding(c.env.JOBS, limit, offset);
+    if (!page) {
+      return c.json(
+        { error: "dead_letter_admin_unavailable", message: "This deployment's queue backend does not expose dead-letter admin." },
+        501,
+      );
+    }
+    return c.json({ generatedAt: nowIso(), limit, offset, total: page.total, items: page.items });
+  });
+
+  // Dead-letter-queue admin actions (#2215): replay/delete a single dead job, or purge all of them. Same
+  // env.JOBS-binding mirror and null/501 "admin unavailable" contract as the read-only GET route above --
+  // absent entirely on Cloudflare, where the plain Queue binding exposes none of these methods.
+  app.post("/v1/app/selfhost/queue/dead/:id/replay", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) return c.json({ error: "invalid_job_id" }, 400);
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- requireAppRole already rejects an unauthenticated caller before this handler runs. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const result = await queueReplayDeadLetterJobViaBinding(c.env.JOBS, id);
+    if (result === null) {
+      return c.json(
+        { error: "dead_letter_admin_unavailable", message: "This deployment's queue backend does not expose dead-letter admin." },
+        501,
+      );
+    }
+    if (result === false) return c.json({ error: "dead_letter_job_not_found" }, 404);
+    await recordAuditEvent(c.env, {
+      eventType: "operator.dlq_job_replayed",
+      actor: identity.actor,
+      targetKey: `selfhost_jobs#${id}`,
+      outcome: "completed",
+      metadata: { id },
+    });
+    return c.json({ ok: true, id });
+  });
+
+  app.delete("/v1/app/selfhost/queue/dead/:id", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) return c.json({ error: "invalid_job_id" }, 400);
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- requireAppRole already rejects an unauthenticated caller before this handler runs. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const result = await queueDeleteDeadLetterJobViaBinding(c.env.JOBS, id);
+    if (result === null) {
+      return c.json(
+        { error: "dead_letter_admin_unavailable", message: "This deployment's queue backend does not expose dead-letter admin." },
+        501,
+      );
+    }
+    if (result === false) return c.json({ error: "dead_letter_job_not_found" }, 404);
+    await recordAuditEvent(c.env, {
+      eventType: "operator.dlq_job_deleted",
+      actor: identity.actor,
+      targetKey: `selfhost_jobs#${id}`,
+      outcome: "completed",
+      metadata: { id },
+    });
+    return c.json({ ok: true, id });
+  });
+
+  app.delete("/v1/app/selfhost/queue/dead", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- requireAppRole already rejects an unauthenticated caller before this handler runs. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const purged = await queuePurgeDeadLetterJobsViaBinding(c.env.JOBS);
+    if (purged === null) {
+      return c.json(
+        { error: "dead_letter_admin_unavailable", message: "This deployment's queue backend does not expose dead-letter admin." },
+        501,
+      );
+    }
+    await recordAuditEvent(c.env, {
+      eventType: "operator.dlq_purged",
+      actor: identity.actor,
+      targetKey: "selfhost_jobs#all",
+      outcome: "completed",
+      metadata: { purged },
+    });
+    return c.json({ ok: true, purged });
   });
 
   // Global agent kill-switch (#2359): the write side (setGlobalAgentFrozen) previously had zero callers — the
@@ -1990,6 +2125,8 @@ export function createApp() {
 
   app.get("/v1/repos/:owner/:repo/intelligence", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const identity = await authenticateRequestIdentity(c);
+    if (identity?.kind === "static" && identity.actor === "mcp" && !(await import("../auth/security")).isMcpReadRepoAllowed(c.env.MCP_READ_REPO_ALLOWLIST, fullName)) return c.json({ error: "forbidden_repo" }, 403);
     return c.json(await buildRepoIntelligenceResponse(c.env, fullName));
   });
 
@@ -2003,6 +2140,7 @@ export function createApp() {
       const forbidden = await requireSessionRepoAccess(c, identity, fullName, repo);
       if (forbidden) return forbidden;
     }
+    if (identity.kind === "static" && identity.actor === "mcp" && !(await import("../auth/security")).isMcpReadRepoAllowed(c.env.MCP_READ_REPO_ALLOWLIST, fullName)) return c.json({ error: "forbidden_repo" }, 403);
     const response = await buildIssueQualityResponse(c.env, fullName);
     if (!response) return c.json({ error: "issue_quality_not_found", repoFullName: fullName }, 404);
     return c.json(response);
@@ -2387,6 +2525,41 @@ export function createApp() {
     return c.json({ configured: false });
   });
 
+  // Maintainer self-serve Linear API key (#3186). Write-only + live GitHub write-access scoped, mirroring the
+  // ai-key routes above. GET returns only {configured, last4}; the key is never returned, logged, or surfaced.
+  app.get("/v1/repos/:owner/:repo/linear-key", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoWriteAccess(c, fullName);
+    if (gate instanceof Response) return gate;
+    return c.json(await getRepositoryLinearKeyStatus(c.env, fullName));
+  });
+
+  app.post("/v1/repos/:owner/:repo/linear-key", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoWriteAccess(c, fullName);
+    if (gate instanceof Response) return gate;
+    const parsed = repositoryLinearKeySchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "invalid_linear_key", issues: parsed.error.issues }, 400);
+    const createdBy = gate.identity?.kind === "session" ? gate.identity.actor : null;
+    try {
+      return c.json(await upsertRepositoryLinearKey(c.env, { repoFullName: fullName, key: parsed.data.key, createdBy }));
+    } catch (error) {
+      if (error instanceof Error && error.message === "missing_encryption_secret") {
+        return c.json({ error: "encryption_unavailable", detail: "Key storage is not configured on the server." }, 503);
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/v1/repos/:owner/:repo/linear-key", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoWriteAccess(c, fullName);
+    if (gate instanceof Response) return gate;
+    const actor = gate.identity?.kind === "session" ? gate.identity.actor : null;
+    await deleteRepositoryLinearKey(c.env, fullName, actor);
+    return c.json({ configured: false });
+  });
+
   app.post("/v1/repos/:owner/:repo/settings-preview", async (c) => {
     const identity = await authenticateRequestIdentity(c);
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
@@ -2453,7 +2626,11 @@ export function createApp() {
   });
 
   app.get("/v1/repos/:owner/:repo/pulls/:number/reviewability", async (c) => {
+    const unauthorized = await requireStaticProtectedApiToken(c);
+    if (unauthorized) return unauthorized;
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const identity = await authenticateRequestIdentity(c);
+    if (identity?.kind === "static" && identity.actor === "mcp" && !(await import("../auth/security")).isMcpReadRepoAllowed(c.env.MCP_READ_REPO_ALLOWLIST, fullName)) return c.json({ error: "forbidden_repo" }, 403);
     const number = Number(c.req.param("number"));
     if (!Number.isInteger(number) || number <= 0) return c.json({ error: "invalid_pull_number" }, 400);
     const [repo, pullRequest, issues, pullRequests, files, reviews, checks, recentMergedPullRequests] = await Promise.all([
@@ -3000,7 +3177,16 @@ export function createApp() {
     const auth = c.req.header("authorization") ?? "";
     const secret = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
     if (!secret) return c.json({ error: "missing_enrollment_secret" }, 401);
-    const body = await c.req.json().catch(() => null);
+    const rawBody = await readOrbRelayRegisterBody(c.req.raw, c.req.header("content-length"));
+    if (rawBody === null) return c.json({ error: "payload_too_large", maxBytes: MAX_ORB_RELAY_REGISTER_BODY_BYTES }, 413);
+    let body: unknown = null;
+    if (rawBody) {
+      try {
+        body = JSON.parse(rawBody) as unknown;
+      } catch {
+        body = null;
+      }
+    }
     const forceRefresh = typeof body === "object" && body !== null && (body as { forceRefresh?: unknown }).forceRefresh === true;
     let result: Awaited<ReturnType<typeof brokerOrbToken>>;
     try {
@@ -3593,6 +3779,35 @@ export function createApp() {
   app.delete("/v1/internal/repos/:owner/:repo/ai-key", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     await deleteRepositoryAiKey(c.env, fullName);
+    return c.json({ configured: false });
+  });
+
+  // Linear API key (#3186). GET returns secret-free status only; POST stores it encrypted at rest;
+  // DELETE removes it. The plaintext key is never logged and never returned.
+  app.get("/v1/internal/repos/:owner/:repo/linear-key", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    return c.json(await getRepositoryLinearKeyStatus(c.env, fullName));
+  });
+
+  app.post("/v1/internal/repos/:owner/:repo/linear-key", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = repositoryLinearKeySchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_linear_key", issues: parsed.error.issues }, 400);
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    try {
+      const status = await upsertRepositoryLinearKey(c.env, { repoFullName: fullName, key: parsed.data.key });
+      return c.json(status);
+    } catch (error) {
+      if (error instanceof Error && error.message === "missing_encryption_secret") {
+        return c.json({ error: "encryption_unavailable", detail: "TOKEN_ENCRYPTION_SECRET is not configured." }, 503);
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/v1/internal/repos/:owner/:repo/linear-key", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    await deleteRepositoryLinearKey(c.env, fullName);
     return c.json({ configured: false });
   });
 
@@ -4332,6 +4547,11 @@ async function buildRepoOutcomePatternsResponse(env: Env, fullName: string) {
 
 async function buildRegistrationReadinessResponse(env: Env, fullName: string) {
   /* v8 ignore start -- Registration readiness route-level shaping over covered signal helpers. */
+  // Intentionally the raw DB `settings` alongside the raw (cache-only, never live-fetched) `focusManifest`,
+  // not resolveRepositorySettings's merged view: this endpoint's whole purpose is to advise on the
+  // relationship between the two config layers (e.g. "your yml sets X but the currently active settings say
+  // Y"), which requires seeing them unmerged (#2912). See buildRegistrationReadiness's use of `focusManifest`
+  // for the yml-compiled policy section, separate from `settings` for the currently-active-behavior section.
   const [intelligence, settings, upstreamReports, focusManifest] = await Promise.all([
     buildRepoIntelligenceResponse(env, fullName),
     getRepositorySettings(env, fullName),
@@ -4385,6 +4605,10 @@ async function buildSelfDogfoodRegistrationPackResponse(env: Env) {
 
 async function buildGittensorConfigRecommendationResponse(env: Env, fullName: string) {
   /* v8 ignore start -- Config recommendation route-level shaping over covered signal helpers. */
+  // Intentionally the raw DB settings, not resolveRepositorySettings's merged view: this tool recommends what
+  // to ADD to .gittensory.yml based on the repo's currently-active (dashboard/API-configured) behavior — using
+  // the yml-merged view here would be comparing the recommendation against itself once a yml override exists
+  // (#2912).
   const intelligence = await buildRepoIntelligenceResponse(env, fullName);
   const settings = await getRepositorySettings(env, fullName);
   const repo = intelligence.repo;
@@ -4903,9 +5127,11 @@ function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: 
   if (isRepoOnboardingPackPreviewPath(path)) return true;
   if (isRepoFocusManifestPath(path)) return true;
   if (isRepoAiConfigPath(path)) return true;
+  if (isRepoLinearConfigPath(path)) return true;
   if (isRepoCheckBeforeStartPath(path)) return true;
   if (isRepoValidateLinkedIssuePath(path)) return true;
   if (isRepoAgentAuditFeedPath(path)) return true; // route's requireRepoMaintainer enforces per-repo authority (contributors → 403)
+  if (isRepoAgentPendingActionsPath(path)) return true; // list-only: requireRepoMaintainer; decision POSTs require server tokens
   if (isRepoContributorIssueDraftGeneratePath(path)) return true;
   if (path === LINT_PR_TEXT_PATH || path === LINT_SLOP_RISK_PATH || path === LINT_ISSUE_SLOP_PATH) return true;
   if (path === EXTENSION_PULL_CONTEXT_PATH && isExtensionScopedSession(identity)) return true;
@@ -4955,6 +5181,7 @@ function isRepoAgentAuditFeedPath(path: string): boolean {
   return /^\/v1\/repos\/[^/]+\/[^/]+\/agent\/audit-feed$/.test(path);
 }
 
+function isRepoAgentPendingActionsPath(path: string): boolean { return /^\/v1\/repos\/[^/]+\/[^/]+\/agent\/pending-actions$/.test(path); }
 function isIssueQualityPath(path: string): boolean {
   return /^\/v1\/repos\/[^/]+\/[^/]+\/issue-quality$/.test(path);
 }
@@ -4965,6 +5192,13 @@ function isRepoFocusManifestPath(path: string): boolean {
 
 function isRepoAiConfigPath(path: string): boolean {
   return /^\/v1\/repos\/[^/]+\/[^/]+\/ai-(?:review|key)$/.test(path);
+}
+
+// #3186: without this, a session (browser) caller hits the coarse-grained "insufficient_role" 403 from this
+// module's own broad path-allowlist BEFORE ever reaching the route's own requireRepoWriteAccess check --
+// same shape as isRepoAiConfigPath above, just for the new Linear key route.
+function isRepoLinearConfigPath(path: string): boolean {
+  return /^\/v1\/repos\/[^/]+\/[^/]+\/linear-key$/.test(path);
 }
 
 async function authenticateRequestIdentity(c: ProtectedRouteContext): Promise<AuthIdentity | null> {

@@ -84,6 +84,26 @@ describe("rankCandidateIssues (#2302 follow-up)", () => {
     expect(ranked[0]?.laneFit).toBeGreaterThanOrEqual(0.85);
   });
 
+  it("excludes repositories that explicitly opt out of miner targeting", () => {
+    const ranked = rankCandidateIssues([rawIssue({ labels: ["help wanted", "feature"] })], {
+      nowMs: NOW,
+      goalSpecContentByRepo: {
+        "acme/widgets": "minerEnabled: false\npreferredLabels: [feature]\n",
+      },
+    });
+    const summary = rankCandidateIssuesWithSummary([rawIssue()], {
+      nowMs: NOW,
+      goalSpecContentByRepo: {
+        "acme/widgets": "minerEnabled: false\n",
+      },
+    });
+
+    expect(ranked).toEqual([]);
+    expect(summary.issues).toEqual([]);
+    expect(summary.skippedInvalid).toBe(0);
+    expect(summary.usedDefaultGoalSpec).toBe(false);
+  });
+
   it("raises dupRisk when repo-level contention inputs are provided", () => {
     const calm = rankCandidateIssues([rawIssue()], { nowMs: NOW, highRiskDuplicateClusters: 0, openPullRequests: 4 });
     const busy = rankCandidateIssues([rawIssue()], { nowMs: NOW, highRiskDuplicateClusters: 4, openPullRequests: 4 });

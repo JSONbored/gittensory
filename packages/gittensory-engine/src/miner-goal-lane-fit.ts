@@ -1,3 +1,4 @@
+import { computeLaneFit } from "./goal-model.js";
 import type { MinerGoalSpec } from "./miner-goal-spec.js";
 
 /** Whether a repo's miner goal spec permits autonomous targeting (explicit opt-out only). */
@@ -52,4 +53,34 @@ export function computeMinerGoalLaneFit(
   }
 
   return clamp01(score);
+}
+
+function normalizeCandidatePaths(paths: readonly string[] | undefined): string[] {
+  if (!paths) return [];
+  const normalized: string[] = [];
+  for (const path of paths) {
+    if (typeof path !== "string") continue;
+    const trimmed = path.trim();
+    if (trimmed) normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+/**
+ * Lane-fit for metadata-ranked issues. Uses full path+label {@link computeLaneFit} when
+ * `candidatePaths` are present; otherwise falls back to label-only {@link computeMinerGoalLaneFit}.
+ */
+export function computeMetadataLaneFit(
+  issue: { labels: readonly string[]; candidatePaths?: readonly string[] | undefined },
+  spec: MinerGoalSpec,
+): number {
+  const candidatePaths = normalizeCandidatePaths(issue.candidatePaths);
+  if (candidatePaths.length > 0) {
+    return computeLaneFit({
+      candidatePaths,
+      candidateLabels: [...issue.labels],
+      goalSpec: spec,
+    });
+  }
+  return computeMinerGoalLaneFit(issue, spec);
 }

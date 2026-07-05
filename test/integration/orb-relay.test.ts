@@ -253,6 +253,12 @@ describe("relayForward (deferred forward + failure persistence, #orb-ack-fast)",
     expect(warnLog.mock.calls.some(([line]) => String(line).includes("orb_relay_transient_skip") && String(line).includes('"phase":"initial"'))).toBe(true);
   });
 
+  it("does NOT persist terminal no-enrollment skips for the retry cron", async () => {
+    const e = brokeredEnv();
+    await relayForward(e, { eventName: "pull_request", installationId: 822, deliveryId: "rf-no-enrollment", rawBody: '{"payload":true}' });
+    expect(await db(e).prepare("SELECT delivery_id FROM orb_relay_failures WHERE delivery_id='rf-no-enrollment'").first()).toBeFalsy();
+  });
+
   it("does NOT persist permanently non-forwardable skips (check_run)", async () => {
     const e = brokeredEnv();
     await enroll(e, 8211);
@@ -392,6 +398,14 @@ describe("retryFailedRelays", () => {
     await retryFailedRelays(e, { fetchImpl: (() => Promise.resolve(new Response("ok"))) as typeof fetch });
     const row = await db(e).prepare("SELECT delivery_id FROM orb_relay_failures WHERE delivery_id='skip-1'").first();
     expect(row ?? null).toBeNull(); // skipped = no longer applicable → cleaned up
+  });
+
+  it("DELETES a row when the installation no longer has an active enrollment", async () => {
+    const e = brokeredEnv();
+    await storeRelayFailure(e, { deliveryId: "no-enrollment-retry", eventName: "pull_request", installationId: 9604, rawBody: "{}" });
+    await retryFailedRelays(e);
+    const row = await db(e).prepare("SELECT delivery_id FROM orb_relay_failures WHERE delivery_id='no-enrollment-retry'").first();
+    expect(row ?? null).toBeNull();
   });
 
   it("KEEPS retrying a forwardable event when forwardOrbEvent skips due to transient config (no relay URL)", async () => {
@@ -797,10 +811,10 @@ describe("forwardOrbEvent (pull mode #16)", () => {
     expect(await forwardOrbEvent(e, { eventName: "pull_request", installationId: 8101, deliveryId: "d", rawBody: "{}" })).toBe("skipped");
   });
 
-  it("SKIPS a forwardable event for an install with NO enrollment row at all (the !row arm)", async () => {
+  it("IGNORES a forwardable event for an install with NO enrollment row at all (the !row arm)", async () => {
     const e = brokeredEnv();
-    // installationId 8199 is never enrolled → the enrollment lookup returns no row.
-    expect(await forwardOrbEvent(e, { eventName: "pull_request", installationId: 8199, deliveryId: "d", rawBody: "{}" })).toBe("skipped");
+    // installationId 8199 is never enrolled → terminal no-enrollment skips are not retryable.
+    expect(await forwardOrbEvent(e, { eventName: "pull_request", installationId: 8199, deliveryId: "d", rawBody: "{}" })).toBe("ignored");
   });
 
   it("re-registering a pull enrollment in push mode flips relay_mode back so it PUSHES again", async () => {

@@ -11,6 +11,7 @@ import type {
 } from "../types.js";
 import type { AnalysisContext } from "../analysis-context.js";
 import { boundedFetchJson } from "../external-fetch.js";
+import { isHistoryUninformativePath } from "./history-path.js";
 
 const GITHUB_API = "https://api.github.com";
 const SLUG_RE = /^[A-Za-z0-9._-]+$/;
@@ -19,9 +20,6 @@ const PER_PAGE = 100; // one page; a file with a full page of commits in the win
 const MAX_FILES_PROBED = 8; // bound the GitHub round-trips, matching the other history-class analyzers
 const MIN_COMMITS = 8; // a hotspot must change frequently within the window
 const MIN_FIX_FRACTION = 0.3; // and a meaningful share of those changes must be fixes/reverts
-// Files whose commit churn is not a useful code-fragility signal — lockfiles, generated output, and binaries.
-const SKIP_RE =
-  /(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|go\.sum)$|\.(?:lock|min\.js|map|snap|png|jpe?g|gif|svg|ico|pdf|zip|gz|woff2?)$|(?:^|\/)(?:dist|build|vendor)\//i;
 // Defect-correcting commit subjects: fix/bugfix/hotfix/revert/regression (conventional-commit `fix:` included).
 const FIX_RE = /\b(?:fix(?:e[ds]|ing)?|bug ?fix|hotfix|revert(?:ed|s)?|regression)\b/i;
 
@@ -109,7 +107,7 @@ export async function scanChurnHotspot(
   const since = new Date(Date.now() - WINDOW_DAYS * 86_400_000).toISOString();
   // A newly-added file has no prior history; skip it (and non-code/generated files) before spending a round-trip.
   const paths = files
-    .filter((file) => file.status !== "added" && !SKIP_RE.test(file.path))
+    .filter((file) => file.status !== "added" && !isHistoryUninformativePath(file.path))
     .map((file) => file.path)
     .slice(0, MAX_FILES_PROBED);
 

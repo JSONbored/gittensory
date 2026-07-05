@@ -2,6 +2,12 @@
 import { createRequire } from "node:module";
 import { printHelp, printVersion, runCli } from "../lib/cli.js";
 import { runDenyCheck } from "../lib/deny-check.js";
+import { runGovernorCli } from "../lib/governor-ledger-cli.js";
+import { runLedgerCli } from "../lib/event-ledger-cli.js";
+import { runManagePoll } from "../lib/manage-poll.js";
+import { runManageStatus } from "../lib/manage-status.js";
+import { runPlanCli } from "../lib/plan-store-cli.js";
+import { runQueueCli } from "../lib/portfolio-queue-cli.js";
 import { runStateCli } from "../lib/run-state-cli.js";
 import { runDoctor, runStatus } from "../lib/status.js";
 import {
@@ -21,6 +27,26 @@ if (cliArgs[0] === "status") {
 
 if (cliArgs[0] === "doctor") {
   process.exit(runDoctor(cliArgs.slice(1)));
+}
+
+if (cliArgs[0] === "manage" && cliArgs[1] === "status") {
+  process.exit(runManageStatus(cliArgs.slice(2)));
+}
+
+if (cliArgs[0] === "queue") {
+  process.exit(runQueueCli(cliArgs[1], cliArgs.slice(2)));
+}
+
+if (cliArgs[0] === "ledger") {
+  process.exit(runLedgerCli(cliArgs[1], cliArgs.slice(2)));
+}
+
+if (cliArgs[0] === "plan") {
+  process.exit(runPlanCli(cliArgs[1], cliArgs.slice(2)));
+}
+
+if (cliArgs[0] === "governor") {
+  process.exit(await runGovernorCli(cliArgs[1], cliArgs.slice(2)));
 }
 
 const require = createRequire(import.meta.url);
@@ -64,6 +90,12 @@ if (cliArgs[0] === "hooks" && cliArgs[1] === "check") {
 
 if (cliArgs[0] === "state") {
   const exitCode = runStateCli(cliArgs[1], cliArgs.slice(2));
+  await awaitOpportunisticUpdateCheck(updateCheck);
+  process.exit(exitCode);
+}
+
+if (cliArgs[0] === "manage" && cliArgs[1] === "poll") {
+  const exitCode = await runManagePoll(cliArgs.slice(2));
   await awaitOpportunisticUpdateCheck(updateCheck);
   process.exit(exitCode);
 }

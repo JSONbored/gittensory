@@ -52,10 +52,12 @@ function normalizeIdentifier(identifier) {
   return trimmed;
 }
 
-/** Priority is a placeholder numeric input; an omitted priority defaults to 0, a non-finite one is rejected. */
+/** Priority is a placeholder numeric input; an omitted priority defaults to 0, a non-finite or negative one is rejected. */
 function normalizePriority(priority) {
-  if (priority === undefined) return 0;
-  if (typeof priority !== "number" || !Number.isFinite(priority)) throw new Error("invalid_priority");
+  if (priority === undefined || priority === null) return 0;
+  if (typeof priority !== "number" || !Number.isFinite(priority) || priority < 0) {
+    throw new Error("invalid_priority");
+  }
   return priority;
 }
 
@@ -147,7 +149,7 @@ export function initPortfolioQueueStore(dbPath = resolvePortfolioQueueDbPath()) 
       return row ? rowToEntry(row) : null;
     },
     listQueue(repoFullName) {
-      const rows = repoFullName === undefined
+      const rows = repoFullName === undefined || repoFullName === null
         ? listAllStatement.all()
         : listRepoStatement.all(normalizeRepoFullName(repoFullName));
       return rows.map(rowToEntry);

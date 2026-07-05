@@ -5,6 +5,7 @@ import {
   fetchBrokeredInstallationToken,
   isOrbBrokerMode,
   ORB_RELAY_REGISTER_RETRY_BACKOFF_MS,
+  ORB_RELAY_REGISTER_UNHEALTHY_FAILURE_STREAK,
   registerOrbRelayTarget,
   registerOrbRelayTargetWithRetry,
 } from "../../src/orb/broker-client";
@@ -158,7 +159,11 @@ describe("registerOrbRelayTarget", () => {
     const errBody = (async () => Response.json({ error: "database unavailable" }, { status: 500 })) as typeof fetch;
     expect(await registerOrbRelayTarget(cfg, errBody)).toEqual({ status: "failed", reason: "http_500: database unavailable" });
 
-    const messageBody = (async () => Response.json({ message: "install not found" }, { status: 404 })) as typeof fetch;
+    const messageBody = (async () =>
+      new Response(JSON.stringify({ message: "install not found" }), {
+        status: 404,
+        headers: { "content-length": "31", "content-type": "application/json" },
+      })) as typeof fetch;
     expect(await registerOrbRelayTarget(cfg, messageBody)).toEqual({ status: "failed", reason: "http_404: install not found" });
   });
 
@@ -181,13 +186,86 @@ describe("registerOrbRelayTarget", () => {
     const result = await registerOrbRelayTarget(cfg, (async () => Response.json({ error: longMessage }, { status: 500 })) as typeof fetch);
     expect(result.reason).toBe(`http_500: ${"x".repeat(200)}`);
   });
+
+  it("does not read relay registration failure bodies whose Content-Length exceeds the diagnostic cap", async () => {
+    const cfg = { ORB_ENROLLMENT_SECRET: "s", PUBLIC_API_ORIGIN: "https://me.example" };
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode('{"error":"must not be read"}'));
+        controller.close();
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+
+    const result = await registerOrbRelayTarget(
+      cfg,
+      (async () =>
+        new Response(body, {
+          status: 500,
+          headers: { "content-length": "2001" },
+        })) as typeof fetch,
+    );
+
+    expect(result).toEqual({ status: "failed", reason: "http_500" });
+    expect(canceled).toBe(true);
+  });
+
+
+  it("falls back to the bare status when the diagnostic response has no body", async () => {
+    const cfg = { ORB_ENROLLMENT_SECRET: "s", PUBLIC_API_ORIGIN: "https://me.example" };
+    const result = await registerOrbRelayTarget(cfg, (async () => new Response(null, { status: 500 })) as typeof fetch);
+    expect(result).toEqual({ status: "failed", reason: "http_500" });
+  });
+
+  it("truncates and cancels a single oversized diagnostic stream chunk", async () => {
+    const cfg = { ORB_ENROLLMENT_SECRET: "s", PUBLIC_API_ORIGIN: "https://me.example" };
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode('{"error":"oversized_chunk"}'.padEnd(2_100, " ")));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+
+    const result = await registerOrbRelayTarget(cfg, (async () => new Response(body, { status: 500 })) as typeof fetch);
+
+    expect(result).toEqual({ status: "failed", reason: "http_500: oversized_chunk" });
+    expect(canceled).toBe(true);
+  });
+
+  it("stream-reads at most the relay registration diagnostic cap and cancels the remainder", async () => {
+    const cfg = { ORB_ENROLLMENT_SECRET: "s", PUBLIC_API_ORIGIN: "https://me.example" };
+    let pulls = 0;
+    let canceled = false;
+    const boundedJson = '{"error":"bounded_broker_error"}';
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(new TextEncoder().encode(pulls === 1 ? boundedJson.padEnd(2_000, " ") : "x".repeat(10_000)));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+
+    const result = await registerOrbRelayTarget(cfg, (async () => new Response(body, { status: 500 })) as typeof fetch);
+
+    expect(result).toEqual({ status: "failed", reason: "http_500: bounded_broker_error" });
+    expect(pulls).toBeLessThanOrEqual(2);
+    expect(canceled).toBe(true);
+  });
 });
 
 describe("registerOrbRelayTargetWithRetry", () => {
   it("skips outside broker mode without touching state", async () => {
     const state = createOrbRelayRegistrationState();
     expect(await registerOrbRelayTargetWithRetry({}, state)).toEqual({ status: "skipped" });
-    expect(state).toEqual({ registered: false, lastAttemptAtMs: null, attempts: 0 });
+    expect(state).toEqual({ registered: false, lastAttemptAtMs: null, attempts: 0, consecutiveFailures: 0 });
   });
 
   it("attempts, marks registered on success, and never attempts again", async () => {
@@ -197,7 +275,7 @@ describe("registerOrbRelayTargetWithRetry", () => {
 
     const first = await registerOrbRelayTargetWithRetry(cfg, state, 1_000, fetchImpl);
     expect(first).toEqual({ status: "registered" });
-    expect(state).toEqual({ registered: true, lastAttemptAtMs: 1_000, attempts: 1 });
+    expect(state).toEqual({ registered: true, lastAttemptAtMs: 1_000, attempts: 1, consecutiveFailures: 0 });
 
     const second = await registerOrbRelayTargetWithRetry(cfg, state, 2_000, fetchImpl);
     expect(second).toEqual({ status: "already_registered" });
@@ -212,6 +290,7 @@ describe("registerOrbRelayTargetWithRetry", () => {
     const first = await registerOrbRelayTargetWithRetry(cfg, state, 0, failThenSucceed);
     expect(first).toEqual({ status: "failed", reason: "http_500" });
     expect(state.attempts).toBe(1);
+    expect(state.consecutiveFailures).toBe(1);
 
     // Still inside the backoff window — must not re-attempt (no fetch call at all).
     const stillBackingOff = await registerOrbRelayTargetWithRetry(
@@ -224,12 +303,13 @@ describe("registerOrbRelayTargetWithRetry", () => {
     );
     expect(stillBackingOff).toEqual({ status: "backoff" });
     expect(state.attempts).toBe(1);
+    expect(state.consecutiveFailures).toBe(1); // backoff never re-attempts, so the streak doesn't move
 
     // Backoff elapsed — retries and can now recover.
     const { fetchImpl: successFetch } = captureFetch(new Response("ok"));
     const recovered = await registerOrbRelayTargetWithRetry(cfg, state, ORB_RELAY_REGISTER_RETRY_BACKOFF_MS, successFetch);
     expect(recovered).toEqual({ status: "registered" });
-    expect(state).toEqual({ registered: true, lastAttemptAtMs: ORB_RELAY_REGISTER_RETRY_BACKOFF_MS, attempts: 2 });
+    expect(state).toEqual({ registered: true, lastAttemptAtMs: ORB_RELAY_REGISTER_RETRY_BACKOFF_MS, attempts: 2, consecutiveFailures: 0 });
   });
 
   it("passes through a skipped result from the underlying attempt (e.g. push mode with no public origin) without arming backoff", async () => {
@@ -238,6 +318,42 @@ describe("registerOrbRelayTargetWithRetry", () => {
     expect(result).toEqual({ status: "skipped" });
     // skipped still counts as an attempt (it went through the backoff gate), but never registers.
     expect(state.registered).toBe(false);
+    // A skip is an intentional no-op (e.g. push mode with no public origin yet), not a broker failure --
+    // it must not move the consecutive-failure streak either direction.
+    expect(state.consecutiveFailures).toBe(0);
+  });
+
+  it("grows the consecutive-failure streak across repeated failures and resets it to 0 on the next success", async () => {
+    const state = createOrbRelayRegistrationState();
+    const cfg = { ORB_ENROLLMENT_SECRET: "s", PUBLIC_API_ORIGIN: "https://me.example" };
+    const failing = (async () => new Response("no", { status: 500 })) as typeof fetch;
+
+    let nowMs = 0;
+    for (let i = 1; i <= ORB_RELAY_REGISTER_UNHEALTHY_FAILURE_STREAK; i++) {
+      const result = await registerOrbRelayTargetWithRetry(cfg, state, nowMs, failing);
+      expect(result).toEqual({ status: "failed", reason: "http_500" });
+      expect(state.consecutiveFailures).toBe(i);
+      nowMs += ORB_RELAY_REGISTER_RETRY_BACKOFF_MS;
+    }
+    expect(state.consecutiveFailures).toBe(ORB_RELAY_REGISTER_UNHEALTHY_FAILURE_STREAK);
+
+    const { fetchImpl: successFetch } = captureFetch(new Response("ok"));
+    const recovered = await registerOrbRelayTargetWithRetry(cfg, state, nowMs, successFetch);
+    expect(recovered).toEqual({ status: "registered" });
+    expect(state.consecutiveFailures).toBe(0);
+    expect(state.attempts).toBe(ORB_RELAY_REGISTER_UNHEALTHY_FAILURE_STREAK + 1);
+  });
+
+  it("counts a thrown fetch (not just a non-ok response) towards the consecutive-failure streak", async () => {
+    const state = createOrbRelayRegistrationState();
+    const cfg = { ORB_ENROLLMENT_SECRET: "s", PUBLIC_API_ORIGIN: "https://me.example" };
+    const throwing = (async () => {
+      throw new Error("network down");
+    }) as typeof fetch;
+
+    const result = await registerOrbRelayTargetWithRetry(cfg, state, 0, throwing);
+    expect(result).toEqual({ status: "failed", reason: "network down" });
+    expect(state.consecutiveFailures).toBe(1);
   });
 });
 

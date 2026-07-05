@@ -81,8 +81,8 @@ describe("neutralHoldReasonCode — bounded hold-reason class for a neutral gate
     expect(neutralHoldReasonCode({ conclusion: "skipped", warnings: [] })).toBeNull();
   });
 
-  it("returns the recognized code for each known neutral-hold class (guardrail, size, manifest-blocked, ai-inconclusive, sync-state)", () => {
-    for (const code of ["guardrail_hold", "oversized_pr", "manifest_blocked_path", "ai_review_inconclusive", "repo_not_registered", "repo_not_seen", "pr_not_cached", "pre_merge_check_unresolved", "cla_check_unresolved"]) {
+  it("returns the recognized code for each known neutral-hold class (guardrail, size, ai-inconclusive, sync-state)", () => {
+    for (const code of ["guardrail_hold", "oversized_pr", "ai_review_inconclusive", "repo_not_registered", "repo_not_seen", "pr_not_cached", "pre_merge_check_unresolved", "cla_check_unresolved"]) {
       expect(neutralHoldReasonCode({ conclusion: "neutral", warnings: [finding(code)] })).toBe(code);
     }
   });
@@ -126,6 +126,16 @@ describe("recordNativeGateDecision — flag-gated SHADOW recording into review_a
     const rows = await rawAll(env, "SELECT * FROM review_audit");
     expect(rows.length).toBe(1); // same (source, project, pr, sha) → one row
     expect(rows[0]).toMatchObject({ decision: "hold", summary: "slop_risk" }); // failure → hold, latest wins
+  });
+
+  it("can replace the gate-shaped hold with the downstream native close disposition for self-tune", async () => {
+    const env = createTestEnv({ GITTENSORY_REVIEW_PARITY_AUDIT: "true" });
+    await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 7, headSha: "abc123", conclusion: "failure", reasonCode: "slop_risk" });
+    await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 7, headSha: "abc123", conclusion: "failure", action: "close", reasonCode: "ci_failed" });
+
+    const rows = await rawAll(env, "SELECT * FROM review_audit");
+    expect(rows.length).toBe(1);
+    expect(rows[0]).toMatchObject({ decision: "close", summary: "ci_failed", source: GITTENSORY_NATIVE_SOURCE });
   });
 
   it("a new commit gets its OWN row", async () => {
@@ -361,12 +371,21 @@ async function seedGateEnabledRepo(env: Env): Promise<void> {
 // The miner-list/token/check-run endpoints the gate finalize touches; `confirmedAuthor` toggles whether the
 // gittensor miner list confirms the PR author. Confirmed status no longer changes the gate verdict (it feeds
 // scoring); the configured blocker fails the gate for either author (#gate-nonconfirmed).
+//
+// Also stubs the live `GET /pulls/{n}` read that `maybePublishPrPublicSurface`'s pre-publish freshness guard
+// makes on every finalize pass (reviewTargetFreshness → fetchPullRequestFreshness → fetchLivePullRequestResult).
+// Without this, that call falls through to the catch-all 404 below, which the freshness guard now classifies
+// as "unavailable" and retries via RetryablePullRequestFreshnessUnavailableError instead of the old silent
+// no-op -- correct production behavior (a real, freshly-opened PR resolves this read every time), but it means
+// every finalize-path test needs the live PR to actually resolve, matching prWebhook's own head sha (#gate123)
+// so freshness classifies as "current" rather than "unavailable"/"head_changed".
 function stubFinalizeFetch(confirmedAuthor: string | null): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString();
     if (url === "https://api.gittensor.io/miners") return Response.json(confirmedAuthor ? [{ uid: 7, githubUsername: confirmedAuthor, githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1 }] : []);
     if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
     if (url.includes("/check-runs")) return Response.json({ id: 900 }, { status: 201 });
+    if (url.includes("/pulls/42")) return Response.json({ number: 42, title: "Gate without issue", state: "open", head: { sha: "gate123" } });
     return new Response("not found", { status: 404 });
   });
 }

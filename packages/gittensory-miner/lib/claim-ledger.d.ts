@@ -16,8 +16,8 @@ export type RecordClaimInput = {
 };
 
 export type ListClaimsFilter = {
-  repoFullName?: string;
-  status?: ClaimStatus;
+  repoFullName?: string | null;
+  status?: ClaimStatus | null;
 };
 
 export type ClaimLedger = {
