@@ -5,6 +5,7 @@ import {
   latestGitHubRestRateLimitObservation,
 } from "../../src/github/client";
 import { buildCapture, mapFilesToRoutes, resolvePreviewUrlTemplate, resolveVisualRoutes } from "../../src/review/visual/capture";
+import * as previewUrlModule from "../../src/review/visual/preview-url";
 import { createTestEnv } from "../helpers/d1";
 
 afterEach(() => {
@@ -110,6 +111,131 @@ describe("visual capture preview discovery", () => {
         afterUrlMobile: `https://worker.example/gittensory/shot?url=${encodeURIComponent("https://pr-42-abc1234.preview.example.com/app")}&w=390&h=844`,
       },
     ]);
+  });
+
+  it("uses target.previewUrl directly (no url_template configured) and skips discovery entirely", async () => {
+    const seenUrls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      seenUrls.push(String(input));
+      throw new Error("discovery must not run when target.previewUrl is already set");
+    });
+
+    const result = await buildCapture(
+      createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
+      "installation-token",
+      { repoFullName: "owner/repo", prNumber: 9, previewUrl: "https://existing-preview.example.com", previewFromChecks: true },
+      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+    );
+
+    expect(seenUrls).toEqual([]);
+    expect(result.routes[0]?.afterUrl).toContain(encodeURIComponent("https://existing-preview.example.com/app"));
+  });
+
+  it("degrades to no preview (never throws) when getLatestDeploymentStatus itself throws — defense-in-depth for a callee that never actually rejects in practice", async () => {
+    const statusSpy = vi.spyOn(previewUrlModule, "getLatestDeploymentStatus").mockRejectedValueOnce(new Error("transient failure"));
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
+
+    try {
+      const result = await buildCapture(
+        createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
+        "installation-token",
+        { repoFullName: "owner/repo", prNumber: 10, headSha: "deadbeef" },
+        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      );
+      expect(result.routes[0]?.afterUrl).toContain("placeholder=loading");
+      expect(result.previewPending).toBe(false);
+    } finally {
+      statusSpy.mockRestore();
+    }
+  });
+
+  it("marks the capture pending when a matching check run is still running (buildState 'building')", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/deployments?")) return Response.json([]);
+      if (url.includes("/status")) return Response.json({ statuses: [] });
+      if (url.includes("/check-runs")) {
+        return Response.json({ check_runs: [{ name: "Cloudflare Workers Builds", status: "in_progress" }] });
+      }
+      if (url.includes("/comments")) return Response.json([]);
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await buildCapture(
+      createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
+      "installation-token",
+      { repoFullName: "owner/repo", prNumber: 11, headSha: "cafebabe", previewFromChecks: true },
+      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+    );
+
+    expect(result.previewPending).toBe(true);
+    expect(result.routes[0]?.afterUrl).toContain("placeholder=loading");
+  });
+
+  it("finds the preview URL from a commit check run, skipping the PR-comment fallback entirely", async () => {
+    const seenUrls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      seenUrls.push(url);
+      if (url.includes("/deployments?")) return Response.json([]);
+      if (url.includes("/status")) return Response.json({ statuses: [] });
+      if (url.includes("/check-runs")) {
+        return Response.json({ check_runs: [{ status: "completed", conclusion: "success", details_url: "https://pr-9.myapp.pages.dev/preview" }] });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await buildCapture(
+      createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
+      "installation-token",
+      { repoFullName: "owner/repo", prNumber: 9, headSha: "cafebabe", previewFromChecks: true },
+      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+    );
+
+    expect(seenUrls.some((url) => url.includes("/issues/9/comments"))).toBe(false);
+    expect(result.routes[0]?.afterUrl).toContain(encodeURIComponent("https://pr-9.myapp.pages.dev/app"));
+  });
+
+  it("marks the capture pending when a matching check run already succeeded (buildState 'succeeded')", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/deployments?")) return Response.json([]);
+      if (url.includes("/status")) return Response.json({ statuses: [] });
+      if (url.includes("/check-runs")) {
+        return Response.json({ check_runs: [{ name: "Cloudflare Workers Builds", status: "completed", conclusion: "success" }] });
+      }
+      if (url.includes("/comments")) return Response.json([]);
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await buildCapture(
+      createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
+      "installation-token",
+      { repoFullName: "owner/repo", prNumber: 12, headSha: "cafebabe", previewFromChecks: true },
+      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+    );
+
+    expect(result.previewPending).toBe(true);
+  });
+
+  it("leaves the capture non-pending when no matching preview check run exists at all (buildState 'absent')", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/deployments?")) return Response.json([]);
+      if (url.includes("/status")) return Response.json({ statuses: [] });
+      if (url.includes("/check-runs")) return Response.json({ check_runs: [{ name: "lint", status: "completed", conclusion: "success" }] });
+      if (url.includes("/comments")) return Response.json([]);
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await buildCapture(
+      createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
+      "installation-token",
+      { repoFullName: "owner/repo", prNumber: 13, headSha: "cafebabe", previewFromChecks: true },
+      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+    );
+
+    expect(result.previewPending).toBe(false);
   });
 
   it("an explicit routes.paths list replaces file-based route inference end to end", async () => {
