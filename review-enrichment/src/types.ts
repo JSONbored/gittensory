@@ -447,6 +447,19 @@ export interface MagicNumberFinding {
   value: string;
 }
 
+/** A newly-added test-skip/narrowing marker, or a CI workflow step that newly stops being able to fail the
+ *  build — both pad or hollow out the test-ratio signal without actually running (more of) the suite. Reports
+ *  the location and rule kind only, never file/patch content. `skip-marker`: a test disabled via `.skip`/`x*`
+ *  (JS/TS), `@pytest.mark.skip(if)` (Python), `@Disabled` (JUnit), or `t.Skip(` (Go). `only-marker`: a
+ *  `.only`/`f*` (JS/TS) narrowing marker that silently excludes sibling tests from the run. `ci-continue-on-error`
+ *  / `ci-neutralized-if`: a workflow step that runs a recognized test command newly gains `continue-on-error:
+ *  true` or a literal `if: false`, so it can never fail the check regardless of the test outcome. */
+export interface TestSkipGamingFinding {
+  file: string;
+  line: number;
+  kind: "skip-marker" | "only-marker" | "ci-continue-on-error" | "ci-neutralized-if";
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -483,6 +496,7 @@ export interface BriefFindings {
   terminology?: TerminologyFinding[];
   todoMarker?: TodoMarkerFinding[];
   magicNumber?: MagicNumberFinding[];
+  testSkipGaming?: TestSkipGamingFinding[];
 }
 
 /** A JSDoc/TSDoc block whose `@param` tags name parameters the adjacent function no longer declares — a

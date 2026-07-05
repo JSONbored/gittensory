@@ -459,6 +459,7 @@ export function renderBrief(
   lines.push(...renderDescriptorSection("terminology", findings.terminology));
   lines.push(...renderDescriptorSection("todoMarker", findings.todoMarker));
   lines.push(...renderDescriptorSection("magicNumber", findings.magicNumber));
+  lines.push(...renderDescriptorSection("testSkipGaming", findings.testSkipGaming));
 
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 

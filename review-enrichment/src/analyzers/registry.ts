@@ -25,6 +25,7 @@ import { secretAnalyzer } from "./secret/descriptor.js";
 import { scanSecretLog } from "./secret-log.js";
 import { scanStaleBranch } from "./stale-branch.js";
 import { scanTestRatio } from "./test-ratio.js";
+import { scanTestSkipGaming } from "./test-skip-gaming.js";
 import { scanMigrationSafety } from "./migration-safety.js";
 import { scanLooseRanges } from "./loose-range.js";
 import { scanMagicNumbers } from "./magic-number.js";
@@ -885,6 +886,48 @@ export const ANALYZER_DESCRIPTORS = [
       return lines;
     },
     run: (req, { signal }) => scanMagicNumbers(req, signal),
+  }),
+  descriptor({
+    name: "testSkipGaming",
+    title: "Test-skip gaming",
+    category: "quality",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: 25, maxLineChars: 2000 },
+    docs: {
+      summary:
+        "Flags newly-added test skip/disable/narrowing markers and CI workflow steps that newly stop being able to fail the build.",
+      looksAt:
+        "Added lines in changed test files (skip/only markers) and .github/workflows/*.yml files (continue-on-error / literal if: false gained by a step that runs a recognized test command).",
+      reports: "File, line, and public-safe rule kind — never file/patch content.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Diff-scoped by design: removing a pre-existing marker, or a marker elsewhere in the file the PR doesn't touch, is never flagged. Complements the test-ratio analyzer by catching padding that never actually executes.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const explain = (kind: (typeof findings)[number]["kind"]): string => {
+        switch (kind) {
+          case "skip-marker":
+            return "a newly-added test is skipped/disabled, so it never actually runs";
+          case "only-marker":
+            return "a newly-added narrowing marker silently excludes sibling tests from the run";
+          case "ci-continue-on-error":
+            return "a test step newly gained continue-on-error: true, so it can no longer fail the check";
+          case "ci-neutralized-if":
+            return "a test step newly gained an if: false condition, so it never runs at all";
+        }
+      };
+      const lines = ["### Test-skip gaming (padding the test-ratio signal without real coverage)"];
+      for (const item of findings) {
+        lines.push(
+          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} — ${explain(item.kind)}`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal }) => scanTestSkipGaming(req, signal),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 
