@@ -360,6 +360,10 @@ export function renderBrief(
           return "sets `Referrer-Policy: unsafe-url`, leaking the full URL (path and query) to cross-origin destinations";
         case "cookie-not-httponly":
           return "sets `httpOnly: false` on a cookie, exposing it to JavaScript so an XSS can read it";
+        case "coop-unsafe-none":
+          return "sets `Cross-Origin-Opener-Policy: unsafe-none`, allowing cross-origin pages to retain opener access";
+        case "coep-unsafe-none":
+          return "sets `Cross-Origin-Embedder-Policy: unsafe-none`, disabling cross-origin isolation requirements for embedded resources";
       }
     };
 

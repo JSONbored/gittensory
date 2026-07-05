@@ -112,6 +112,10 @@ const DOCKER_SOCKET_MOUNT_RE =
 const HSTS_DISABLED_RE = /\bStrict-Transport-Security\b[^\n]*\bmax-age\s*=\s*0\b/i;
 const REFERRER_UNSAFE_URL_RE = /\bReferrer-Policy\b[^\n]*\bunsafe-url\b/i;
 const COOKIE_NOT_HTTPONLY_RE = /\bhttp[_-]?only\b[\s"'=:,-]*false\b/i;
+const COOP_UNSAFE_NONE_RE =
+  /\bCross-Origin-Opener-Policy\b[^\n]*\bunsafe-none\b/i;
+const COEP_UNSAFE_NONE_RE =
+  /\bCross-Origin-Embedder-Policy\b[^\n]*\bunsafe-none\b/i;
 
 function* patchLines(patch: string): Generator<string> {
   let start = 0;
@@ -538,6 +542,18 @@ export function scanPatchForIacMisconfig(
     if (
       COOKIE_NOT_HTTPONLY_RE.test(body) &&
       pushFinding(findings, seen, path, newLine, "cookie-not-httponly", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      COOP_UNSAFE_NONE_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "coop-unsafe-none", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      COEP_UNSAFE_NONE_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "coep-unsafe-none", maxFindings)
     ) {
       return findings;
     }

@@ -270,7 +270,9 @@ export interface IacMisconfigFinding {
     | "docker-socket-mount"
     | "hsts-disabled"
     | "referrer-policy-leak"
-    | "cookie-not-httponly";
+    | "cookie-not-httponly"
+    | "coop-unsafe-none"
+    | "coep-unsafe-none";
 }
 
 /** A newly-added dependency whose install compiles native code (npm node-gyp addon) or has no prebuilt wheel
