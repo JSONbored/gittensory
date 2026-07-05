@@ -60,6 +60,31 @@ LITESTREAM_REGION=us-east-1`}
       </p>
       <CodeBlock lang="bash" code={`docker compose --profile backup up -d`} />
 
+      <h3>Retention: how many backups are kept</h3>
+      <p>
+        Each run keeps the newest <code>BACKUP_RETAIN</code> backups (default <strong>7</strong>) —
+        applied <em>independently per target</em>: <code>postgres/</code>, <code>sqlite/</code>, and{" "}
+        <code>qdrant/</code> in the <code>gittensory-backups</code> volume each retain their own
+        newest 7, not 7 combined across all three. Set it in <code>.env</code> to change the window:
+      </p>
+      <CodeBlock filename=".env" code={`BACKUP_RETAIN=14`} />
+      <p>
+        <code>scripts/backup.sh</code>'s <code>normalize_backup_retain</code> guards against
+        misconfiguration rather than failing the run: a non-numeric or empty value falls back to 7
+        with a logged warning, and <code>BACKUP_RETAIN=0</code> is coerced up to 1 (a retention
+        window of zero would delete the backup the script just took, so the script refuses that
+        rather than leaving you with nothing).
+      </p>
+      <Callout variant="warn" title="A failed SQLite backup never prunes">
+        If the SQLite online backup fails verification (a non-empty file whose{" "}
+        <code>PRAGMA integrity_check</code> doesn't come back <code>ok</code>), the script deletes
+        the bad output, logs the failure, and — critically —{" "}
+        <strong>skips the retention prune for the sqlite target on that run</strong>, so a broken
+        backup can never push a known-good one out of the retained window. Postgres and Qdrant
+        retention still run normally on that same pass, since only the SQLite leg failed. The run
+        still exits non-zero so the failure is loud.
+      </Callout>
+
       <h2>Multi-instance: Postgres and Redis</h2>
       <FeatureRow
         items={[
