@@ -4,6 +4,7 @@ import {
   RECENCY_POOLS,
   classifyRecencyPool,
   detectForwardReferences,
+  generateReplayScoringKey,
   generateReplayTask,
   lintFrozenContext,
   scrubForwardReferences,
@@ -137,7 +138,7 @@ describe("gittensory-miner leakage-safe replay task generation (#3011)", () => {
       modelCutoffIso: "2026-01-01T00:00:00Z",
     };
 
-    it("produces a scrubbed frozen bundle and a SEPARATE revealed bundle for an eligible clean point", () => {
+    it("produces only a scrubbed frozen bundle for an eligible clean point", () => {
       const task = generateReplayTask(
         { ...eligible, frozenContextTexts: ["intro references #300 and old #12"] },
         CONTEXT,
@@ -150,8 +151,8 @@ describe("gittensory-miner leakage-safe replay task generation (#3011)", () => {
         commitT: "abc1234def",
         contextTexts: [`intro references ${FORWARD_REF_PLACEHOLDER} and old #12`],
       });
-      // Ground truth lives only on the revealed side — never merged into the frozen bundle.
-      expect(task.revealed).toEqual({ commitCount: 10, groundTruth: { merged: true, approach: "refactor" } });
+      expect(task).not.toHaveProperty("revealed");
+      expect(JSON.stringify(task)).not.toContain("refactor");
       expect(task.frozen).not.toHaveProperty("groundTruth");
     });
 
@@ -186,6 +187,40 @@ describe("gittensory-miner leakage-safe replay task generation (#3011)", () => {
       expect(generateReplayTask(input, CONTEXT, options)).toEqual(
         generateReplayTask(input, CONTEXT, options),
       );
+    });
+
+    it("exposes revealed ground truth only through the scoring-only accessor", () => {
+      const replayTask = generateReplayTask(
+        { ...eligible, frozenContextTexts: ["intro references #300"] },
+        CONTEXT,
+        options,
+      );
+      const scoringKey = generateReplayScoringKey(
+        { ...eligible, frozenContextTexts: ["intro references #300"] },
+        options,
+      );
+
+      if (!replayTask.eligible) {
+        throw new Error(`expected eligible replay task, got ${JSON.stringify(replayTask)}`);
+      }
+      if (!scoringKey.eligible) {
+        throw new Error(`expected eligible scoring key, got ${JSON.stringify(scoringKey)}`);
+      }
+      expect(replayTask).not.toHaveProperty("revealed");
+      expect(scoringKey).toEqual({
+        commitCount: 10,
+        eligible: true,
+        groundTruth: { merged: true, approach: "refactor" },
+      });
+      expect(scoringKey).not.toHaveProperty("frozen");
+    });
+
+    it("rejects a scoring key for a candidate that fails selection", () => {
+      expect(generateReplayScoringKey({ priorCommitCount: 2, revealedCommitCount: 1 }, options)).toEqual({
+        eligible: false,
+        rejected: "selection",
+        reasons: ["insufficient_prior_history", "insufficient_revealed_history"],
+      });
     });
   });
 });
