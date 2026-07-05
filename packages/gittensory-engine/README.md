@@ -539,6 +539,7 @@ dashboard progress summaries:
 - `isPlanBlocked(plan)` — pending steps remain but none are runnable (deadlock; mirrors `planProgress`'s `blocked` status)
 - `isPlanProgressComplete(plan)` — every step is `completed` or `skipped` (empty plans are not complete; mirrors `planProgress`'s `completed` status)
 - `resolvePlanOverallStatus(plan)` — coarse status (`pending` | `running` | `completed` | `failed` | `blocked`); mirrors `planProgress`'s `status`
+- `hasPlanReadySteps(plan)` — any step is runnable now (`pending` with satisfied dependencies; mirrors `nextReadySteps(plan).length > 0`)
 
 ## Opportunity competition
 
