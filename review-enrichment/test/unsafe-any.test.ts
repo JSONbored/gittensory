@@ -51,6 +51,17 @@ test("detectUnsafeAny: ignores block comments after real code", () => {
 
 test("detectUnsafeAny: does not treat object-literal values as type annotations", () => {
   assert.equal(detectUnsafeAny("return { value: any };"), null);
+  assert.equal(detectUnsafeAny("return { value: any, other: true };"), null);
+});
+
+test("scanPatchForUnsafeAny: ignores multi-line block comments spanning added lines", () => {
+  const patch = [
+    "@@ -1,0 +1,3 @@",
+    "+/*",
+    "+ * const x: any = 1;",
+    "+ */",
+  ].join("\n");
+  assert.deepEqual(scanPatchForUnsafeAny("src/a.ts", patch), []);
 });
 
 test("scanPatchForUnsafeAny: accepts .mts and .cts extensions", () => {

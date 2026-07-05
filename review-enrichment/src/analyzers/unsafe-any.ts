@@ -12,7 +12,7 @@ const TS_EXTS = new Set(["ts", "tsx", "mts", "cts"]);
 
 const CAST_RE = /\bas\s+any\b/;
 const ASSERTION_RE = /<\s*any\s*>/;
-const ANNOTATION_RE = /:\s*any\b(?!\s*\})/;
+const ANNOTATION_RE = /:\s*any\b(?!\s*[,}])/;
 
 function isTypeScriptPath(path: string): boolean {
   const ext = /\.([^.]+)$/.exec(path)?.[1]?.toLowerCase();
@@ -29,6 +29,31 @@ function isFullLineComment(line: string): boolean {
   const trimmed = line.trimStart();
   if (trimmed.startsWith("//")) return true;
   return /^\s*\/\*[\s\S]*\*\/\s*$/.test(line);
+}
+
+type BlockCommentState = { open: boolean };
+
+/** Remove block-comment spans from one added line, tracking multi-line comment state. Pure aside from state. */
+export function stripBlockCommentsFromAddedLine(line: string, state: BlockCommentState): string | null {
+  let scanLine = line;
+  if (state.open) {
+    const end = scanLine.indexOf("*/");
+    if (end < 0) return null;
+    state.open = false;
+    scanLine = scanLine.slice(end + 2);
+  }
+  while (true) {
+    const start = scanLine.indexOf("/*");
+    if (start < 0) break;
+    const end = scanLine.indexOf("*/", start + 2);
+    if (end < 0) {
+      scanLine = scanLine.slice(0, start);
+      state.open = true;
+      break;
+    }
+    scanLine = `${scanLine.slice(0, start)} ${scanLine.slice(end + 2)}`;
+  }
+  return scanLine;
 }
 
 /** Classify one added TS line for an unsafe-`any` pattern, or null. Pure. */
@@ -57,27 +82,35 @@ export function scanPatchForUnsafeAny(
   const findings: UnsafeAnyFinding[] = [];
   let newLine = 0;
   let inHunk = false;
+  const blockComment: BlockCommentState = { open: false };
   for (const line of patch.split("\n")) {
     if (limits.signal?.aborted) throw new Error("analyzer_aborted");
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
     if (hunk) {
       newLine = Number(hunk[1]);
       inHunk = true;
+      blockComment.open = false;
       continue;
     }
     if (!inHunk) continue;
     if (line.startsWith("+")) {
       const body = line.slice(1);
       if (body.length <= MAX_LINE_CHARS) {
-        const kind = detectUnsafeAny(body);
-        if (kind) {
-          findings.push({ file: path, line: newLine, kind });
-          if (findings.length >= maxFindings) return findings;
+        const scanLine = stripBlockCommentsFromAddedLine(body, blockComment);
+        if (scanLine !== null) {
+          const kind = detectUnsafeAny(scanLine);
+          if (kind) {
+            findings.push({ file: path, line: newLine, kind });
+            if (findings.length >= maxFindings) return findings;
+          }
         }
       }
       newLine++;
-    } else if (!line.startsWith("-") && !line.startsWith("\\")) {
-      newLine++;
+    } else {
+      blockComment.open = false;
+      if (!line.startsWith("-") && !line.startsWith("\\")) {
+        newLine++;
+      }
     }
   }
   return findings;
