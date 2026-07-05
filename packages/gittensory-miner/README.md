@@ -56,6 +56,7 @@ From a local checkout:
 ```sh
 npm install
 npm --workspace @jsonbored/gittensory-miner run build
+npm link --workspace @jsonbored/gittensory-miner
 ```
 
 ## Commands
