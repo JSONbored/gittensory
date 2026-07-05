@@ -10657,7 +10657,10 @@ async function closeReviewEvasionSelfCloseIfActive(
     // with a RequestError (an Error subclass), never a raw thrown value -- but `closeError` is typed
     // `unknown`, so the fallback below stays as a type-safe normalization. The `if` body itself (the real
     // rethrow) IS reachable and IS exercised by the existing re-close-failure tests -- only the else branch
-    // (this `if`'s implicit non-Error path) and the fallback statement below are ignored.
+    // (this `if`'s implicit non-Error path) and the fallback statement below are ignored. Concretely: a 500
+    // from GitHub on the re-close PATCH makes closePullRequest reject with a RequestError, which is exactly
+    // what test/unit/queue.test.ts's "REGRESSION (gate-flagged): a retry after the re-close failure
+    // converges -- the PR ends up closed, and the strike is recorded exactly once" drives through this `if`.
     /* v8 ignore else */
     if (closeError instanceof Error) throw closeError;
     /* v8 ignore next -- unreachable, see above. */
