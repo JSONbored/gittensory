@@ -19,6 +19,11 @@ docker-compose.override.yml
 # Private self-host operator config. Root AGENTS.md/CLAUDE.md are public project docs;
 # repo-scoped review instructions live under this ignored mount.
 gittensory-config/
+gittensory-config.backup-*/
+# Operator deploy-backup snapshots -- contains raw .env/.yml backups and config tarballs, same
+# exposure class as gittensory-config/ above (secrets + private review rules), just under a
+# different directory name that the pattern above does not match.
+.deploy-backups/
 # Codex/CLI auth state must only live in runtime volumes or operator home dirs.
 .codex/
 **/.codex/
