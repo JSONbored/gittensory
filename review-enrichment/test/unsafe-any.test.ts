@@ -49,9 +49,9 @@ test("detectUnsafeAny: ignores block comments after real code", () => {
   assert.equal(detectUnsafeAny("/* @internal */ const value: any = input;"), "annotation");
 });
 
-test("detectUnsafeAny: does not treat object-literal values as type annotations", () => {
-  assert.equal(detectUnsafeAny("return { value: any };"), null);
-  assert.equal(detectUnsafeAny("return { value: any, other: true };"), null);
+test("detectUnsafeAny: flags comma-separated parameter and declarator annotations", () => {
+  assert.equal(detectUnsafeAny("function f(v: any, next: string) {}"), "annotation");
+  assert.equal(detectUnsafeAny("let a: any, b: string;"), "annotation");
 });
 
 test("scanPatchForUnsafeAny: ignores multi-line block comments spanning added lines", () => {

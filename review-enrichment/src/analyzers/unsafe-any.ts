@@ -12,7 +12,7 @@ const TS_EXTS = new Set(["ts", "tsx", "mts", "cts"]);
 
 const CAST_RE = /\bas\s+any\b/;
 const ASSERTION_RE = /<\s*any\s*>/;
-const ANNOTATION_RE = /:\s*any\b(?!\s*[,}])/;
+const ANNOTATION_RE = /:\s*any\b/;
 
 function isTypeScriptPath(path: string): boolean {
   const ext = /\.([^.]+)$/.exec(path)?.[1]?.toLowerCase();
