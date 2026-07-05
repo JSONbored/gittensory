@@ -160,8 +160,13 @@ function SelfHostingSecurity() {
         terminating TLS on <code>80</code>/<code>443</code>/<code>443/udp</code> (the last for
         HTTP/3) and obtaining a Let's Encrypt certificate automatically for whatever domain you set.
         It needs a real DNS record: point <code>DOMAIN</code> at this host's public IP{" "}
-        <em>before</em> starting the profile, or the ACME HTTP-01 challenge Caddy runs on port 80
-        fails and it falls back to a self-signed cert.
+        <em>before</em> starting the profile. The shipped Caddyfile has no fallback TLS directive,
+        so if the ACME HTTP-01 challenge fails (DNS not propagated yet, port 80 unreachable), Caddy
+        does <strong>not</strong> silently substitute a self-signed cert for a real domain — it logs
+        the failure and retries with backoff, and the site has no working HTTPS until DNS and ACME
+        both succeed. (A recognized non-public hostname like <code>localhost</code>, below, is a
+        deliberately different case — Caddy issues its own internal-CA cert for those automatically,
+        since it can never get a real one.)
       </p>
       <CodeBlock filename=".env" code={`DOMAIN=reviews.yourcompany.com`} />
       <p>
@@ -236,21 +241,39 @@ function SelfHostingSecurity() {
       <p>
         The <code>tailscale</code> profile joins the stack to your tailnet instead of exposing
         anything to the public internet. It runs with <code>network_mode: host</code> — Tailscale
-        needs host networking to advertise this machine's address on the tailnet — so once it's up,
-        the <code>gittensory</code> service is reachable at this host's tailnet IP on port{" "}
-        <code>8787</code>, with no port published to the public internet at all.
+        needs host networking to advertise this machine's address on the tailnet.
       </p>
       <CodeBlock
         filename=".env"
         code={`TS_AUTHKEY=            # generate at tailscale.com/admin/settings/keys
 TS_EXTRA_ARGS=          # optional, e.g. --advertise-tags=tag:self-host`}
       />
+      <Callout variant="warn" title="Unlike Caddy, keep the app's port mapping">
+        Tailscale doesn't replace the <code>gittensory</code> service's listener the way Caddy does
+        — it adds a new network interface to the <em>host</em>. Docker's default{" "}
+        <code>{`ports: ["\${PORT:-8787}:8787"]`}</code> mapping publishes to all of the host's
+        interfaces, so once Tailscale is up, that same mapping is what makes port <code>8787</code>{" "}
+        reachable at the host's tailnet IP too —{" "}
+        <strong>
+          removing it, as you would for Caddy, makes the app unreachable everywhere, tailnet
+          included.
+        </strong>
+      </Callout>
       <p>
-        As with Caddy, remove the <code>gittensory</code> service's own <code>ports:</code> mapping
-        — with the sidecar on host networking, GitHub webhook delivery and any operator access
-        should go through the tailnet address, not a publicly bound port left over from the default
-        stack. This is the right choice when the instance only needs to be reachable by your own
-        team or CI, and you'd rather not manage a domain or certificate at all.
+        The tradeoff: leaving the default <code>0.0.0.0</code>-bound mapping in place means{" "}
+        <code>8787</code> is also still reachable from your LAN, and from the public internet if
+        this host has a public interface at all — Tailscale doesn't narrow that on its own. If you
+        want the instance reachable <em>only</em> via the tailnet, either firewall the host to allow{" "}
+        <code>8787</code> solely from your tailnet's address range, or bind the app's mapping to{" "}
+        <code>127.0.0.1:8787:8787</code> and use{" "}
+        <a href="https://tailscale.com/kb/1242/tailscale-serve" target="_blank" rel="noreferrer">
+          <code>tailscale serve</code>
+        </a>{" "}
+        inside the <code>tailscale</code> container (it shares the host's loopback under{" "}
+        <code>network_mode: host</code>) to proxy that localhost-only port onto the tailnet — check
+        the pinned image's <code>tailscale serve --help</code> for the exact current flags. This
+        profile is the right choice when the instance only needs to be reachable by your own team or
+        CI, and you'd rather not manage a domain or certificate at all.
       </p>
 
       <h2>Public output boundary</h2>
