@@ -833,6 +833,27 @@ describe("advisory rules", () => {
     }
   });
 
+  it("flags Missing test evidence for Dart source via isCodePath + isCodeFile parity", () => {
+    const advisory = buildPullRequestAdvisory(repo, {
+      repoFullName: repo.fullName, number: 25, title: "Add Dart widget without tests", state: "open",
+      authorLogin: "contributor", authorAssociation: "NONE", labels: [], linkedIssues: [],
+    });
+    const sourcePaths = ["lib/models/user.dart", "lib/widgets/card.dart"];
+    const files: PullRequestFileRecord[] = sourcePaths.map((path) => ({
+      repoFullName: repo.fullName, pullNumber: 25, path, additions: 10, deletions: 0, changes: 10, payload: {},
+    }));
+    const collisions: CollisionReport = {
+      repoFullName: repo.fullName, generatedAt: "2026-06-10T00:00:00.000Z",
+      summary: { clusterCount: 0, highRiskCount: 0, itemsReviewed: 0 }, clusters: [],
+    };
+
+    const { annotations } = buildCheckRunAnnotations(advisory, { files, collisions, pullNumber: 25 }, "standard");
+
+    for (const path of sourcePaths) {
+      expect(annotations.some((entry) => entry.title === "Missing test evidence" && entry.path === path)).toBe(true);
+    }
+  });
+
   it("buildCheckRunAnnotations uses notice level for medium-risk collisions and critical public finding text", () => {
     const advisory = {
       ...buildPullRequestAdvisory(repo, null),

@@ -5539,9 +5539,10 @@ function isCodeFile(file: string): boolean {
   // Mirrors isCodeFile in local-branch.ts — kept in sync (cs/swift/groovy/php and C/C++/Objective-C added
   // so native/C#/Swift/Groovy/PHP source counts as code, matching the test conventions
   // isTestPath already recognizes; vue/svelte/astro match rag.ts, visual paths, and isCodePath;
-  // cc/hpp complete the C++ extension set alongside cpp/c/h).
+  // cc/hpp complete the C++ extension set alongside cpp/c/h; dart matches rag.ts and
+  // test-evidence's *_test.dart test convention).
   return (
-    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro)$/i.test(
+    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro|dart)$/i.test(
       file,
     ) && !isTestFile(file)
   );

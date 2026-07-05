@@ -1273,8 +1273,10 @@ export function isCodeFile(file: string): boolean {
   // nor code in the local scorer. vue/svelte/astro align with review/rag.ts CODE_EXT_RE,
   // review/visual/paths.ts, and rules/advisory.ts isCodePath so every classifier agrees.
   // cc/hpp round out the C++ set alongside cpp/c/h (rag.ts already indexes all four).
+  // dart aligns with rag.ts and test-evidence's *_test.dart convention (hand-authored
+  // .dart is source; generated .g.dart/.freezed.dart stay non-code via isGeneratedFile).
   return (
-    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro)$/i.test(
+    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro|dart)$/i.test(
       file,
     ) && !isTestFile(file)
   );

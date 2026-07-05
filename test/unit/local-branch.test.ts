@@ -1784,6 +1784,10 @@ describe("local MCP git metadata collection", () => {
       expect(isTestFile(file)).toBe(false);
       expect(isCodeFile(file)).toBe(true);
     }
+    // Dart/Flutter hand-authored source; *_test.dart remains test-only.
+    expect(isCodeFile("lib/models/user.dart")).toBe(true);
+    expect(isTestFile("lib/models/user_test.dart")).toBe(true);
+    expect(isCodeFile("lib/models/user_test.dart")).toBe(false);
   });
 
   it("extracts linked issues only from standalone closing keywords, not keyword substrings", async () => {

@@ -114,17 +114,17 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
     expect(py.nonCodeTokenScore).toBe(0);
   });
 
-  it("classifies Dart/Flutter *_test.dart as a test in both .mjs and .py previews", () => {
+  it("classifies Dart/Flutter source and *_test.dart tests in both .mjs and .py previews", () => {
     // Parity with src/signals/test-evidence.ts: co-located `foo_test.dart` must count as test evidence,
-    // not source/non-code, in every mirrored classifier.
+    // while hand-authored `.dart` source counts as code (rag.ts already indexes .dart).
     const files = [
       { path: "lib/models/user_test.dart", additions: 8, deletions: 0 },
-      { path: "lib/models/user.dart", additions: 3, deletions: 0 }, // non-code (dart not in isCodeFile)
+      { path: "lib/models/user.dart", additions: 3, deletions: 0 },
     ];
     const mjs = runPreview(files);
     expect(mjs.testTokenScore).toBe(8);
-    expect(mjs.sourceTokenScore).toBe(0);
-    expect(mjs.nonCodeTokenScore).toBe(3);
+    expect(mjs.sourceTokenScore).toBe(3);
+    expect(mjs.nonCodeTokenScore).toBe(0);
 
     const python = findPython();
     if (!python) return;
@@ -134,8 +134,8 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
     expect(res.status, res.stderr).toBe(0);
     const py = JSON.parse(res.stdout);
     expect(py.testTokenScore).toBe(8);
-    expect(py.sourceTokenScore).toBe(0);
-    expect(py.nonCodeTokenScore).toBe(3);
+    expect(py.sourceTokenScore).toBe(3);
+    expect(py.nonCodeTokenScore).toBe(0);
   });
 
   it("classifies Vue/Svelte/Astro source as code in both .mjs and .py previews", () => {

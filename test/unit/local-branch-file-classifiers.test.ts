@@ -139,6 +139,9 @@ describe("isCodeFile", () => {
       "src/App.vue",
       "src/Widget.svelte",
       "src/pages/index.astro",
+      // Dart/Flutter hand-authored source — rag.ts indexes .dart; *_test.dart stays test.
+      "lib/models/user.dart",
+      "lib/widgets/card.dart",
     ]) {
       expect(isCodeFile(path)).toBe(true);
     }
@@ -160,6 +163,8 @@ describe("isCodeFile", () => {
       "AppTests/LoginTests.swift",
       // PHP class-suffix test file (PHPUnit) — code extension, but a test, not code.
       "app/Service/PaymentTest.php",
+      // Dart co-located *_test.dart is test evidence, not source.
+      "lib/models/user_test.dart",
     ]) {
       expect(isCodeFile(path)).toBe(false);
     }
