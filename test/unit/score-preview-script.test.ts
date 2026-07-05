@@ -132,6 +132,32 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
     expect(py.nonCodeTokenScore).toBe(3);
   });
 
+  it("classifies Vue/Svelte/Astro source as code in both .mjs and .py previews", () => {
+    // Parity with review/rag.ts CODE_EXT_RE and review/visual/paths.ts: front-end framework
+    // source must count as code, not non-code, in every mirrored classifier.
+    const files = [
+      { path: "src/App.vue", additions: 6, deletions: 0 },
+      { path: "src/Widget.svelte", additions: 4, deletions: 0 },
+      { path: "src/pages/index.astro", additions: 5, deletions: 0 },
+      { path: "README.md", additions: 2, deletions: 0 }, // non-code control
+    ];
+    const mjs = runPreview(files);
+    expect(mjs.sourceTokenScore).toBe(15);
+    expect(mjs.testTokenScore).toBe(0);
+    expect(mjs.nonCodeTokenScore).toBe(2);
+
+    const python = findPython();
+    if (!python) return;
+    const env = { ...process.env };
+    delete env.GITTENSOR_ROOT;
+    const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: files }), encoding: "utf8", env });
+    expect(res.status, res.stderr).toBe(0);
+    const py = JSON.parse(res.stdout);
+    expect(py.sourceTokenScore).toBe(15);
+    expect(py.testTokenScore).toBe(0);
+    expect(py.nonCodeTokenScore).toBe(2);
+  });
+
   it("classifies PascalCase PHP test files as tests in both .mjs and .py previews", () => {
     // Parity with src/signals/test-evidence.ts: PHPUnit/PHPSpec class-suffix files must not be counted as
     // PHP source simply because they live outside a conventional tests/ directory.

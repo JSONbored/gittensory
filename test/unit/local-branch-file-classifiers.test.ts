@@ -131,6 +131,11 @@ describe("isCodeFile", () => {
       "src/native/add.cpp",
       "include/native/add.h",
       "src/objc/View.m",
+      // Front-end framework source — already indexed as code by rag.ts and flagged
+      // as visual paths, but must count as code for slop/missing-tests signals.
+      "src/App.vue",
+      "src/Widget.svelte",
+      "src/pages/index.astro",
     ]) {
       expect(isCodeFile(path)).toBe(true);
     }

@@ -1774,6 +1774,11 @@ describe("local MCP git metadata collection", () => {
       expect(isTestFile(file)).toBe(false);
       expect(isCodeFile(file)).toBe(true);
     }
+    // Front-end framework source mirrors review/rag.ts and visual-path classifiers.
+    for (const file of ["src/App.vue", "src/Widget.svelte", "src/pages/index.astro"]) {
+      expect(isTestFile(file)).toBe(false);
+      expect(isCodeFile(file)).toBe(true);
+    }
   });
 
   it("extracts linked issues only from standalone closing keywords, not keyword substrings", async () => {
