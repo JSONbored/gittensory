@@ -2005,6 +2005,7 @@ describe("pure helpers", () => {
 
     it("parseDualAiTieBreakJudgeResponse rejects malformed favored values and invalid JSON", () => {
       expect(parseDualAiTieBreakJudgeResponse("{")).toBeNull();
+      expect(parseDualAiTieBreakJudgeResponse('{"favored":')).toBeNull();
       expect(
         parseDualAiTieBreakJudgeResponse('{"favored":"reviewer_first"}'),
       ).toBeNull();
@@ -2050,6 +2051,14 @@ describe("pure helpers", () => {
           "Boost your reward payout",
         ),
       ).toMatchObject({ defect: null, split: true, inconclusive: false });
+      const unsafe = r(["Boost your reward payout"]);
+      expect(
+        mapDualAiTieBreakVerdictToCombineResult(
+          [unsafe, unsafe],
+          "consensus",
+          "Null deref in src/a.ts",
+        ).defect?.title,
+      ).toContain("Null deref");
     });
 
     it("runDualAiTieBreakJudgeCall parses judge output, retries unparseable responses, and uses the fallback model", async () => {
