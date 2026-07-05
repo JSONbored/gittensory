@@ -78,6 +78,7 @@ describe("isGeneratedFile", () => {
       "proto/messages.pb.swift",
       "proto/messages.pb.dart",
       "proto/messages.pb.kt",
+      "proto/messages.pb.cs",
       "lib/user.freezed.dart",
       "lib/api_client.gr.dart",
       "ui/MainForm.Designer.cs",
