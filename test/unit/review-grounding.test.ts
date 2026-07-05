@@ -156,11 +156,11 @@ describe("review-grounding: fetchFullFileContents (injected FileFetcher, fail-sa
     const out = await fetchFullFileContents(
       { ciGrounding: false, fullFileContext: true },
       "sha",
-      files(["README.md"], ["src/a.ts"], ["logo.png"], ["old.ts", "removed"]),
+      files(["README.md"], ["src/a.ts"], ["logo.png"], ["assets/photo.avif"], ["assets/poster.bmp"], ["assets/icon.heic"], ["dist/pkg.tgz"], ["old.ts", "removed"]),
       fetcher,
     );
     expect(out).toBeDefined();
-    // source (priority 0) before docs (priority 2); png + removed excluded
+    // source (priority 0) before docs (priority 2); binary + removed excluded
     expect(out?.map((f) => f.path)).toEqual(["src/a.ts", "README.md"]);
   });
 
