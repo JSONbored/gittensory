@@ -4,7 +4,7 @@
   "tags": ["gittensory", "codex", "ai"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "30s",
   "time": { "from": "now-7d", "to": "now" },
   "description": "Codex review observability for the self-hosted stack. Prometheus panels are subscription-CLI attempt counters for the selected range; durable review records come from ai_usage_events, filtered by provider='codex' (migration 0109), and must be read with their status. Token/cost columns are populated whenever the Codex CLI reports real usage; estimated_neurons is a heuristic budget proxy, not billing-grade accounting.",
@@ -129,8 +129,8 @@
           "refId": "A",
           "queryType": "time series",
           "timeColumns": ["time"],
-          "queryText": "SELECT date(created_at) AS time, sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY date(created_at) ORDER BY time",
-          "rawQueryText": "SELECT date(created_at) AS time, sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY date(created_at) ORDER BY time"
+          "queryText": "SELECT date(created_at) AS time, coalesce(sum(input_tokens), 0) AS input_tokens, coalesce(sum(output_tokens), 0) AS output_tokens FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY date(created_at) ORDER BY time",
+          "rawQueryText": "SELECT date(created_at) AS time, coalesce(sum(input_tokens), 0) AS input_tokens, coalesce(sum(output_tokens), 0) AS output_tokens FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY date(created_at) ORDER BY time"
         }
       ]
     },
@@ -165,8 +165,8 @@
           "refId": "A",
           "queryType": "time series",
           "timeColumns": ["time"],
-          "queryText": "SELECT date(created_at) AS time, sum(cost_usd) AS cost_usd FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY date(created_at) ORDER BY time",
-          "rawQueryText": "SELECT date(created_at) AS time, sum(cost_usd) AS cost_usd FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY date(created_at) ORDER BY time"
+          "queryText": "SELECT date(created_at) AS time, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY date(created_at) ORDER BY time",
+          "rawQueryText": "SELECT date(created_at) AS time, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE feature = 'ai_review_pr' AND provider = 'codex' GROUP BY date(created_at) ORDER BY time"
         }
       ]
     },

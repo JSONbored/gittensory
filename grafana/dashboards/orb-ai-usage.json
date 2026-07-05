@@ -4,10 +4,10 @@
   "tags": ["gittensory", "ai", "orb"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": { "from": "now-7d", "to": "now" },
-  "description": "Durable, provider-neutral AI usage from ai_usage_events (migration 0109) — every configured provider (Codex, Claude Code, OpenAI-compatible, Ollama, Anthropic BYOK), not just Codex. Populated whenever the configured provider reports real usage; falls back to estimated_neurons-only rows for features that don't yet thread real usage through. See 'Gittensory - Codex usage (self-host)' for a Codex-focused view and 'Gittensory — Claude usage (OTEL)' for Claude Code's own CLI/session telemetry (a separate, non-durable data source).",
+  "description": "Durable, provider-neutral AI usage from ai_usage_events (migration 0109) — every configured provider (Codex, Claude Code, OpenAI-compatible, Ollama, Anthropic BYOK), not just Codex. Every AI feature (ai_review_pr, agent_private_summary, agent_public_summary, pr_intelligence_comment, ai_slop_pr, issue_plan) threads real usage through recordAiUsageEvent on a completed call; a row still lands as estimated_neurons-only when the call never happened (quota_exceeded/disabled/unavailable), is a BYOK call (not yet usage-tracked), or the provider omitted a parseable usage field — see the 'Events missing real usage' panel. See 'Gittensory - Codex usage (self-host)' for a Codex-focused view and 'Gittensory — Claude usage (OTEL)' for Claude Code's own CLI/session telemetry (a separate, non-durable data source).",
   "panels": [
     {
       "id": 1,
@@ -71,7 +71,7 @@
       "id": 5,
       "type": "stat",
       "title": "Events missing real usage",
-      "description": "Rows with a feature/status implying a real AI call but no provider attribution yet (estimated_neurons-only). Should shrink over time as more features thread real usage through recordAiUsageEvent.",
+      "description": "Completed AI calls (status='ok', a response was actually returned) with no provider attribution. Excludes quota_exceeded/disabled/unavailable rows (no call was attempted, so no usage was ever possible) and ai_key_change audit rows (not an AI call at all) — those never carry provider/usage data by design, not by gap. A nonzero count here means either a BYOK call (callAiProvider does not yet capture usage) or a provider response that omitted a parseable usage field.",
       "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
       "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "orange" } } },
@@ -80,8 +80,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT count(*) AS unattributed FROM ai_usage_events WHERE provider IS NULL AND feature != 'ai_key_change'",
-          "rawQueryText": "SELECT count(*) AS unattributed FROM ai_usage_events WHERE provider IS NULL AND feature != 'ai_key_change'"
+          "queryText": "SELECT count(*) AS unattributed FROM ai_usage_events WHERE provider IS NULL AND status = 'ok'",
+          "rawQueryText": "SELECT count(*) AS unattributed FROM ai_usage_events WHERE provider IS NULL AND status = 'ok'"
         }
       ]
     },
@@ -103,8 +103,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT provider, count(*) AS events, sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens, sum(cost_usd) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL GROUP BY provider ORDER BY events DESC",
-          "rawQueryText": "SELECT provider, count(*) AS events, sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens, sum(cost_usd) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL GROUP BY provider ORDER BY events DESC"
+          "queryText": "SELECT provider, count(*) AS events, coalesce(sum(input_tokens), 0) AS input_tokens, coalesce(sum(output_tokens), 0) AS output_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL GROUP BY provider ORDER BY events DESC",
+          "rawQueryText": "SELECT provider, count(*) AS events, coalesce(sum(input_tokens), 0) AS input_tokens, coalesce(sum(output_tokens), 0) AS output_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL GROUP BY provider ORDER BY events DESC"
         }
       ]
     },
@@ -120,8 +120,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT provider, model, effort, count(*) AS events, sum(total_tokens) AS total_tokens, sum(cost_usd) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL GROUP BY provider, model, effort ORDER BY events DESC LIMIT 50",
-          "rawQueryText": "SELECT provider, model, effort, count(*) AS events, sum(total_tokens) AS total_tokens, sum(cost_usd) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL GROUP BY provider, model, effort ORDER BY events DESC LIMIT 50"
+          "queryText": "SELECT provider, model, effort, count(*) AS events, coalesce(sum(total_tokens), 0) AS total_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL GROUP BY provider, model, effort ORDER BY events DESC LIMIT 50",
+          "rawQueryText": "SELECT provider, model, effort, count(*) AS events, coalesce(sum(total_tokens), 0) AS total_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL GROUP BY provider, model, effort ORDER BY events DESC LIMIT 50"
         }
       ]
     },
@@ -143,8 +143,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT json_extract(metadata_json, '$.repoFullName') AS repo, provider, count(*) AS events, sum(total_tokens) AS total_tokens, sum(cost_usd) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND json_extract(metadata_json, '$.repoFullName') IS NOT NULL GROUP BY repo, provider ORDER BY events DESC LIMIT 50",
-          "rawQueryText": "SELECT json_extract(metadata_json, '$.repoFullName') AS repo, provider, count(*) AS events, sum(total_tokens) AS total_tokens, sum(cost_usd) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND json_extract(metadata_json, '$.repoFullName') IS NOT NULL GROUP BY repo, provider ORDER BY events DESC LIMIT 50"
+          "queryText": "SELECT json_extract(metadata_json, '$.repoFullName') AS repo, provider, count(*) AS events, coalesce(sum(total_tokens), 0) AS total_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND json_extract(metadata_json, '$.repoFullName') IS NOT NULL GROUP BY repo, provider ORDER BY events DESC LIMIT 50",
+          "rawQueryText": "SELECT json_extract(metadata_json, '$.repoFullName') AS repo, provider, count(*) AS events, coalesce(sum(total_tokens), 0) AS total_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND json_extract(metadata_json, '$.repoFullName') IS NOT NULL GROUP BY repo, provider ORDER BY events DESC LIMIT 50"
         }
       ]
     },
