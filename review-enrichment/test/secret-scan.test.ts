@@ -528,6 +528,41 @@ test("scanPatch does not flag truncated Cohere/Intercom tokens or identifier con
   assert.equal(scanPatch("src/config.ts", hunk([`const intercom = "dG9rOm${"a".repeat(29)}";`])).length, 0);
 });
 
+test("scanPatch flags Together AI and Fireworks API keys with high confidence", () => {
+  const fakeTogetherKey = "together_" + "a".repeat(16);
+  const togetherFindings = scanPatch("src/config.ts", hunk([`const together = "${fakeTogetherKey}";`]));
+  assert.equal(togetherFindings.length, 1);
+  assert.equal(togetherFindings[0].kind, "together_api_key");
+  assert.equal(togetherFindings[0].confidence, "high");
+
+  const fakeFireworksKey = "fw_" + "a".repeat(20);
+  const fireworksFindings = scanPatch("src/config.ts", hunk([`const fireworks = "${fakeFireworksKey}";`]));
+  assert.equal(fireworksFindings.length, 1);
+  assert.equal(fireworksFindings[0].kind, "fireworks_api_key");
+  assert.equal(fireworksFindings[0].confidence, "high");
+
+  const fakeFirePassKey = "fpk_" + "b".repeat(20);
+  const firePassFindings = scanPatch("src/config.ts", hunk([`const firepass = "${fakeFirePassKey}";`]));
+  assert.equal(firePassFindings.length, 1);
+  assert.equal(firePassFindings[0].kind, "fireworks_api_key");
+  assert.equal(firePassFindings[0].confidence, "high");
+});
+
+test("scanPatch does not flag truncated Together/Fireworks keys or identifier continuation", () => {
+  assert.equal(scanPatch("src/config.ts", hunk([`const together = "together_${"a".repeat(15)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const together = "together_${"a".repeat(16)}_suffix";`])).some((f) => f.kind === "together_api_key"),
+    false,
+  );
+
+  assert.equal(scanPatch("src/config.ts", hunk([`const fireworks = "fw_${"a".repeat(19)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const fireworks = "fw_${"a".repeat(20)}_suffix";`])).some((f) => f.kind === "fireworks_api_key"),
+    false,
+  );
+  assert.equal(scanPatch("src/config.ts", hunk([`const firepass = "fpk_${"b".repeat(19)}";`])).length, 0);
+});
+
 test("scanPatch flags additional high-confidence SaaS/cloud/CI credential formats", () => {
   const cases = [
     ["google_oauth_client_secret", "GOCSPX-" + b62(28)],

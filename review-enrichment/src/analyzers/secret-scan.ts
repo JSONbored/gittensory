@@ -212,6 +212,18 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // Together AI API key: `together_` + base62 body.
+    kind: "together_api_key",
+    re: /\btogether_[A-Za-z0-9]{16,}(?![A-Za-z0-9_])/,
+    confidence: "high",
+  },
+  {
+    // Fireworks AI API key: `fw_` (standard) or `fpk_` (Fire Pass) + base62 body.
+    kind: "fireworks_api_key",
+    re: /\b(?:fw|fpk)_[A-Za-z0-9]{20,}(?![A-Za-z0-9_])/,
+    confidence: "high",
+  },
+  {
     // Google OAuth 2.0 client secret: `GOCSPX-` + 28 base64url chars.
     kind: "google_oauth_client_secret",
     re: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/,
