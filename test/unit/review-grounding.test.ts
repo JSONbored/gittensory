@@ -102,6 +102,13 @@ describe("review-grounding: diffFilePriority (source survives the budget first)"
     expect(diffFilePriority("src/a.ts")).toBeLessThan(diffFilePriority("README.md"));
   });
 
+  it("ranks long-form doc spellings as docs(2), matching rag.ts and path-matchers", () => {
+    for (const path of ["GUIDE.markdown", "docs/spec.asciidoc", "notes.ADOC"]) {
+      expect(diffFilePriority(path)).toBe(2);
+      expect(diffFilePriority(path)).toBeGreaterThan(diffFilePriority("src/a.ts"));
+    }
+  });
+
   it("ranks every canonical test convention as tests(1) so real source is inlined first", () => {
     for (const path of [
       "e2e/checkout.cy.ts", // Cypress

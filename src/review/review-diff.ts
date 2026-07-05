@@ -22,7 +22,7 @@ export const DEFAULT_DIFF_BUDGET = 80_000;
 export function diffFilePriority(path: string): number {
   if (/(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|cargo\.lock|poetry\.lock|composer\.lock|go\.sum)$|\.(min\.(js|css)|map|snap)$/i.test(path)) return 4;
   if (/(^|\/)(dist|build|out|coverage|vendor|node_modules)\//i.test(path)) return 4;
-  if (/\.(md|mdx|rst|txt|adoc)$/i.test(path)) return 2;
+  if (/\.(md|mdx|markdown|rst|adoc|asciidoc|txt)$/i.test(path)) return 2;
   if (isTestPath(path)) return 1;
   return 0; // source code
 }

@@ -11,6 +11,13 @@ describe("diffFilePriority — source survives, noise drops first", () => {
     expect(diffFilePriority("app.min.css")).toBe(4);
   });
 
+  it("ranks long-form doc spellings as docs(2), matching rag.ts and path-matchers", () => {
+    for (const path of ["GUIDE.markdown", "docs/spec.asciidoc", "notes.ADOC"]) {
+      expect(diffFilePriority(path)).toBe(2);
+      expect(diffFilePriority(path)).toBeGreaterThan(diffFilePriority("src/a.ts"));
+    }
+  });
+
   it("ranks every canonical test convention as tests(1), not source(0)", () => {
     // These are all tests; before delegating to isTestPath the inline regex missed them and ranked
     // them SOURCE(0), so on a tight budget they could displace real source (the opposite of the goal).
