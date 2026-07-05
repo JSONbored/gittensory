@@ -27,6 +27,7 @@ test("detectFloatingPromise: does not flag awaited, returned, voided, or chained
   assert.equal(detectFloatingPromise("fetch('/x').catch(() => {});"), null);
   assert.equal(detectFloatingPromise("fetch('/x').then(handleOk);"), null);
   assert.equal(detectFloatingPromise("fetch('/x').finally(cleanup);"), "fetch");
+  assert.equal(detectFloatingPromise('fetch("/.catch(");'), "fetch");
 });
 
 test("detectFloatingPromise: skips assignments, non-promise calls, and comments", () => {

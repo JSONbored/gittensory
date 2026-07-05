@@ -57,11 +57,12 @@ function extractLeadingCallCallee(line: string): string | null {
 
 /** Classify one added line for a floating promise call, or null. Pure. */
 export function detectFloatingPromise(line: string): string | null {
-  if (isCommentLine(line) || HANDLED_PREFIX.test(line) || PROMISE_CHAIN_RE.test(line)) {
+  if (isCommentLine(line) || HANDLED_PREFIX.test(line)) {
     return null;
   }
 
   const code = codeOnly(line).replace(/=>/g, "  ");
+  if (PROMISE_CHAIN_RE.test(code)) return null;
   if (/(?<![=<>!])=(?!=)/.test(code)) return null;
 
   const callee = extractLeadingCallCallee(line);
