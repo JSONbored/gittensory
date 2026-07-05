@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -119,5 +119,21 @@ describe("gittensory-miner claim ledger (#2314)", () => {
     expect(() => ledger.recordClaim({ repoFullName: "o/a", issueNumber: 0 })).toThrow("invalid_issue_number");
     expect(() => ledger.recordClaim({ repoFullName: "o/a", issueNumber: 1.5 })).toThrow("invalid_issue_number");
     expect(() => ledger.listClaims({ status: "bogus" as never })).toThrow("invalid_status");
+  });
+
+  it("claim-then-list, then release, excludes released rows from the active-only filter (#3354)", () => {
+    const ledger = tempLedger();
+    ledger.recordClaim({ repoFullName: "o/a", issueNumber: 10 });
+    expect(ledger.listClaims({ status: "active" }).map((c) => c.issueNumber)).toEqual([10]);
+    ledger.releaseClaim("o/a", 10);
+    expect(ledger.listClaims({ status: "active" })).toEqual([]);
+    expect(ledger.listClaims()).toHaveLength(1);
+  });
+
+  it("documents that miner_claims is local bookkeeping only, not duplicate adjudication (#3355)", () => {
+    const source = readFileSync("packages/gittensory-miner/lib/claim-ledger.js", "utf8");
+    expect(source).toContain("LOCAL bookkeeping only");
+    expect(source).toContain("does NOT adjudicate contested duplicates");
+    expect(source).toContain("isDuplicateClusterWinnerByClaim");
   });
 });

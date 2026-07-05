@@ -78,6 +78,9 @@ export function openClaimLedger(dbPath = resolveClaimLedgerDbPath()) {
   const db = new DatabaseSync(resolvedPath);
   chmodSync(resolvedPath, 0o600);
   db.exec("PRAGMA busy_timeout = 5000");
+  // LOCAL bookkeeping only: this table records which issues this miner instance has soft-claimed on this
+  // machine. It does NOT adjudicate contested duplicates — sibling miners claiming the same issue are
+  // resolved elsewhere via `isDuplicateClusterWinnerByClaim` from `@jsonbored/gittensory-engine` (#3355).
   db.exec(`
     CREATE TABLE IF NOT EXISTS miner_claims (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
