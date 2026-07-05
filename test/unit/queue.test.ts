@@ -2985,7 +2985,7 @@ describe("queue processors", () => {
     ).resolves.toBeUndefined();
 
     expect(commentPosted).toBe(true); // the surface published despite the ai_review_cache marker write throwing
-    expect(markSpy).toHaveBeenCalled();
+    expect(markSpy).toHaveBeenCalledWith(env, "JSONbored/gittensory", 7, "a7"); // ties this regression to the real write path, not any call
     markSpy.mockRestore();
   });
 
