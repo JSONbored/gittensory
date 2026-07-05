@@ -181,6 +181,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : {} });
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return new Response("not found", { status: 404 });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "base-commit-sha", commit: { tree: { sha: "base-tree-sha" } } } });
       if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "new-tree-sha" });
       if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "new-commit-sha" });
@@ -222,6 +223,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       const method = init?.method ?? "GET";
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return new Response("not found", { status: 404 });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "base-commit-sha", commit: { tree: { sha: "base-tree-sha" } } } });
       if (url.endsWith("/git/trees") && method === "POST") {
         treeAttempts += 1;
@@ -252,6 +254,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       if (url.endsWith("/repos/owner/widgets") && method === "GET") return Response.json({ default_branch: "trunk" });
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return new Response("not found", { status: 404 });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.endsWith("/branches/trunk")) return Response.json({ commit: { sha: "c", commit: { tree: { sha: "t" } } } });
       if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "ts" });
       if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "cs" });
@@ -275,6 +278,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       const method = init?.method ?? "GET";
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json([{ name: "AGENTS.md", type: "dir" }]);
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "base-commit-sha", commit: { tree: { sha: "base-tree-sha" } } } });
       if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "new-tree-sha" });
       if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "new-commit-sha" });
@@ -300,6 +304,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       const method = init?.method ?? "GET";
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json({ content: base64Utf8(currentContent), encoding: "base64" });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return Response.json({ content: base64Utf8("AGENTS.md"), encoding: "base64" });
       if (method === "POST") wroteAnything = true;
       return new Response("unexpected", { status: 500 });
     });
@@ -319,6 +324,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       const method = init?.method ?? "GET";
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json({ message: "rate limited" }, { status: 403 });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return new Response("not found", { status: 404 });
       return new Response("unexpected", { status: 500 });
     });
     const result = await openRepoDocPullRequest(env, REPO, "live");
@@ -338,11 +344,33 @@ describe("openRepoDocPullRequest (#3000)", () => {
       const method = init?.method ?? "GET";
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json({ content: base64Utf8("# Hand-written AGENTS.md\n\nNo markers here.\n"), encoding: "base64" });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return new Response("not found", { status: 404 });
       if (method === "POST") wroteAnything = true;
       return new Response("unexpected", { status: 500 });
     });
     const result = await openRepoDocPullRequest(env, REPO, "live");
     expect(result).toEqual({ opened: false, reason: "AGENTS.md needs manual review before it can be refreshed: no generated-content marker block found" });
+    expect(wroteAnything).toBe(false);
+  });
+
+  it("REGRESSION: refuses to overwrite a hand-maintained CLAUDE.md when overwrite is not allowed", async () => {
+    const env = envWithKey();
+    await seedInstalledRepo(env, { defaultBranch: "main" });
+    await seedProfileData(env);
+    await seedRepoDocGenerationConfig(env, REPO);
+    let wroteAnything = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (TOKEN_URL.test(url)) return Response.json({ token: "t" });
+      const method = init?.method ?? "GET";
+      if (url.includes("/pulls?") && method === "GET") return Response.json([]);
+      if (url.includes("/contents/AGENTS.md") && method === "GET") return new Response("not found", { status: 404 });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return Response.json({ content: base64Utf8("# Human CLAUDE instructions\n\nKeep this bespoke workflow.\n"), encoding: "base64" });
+      if (method === "POST") wroteAnything = true;
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await openRepoDocPullRequest(env, REPO, "live");
+    expect(result).toEqual({ opened: false, reason: "CLAUDE.md needs manual review before it can be refreshed: no generated-content marker block found" });
     expect(wroteAnything).toBe(false);
   });
 
@@ -359,6 +387,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : {} });
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json({ content: base64Utf8("# Hand-written AGENTS.md\n\nNo markers here.\n"), encoding: "base64" });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return Response.json({ content: base64Utf8("# Hand-written CLAUDE.md\n\nNo markers here.\n"), encoding: "base64" });
       if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "base-commit-sha", commit: { tree: { sha: "base-tree-sha" } } } });
       if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "overwrite-tree-sha" });
       if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "overwrite-commit-sha" });
@@ -369,9 +398,11 @@ describe("openRepoDocPullRequest (#3000)", () => {
     const result = await openRepoDocPullRequest(env, REPO, "live");
     expect(result).toEqual({ opened: true, reused: false, pullNumber: 71, url: "https://github.com/owner/widgets/pull/71", claudeMode: "symlink" });
     const treeCall = calls.find((c) => c.url.endsWith("/git/trees"));
-    const agentsEntry = (treeCall?.body.tree as Array<{ path: string; content: string }>).find((entry) => entry.path === "AGENTS.md");
+    const tree = treeCall?.body.tree as Array<{ path: string; content: string }>;
+    const agentsEntry = tree.find((entry) => entry.path === "AGENTS.md");
     expect(agentsEntry?.content).not.toContain("Hand-written AGENTS.md");
     expect(agentsEntry?.content).toContain("# AGENTS.md");
+    expect(tree.find((entry) => entry.path === "CLAUDE.md")?.content).not.toContain("Hand-written CLAUDE.md");
   });
 
   it("#3004: opens a refresh PR that preserves manual content outside the marker block", async () => {
@@ -390,6 +421,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : {} });
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json({ content: base64Utf8(currentContent), encoding: "base64" });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "base-commit-sha", commit: { tree: { sha: "base-tree-sha" } } } });
       if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "refresh-tree-sha" });
       if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "refresh-commit-sha" });
@@ -507,6 +539,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : {} });
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json({ content: base64Utf8(currentAgentsContent), encoding: "base64" });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.includes("/contents/") && method === "GET") return new Response("not found", { status: 404 });
       if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "base-commit-sha", commit: { tree: { sha: "base-tree-sha" } } } });
       if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "tree-sha" });
@@ -538,6 +571,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       const method = init?.method ?? "GET";
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return Response.json({ content: base64Utf8(currentAgentsContent), encoding: "base64" });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return Response.json({ content: base64Utf8("AGENTS.md"), encoding: "base64" });
       if (url.includes("/contents/") && method === "GET") return Response.json({ content: base64Utf8(currentSkillContent), encoding: "base64" });
       if (method === "POST") wroteAnything = true;
       return new Response("unexpected", { status: 500 });
@@ -559,6 +593,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : {} });
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return new Response("not found", { status: 404 });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.includes("/contents/") && method === "GET") return Response.json({ content: base64Utf8("# Hand-written skill notes\n\nNo markers here.\n"), encoding: "base64" });
       if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "base-commit-sha", commit: { tree: { sha: "base-tree-sha" } } } });
       if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "tree-sha" });
@@ -585,6 +620,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : {} });
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return new Response("not found", { status: 404 });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.includes("/contents/") && method === "GET") return Response.json({ content: base64Utf8("# Hand-written skill notes\n\nNo markers here.\n"), encoding: "base64" });
       if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "base-commit-sha", commit: { tree: { sha: "base-tree-sha" } } } });
       if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "tree-sha" });
@@ -613,6 +649,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
       const method = init?.method ?? "GET";
       if (url.includes("/pulls?") && method === "GET") return Response.json([]);
       if (url.includes("/contents/AGENTS.md") && method === "GET") return new Response("not found", { status: 404 });
+      if (url.includes("/contents/CLAUDE.md") && method === "GET") return new Response("not found", { status: 404 });
       if (url.endsWith("/branches/main")) return Response.json({ commit: { sha: "c", commit: { tree: { sha: "t" } } } });
       if (url.endsWith("/git/trees") && method === "POST") return Response.json({ message: "tree rejected entirely" }, { status: 422 });
       return new Response("unexpected", { status: 500 });

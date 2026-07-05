@@ -184,6 +184,13 @@ export async function openRepoDocPullRequest(env: Env, repoFullName: string, mod
       // currentAgentsContent is guaranteed non-null here.
       const agentsContent = refresh.action === "no-change" ? currentAgentsContent! : refresh.content;
 
+      const currentClaudeContent = await fetchExistingFileContent(octokit, owner, repo, CLAUDE_FILE_PATH, baseBranch);
+      const claudeRefresh = currentClaudeContent === AGENTS_FILE_PATH ? ({ action: "no-change" } as const) : refreshGeneratedDoc(currentClaudeContent, generatedSection, REPO_DOC_MARKERS);
+      if (claudeRefresh.action === "manual-review-required" && !manifest.repoDocGeneration.allowOverwriteExisting) {
+        return { opened: false, reason: `CLAUDE.md needs manual review before it can be refreshed: ${claudeRefresh.reason}` };
+      }
+      const claudeChanged = claudeRefresh.action !== "no-change";
+
       // Skill file (#3001): additive to this SAME pull request, never a parallel delivery path. A skill-only
       // change can still open a PR even when AGENTS.md itself is unchanged; a skill-file conflict only excludes
       // the skill from THIS run (agentsChanged is unaffected), it never blocks the AGENTS.md refresh.
@@ -201,7 +208,7 @@ export async function openRepoDocPullRequest(env: Env, repoFullName: string, mod
         }
       }
 
-      if (!agentsChanged && !skillEntry) return { opened: false, reason: "no meaningful change since the last generated AGENTS.md" };
+      if (!agentsChanged && !claudeChanged && !skillEntry) return { opened: false, reason: "no meaningful change since the last generated AGENTS.md" };
 
       const branchInfo = await octokit.request("GET /repos/{owner}/{repo}/branches/{branch}", { owner, repo, branch: baseBranch });
       const baseCommitSha = branchInfo.data.commit.sha;
