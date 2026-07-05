@@ -517,6 +517,20 @@ rendering.
 Each builder returns `RawPlanStep[]` in the shape accepted by `gittensory_build_plan`. Templates are pure data — they
 describe step ordering via `dependsOn` but never actuate anything.
 
+## Plan DAG status helpers
+
+`plan-export.ts` renders a validated `PlanDag`; the helpers below are pure predicates over that shape for miner and
+dashboard progress summaries:
+
+- `countPlanSteps(plan)` — total step count
+- `countPlanStepsByStatus(plan, status)` — steps matching a `PlanStepStatus`
+- `isPlanEmpty(plan)` — whether the plan has no steps
+- `isPlanFullyCompleted(plan)` — every step is `completed` (empty plans are not complete)
+- `hasPlanFailedSteps(plan)` — any step is `failed`
+- `hasPlanPendingSteps(plan)` — any step is `pending`
+- `hasPlanRunningSteps(plan)` — any step is `running`
+- `hasPlanSkippedSteps(plan)` — any step is `skipped`
+
 ## Opportunity competition
 
 `computeOpportunityCompetition(highRiskDuplicateClusters, openPullRequests)` mirrors the hosted
