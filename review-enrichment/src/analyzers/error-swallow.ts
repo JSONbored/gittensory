@@ -7,6 +7,7 @@ import { isTestPath } from "./test-ratio.js";
 
 const MAX_FINDINGS = 25;
 const MAX_LINE_CHARS = 2000;
+const MAX_MULTILINE_ADDED_LINES = 50;
 
 const SOURCE_EXTS = new Set(["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "py"]);
 
@@ -28,6 +29,10 @@ export function isErrorSwallowSourcePath(path: string): boolean {
   return Boolean(ext && SOURCE_EXTS.has(ext) && !isTestPath(path));
 }
 
+function isAddedPatchLine(line: string): boolean {
+  return line.startsWith("+") && !line.startsWith("+++");
+}
+
 function bodySwallowsError(body: string, binding: string | null, isPython: boolean): ErrorSwallowFinding["kind"] | null {
   const inner = codeOnly(body).trim();
   if (!inner) return "empty-catch";
@@ -41,7 +46,7 @@ function bodySwallowsError(body: string, binding: string | null, isPython: boole
   if (mentionsLogOrBinding(inner, binding)) return null;
 
   if (binding) return "unused-binding";
-  return "empty-catch";
+  return null;
 }
 
 function mentionsLogOrBinding(body: string, binding: string | null): boolean {
@@ -49,15 +54,48 @@ function mentionsLogOrBinding(body: string, binding: string | null): boolean {
   return /\b(console\.|logger\.|log\.|print\s*\(|Sentry\.|captureException\b|reportError\b|\.error\s*\(|\.warn\s*\()/i.test(body);
 }
 
-/** Classify one added JS/TS catch on a single line, or null when clean / out of scope. Pure. */
-export function detectJsCatchSwallow(line: string): ErrorSwallowFinding["kind"] | null {
-  const code = codeOnly(line);
-  const match = JS_CATCH_RE.exec(code);
+function classifyJsCatchText(text: string): ErrorSwallowFinding["kind"] | null {
+  const match = JS_CATCH_RE.exec(codeOnly(text));
   if (!match) return null;
   return bodySwallowsError(match[2] ?? "", match[1] ?? null, false);
 }
 
-/** Classify one added Python except line (and optional same-line body), or null. Pure. */
+function braceBlockComplete(text: string): boolean {
+  const code = codeOnly(text);
+  let depth = 0;
+  let seenOpen = false;
+  for (const ch of code) {
+    if (ch === "{") {
+      depth += 1;
+      seenOpen = true;
+    } else if (ch === "}") {
+      depth -= 1;
+    }
+  }
+  return seenOpen && depth <= 0;
+}
+
+/** Collect consecutive added lines until a `{`/`}` block closes. Pure. */
+function collectAddedBraceBlock(lines: string[], startIndex: number): { text: string; lineCount: number } | null {
+  let text = "";
+  let lineCount = 0;
+  for (let i = startIndex; i < lines.length && lineCount < MAX_MULTILINE_ADDED_LINES; i += 1) {
+    const line = lines[i]!;
+    if (!isAddedPatchLine(line)) break;
+    text += (lineCount > 0 ? "\n" : "") + line.slice(1);
+    lineCount += 1;
+    if (braceBlockComplete(text)) break;
+  }
+  return lineCount > 0 ? { text, lineCount } : null;
+}
+
+/** Classify one added JS/TS catch (single- or multi-line text), or null when clean / out of scope. Pure. */
+export function detectJsCatchSwallow(line: string): ErrorSwallowFinding["kind"] | null {
+  if (!/\bcatch\b/.test(line)) return null;
+  return classifyJsCatchText(line);
+}
+
+/** Classify one added Python except line (and optional immediate next added body line), or null. Pure. */
 export function detectPythonExceptSwallow(line: string, nextAddedLine?: string | null): ErrorSwallowFinding["kind"] | null {
   const match = PYTHON_EXCEPT_RE.exec(line);
   if (!match) return null;
@@ -66,6 +104,11 @@ export function detectPythonExceptSwallow(line: string, nextAddedLine?: string |
   if (!body && nextAddedLine) body = nextAddedLine.trim();
   if (/^\s*pass\s*$/.test(body) || body === "pass") return null;
   return bodySwallowsError(body, binding, true);
+}
+
+function pythonExceptUsesNextAddedLine(line: string): boolean {
+  const match = PYTHON_EXCEPT_RE.exec(line);
+  return Boolean(match && !(match[3] ?? "").trim());
 }
 
 /** Scan one file patch's added lines for error-swallowing catch blocks, line-cited via hunk headers. Pure. */
@@ -86,35 +129,50 @@ export function scanPatchForErrorSwallow(
   for (let index = 0; index < lines.length; index += 1) {
     if (limits.signal?.aborted) throw new Error("analyzer_aborted");
     const line = lines[index]!;
-    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
     if (hunk) {
       newLine = Number(hunk[1]);
       inHunk = true;
       continue;
     }
-    if (!inHunk || !line.startsWith("+") || line.startsWith("+++")) continue;
+    if (!inHunk) continue;
 
-    const body = line.slice(1);
-    if (body.length > MAX_LINE_CHARS) {
+    if (isAddedPatchLine(line)) {
+      const body = line.slice(1);
+      if (body.length > MAX_LINE_CHARS) {
+        newLine += 1;
+        continue;
+      }
+
+      let kind: ErrorSwallowFinding["kind"] | null = null;
+      let skipAddedLines = 0;
+
+      if (isPython) {
+        const nextLine = lines[index + 1];
+        const nextAdded = nextLine && isAddedPatchLine(nextLine) ? nextLine.slice(1) : null;
+        kind = detectPythonExceptSwallow(body, nextAdded);
+        if (pythonExceptUsesNextAddedLine(body) && nextAdded) skipAddedLines = 1;
+      } else if (/\bcatch\b/.test(body)) {
+        kind = detectJsCatchSwallow(body);
+        if (!kind) {
+          const block = collectAddedBraceBlock(lines, index);
+          if (block) {
+            kind = classifyJsCatchText(block.text);
+            skipAddedLines = block.lineCount - 1;
+          }
+        }
+      }
+
+      if (kind) {
+        findings.push({ file: path, line: newLine, kind });
+        if (findings.length >= maxFindings) return findings;
+      }
+
+      newLine += 1 + skipAddedLines;
+      index += skipAddedLines;
+    } else if (!line.startsWith("-") && !line.startsWith("\\")) {
       newLine += 1;
-      continue;
     }
-
-    let kind: ErrorSwallowFinding["kind"] | null = null;
-    if (isPython) {
-      const nextAdded =
-        lines.slice(index + 1).find((candidate) => candidate.startsWith("+") && !candidate.startsWith("+++"))?.slice(1) ??
-        null;
-      kind = detectPythonExceptSwallow(body, nextAdded);
-    } else {
-      kind = detectJsCatchSwallow(body);
-    }
-
-    if (kind) {
-      findings.push({ file: path, line: newLine, kind });
-      if (findings.length >= maxFindings) return findings;
-    }
-    newLine += 1;
   }
 
   return findings;
