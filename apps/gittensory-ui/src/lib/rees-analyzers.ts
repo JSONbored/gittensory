@@ -1050,6 +1050,29 @@ export const REES_ANALYZERS = [
     },
   },
   {
+    name: "i18n",
+    title: "i18n regressions",
+    category: "quality",
+    cost: "local",
+    defaultEnabled: true,
+    profiles: ["fast", "balanced", "deep"],
+    requires: ["files"],
+    limits: {
+      maxFindings: 25,
+      maxLineChars: 2000,
+    },
+    docs: {
+      summary:
+        "When the diff shows a translation convention, flags newly-added user-facing JSX text or label/title props that bypass it.",
+      looksAt:
+        "Added lines in changed non-test TSX/JSX/Vue UI files where the same patch also adds i18n calls.",
+      reports: "File and line only — never string content.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Inactive when the file's added lines show no t()/useTranslation/FormattedMessage-style convention. Skips technical props and dotted i18n-key-shaped literals.",
+    },
+  },
+  {
     name: "commitLint",
     title: "Conventional-commit subjects",
     category: "quality",

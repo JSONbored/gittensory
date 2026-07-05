@@ -33,6 +33,7 @@ import { scanMagicNumbers } from "./magic-number.js";
 import { scanConflictMarkers } from "./conflict-marker.js";
 import { scanDebugLeftover } from "./debug-leftover.js";
 import { scanDeepNesting } from "./deep-nesting.js";
+import { scanI18nRegression } from "./i18n-regression.js";
 import { scanErrorSwallow } from "./error-swallow.js";
 import { scanFloatingPromise } from "./floating-promise.js";
 import { scanSizeSmell } from "./size-smell.js";
@@ -1135,6 +1136,33 @@ export const ANALYZER_DESCRIPTORS = [
       return lines;
     },
     run: (req, { signal }) => scanErrorSwallow(req, signal),
+  }),
+  descriptor({
+    name: "i18n",
+    title: "i18n regressions",
+    category: "quality",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: 25, maxLineChars: 2000 },
+    docs: {
+      summary:
+        "When the diff shows a translation convention, flags newly-added user-facing JSX text or label/title props that bypass it.",
+      looksAt: "Added lines in changed non-test TSX/JSX/Vue UI files where the same patch also adds i18n calls.",
+      reports: "File and line only — never string content.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Inactive when the file's added lines show no t()/useTranslation/FormattedMessage-style convention. Skips technical props and dotted i18n-key-shaped literals.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### i18n regressions (hardcoded UI copy where translation is in use)"];
+      for (const item of findings) {
+        lines.push(`- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)}`);
+      }
+      return lines;
+    },
+    run: (req, { signal }) => scanI18nRegression(req, signal),
   }),
   descriptor({
     name: "commitLint",
