@@ -483,5 +483,14 @@ describe("AI review cache (#1)", () => {
       await putCachedAiReview(env, "o/r", 61, "sha3", "block", { notes: "pending", reviewerCount: 1 });
       expect(await countPublishedAiReviewHeads(env, "o/r", 61)).toBe(2);
     });
+
+    it("returns 0 when the count query yields no row (fail-safe)", async () => {
+      const env = createTestEnv();
+      const prepareSpy = vi.spyOn(env.DB, "prepare").mockReturnValue({
+        bind: () => ({ first: async () => null }),
+      } as never);
+      expect(await countPublishedAiReviewHeads(env, "o/r", 62)).toBe(0);
+      prepareSpy.mockRestore();
+    });
   });
 });
