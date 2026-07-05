@@ -13,7 +13,9 @@ const patchOf = (lines: string[]) =>
 
 test("detectErrorSwallow: flags empty catches and return-null handlers", () => {
   assert.equal(detectErrorSwallow("try { f(); } catch (e) {}"), "empty-catch");
+  assert.equal(detectErrorSwallow("try { f(); } catch {}"), "empty-catch");
   assert.equal(detectErrorSwallow("try { f(); } catch (e) { return null; }"), "return-null");
+  assert.equal(detectErrorSwallow("try { f(); } catch { return null; }"), "return-null");
   assert.equal(detectErrorSwallow("except ValueError: pass"), "empty-catch");
   assert.equal(detectErrorSwallow("except ValueError as err: pass"), "unused-binding");
 });

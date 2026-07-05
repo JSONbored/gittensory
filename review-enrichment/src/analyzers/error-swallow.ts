@@ -9,8 +9,8 @@ const MAX_LINE_CHARS = 2000;
 
 const SOURCE_EXTS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts", "py"]);
 
-const CATCH_OPEN_RE = /catch\s*\(\s*(\w+)?\s*\)\s*\{/;
-const SINGLE_CATCH_RE = /catch\s*\(\s*(\w+)?\s*\)\s*\{([\s\S]*?)\}/;
+const CATCH_OPEN_RE = /catch(?:\s*\(\s*(\w+)?\s*\))?\s*\{/;
+const SINGLE_CATCH_RE = /catch(?:\s*\(\s*(\w+)?\s*\))?\s*\{([\s\S]*?)\}/;
 const PY_EXCEPT_PASS_RE = /^\s*except(?:\s+[\w.]+\s*(?:as\s+(\w+))?)?\s*:\s*pass\s*(?:#.*)?$/;
 
 function isScannablePath(path: string): boolean {
