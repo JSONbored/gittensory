@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import type { InlineFinding } from "../../src/services/ai-review";
-import { isInlineCommentsEnabled, maybePostInlineComments, postInlineReviewComments, rightSideLinesFromPatch, selectInlineComments, shouldRequestInlineFindings } from "../../src/review/inline-comments";
+import { isInlineCommentsEnabled, maybePostInlineComments, postInlineReviewComments, rightSideLinesFromPatch, selectInlineComments, shouldRenderSuggestions, shouldRequestInlineFindings } from "../../src/review/inline-comments";
 import { createTestEnv } from "../helpers/d1";
 
 function envWithKey() {
@@ -28,6 +28,16 @@ describe("shouldRequestInlineFindings (#inline-comments)", () => {
     expect(shouldRequestInlineFindings(on, "acme/widgets", undefined)).toBe(false); // manifest toggle absent
     expect(shouldRequestInlineFindings({ GITTENSORY_REVIEW_REPOS: "acme/widgets" }, "acme/widgets", true)).toBe(false); // operator flag off
     expect(shouldRequestInlineFindings(on, "other/repo", true)).toBe(false); // repo not allowlisted
+  });
+});
+
+describe("shouldRenderSuggestions (#1956)", () => {
+  it("requires the manifest toggle AND inline comments already being enabled — a suggestion has nothing to attach to otherwise", () => {
+    expect(shouldRenderSuggestions(true, true)).toBe(true);
+    expect(shouldRenderSuggestions(true, false)).toBe(false); // manifest toggle off
+    expect(shouldRenderSuggestions(true, undefined)).toBe(false); // manifest toggle absent
+    expect(shouldRenderSuggestions(false, true)).toBe(false); // inline comments themselves are off
+    expect(shouldRenderSuggestions(false, false)).toBe(false);
   });
 });
 
@@ -85,6 +95,38 @@ describe("selectInlineComments (#inline-comments)", () => {
     const bigFiles = [{ path: "src/big.ts", payload: { patch: bigPatch } }];
     const many: InlineFinding[] = Array.from({ length: 12 }, (_, i) => ({ path: "src/big.ts", line: i + 1, severity: "nit", body: `b${i + 1}` }));
     expect(selectInlineComments(many, bigFiles)).toHaveLength(10);
+  });
+
+  describe("suggestion blocks (#1956)", () => {
+    const withSuggestion: InlineFinding = { path: "src/a.ts", line: 2, severity: "nit", body: "Use const.", suggestion: "const x = 1;" };
+
+    it("defaults to OFF (backward compatible) — a suggestion is never rendered when the third argument is omitted", () => {
+      const out = selectInlineComments([withSuggestion], files);
+      expect(out).toEqual([{ path: "src/a.ts", line: 2, side: "RIGHT", body: "**Nit:** Use const." }]);
+    });
+
+    it("does not render a suggestion when explicitly disabled, even if the finding carries one", () => {
+      const out = selectInlineComments([withSuggestion], files, false);
+      expect(out[0]?.body).not.toContain("```suggestion");
+    });
+
+    it("renders a GitHub-native suggested-change block when enabled and the finding carries a suggestion", () => {
+      const out = selectInlineComments([withSuggestion], files, true);
+      expect(out[0]?.body).toBe("**Nit:** Use const.\n\n```suggestion\nconst x = 1;\n```");
+    });
+
+    it("renders no suggestion block (finding text only) when enabled but the finding has none", () => {
+      const noSuggestion: InlineFinding = { path: "src/a.ts", line: 2, severity: "nit", body: "Use const." };
+      const out = selectInlineComments([noSuggestion], files, true);
+      expect(out[0]?.body).toBe("**Nit:** Use const.");
+    });
+
+    it("fails safe: drops a suggestion whose own text contains a triple-backtick run, to avoid corrupting the comment's markdown fence, but keeps the finding text", () => {
+      const breaksFence: InlineFinding = { path: "src/a.ts", line: 2, severity: "blocker", body: "Fix this.", suggestion: "```\nescape attempt\n```" };
+      const out = selectInlineComments([breaksFence], files, true);
+      expect(out[0]?.body).toBe("**Blocker:** Fix this.");
+      expect(out[0]?.body).not.toContain("escape attempt");
+    });
   });
 });
 
@@ -182,5 +224,35 @@ describe("maybePostInlineComments (#inline-comments, review-path entry)", () => 
     await maybePostInlineComments(envWithKey(), { ...base, aiReview: { inlineFindings: findings }, getFiles });
     expect(getFiles).toHaveBeenCalledTimes(1);
     expect(calls[0]?.body).toMatchObject({ event: "COMMENT", comments: [{ path: "src/a.ts", line: 2, side: "RIGHT", body: "**Nit:** guard this" }] });
+  });
+
+  it("renders a suggested-change block end-to-end when suggestionsEnabled is threaded through (#1956)", async () => {
+    const getFiles = vi.fn(async () => files);
+    const withSuggestion: InlineFinding[] = [{ path: "src/a.ts", line: 2, severity: "nit", body: "guard this", suggestion: "if (x) guard();" }];
+    const calls: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (url.endsWith("/pulls/3/reviews")) return Response.json({ id: 10 });
+      return new Response("unexpected", { status: 500 });
+    });
+    await maybePostInlineComments(envWithKey(), { ...base, aiReview: { inlineFindings: withSuggestion }, getFiles, suggestionsEnabled: true });
+    expect(calls[0]?.body).toMatchObject({ comments: [{ path: "src/a.ts", line: 2, side: "RIGHT", body: "**Nit:** guard this\n\n```suggestion\nif (x) guard();\n```" }] });
+  });
+
+  it("omits the suggestion block end-to-end when suggestionsEnabled is not passed (default off, backward compatible)", async () => {
+    const getFiles = vi.fn(async () => files);
+    const withSuggestion: InlineFinding[] = [{ path: "src/a.ts", line: 2, severity: "nit", body: "guard this", suggestion: "if (x) guard();" }];
+    const calls: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (url.endsWith("/pulls/3/reviews")) return Response.json({ id: 11 });
+      return new Response("unexpected", { status: 500 });
+    });
+    await maybePostInlineComments(envWithKey(), { ...base, aiReview: { inlineFindings: withSuggestion }, getFiles });
+    expect(calls[0]?.body).toMatchObject({ comments: [{ path: "src/a.ts", line: 2, side: "RIGHT", body: "**Nit:** guard this" }] });
   });
 });

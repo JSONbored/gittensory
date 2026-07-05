@@ -390,6 +390,7 @@ import {
 } from "../services/ai-review";
 import {
   maybePostInlineComments,
+  shouldRenderSuggestions,
   shouldRequestInlineFindings,
 } from "../review/inline-comments";
 import { evaluateClaCheck } from "../review/cla-check";
@@ -7637,6 +7638,7 @@ async function maybePublishPrPublicSurface(
       }
     | undefined;
   let inlineCommentsEnabledForReview = false;
+  let suggestionsEnabledForReview = false;
   let aiReviewExpected = false;
   let aiReviewWasReused = false;
   let gateFinalized = false;
@@ -8236,6 +8238,7 @@ async function maybePublishPrPublicSurface(
             profile: reviewProfile,
             securityFocus: reviewSecurityFocus,
             inlineComments: reviewInlineComments,
+            suggestions: reviewSuggestions,
             pathInstructions: reviewPathInstructions,
             instructions: manifestReviewInstructions,
             tone: reviewTone,
@@ -8247,6 +8250,10 @@ async function maybePublishPrPublicSurface(
             env,
             repoFullName,
             reviewInlineComments,
+          );
+          suggestionsEnabledForReview = shouldRenderSuggestions(
+            inlineCommentsEnabledForReview,
+            reviewSuggestions,
           );
           const reviewFilesForAi = await getReviewFiles();
           const changedPaths = reviewFilesForAi.map((file) => file.path);
@@ -9341,6 +9348,7 @@ async function maybePublishPrPublicSurface(
       getFiles: getReviewFiles,
       mode,
       inlineCommentsEnabled: inlineCommentsEnabledForReview,
+      suggestionsEnabled: suggestionsEnabledForReview,
     });
   }
   if (decision.willLabel) {

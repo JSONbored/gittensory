@@ -34,6 +34,17 @@ export function shouldRequestInlineFindings(
   return manifestToggle === true && isInlineCommentsEnabled(env) && isConvergenceRepoAllowed(env, repoFullName);
 }
 
+/** PURE (#1956): should a `suggestion` be rendered as a GitHub-native ` ```suggestion ` block? This is an
+ *  ADDITIONAL opt-in (`review.suggestions`) layered on top of inline comments being enabled at all — a
+ *  suggestion has nothing to attach to without the inline comment it rides on, so it can never be true when
+ *  `inlineCommentsEnabled` is false, regardless of the manifest toggle. */
+export function shouldRenderSuggestions(
+  inlineCommentsEnabled: boolean,
+  manifestToggle: boolean | undefined,
+): boolean {
+  return inlineCommentsEnabled && manifestToggle === true;
+}
+
 /** A GitHub inline review comment anchored to a line on the RIGHT (added/context) side of the PR diff. */
 export type ReviewInlineComment = { path: string; line: number; side: "RIGHT"; body: string };
 
@@ -66,17 +77,34 @@ export function rightSideLinesFromPatch(patch: string): Set<number> {
   return lines;
 }
 
-/** The inline comment body: a compact severity label + the finding. Public-safe by construction — the body was
- *  already run through the public-safe filter by composeInlineFindings before it reached here. */
-function formatInlineBody(finding: InlineFinding): string {
+/** GitHub's suggested-change syntax requires the LITERAL ` ```suggestion ` fence; if the suggestion text itself
+ *  contains a triple-backtick run, embedding it verbatim would prematurely close the fence and corrupt the
+ *  comment (the rest of the finding body would spill out as raw, unintended markdown). Fail-safe (#1956):
+ *  drop the suggestion block and keep the finding text rather than risk a malformed comment — mirrors the
+ *  "a bad/blank suggestion is simply dropped while keeping the finding itself" discipline already applied when
+ *  the suggestion is parsed (ai-review.ts's parseModelReview). */
+function safeSuggestionBlock(suggestion: string | undefined): string {
+  if (!suggestion || suggestion.includes("```")) return "";
+  return `\n\n\`\`\`suggestion\n${suggestion}\n\`\`\``;
+}
+
+/** The inline comment body: a compact severity label + the finding, plus a one-click GitHub suggested-change
+ *  block when the finding carries a `suggestion` AND the caller has suggestions enabled (#1956). Public-safe by
+ *  construction — both the body and the suggestion were already run through the public-safe filter by
+ *  composeInlineFindings before they reached here. */
+function formatInlineBody(finding: InlineFinding, suggestionsEnabled: boolean): string {
   const label = finding.severity === "blocker" ? "Blocker" : "Nit";
-  return `**${label}:** ${finding.body}`;
+  const suggestionBlock = suggestionsEnabled ? safeSuggestionBlock(finding.suggestion) : "";
+  return `**${label}:** ${finding.body}${suggestionBlock}`;
 }
 
 /** PURE: turn the model's line-anchored findings into GitHub inline review comments, dropping any whose
  *  (path, line) is not a commentable RIGHT-side line in that file's diff (so GitHub never 422s) and any file with
- *  no usable patch. Dedupes by path+line (first wins) and caps the total. Empty in / nothing anchorable ⇒ []. */
-export function selectInlineComments(findings: InlineFinding[], files: Pick<PullRequestFileRecord, "path" | "payload">[]): ReviewInlineComment[] {
+ *  no usable patch. Dedupes by path+line (first wins) and caps the total. Empty in / nothing anchorable ⇒ [].
+ *  `suggestionsEnabled` (#1956) gates whether a finding's `suggestion` is rendered as a committable GitHub
+ *  suggested-change block — a suggestion is anchored to the SAME single line as its parent finding, so the
+ *  existing line-validity check above already covers "drop it if the range can't be anchored". */
+export function selectInlineComments(findings: InlineFinding[], files: Pick<PullRequestFileRecord, "path" | "payload">[], suggestionsEnabled = false): ReviewInlineComment[] {
   const rightLinesByPath = new Map<string, Set<number>>();
   for (const file of files) {
     const patch = typeof file.payload?.patch === "string" ? file.payload.patch : "";
@@ -91,7 +119,7 @@ export function selectInlineComments(findings: InlineFinding[], files: Pick<Pull
     const key = `${finding.path}:${finding.line}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ path: finding.path, line: finding.line, side: "RIGHT", body: formatInlineBody(finding) });
+    out.push({ path: finding.path, line: finding.line, side: "RIGHT", body: formatInlineBody(finding, suggestionsEnabled) });
   }
   return out;
 }
@@ -110,9 +138,10 @@ export async function postInlineReviewComments(
     findings: InlineFinding[];
     files: Pick<PullRequestFileRecord, "path" | "payload">[];
     mode: AgentActionMode;
+    suggestionsEnabled?: boolean | undefined;
   },
 ): Promise<{ posted: number }> {
-  const comments = selectInlineComments(args.findings, args.files);
+  const comments = selectInlineComments(args.findings, args.files, args.suggestionsEnabled);
   if (comments.length === 0 || !args.commitId) return { posted: 0 };
   try {
     await createPullRequestReviewComments(env, args.installationId, args.repoFullName, args.pullNumber, args.commitId, comments, args.mode);
@@ -140,6 +169,7 @@ export async function maybePostInlineComments(
     getFiles: () => Promise<Pick<PullRequestFileRecord, "path" | "payload">[]>;
     mode: AgentActionMode;
     inlineCommentsEnabled: boolean;
+    suggestionsEnabled?: boolean | undefined;
   },
 ): Promise<void> {
   if (!args.inlineCommentsEnabled) return;
@@ -153,5 +183,6 @@ export async function maybePostInlineComments(
     findings,
     files: await args.getFiles(),
     mode: args.mode,
+    suggestionsEnabled: args.suggestionsEnabled,
   });
 }
