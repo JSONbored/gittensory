@@ -1010,6 +1010,38 @@ describe("parseFocusManifest gate config", () => {
     expect(parseFocusManifest({ gate: { readiness: { minScore: 59.6 } } }).gate.readinessMinScore).toBe(60);
   });
 
+  it("sets gate.present when only gate.readiness.minScore is configured (#2053)", () => {
+    const m = parseFocusManifest({ gate: { readiness: { minScore: 75 } } });
+    expect(m.gate.present).toBe(true);
+    expect(m.gate.readinessMode).toBeNull();
+    expect(m.gate.readinessMinScore).toBe(75);
+  });
+
+  it("round-trips gate.readiness.minScore through gateConfigToJson unchanged (#2053)", () => {
+    for (const minScore of [0, 1, 42, 99, 100]) {
+      const original = parseFocusManifest({ gate: { readiness: { minScore } } });
+      const json = gateConfigToJson(original.gate) as { readiness: { minScore: number } };
+      expect(json.readiness.minScore).toBe(minScore);
+      expect(parseFocusManifest({ gate: json }).gate).toEqual(original.gate);
+    }
+  });
+
+  it("warns and ignores invalid gate.readiness.minScore values (#2053)", () => {
+    for (const bad of ["high", NaN, Infinity, -Infinity]) {
+      const m = parseFocusManifest({ gate: { readiness: { minScore: bad as unknown as number } } });
+      expect(m.gate.readinessMinScore).toBeNull();
+      expect(m.warnings.some((w) => /gate\.readiness\.minScore.*must be a number between 0 and 100/.test(w))).toBe(true);
+    }
+  });
+
+  it("leaves gate.readiness.minScore null when omitted and omits it from gateConfigToJson (#2053)", () => {
+    const m = parseFocusManifest({ gate: { readiness: { mode: "advisory" } } });
+    expect(m.gate.readinessMinScore).toBeNull();
+    const json = gateConfigToJson(m.gate) as { readiness: Record<string, unknown> };
+    expect(json.readiness).toEqual({ mode: "advisory" });
+    expect(json.readiness).not.toHaveProperty("minScore");
+  });
+
   it("ignores a non-mapping gate or readiness block with a warning", () => {
     const m1 = parseFocusManifest({ gate: ["nope"] });
     expect(m1.gate.present).toBe(false);
