@@ -284,6 +284,18 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // Cartesia API key: `sk_car_` or admin `sk_car_admin_` + base62 body.
+    kind: "cartesia_api_key",
+    re: /\bsk_car_(?:admin_)?[A-Za-z0-9]{20,}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // Apify personal API token: `apify_api_` + base62 body.
+    kind: "apify_api_token",
+    re: /\bapify_api_[A-Za-z0-9]{20,}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
     // Google OAuth 2.0 client secret: `GOCSPX-` + 28 base64url chars.
     kind: "google_oauth_client_secret",
     re: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/,

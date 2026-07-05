@@ -759,6 +759,49 @@ test("scanPatch does not flag truncated xAI/Deepgram keys or identifier continua
   );
 });
 
+test("scanPatch flags Cartesia and Apify API tokens with high confidence", () => {
+  const fakeCartesiaKey = "sk_car_" + "a".repeat(20);
+  const cartesiaFindings = scanPatch("src/config.ts", hunk([`const cartesia = "${fakeCartesiaKey}";`]));
+  assert.equal(cartesiaFindings.length, 1);
+  assert.equal(cartesiaFindings[0].kind, "cartesia_api_key");
+  assert.equal(cartesiaFindings[0].confidence, "high");
+
+  const fakeCartesiaAdmin = "sk_car_admin_" + "b".repeat(20);
+  const cartesiaAdminFindings = scanPatch("src/config.ts", hunk([`const cartesiaAdmin = "${fakeCartesiaAdmin}";`]));
+  assert.equal(cartesiaAdminFindings.length, 1);
+  assert.equal(cartesiaAdminFindings[0].kind, "cartesia_api_key");
+  assert.equal(cartesiaAdminFindings[0].confidence, "high");
+
+  const fakeApifyToken = "apify_api_" + "c".repeat(20);
+  const apifyFindings = scanPatch("src/config.ts", hunk([`const apify = "${fakeApifyToken}";`]));
+  assert.equal(apifyFindings.length, 1);
+  assert.equal(apifyFindings[0].kind, "apify_api_token");
+  assert.equal(apifyFindings[0].confidence, "high");
+});
+
+test("scanPatch does not flag truncated Cartesia/Apify tokens or identifier continuation", () => {
+  assert.equal(scanPatch("src/config.ts", hunk([`const cartesia = "sk_car_${"a".repeat(19)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const cartesia = "sk_car_${"a".repeat(20)}_suffix";`])).some((f) => f.kind === "cartesia_api_key"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const cartesia = "sk_car_${"a".repeat(20)}-suffix";`])).some((f) => f.kind === "cartesia_api_key"),
+    false,
+  );
+  assert.equal(scanPatch("src/config.ts", hunk([`const cartesiaAdmin = "sk_car_admin_${"b".repeat(19)}";`])).length, 0);
+
+  assert.equal(scanPatch("src/config.ts", hunk([`const apify = "apify_api_${"c".repeat(19)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const apify = "apify_api_${"c".repeat(20)}_suffix";`])).some((f) => f.kind === "apify_api_token"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const apify = "apify_api_${"c".repeat(20)}-suffix";`])).some((f) => f.kind === "apify_api_token"),
+    false,
+  );
+});
+
 test("scanPatch flags additional high-confidence SaaS/cloud/CI credential formats", () => {
   const cases = [
     ["google_oauth_client_secret", "GOCSPX-" + b62(28)],
