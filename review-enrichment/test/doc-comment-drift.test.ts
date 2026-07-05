@@ -45,6 +45,26 @@ test("extractFunctionParams: excludes a name declared more than once (overload/d
   assert.deepEqual([...map.get("other")], ["z"]);
 });
 
+test("extractFunctionParams: extracts params from a multi-line signature", () => {
+  const map = extractFunctionParams("function foo(\n  a,\n  b\n) {}\n");
+  assert.deepEqual([...map.get("foo")], ["a", "b"]);
+});
+
+test("extractFunctionParams: a rest parameter keeps its name without the `...` marker", () => {
+  const map = extractFunctionParams("function bar(...rest) {}\n");
+  assert.deepEqual([...map.get("bar")], ["rest"]);
+});
+
+test("extractFunctionParams: strips a TS type annotation and a default value from each name", () => {
+  const map = extractFunctionParams("function baz(a: string, b = 5): void {}\n");
+  assert.deepEqual([...map.get("baz")], ["a", "b"]);
+});
+
+test("extractFunctionParams: skips a TS `this` pseudo-parameter, keeping the real args", () => {
+  const map = extractFunctionParams("function qux(this: T, a) {}\n");
+  assert.deepEqual([...map.get("qux")], ["a"]);
+});
+
 test("reconstructOldContent: bails (null) when the patch context does not match the head content", () => {
   // The context line ` other` doesn't exist in newContent → misaligned patch → fail closed.
   assert.equal(reconstructOldContent(`a\nb\n`, `@@ -1,2 +1,2 @@\n-x\n+a\n other`), null);
