@@ -39,6 +39,7 @@ export const REES_ANALYZER_NAMES = [
   "todoMarker",
   "magicNumber",
   "conflictMarker",
+  "commitLint",
 ] as const;
 
 export type ReesAnalyzerName = (typeof REES_ANALYZER_NAMES)[number];
