@@ -187,7 +187,8 @@ if pg_enabled; then
   if ! pg_table_exists "pull_requests" &&
      ! pg_table_exists "advisories" &&
      ! pg_table_exists "review_targets" &&
-     ! pg_table_exists "ai_usage_events"; then
+     ! pg_table_exists "ai_usage_events" &&
+     ! pg_table_exists "review_audit"; then
     if [ -s "$OUT_DB" ]; then
       rm -f "$TMP_DB" "$TMP_DB-wal" "$TMP_DB-shm"
       echo "reporting export skipped: no reporting source tables in Postgres; preserving last good $OUT_DB" >&2
@@ -349,7 +350,8 @@ fi
 if ! source_table_exists "pull_requests" &&
    ! source_table_exists "advisories" &&
    ! source_table_exists "review_targets" &&
-   ! source_table_exists "ai_usage_events"; then
+   ! source_table_exists "ai_usage_events" &&
+   ! source_table_exists "review_audit"; then
   if [ -s "$OUT_DB" ]; then
     rm -f "$TMP_DB" "$TMP_DB-wal" "$TMP_DB-shm"
     echo "reporting export skipped: no reporting source tables in $APP_DB; preserving last good $OUT_DB" >&2

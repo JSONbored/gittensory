@@ -394,6 +394,51 @@ esac
     expect(sqlite(outDb, "SELECT status || '|' || (verdict IS NULL) FROM review_targets WHERE repo='JSONbored/gittensory' AND number=4001;")).toBe("manual|1");
   });
 
+  it("a source DB with ONLY review_audit (no pull_requests/review_targets/ai_usage_events) is recognized as having real data -- the exporter runs a fresh pass instead of preserving a stale last-good snapshot", () => {
+    const root = tmpRoot();
+    const appDb = join(root, "app.sqlite");
+    const outDb = join(root, "reporting.sqlite");
+
+    // Seed a legitimate "last good" output from a normal run, so a wrongly-triggered skip would be observable
+    // (the old snapshot would survive untouched instead of being replaced by a fresh, empty pass).
+    sqlite(appDb, `
+      CREATE TABLE pull_requests (
+        repo_full_name TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL,
+        author_login TEXT, merged_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      INSERT INTO pull_requests (repo_full_name, number, title, state, author_login, merged_at, created_at, updated_at)
+      VALUES ('JSONbored/gittensory', 9001, 'stale last-good PR', 'open', 'JSONbored', NULL, '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z');
+
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL, target_id TEXT NOT NULL, event_type TEXT NOT NULL, decision TEXT,
+        source TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+      INSERT INTO review_audit (id, target_id, event_type, decision, source, created_at)
+      VALUES ('g0', 'JSONbored/gittensory#9001', 'gate_decision', 'hold', 'gittensory-native', '2026-07-01T00:00:00Z');
+    `);
+    runExporter(root, appDb, outDb);
+    expect(sqlite(outDb, "SELECT count(*) FROM review_targets;")).toBe("1");
+
+    // Now point at a fresh source DB containing ONLY review_audit -- no pull_requests, review_targets, or
+    // ai_usage_events at all.
+    const onlyAuditDb = join(root, "only-audit.sqlite");
+    sqlite(onlyAuditDb, `
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL, target_id TEXT NOT NULL, event_type TEXT NOT NULL, decision TEXT,
+        source TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+      INSERT INTO review_audit (id, target_id, event_type, decision, source, created_at)
+      VALUES ('g1', 'JSONbored/gittensory#9002', 'gate_decision', 'hold', 'gittensory-native', '2026-07-05T00:00:00Z');
+    `);
+    // Must not throw: a wrongly-triggered "no reporting source tables" skip exits non-zero when a last-good
+    // snapshot already exists (see the seeded run above).
+    expect(() => runExporter(root, onlyAuditDb, outDb)).not.toThrow();
+
+    // The stale PR from the seeded run is GONE -- proving this was a genuine fresh pass (pull_requests doesn't
+    // exist in the only-review_audit source, so nothing populates review_targets), not a preserved snapshot.
+    expect(sqlite(outDb, "SELECT count(*) FROM review_targets;")).toBe("0");
+  });
+
   it("falls back to legacy review_targets when the current PR cache is absent", () => {
     const root = tmpRoot();
     const appDb = join(root, "app.sqlite");
