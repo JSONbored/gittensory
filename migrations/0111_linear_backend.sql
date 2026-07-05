@@ -6,6 +6,10 @@
 -- and is encrypted at rest the same way (AES-256-GCM, see src/utils/crypto.ts).
 ALTER TABLE repository_settings ADD COLUMN auto_project_milestone_match_backend TEXT NOT NULL DEFAULT 'github';
 
+-- No DB-side DEFAULT CURRENT_TIMESTAMP on created_at/updated_at (unlike repository_ai_keys above): every
+-- write to this table goes through Drizzle's $defaultFn(() => nowIso()) (src/db/schema.ts), which always
+-- computes and supplies the ISO timestamp explicitly, so a SQLite-format fallback here would just be unused
+-- surface area, not a real safeguard.
 CREATE TABLE IF NOT EXISTS repository_linear_keys (
   repo_full_name TEXT PRIMARY KEY,
   ciphertext TEXT NOT NULL,
@@ -14,6 +18,6 @@ CREATE TABLE IF NOT EXISTS repository_linear_keys (
   key_version INTEGER NOT NULL DEFAULT 1,
   last4 TEXT NOT NULL,
   created_by TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
