@@ -2043,6 +2043,27 @@ function boundAgentHoldAuditReason(reason: string): string {
     : reason;
 }
 
+/** Shared disambiguation for "the PR isn't review-good/mergeable and a close should be considered, but no
+ *  close ended up in the final plan" -- used by BOTH the CI-failed branch and the gate-blocker-codes branch in
+ *  {@link agentHoldAuditDetail} below, so a protected author or a not-yet-"auto" close autonomy is surfaced
+ *  with the SAME specific reason regardless of which signal (red CI vs. a gate blocker) triggered the hold.
+ *  Before this helper existed, the ciState==="failed" branch returned a bare, unexplained
+ *  "no close action was planned" message unconditionally -- it never checked protectedAuthor/closeAutonomy the
+ *  way the gate-blocker-codes branch already did just a few lines below it, so the single MOST common real-world
+ *  hold reason (a protected author, or close autonomy not yet set to auto) was invisible for a red-CI hold even
+ *  though the identical check already worked correctly for a gate-blocker hold (#selfhost-holdplan-audit). Returns
+ *  null when neither condition explains the hold -- a genuine residual case the caller falls back to its own
+ *  more specific generic message for. */
+function closeWithheldReason(args: { protectedAuthor: boolean; closeOwnerAuthors: boolean; closeAutonomy: string; blockerCode?: string | undefined }): string | null {
+  if (args.protectedAuthor && args.closeOwnerAuthors !== true) {
+    return args.blockerCode ? boundAgentHoldAuditReason(`close withheld for protected author on gate blocker ${args.blockerCode}`) : "close withheld for protected author";
+  }
+  if (args.closeAutonomy !== "auto" && args.closeAutonomy !== "auto_with_approval") {
+    return boundAgentHoldAuditReason(`close withheld because close autonomy is ${args.closeAutonomy}`);
+  }
+  return null;
+}
+
 export function agentHoldAuditDetail(args: {
   planned: PlannedAgentAction[];
   breakerOnPlan: PlannedAgentAction[];
@@ -2065,8 +2086,13 @@ export function agentHoldAuditDetail(args: {
     return "auto-action held by precision circuit breaker";
   if (args.ciHasPending || args.ciState === "pending")
     return "auto-action held because CI is still pending";
-  if (args.ciState === "failed")
-    return "auto-action held because CI is failing but no close action was planned";
+  const protectedAuthor = args.authorIsAutomationBot || args.authorIsOwner || args.authorIsAdmin;
+  if (args.ciState === "failed") {
+    return (
+      closeWithheldReason({ protectedAuthor, closeOwnerAuthors: args.closeOwnerAuthors, closeAutonomy: args.closeAutonomy }) ??
+      "auto-action held because CI is failing but no close action was planned"
+    );
+  }
   if (args.gateConclusion === "success") {
     if (args.mergeableState === "dirty")
       return "merge withheld because the PR conflicts with the base branch";
@@ -2078,13 +2104,11 @@ export function agentHoldAuditDetail(args: {
       return boundAgentHoldAuditReason(`merge withheld because merge autonomy is ${args.mergeAutonomy}`);
     return "merge withheld because no merge action was planned";
   }
-  const protectedAuthor = args.authorIsAutomationBot || args.authorIsOwner || args.authorIsAdmin;
   if (args.gateBlockerCodes.length > 0) {
-    if (protectedAuthor && args.closeOwnerAuthors !== true)
-      return boundAgentHoldAuditReason(`close withheld for protected author on gate blocker ${args.gateBlockerCodes[0]}`);
-    if (args.closeAutonomy !== "auto" && args.closeAutonomy !== "auto_with_approval")
-      return boundAgentHoldAuditReason(`close withheld because close autonomy is ${args.closeAutonomy}`);
-    return boundAgentHoldAuditReason(`held on gate blocker ${args.gateBlockerCodes[0]}`);
+    return (
+      closeWithheldReason({ protectedAuthor, closeOwnerAuthors: args.closeOwnerAuthors, closeAutonomy: args.closeAutonomy, blockerCode: args.gateBlockerCodes[0] }) ??
+      boundAgentHoldAuditReason(`held on gate blocker ${args.gateBlockerCodes[0]}`)
+    );
   }
   if (protectedAuthor && args.closeOwnerAuthors !== true)
     return "auto-action held for protected author";
@@ -2640,7 +2664,10 @@ async function runAgentMaintenancePlanAndExecute(
   // text) so an operator can see, at a glance, how much of the plan a breaker is currently rewriting, without
   // re-deriving it from individual PR audit rows. Fires only when the breaker actually changed something —
   // the common (not-engaged) path increments nothing, matching every other breaker log in this codebase.
-  for (const direction of precisionBreakerDowngradeDirections(planned, breakerOnPlan)) {
+  // Captured into a variable (not just consumed by the loop below) so the hold-audit metadata below can report
+  // whether/which direction the breaker engaged without recomputing it a second time (#selfhost-holdplan-audit).
+  const precisionBreakerDirections = precisionBreakerDowngradeDirections(planned, breakerOnPlan);
+  for (const direction of precisionBreakerDirections) {
     incr("gittensory_precision_breaker_downgrades_total", { direction });
   }
   // Observability (#terminal-outcome-audit): the final per-pass disposition, ALWAYS recorded -- including the
@@ -2674,6 +2701,14 @@ async function runAgentMaintenancePlanAndExecute(
   });
   if (disposition.actionClass === "hold") {
     const gateBlockerCodes = gate.blockers.map((blocker) => blocker.code);
+    const mergeAutonomy = resolveAutonomy(settings.autonomy, "merge");
+    const closeAutonomy = resolveAutonomy(settings.autonomy, "close");
+    // Same isContributor/closeEligible formula planAgentMaintenanceActions itself uses (agent-actions.ts) --
+    // duplicated here (not imported) because the planner computes it as a private local, never returns it.
+    // Persisted so a hold can be debugged without re-deriving eligibility from the three author-flag booleans
+    // by hand (#selfhost-holdplan-audit).
+    const isContributorAuthor = !authorIsOwner && !authorIsAdmin && !authorIsAutomationBot;
+    const closeEligible = isContributorAuthor || ((authorIsOwner || authorIsAdmin) && settings.closeOwnerAuthors === true);
     const holdDetail = agentHoldAuditDetail({
       planned,
       breakerOnPlan,
@@ -2687,8 +2722,8 @@ async function runAgentMaintenancePlanAndExecute(
       authorIsAdmin,
       authorIsAutomationBot,
       closeOwnerAuthors: settings.closeOwnerAuthors,
-      mergeAutonomy: resolveAutonomy(settings.autonomy, "merge"),
-      closeAutonomy: resolveAutonomy(settings.autonomy, "close"),
+      mergeAutonomy,
+      closeAutonomy,
     });
     await recordAuditEvent(env, {
       eventType: "agent.action.hold",
@@ -2700,12 +2735,25 @@ async function runAgentMaintenancePlanAndExecute(
         deliveryId,
         repoFullName,
         pullNumber: pr.number,
+        /* v8 ignore next -- defensive: a real GitHub PR always carries a head sha by the time it reaches this
+         * planning/audit path (it was upserted from the API earlier in this same webhook); the null fallback
+         * only keeps the JsonValue metadata type honest for the field's declared optionality. */
+        headSha: pr.headSha ?? null,
         gateConclusion: gate.conclusion,
         gateBlockerCodes,
+        gateBlockerTitles: gate.blockers.map((blocker) => blocker.title),
         ciState: ciAggregate.ciState,
         ciHasPending: ciAggregate.hasPending,
+        ciFailingCheckNames: ciAggregate.failingDetails.map((detail) => detail.name),
         mergeableState: liveMergeState ?? pr.mergeableState ?? null,
         reviewDecision: liveReviewDecision ?? pr.reviewDecision ?? null,
+        closeEligible,
+        closeAutonomy,
+        mergeAutonomy,
+        protectedAuthor: { owner: authorIsOwner, admin: authorIsAdmin, automation: authorIsAutomationBot },
+        closeOwnerAuthors: settings.closeOwnerAuthors,
+        precisionBreakerEngaged: precisionBreakerDirections.length > 0,
+        precisionBreakerDirections,
         disposition,
         plannedActionClasses: planned.map((action) => action.actionClass),
         finalActionClasses: breakerOnPlan.map((action) => action.actionClass),

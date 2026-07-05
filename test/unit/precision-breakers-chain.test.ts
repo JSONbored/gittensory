@@ -174,6 +174,26 @@ describe("agentHoldAuditDetail — durable why-no-action audit reason", () => {
     expect(agentHoldAuditDetail({ ...base, ciState: "failed" })).toBe("auto-action held because CI is failing but no close action was planned");
   });
 
+  // REGRESSION (#selfhost-holdplan-audit): before this fix, a red-CI hold NEVER disambiguated protected-author
+  // or close-autonomy-not-auto -- it fell straight to the generic "no close action was planned" message even
+  // when the REAL reason (identical to the already-correct gate-blocker-codes branch below) was fully knowable.
+  // This is the single most common real-world cause of an opaque "CI is failing but no close action was
+  // planned" hold, so it must be surfaced with the SAME specificity red-CI gets via the gate-blocker path.
+  it("disambiguates a red-CI hold exactly like a gate-blocker hold: protected author, then close autonomy, before falling back to the generic reason", () => {
+    expect(agentHoldAuditDetail({ ...base, ciState: "failed", authorIsOwner: true })).toBe("close withheld for protected author");
+    expect(agentHoldAuditDetail({ ...base, ciState: "failed", authorIsAdmin: true })).toBe("close withheld for protected author");
+    expect(agentHoldAuditDetail({ ...base, ciState: "failed", authorIsAutomationBot: true })).toBe("close withheld for protected author");
+    // closeOwnerAuthors: true means the owner opted IN to being closeable like a contributor -- no longer
+    // "protected" for this purpose, so it falls through to the close-autonomy check (still "auto" here, so it
+    // reaches the generic fallback, proving the protected-author check is actually gated on closeOwnerAuthors).
+    expect(agentHoldAuditDetail({ ...base, ciState: "failed", authorIsOwner: true, closeOwnerAuthors: true })).toBe(
+      "auto-action held because CI is failing but no close action was planned",
+    );
+    expect(agentHoldAuditDetail({ ...base, ciState: "failed", closeAutonomy: "observe" })).toBe("close withheld because close autonomy is observe");
+    // Protected-author is checked BEFORE close-autonomy (matches the gate-blocker branch's own precedence).
+    expect(agentHoldAuditDetail({ ...base, ciState: "failed", authorIsOwner: true, closeAutonomy: "observe" })).toBe("close withheld for protected author");
+  });
+
   it("records the common green-review/no-merge reasons", () => {
     expect(agentHoldAuditDetail({ ...base, mergeableState: "dirty" })).toBe("merge withheld because the PR conflicts with the base branch");
     expect(agentHoldAuditDetail({ ...base, mergeableState: "blocked" })).toBe("merge withheld because mergeable_state is blocked");

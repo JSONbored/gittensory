@@ -20919,6 +20919,26 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
     expect(seen.closed).toBe(false);
     const closeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.close'").first<{ n: number }>();
     expect(closeAudit?.n).toBe(0);
+    // Enriched hold-audit fields (#selfhost-holdplan-audit): this scenario's gate blocker (missing linked issue)
+    // already produced a specific "protected author" detail before this change -- what's new here is that
+    // `metadata` now ALSO carries the structured closeEligible/closeAutonomy/protectedAuthor fields, so a hold
+    // is debuggable from the audit table alone. The actual bug fix -- a RED-CI hold (no gate blocker at all)
+    // gaining the same protected-author/close-autonomy disambiguation the gate-blocker branch already had --
+    // is unit-tested directly against agentHoldAuditDetail in precision-breakers-chain.test.ts, where the two
+    // branches can be exercised independently without needing a webhook fixture that produces CI-failed with
+    // zero gate blockers.
+    const holdAudit = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = 'agent.action.hold' order by created_at desc limit 1").first<{ detail: string; metadata_json: string }>();
+    expect(holdAudit?.detail).toBe("close withheld for protected author on gate blocker missing_linked_issue");
+    expect(JSON.parse(holdAudit?.metadata_json ?? "{}")).toMatchObject({
+      repoFullName: "JSONbored/gittensory",
+      pullNumber: 63,
+      closeEligible: false,
+      closeAutonomy: "auto",
+      // The repo owner is also treated as an admin (GitHub's own collaborator-permission model), so both flags
+      // are true for this fixture -- only `automation` is meaningfully independent of `owner` here.
+      protectedAuthor: { owner: true, admin: true, automation: false },
+      closeOwnerAuthors: false,
+    });
   });
 
   it("REGRESSION: closeOwnerAuthors=true allows the general heuristic-close path to close a blocked owner-authored PR", async () => {
