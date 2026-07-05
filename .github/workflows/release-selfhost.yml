@@ -308,12 +308,18 @@ jobs:
           if [ "$PRERELEASE" = "true" ]; then
             PRERELEASE_ARGS=(--prerelease --latest=false)
           fi
-          # Find the orb-v tag immediately preceding this one, by actual tag-creation order -- NOT a
-          # semver sort (which mis-orders a prerelease against its own later stable tag, e.g.
-          # 0.1.0-beta.2 vs 0.1.0), and NOT the Release Notes API's own "previous release" auto-detection
-          # either (this repo's release list also carries mcp-v* releases on an independent cadence, which
-          # could get picked up by mistake once the two schemes' timestamps interleave). Excludes the tag
-          # being released so a workflow re-run never diffs a tag against itself.
+          # Find the orb-v tag immediately preceding this one, by the best available local tag-date
+          # ordering (`--sort=-creatordate`: the tag's own date for an annotated tag, or its tagged
+          # commit's date for a lightweight one) -- NOT a semver sort, which mis-orders a prerelease
+          # against its own later stable tag (e.g. 0.1.0-beta.2 vs 0.1.0), and NOT the Release Notes
+          # API's own "previous release" auto-detection either (this repo's release list also carries
+          # mcp-v* releases on an independent cadence, which could get picked up by mistake once the two
+          # schemes' timestamps interleave). This is NOT a guarantee of true creation order for two
+          # lightweight orb-v tags pointing at the SAME commit (e.g. promoting an -rc straight to stable
+          # with no new commits) -- that tie is broken by git's own secondary sort, not by which tag was
+          # actually pushed first. Not a correctness problem in practice: the changelog for that specific
+          # release would just come out emptier than expected, never wrong or release-blocking. Excludes
+          # the tag being released so a workflow re-run never diffs a tag against itself.
           PREV_TAG=$(git tag -l 'orb-v*' --sort=-creatordate | grep -vF -x "$REF_NAME" | head -1 || true)
 
           # The very first orb release here hit GitHub's 125000-character release-body limit
@@ -326,10 +332,16 @@ jobs:
           # falls back to the plain notes below, the same as the original safe behavior.
           CHANGELOG=""
           if [ -n "$PREV_TAG" ]; then
-            CHANGELOG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            if ! CHANGELOG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
               -f tag_name="$REF_NAME" \
               -f previous_tag_name="$PREV_TAG" \
-              --jq '.body' 2>/dev/null || true)
+              --jq '.body' 2>/dev/null); then
+              # Fails open below (plain notes, no changelog) either way -- this warning just tells an
+              # operator reading the run log that the section is missing because the API call itself
+              # failed, not because the range between PREV_TAG and this release genuinely had no PRs.
+              echo "::warning::Fetching the release changelog (${PREV_TAG}...${REF_NAME}) failed; publishing without it."
+              CHANGELOG=""
+            fi
           fi
 
           FULL_NOTES="$NOTES"

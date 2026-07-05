@@ -112,6 +112,7 @@ exit 1
       });
       return {
         status: result.status,
+        stdout: result.stdout,
         stderr: result.stderr,
         calls: readOptional(callsLog),
         notesPassed: readOptional(notesFile),
@@ -185,5 +186,8 @@ describe('release-selfhost.yml "GitHub Release" step changelog generation', () =
     const r = harness.run();
     expect(r.status).toBe(0);
     expect(r.notesPassed).toContain("docker pull ghcr.io/jsonbored/gittensory-selfhost:orb-v0.2.0");
+    // A silent empty changelog would be indistinguishable from a genuinely empty PR range -- the run
+    // log must say the API call itself failed.
+    expect(r.stdout).toContain("::warning::Fetching the release changelog");
   });
 });
