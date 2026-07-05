@@ -1245,6 +1245,50 @@ test("scanPatch does not flag truncated Mixedbread/Sourcegraph local tokens or i
   );
 });
 
+test("scanPatch flags Infracost and ClickHouse Cloud API secret keys with high confidence", () => {
+  const fakeInfracostToken = ["ico-", b62(32)].join("");
+  const infracostFindings = scanPatch("src/config.ts", hunk([`const ico = "${fakeInfracostToken}";`]));
+  assert.equal(infracostFindings.length, 1);
+  assert.equal(infracostFindings[0].kind, "infracost_api_token");
+  assert.equal(infracostFindings[0].confidence, "high");
+
+  const fakeClickhouseKey = ["4b1d", b62(38)].join("");
+  const clickhouseFindings = scanPatch("src/config.ts", hunk([`const ch = "${fakeClickhouseKey}";`]));
+  assert.equal(clickhouseFindings.length, 1);
+  assert.equal(clickhouseFindings[0].kind, "clickhouse_cloud_api_secret_key");
+  assert.equal(clickhouseFindings[0].confidence, "high");
+});
+
+test("scanPatch does not flag truncated Infracost/ClickHouse keys or identifier continuation", () => {
+  assert.equal(scanPatch("src/config.ts", hunk([`const ico = "ico-${b62(31)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const ico = "ico-${b62(32)}-suffix";`])).some((f) => f.kind === "infracost_api_token"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const ico = "ico-${b62(32)}_suffix";`])).some((f) => f.kind === "infracost_api_token"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const ico = "ico-${b62(32)}z";`])).some((f) => f.kind === "infracost_api_token"),
+    false,
+  );
+
+  assert.equal(scanPatch("src/config.ts", hunk([`const ch = "4b1d${b62(37)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const ch = "4b1d${b62(38)}-suffix";`])).some((f) => f.kind === "clickhouse_cloud_api_secret_key"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const ch = "4b1d${b62(38)}_suffix";`])).some((f) => f.kind === "clickhouse_cloud_api_secret_key"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const ch = "4b1d${b62(38)}z";`])).some((f) => f.kind === "clickhouse_cloud_api_secret_key"),
+    false,
+  );
+});
+
 test("scanPatch flags additional high-confidence SaaS/cloud/CI credential formats", () => {
   const cases = [
     ["google_oauth_client_secret", "GOCSPX-" + b62(28)],

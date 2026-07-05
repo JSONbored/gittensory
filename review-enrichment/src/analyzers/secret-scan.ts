@@ -416,6 +416,18 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // Infracost API token: `ico-` + 32 base62 chars.
+    kind: "infracost_api_token",
+    re: /\bico-[a-zA-Z0-9]{32}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // ClickHouse Cloud API secret key: `4b1d` + 38 base62 chars.
+    kind: "clickhouse_cloud_api_secret_key",
+    re: /\b4b1d[A-Za-z0-9]{38}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
     // Google OAuth 2.0 client secret: `GOCSPX-` + 28 base64url chars.
     kind: "google_oauth_client_secret",
     re: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/,
