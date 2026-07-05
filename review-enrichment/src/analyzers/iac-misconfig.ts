@@ -85,6 +85,26 @@ const VALIDATE_CERTS_OFF_RE = /\bvalidate_certs\b[\s"'=:,-]*["']?(?:no|false)\b/
 const TLS_SKIP_VERIFY_RE = /\b(?:tls_skip_verify|insecure_skip_verify)\b[\s"'=:,-]*true\b/i;
 const TRUST_ALL_CERTS_RE = /\bTrustServerCertificate\s*=\s*["']?true\b/i;
 
+// Docker Compose / container-runtime hardening. In each case the MATCHED VALUE is the insecure action itself
+// (dropping a confinement, sharing a host namespace, granting all capabilities, or mounting the host Docker
+// socket), so there is no "safe value" form of the same line — the secure setting uses a different value the
+// regex never matches. `cap_add` is the ADD list specifically, so `cap_drop: [ALL]` (the safe hardening) is
+// never matched.
+const SECCOMP_UNCONFINED_RE = /\bseccomp[=:]\s*["']?unconfined\b/i;
+const APPARMOR_UNCONFINED_RE = /\bapparmor[=:]\s*["']?unconfined\b/i;
+const USERNS_HOST_RE = /\buserns_mode\s*:\s*["']?host\b/i;
+const IPC_HOST_RE = /\bipc\s*:\s*["']?host\b/i;
+const CAP_ADD_ALL_RE = /\bcap_add\b[^\n]*\bALL\b/;
+const NO_NEW_PRIVILEGES_OFF_RE = /\bno-new-privileges[=:]\s*["']?false\b/i;
+// A bind mount of the host Docker socket into a container, in either Compose syntax: the short form
+// `- /var/run/docker.sock:<target>` (trailing `:` = the source→target separator) OR the long form's
+// `source: /var/run/docker.sock` line. Both name the socket as a mount source; matching either line alone is
+// sufficient (a mount of the host socket is the risk regardless of target). A plain reference such as
+// `DOCKER_HOST=unix:///var/run/docker.sock` — the normal way the CLI addresses the daemon, not a mount — has
+// neither shape, so it is NOT flagged.
+const DOCKER_SOCKET_MOUNT_RE =
+  /\/var\/run\/docker\.sock:|\bsource\s*:\s*["']?\/var\/run\/docker\.sock\b/;
+
 function* patchLines(patch: string): Generator<string> {
   let start = 0;
   for (let i = 0; i <= patch.length; i++) {
@@ -450,6 +470,48 @@ export function scanPatchForIacMisconfig(
     if (
       TRUST_ALL_CERTS_RE.test(body) &&
       pushFinding(findings, seen, path, newLine, "trust-all-server-certs", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      SECCOMP_UNCONFINED_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "seccomp-unconfined-runtime", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      APPARMOR_UNCONFINED_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "apparmor-unconfined", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      USERNS_HOST_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "userns-host", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      IPC_HOST_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "ipc-host", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      CAP_ADD_ALL_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "cap-add-all", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      NO_NEW_PRIVILEGES_OFF_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "no-new-privileges-off", maxFindings)
+    ) {
+      return findings;
+    }
+    if (
+      DOCKER_SOCKET_MOUNT_RE.test(body) &&
+      pushFinding(findings, seen, path, newLine, "docker-socket-mount", maxFindings)
     ) {
       return findings;
     }
