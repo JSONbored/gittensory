@@ -851,6 +851,49 @@ test("scanPatch does not flag truncated Baseten/Laminar keys or identifier conti
   );
 });
 
+test("scanPatch flags Exa and Mem0 API keys with high confidence", () => {
+  const fakeExaKey = "exa_" + "x".repeat(20);
+  const exaFindings = scanPatch("src/config.ts", hunk([`const exa = "${fakeExaKey}";`]));
+  assert.equal(exaFindings.length, 1);
+  assert.equal(exaFindings[0].kind, "exa_api_key");
+  assert.equal(exaFindings[0].confidence, "high");
+
+  const fakeMem0PlatformKey = "m0-" + "a".repeat(20);
+  const mem0PlatformFindings = scanPatch("src/config.ts", hunk([`const mem0 = "${fakeMem0PlatformKey}";`]));
+  assert.equal(mem0PlatformFindings.length, 1);
+  assert.equal(mem0PlatformFindings[0].kind, "mem0_api_key");
+  assert.equal(mem0PlatformFindings[0].confidence, "high");
+
+  const fakeMem0SelfHostedKey = "m0sk_" + "b".repeat(20);
+  const mem0SelfHostedFindings = scanPatch("src/config.ts", hunk([`const mem0Local = "${fakeMem0SelfHostedKey}";`]));
+  assert.equal(mem0SelfHostedFindings.length, 1);
+  assert.equal(mem0SelfHostedFindings[0].kind, "mem0_api_key");
+  assert.equal(mem0SelfHostedFindings[0].confidence, "high");
+});
+
+test("scanPatch does not flag truncated Exa/Mem0 keys or identifier continuation", () => {
+  assert.equal(scanPatch("src/config.ts", hunk([`const exa = "exa_${"x".repeat(19)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const exa = "exa_${"x".repeat(20)}_suffix";`])).some((f) => f.kind === "exa_api_key"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const exa = "exa_${"x".repeat(20)}-suffix";`])).some((f) => f.kind === "exa_api_key"),
+    false,
+  );
+
+  assert.equal(scanPatch("src/config.ts", hunk([`const mem0 = "m0-${"a".repeat(19)}";`])).length, 0);
+  assert.equal(scanPatch("src/config.ts", hunk([`const mem0Local = "m0sk_${"b".repeat(19)}";`])).length, 0);
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const mem0 = "m0-${"a".repeat(20)}.suffix";`])).some((f) => f.kind === "mem0_api_key"),
+    false,
+  );
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const mem0Local = "m0sk_${"b".repeat(20)}.suffix";`])).some((f) => f.kind === "mem0_api_key"),
+    false,
+  );
+});
+
 test("scanPatch flags additional high-confidence SaaS/cloud/CI credential formats", () => {
   const cases = [
     ["google_oauth_client_secret", "GOCSPX-" + b62(28)],

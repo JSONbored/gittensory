@@ -308,6 +308,18 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // Exa search API key: `exa_` + base62 body.
+    kind: "exa_api_key",
+    re: /\bexa_[A-Za-z0-9]{20,}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // Mem0 API key: platform `m0-` or self-hosted `m0sk_` + body.
+    kind: "mem0_api_key",
+    re: /\bm0(?:sk_|-)[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_.-])/,
+    confidence: "high",
+  },
+  {
     // Google OAuth 2.0 client secret: `GOCSPX-` + 28 base64url chars.
     kind: "google_oauth_client_secret",
     re: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/,
