@@ -2529,6 +2529,54 @@ describe("pure helpers", () => {
       expect(result.split).toBe(false);
       expect(result.consensusDefect?.title).toContain("Null deref");
     });
+
+    it("dualAiTieBreakVerdictsOrderStable accepts case-insensitive matching consensus titles", () => {
+      expect(
+        dualAiTieBreakVerdictsOrderStable(
+          { verdict: "consensus", consensusTitle: "Null deref in src/a.ts" },
+          { verdict: "consensus", consensusTitle: "NULL DEREF IN SRC/A.TS" },
+        ),
+      ).toBe(true);
+    });
+
+    it("runDualAiTieBreakJudgeCall records provider_error diagnostics after retries exhaust", async () => {
+      const run = vi.fn(async () => {
+        throw new Error("judge provider down");
+      });
+      const env = createTestEnv({ AI: { run } as unknown as Ai });
+      const diagnostics: Array<{ status: string; error?: string }> = [];
+      expect(
+        await runDualAiTieBreakJudgeCall(
+          env,
+          "primary",
+          "primary",
+          blockedA,
+          clean,
+          false,
+          diagnostics as never,
+        ),
+      ).toBeNull();
+      expect(diagnostics.some((d) => d.status === "provider_error")).toBe(true);
+    });
+
+    it("resolveDualAiTieBreakWithOrderStability returns inconclusive when judge output never parses", async () => {
+      const run = vi.fn(async () => ({ response: "not-json" }));
+      const env = createTestEnv({ AI: { run } as unknown as Ai });
+      expect(
+        await resolveDualAiTieBreakWithOrderStability({
+          env,
+          model: "primary-model",
+          fallback: "primary-model",
+          reviewA: blockedA,
+          reviewB: clean,
+          diagnostics: [],
+        }),
+      ).toEqual({
+        stable: false,
+        verdict: "inconclusive",
+        orderUnstable: false,
+      });
+    });
   });
 
   it("consensusDefectOf requires a concrete blocker in BOTH reviews and drops unsafe titles", () => {
