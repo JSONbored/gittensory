@@ -1561,7 +1561,7 @@ describe("local branch analysis", () => {
     expect(JSON.stringify(analysis.prPacket)).not.toMatch(/reward|score|wallet|hotkey|farming|payout|ranking|trust score/i);
   });
 
-  it("treats a maintainer-blocked path as a branch-quality blocker", () => {
+  it("ignores legacy focus-manifest blockedPaths during branch-quality analysis", () => {
     const analysis = buildLocalBranchAnalysis({
       input: {
         login: "oktofeesh1",
@@ -1580,9 +1580,9 @@ describe("local branch analysis", () => {
       scoringProfile,
     });
 
-    expect(analysis.manifestGuidance.matchedBlockedPaths).toEqual(["migrations/"]);
-    expect(analysis.localFindings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "manifest_blocked_path", severity: "critical" })]));
-    expect(analysis.branchQualityBlockers).toEqual(expect.arrayContaining([expect.stringContaining("maintainer-blocked area")]));
+    expect(analysis.manifestGuidance.present).toBe(false);
+    expect(analysis.localFindings.map((finding) => finding.code)).not.toContain("manifest_blocked_path");
+    expect(analysis.branchQualityBlockers.join(" ")).not.toMatch(/maintainer-blocked|blocked path|guarded path/i);
     expect(JSON.stringify(analysis.prPacket)).not.toMatch(/reward|score|wallet|hotkey|farming|payout|ranking|trust score/i);
   });
 
@@ -1762,18 +1762,32 @@ describe("local MCP git metadata collection", () => {
       expect(isTestFile(file)).toBe(true);
       expect(isCodeFile(file)).toBe(false);
     }
-    // #2666 + #2743 parity: the pytest `test_*.py` prefix and the JVM/C#/Swift `SomethingTest(s)`/`Spec`
+    // #2666 + #2743 parity: the pytest `test_*.py` prefix and the JVM/C#/Swift/PHP `SomethingTest(s)`/`Spec`
     // class-suffix conventions were added to the server isTestPath but not this MCP copy — so the local
-    // predictor wrongly counted Java/Kotlin/Scala/C#/Swift tests and pytest-prefixed files as SOURCE.
-    for (const file of ["tests/test_utils.py", "test_api.py", "app/FooTests.java", "src/BarSpec.kt", "core/BazTest.scala", "svc/QuuxTests.cs", "ios/CorgeSpec.swift", "build/GraultTest.groovy"]) {
+    // predictor wrongly counted Java/Kotlin/Scala/C#/Swift/PHP tests and pytest-prefixed files as SOURCE.
+    for (const file of ["tests/test_utils.py", "test_api.py", "app/FooTests.java", "src/BarSpec.kt", "core/BazTest.scala", "svc/QuuxTests.cs", "ios/CorgeSpec.swift", "build/GraultTest.groovy", "lib/WaldoSpec.php"]) {
       expect(isTestFile(file)).toBe(true);
       expect(isCodeFile(file)).toBe(false);
     }
-    // Case-sensitive on the PascalCase suffix: a JVM source merely ENDING in "test"/"spec" stays source.
-    for (const file of ["src/Latest.java", "core/manifest.scala", "app/MyService.kt"]) {
+    // Case-sensitive on the PascalCase suffix: a JVM/PHP source merely ENDING in "test"/"spec" stays source.
+    for (const file of ["src/Latest.java", "core/manifest.scala", "app/MyService.kt", "web/Latest.php"]) {
       expect(isTestFile(file)).toBe(false);
       expect(isCodeFile(file)).toBe(true);
     }
+    // Front-end framework source mirrors review/rag.ts and visual-path classifiers.
+    for (const file of ["src/App.vue", "src/Widget.svelte", "src/pages/index.astro"]) {
+      expect(isTestFile(file)).toBe(false);
+      expect(isCodeFile(file)).toBe(true);
+    }
+    // Alternate C++ spellings (.cc/.hpp) must mirror server isCodeFile too.
+    for (const file of ["native/src/parser.cc", "libs/core/types.hpp"]) {
+      expect(isTestFile(file)).toBe(false);
+      expect(isCodeFile(file)).toBe(true);
+    }
+    // Dart/Flutter hand-authored source; *_test.dart remains test-only.
+    expect(isCodeFile("lib/models/user.dart")).toBe(true);
+    expect(isTestFile("lib/models/user_test.dart")).toBe(true);
+    expect(isCodeFile("lib/models/user_test.dart")).toBe(false);
   });
 
   it("extracts linked issues only from standalone closing keywords, not keyword substrings", async () => {

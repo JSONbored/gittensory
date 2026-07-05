@@ -1,9 +1,58 @@
 import { describe, expect, it } from "vitest";
 import {
+  computeMetadataLaneFit,
   computeMinerGoalLaneFit,
   DEFAULT_MINER_GOAL_SPEC,
   isMinerRepoTargetable,
 } from "../../packages/gittensory-engine/src/index";
+
+describe("computeMetadataLaneFit", () => {
+  it("falls back to label-only lane fit when candidatePaths are absent or empty", () => {
+    const spec = { ...DEFAULT_MINER_GOAL_SPEC, preferredLabels: ["bug"] };
+    expect(computeMetadataLaneFit({ labels: ["bug"] }, spec)).toBe(1);
+    expect(computeMetadataLaneFit({ labels: ["feature"] }, spec)).toBe(0.25);
+    expect(computeMetadataLaneFit({ labels: ["bug"], candidatePaths: [] }, spec)).toBe(1);
+    expect(computeMetadataLaneFit({ labels: ["bug"], candidatePaths: ["", "  "] }, spec)).toBe(1);
+  });
+
+  it("uses path+label lane fit when candidatePaths are present", () => {
+    const spec = {
+      ...DEFAULT_MINER_GOAL_SPEC,
+      wantedPaths: ["src/**"],
+      preferredLabels: ["bug"],
+    };
+    expect(
+      computeMetadataLaneFit({ labels: ["bug"], candidatePaths: ["src/app.ts"] }, spec),
+    ).toBe(1);
+    expect(
+      computeMetadataLaneFit({ labels: ["bug"], candidatePaths: ["docs/readme.md"] }, spec),
+    ).toBe(0.5);
+  });
+
+  it("returns 0 when candidatePaths hit blockedPaths", () => {
+    const spec = {
+      ...DEFAULT_MINER_GOAL_SPEC,
+      blockedPaths: ["secrets/**"],
+      wantedPaths: ["src/**"],
+    };
+    expect(
+      computeMetadataLaneFit(
+        { labels: ["bug"], candidatePaths: ["secrets/api-keys.ts"] },
+        spec,
+      ),
+    ).toBe(0);
+  });
+
+  it("ignores non-string candidatePaths entries before scoring", () => {
+    const spec = { ...DEFAULT_MINER_GOAL_SPEC, preferredLabels: ["bug"] };
+    expect(
+      computeMetadataLaneFit(
+        { labels: ["bug"], candidatePaths: [42 as unknown as string, ""] },
+        spec,
+      ),
+    ).toBe(1);
+  });
+});
 
 describe("computeMinerGoalLaneFit", () => {
   it("respects minerEnabled opt-out", () => {

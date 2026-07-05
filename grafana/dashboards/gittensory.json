@@ -1260,7 +1260,7 @@
     },
     {
       "type": "timeseries",
-      "title": "AI requests by model + effort (last 1h)",
+      "title": "AI requests + fallbacks (last 1h)",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1280,6 +1280,14 @@
           },
           "expr": "sum by (model, effort) (increase(gittensory_ai_requests_total[1h]))",
           "legendFormat": "{{model}} \u00b7 {{effort}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (primary, fallback) (increase(gittensory_ai_review_model_fallback_total[1h]))",
+          "legendFormat": "fallback {{primary}}\u2192{{fallback}}"
         }
       ],
       "fieldConfig": {
@@ -2425,8 +2433,35 @@
       ]
     },
     {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 157 },
+      "id": 158,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Maintenance Admission Deferrals (total)",
+      "description": "Aggregate rate of maintenance jobs deferred by admission gating, regardless of reason -- routine backpressure behavior logged at info level, not an error. Break down by reason in 'Maintenance Admission Deferrals by Reason' above.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(gittensory_jobs_maintenance_admission_deferred_total[5m])) or vector(0)",
+          "legendFormat": "deferred",
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 157 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 165 },
       "id": 138,
       "title": "Self-Host Runtime Drift Signals",
       "type": "row"
@@ -2446,7 +2481,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 158 },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 166 },
       "id": 139,
       "options": {
         "colorMode": "background",
@@ -2481,7 +2516,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 158 },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 166 },
       "id": 140,
       "options": {
         "colorMode": "background",
@@ -2516,7 +2551,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 158 },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 166 },
       "id": 141,
       "options": {
         "colorMode": "background",
@@ -2551,7 +2586,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 158 },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 166 },
       "id": 142,
       "options": {
         "colorMode": "background",
@@ -2580,7 +2615,7 @@
           "unit": "ops"
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 162 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 170 },
       "id": 143,
       "options": {
         "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
@@ -2612,7 +2647,7 @@
           "unit": "ops"
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 162 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 170 },
       "id": 144,
       "options": {
         "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
@@ -2630,8 +2665,46 @@
       ]
     },
     {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "seconds since last pull-mode drain" },
+            "properties": [{ "id": "unit", "value": "s" }]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 170 },
+      "id": 158,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Orb Relay Registration: Streak vs Drain Progress (one hiccup vs actually stuck)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "gittensory_orb_relay_register_consecutive_failures or vector(0)",
+          "legendFormat": "consecutive registration failures",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "gittensory_orb_relay_drain_seconds_since_last or vector(0)",
+          "legendFormat": "seconds since last pull-mode drain",
+          "refId": "B"
+        }
+      ]
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 171 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 179 },
       "id": 145,
       "panels": [],
       "title": "Foreground Liveness (#selfhost-queue-liveness)",
@@ -2640,7 +2713,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short" } },
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 172 },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 180 },
       "id": 146,
       "options": {
         "colorMode": "background",
@@ -2663,7 +2736,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short" } },
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 172 },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 180 },
       "id": 147,
       "options": {
         "colorMode": "background",
@@ -2686,7 +2759,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short" } },
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 172 },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 180 },
       "id": 148,
       "options": {
         "colorMode": "background",
@@ -2722,7 +2795,7 @@
           "unit": "s"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 172 },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 180 },
       "id": 149,
       "options": {
         "colorMode": "background",
@@ -2745,7 +2818,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short" } },
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 172 },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 180 },
       "id": 150,
       "options": {
         "colorMode": "background",
@@ -2770,7 +2843,7 @@
       "fieldConfig": {
         "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 }, "unit": "short" }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 176 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 184 },
       "id": 151,
       "options": {
         "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
@@ -2789,7 +2862,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 182 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 190 },
       "id": 152,
       "title": "Backlog-vs-Fresh-Intake Lane Fairness (#selfhost-lane-observability)",
       "type": "row"
@@ -2810,7 +2883,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 183 },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 191 },
       "id": 153,
       "options": {
         "colorMode": "background",
@@ -2846,7 +2919,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 183 },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 191 },
       "id": 154,
       "options": {
         "colorMode": "background",
@@ -2871,7 +2944,7 @@
       "fieldConfig": {
         "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 }, "unit": "short" }
       },
-      "gridPos": { "h": 6, "w": 16, "x": 8, "y": 183 },
+      "gridPos": { "h": 6, "w": 16, "x": 8, "y": 191 },
       "id": 155,
       "options": {
         "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
@@ -2894,7 +2967,7 @@
       "fieldConfig": {
         "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 }, "unit": "ops" }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 189 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 197 },
       "id": 156,
       "options": {
         "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
@@ -2914,7 +2987,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "unit": "short" } },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 189 },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 197 },
       "id": 157,
       "options": {
         "showHeader": true,

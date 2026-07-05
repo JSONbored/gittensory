@@ -215,7 +215,7 @@ describe("buildReviewEnrichment", () => {
     expect(body.githubToken).toBe("gh-read-token");
     expect(body.analyzers).toBeUndefined();
     expect(body.profile).toBeUndefined();
-    expect(body.budget).toEqual({ timeoutMs: 11000, maxBriefChars: 8000 });
+    expect(body.budget).toEqual({ timeoutMs: 9500, maxBriefChars: 8000 });
     expect(body.files).toEqual([
       {
         path: "a.ts",
@@ -274,7 +274,7 @@ describe("buildReviewEnrichment", () => {
 
     const r = await buildReviewEnrichment(env({ REES_URL: "https://r" }), input);
 
-    expect(body?.budget).toEqual({ timeoutMs: 7000, maxBriefChars: 8000 });
+    expect(body?.budget).toEqual({ timeoutMs: 7500, maxBriefChars: 8000 });
     expect(r?.promptSection).toBe("degraded history brief");
     expect(r?.systemSuffix).toContain("REVIEW ENRICHMENT");
   });
@@ -615,10 +615,10 @@ describe("resolveReesAnalyzers", () => {
     warnSpy.mockRestore();
   });
 
-  it("accepts docCommentDrift as a configured analyzer subset", () => {
+  it("accepts approvalIntegrity as a configured analyzer subset", () => {
     expect(
-      resolveReesAnalyzers(env({ REES_ANALYZERS: "docCommentDrift" })),
-    ).toEqual(["docCommentDrift"]);
+      resolveReesAnalyzers(env({ REES_ANALYZERS: "approvalIntegrity" })),
+    ).toEqual(["approvalIntegrity"]);
   });
 
   it("accepts every REES analyzer currently registered by the service", () => {
@@ -626,7 +626,7 @@ describe("resolveReesAnalyzers", () => {
       resolveReesAnalyzers(
         env({
           REES_ANALYZERS:
-            "dependency,lockfileDrift,secret,license,installScript,heavyDependency,actionPin,eol,redos,provenance,codeowners,secretLog,assetWeight,typosquat,commitSignature,iacMisconfig,nativeBuild,history,docCommentDrift",
+            "dependency,lockfileDrift,secret,license,installScript,heavyDependency,actionPin,eol,redos,provenance,codeowners,secretLog,assetWeight,typosquat,commitSignature,iacMisconfig,nativeBuild,history,docCommentDrift,duplication,churnHotspot,blameLink,approvalIntegrity,ciCheckSignals,undocumentedExport,staleBranch,commitHygiene,pendingReviewRequests,testRatio,migrationSafety,looseRange,terminology,todoMarker,conflictMarker,commitLint",
         }),
       ),
     ).toEqual([
@@ -649,6 +649,22 @@ describe("resolveReesAnalyzers", () => {
       "nativeBuild",
       "history",
       "docCommentDrift",
+      "duplication",
+      "churnHotspot",
+      "blameLink",
+      "approvalIntegrity",
+      "ciCheckSignals",
+      "undocumentedExport",
+      "staleBranch",
+      "commitHygiene",
+      "pendingReviewRequests",
+      "testRatio",
+      "migrationSafety",
+      "looseRange",
+      "terminology",
+      "todoMarker",
+      "conflictMarker",
+      "commitLint",
     ]);
   });
 
@@ -774,13 +790,13 @@ describe("resolveReesProfile", () => {
 
 describe("REES timeout budget helpers", () => {
   it("keeps analyzer execution below the HTTP transport timeout", () => {
-    expect(resolveReesTransportTimeoutMs(undefined)).toBe(8000);
+    expect(resolveReesTransportTimeoutMs(undefined)).toBe(10000);
     expect(resolveReesTransportTimeoutMs("12000")).toBe(12000);
-    expect(resolveReesTransportTimeoutMs("bad")).toBe(8000);
+    expect(resolveReesTransportTimeoutMs("bad")).toBe(10000);
     expect(resolveReesTransportTimeoutMs("100")).toBe(1000);
-    expect(resolveReesAnalyzerBudgetMs(8000)).toBe(7000);
-    expect(resolveReesAnalyzerBudgetMs(12000)).toBe(11000);
+    expect(resolveReesAnalyzerBudgetMs(8000)).toBe(5500);
+    expect(resolveReesAnalyzerBudgetMs(12000)).toBe(9500);
     expect(resolveReesAnalyzerBudgetMs(1000)).toBe(500);
-    expect(resolveReesAnalyzerBudgetMs(Number.NaN)).toBe(7000);
+    expect(resolveReesAnalyzerBudgetMs(Number.NaN)).toBe(7500);
   });
 });

@@ -126,6 +126,22 @@ describe("isCodeFile", () => {
       // files, so PHP source must count as code too (else it is neither test nor code).
       "app/Http/Controllers/UserController.php",
       "src/Service/PaymentGateway.php",
+      // Native source extensions are annotatable in advisory check runs and must remain code here too.
+      "src/native/add.c",
+      "src/native/add.cpp",
+      "include/native/add.h",
+      "src/objc/View.m",
+      // Alternate C++ spellings indexed by rag.ts but previously missing here.
+      "native/src/parser.cc",
+      "libs/core/types.hpp",
+      // Front-end framework source — already indexed as code by rag.ts and flagged
+      // as visual paths, but must count as code for slop/missing-tests signals.
+      "src/App.vue",
+      "src/Widget.svelte",
+      "src/pages/index.astro",
+      // Dart/Flutter hand-authored source — rag.ts indexes .dart; *_test.dart stays test.
+      "lib/models/user.dart",
+      "lib/widgets/card.dart",
     ]) {
       expect(isCodeFile(path)).toBe(true);
     }
@@ -147,6 +163,8 @@ describe("isCodeFile", () => {
       "AppTests/LoginTests.swift",
       // PHP class-suffix test file (PHPUnit) — code extension, but a test, not code.
       "app/Service/PaymentTest.php",
+      // Dart co-located *_test.dart is test evidence, not source.
+      "lib/models/user_test.dart",
     ]) {
       expect(isCodeFile(path)).toBe(false);
     }

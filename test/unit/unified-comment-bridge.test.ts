@@ -656,6 +656,48 @@ describe("verdictReason on a held/blocked headline (FIX D2)", () => {
     expect(body).toContain("Manual maintainer review required.");
   });
 
+  it("uses guardrail warning details for the manual-review reason so the exact path and glob are public", () => {
+    const body = buildUnifiedCommentBody({
+      gate: gate({
+        conclusion: "neutral",
+        summary: "Touches a guarded path — held for manual review",
+        warnings: [
+          {
+            code: "guardrail_hold",
+            severity: "warning",
+            title: "Touches a guarded path — held for manual review",
+            detail: "This PR changes guardrail-protected path(s): `workers/api.mjs` (matched `workers/**`).",
+            action: "A maintainer must review this manually.",
+          },
+        ],
+      }),
+      aiReview: { notes: "The AI review still ran and found only non-blocking concerns." },
+      panelRows,
+      readinessTotal: 73,
+      changedFiles: 18,
+      footerMarkdown: footer,
+    });
+    expect(body).toContain("Suggested Action - Manual Review");
+    expect(body).toContain("Touches a guarded path — held for manual review: This PR changes guardrail-protected path(s): `workers/api.mjs` (matched `workers/**`).");
+    expect(body).toContain("The AI review still ran and found only non-blocking concerns.");
+  });
+
+  it("falls back to the guardrail warning title when a manual hold warning has no detail", () => {
+    const body = buildUnifiedCommentBody({
+      gate: gate({
+        conclusion: "neutral",
+        summary: "Manual review required.",
+        warnings: [{ code: "guardrail_hold", severity: "warning", title: "Touches a guarded path — held for manual review", detail: "" }],
+      }),
+      panelRows,
+      readinessTotal: 73,
+      changedFiles: 18,
+      footerMarkdown: footer,
+    });
+    expect(body).toContain("Touches a guarded path — held for manual review");
+    expect(body).not.toContain("Touches a guarded path — held for manual review:");
+  });
+
   it("falls back to the gate TITLE when the summary is empty", () => {
     const body = buildUnifiedCommentBody({
       gate: gate({ conclusion: "failure", title: "Gittensory Orb Review Agent: blocked by policy", summary: "  " }),
@@ -665,6 +707,20 @@ describe("verdictReason on a held/blocked headline (FIX D2)", () => {
       footerMarkdown: footer,
     });
     expect(body).toContain("Gittensory Orb Review Agent: blocked by policy");
+  });
+
+  it("renders the Manual Review headline with no reason bullet when the whole fallback chain is exhausted (no matching warning, blank summary, blank title)", () => {
+    const body = buildUnifiedCommentBody({
+      gate: gate({ conclusion: "action_required", title: "  ", summary: "  ", warnings: [] }),
+      panelRows,
+      readinessTotal: 55,
+      changedFiles: 2,
+      footerMarkdown: footer,
+    });
+    expect(body).toContain("Suggested Action - Manual Review");
+    // "held" has no default reason (unlike ready/advisory/blocked), so an exhausted chain renders the bare
+    // heading with no trailing "- reason" bullet at all -- not even an empty one.
+    expect(body).not.toMatch(/Suggested Action - Manual Review\*\*\n-/);
   });
 
   it("does NOT overwrite the positive ready wording on a passing (merge) verdict", () => {

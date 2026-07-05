@@ -67,19 +67,26 @@ export function isForegroundDeferralStale(config: ForegroundLivenessConfig, pend
 
 /** PURE ramp-up selection: given every candidate ELIGIBLE for release this sweep (already filtered by
  *  isForegroundDeferralStale or a live rate-limit-clear check -- this function does not itself decide
- *  eligibility), pick at most `maxReleasePerSweep` of them, prioritizing the OLDEST (longest-pending) first.
+ *  eligibility), pick at most `maxReleasePerSweep` of them, prioritizing candidates whose rate-limit bucket is
+ *  CURRENTLY clear before using age order. The stale-age backstop must not let an older still-blocked bucket
+ *  monopolize the global ramp-up cap and starve newer clear-bucket foreground work across repeated sweeps.
  *  When candidates already fit within the cap, every one is released (a small/moderate backlog is never
  *  artificially throttled) -- the cap only engages for a genuinely large backlog, gradually draining it over
  *  several sweep ticks instead of releasing hundreds of jobs into one instant. Ties broken by the original
  *  array order (stable) so behavior is deterministic given the same input. Pure. */
-export function selectForegroundDeferralsToRelease<T extends { pendingSinceMs: number }>(
+export function selectForegroundDeferralsToRelease<T extends { pendingSinceMs: number; rateLimitClear: boolean }>(
   candidates: readonly T[],
   maxReleasePerSweep: number,
 ): T[] {
   if (candidates.length <= maxReleasePerSweep) return [...candidates];
   return [...candidates]
     .map((candidate, index) => ({ candidate, index }))
-    .sort((a, b) => a.candidate.pendingSinceMs - b.candidate.pendingSinceMs || a.index - b.index)
+    .sort(
+      (a, b) =>
+        Number(b.candidate.rateLimitClear) - Number(a.candidate.rateLimitClear) ||
+        a.candidate.pendingSinceMs - b.candidate.pendingSinceMs ||
+        a.index - b.index,
+    )
     .slice(0, maxReleasePerSweep)
     .map(({ candidate }) => candidate);
 }

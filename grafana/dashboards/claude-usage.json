@@ -4,10 +4,10 @@
   "tags": ["gittensory", "claude", "ai"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 3,
+  "version": 4,
   "refresh": "30s",
   "time": { "from": "now-7d", "to": "now" },
-  "description": "Claude Code review-CLI usage via OpenTelemetry. Each headless review is a session-scoped cumulative counter, so totals use last_over_time (sum of each session's final value) — increase()/rate() would read flat because a session exports its total in one shot.",
+  "description": "Claude Code CLI/session telemetry via OpenTelemetry — NOT the durable ORB ai_usage_events DB attribution (see the 'Gittensory - ORB AI usage' dashboard for that, filterable by provider/model/repo/PR). Each headless review is a session-scoped cumulative counter, so totals use last_over_time (sum of each session's final value) — increase()/rate() would read flat because a session exports its total in one shot.",
   "templating": {
     "list": [
       {

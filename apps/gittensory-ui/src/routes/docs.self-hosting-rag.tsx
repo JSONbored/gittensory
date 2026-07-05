@@ -53,6 +53,17 @@ function SelfHostingRag() {
         ]}
       />
 
+      <h2>Choosing a vector backend</h2>
+      <p>
+        SQLite vectors are the default and need no extra service — fine for a small instance or
+        getting started. Qdrant (<code>QDRANT_URL</code>, <code>--profile qdrant</code>) is the
+        preferred dedicated vector store for review context at scale. A third option,{" "}
+        <code>PGVECTOR_ENABLED=true</code>, uses the Postgres pgvector table instead — only relevant
+        if you're already running the <code>postgres</code> profile and want to avoid standing up a
+        separate Qdrant service. Leave it <code>false</code> (the default) when{" "}
+        <code>QDRANT_URL</code> is set; Qdrant remains preferred for RAG at scale.
+      </p>
+
       <h2>Qdrant and Ollama example</h2>
       <CodeBlock
         filename=".env"
@@ -72,6 +83,13 @@ docker compose exec ollama ollama pull nomic-embed-text:latest`}
         Use <code>QDRANT_DIM=1024</code> for 1024-dimensional models such as <code>bge-m3</code> or{" "}
         <code>mxbai-embed-large</code>. If a Qdrant collection already exists, recreate it before
         changing dimensions.
+      </p>
+      <p>
+        <code>AI_EMBED_API_KEY</code> is the bearer credential for <code>AI_EMBED_BASE_URL</code>,
+        if that endpoint requires one — a local Ollama typically doesn't, but a hosted
+        OpenAI-compatible embeddings endpoint usually does. Setting <code>AI_EMBED_MODEL</code>{" "}
+        alone does nothing without <code>AI_EMBED_BASE_URL</code> also set; unset, embeddings use
+        the same provider as the rest of the review chain.
       </p>
 
       <h2>Indexing</h2>

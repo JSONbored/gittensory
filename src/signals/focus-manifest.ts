@@ -1,11 +1,12 @@
 import { parse as parseYaml } from "yaml";
-import type { GatePolicyPack, GateRuleMode, JsonValue, LinkedIssueLabelPropagationConfig, PrTypeLabelSet, RepositorySettings, ReviewCheckMode } from "../types";
+import type { GatePolicyPack, GateRuleMode, JsonValue, LinkedIssueHardRulesConfig, LinkedIssueLabelPropagationConfig, PrTypeLabelSet, RepositorySettings, ReviewCheckMode } from "../types";
 import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy } from "../settings/autonomy";
 import { normalizeCommandAuthorizationPolicy } from "../settings/command-authorization";
 import { mergeContributorBlacklists, normalizeContributorBlacklist } from "../settings/contributor-blacklist";
 import { normalizeAutoCloseExemptLogins } from "../settings/auto-close-exempt";
 import { DEFAULT_TYPE_LABELS, normalizeTypeLabelSet } from "../settings/pr-type-label";
 import { DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, normalizeLinkedIssueLabelPropagationConfig, VALID_LINKED_ISSUE_LABEL_PROPAGATION_MODES } from "../review/linked-issue-label-propagation";
+import { DEFAULT_LINKED_ISSUE_HARD_RULES, isLinkedIssueHardRuleMode, normalizeLinkedIssueHardRulesConfig } from "../review/linked-issue-hard-rules-config";
 import { normalizeModerationLabel, normalizeModerationRules } from "../settings/moderation-rules";
 import { REES_ANALYZER_NAME_SET, type ReesAnalyzerName } from "../review/enrichment-analyzer-names";
 import { hasUnsafeWildcardCount } from "./change-guardrail";
@@ -148,6 +149,33 @@ export type FocusManifestContentLaneConfig = {
   validatorId: string | null;
 };
 
+/** Which generated-file types the repo-doc generation roadmap (#2993) is allowed to touch for a repo.
+ *  "agents" covers AGENTS.md/CLAUDE.md (#3000/#3004); "skills" covers generated Claude Code/Codex skill
+ *  files once that generator lands (#3001) -- listed here now so a maintainer can opt in ahead of time. */
+export type FocusManifestRepoDocGenerationScope = "agents" | "skills";
+
+/**
+ * Per-repo opt-in for the repo-doc generation roadmap (#2993/#3002), declared as code under
+ * `repoDocGeneration:`. Purely a `.gittensory.yml` surface -- there is no DB-backed dashboard counterpart,
+ * so precedence is simply "the manifest value, or the default below when unset" (no DB layer to overlay).
+ * Defaults to fully disabled: a repo with no `repoDocGeneration:` block, or an explicit `enabled: false`,
+ * is never touched by the generator. `allowOverwriteExisting` is a SEPARATE opt-in specifically for a repo
+ * that already has a hand-maintained AGENTS.md/CLAUDE.md (no recognizable generated-content marker block,
+ * per generated-doc-refresh.ts's `manual-review-required` outcome) -- without it, that repo is left alone
+ * rather than proposed for a wholesale overwrite, even when `enabled` is true.
+ */
+export type FocusManifestRepoDocGenerationConfig = {
+  present: boolean;
+  enabled: boolean;
+  scope: FocusManifestRepoDocGenerationScope[];
+  allowOverwriteExisting: boolean;
+  /** How many days must elapse between scheduled refresh attempts for this repo (#3003). Default 7 (weekly).
+   *  Purely a rate-limiting knob on the SCHEDULED sweep -- it never affects correctness, since
+   *  openRepoDocPullRequest's own no-change short-circuit already prevents a redundant PR regardless of how
+   *  often it's invoked; this just avoids re-checking a stable repo more often than the operator wants. */
+  refreshIntervalDays: number;
+};
+
 /**
  * Generic repository-settings override declared in `.gittensory.yml` under `settings:`. A partial of
  * {@link RepositorySettings} — every behaviour a maintainer can toggle in the dashboard can be set here
@@ -165,6 +193,8 @@ export type FocusManifestSettings = Partial<
     | "checkRunDetailLevel"
     | "gateCheckMode"
     | "reviewCheckMode"
+    | "autoProjectMilestoneMatch"
+    | "autoProjectMilestoneMatchBackend"
     | "linkedIssueGateMode"
     | "duplicatePrGateMode"
     | "selfAuthoredLinkedIssueGateMode"
@@ -203,6 +233,12 @@ export type FocusManifestSettings = Partial<
     | "reviewNagLabel"
     | "reviewNagMonitoredMentions"
     | "autoCloseExemptLogins"
+    | "hardGuardrailGlobs"
+    | "manualReviewLabel"
+    | "readyToMergeLabel"
+    | "changesRequestedLabel"
+    | "migrationCollisionLabel"
+    | "pendingClosureLabel"
     | "accountAgeThresholdDays"
     | "newAccountLabel"
     | "commandRateLimitPolicy"
@@ -215,15 +251,22 @@ export type FocusManifestSettings = Partial<
     | "moderationBannedLabel"
   >
 > & {
-  // `typeLabels`/`linkedIssueLabelPropagation` are declared PARTIAL here (not via the `Pick<RepositorySettings,
+  // `typeLabels`/`linkedIssueLabelPropagation`/`linkedIssueHardRules` are declared PARTIAL here (not via the `Pick<RepositorySettings,
   // ...>` above, which would force a complete, defaults-filled object) so `resolveEffectiveSettings` can merge
   // them field-by-field against the DB value — a `.gittensory.yml` override naming only one key (e.g. just
   // `typeLabels.priority`) must inherit the OTHER keys from the DB-persisted value, not silently reset them to
-  // the built-in default (#priority-linked-issue-gate). `mappings` is still a complete replacement when
-  // present (arrays don't have per-item precedence semantics, matching the private-config layer's own
-  // documented array-replace-wholesale overlay behavior).
-  typeLabels?: Partial<PrTypeLabelSet> | undefined;
+  // the built-in default (#priority-linked-issue-gate), and can add arbitrary categories beyond the built-in
+  // three (#label-modularity). `mappings` is still a complete replacement when present (arrays don't have
+  // per-item precedence semantics, matching the private-config layer's own documented array-replace-wholesale
+  // overlay behavior).
+  // `typeLabels: null` (distinct from an omitted key OR a sparse-but-nonempty object) is a DELIBERATE signal
+  // reserved for a manifest's literal `typeLabels: {}` — "zero configured categories for this repo" — the same
+  // load-bearing-null idiom as `blacklistLabel`/`contributorCapLabel`/etc. This is NOT the same as a sparse
+  // override whose named keys all failed validation (which still parses to `{}`, not `null`, and must NOT wipe
+  // the DB value -- see `resolveEffectiveSettings`).
+  typeLabels?: Partial<PrTypeLabelSet> | null | undefined;
   linkedIssueLabelPropagation?: Partial<LinkedIssueLabelPropagationConfig> | undefined;
+  linkedIssueHardRules?: Partial<LinkedIssueHardRulesConfig> | undefined;
 };
 
 /** Field keys for the public review-panel rows a maintainer can show/hide via `review.fields`. */
@@ -308,15 +351,15 @@ const MAX_PATH_INSTRUCTIONS = 50;
 
 /**
  * Normalized maintainer focus manifest. Repo owners declare which work areas are wanted,
- * blocked, or preferred so Gittensory guidance can explain why a path is encouraged or
- * discouraged. `maintainerNotes` are private review context and must never reach a public
+ * preferred, and how PRs should present validation. Path-based manual review is intentionally
+ * not part of this manifest anymore; use `settings.hardGuardrailGlobs` for that single
+ * authoritative control. `maintainerNotes` are private review context and must never reach a public
  * GitHub surface; `publicNotes` are explicitly opted into public output by the maintainer.
  */
 export type FocusManifest = {
   present: boolean;
   source: FocusManifestSource;
   wantedPaths: string[];
-  blockedPaths: string[];
   preferredLabels: string[];
   linkedIssuePolicy: FocusManifestLinkedIssuePolicy;
   testExpectations: string[];
@@ -328,12 +371,12 @@ export type FocusManifest = {
   review: FocusManifestReviewConfig;
   features: FocusManifestFeaturesConfig;
   contentLane: FocusManifestContentLaneConfig;
+  repoDocGeneration: FocusManifestRepoDocGenerationConfig;
   warnings: string[];
 };
 
 export type FocusManifestFinding = {
   code:
-    | "manifest_blocked_path"
     | "manifest_off_focus"
     | "manifest_preferred_path"
     | "manifest_missing_preferred_label"
@@ -354,7 +397,6 @@ export type FocusManifestGuidance = {
   linkedIssuePolicy: FocusManifestLinkedIssuePolicy;
   issueDiscoveryPolicy: FocusManifestIssueDiscoveryPolicy;
   matchedWantedPaths: string[];
-  matchedBlockedPaths: string[];
   preferredLabelHits: string[];
   findings: FocusManifestFinding[];
   publicNextSteps: string[];
@@ -423,11 +465,20 @@ const EMPTY_CONTENT_LANE_CONFIG: FocusManifestContentLaneConfig = {
   validatorId: null,
 };
 
+const DEFAULT_REPO_DOC_REFRESH_INTERVAL_DAYS = 7;
+
+const EMPTY_REPO_DOC_GENERATION_CONFIG: FocusManifestRepoDocGenerationConfig = {
+  present: false,
+  enabled: false,
+  scope: ["agents"],
+  allowOverwriteExisting: false,
+  refreshIntervalDays: DEFAULT_REPO_DOC_REFRESH_INTERVAL_DAYS,
+};
+
 const EMPTY_MANIFEST: FocusManifest = {
   present: false,
   source: "none",
   wantedPaths: [],
-  blockedPaths: [],
   preferredLabels: [],
   linkedIssuePolicy: "optional",
   testExpectations: [],
@@ -439,6 +490,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
   features: { ...EMPTY_FEATURES_CONFIG },
   contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
+  repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
   warnings: [],
 };
 
@@ -468,6 +520,7 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
     features: { ...EMPTY_FEATURES_CONFIG },
     contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
+    repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
   };
 }
 
@@ -922,6 +975,54 @@ export function contentLaneConfigToJson(contentLane: FocusManifestContentLaneCon
   return out;
 }
 
+const REPO_DOC_GENERATION_SCOPES: readonly FocusManifestRepoDocGenerationScope[] = ["agents", "skills"];
+
+/** `undefined`/`null` (key omitted) falls back to the default scope; a non-list value is a genuine type error
+ *  and ALSO falls back to the default (rather than emptying it out, which would silently disable an otherwise
+ *  `enabled: true` config); an actual list -- even an explicitly empty one, or one where every entry is
+ *  invalid -- is respected as "nothing in scope", since that is a deliberate, well-typed value. */
+function parseRepoDocGenerationScope(value: JsonValue | undefined, warnings: string[]): FocusManifestRepoDocGenerationScope[] {
+  if (value === undefined || value === null) return [...EMPTY_REPO_DOC_GENERATION_CONFIG.scope];
+  if (!Array.isArray(value)) {
+    warnings.push('Manifest field "repoDocGeneration.scope" must be a list; falling back to the default scope.');
+    return [...EMPTY_REPO_DOC_GENERATION_CONFIG.scope];
+  }
+  const raw = normalizeStringList(value, "repoDocGeneration.scope", warnings);
+  return raw.filter((entry): entry is FocusManifestRepoDocGenerationScope => {
+    if ((REPO_DOC_GENERATION_SCOPES as readonly string[]).includes(entry)) return true;
+    warnings.push(`Manifest field "repoDocGeneration.scope" has an unrecognized entry "${entry}"; ignoring it.`);
+    return false;
+  });
+}
+
+/**
+ * Parse the optional `repoDocGeneration:` mapping (#3002). Unlike `gate:`/`settings:`, every field here has a
+ * concrete default rather than a null "unconfigured" sentinel -- there is no DB layer to overlay onto, so the
+ * parsed value (or the default, when a key is omitted) IS the effective value. An explicitly empty `scope: []`
+ * is honored as "nothing in scope" (not coerced back to the default); only an OMITTED `scope` key falls back to
+ * `["agents"]`, mirroring how `undefined`/`null` mean "unset" everywhere else in this file.
+ */
+function parseRepoDocGenerationConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestRepoDocGenerationConfig {
+  if (value === undefined || value === null) return { ...EMPTY_REPO_DOC_GENERATION_CONFIG };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push('Manifest field "repoDocGeneration" must be a mapping; ignoring it.');
+    return { ...EMPTY_REPO_DOC_GENERATION_CONFIG };
+  }
+  const record = value as Record<string, JsonValue>;
+  const enabled = normalizeOptionalBoolean(record.enabled, "repoDocGeneration.enabled", warnings) ?? false;
+  const allowOverwriteExisting = normalizeOptionalBoolean(record.allowOverwriteExisting, "repoDocGeneration.allowOverwriteExisting", warnings) ?? false;
+  const scope = parseRepoDocGenerationScope(record.scope, warnings);
+  const refreshIntervalDays = normalizeOptionalPositiveInteger(record.refreshIntervalDays, "repoDocGeneration.refreshIntervalDays", warnings) ?? DEFAULT_REPO_DOC_REFRESH_INTERVAL_DAYS;
+  return { present: true, enabled, scope, allowOverwriteExisting, refreshIntervalDays };
+}
+
+/** Serialize a repoDocGeneration config back into the parse-compatible shape so a cached snapshot round-trips
+ *  through {@link parseRepoDocGenerationConfig} unchanged. Returns null when nothing is configured. */
+export function repoDocGenerationConfigToJson(config: FocusManifestRepoDocGenerationConfig): JsonValue {
+  if (!config.present) return null;
+  return { enabled: config.enabled, scope: config.scope, allowOverwriteExisting: config.allowOverwriteExisting, refreshIntervalDays: config.refreshIntervalDays };
+}
+
 function normalizeOptionalEnum<T extends string>(value: JsonValue | undefined, field: string, allowed: readonly T[], warnings: string[]): T | null {
   if (value === undefined || value === null) return null;
   if (typeof value === "string" && (allowed as readonly string[]).includes(value)) return value as T;
@@ -971,6 +1072,10 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   // resolveEffectiveSettings, and wins when both are set).
   const reviewCheckMode = normalizeOptionalEnum(r.reviewCheckMode, "settings.reviewCheckMode", ["required", "visible", "disabled"] as const, warnings);
   if (reviewCheckMode !== null) out.reviewCheckMode = reviewCheckMode;
+  const autoProjectMilestoneMatch = normalizeOptionalEnum(r.autoProjectMilestoneMatch, "settings.autoProjectMilestoneMatch", ["off", "suggest", "auto"] as const, warnings);
+  if (autoProjectMilestoneMatch !== null) out.autoProjectMilestoneMatch = autoProjectMilestoneMatch;
+  const autoProjectMilestoneMatchBackend = normalizeOptionalEnum(r.autoProjectMilestoneMatchBackend, "settings.autoProjectMilestoneMatchBackend", ["github", "linear"] as const, warnings);
+  if (autoProjectMilestoneMatchBackend !== null) out.autoProjectMilestoneMatchBackend = autoProjectMilestoneMatchBackend;
   const linkedIssueGateMode = normalizeOptionalGateMode(r.linkedIssueGateMode, "settings.linkedIssueGateMode", warnings);
   if (linkedIssueGateMode !== null) out.linkedIssueGateMode = linkedIssueGateMode;
   const duplicatePrGateMode = normalizeOptionalGateMode(r.duplicatePrGateMode, "settings.duplicatePrGateMode", warnings);
@@ -1035,27 +1140,39 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   } else if (r.commandAuthorization !== undefined) {
     warnings.push(`Manifest "settings.commandAuthorization" must be an object; ignoring it and keeping any existing policy.`);
   }
-  // TYPE label NAME overrides (#priority-linked-issue-gate): unlike commandAuthorization/autoMaintain
-  // above, this is deliberately kept SPARSE -- only the keys actually present AND validly-shaped in the
-  // raw YAML are copied onto `out.typeLabels` (via `normalizeTypeLabelSet`, which still fills in the
-  // OTHER keys to run its own shape checks, but those defaults-filled values are discarded here). A
-  // manifest naming only `typeLabels.priority` must inherit `bug`/`feature` from the DB-persisted value in
+  // TYPE label category overrides (#priority-linked-issue-gate, #label-modularity): unlike
+  // commandAuthorization/autoMaintain above, this is deliberately kept SPARSE -- only the keys actually
+  // present AND validly-shaped in the raw YAML are copied onto `out.typeLabels` (via
+  // `normalizeTypeLabelSet`, which still fills in the built-in bug/feature/priority keys to run its own
+  // shape checks, but those defaults-filled values are discarded here). A manifest naming only
+  // `typeLabels.priority` must inherit `bug`/`feature` from the DB-persisted value in
   // `resolveEffectiveSettings`, not have them silently reset to the built-in gittensor:* names -- assigning
   // the normalizer's complete object here would do exactly that via the resolver's wholesale
   // `{...dbSettings, ...manifest.settings}` spread. The per-field shape check below (not just "is the key
   // present") matters too: a malformed value (e.g. `typeLabels.priority: 123`) is present but invalid, so
   // `normalizeTypeLabelSet` warns and reports its OWN built-in-default fallback for that key -- copying
   // that fallback into the sparse override would silently overwrite a DB-customized value with the
-  // built-in default on a config typo, instead of leaving the DB value alone.
+  // built-in default on a config typo, instead of leaving the DB value alone. The loop is generic over
+  // whatever keys the raw object actually has (not hardcoded to bug/feature/priority), so an arbitrary
+  // custom category (e.g. `security`) sparse-overrides exactly like a built-in one.
   if (typeof r.typeLabels === "object" && r.typeLabels !== null && !Array.isArray(r.typeLabels)) {
     const rawTypeLabels = r.typeLabels as Record<string, unknown>;
-    const validated = normalizeTypeLabelSet(rawTypeLabels, warnings);
-    const isValidLabelName = (value: unknown): boolean => typeof value === "string" && value.trim().length > 0;
-    const sparseTypeLabels: Partial<PrTypeLabelSet> = {};
-    if (isValidLabelName(rawTypeLabels.bug)) sparseTypeLabels.bug = validated.bug;
-    if (isValidLabelName(rawTypeLabels.feature)) sparseTypeLabels.feature = validated.feature;
-    if (isValidLabelName(rawTypeLabels.priority)) sparseTypeLabels.priority = validated.priority;
-    out.typeLabels = sparseTypeLabels;
+    if (Object.keys(rawTypeLabels).length === 0) {
+      // A literal `typeLabels: {}` is a DELIBERATE, complete declaration -- "zero configured categories
+      // for this repo" -- distinct from a sparse override whose named keys all failed validation (the
+      // `else` branch below, which must NOT wipe the DB value). Represented as `null` so
+      // `resolveEffectiveSettings` can tell the two apart even though both would otherwise collapse to
+      // the same empty-object shape (#label-modularity).
+      out.typeLabels = null;
+    } else {
+      const validated = normalizeTypeLabelSet(rawTypeLabels, warnings);
+      const isValidLabelName = (value: unknown): boolean => typeof value === "string" && value.trim().length > 0;
+      const sparseTypeLabels: Partial<PrTypeLabelSet> = {};
+      for (const key of Object.keys(rawTypeLabels)) {
+        if (isValidLabelName(rawTypeLabels[key])) sparseTypeLabels[key] = validated[key];
+      }
+      out.typeLabels = sparseTypeLabels;
+    }
   } else if (r.typeLabels !== undefined) {
     warnings.push(`Manifest "settings.typeLabels" must be an object; ignoring it and keeping any existing label names.`);
   }
@@ -1082,6 +1199,27 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
     out.linkedIssueLabelPropagation = sparsePropagation;
   } else if (r.linkedIssueLabelPropagation !== undefined) {
     warnings.push(`Manifest "settings.linkedIssueLabelPropagation" must be an object; ignoring it and keeping any existing policy.`);
+  }
+  // Linked-issue hard rules: same sparse-partial overlay contract as linkedIssueLabelPropagation. A global config
+  // can enable the policy and set label lists; a repo override can toggle one mode without resetting those lists.
+  if (typeof r.linkedIssueHardRules === "object" && r.linkedIssueHardRules !== null && !Array.isArray(r.linkedIssueHardRules)) {
+    const rawRules = r.linkedIssueHardRules as Record<string, unknown>;
+    const validated = normalizeLinkedIssueHardRulesConfig(rawRules, warnings);
+    const sparseRules: Partial<LinkedIssueHardRulesConfig> = {};
+    if (isLinkedIssueHardRuleMode(rawRules.ownerAssignedClose)) sparseRules.ownerAssignedClose = validated.ownerAssignedClose;
+    if (isLinkedIssueHardRuleMode(rawRules.assignedIssueClose)) sparseRules.assignedIssueClose = validated.assignedIssueClose;
+    if (isLinkedIssueHardRuleMode(rawRules.missingPointLabelClose)) sparseRules.missingPointLabelClose = validated.missingPointLabelClose;
+    if (isLinkedIssueHardRuleMode(rawRules.maintainerOnlyLabelClose)) sparseRules.maintainerOnlyLabelClose = validated.maintainerOnlyLabelClose;
+    if (Array.isArray(rawRules.pointBearingLabels)) sparseRules.pointBearingLabels = validated.pointBearingLabels;
+    if (Array.isArray(rawRules.maintainerOnlyLabels)) sparseRules.maintainerOnlyLabels = validated.maintainerOnlyLabels;
+    if (typeof rawRules.defaultLabelRepo === "boolean") sparseRules.defaultLabelRepo = validated.defaultLabelRepo;
+    if (typeof rawRules.verifyBeforeClose === "boolean") sparseRules.verifyBeforeClose = validated.verifyBeforeClose;
+    if (typeof rawRules.closeDelaySeconds === "number" && Number.isFinite(rawRules.closeDelaySeconds) && rawRules.closeDelaySeconds >= 0) {
+      sparseRules.closeDelaySeconds = validated.closeDelaySeconds;
+    }
+    out.linkedIssueHardRules = sparseRules;
+  } else if (r.linkedIssueHardRules !== undefined) {
+    warnings.push(`Manifest "settings.linkedIssueHardRules" must be an object; ignoring it and keeping any existing policy.`);
   }
   // Contributor blacklist (#1425): `settings.contributorBlacklist` is a list of banned-login entries. Only set it
   // when at least one VALID entry survives normalization, so a malformed block never blanks the DB-configured
@@ -1160,6 +1298,51 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
     const { logins, warnings: exemptWarnings } = normalizeAutoCloseExemptLogins(r.autoCloseExemptLogins);
     warnings.push(...exemptWarnings);
     if (logins.length > 0) out.autoCloseExemptLogins = logins;
+  }
+  // Hard manual-review guardrails are config-as-code only. Arrays replace lower layers wholesale, so only an
+  // explicit [] or a non-empty valid list replaces a private global setting. Null/malformed values are ignored
+  // instead of clearing.
+  if (Array.isArray(r.hardGuardrailGlobs)) {
+    const hardGuardrailGlobs = normalizeStringList(r.hardGuardrailGlobs, "settings.hardGuardrailGlobs", warnings);
+    if (r.hardGuardrailGlobs.length === 0 || hardGuardrailGlobs.length > 0) {
+      out.hardGuardrailGlobs = hardGuardrailGlobs;
+    } else {
+      warnings.push(`Manifest "settings.hardGuardrailGlobs" did not contain any valid path globs; ignoring it and keeping any existing guardrails.`);
+    }
+  } else if (r.hardGuardrailGlobs !== undefined) {
+    warnings.push(`Manifest "settings.hardGuardrailGlobs" must be an array of path globs; ignoring it and keeping any existing guardrails.`);
+  }
+  // Manual-review label is deliberately separate from review_state_label so operators can use one hold label
+  // without enabling the old ready/changes disposition labels. Null disables only the label, not the hold.
+  if (r.manualReviewLabel === null) {
+    out.manualReviewLabel = null;
+  } else {
+    const manualReviewLabel = normalizeOptionalString(r.manualReviewLabel, "settings.manualReviewLabel", warnings);
+    if (manualReviewLabel !== null) out.manualReviewLabel = manualReviewLabel;
+  }
+  if (r.readyToMergeLabel === null) {
+    out.readyToMergeLabel = null;
+  } else {
+    const readyToMergeLabel = normalizeOptionalString(r.readyToMergeLabel, "settings.readyToMergeLabel", warnings);
+    if (readyToMergeLabel !== null) out.readyToMergeLabel = readyToMergeLabel;
+  }
+  if (r.changesRequestedLabel === null) {
+    out.changesRequestedLabel = null;
+  } else {
+    const changesRequestedLabel = normalizeOptionalString(r.changesRequestedLabel, "settings.changesRequestedLabel", warnings);
+    if (changesRequestedLabel !== null) out.changesRequestedLabel = changesRequestedLabel;
+  }
+  if (r.migrationCollisionLabel === null) {
+    out.migrationCollisionLabel = null;
+  } else {
+    const migrationCollisionLabel = normalizeOptionalString(r.migrationCollisionLabel, "settings.migrationCollisionLabel", warnings);
+    if (migrationCollisionLabel !== null) out.migrationCollisionLabel = migrationCollisionLabel;
+  }
+  if (r.pendingClosureLabel === null) {
+    out.pendingClosureLabel = null;
+  } else {
+    const pendingClosureLabel = normalizeOptionalString(r.pendingClosureLabel, "settings.pendingClosureLabel", warnings);
+    if (pendingClosureLabel !== null) out.pendingClosureLabel = pendingClosureLabel;
   }
   // Account-age throttle (#2561): an explicit yml `null` is load-bearing (clears a DB-configured threshold
   // back to "off"), matching contributorOpenPrCap's own null-vs-omitted distinction above.
@@ -1559,43 +1742,22 @@ export function excludeReviewPaths<T extends { path: string }>(files: T[], exclu
 }
 
 /**
- * Resolve the EFFECTIVE repository settings a webhook should act on: `.gittensory.yml` > DB settings >
- * safe defaults. The generic `settings:` override applies first; the friendly `gate:` alias then wins
- * for its fields. This single resolver makes the whole gittensory configuration — gate on/off, blocker
- * modes, comments, labels, surface, audience — controllable from the repo's `.gittensory.yml`.
+ * Apply the typed `gate:` alias's overrides onto already-spread effective settings, mutating `effective` in
+ * place. Split out of resolveEffectiveSettings purely for readability — this stays the ONLY place a `gate.*`
+ * field maps onto its `RepositorySettings` counterpart. `gate:` still WINS over an overlapping `settings:`
+ * value (the caller runs this AFTER the `{ ...dbSettings, ...manifest.settings }` spread), matching the
+ * documented precedence (self-hosting-configuration docs: "the typed gate: block ... wins over the generic
+ * settings: block for those same fields"). Every field here is independently null-gated — a `gate:` field
+ * absent from the parsed manifest is `null` (see parseGateConfig below) and leaves `effective` untouched, so a
+ * repo with no `gate:` block resolves byte-identically to before this was split out.
  */
-export function resolveEffectiveSettings(
-  dbSettings: RepositorySettings,
-  manifest: FocusManifest,
-  sharedContributorBlacklist: RepositorySettings["contributorBlacklist"] = [],
-): RepositorySettings {
-  // `typeLabels`/`linkedIssueLabelPropagation` are parsed as SPARSE partials (see parseFocusManifest above),
-  // unlike every other `manifest.settings` field, which is always a complete value ready to overlay the DB
-  // value wholesale via the spread below. Pull them out of the spread and merge each field individually,
-  // manifest override > DB value > built-in default, so a `.gittensory.yml` naming only one key (e.g.
-  // `typeLabels.priority`) can never silently reset the others back to the built-in default and discard a
-  // DB-customized value (#priority-linked-issue-gate).
-  const { typeLabels: typeLabelsOverride, linkedIssueLabelPropagation: linkedIssueLabelPropagationOverride, ...restManifestSettings } = manifest.settings;
-  const effective: RepositorySettings = { ...dbSettings, ...restManifestSettings };
-  if (typeLabelsOverride !== undefined) {
-    const base = dbSettings.typeLabels ?? DEFAULT_TYPE_LABELS;
-    effective.typeLabels = { bug: typeLabelsOverride.bug ?? base.bug, feature: typeLabelsOverride.feature ?? base.feature, priority: typeLabelsOverride.priority ?? base.priority };
-  }
-  if (linkedIssueLabelPropagationOverride !== undefined) {
-    const base = dbSettings.linkedIssueLabelPropagation ?? DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION;
-    effective.linkedIssueLabelPropagation = {
-      enabled: linkedIssueLabelPropagationOverride.enabled ?? base.enabled,
-      mode: linkedIssueLabelPropagationOverride.mode ?? base.mode,
-      mappings: linkedIssueLabelPropagationOverride.mappings ?? base.mappings,
-    };
-  }
-  const gate = manifest.gate;
+function applyGateConfigOverrides(effective: RepositorySettings, gate: FocusManifestGateConfig): void {
   if (gate.enabled !== null) effective.gateCheckMode = gate.enabled ? "enabled" : "off";
   // reviewCheckMode (#2852) resolution: explicit `gate.checkMode` is the most-specific signal and always wins
   // when set. Otherwise fall back to the legacy `gate.enabled` boolean alias, mapped symmetrically so it keeps
   // its historical effect (true -> the check publishes and may be required; false -> it never publishes) even
   // though it no longer drives `gateCheckMode` alone. When NEITHER is set, `effective.reviewCheckMode` already
-  // holds `settings.reviewCheckMode` (yml `settings:` override, else the DB value) from the spread above.
+  // holds `settings.reviewCheckMode` (yml `settings:` override, else the DB value) from the caller's spread.
   if (gate.checkMode !== null) effective.reviewCheckMode = gate.checkMode;
   else if (gate.enabled !== null) effective.reviewCheckMode = gate.enabled ? "required" : "disabled";
   if (gate.pack !== null) effective.gatePack = gate.pack;
@@ -1634,6 +1796,71 @@ export function resolveEffectiveSettings(
   if (gate.claCheckRunName !== null) effective.claCheckRunName = gate.claCheckRunName;
   if (gate.claCheckRunAppSlug !== null) effective.claCheckRunAppSlug = gate.claCheckRunAppSlug;
   if (gate.expectedCiContexts !== null) effective.expectedCiContexts = gate.expectedCiContexts;
+}
+
+/**
+ * Resolve the EFFECTIVE repository settings a webhook should act on: `.gittensory.yml` > DB settings >
+ * safe defaults. The generic `settings:` override applies first; the friendly `gate:` alias then wins
+ * for its fields. This single resolver makes the whole gittensory configuration — gate on/off, blocker
+ * modes, comments, labels, surface, audience — controllable from the repo's `.gittensory.yml`.
+ */
+export function resolveEffectiveSettings(
+  dbSettings: RepositorySettings,
+  manifest: FocusManifest,
+  sharedContributorBlacklist: RepositorySettings["contributorBlacklist"] = [],
+): RepositorySettings {
+  // `typeLabels`/`linkedIssueLabelPropagation`/`linkedIssueHardRules` are parsed as SPARSE partials (see
+  // parseFocusManifest above),
+  // unlike every other `manifest.settings` field, which is always a complete value ready to overlay the DB
+  // value wholesale via the spread below. Pull them out of the spread and merge each field individually,
+  // manifest override > DB value > built-in default, so a `.gittensory.yml` naming only one key (e.g.
+  // `typeLabels.priority`) can never silently reset the others back to the built-in default and discard a
+  // DB-customized value (#priority-linked-issue-gate), and an arbitrary custom category (e.g. `security`)
+  // layers in alongside the DB value rather than requiring it too (#label-modularity).
+  const {
+    typeLabels: typeLabelsOverride,
+    linkedIssueLabelPropagation: linkedIssueLabelPropagationOverride,
+    linkedIssueHardRules: linkedIssueHardRulesOverride,
+    ...restManifestSettings
+  } = manifest.settings;
+  const effective: RepositorySettings = { ...dbSettings, ...restManifestSettings };
+  if (typeLabelsOverride !== undefined) {
+    // `null` is parseFocusManifest's distinct signal for a literal `typeLabels: {}` -- a deliberate
+    // "zero configured categories for this repo" that REPLACES the DB value wholesale, rather than a
+    // sparse override merged over it (#label-modularity). Any other (possibly-empty-if-all-invalid)
+    // object is a sparse layer: its present keys win, every other key (built-in or custom) is inherited
+    // from the DB value -- a plain object spread generalizes the old per-key `?? ` merge to an arbitrary
+    // key set for free, and an override with zero surviving keys (e.g. every named key failed validation)
+    // spreads in nothing, leaving the DB value completely unchanged.
+    // The cast is safe: every key parseFocusManifest actually sets on the sparse override already
+    // passed normalizeTypeLabelSet's non-empty-string validation (see the sparse-copy loop above), so
+    // no value here is ever `undefined` at runtime -- only `Partial<PrTypeLabelSet>`'s TYPE (not its
+    // actual contents) admits that possibility.
+    effective.typeLabels = typeLabelsOverride === null ? {} : ({ ...(dbSettings.typeLabels ?? DEFAULT_TYPE_LABELS), ...typeLabelsOverride } as PrTypeLabelSet);
+  }
+  if (linkedIssueLabelPropagationOverride !== undefined) {
+    const base = dbSettings.linkedIssueLabelPropagation ?? DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION;
+    effective.linkedIssueLabelPropagation = {
+      enabled: linkedIssueLabelPropagationOverride.enabled ?? base.enabled,
+      mode: linkedIssueLabelPropagationOverride.mode ?? base.mode,
+      mappings: linkedIssueLabelPropagationOverride.mappings ?? base.mappings,
+    };
+  }
+  if (linkedIssueHardRulesOverride !== undefined) {
+    const base = dbSettings.linkedIssueHardRules ?? DEFAULT_LINKED_ISSUE_HARD_RULES;
+    effective.linkedIssueHardRules = {
+      ownerAssignedClose: linkedIssueHardRulesOverride.ownerAssignedClose ?? base.ownerAssignedClose,
+      assignedIssueClose: linkedIssueHardRulesOverride.assignedIssueClose ?? base.assignedIssueClose,
+      missingPointLabelClose: linkedIssueHardRulesOverride.missingPointLabelClose ?? base.missingPointLabelClose,
+      maintainerOnlyLabelClose: linkedIssueHardRulesOverride.maintainerOnlyLabelClose ?? base.maintainerOnlyLabelClose,
+      pointBearingLabels: linkedIssueHardRulesOverride.pointBearingLabels ?? base.pointBearingLabels,
+      maintainerOnlyLabels: linkedIssueHardRulesOverride.maintainerOnlyLabels ?? base.maintainerOnlyLabels,
+      defaultLabelRepo: linkedIssueHardRulesOverride.defaultLabelRepo ?? base.defaultLabelRepo,
+      verifyBeforeClose: linkedIssueHardRulesOverride.verifyBeforeClose ?? base.verifyBeforeClose,
+      closeDelaySeconds: linkedIssueHardRulesOverride.closeDelaySeconds ?? base.closeDelaySeconds,
+    };
+  }
+  applyGateConfigOverrides(effective, manifest.gate);
   // The dashboard "Require linked issue" toggle must not silently diverge from gate blocking: when the
   // boolean is on but linkedIssueGateMode is still off, treat it as a block requirement (#797).
   if (effective.requireLinkedIssue && effective.linkedIssueGateMode === "off") {
@@ -1667,7 +1894,6 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     present: true,
     source: normalizeSource(source, record.source, warnings),
     wantedPaths: normalizeStringList(record.wantedPaths, "wantedPaths", warnings),
-    blockedPaths: normalizeStringList(record.blockedPaths, "blockedPaths", warnings),
     preferredLabels: normalizeStringList(record.preferredLabels, "preferredLabels", warnings),
     linkedIssuePolicy: normalizeEnum(record.linkedIssuePolicy, "linkedIssuePolicy", ["required", "preferred", "optional"] as const, "optional", warnings),
     testExpectations: normalizeStringList(record.testExpectations, "testExpectations", warnings),
@@ -1679,11 +1905,11 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     review: parseReviewConfig(record.review, warnings),
     features: parseFeaturesConfig(record.features, warnings),
     contentLane: parseContentLaneConfig(record.contentLane, warnings),
+    repoDocGeneration: parseRepoDocGenerationConfig(record.repoDocGeneration, warnings),
     warnings,
   };
   if (
     manifest.wantedPaths.length === 0 &&
-    manifest.blockedPaths.length === 0 &&
     manifest.preferredLabels.length === 0 &&
     manifest.testExpectations.length === 0 &&
     manifest.maintainerNotes.length === 0 &&
@@ -1694,7 +1920,8 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     Object.keys(manifest.settings).length === 0 &&
     !manifest.review.present &&
     !manifest.features.present &&
-    !manifest.contentLane.present
+    !manifest.contentLane.present &&
+    !manifest.repoDocGeneration.present
   ) {
     warnings.push("Manifest contained no recognized focus fields; falling back to deterministic signals.");
     manifest.present = false;
@@ -1841,7 +2068,6 @@ export function buildFocusManifestGuidance(args: {
   const testFileCount = Math.max(0, args.testFileCount ?? 0);
   const passedValidationCount = Math.max(0, args.passedValidationCount ?? 0);
 
-  const matchedBlockedPaths = matchedPatterns(changedPaths, manifest.blockedPaths);
   const matchedWantedPaths = matchedPatterns(changedPaths, manifest.wantedPaths);
   const preferredLabelHits = manifest.preferredLabels.filter((label) => labels.includes(label.toLowerCase()));
 
@@ -1858,7 +2084,6 @@ export function buildFocusManifestGuidance(args: {
       linkedIssuePolicy: manifest.linkedIssuePolicy,
       issueDiscoveryPolicy: manifest.issueDiscoveryPolicy,
       matchedWantedPaths: [],
-      matchedBlockedPaths: [],
       preferredLabelHits: [],
       findings,
       publicNextSteps: [],
@@ -1867,16 +2092,7 @@ export function buildFocusManifestGuidance(args: {
     };
   }
 
-  if (matchedBlockedPaths.length > 0) {
-    findings.push({
-      code: "manifest_blocked_path",
-      severity: "critical",
-      title: "Change touches a maintainer-blocked area",
-      detail: `Changed paths match maintainer-blocked patterns: ${matchedBlockedPaths.slice(0, 5).join(", ")}.`,
-      action: "Move this work out of the maintainer-blocked area or confirm with the maintainer before opening a PR.",
-    });
-    publicNextSteps.push("Avoid the maintainer-blocked areas this branch currently touches; confirm scope with the maintainer first.");
-  } else if (manifest.wantedPaths.length > 0 && matchedWantedPaths.length === 0 && changedPaths.length > 0) {
+  if (manifest.wantedPaths.length > 0 && matchedWantedPaths.length === 0 && changedPaths.length > 0) {
     findings.push({
       code: "manifest_off_focus",
       severity: "warning",
@@ -1929,14 +2145,16 @@ export function buildFocusManifestGuidance(args: {
   }
 
   if (manifest.testExpectations.length > 0 && testFileCount === 0 && passedValidationCount === 0) {
+    const safeExpectations = manifest.testExpectations.filter(isFocusManifestPublicSafe).slice(0, 3);
+    const expectationDetail = safeExpectations.length > 0 ? ` Expected evidence: ${safeExpectations.join("; ")}.` : "";
     findings.push({
       code: "manifest_missing_tests",
       severity: "warning",
-      title: "Maintainer test expectations unmet",
-      detail: `Maintainer expects test evidence: ${manifest.testExpectations.slice(0, 3).join("; ")}.`,
-      action: "Add or update tests, or attach passing validation output that satisfies the maintainer's test expectations.",
+      title: "Configured validation evidence missing",
+      detail: `No changed test files or passing validation evidence were detected for this PR.${expectationDetail}`,
+      action: "Add regression/invariant coverage, update relevant tests, or attach passing validation output that satisfies the repo's configured expectations.",
     });
-    publicNextSteps.push("Add tests or attach passing validation that meets the maintainer's test expectations.");
+    publicNextSteps.push("Add relevant tests or passing validation evidence that matches the repo's configured expectations.");
   }
 
   if (manifest.issueDiscoveryPolicy === "discouraged") {
@@ -1959,17 +2177,15 @@ export function buildFocusManifestGuidance(args: {
     linkedIssuePolicy: manifest.linkedIssuePolicy,
     issueDiscoveryPolicy: manifest.issueDiscoveryPolicy,
     matchedWantedPaths,
-    matchedBlockedPaths,
     preferredLabelHits,
     findings,
     publicNextSteps: safeNextSteps,
     warnings: manifest.warnings,
-    summary: summarize(manifest, matchedBlockedPaths, matchedWantedPaths),
+    summary: summarize(manifest, matchedWantedPaths),
   };
 }
 
-function summarize(manifest: FocusManifest, blocked: string[], wanted: string[]): string {
-  if (blocked.length > 0) return "Maintainer focus manifest: change touches a blocked area.";
+function summarize(manifest: FocusManifest, wanted: string[]): string {
   if (wanted.length > 0) return "Maintainer focus manifest: change aligns with a wanted area.";
   if (manifest.wantedPaths.length > 0) return "Maintainer focus manifest: change is outside the wanted areas.";
   return "Maintainer focus manifest applied with no path-specific verdict.";
@@ -2095,11 +2311,13 @@ export function compileFocusManifestPolicy(
 
 function buildPolicyEntryGuidance(manifest: FocusManifest): string[] {
   const guidance: string[] = [];
-  if (manifest.wantedPaths.length > 0) {
-    guidance.push(`Focus changes on maintainer-wanted areas: ${manifest.wantedPaths.slice(0, 5).join(", ")}.`);
-  }
-  if (manifest.blockedPaths.length > 0) {
-    guidance.push(`Avoid maintainer-blocked areas: ${manifest.blockedPaths.slice(0, 5).join(", ")}.`);
+  // Build the sentence from the public-safe subset (as preferredLabels and publicNotes below already do, and
+  // as the sibling buildPolicyContributionLanes does for preferredPaths). Joining the raw wantedPaths means a
+  // single reserved-word path (e.g. `src/ranking/`) fails the all-or-nothing public-safety filter at the end
+  // and silently drops the entire focus-areas guidance line instead of surfacing the safe paths.
+  const safeWantedPaths = manifest.wantedPaths.filter(isFocusManifestPublicSafe);
+  if (safeWantedPaths.length > 0) {
+    guidance.push(`Focus changes on maintainer-wanted areas: ${safeWantedPaths.slice(0, 5).join(", ")}.`);
   }
   if (manifest.linkedIssuePolicy === "required") guidance.push("Link a tracked issue before opening a pull request.");
   else if (manifest.linkedIssuePolicy === "preferred") guidance.push("Linking a tracked issue is preferred before opening a pull request.");
@@ -2124,7 +2342,6 @@ function buildPolicyContributionLanes(manifest: FocusManifest): FocusManifestPol
 
   const lanes: FocusManifestPolicyContributionLane[] = [];
   const safeWantedPaths = manifest.wantedPaths.filter(isFocusManifestPublicSafe);
-  const safeBlockedPaths = manifest.blockedPaths.filter(isFocusManifestPublicSafe);
   const safeTestExpectations = manifest.testExpectations.filter(isFocusManifestPublicSafe);
 
   // Derive the public preference only from public-safe signals: use the SAME filtered list that surfaces in
@@ -2147,7 +2364,7 @@ function buildPolicyContributionLanes(manifest: FocusManifest): FocusManifestPol
           ? "Contribute changes in maintainer-wanted areas with required validation evidence."
           : "Direct pull requests are accepted when they stay inside maintainer-wanted scope.",
     preferredPaths: safeWantedPaths,
-    discouragedPaths: safeBlockedPaths,
+    discouragedPaths: [],
     validationExpectations: safeTestExpectations,
     publicNotes: manifest.publicNotes.filter(isFocusManifestPublicSafe),
   });
@@ -2168,7 +2385,7 @@ function buildPolicyContributionLanes(manifest: FocusManifest): FocusManifestPol
           ? "The maintainer has indicated this repo prefers direct fixes over new issue reports."
           : "Issue discovery is optional; confirm maintainer scope before filing new issues.",
     preferredPaths: [],
-    discouragedPaths: safeBlockedPaths,
+    discouragedPaths: [],
     validationExpectations: [],
     publicNotes: [],
   });
@@ -2184,9 +2401,6 @@ function buildPolicyReadinessWarnings(manifest: FocusManifest): string[] {
   }
   if (manifest.testExpectations.length === 0) {
     warnings.push("Focus manifest does not define validation expectations; contributors may not know what tests to run.");
-  }
-  if (manifest.blockedPaths.length > 0 && manifest.wantedPaths.length === 0) {
-    warnings.push("Focus manifest blocks work areas but does not define wanted paths; pair blocked areas with a positive lane.");
   }
   return warnings.filter(isFocusManifestPublicSafe);
 }
@@ -2236,7 +2450,6 @@ export function deriveContributionLanes(manifest: FocusManifest): ContributionLa
   }
 
   const safeWanted = manifest.wantedPaths.filter(isFocusManifestPublicSafe);
-  const safeBlocked = manifest.blockedPaths.filter(isFocusManifestPublicSafe);
   const safePublicNotes = manifest.publicNotes.filter(isFocusManifestPublicSafe);
 
   const validationExpectations: string[] = [];
@@ -2249,7 +2462,6 @@ export function deriveContributionLanes(manifest: FocusManifest): ContributionLa
   const directPrLane: ContributionLanePreference =
     manifest.issueDiscoveryPolicy === "encouraged" ? "discouraged"
     : safeWanted.length > 0 ? "preferred"
-    : safeBlocked.length > 0 ? "discouraged"
     : "neutral";
 
   const issueDiscoveryLane: ContributionLanePreference =
@@ -2272,9 +2484,6 @@ export function deriveContributionLanes(manifest: FocusManifest): ContributionLa
   const prEntryGuidance: string[] = [];
   if (safeWanted.length > 0) {
     prEntryGuidance.push(`Focus changes on maintainer-wanted areas: ${manifest.wantedPaths.slice(0, 5).join(", ")}.`);
-  }
-  if (safeBlocked.length > 0) {
-    prEntryGuidance.push(`Avoid maintainer-blocked areas: ${manifest.blockedPaths.slice(0, 5).join(", ")}.`);
   }
   if (manifest.preferredLabels.length > 0) {
     const safeLabels = manifest.preferredLabels.filter(isFocusManifestPublicSafe);
@@ -2315,7 +2524,7 @@ export function deriveContributionLanes(manifest: FocusManifest): ContributionLa
     directPrLane,
     issueDiscoveryLane,
     preferredEntryPaths: safeWanted,
-    discouragedEntryPaths: safeBlocked,
+    discouragedEntryPaths: [],
     validationExpectations,
     issueEntryGuidance: issueEntryGuidance.filter(isFocusManifestPublicSafe),
     prEntryGuidance: safeprEntryGuidance,

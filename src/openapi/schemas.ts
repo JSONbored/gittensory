@@ -591,6 +591,8 @@ export const RepositorySettingsSchema = z
     checkRunDetailLevel: z.enum(["minimal", "standard", "deep"]),
     gateCheckMode: z.enum(["off", "enabled"]),
     reviewCheckMode: z.enum(["required", "visible", "disabled"]),
+    autoProjectMilestoneMatch: z.enum(["off", "suggest", "auto"]).optional(),
+    autoProjectMilestoneMatchBackend: z.enum(["github", "linear"]).optional(),
     gatePack: z.enum(["gittensor", "oss-anti-slop"]),
     linkedIssueGateMode: z.enum(["off", "advisory", "block"]),
     duplicatePrGateMode: z.enum(["off", "advisory", "block"]),
@@ -628,12 +630,27 @@ export const RepositorySettingsSchema = z
     closeOwnerAuthors: z.boolean(),
     autoLabelEnabled: z.boolean(),
     typeLabelsEnabled: z.boolean(),
-    typeLabels: z.object({ bug: z.string(), feature: z.string(), priority: z.string() }).optional(),
+    // Open `category -> label name` record (#label-modularity): bug/feature/priority are the built-in
+    // categories, but a self-hoster may register any number of additional ones (e.g. `security`).
+    typeLabels: z.record(z.string(), z.string()).optional(),
     linkedIssueLabelPropagation: z
       .object({
         enabled: z.boolean(),
         mode: z.enum(["exclusive_type_label"]),
         mappings: z.array(z.object({ issueLabel: z.string(), prLabel: z.string(), removeOtherTypeLabels: z.boolean() })),
+      })
+      .optional(),
+    linkedIssueHardRules: z
+      .object({
+        ownerAssignedClose: z.enum(["block", "off"]),
+        assignedIssueClose: z.enum(["block", "off"]),
+        missingPointLabelClose: z.enum(["block", "off"]),
+        maintainerOnlyLabelClose: z.enum(["block", "off"]),
+        pointBearingLabels: z.array(z.string()),
+        maintainerOnlyLabels: z.array(z.string()),
+        defaultLabelRepo: z.boolean(),
+        verifyBeforeClose: z.boolean(),
+        closeDelaySeconds: z.number().int().min(0).max(300),
       })
       .optional(),
     gittensorLabel: z.string(),
@@ -660,7 +677,7 @@ export const RepositorySettingsSchema = z
       )
       .optional(),
     autonomy: z
-      .record(z.enum(["review", "request_changes", "approve", "merge", "close", "label", "review_state_label"]), z.enum(["observe", "suggest", "propose", "auto_with_approval", "auto"]))
+      .record(z.enum(["review", "request_changes", "approve", "merge", "close", "label", "review_state_label", "update_branch", "assign"]), z.enum(["observe", "suggest", "propose", "auto_with_approval", "auto"]))
       .optional(),
     autoMaintain: z.object({ requireApprovals: z.number().int(), mergeMethod: z.enum(["merge", "squash", "rebase"]) }).optional(),
     agentPaused: z.boolean().optional(),
@@ -675,6 +692,12 @@ export const RepositorySettingsSchema = z
     reviewNagLabel: z.string().nullable().optional(),
     reviewNagMonitoredMentions: z.array(z.string()).optional(),
     autoCloseExemptLogins: z.array(z.string()).optional(),
+    hardGuardrailGlobs: z.array(z.string()).nullable().optional(),
+    manualReviewLabel: z.string().nullable().optional(),
+    readyToMergeLabel: z.string().nullable().optional(),
+    changesRequestedLabel: z.string().nullable().optional(),
+    migrationCollisionLabel: z.string().nullable().optional(),
+    pendingClosureLabel: z.string().nullable().optional(),
     accountAgeThresholdDays: z.number().int().positive().nullable().optional(),
     newAccountLabel: z.string().optional(),
     commandRateLimitPolicy: z.enum(["off", "hold"]).optional(),
@@ -703,6 +726,8 @@ export const RepoSettingsPreviewSchema = z
       checkRunDetailLevel: z.enum(["minimal", "standard", "deep"]),
       gateCheckMode: z.enum(["off", "enabled"]),
       reviewCheckMode: z.enum(["required", "visible", "disabled"]),
+      autoProjectMilestoneMatch: z.enum(["off", "suggest", "auto"]).optional(),
+      autoProjectMilestoneMatchBackend: z.enum(["github", "linear"]).optional(),
       gatePack: z.enum(["gittensor", "oss-anti-slop"]),
       linkedIssueGateMode: z.enum(["off", "advisory", "block"]),
       duplicatePrGateMode: z.enum(["off", "advisory", "block"]),
@@ -1081,6 +1106,8 @@ export const InstallationRepairSchema = z
           checkRunMode: z.enum(["off", "enabled"]),
           gateCheckMode: z.enum(["off", "enabled"]),
           reviewCheckMode: z.enum(["required", "visible", "disabled"]),
+          autoProjectMilestoneMatch: z.enum(["off", "suggest", "auto"]).optional(),
+          autoProjectMilestoneMatchBackend: z.enum(["github", "linear"]).optional(),
           autoLabelEnabled: z.boolean(),
         }),
       }),
@@ -1994,6 +2021,8 @@ export const RegistrationReadinessSchema = z
       checkRunMode: z.enum(["off", "enabled"]),
       gateCheckMode: z.enum(["off", "enabled"]),
       reviewCheckMode: z.enum(["required", "visible", "disabled"]),
+      autoProjectMilestoneMatch: z.enum(["off", "suggest", "auto"]).optional(),
+      autoProjectMilestoneMatchBackend: z.enum(["github", "linear"]).optional(),
       quietByDefault: z.boolean(),
       behavior: z.string(),
       warnings: z.array(z.string()),
@@ -2298,7 +2327,6 @@ export const LocalBranchAnalysisSchema = z
       linkedIssuePolicy: z.enum(["required", "preferred", "optional"]),
       issueDiscoveryPolicy: z.enum(["encouraged", "neutral", "discouraged"]),
       matchedWantedPaths: z.array(z.string()),
-      matchedBlockedPaths: z.array(z.string()),
       preferredLabelHits: z.array(z.string()),
       findings: z.array(z.object({ code: z.string(), severity: z.enum(["info", "warning", "critical"]), title: z.string(), detail: z.string(), action: z.string().optional() })),
       publicNextSteps: z.array(z.string()),

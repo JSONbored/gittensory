@@ -4,6 +4,7 @@ import {
   agentRequiresContentsWrite,
   agentRequiresPrWrite,
   buildAgentActionAudit,
+  STRUCTURED_CLOSE_REASONS_MAX_COUNT,
   formatAgentPermissionDenial,
   isGlobalAgentPause,
   requiredAgentActionPermissions,
@@ -73,6 +74,68 @@ describe("buildAgentActionAudit", () => {
     expect(audit.targetKey).toBe("owner/repo");
     expect(audit.actor).toBeNull();
     expect(audit.detail).toBeNull();
+  });
+
+  it("records structured close reasons only for close-action audit metadata", () => {
+    const closeAudit = buildAgentActionAudit({
+      actionClass: "close",
+      autonomyLevel: "auto",
+      mode: "live",
+      outcome: "completed",
+      repoFullName: "owner/repo",
+      reason: "ci failed; blocker",
+      closeReasons: ["ci failed", "blocker"],
+    });
+    expect(closeAudit.metadata).toMatchObject({ closeReasons: ["ci failed", "blocker"], closeReasonCount: 2 });
+
+    const mergeAudit = buildAgentActionAudit({
+      actionClass: "merge",
+      autonomyLevel: "auto",
+      mode: "live",
+      outcome: "completed",
+      repoFullName: "owner/repo",
+      reason: "clean",
+      closeReasons: ["must not attach"],
+    });
+    expect(mergeAudit.metadata).not.toHaveProperty("closeReasons");
+    expect(mergeAudit.metadata).not.toHaveProperty("closeReasonCount");
+
+    const legacyCloseAudit = buildAgentActionAudit({
+      actionClass: "close",
+      autonomyLevel: "auto",
+      mode: "live",
+      outcome: "completed",
+      repoFullName: "owner/repo",
+      reason: "legacy flattened reason",
+    });
+    expect(legacyCloseAudit.metadata).not.toHaveProperty("closeReasons");
+
+    const emptyCloseAudit = buildAgentActionAudit({
+      actionClass: "close",
+      autonomyLevel: "auto",
+      mode: "live",
+      outcome: "completed",
+      repoFullName: "owner/repo",
+      reason: "empty reason list",
+      closeReasons: [],
+    });
+    expect(emptyCloseAudit.metadata).not.toHaveProperty("closeReasons");
+
+    const manyCloseReasons = Array.from({ length: STRUCTURED_CLOSE_REASONS_MAX_COUNT + 1 }, (_, index) => `blocker ${index}`);
+    const truncatedCloseAudit = buildAgentActionAudit({
+      actionClass: "close",
+      autonomyLevel: "auto",
+      mode: "live",
+      outcome: "completed",
+      repoFullName: "owner/repo",
+      reason: "many blockers",
+      closeReasons: manyCloseReasons,
+    });
+    expect(truncatedCloseAudit.metadata).toMatchObject({
+      closeReasons: manyCloseReasons.slice(0, STRUCTURED_CLOSE_REASONS_MAX_COUNT),
+      closeReasonCount: manyCloseReasons.length,
+      closeReasonsTruncated: true,
+    });
   });
 });
 

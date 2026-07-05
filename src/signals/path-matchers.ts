@@ -65,7 +65,7 @@ function isGeneratedFileFrom(parts: NormalizedPath): boolean {
     // Source maps for every first-class JS/TS bundle extension. `.mjs`/`.cjs` are already
     // recognized code extensions (isCodeFile), so their bundlers' `.mjs.map` / `.cjs.map`
     // maps are generated output too — the same as `.js.map`.
-    /\.(js|jsx|mjs|cjs|ts|tsx|css)\.map$/.test(norm) ||
+    /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts|vue|svelte|astro|scss|less|css)\.map$/.test(norm) ||
     base === "worker-configuration.d.ts"
   );
 }
@@ -264,6 +264,11 @@ const CONFIG_FILE_NAMES: ReadonlySet<string> = new Set([
   "azure-pipelines.yml",
   "buf.yaml",
   "buf.gen.yaml",
+  // Native/C++ build system definitions (siblings to Makefile/Dockerfile above).
+  "cmakelists.txt",
+  "meson.build",
+  "build.bazel",
+  "module.bazel",
 ]);
 
 // Filename prefixes that identify build, lint, test-runner, and environment config files.

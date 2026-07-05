@@ -163,6 +163,13 @@ describe("sanitizeRoleText token redaction", () => {
     expect(sanitizeRoleText("key glpat-abcdefghij1234")).toContain("<redacted-token>");
   });
 
+  // Regression (#1825): the Orb broker's enrollment id/secret (createOpaqueToken("orbenr"/"orbsec"),
+  // src/orb/broker.ts) must be redacted like any other opaque token when it appears bare in role text.
+  it("redacts orbenr_ and orbsec_ prefixed Orb broker tokens", () => {
+    expect(sanitizeRoleText(`enrollment orbenr_${"a".repeat(20)}`)).toContain("<redacted-token>");
+    expect(sanitizeRoleText(`secret orbsec_${"b".repeat(20)}`)).toContain("<redacted-token>");
+  });
+
   it("redacts Bearer authorization tokens", () => {
     const result = sanitizeRoleText("Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.abc");
     expect(result).toBe("Authorization: Bearer <redacted-token>");
@@ -373,10 +380,11 @@ describe("compileFocusManifestPolicy — public-safe output boundaries", () => {
     expect(policy.publicSafe.readinessWarnings).toEqual([]);
   });
 
-  it("emits a readiness warning for blocked-only manifests with no wanted scope", () => {
+  it("treats legacy blocked-only manifests as absent", () => {
     const manifest = parseFocusManifest({ blockedPaths: ["migrations/"], wantedPaths: [], preferredLabels: [], testExpectations: [] });
     const policy = compileFocusManifestPolicy("JSONbored/gittensory", manifest, { generatedAt: FIXED_DATE });
-    expect(policy.publicSafe.readinessWarnings.join(" ")).toMatch(/blocks work areas.*does not define wanted|pair blocked areas/i);
+    expect(policy.present).toBe(false);
+    expect(policy.publicSafe.readinessWarnings).toEqual([]);
     expect(JSON.stringify(policy.publicSafe)).not.toMatch(FORBIDDEN_POLICY_PATTERN);
   });
 

@@ -170,6 +170,46 @@ describe("gaugeVector (#selfhost-lane-observability)", () => {
     expect(out).toContain('v{repo="owner/b"} 5');
   });
 
+  it("redacts repository labels from the public backlog-by-repo gauge vector", async () => {
+    gaugeVector("gittensory_queue_backlog_by_repo", () => [
+      { labels: { rank: "1", repo: "private-owner/secret-repo" }, value: 3 },
+      { labels: { rank: "2", repo: "other-org/confidential" }, value: 1 },
+    ]);
+
+    const out = await renderMetrics();
+    expect(out).toContain('gittensory_queue_backlog_by_repo{rank="1",repo="redacted-1"} 3');
+    expect(out).toContain('gittensory_queue_backlog_by_repo{rank="2",repo="redacted-2"} 1');
+    resetMetrics();
+    gaugeVector("gittensory_queue_backlog_by_repo", () => [
+      { labels: { repo: "private-owner/secret-repo" }, value: 4 },
+    ]);
+    expect(await renderMetrics()).toContain('gittensory_queue_backlog_by_repo{repo="redacted-1"} 4');
+    expect(out).not.toContain("private-owner/secret-repo");
+    expect(out).not.toContain("other-org/confidential");
+  });
+
+  it("keeps backlog-by-repo redacted even in self-hosted metrics mode", async () => {
+    setSelfHostedMetricsMode(true);
+    gaugeVector("gittensory_queue_backlog_by_repo", () => [
+      { labels: { rank: "1", repo: "owner/repo" }, value: 2 },
+    ]);
+
+    const out = await renderMetrics();
+    expect(out).toContain('gittensory_queue_backlog_by_repo{rank="1",repo="redacted-1"} 2');
+    expect(out).not.toContain("owner/repo");
+  });
+
+  it("reuses the same redacted label for a repo across repeated scrapes, without resetting", async () => {
+    gaugeVector("gittensory_queue_backlog_by_repo", () => [
+      { labels: { rank: "1", repo: "owner/repo" }, value: 2 },
+    ]);
+
+    const first = await renderMetrics();
+    const second = await renderMetrics();
+    expect(first).toContain('gittensory_queue_backlog_by_repo{rank="1",repo="redacted-1"} 2');
+    expect(second).toContain('gittensory_queue_backlog_by_repo{rank="1",repo="redacted-1"} 2');
+  });
+
   it("supports an async sampler", async () => {
     gaugeVector("async_v", async () => [{ labels: { key_scope: "public" }, value: 42 }]);
     expect(await renderMetrics()).toContain('async_v{key_scope="public"} 42');

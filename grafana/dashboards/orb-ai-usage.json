@@ -1,0 +1,169 @@
+{
+  "uid": "gittensory-orb-ai-usage",
+  "title": "Gittensory - ORB AI usage",
+  "tags": ["gittensory", "ai", "orb"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 4,
+  "refresh": "30s",
+  "time": { "from": "now-7d", "to": "now" },
+  "description": "Durable, provider-neutral AI usage from ai_usage_events (migration 0109) — every configured provider (Codex, Claude Code, OpenAI-compatible, Ollama, Anthropic BYOK), not just Codex. Every AI feature (ai_review_pr, agent_private_summary, agent_public_summary, pr_intelligence_comment, ai_slop_pr, issue_plan) threads real usage through recordAiUsageEvent on a completed call; a row still lands as estimated_neurons-only when the call never happened (quota_exceeded/disabled/unavailable), is a BYOK call (not yet usage-tracked), or the provider omitted a parseable usage field — see the 'Events missing real usage' panel. See 'Gittensory - Codex usage (self-host)' for a Codex-focused view and 'Gittensory — Claude usage (OTEL)' for Claude Code's own CLI/session telemetry (a separate, non-durable data source).",
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Summary (all providers)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Total AI events",
+      "description": "Every ai_usage_events row with a non-null provider (i.e. a real, attributed AI call), across all features.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT count(*) AS events FROM ai_usage_events WHERE provider IS NOT NULL",
+          "rawQueryText": "SELECT count(*) AS events FROM ai_usage_events WHERE provider IS NOT NULL"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total tokens",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT coalesce(sum(total_tokens), 0) AS total_tokens FROM ai_usage_events WHERE provider IS NOT NULL",
+          "rawQueryText": "SELECT coalesce(sum(total_tokens), 0) AS total_tokens FROM ai_usage_events WHERE provider IS NOT NULL"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Total cost",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4, "color": { "mode": "fixed", "fixedColor": "green" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL",
+          "rawQueryText": "SELECT coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Events missing real usage",
+      "description": "Completed AI calls (status='ok', a response was actually returned) with no real usage captured — either no provider attribution at all, or a provider attributed with input_tokens/output_tokens/total_tokens/cost_usd all still at their zero default. (input_tokens/output_tokens/total_tokens/cost_usd are NOT NULL DEFAULT 0 per migration 0109 — recordAiUsageEvent's finiteNumber() coercion means they can never be SQL NULL, so a zero-value check, not an IS NULL check, is the real \"no data\" signal here; coerceAiUsage extracts provider independently of the numeric fields, so a provider name with no parseable token counts is a real, reachable row shape.) Excludes quota_exceeded/disabled/unavailable rows (no call was attempted, so no usage was ever possible) and ai_key_change audit rows (not an AI call at all — recordAiKeyChange's status is always \"set\"/\"replace\"/\"delete\", never \"ok\", but the feature is excluded explicitly here too so this panel doesn't rely on that invariant holding in another file). A nonzero count here means either a BYOK call (callAiProvider does not yet capture usage) or a provider response that omitted a parseable usage field.",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "orange" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT count(*) AS unattributed FROM ai_usage_events WHERE status = 'ok' AND feature <> 'ai_key_change' AND (provider IS NULL OR (input_tokens = 0 AND output_tokens = 0 AND total_tokens = 0 AND cost_usd = 0))",
+          "rawQueryText": "SELECT count(*) AS unattributed FROM ai_usage_events WHERE status = 'ok' AND feature <> 'ai_key_change' AND (provider IS NULL OR (input_tokens = 0 AND output_tokens = 0 AND total_tokens = 0 AND cost_usd = 0))"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "row",
+      "title": "By provider / model / effort",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Usage by provider",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "options": { "showHeader": true, "cellHeight": "sm", "sortBy": [{ "displayName": "events", "desc": true }] },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } } },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT provider, count(*) AS events, coalesce(sum(input_tokens), 0) AS input_tokens, coalesce(sum(output_tokens), 0) AS output_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL GROUP BY provider ORDER BY events DESC",
+          "rawQueryText": "SELECT provider, count(*) AS events, coalesce(sum(input_tokens), 0) AS input_tokens, coalesce(sum(output_tokens), 0) AS output_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL GROUP BY provider ORDER BY events DESC"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Usage by provider + model + effort",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "options": { "showHeader": true, "cellHeight": "sm", "sortBy": [{ "displayName": "events", "desc": true }] },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } } },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT provider, model, effort, count(*) AS events, coalesce(sum(total_tokens), 0) AS total_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL GROUP BY provider, model, effort ORDER BY events DESC LIMIT 50",
+          "rawQueryText": "SELECT provider, model, effort, count(*) AS events, coalesce(sum(total_tokens), 0) AS total_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL GROUP BY provider, model, effort ORDER BY events DESC LIMIT 50"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "By repo / PR",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 }
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Top repos by AI usage",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "options": { "showHeader": true, "cellHeight": "sm", "sortBy": [{ "displayName": "events", "desc": true }] },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } } },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT json_extract(metadata_json, '$.repoFullName') AS repo, provider, count(*) AS events, coalesce(sum(total_tokens), 0) AS total_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND json_extract(metadata_json, '$.repoFullName') IS NOT NULL GROUP BY repo, provider ORDER BY events DESC LIMIT 50",
+          "rawQueryText": "SELECT json_extract(metadata_json, '$.repoFullName') AS repo, provider, count(*) AS events, coalesce(sum(total_tokens), 0) AS total_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND json_extract(metadata_json, '$.repoFullName') IS NOT NULL GROUP BY repo, provider ORDER BY events DESC LIMIT 50"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Recent AI events (all providers)",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "options": { "showHeader": true, "cellHeight": "sm", "sortBy": [{ "displayName": "created_at", "desc": true }] },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } } },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT created_at, feature, provider, model, effort, status, input_tokens, output_tokens, total_tokens, cost_usd, json_extract(metadata_json, '$.repoFullName') AS repo, json_extract(metadata_json, '$.pullNumber') AS pr FROM ai_usage_events WHERE provider IS NOT NULL ORDER BY created_at DESC LIMIT 100",
+          "rawQueryText": "SELECT created_at, feature, provider, model, effort, status, input_tokens, output_tokens, total_tokens, cost_usd, json_extract(metadata_json, '$.repoFullName') AS repo, json_extract(metadata_json, '$.pullNumber') AS pr FROM ai_usage_events WHERE provider IS NOT NULL ORDER BY created_at DESC LIMIT 100"
+        }
+      ]
+    }
+  ]
+}

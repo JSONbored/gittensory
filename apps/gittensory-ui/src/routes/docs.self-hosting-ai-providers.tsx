@@ -69,6 +69,28 @@ function SelfHostingAiProviders() {
 ANTHROPIC_API_KEY=<provider-key>
 ANTHROPIC_AI_MODEL=claude-sonnet-4-6`}
       />
+      <p>
+        <code>ANTHROPIC_AI_BASE_URL</code> defaults to <code>https://api.anthropic.com</code> — set
+        it only to route through a gateway or proxy in front of the real Anthropic API.
+      </p>
+
+      <h2>OpenAI API</h2>
+      <p>
+        Distinct from OpenAI-compatible below: this is the native OpenAI API path (
+        <code>AI_PROVIDER=openai</code>), for when you have an OpenAI account key rather than a
+        gateway or local endpoint.
+      </p>
+      <CodeBlock
+        filename=".env"
+        code={`AI_PROVIDER=openai
+OPENAI_API_KEY=<provider-key>
+OPENAI_AI_BASE_URL=https://api.openai.com/v1
+OPENAI_AI_MODEL=gpt-5.5`}
+      />
+      <p>
+        <code>OPENAI_AI_BASE_URL</code> and <code>OPENAI_AI_MODEL</code> already default to the
+        values shown — set them only to override the endpoint or model.
+      </p>
 
       <h2>OpenAI-compatible endpoint</h2>
       <CodeBlock
@@ -79,14 +101,48 @@ OPENAI_COMPATIBLE_AI_API_KEY=
 OPENAI_COMPATIBLE_AI_MODEL=llama3.1`}
       />
 
-      <h2>Fallback and dual review</h2>
+      <h2>Ollama (dedicated provider)</h2>
       <p>
-        A comma-list can be a fallback chain or a two-reviewer plan. With two available providers,
-        <code>AI_COMBINE</code> controls how decisions are combined.
+        <code>AI_PROVIDER=ollama</code> is a separate provider id from routing Ollama through{" "}
+        <code>openai-compatible</code> above — use whichever matches how you want
+        fallback/dual-review chains to identify it. Defaults to a local Ollama at{" "}
+        <code>http://localhost:11434/v1</code> with no API key.
       </p>
       <CodeBlock
         filename=".env"
+        code={`AI_PROVIDER=ollama
+OLLAMA_AI_BASE_URL=http://ollama:11434/v1
+OLLAMA_AI_API_KEY=
+OLLAMA_AI_MODEL=llama3.1`}
+      />
+      <p>
+        Set <code>OLLAMA_AI_BASE_URL</code> to <code>http://ollama:11434/v1</code> when using the
+        compose <code>ollama</code> profile; <code>OLLAMA_AI_API_KEY</code> is normally left blank
+        for a local, unauthenticated Ollama instance.
+      </p>
+
+      <h2>Fallback and dual review</h2>
+      <p>
+        A comma-list is a fallback chain by default. Use this for subscription CLIs when you want
+        Codex first and Claude Code only when Codex is unavailable or out of tokens.
+      </p>
+      <CodeBlock
+        filename=".env — fallback chain"
+        code={`AI_PROVIDER=codex,claude-code
+CODEX_AI_EFFORT=medium
+CLAUDE_AI_EFFORT=medium
+CLAUDE_CODE_OAUTH_TOKEN=
+GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER=1`}
+      />
+      <p>
+        Set <code>AI_DUAL_REVIEW=1</code> only when you want the first two providers to run as
+        independent reviewers on every PR. In dual-review mode, <code>AI_COMBINE</code> controls how
+        decisions are combined.
+      </p>
+      <CodeBlock
+        filename=".env — dual review"
         code={`AI_PROVIDER=anthropic,ollama
+AI_DUAL_REVIEW=1
 AI_COMBINE=synthesis
 AI_ON_MERGE=either`}
       />
@@ -95,7 +151,7 @@ AI_ON_MERGE=either`}
           {
             title: "single",
             description:
-              "One reviewer verdict. This is the automatic mode when one provider is configured.",
+              "One reviewer verdict. This is the automatic mode for one provider or a fallback chain.",
           },
           {
             title: "consensus",

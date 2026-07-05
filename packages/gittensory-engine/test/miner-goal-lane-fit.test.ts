@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { DEFAULT_MINER_GOAL_SPEC } from "../dist/miner-goal-spec.js";
-import { computeMinerGoalLaneFit, isMinerRepoTargetable } from "../dist/miner-goal-lane-fit.js";
+import { computeMetadataLaneFit, computeMinerGoalLaneFit, isMinerRepoTargetable } from "../dist/miner-goal-lane-fit.js";
 
 test("isMinerRepoTargetable respects minerEnabled opt-out", () => {
   assert.equal(isMinerRepoTargetable(DEFAULT_MINER_GOAL_SPEC), true);
@@ -48,6 +48,60 @@ test("computeMinerGoalLaneFit ignores malformed label entries safely", () => {
       ...DEFAULT_MINER_GOAL_SPEC,
       preferredLabels: ["BUG"],
     }),
+    1,
+  );
+});
+
+test("computeMetadataLaneFit falls back to label-only lane fit when candidatePaths are absent", () => {
+  const spec = { ...DEFAULT_MINER_GOAL_SPEC, preferredLabels: ["bug"] };
+  assert.equal(computeMetadataLaneFit({ labels: ["bug"] }, spec), 1);
+  assert.equal(computeMetadataLaneFit({ labels: ["feature"] }, spec), 0.25);
+});
+
+test("computeMetadataLaneFit uses computeLaneFit when candidatePaths are present", () => {
+  const spec = {
+    ...DEFAULT_MINER_GOAL_SPEC,
+    wantedPaths: ["src/**"],
+    preferredLabels: ["bug"],
+  };
+  assert.equal(
+    computeMetadataLaneFit(
+      { labels: ["bug"], candidatePaths: ["src/app.ts"] },
+      spec,
+    ),
+    1,
+  );
+  assert.equal(
+    computeMetadataLaneFit(
+      { labels: ["bug"], candidatePaths: ["docs/readme.md"] },
+      spec,
+    ),
+    0.5,
+  );
+});
+
+test("computeMetadataLaneFit returns 0 when candidatePaths hit blockedPaths", () => {
+  const spec = {
+    ...DEFAULT_MINER_GOAL_SPEC,
+    blockedPaths: ["secrets/**"],
+    wantedPaths: ["src/**"],
+  };
+  assert.equal(
+    computeMetadataLaneFit(
+      { labels: ["bug"], candidatePaths: ["secrets/api-keys.ts"] },
+      spec,
+    ),
+    0,
+  );
+});
+
+test("computeMetadataLaneFit ignores blank or malformed candidatePaths entries", () => {
+  const spec = { ...DEFAULT_MINER_GOAL_SPEC, preferredLabels: ["bug"] };
+  assert.equal(
+    computeMetadataLaneFit(
+      { labels: ["bug"], candidatePaths: ["", "  ", 42 as unknown as string] },
+      spec,
+    ),
     1,
   );
 });

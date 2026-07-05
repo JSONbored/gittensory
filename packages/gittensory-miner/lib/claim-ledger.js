@@ -122,8 +122,13 @@ export function openClaimLedger(dbPath = resolveClaimLedgerDbPath()) {
     "SELECT * FROM miner_claims WHERE repo_full_name = ? AND status = ? ORDER BY id ASC",
   );
 
+  function normalizeListRepoFilter(repoFullName) {
+    if (repoFullName === undefined || repoFullName === null) return undefined;
+    return normalizeRepoFullName(repoFullName);
+  }
+
   function normalizeStatusFilter(status) {
-    if (status === undefined) return undefined;
+    if (status === undefined || status === null) return undefined;
     if (!CLAIM_STATUSES.includes(status)) throw new Error("invalid_status");
     return status;
   }
@@ -155,9 +160,7 @@ export function openClaimLedger(dbPath = resolveClaimLedgerDbPath()) {
       return row ? rowToClaim(row) : null;
     },
     listClaims(filter = {}) {
-      const repoFullName = filter.repoFullName === undefined
-        ? undefined
-        : normalizeRepoFullName(filter.repoFullName);
+      const repoFullName = normalizeListRepoFilter(filter.repoFullName);
       const status = normalizeStatusFilter(filter.status);
 
       let rows;

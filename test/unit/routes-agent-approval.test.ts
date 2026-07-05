@@ -136,6 +136,56 @@ describe("agent approval-queue routes (#779)", () => {
     const again = await app.request(`/v1/repos/owner/repo/agent/pending-actions/${action.id}/accept`, { method: "POST", headers: headers(env) }, env);
     expect(again.status).toBe(409);
   });
+
+  it("allows a repository owner session to list the approval queue", async () => {
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
+    await upsertInstallation(env, {
+      installation: { id: 5, account: { login: "owner", id: 1, type: "User" }, repository_selection: "selected", permissions: { metadata: "read", contents: "write", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }],
+    });
+    await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 5);
+    await seedPending(env);
+    const { token } = await createSessionForGitHubUser(env, { login: "owner", id: 1 });
+
+    const list = await app.request("/v1/repos/owner/repo/agent/pending-actions", { headers: { cookie: `gittensory_session=${token}` } }, env);
+
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toMatchObject({ repoFullName: "owner/repo", pendingActions: [{ actionClass: "merge", status: "pending" }] });
+  });
+
+  it("forbids repository owner browser sessions from deciding pending actions", async () => {
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
+    await upsertInstallation(env, {
+      installation: { id: 5, account: { login: "owner", id: 1, type: "User" }, repository_selection: "selected", permissions: { metadata: "read", contents: "write", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }],
+    });
+    await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 5);
+    const action = await seedPending(env);
+    const { token } = await createSessionForGitHubUser(env, { login: "owner", id: 1 });
+
+    const res = await app.request(`/v1/repos/owner/repo/agent/pending-actions/${action.id}/accept`, { method: "POST", headers: { cookie: `gittensory_session=${token}`, origin: "https://preview.example" } }, env);
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({ error: "insufficient_role" });
+    expect(mergePullRequest).not.toHaveBeenCalled();
+    expect((await getPendingAgentAction(env, action.id))?.status).toBe("pending");
+  });
+
+  it("forbids a contributor (non-maintainer) session even though the coarse allowlist permits the path", async () => {
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
+    await upsertInstallation(env, {
+      installation: { id: 5, account: { login: "owner", id: 1, type: "User" }, repository_selection: "selected", permissions: { metadata: "read" }, events: ["pull_request"] },
+    });
+    await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 5);
+    await seedPending(env);
+    const { token } = await createSessionForGitHubUser(env, { login: "contributor", id: 999 });
+
+    const list = await app.request("/v1/repos/owner/repo/agent/pending-actions", { headers: { authorization: `Bearer ${token}` } }, env);
+    expect([401, 403]).toContain(list.status);
+
+    const decide = await app.request("/v1/repos/owner/repo/agent/pending-actions/x/reject", { method: "POST", headers: { authorization: `Bearer ${token}` } }, env);
+    expect([401, 403]).toContain(decide.status);
+  });
 });
 
 describe("agent audit-feed route (#784)", () => {

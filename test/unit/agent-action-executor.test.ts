@@ -13,6 +13,9 @@ vi.mock("../../src/github/labels", () => ({
   ensurePullRequestLabel: vi.fn(async () => ({ applied: true, created: false })),
   removePullRequestLabel: vi.fn(async () => undefined),
 }));
+vi.mock("../../src/github/assignees", () => ({
+  ensurePullRequestAssignee: vi.fn(async () => ({ applied: true })),
+}));
 vi.mock("../../src/github/pr-freshness", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/github/pr-freshness")>();
   return {
@@ -38,6 +41,7 @@ vi.mock("../../src/github/backfill", async (importOriginal) => ({
 
 import { closeIssue, closePullRequest, createIssueComment, createPullRequestReview, dismissLatestBotApproval, mergePullRequest, updatePullRequestBranch } from "../../src/github/pr-actions";
 import { ensurePullRequestLabel, removePullRequestLabel } from "../../src/github/labels";
+import { ensurePullRequestAssignee } from "../../src/github/assignees";
 import { fetchPullRequestFreshness } from "../../src/github/pr-freshness";
 import { createInstallationToken } from "../../src/github/app";
 import { fetchLiveCiAggregate, refreshInstallationHealthForInstallation } from "../../src/github/backfill";
@@ -45,6 +49,7 @@ import {
   actionParams,
   clearInstallationHealthRefreshCooldownForTest,
   clearWritePermissionDenialCooldownForTest,
+  writePermissionDenialCooldownSizeForTest,
   executeAgentMaintenanceActions,
   executeIssueMaintenanceActions,
   pendingActionToPlanned,
@@ -54,8 +59,9 @@ import {
   type IssueActionExecutionContext,
 } from "../../src/services/agent-action-executor";
 import type { PlannedAgentAction } from "../../src/settings/agent-actions";
+import { STRUCTURED_CLOSE_REASONS_MAX_COUNT } from "../../src/settings/agent-execution";
 import { AGENT_LABEL_PENDING_CLOSURE } from "../../src/review/linked-issue-hard-rules";
-import { getGlobalContributorBlacklist, isGlobalAgentFrozen, setGlobalAgentFrozen, upsertGlobalModerationConfig, upsertPullRequestFromGitHub } from "../../src/db/repositories";
+import { clearProcessLocalGlobalAgentFrozenCacheForTest, getGlobalContributorBlacklist, isGlobalAgentFrozen, setGlobalAgentFrozen, upsertGlobalModerationConfig, upsertPullRequestFromGitHub } from "../../src/db/repositories";
 import * as repositoriesModule from "../../src/db/repositories";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 import { createTestEnv } from "../helpers/d1";
@@ -75,7 +81,7 @@ function ctx(over: Partial<AgentActionExecutionContext> = {}): AgentActionExecut
   };
 }
 
-const label: PlannedAgentAction = { actionClass: "label", requiresApproval: false, reason: "ready", label: "gittensory:ready-to-merge" };
+const label: PlannedAgentAction = { actionClass: "label", requiresApproval: false, reason: "ready", label: "ready-to-merge" };
 const requestChanges: PlannedAgentAction = { actionClass: "request_changes", requiresApproval: false, reason: "1 blocker", reviewBody: "please fix" };
 const approve: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "passed", reviewBody: "lgtm" };
 const merge: PlannedAgentAction = { actionClass: "merge", requiresApproval: false, reason: "clean", mergeMethod: "squash" };
@@ -101,15 +107,48 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
 
   it("actionParams threads expectedHeadSha for an update_branch action (and omits absent fields)", () => {
     expect(actionParams(updateBranch)).toEqual({ expectedHeadSha: "sha7" });
-    expect(actionParams(label)).toEqual({ label: "gittensory:ready-to-merge" });
+    expect(actionParams(label)).toEqual({ label: "ready-to-merge" });
     expect(actionParams(merge)).toEqual({ mergeMethod: "squash" });
+  });
+
+  it("#label-scoping: actionParams preserves autonomyClass so pending replay re-checks the original scope", () => {
+    const scopedLabel: PlannedAgentAction = { actionClass: "label", autonomyClass: "close", requiresApproval: true, reason: "blacklisted contributor", label: "slop", labelOp: "add" };
+
+    const persisted = actionParams(scopedLabel);
+    const replayed = pendingActionToPlanned({ actionClass: "label", params: persisted, reason: scopedLabel.reason });
+
+    expect(persisted).toEqual({ autonomyClass: "close", label: "slop", labelOp: "add" });
+    expect(replayed).toMatchObject({ actionClass: "label", autonomyClass: "close", requiresApproval: false, reason: "blacklisted contributor", label: "slop", labelOp: "add" });
+  });
+
+  it("actionParams round-trips structured closeReasons so approval replay preserves every close cause", () => {
+    const closeWithReasons: PlannedAgentAction = {
+      actionClass: "close",
+      requiresApproval: true,
+      reason: "CI failed; blocker",
+      closeComment: "closing",
+      closeReasons: ["CI failed", "blocker"],
+    };
+
+    const persisted = actionParams(closeWithReasons);
+    const replayed = pendingActionToPlanned({ actionClass: "close", params: persisted, reason: closeWithReasons.reason });
+
+    expect(persisted).toEqual({ closeComment: "closing", closeReasons: ["CI failed", "blocker"] });
+    expect(replayed).toMatchObject({ actionClass: "close", requiresApproval: false, reason: "CI failed; blocker", closeComment: "closing", closeReasons: ["CI failed", "blocker"] });
+  });
+
+  it("bounds structured closeReasons in approval-queue params", () => {
+    const closeReasons = Array.from({ length: STRUCTURED_CLOSE_REASONS_MAX_COUNT + 1 }, (_, index) => `blocker ${index}`);
+    const persisted = actionParams({ actionClass: "close", requiresApproval: true, reason: closeReasons.join("; "), closeComment: "closing", closeReasons });
+
+    expect(persisted.closeReasons).toEqual(closeReasons.slice(0, STRUCTURED_CLOSE_REASONS_MAX_COUNT));
   });
 
   it("LIVE: executes each action class via its GitHub primitive and audits completed", async () => {
     const env = createTestEnv({});
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [label, requestChanges, approve, merge, close, updateBranch]);
     expect(outcomes.map((o) => o.outcome)).toEqual(["completed", "completed", "completed", "completed", "completed", "completed"]);
-    expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "gittensory:ready-to-merge", { createMissingLabel: true });
+    expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "ready-to-merge", { createMissingLabel: true });
     expect(createPullRequestReview).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "REQUEST_CHANGES", "please fix");
     // Falls back to ctx.headSha ("sha7") as the pinned commit_id when the action carries no expectedHeadSha of
     // its own — a live sweep's approve plans no explicit pin, so this is the unpinned/live-sweep case (#2262).
@@ -135,9 +174,12 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect(outcomes[0]?.outcome).toBe("completed");
     expect(outcomes[0]?.detail.length).toBe(281); // 280 chars + the "…" truncation marker
     expect(outcomes[0]?.detail.endsWith("…")).toBe(true);
-    const audit = await (env.DB.prepare("select detail from audit_events where event_type = 'agent.action.close' order by created_at desc limit 1").first<{ detail: string }>());
+    const audit = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = 'agent.action.close' order by created_at desc limit 1").first<{ detail: string; metadata_json: string }>();
     expect(audit?.detail).toBe(outcomes[0]?.detail);
     expect(audit?.detail.length).toBeLessThan(longReason.length);
+    const metadata = JSON.parse(audit?.metadata_json ?? "{}");
+    expect(metadata.closeReasons).toEqual([outcomes[0]?.detail]);
+    expect(metadata.closeReasonCount).toBe(1);
   });
 
   it("does NOT truncate a reason at or under the bound (no stray truncation marker on ordinary-length reasons)", async () => {
@@ -145,6 +187,62 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [close]);
     expect(outcomes[0]?.detail).toBe("noise");
     expect(outcomes[0]?.detail.endsWith("…")).toBe(false);
+  });
+
+  it("records every structured close reason in audit metadata instead of only the flattened detail", async () => {
+    const env = createTestEnv({});
+    const closeWithReasons: PlannedAgentAction = {
+      actionClass: "close",
+      requiresApproval: false,
+      reason: "CI is failing (codecov/patch); review blocker; base conflict",
+      closeComment: "closing",
+      closeReasons: ["CI is failing (codecov/patch)", "review blocker", "base conflict"],
+    };
+
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [closeWithReasons]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+
+    const audit = await auditFor(env, "close");
+    const metadata = JSON.parse(audit?.metadata_json ?? "{}");
+    expect(metadata.closeReasons).toEqual(["CI is failing (codecov/patch)", "review blocker", "base conflict"]);
+    expect(metadata.closeReasonCount).toBe(3);
+    expect(outcomes[0]?.detail).toBe(closeWithReasons.reason);
+  });
+
+  it("bounds explicit structured close reasons before storing them in audit metadata", async () => {
+    const env = createTestEnv({});
+    const longReason = "review blocker: ".repeat(30);
+    const closeWithLongStructuredReason: PlannedAgentAction = {
+      actionClass: "close",
+      requiresApproval: false,
+      reason: "combined close reason",
+      closeComment: "closing",
+      closeReasons: ["short reason", longReason],
+    };
+
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [closeWithLongStructuredReason]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+
+    const audit = await auditFor(env, "close");
+    const metadata = JSON.parse(audit?.metadata_json ?? "{}");
+    expect(metadata.closeReasons[0]).toBe("short reason");
+    expect(metadata.closeReasons[1]).toHaveLength(281);
+    expect(metadata.closeReasons[1].endsWith("…")).toBe(true);
+    expect(metadata.closeReasons[1].length).toBeLessThan(longReason.length);
+  });
+
+  it("bounds structured closeReasons count before storing audit metadata, and flags the real close-action audit row as truncated", async () => {
+    const env = createTestEnv({});
+    const closeReasons = Array.from({ length: STRUCTURED_CLOSE_REASONS_MAX_COUNT + 1 }, (_, index) => `blocker ${index}`);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [{ actionClass: "close", requiresApproval: false, reason: closeReasons.join("; "), closeComment: "closing", closeReasons }]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+
+    const audit = await auditFor(env, "close");
+    const metadata = JSON.parse(audit?.metadata_json ?? "{}");
+    expect(metadata.closeReasons).toEqual(closeReasons.slice(0, STRUCTURED_CLOSE_REASONS_MAX_COUNT));
+    // The REAL count (before bounding), so an over-limit close is distinguishable from an exactly-at-limit one.
+    expect(metadata.closeReasonCount).toBe(STRUCTURED_CLOSE_REASONS_MAX_COUNT + 1);
+    expect(metadata.closeReasonsTruncated).toBe(true);
   });
 
   it("#label-scoping: a label action's autonomyClass (not the literal actionClass) governs the durable re-check", async () => {
@@ -374,6 +472,23 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     expect(mergePullRequest).not.toHaveBeenCalled();
   });
 
+  // REGRESSION (gate-flagged gap, #selfhost-ci-verification): the planning pass evaluates settings.expectedCiContexts,
+  // but this final pre-mutation re-check used to always pass `undefined` for requiredContexts (fold-all mode) --
+  // a maintainer-configured repo could see the plan and its own execution-time re-check disagree on ciState.
+  it("threads ctx.expectedCiContexts into the live CI re-check's requiredContexts argument", async () => {
+    const env = createTestEnv({});
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ expectedCiContexts: ["build", "test"] }), [merge]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(fetchLiveCiAggregate).toHaveBeenCalledWith(env, "owner/repo", "sha7", expect.any(String), new Set(["build", "test"]), expect.any(String));
+  });
+
+  it("passes null (fold-all) requiredContexts when ctx.expectedCiContexts is unset — unchanged pre-existing behavior", async () => {
+    const env = createTestEnv({});
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(fetchLiveCiAggregate).toHaveBeenCalledWith(env, "owner/repo", "sha7", expect.any(String), null, expect.any(String));
+  });
+
   it("the live CI re-check fails open on a token-mint error — it is defense-in-depth, not the primary gate (#2128)", async () => {
     const env = createTestEnv({});
     vi.mocked(createInstallationToken).mockRejectedValueOnce(new Error("mint failed"));
@@ -384,25 +499,68 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
 
   it("LIVE label with labelOp=add + comment: adds the label AND posts the comment", async () => {
     const env = createTestEnv({});
-    const flag: PlannedAgentAction = { actionClass: "label", requiresApproval: false, reason: "flag", label: "gittensory:pending-closure", labelOp: "add", comment: "⚠️ flagged" };
+    const flag: PlannedAgentAction = { actionClass: "label", requiresApproval: false, reason: "flag", label: "pending-closure", labelOp: "add", comment: "⚠️ flagged" };
     await executeAgentMaintenanceActions(env, ctx(), [flag]);
-    expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "gittensory:pending-closure", { createMissingLabel: true });
+    expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "pending-closure", { createMissingLabel: true });
     expect(removePullRequestLabel).not.toHaveBeenCalled();
     expect(createIssueComment).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "⚠️ flagged");
   });
 
   it("LIVE label with labelOp=remove + comment: removes the label (never adds) AND posts the comment", async () => {
     const env = createTestEnv({});
-    const clear: PlannedAgentAction = { actionClass: "label", requiresApproval: false, reason: "resolved", label: "gittensory:pending-closure", labelOp: "remove", comment: "✓ resolved" };
+    const clear: PlannedAgentAction = { actionClass: "label", requiresApproval: false, reason: "resolved", label: "pending-closure", labelOp: "remove", comment: "✓ resolved" };
     await executeAgentMaintenanceActions(env, ctx(), [clear]);
-    expect(removePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "gittensory:pending-closure");
+    expect(removePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "pending-closure");
     expect(ensurePullRequestLabel).not.toHaveBeenCalled();
     expect(createIssueComment).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "✓ resolved");
   });
 
   it("actionParams threads labelOp + comment so a staged flag replays faithfully", () => {
-    const flag: PlannedAgentAction = { actionClass: "label", requiresApproval: false, reason: "flag", label: "gittensory:pending-closure", labelOp: "add", comment: "⚠️ flagged" };
-    expect(actionParams(flag)).toEqual({ label: "gittensory:pending-closure", labelOp: "add", comment: "⚠️ flagged" });
+    const flag: PlannedAgentAction = { actionClass: "label", requiresApproval: false, reason: "flag", label: "pending-closure", labelOp: "add", comment: "⚠️ flagged" };
+    expect(actionParams(flag)).toEqual({ label: "pending-closure", labelOp: "add", comment: "⚠️ flagged" });
+  });
+
+  it("LIVE assign (#3182): calls ensurePullRequestAssignee with the planned login and does not fall back to a label when it sticks", async () => {
+    const env = createTestEnv({});
+    const assign: PlannedAgentAction = { actionClass: "assign", requiresApproval: false, reason: "auto-assign PR opener", assignee: "alice" };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ autonomy: { assign: "auto" } }), [assign]);
+    expect(ensurePullRequestAssignee).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "alice");
+    expect(ensurePullRequestLabel).not.toHaveBeenCalled();
+    expect(outcomes[0]?.outcome).toBe("completed");
+    // REGRESSION (#audit-assign-fallback-visibility): a real, sticking assignee keeps the planner's generic
+    // reason as the audit detail -- only the fallback path below overrides it.
+    const audit = await env.DB.prepare("select detail from audit_events where event_type = 'agent.action.assign' order by created_at desc limit 1").first<{ detail: string }>();
+    expect(audit?.detail).toBe("auto-assign PR opener");
+  });
+
+  it("LIVE assign (#3182): falls back to a per-login label when GitHub silently drops an ineligible assignee", async () => {
+    const env = createTestEnv({});
+    vi.mocked(ensurePullRequestAssignee).mockResolvedValueOnce({ applied: false });
+    const assign: PlannedAgentAction = { actionClass: "assign", requiresApproval: false, reason: "auto-assign PR opener", assignee: "external-contributor" };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ autonomy: { assign: "auto" } }), [assign]);
+    expect(ensurePullRequestLabel).toHaveBeenCalledWith(env, 123, "owner/repo", 7, "by:external-contributor", { createMissingLabel: true });
+    expect(outcomes[0]?.outcome).toBe("completed");
+    // REGRESSION (#audit-assign-fallback-visibility): the audit detail must distinguish this fallback from a
+    // real applied assignee -- previously both cases recorded the identical generic planner reason, so
+    // audit_events had no way to tell a silently-refused assignee from a successful one.
+    const audit = await env.DB.prepare("select detail from audit_events where event_type = 'agent.action.assign' order by created_at desc limit 1").first<{ detail: string }>();
+    expect(audit?.detail).toBe("assignee refused by GitHub — fell back to a by:external-contributor label");
+  });
+
+  it("assign with no login is a no-op (defensive — the planner always sets it, but the executor must not call GitHub with an empty login)", async () => {
+    const env = createTestEnv({});
+    const assign: PlannedAgentAction = { actionClass: "assign", requiresApproval: false, reason: "auto-assign PR opener" };
+    await executeAgentMaintenanceActions(env, ctx({ autonomy: { assign: "auto" } }), [assign]);
+    expect(ensurePullRequestAssignee).not.toHaveBeenCalled();
+    expect(ensurePullRequestLabel).not.toHaveBeenCalled();
+  });
+
+  it("assign is denied when the assign autonomy class is not acting", async () => {
+    const env = createTestEnv({});
+    const assign: PlannedAgentAction = { actionClass: "assign", requiresApproval: false, reason: "auto-assign PR opener", assignee: "alice" };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ autonomy: {} }), [assign]);
+    expect(outcomes[0]?.outcome).toBe("denied");
+    expect(ensurePullRequestAssignee).not.toHaveBeenCalled();
   });
 
   it("LIVE approve persists the approved head SHA for re-approval idempotency", async () => {
@@ -446,11 +604,13 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
   });
 
   it("isGlobalAgentFrozen fails open (false) on a read error — a D1 hiccup never freezes the fleet by itself", async () => {
+    clearProcessLocalGlobalAgentFrozenCacheForTest();
     const broken = { ...createTestEnv({}), DB: null } as unknown as Env;
     expect(await isGlobalAgentFrozen(broken)).toBe(false);
   });
 
   it("isGlobalAgentFrozen's fail-open is never SILENT — a read error is observable, not indistinguishable from a genuine unfrozen state (#2125)", async () => {
+    clearProcessLocalGlobalAgentFrozenCacheForTest();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const broken = { ...createTestEnv({}), DB: null } as unknown as Env;
     expect(await isGlobalAgentFrozen(broken)).toBe(false);
@@ -459,12 +619,43 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
   });
 
   it("isGlobalAgentFrozen also warns (but still fails open) when the table exists but the singleton row is absent (#2125)", async () => {
+    clearProcessLocalGlobalAgentFrozenCacheForTest();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const env = createTestEnv({});
     await env.DB.prepare("DELETE FROM global_agent_controls WHERE id = 'singleton'").run();
     expect(await isGlobalAgentFrozen(env)).toBe(false);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("global_kill_switch_row_missing"));
     warn.mockRestore();
+  });
+
+  it("REGRESSION: after operator freeze, a read error fail-closes on this process so agent actions stay halted (#2125)", async () => {
+    clearProcessLocalGlobalAgentFrozenCacheForTest();
+    const env = createTestEnv({});
+    await setGlobalAgentFrozen(env, true, "operator");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const broken = { ...env, DB: null } as unknown as Env;
+    expect(await isGlobalAgentFrozen(broken)).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("global_kill_switch_read_error_fail_closed"));
+    warn.mockRestore();
+  });
+
+  it("REGRESSION: after operator freeze, a missing singleton row stays fail-closed and does not clear sticky cache (#2125)", async () => {
+    clearProcessLocalGlobalAgentFrozenCacheForTest();
+    const env = createTestEnv({});
+    await setGlobalAgentFrozen(env, true, "operator");
+    await env.DB.prepare("DELETE FROM global_agent_controls WHERE id = 'singleton'").run();
+    expect(await isGlobalAgentFrozen(env)).toBe(true);
+    const broken = { ...env, DB: null } as unknown as Env;
+    expect(await isGlobalAgentFrozen(broken)).toBe(true);
+  });
+
+  it("REGRESSION: after operator unfreeze, a read error fails open again on this process", async () => {
+    clearProcessLocalGlobalAgentFrozenCacheForTest();
+    const env = createTestEnv({});
+    await setGlobalAgentFrozen(env, true, "operator");
+    await setGlobalAgentFrozen(env, false, "operator");
+    const broken = { ...env, DB: null } as unknown as Env;
+    expect(await isGlobalAgentFrozen(broken)).toBe(false);
   });
 
   it("auto_with_approval: stages the action (queued) instead of executing", async () => {
@@ -602,16 +793,64 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
       expect(prB[0]).toMatchObject({ outcome: "denied", detail: "contents: write not granted — maintainer must re-consent" });
       expect(await auditCount(env, "merge")).toBe(2); // one audit row per PR, not one shared row
     });
+
+    it("REGRESSION: prunes expired per-PR denial entries instead of retaining them for the process lifetime", async () => {
+      const env = createTestEnv({});
+      const perms = { pull_requests: "write" as const, contents: "read" as const, issues: "write" as const };
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-03T00:00:00Z"));
+      try {
+        await executeAgentMaintenanceActions(env, ctx({ installationId: 206, pullNumber: 601, installationPermissions: perms }), [merge]);
+        await executeAgentMaintenanceActions(env, ctx({ installationId: 206, pullNumber: 602, installationPermissions: perms }), [merge]);
+        expect(writePermissionDenialCooldownSizeForTest()).toBe(2);
+
+        vi.setSystemTime(new Date("2026-07-03T00:16:00Z"));
+        await executeAgentMaintenanceActions(env, ctx({ installationId: 206, pullNumber: 603, installationPermissions: perms }), [merge]);
+
+        expect(writePermissionDenialCooldownSizeForTest()).toBe(1);
+        expect(await auditCount(env, "merge")).toBe(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("REGRESSION: caps active denial cooldown entries so unique denied PRs cannot grow memory without bound", async () => {
+      const env = createTestEnv({});
+      const perms = { pull_requests: "write" as const, contents: "read" as const, issues: "write" as const };
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-03T01:00:00Z"));
+      try {
+        for (let pullNumber = 1; pullNumber <= 1025; pullNumber++) {
+          await executeAgentMaintenanceActions(env, ctx({ installationId: 207, pullNumber, installationPermissions: perms }), [merge]);
+        }
+
+        expect(writePermissionDenialCooldownSizeForTest()).toBe(1024);
+
+        const oldestPrRetry = await executeAgentMaintenanceActions(env, ctx({ installationId: 207, pullNumber: 1, installationPermissions: perms }), [merge]);
+        expect(oldestPrRetry[0]?.detail).toBe("contents: write not granted — maintainer must re-consent");
+        expect(writePermissionDenialCooldownSizeForTest()).toBe(1024);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
-  it("#label-close-split-brain: a coupled anti-abuse label+close pair (matching closeKind) BOTH complete when the close succeeds", async () => {
+  it("#label-close-split-brain: a coupled anti-abuse label+close pair (matching closeKind) BOTH complete when the close succeeds and closes the PR before the label", async () => {
     const env = createTestEnv({});
     const coupledClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "over the per-contributor open-item cap", closeComment: "closing", closeKind: "contributor_cap" };
     const coupledLabel: PlannedAgentAction = { actionClass: "label", autonomyClass: "close", requiresApproval: false, reason: "over the per-contributor open-item cap", label: "over-contributor-limit", labelOp: "add", closeKind: "contributor_cap" };
+    vi.mocked(fetchPullRequestFreshness)
+      // First resolution: the close's own freshness check (open, current). The second resolution is the
+      // regression tripwire -- it must NEVER be consumed, because the label reuses the close's already-proven
+      // outcome instead of re-checking freshness against the now-closed PR (which would read "stale"/closed and
+      // wrongly deny the label). The toHaveBeenCalledTimes(1) assertion below is what actually proves this.
+      .mockResolvedValueOnce({ status: "current", liveHeadSha: "sha7", liveState: "open" })
+      .mockResolvedValueOnce({ status: "stale", reason: "closed", expectedHeadSha: "sha7", liveHeadSha: "sha7", liveState: "closed" });
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [coupledClose, coupledLabel]);
     expect(outcomes.map((o) => o.outcome)).toEqual(["completed", "completed"]);
     expect(closePullRequest).toHaveBeenCalledTimes(1);
     expect(ensurePullRequestLabel).toHaveBeenCalledTimes(1);
+    expect(fetchPullRequestFreshness).toHaveBeenCalledTimes(1);
   });
 
   it("#label-close-split-brain (confirmed root cause of PR-cap miscounting): a coupled anti-abuse label is SKIPPED, not posted, when its paired close is denied for lacking pull_requests:write — `label` mutates via the Issues API and is otherwise exempt from that gate, so without this correlation a PR could be mislabeled 'over-contributor-limit' while it stays open forever", async () => {
@@ -1166,9 +1405,12 @@ describe("executeIssueMaintenanceActions (#2270 issue-side actuation)", () => {
     expect(outcomes[0]?.outcome).toBe("completed");
     expect(outcomes[0]?.detail.length).toBe(281); // 280 chars + the "…" truncation marker
     expect(outcomes[0]?.detail.endsWith("…")).toBe(true);
-    const audit = await env.DB.prepare("select detail from audit_events where event_type = 'agent.action.close' order by created_at desc limit 1").first<{ detail: string }>();
+    const audit = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = 'agent.action.close' order by created_at desc limit 1").first<{ detail: string; metadata_json: string }>();
     expect(audit?.detail).toBe(outcomes[0]?.detail);
     expect(audit?.detail.length).toBeLessThan(longReason.length);
+    const metadata = JSON.parse(audit?.metadata_json ?? "{}");
+    expect(metadata.closeReasons).toEqual([outcomes[0]?.detail]);
+    expect(metadata.closeReasonCount).toBe(1);
   });
 
   it("does NOT truncate a reason at or under the bound (no stray truncation marker on ordinary-length reasons)", async () => {
@@ -1180,7 +1422,7 @@ describe("executeIssueMaintenanceActions (#2270 issue-side actuation)", () => {
 });
 
 describe("pendingClosureLabelApplied (#1136 Pass-2 trigger)", () => {
-  const labelAdd: PlannedAgentAction = { actionClass: "label", requiresApproval: false, reason: "flag", label: AGENT_LABEL_PENDING_CLOSURE, labelOp: "add" };
+  const labelAdd: PlannedAgentAction = { actionClass: "label", closeKind: "linked-issue-hard-rule", requiresApproval: false, reason: "flag", label: AGENT_LABEL_PENDING_CLOSURE, labelOp: "add" };
   const approve2: PlannedAgentAction = { actionClass: "approve", requiresApproval: false, reason: "ok" };
   const out = (outcome: AgentActionOutcome["outcome"], actionClass: AgentActionOutcome["actionClass"] = "label"): AgentActionOutcome => ({ actionClass, outcome, detail: "" });
 
@@ -1196,8 +1438,12 @@ describe("pendingClosureLabelApplied (#1136 Pass-2 trigger)", () => {
   it("false for a label REMOVE — only an ADD establishes the pending-closure flag", () => {
     expect(pendingClosureLabelApplied([{ ...labelAdd, labelOp: "remove" }], [out("completed")])).toBe(false);
   });
-  it("false for a completed add of a DIFFERENT label", () => {
-    expect(pendingClosureLabelApplied([{ ...labelAdd, label: "some-other-label" }], [out("completed")])).toBe(false);
+  it("true for a completed linked-issue flag even when the pending label is customized", () => {
+    expect(pendingClosureLabelApplied([{ ...labelAdd, label: "custom-pending-label" }], [out("completed")])).toBe(true);
+  });
+  it("false for a completed add that is not the linked-issue hard-rule flag", () => {
+    const { closeKind: _closeKind, ...ordinaryLabel } = labelAdd;
+    expect(pendingClosureLabelApplied([{ ...ordinaryLabel, label: "custom-pending-label" }], [out("completed")])).toBe(false);
   });
   it("matches the label's outcome by its OWN plan index (not assuming index 0)", () => {
     expect(pendingClosureLabelApplied([approve2, labelAdd], [out("completed", "approve"), out("completed")])).toBe(true);
