@@ -30,6 +30,8 @@ no enforcement wiring yet. (#2328)
 
 ## Install
 
+See [`docs/miner-goal-spec.md`](docs/miner-goal-spec.md) for the `.gittensory-miner.yml` field reference and [`.gittensory-miner.yml.example`](../../.gittensory-miner.yml.example) at the repo root.
+
 From a local checkout:
 
 ```sh
