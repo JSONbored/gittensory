@@ -38,6 +38,19 @@ test("hasCatastrophicBacktracking flags a nested unbounded quantifier and spares
   }
 });
 
+test("hasCatastrophicBacktracking handles the `{n,}` unbounded quantifier, not just `+`/`*`", () => {
+  // An open-ended `{2,}` inside a quantified group is catastrophic; a BOUNDED `{2,3}` is not.
+  assert.equal(hasCatastrophicBacktracking("(a{2,})+"), true);
+  assert.equal(hasCatastrophicBacktracking("(a{2,3})+"), false);
+});
+
+test("hasCatastrophicBacktracking treats escaped parens/quantifiers as literals, not structure", () => {
+  // `\(` / `\)` are escaped literals, not a real group — no catastrophic nesting exists here.
+  assert.equal(hasCatastrophicBacktracking("\\(a+\\)+"), false);
+  // A group whose inner `\+` is an escaped literal plus (not a quantifier) is linear.
+  assert.equal(hasCatastrophicBacktracking("(a\\+)+"), false);
+});
+
 test("scanPatchForRedos cites the added-line number of a catastrophic literal", () => {
   const patch = [
     "@@ -1,2 +1,3 @@",
