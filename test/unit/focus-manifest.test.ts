@@ -2311,6 +2311,12 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(eff.unlinkedIssueGuardrail).toEqual({ mode: "hold", minConfidence: 0.95 });
   });
 
+  it("resolveEffectiveSettings merges a minConfidence-only unlinkedIssueGuardrail override without clearing the lower-layer mode", () => {
+    const db = { unlinkedIssueGuardrail: { mode: "hold", minConfidence: 0.85 } } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { unlinkedIssueGuardrail: { minConfidence: 0.7 } } }));
+    expect(eff.unlinkedIssueGuardrail).toEqual({ mode: "hold", minConfidence: 0.7 });
+  });
+
   it("drops a malformed unlinkedIssueGuardrail.minConfidence field instead of replacing existing policy with defaults", () => {
     const parsed = parseFocusManifest({ settings: { unlinkedIssueGuardrail: { mode: "hold", minConfidence: 5 } } });
     expect(parsed.settings.unlinkedIssueGuardrail).toEqual({ mode: "hold" });

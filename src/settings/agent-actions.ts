@@ -684,7 +684,19 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // is held separately, via the owner close-exemption below — never auto-closed.) Submission volume is NOT a
   // hold reason: a high-volume author's clean PR still merges and their bad PR still closes — the quality
   // gate, not a submission count, is the defense (anti-farming-by-manual-hold removed).
-  const heldForManualReview = guardrailHit || input.migrationCollisionHold !== undefined || input.unlinkedIssueMatchHold !== undefined;
+  //
+  // A confirmed repeat unlinked-issue-match (unlinkedIssueMatchClose) is ALSO folded in here, but only when
+  // `close` autonomy is NOT acting (gate-review finding): without this, a repo running `merge: auto` with
+  // `close` unset/observe would see `unlinkedIssueMatchViolated` below evaluate false (it requires
+  // `acting("close")`), and — since nothing else accounts for the confirmed repeat — an otherwise-green PR
+  // would silently MERGE straight through the escalation instead of being held. When `close` IS acting, the
+  // dedicated close branch below handles it and this term is redundant (harmless: both paths agree the PR
+  // must not silently merge).
+  const heldForManualReview =
+    guardrailHit ||
+    input.migrationCollisionHold !== undefined ||
+    input.unlinkedIssueMatchHold !== undefined ||
+    (input.unlinkedIssueMatchClose !== undefined && !acting("close"));
   const labels = resolveAgentDispositionLabels(input);
   // Canonical (reviewbot non-content-gate) policy, tuned to the operator's minimize-manual goal: merge-or-close
   // with high accuracy; manual review is the RARE exception. A PR is "review-good" when the gate passes AND CI is
@@ -807,6 +819,22 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     });
   }
 
+  // 1e) unlinked-issue-match REPEAT manual-review fallback when `close` autonomy can't act (gate-review
+  // finding): mirrors 1d, but for the escalated-repeat case folded into `heldForManualReview` above only
+  // when close isn't acting — without this, a confirmed repeat would silently MERGE with no visible signal
+  // at all (the dedicated close branch below never fires without `acting("close")`).
+  if (reviewGood && input.unlinkedIssueMatchClose !== undefined && !acting("close") && !acting("review_state_label") && labels.manualReview !== null && acting("merge") && !hasLabelOrPlanned(input.pr.labels, actions, labels.manualReview)) {
+    actions.push({
+      actionClass: "label",
+      autonomyClass: "merge",
+      requiresApproval: false,
+      reason: `verdict=${conclusion}; ${input.unlinkedIssueMatchClose.reason}`,
+      label: labels.manualReview,
+      labelOp: "add",
+      comment: sanitizePublicComment(input.unlinkedIssueMatchClose.comment),
+    });
+  }
+
   // 2) review_state_label (#label-scoping) — ready-to-merge (review-good, unguarded) / manual-review
   // (review-good but guarded) / changes-requested (not review-good → will be closed for a contributor, held for
   // the owner). A pending linked-issue hard-rule close (flag OR close pass) forces the changes-requested label
@@ -836,9 +864,11 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
             ? `verdict=${conclusion}; ${input.migrationCollisionHold.reason}`
             : input.unlinkedIssueMatchHold !== undefined
               ? `verdict=${conclusion}; ${input.unlinkedIssueMatchHold.reason}`
-              : heldForManualReview
-                ? `verdict=${conclusion}; ${guardrailReason}`
-                : `verdict=${conclusion}; CI green`;
+              : input.unlinkedIssueMatchClose !== undefined
+                ? `verdict=${conclusion}; ${input.unlinkedIssueMatchClose.reason}`
+                : heldForManualReview
+                  ? `verdict=${conclusion}; ${guardrailReason}`
+                  : `verdict=${conclusion}; CI green`;
     if (label !== null && !hasLabelOrPlanned(input.pr.labels, actions, label)) {
       actions.push({
         actionClass: "label",
@@ -855,7 +885,9 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
           ? { comment: sanitizePublicComment(input.migrationCollisionHold.comment) }
           : !linkedIssueCloseInFlight && !unlinkedIssueMatchViolated && reviewGood && input.unlinkedIssueMatchHold !== undefined
             ? { comment: sanitizePublicComment(input.unlinkedIssueMatchHold.comment) }
-            : {}),
+            : !linkedIssueCloseInFlight && !unlinkedIssueMatchViolated && reviewGood && input.unlinkedIssueMatchClose !== undefined
+              ? { comment: sanitizePublicComment(input.unlinkedIssueMatchClose.comment) }
+              : {}),
       });
     }
     // Flag-then-close double-check, Pass 1: add the pending-closure label + a warning comment citing the specific
