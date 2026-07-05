@@ -96,6 +96,27 @@ describe("test evidence helpers", () => {
     expect(hasValidationNote("Tests failed locally but I'm opening this anyway.")).toBe(false);
     expect(hasValidationNote("No validation was performed.")).toBe(false);
   });
+
+  // REGRESSION (#3304, round 2): the first negation fix used a literal `tests?` noun, which missed the past-
+  // tense verb form "tested" -- "Not tested locally." slipped through as affirmative evidence because only
+  // the (unrelated) positive "tested" keyword matched. The proximity-based redesign shares one stem
+  // definition between the negation and affirmative checks, so this class of miss cannot recur for any
+  // stem/tense combination.
+  it("rejects negated verb forms the noun-only check missed, including compounds and interposed words", () => {
+    expect(hasValidationNote("Not tested locally.")).toBe(false);
+    expect(hasValidationNote("Untested change, opening as a draft-adjacent PR.")).toBe(false);
+    expect(hasValidationNote("Unvalidated — please review carefully.")).toBe(false);
+    expect(hasValidationNote("Testing skipped for this draft.")).toBe(false);
+    expect(hasValidationNote("Have not run any tests yet.")).toBe(false);
+  });
+
+  // REGRESSION (#3304, round 2): a negation word elsewhere in the body must not suppress an unrelated,
+  // later affirmative note -- the proximity check is bounded to the same sentence specifically so this
+  // cannot happen (a prior naive "any negation word anywhere" design would wrongly return false here).
+  it("does not let an unrelated negation elsewhere in the body suppress a real validation note", () => {
+    expect(hasValidationNote("This is not a breaking change. Tested with npm run test:ci.")).toBe(true);
+    expect(hasValidationNote("Not a big deal, tested with npm test.")).toBe(true);
+  });
 });
 
 describe("classifyTestCoverage", () => {
