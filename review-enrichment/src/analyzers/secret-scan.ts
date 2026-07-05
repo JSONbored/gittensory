@@ -603,6 +603,54 @@ const RULES: Rule[] = [
     confidence: "high",
   },
   {
+    // New Relic insights insert key: `NRII-` + 32 base64url.
+    kind: "newrelic_insights_key",
+    re: /\bNRII-[A-Za-z0-9_-]{32}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // New Relic REST API key: `NRRA-` + 42 hex.
+    kind: "newrelic_rest_key",
+    re: /\bNRRA-[a-f0-9]{42}\b/,
+    confidence: "high",
+  },
+  {
+    // Sentry organization auth token: `sntrys_` + base64url body (distinct from the `sntryu_` user token above).
+    kind: "sentry_org_token",
+    re: /\bsntrys_[A-Za-z0-9_=-]{40,}(?![A-Za-z0-9_=-])/,
+    confidence: "high",
+  },
+  {
+    // OpenAI service-account key: `sk-svcacct-` + base64url body (distinct from the `sk-proj-`/`sk-ant-` keys).
+    kind: "openai_service_account_key",
+    re: /\bsk-svcacct-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // Google OAuth 2.0 access token: `ya29.` + base64url body.
+    kind: "google_oauth_access_token",
+    re: /\bya29\.[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/,
+    confidence: "high",
+  },
+  {
+    // Persona API key: `persona_sandbox_`/`persona_production_` + >=24 base62.
+    kind: "persona_api_key",
+    re: /\bpersona_(?:sandbox|production)_[A-Za-z0-9]{24,}(?![A-Za-z0-9])/,
+    confidence: "high",
+  },
+  {
+    // Depot API token: `depot_project_`/`depot_org_`/`depot_user_` + >=20 base62.
+    kind: "depot_token",
+    re: /\bdepot_(?:project|org|user)_[A-Za-z0-9]{20,}(?![A-Za-z0-9])/,
+    confidence: "high",
+  },
+  {
+    // Octopus Deploy API key: `API-` + 26 uppercase base36.
+    kind: "octopus_deploy_key",
+    re: /\bAPI-[A-Z0-9]{26}\b/,
+    confidence: "high",
+  },
+  {
     kind: "private_key",
     re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/,
     confidence: "high",

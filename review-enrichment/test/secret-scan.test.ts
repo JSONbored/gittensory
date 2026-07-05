@@ -719,3 +719,39 @@ test("scanPatch does not flag near-miss variants of the infra/AI credential form
     assert.equal(findings.length, 0, `near-miss should not match: ${nm}`);
   }
 });
+
+test("scanPatch flags observability and CI/identity credential formats", () => {
+  const cases = [
+    ["newrelic_insights_key", "NRII-" + b62(32)],
+    ["newrelic_rest_key", "NRRA-" + hex(42)],
+    ["sentry_org_token", "sntrys_" + b62(40)],
+    ["openai_service_account_key", "sk-svcacct-" + b62(40)],
+    ["google_oauth_access_token", "ya29." + b62(40)],
+    ["persona_api_key", "persona_sandbox_" + b62(24)],
+    ["depot_token", "depot_project_" + b62(20)],
+    ["octopus_deploy_key", "API-" + b62(26)],
+  ];
+  for (const [kind, secret] of cases) {
+    const findings = scanPatch("src/config.ts", hunk([`const c = "${secret}";`]));
+    assert.equal(findings.length, 1, `${kind}: expected exactly one finding, got ${JSON.stringify(findings)}`);
+    assert.equal(findings[0].kind, kind, `${kind}: wrong kind`);
+    assert.equal(findings[0].confidence, "high", `${kind}: wrong confidence`);
+  }
+});
+
+test("scanPatch does not flag near-miss variants of the observability/CI formats", () => {
+  const nearMisses = [
+    "NRII-" + b62(31),
+    "NRRA-" + hex(41),
+    "sntrys_" + b62(39),
+    "sk-svcacct-" + b62(19),
+    "ya29." + b62(19),
+    "persona_sandbox_" + b62(23),
+    "depot_project_" + b62(19),
+    "API-" + b62(25),
+  ];
+  for (const nm of nearMisses) {
+    const findings = scanPatch("src/config.ts", hunk([`const c = "${nm}";`]));
+    assert.equal(findings.length, 0, `near-miss should not match: ${nm}`);
+  }
+});
