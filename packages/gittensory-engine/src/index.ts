@@ -12,6 +12,7 @@ export {
 } from "./opportunity-ranker.js";
 export { rankOpportunitiesAtOrAboveScore } from "./ranked-opportunity-min-score.js";
 export { pickTopRankedOpportunitiesAtOrAboveScore } from "./ranked-opportunity-top-min-score.js";
+export { bestRankedOpportunity } from "./ranked-opportunity-best-pick.js";
 export {
   extractObjectiveAnchorHistory,
   extractObjectiveAnchorFeatures,
