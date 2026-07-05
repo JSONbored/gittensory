@@ -179,13 +179,13 @@ export async function enqueueWebhookByEnv(env: Env, deliveryId: string, eventNam
     recordWebhookEnqueueMetric(eventName, payload.action, "enqueue_failed");
     // Missing binding is a deploy-ordering defect (the WEBHOOKS queue isn't provisioned yet), not a transient
     // blip — an operator needs to SEE it, not infer it from a metric dip. ERROR level so the central Sentry
-    // forwarder captures it (#1824); repository/installation stay out of the tags (webhook ingest observability).
+    // forwarder captures it (#1824); repository/installation stay out of the forwarded log because
+    // Sentry indexes common repo fields as tags (webhook ingest observability).
     console.error(
       JSON.stringify({
         level: "error",
         event: "selfhost_webhook_enqueue_binding_missing",
         eventName,
-        repository: eventRow.repositoryFullName,
       }),
     );
     return "enqueue_failed";
@@ -205,14 +205,13 @@ export async function enqueueWebhookByEnv(env: Env, deliveryId: string, eventNam
     await recordWebhookEvent(env, { ...eventRow, status: "error" });
     recordWebhookEnqueueMetric(eventName, payload.action, "enqueue_failed");
     // ERROR level so the central Sentry forwarder captures a failing webhook enqueue (#1824) — previously only a
-    // Prometheus counter moved, which an operator would only notice by comparing dashboards. Never logs rawBody or
-    // the parsed payload (secret-scrub boundary); only the delivery's routing metadata.
+    // Prometheus counter moved, which an operator would only notice by comparing dashboards. Never logs rawBody,
+    // parsed payload, or repository/installation metadata (secret-scrub boundary).
     console.error(
       JSON.stringify({
         level: "error",
         event: "selfhost_webhook_enqueue_failed",
         eventName,
-        repository: eventRow.repositoryFullName,
         error: error instanceof Error ? error.message : String(error),
       }),
     );

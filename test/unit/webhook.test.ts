@@ -88,7 +88,7 @@ describe("github webhook enqueue failure (#786)", () => {
         return (
           line.includes("selfhost_webhook_enqueue_binding_missing") &&
           line.includes('"eventName":"pull_request"') &&
-          line.includes("JSONbored/gittensory")
+          !line.includes("JSONbored/gittensory")
         );
       }),
     ).toBe(true);
@@ -131,15 +131,15 @@ describe("github webhook enqueue failure (#786)", () => {
     const event = await getWebhookEvent(env, "enqueue-fail-1");
     expect(event?.status).toBe("error");
     expect(await renderMetrics()).toContain('gittensory_webhook_enqueue_total{action="opened",event="pull_request",result="enqueue_failed"} 1');
-    // ERROR level so the central Sentry forwarder captures a failing webhook enqueue (#1824). Never logs rawBody
-    // or the parsed payload -- only delivery routing metadata + the thrown error's message.
+    // ERROR level so the central Sentry forwarder captures a failing webhook enqueue (#1824). Never logs rawBody,
+    // parsed payload, or repository metadata -- only the event kind + the thrown error's message.
     expect(
       errorSpy.mock.calls.some((c) => {
         const line = String(c[0]);
         return (
           line.includes("selfhost_webhook_enqueue_failed") &&
           line.includes('"eventName":"pull_request"') &&
-          line.includes("JSONbored/gittensory") &&
+          !line.includes("JSONbored/gittensory") &&
           line.includes("queue unavailable")
         );
       }),
@@ -184,6 +184,7 @@ describe("github webhook enqueue failure (#786)", () => {
     await handleGitHubWebhook(context);
     const logged = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
     expect(logged).toContain("selfhost_webhook_enqueue_failed");
+    expect(logged).not.toContain("JSONbored/gittensory");
     expect(logged).not.toContain("raw diff");
     expect(logged).not.toContain("UNIQUE-PAYLOAD-MARKER-THAT-MUST-NEVER-LEAK");
     errorSpy.mockRestore();
