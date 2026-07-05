@@ -322,6 +322,20 @@ test("requirementTokens drops short words and stopwords", () => {
   ]);
 });
 
+test("requirementTokens deduplicates case-insensitively", () => {
+  // Repeated words (any case) collapse to one token — the existing test has no repeats.
+  assert.deepEqual(requirementTokens("Cache cache CACHE storage"), ["cache", "storage"]);
+});
+
+test("requirementTokens drops a long-enough stopword via the stopword set, not the length floor", () => {
+  // `feature`/`should`/`support` are >= the 4-char floor, so they're dropped by the stopword check itself.
+  assert.deepEqual(requirementTokens("this feature should support caching"), ["caching"]);
+});
+
+test("requirementTokens keeps alphanumeric tokens and splits on punctuation", () => {
+  assert.deepEqual(requirementTokens("oauth2 retry-loop"), ["oauth2", "retry", "loop"]);
+});
+
 test("classifyCoverage thresholds", () => {
   assert.equal(classifyCoverage("history analyzer enrichment", "history analyzer enrichment"), "full");
   assert.equal(classifyCoverage("history analyzer enrichment", "history only"), "partial");
