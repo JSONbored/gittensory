@@ -45,6 +45,14 @@ file exists privately, the public file in layer 3 is **never consulted** for tha
 unchanged from the original private-config behavior (#1390) — only the interaction *between* the
 private per-repo and private global layers is new.
 
+This chain governs *per-repo review policy* only. A separate, lower-level set of **deployment
+environment variables** (`GITTENSORY_REVIEW_*` flags, AI provider keys/models, self-host runtime
+knobs, etc.) configures the deployment itself and sits **underneath** all 5 layers above — a
+`.gittensory.yml`/private-config value never overrides an operator's env-level kill-switch, it only
+narrows what's already permitted. See the generated, always-current
+[`SELFHOST_ENV_REFERENCE_ROWS`](../../apps/gittensory-ui/src/lib/selfhost-env-reference.ts) (built by
+`npm run selfhost:env-reference` from every `env.SOMETHING` read in the codebase) for the full list.
+
 ## Overlay (deep-merge) semantics
 
 When **both** a per-repo file and a global default exist for a repo, they are merged — the

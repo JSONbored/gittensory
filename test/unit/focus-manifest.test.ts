@@ -31,6 +31,12 @@ import {
   reviewConfigToJson,
   settingsOverrideToJson,
   type FocusManifest,
+  type FocusManifestContentLaneConfig,
+  type FocusManifestFeaturesConfig,
+  type FocusManifestGateConfig,
+  type FocusManifestRepoDocGenerationConfig,
+  type FocusManifestReviewConfig,
+  type FocusManifestSettings,
   type SelfHostAiModelConfig,
 } from "../../src/signals/focus-manifest";
 import { DEFAULT_COMMAND_AUTHORIZATION_POLICY } from "../../src/settings/command-authorization";
@@ -206,6 +212,191 @@ describe("parseFocusManifestContent", () => {
     expect(round.warnings).toEqual([]);
     expect(round.gate.enabled).toBe(false);
     expect(isAgentConfigured(round.settings.autonomy)).toBe(false);
+  });
+});
+
+// #1670: `.gittensory.yml.example` is meant to be THE exhaustive reference -- every field a maintainer
+// can configure, with a comment, default, and allowed values. The "parses with zero warnings" test above
+// only proves whatever IS in the file is valid; it can never catch a field that's simply missing from the
+// doc entirely. Each map below uses `satisfies Record<keyof T, string>` so adding a field to a config type
+// without also adding it here is a TypeScript compile error -- the doc can never silently drift behind the
+// parser again. A few `FocusManifestSettings` fields are deliberately excluded (see below) because they're
+// raw settings-layer aliases of a `gate:` field that already documents the same knob under its friendlier
+// name (`resolveEffectiveSettings` maps `gate.linkedIssue` -> `settings.linkedIssueGateMode`, etc.) --
+// documenting both would just be confusing about which one to actually use.
+describe(".gittensory.yml.example field-exhaustiveness (#1670)", () => {
+  const exampleContent = readFileSync(".gittensory.yml.example", "utf8");
+
+  const GATE_FIELD_TOKENS = {
+    enabled: "enabled:",
+    checkMode: "checkMode:",
+    pack: "pack:",
+    linkedIssue: "linkedIssue:",
+    duplicates: "duplicates:",
+    readinessMode: "readiness:",
+    readinessMinScore: "readiness:",
+    slopMode: "slop:",
+    slopMinScore: "slop:",
+    slopAiAdvisory: "aiAdvisory:",
+    sizeMode: "size:",
+    lockfileIntegrityMode: "lockfileIntegrity:",
+    aiReviewMode: "aiReview:",
+    aiReviewByok: "byok:",
+    aiReviewProvider: "provider:",
+    aiReviewModel: "model:",
+    aiReviewAllAuthors: "allAuthors:",
+    aiReviewCloseConfidence: "closeConfidence:",
+    aiReviewCombine: "combine:",
+    aiReviewOnMerge: "onMerge:",
+    aiReviewReviewers: "reviewers:",
+    mergeReadiness: "mergeReadiness:",
+    manifestPolicy: "manifestPolicy:",
+    selfAuthoredLinkedIssue: "selfAuthoredLinkedIssue:",
+    dryRun: "dryRun:",
+    firstTimeContributorGrace: "firstTimeContributorGrace:",
+    premergeContentRecheck: "premergeContentRecheck:",
+    requireFreshRebaseWindowMinutes: "requireFreshRebaseWindow:",
+    claMode: "claMode:",
+    claConsentPhrase: "consentPhrase:",
+    claCheckRunName: "checkRunName:",
+    claCheckRunAppSlug: "checkRunAppSlug:",
+    expectedCiContexts: "expectedCiContexts:",
+  } satisfies Record<Exclude<keyof FocusManifestGateConfig, "present">, string>;
+
+  it.each(Object.entries(GATE_FIELD_TOKENS))("documents gate.%s", (_field, token) => {
+    expect(exampleContent).toContain(token);
+  });
+
+  // Settings fields that are raw aliases of an already-documented `gate:` field (see the describe-block
+  // comment above) -- intentionally NOT in SETTINGS_FIELD_TOKENS, so they must be listed here instead of
+  // silently vanishing from the exhaustiveness check.
+  const SETTINGS_GATE_ALIASED_FIELDS = ["gateCheckMode", "linkedIssueGateMode", "duplicatePrGateMode", "selfAuthoredLinkedIssueGateMode", "qualityGateMode", "qualityGateMinScore", "aiReviewMode", "aiReviewByok", "aiReviewProvider", "aiReviewModel", "aiReviewAllAuthors"] as const;
+
+  const SETTINGS_FIELD_TOKENS = {
+    commentMode: "commentMode:",
+    publicAudienceMode: "publicAudienceMode:",
+    publicSignalLevel: "publicSignalLevel:",
+    checkRunMode: "checkRunMode:",
+    checkRunDetailLevel: "checkRunDetailLevel:",
+    reviewCheckMode: "checkMode:", // `gate.checkMode` above documents the same underlying knob.
+    autoProjectMilestoneMatch: "autoProjectMilestoneMatch:",
+    autoProjectMilestoneMatchBackend: "autoProjectMilestoneMatchBackend:",
+    closeOwnerAuthors: "closeOwnerAuthors:",
+    autoLabelEnabled: "autoLabelEnabled:",
+    typeLabelsEnabled: "typeLabelsEnabled:",
+    badgeEnabled: "badgeEnabled:",
+    gittensorLabel: "gittensorLabel:",
+    createMissingLabel: "createMissingLabel:",
+    publicSurface: "publicSurface:",
+    includeMaintainerAuthors: "includeMaintainerAuthors:",
+    requireLinkedIssue: "requireLinkedIssue:",
+    backfillEnabled: "backfillEnabled:",
+    privateTrustEnabled: "privateTrustEnabled:",
+    autonomy: "autonomy:",
+    autoMaintain: "autoMaintain:",
+    agentPaused: "agentPaused:",
+    agentDryRun: "agentDryRun:",
+    commandAuthorization: "commandAuthorization:",
+    contributorBlacklist: "contributorBlacklist:",
+    blacklistLabel: "blacklistLabel:",
+    contributorOpenPrCap: "contributorOpenPrCap:",
+    contributorOpenIssueCap: "contributorOpenIssueCap:",
+    contributorCapLabel: "contributorCapLabel:",
+    contributorCapCancelCi: "contributorCapCancelCi:",
+    reviewNagPolicy: "reviewNagPolicy:",
+    reviewNagMaxPings: "reviewNagMaxPings:",
+    reviewNagCooldownDays: "reviewNagCooldownDays:",
+    reviewNagLabel: "reviewNagLabel:",
+    reviewNagMonitoredMentions: "reviewNagMonitoredMentions:",
+    autoCloseExemptLogins: "autoCloseExemptLogins:",
+    hardGuardrailGlobs: "hardGuardrailGlobs:",
+    manualReviewLabel: "manualReviewLabel:",
+    readyToMergeLabel: "readyToMergeLabel:",
+    changesRequestedLabel: "changesRequestedLabel:",
+    migrationCollisionLabel: "migrationCollisionLabel:",
+    pendingClosureLabel: "pendingClosureLabel:",
+    accountAgeThresholdDays: "accountAgeThresholdDays:",
+    newAccountLabel: "newAccountLabel:",
+    commandRateLimitPolicy: "commandRateLimitPolicy:",
+    commandRateLimitMaxPerWindow: "commandRateLimitMaxPerWindow:",
+    commandRateLimitAiMaxPerWindow: "commandRateLimitAiMaxPerWindow:",
+    commandRateLimitWindowHours: "commandRateLimitWindowHours:",
+    moderationGateMode: "moderationGateMode:",
+    moderationRules: "moderationRules:",
+    moderationWarningLabel: "moderationWarningLabel:",
+    moderationBannedLabel: "moderationBannedLabel:",
+    reviewEvasionProtection: "reviewEvasionProtection:",
+    reviewEvasionLabel: "reviewEvasionLabel:",
+    reviewEvasionComment: "reviewEvasionComment:",
+    typeLabels: "typeLabels:",
+    linkedIssueLabelPropagation: "linkedIssueLabelPropagation:",
+    linkedIssueHardRules: "linkedIssueHardRules:",
+    unlinkedIssueGuardrail: "unlinkedIssueGuardrail:",
+  } satisfies Record<Exclude<keyof FocusManifestSettings, (typeof SETTINGS_GATE_ALIASED_FIELDS)[number]>, string>;
+
+  it.each(Object.entries(SETTINGS_FIELD_TOKENS))("documents settings.%s", (_field, token) => {
+    expect(exampleContent).toContain(token);
+  });
+
+  const REVIEW_FIELD_TOKENS = {
+    footerText: "footer:",
+    note: "note:",
+    fields: "fields:",
+    enrichmentAnalyzers: "enrichment:",
+    profile: "profile:",
+    tone: "tone:",
+    securityFocus: "security_focus:",
+    inlineComments: "inline_comments:",
+    suggestions: "suggestions:",
+    changedFilesSummary: "changed_files_summary:",
+    pathInstructions: "path_instructions:",
+    instructions: "instructions:",
+    excludePaths: "exclude_paths:",
+    pathFilters: "path_filters:",
+    preMergeChecks: "pre_merge_checks:",
+    autoReview: "auto_review:",
+    labelingRules: "labeling_rules:",
+    aiModel: "ai_model:",
+  } satisfies Record<Exclude<keyof FocusManifestReviewConfig, "present">, string>;
+
+  it.each(Object.entries(REVIEW_FIELD_TOKENS))("documents review.%s", (_field, token) => {
+    expect(exampleContent).toContain(token);
+  });
+
+  const FEATURES_FIELD_TOKENS = {
+    rag: "rag:",
+    reputation: "reputation:",
+    unifiedComment: "unifiedComment:",
+    safety: "safety:",
+  } satisfies Record<Exclude<keyof FocusManifestFeaturesConfig, "present">, string>;
+
+  it.each(Object.entries(FEATURES_FIELD_TOKENS))("documents features.%s", (_field, token) => {
+    expect(exampleContent).toContain(token);
+  });
+
+  const CONTENT_LANE_FIELD_TOKENS = {
+    entryFileGlob: "entryFileGlob:",
+    providerFileGlob: "providerFileGlob:",
+    artifactGlob: "artifactGlob:",
+    collectionField: "collectionField:",
+    maxAppendedEntries: "maxAppendedEntries:",
+    duplicateKeyFields: "duplicateKeyFields:",
+    validatorId: "validatorId:",
+  } satisfies Record<Exclude<keyof FocusManifestContentLaneConfig, "present">, string>;
+
+  it.each(Object.entries(CONTENT_LANE_FIELD_TOKENS))("documents contentLane.%s", (_field, token) => {
+    expect(exampleContent).toContain(token);
+  });
+
+  const REPO_DOC_GENERATION_FIELD_TOKENS = {
+    enabled: "enabled:",
+    scope: "scope:",
+    allowOverwriteExisting: "allowOverwriteExisting:",
+    refreshIntervalDays: "refreshIntervalDays:",
+  } satisfies Record<Exclude<keyof FocusManifestRepoDocGenerationConfig, "present">, string>;
+
+  it.each(Object.entries(REPO_DOC_GENERATION_FIELD_TOKENS))("documents repoDocGeneration.%s", (_field, token) => {
+    expect(exampleContent).toContain(token);
   });
 });
 

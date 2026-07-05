@@ -304,6 +304,25 @@ gate:
     # Default: null (engine uses 0.93). Config-as-code only — no DB column or
     # dashboard toggle; this can only be set here.
     closeConfidence: null
+    # Per-repo override of the self-host operator's dual-AI combine strategy (#2567).
+    # single | consensus | synthesis, or null. Default: null (the operator's own
+    # AI_REVIEW_PLAN.combine env default, itself "consensus" if unset). A refinement
+    # only -- not floor-clamped like onMerge below, since the three strategies aren't
+    # ordered by strictness.
+    combine: null
+    # Per-repo override of the synthesis merge rule (#2567): "either" is STRICTER (any
+    # one reviewer's blocker blocks/holds); "both" is more permissive (every reviewer
+    # must agree). either | both, or null. Default: null (the operator's own plan). A
+    # repo may only TIGHTEN the operator's floor -- it can never loosen "either" down
+    # to "both".
+    onMerge: null
+    # Per-repo override of the named reviewer pair(s) to run, in place of the
+    # operator's own AI_REVIEW_PLAN.reviewers (or the free Workers-AI pair when the
+    # operator configured none). List of {model, fallback?}, or null. Default: null
+    # (the operator's plan). No operator floor applies to which reviewers run.
+    # reviewers:
+    #   - model: claude-3-5-sonnet-latest
+    #     fallback: claude-3-haiku-latest
 
 
 # ----------------------------------------------------------------------------
@@ -457,6 +476,13 @@ settings:
   # Create the label if it does not yet exist. Bool. Default: true.
   createMissingLabel: true
 
+  # Auto-assign a merged/linked-issue PR to a matching GitHub Project/Milestone (#3186). off | suggest |
+  # auto. Default: off. "suggest" posts an advisory note only; "auto" applies the match directly.
+  # autoProjectMilestoneMatch: off
+  # Which backend the match runs against. github | linear. Default: github. "linear" matches against a
+  # Linear workspace via a per-repo encrypted API key (set via the dashboard, never here).
+  # autoProjectMilestoneMatchBackend: github
+
   # Also review PRs authored by maintainers (not just detected contributors).
   # Bool. Default: false.
   includeMaintainerAuthors: false
@@ -526,6 +552,16 @@ settings:
   #     you specifically want that running commentary as GitHub labels.
   autonomy: {}
 
+  # Names for the 4 disposition-outcome labels the `review_state_label` autonomy class above applies.
+  # Each is a plain string, or explicit `null` to disable that ONE label without disabling the underlying
+  # merge/close/hold decision it accompanies.
+  # readyToMergeLabel: ready-to-merge          # Default: ready-to-merge.
+  # changesRequestedLabel: changes-requested   # Default: changes-requested.
+  # manualReviewLabel: manual-review           # Default: manual-review. Also the fallback hold label used
+  #                                             # when review_state_label is off but merge/close is acting
+  #                                             # (guardrail holds, migration collisions, etc.).
+  # migrationCollisionLabel: migration-collision  # Default: migration-collision.
+
   # Auto-maintain policy for merges the agent is allowed to perform.
   # Defaults: mergeMethod = squash, requireApprovals = 1.
   autoMaintain:
@@ -541,6 +577,19 @@ settings:
   #   default: [maintainer, collaborator, confirmed_miner]
   #   commands:
   #     gate-override: [maintainer, collaborator]
+
+  # Config-driven contributor ban list (#1425, anti-abuse): a banned login's PR/issue is closed
+  # BEFORE any merit/CI/AI analysis (deterministic, zero-hallucination). `reason`/`evidence`/`addedAt`
+  # are maintainer-only metadata, never published in the automated close comment. Default: [] (no bans).
+  # contributorBlacklist:
+  #   - login: some-banned-login
+  #     reason: "plagiarized PR content"
+  #     evidence: ["https://github.com/owner/repo/pull/123"]
+  #     addedAt: "2026-01-01"
+
+  # Label applied alongside a blacklist close above. String. Gated on `autonomy.close` (#label-scoping);
+  # set to explicit `null` to close without any label. Default: slop.
+  # blacklistLabel: slop
 
   # Per-contributor open-PR/open-issue caps (#2270, anti-abuse): the max PRs/issues a single
   # non-owner/non-admin/non-bot contributor may have open on this repo at once. Uncomment and set a
@@ -627,6 +676,33 @@ settings:
   #                                     # Default: review-evasion.
   # reviewEvasionComment: true         # Post the public explanation comment before the enforcement close. Default: true.
 
+  # Linked-issue HARD-RULE auto-close (#linked-issue-hard-rules): a DETERMINISTIC verdict about the
+  # linked issue itself (not an AI verdict), gated per-rule to block|off. Fires regardless of
+  # `guardrailHit`; still respects the `close` autonomy class and the owner/automation exemption. Off
+  # by default for every rule.
+  # linkedIssueHardRules:
+  #   ownerAssignedClose: off        # Close when the linked issue is assigned to the repo owner. block | off.
+  #   assignedIssueClose: off        # Close when it's assigned to someone other than the PR author. block | off.
+  #   missingPointLabelClose: off    # Close when a default-label repo's issue carries none of pointBearingLabels. block | off.
+  #   maintainerOnlyLabelClose: off  # Close when the issue carries a maintainerOnlyLabels entry. block | off.
+  #   pointBearingLabels: [gittensor:bug, gittensor:feature, gittensor:priority]
+  #   maintainerOnlyLabels: [maintainer-only]
+  #   defaultLabelRepo: false        # Whether this repo's default label set makes missingPointLabelClose meaningful.
+  #   verifyBeforeClose: true        # Two-pass flag-then-close instead of an immediate close (#linked-issue-verify-before-close).
+  #   closeDelaySeconds: 30          # Verification window before Pass 2 closes, when verifyBeforeClose is true.
+  # Label applied by Pass 1 of the flag-then-close verification above (present ⇒ Pass 2 may close on the
+  # next check). Gated on `autonomy.review_state_label`. String. Default: pending-closure.
+  # pendingClosureLabel: pending-closure
+
+  # Unlinked-issue-match guardrail (#unlinked-issue-guardrail): when a contributor PR links no issue, a
+  # deterministic pre-filter + AI verification checks whether it silently solves an existing open issue
+  # anyway (a way to dodge linked-issue scrutiny while still farming merge-ratio credibility upstream).
+  # A first confirmed match HOLDS the PR for manual review; a confirmed REPEAT by the same contributor
+  # escalates to a close. Off by default.
+  # unlinkedIssueGuardrail:
+  #   mode: off          # off | hold. Default: off.
+  #   minConfidence: 0.85  # Number 0-1. Minimum AI-verifier confidence to treat a candidate as a real match.
+
 # Maintainer AI review tuning (`.gittensory.yml` top-level `review:` block). These knobs shape the advisory AI
 # review prompt and file selection only — gate/slop/secret-scan are unaffected.
 # review:
@@ -643,6 +719,70 @@ settings:
 #     - "!src/generated/**"
 #   # Public-safe voice brief complementing review.profile (e.g. concise, cite line numbers). null/unset ⇒ byte-identical prompt.
 #   tone: "Be concise and cite line numbers."
+#   # How nitpicky the AI maintainer review is. chill | balanced | assertive. Default: balanced (absent).
+#   # chill = only blocking defects; assertive = also minor nits. Never changes the gate verdict.
+#   profile: balanced
+#   # When true, the reviewer prioritizes a security-defect category with elevated scrutiny, on top of
+#   # whatever `profile` volume is set. Bool or null. Default: null/false (byte-identical prompt).
+#   security_focus: false
+#   # A repo-level natural-language brief handed to the AI reviewer on EVERY review (vs the per-path
+#   # path_instructions below) -- the maintainer's conventions/voice. Bounded + public-safe at parse time.
+#   # String or null. Default: null (byte-identical prompt).
+#   instructions: "Prefer small, focused PRs. Flag any missing test for a bug fix."
+#   # Per-path natural-language guidance handed to the AI reviewer when a changed file matches the glob.
+#   # Empty/default ⇒ byte-identical prompt.
+#   path_instructions:
+#     - path: "src/db/**"
+#       instructions: "Flag any migration missing a matching down-path note."
+#   # When true, the AI reviewer ALSO leaves quiet, non-blocking inline PR comments on specific changed
+#   # lines, in addition to the decision summary. Bool or null. Default: null/false (no inline comments).
+#   # Operator-gated too (GITTENSORY_REVIEW_INLINE_COMMENTS + allowlist).
+#   inline_comments: false
+#   # When true, an inline finding whose fix is precise enough to anchor to one line is ALSO rendered as
+#   # a one-click GitHub suggestion block. Only takes effect when inline_comments is already on. Bool or
+#   # null. Default: null/false.
+#   suggestions: false
+#   # When true, the unified review comment (only rendered when the unifiedComment feature is on) gains a
+#   # deterministic "Changed files" summary: one row per file category, with counts and +/- totals. Bool
+#   # or null. Default: null/false.
+#   changed_files_summary: false
+#   # Maintainer-declared DETERMINISTIC content assertions (title/description must contain a phrase, a
+#   # label must be present), optionally gated to a path glob. A failed check is advisory by default;
+#   # `enforce: true` makes it a hard gate blocker. Empty/default ⇒ no finding (no AI judgment involved).
+#   pre_merge_checks:
+#     - name: "require a linked issue reference in the description"
+#       description_contains: "Fixes #"
+#       enforce: false
+#   # Per-repo REES enrichment-analyzer toggles (analyzer name -> on/off). Unknown keys warn + drop at
+#   # parse. Empty/default ⇒ the operator's default analyzer set runs unchanged.
+#   enrichment:
+#     deep-nesting: true
+#     error-swallow: false
+#   # Deterministic {label, when} rules that SUGGEST a non-scoring label when a PR's changed paths/
+#   # title/description match ALL of the rule's `when` criteria. Auto-applied only when the repo's
+#   # autoLabelEnabled is set. Reserved gittensor:* labels are refused at parse. Empty ⇒ no suggestion.
+#   # (This block is also active, uncommented, near the top of the live `review:` section above.)
+#   labeling_rules:
+#     - label: area:docs
+#       when_paths: ["docs/**", "**/*.md"]
+#   # Per-repo self-host reviewer model/effort overrides (claude-code / codex). Self-host only; a hosted
+#   # (Workers-AI) repo ignores this entirely. All-null/default ⇒ the operator's global env vars apply.
+#   ai_model:
+#     claude_model: null   # Overrides CLAUDE_AI_MODEL for this repo. String or null.
+#     claude_effort: null  # Overrides CLAUDE_AI_EFFORT for this repo. String or null. Default (env unset): medium.
+#     codex_model: null    # Overrides CODEX_AI_MODEL for this repo. String or null.
+#     codex_effort: null   # Overrides CODEX_AI_EFFORT for this repo. String or null. Default (env unset): medium.
+#   # Maintainer overrides for the public review-panel CONTENT (not what gittensory measures). The
+#   # Gittensor attribution + register link is always appended to the footer regardless; maintainer text
+#   # failing the public-safe filter is dropped, never published.
+#   footer:
+#     text: "Reviewed by the Acme maintainer bot."  # Custom lead line. String or null. Default: null.
+#   note: "Run the test suite before requesting review."  # Short intro line shown above the panel. String or null.
+#   # Per-row show/hide toggles for the panel. Keys: linkedIssue | relatedWork | reviewLoad |
+#   # validationEvidence | openPrQueue | contributorContext | gateResult. Default: all shown (true).
+#   fields:
+#     relatedWork: false
+#     openPrQueue: false
 #   # See the active `review.auto_review` block above for the full eligibility reference (defaults, types, examples).
 #   # The commented snapshot below mirrors a typical self-host setup:
 #   auto_review:
@@ -679,3 +819,14 @@ settings:
 #   maxAppendedEntries: 1               # Positive integer cap on new entries per PR. Default: unbounded.
 #   duplicateKeyFields: [slug]          # Field name(s) used to detect a duplicate entry. Default: [] (no dedup check).
 #   validatorId: my-registry-validator  # Optional identifier for a custom per-entry validator. Default: none.
+
+# Repo-doc generation (#2993/#3002): opt-in only, off by default. Uncomment to let Gittensory open a PR
+# generating/refreshing AGENTS.md/CLAUDE.md (and later, skill files) from this repo's own profile. There
+# is no DB-backed dashboard counterpart -- precedence is simply this manifest value, or fully disabled
+# when the block (or `enabled`) is absent.
+# repoDocGeneration:
+#   enabled: true            # Bool. Default: false (never touched by the generator).
+#   scope: [agents]          # agents | skills, one or more. Default: [] ("skills" is not shipped yet).
+#   allowOverwriteExisting: false  # Bool. Opt-in to propose overwriting a hand-maintained, non-generated
+#                                   # AGENTS.md/CLAUDE.md. Default: false (left alone if not recognizably generated).
+#   refreshIntervalDays: 7   # Positive integer. Minimum days between scheduled refresh attempts. Default: 7.
