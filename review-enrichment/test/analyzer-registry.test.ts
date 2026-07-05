@@ -45,6 +45,7 @@ const EXPECTED_ANALYZERS = [
   "todoMarker",
   "magicNumber",
   "conflictMarker",
+  "commitLint",
 ];
 
 test("analyzer descriptors cover the runtime registry in stable order", () => {

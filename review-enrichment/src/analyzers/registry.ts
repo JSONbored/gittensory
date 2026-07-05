@@ -29,6 +29,7 @@ import { scanMigrationSafety } from "./migration-safety.js";
 import { scanLooseRanges } from "./loose-range.js";
 import { scanMagicNumbers } from "./magic-number.js";
 import { scanConflictMarkers } from "./conflict-marker.js";
+import { scanCommitLint } from "./commit-lint.js";
 import { scanTerminology } from "./terminology.js";
 import { scanTodoMarker } from "./todo-marker.js";
 import { scanTyposquat } from "./typosquat.js";
@@ -915,6 +916,48 @@ export const ANALYZER_DESCRIPTORS = [
       return lines;
     },
     run: (req) => scanConflictMarkers(req),
+  }),
+  descriptor({
+    name: "commitLint",
+    title: "Conventional-commit subjects",
+    category: "quality",
+    cost: "github-light",
+    defaultEnabled: true,
+    requires: ["github-token"],
+    limits: { maxCommits: 100, maxFindings: 25 },
+    docs: {
+      summary:
+        "Lints the PR's commit subjects against the Conventional Commits spec and flags non-conforming subjects (bad/absent type, over-long, or empty).",
+      looksAt: "The PR's commits (one bounded page) — each commit's message subject line.",
+      reports: "A short commit-SHA prefix, the subject line, and the failing reason — never full diff/file content.",
+      network: "Calls the GitHub PR-commits API once, bounded to one page.",
+      notes:
+        "Structured-fields-only: reads commit.message subjects, linted independently, never cross-line state. Fail-safe on missing token/fetch error.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const explain = (reason: (typeof findings)[number]["reason"]): string => {
+        switch (reason) {
+          case "empty":
+            return "empty subject";
+          case "too-long":
+            return "subject exceeds 72 characters";
+          case "missing-colon":
+            return "not `type: summary` — missing the Conventional-Commit structure";
+          case "bad-type":
+            return "unrecognized commit type";
+        }
+      };
+      const lines = ["### Non-conforming commit subjects (Conventional Commits)"];
+      for (const item of findings) {
+        lines.push(
+          `- ${helpers.safeCodeSpan(item.sha)} — ${explain(item.reason)}: ${helpers.promptText(item.subject)}`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal, analysis, diagnostics }) =>
+      scanCommitLint(req, fetch, { signal, analysis, diagnostics }),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 

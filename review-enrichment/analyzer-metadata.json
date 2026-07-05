@@ -998,6 +998,31 @@
         "network": "Pure local analyzer. No external network call.",
         "notes": "Structural: an exactly-seven-character marker run at column 0. The ambiguous `=======` separator is not flagged in Markdown/AsciiDoc files, where it is a legitimate section rule."
       }
+    },
+    {
+      "name": "commitLint",
+      "title": "Conventional-commit subjects",
+      "category": "quality",
+      "cost": "github-light",
+      "defaultEnabled": true,
+      "profiles": [
+        "balanced",
+        "deep"
+      ],
+      "requires": [
+        "github-token"
+      ],
+      "limits": {
+        "maxCommits": 100,
+        "maxFindings": 25
+      },
+      "docs": {
+        "summary": "Lints the PR's commit subjects against the Conventional Commits spec and flags non-conforming subjects (bad/absent type, over-long, or empty).",
+        "looksAt": "The PR's commits (one bounded page) — each commit's message subject line.",
+        "reports": "A short commit-SHA prefix, the subject line, and the failing reason — never full diff/file content.",
+        "network": "Calls the GitHub PR-commits API once, bounded to one page.",
+        "notes": "Structured-fields-only: reads commit.message subjects, linted independently, never cross-line state. Fail-safe on missing token/fetch error."
+      }
     }
   ]
 }

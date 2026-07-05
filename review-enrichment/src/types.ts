@@ -455,6 +455,14 @@ export interface ConflictMarkerFinding {
   marker: "<<<<<<<" | "|||||||" | "=======" | ">>>>>>>";
 }
 
+/** A PR commit subject that does not conform to the Conventional Commits spec (#2021, part of #1499). Reports a
+ *  short SHA prefix, the subject, and the failing reason — never author/email. */
+export interface CommitLintFinding {
+  sha: string;
+  subject: string;
+  reason: "bad-type" | "missing-colon" | "too-long" | "empty";
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -492,6 +500,7 @@ export interface BriefFindings {
   todoMarker?: TodoMarkerFinding[];
   magicNumber?: MagicNumberFinding[];
   conflictMarker?: ConflictMarkerFinding[];
+  commitLint?: CommitLintFinding[];
 }
 
 /** A JSDoc/TSDoc block whose `@param` tags name parameters the adjacent function no longer declares — a
