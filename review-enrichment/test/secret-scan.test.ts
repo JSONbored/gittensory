@@ -999,6 +999,44 @@ test("scanPatch does not flag truncated Gladia/WorkOS keys or identifier continu
   );
 });
 
+test("scanPatch flags Axiom API and personal access tokens with high confidence", () => {
+  const fakeAxiomApiToken = ["xaat-", "01234567", "-", "0123", "-", "4567", "-", "8901", "-", "012345678901"].join("");
+  const axiomApiFindings = scanPatch("src/config.ts", hunk([`const axiom = "${fakeAxiomApiToken}";`]));
+  assert.equal(axiomApiFindings.length, 1);
+  assert.equal(axiomApiFindings[0].kind, "axiom_api_token");
+  assert.equal(axiomApiFindings[0].confidence, "high");
+
+  const fakeAxiomPat = ["xapt-", "01234567", "-", "0123", "-", "4567", "-", "8901", "-", "012345678901"].join("");
+  const axiomPatFindings = scanPatch("src/config.ts", hunk([`const axiomPat = "${fakeAxiomPat}";`]));
+  assert.equal(axiomPatFindings.length, 1);
+  assert.equal(axiomPatFindings[0].kind, "axiom_personal_token");
+  assert.equal(axiomPatFindings[0].confidence, "high");
+});
+
+test("scanPatch does not flag truncated Axiom tokens or identifier continuation", () => {
+  const shortAxiomApiToken = ["xaat-", "01234567", "-", "0123", "-", "4567", "-", "8901", "-", "01234567890"].join("");
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const axiom = "${shortAxiomApiToken}";`])).some((f) => f.kind === "axiom_api_token"),
+    false,
+  );
+  const axiomApiSuffixToken = ["xaat-", "01234567", "-", "0123", "-", "4567", "-", "8901", "-", "012345678901", "-suffix"].join("");
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const axiom = "${axiomApiSuffixToken}";`])).some((f) => f.kind === "axiom_api_token"),
+    false,
+  );
+
+  const shortAxiomPat = ["xapt-", "01234567", "-", "0123", "-", "4567", "-", "8901", "-", "01234567890"].join("");
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const axiomPat = "${shortAxiomPat}";`])).some((f) => f.kind === "axiom_personal_token"),
+    false,
+  );
+  const axiomPatSuffixToken = ["xapt-", "01234567", "-", "0123", "-", "4567", "-", "8901", "-", "012345678901", "-suffix"].join("");
+  assert.equal(
+    scanPatch("src/config.ts", hunk([`const axiomPat = "${axiomPatSuffixToken}";`])).some((f) => f.kind === "axiom_personal_token"),
+    false,
+  );
+});
+
 test("scanPatch flags additional high-confidence SaaS/cloud/CI credential formats", () => {
   const cases = [
     ["google_oauth_client_secret", "GOCSPX-" + b62(28)],
