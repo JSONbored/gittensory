@@ -467,7 +467,7 @@ import {
   resolveLinkedIssueHasOpenReference,
 } from "../review/linked-issue-hard-rules";
 import { DEFAULT_UNLINKED_ISSUE_GUARDRAIL } from "../review/unlinked-issue-guardrail-config";
-import { resolveUnlinkedIssueMatchHold } from "../review/unlinked-issue-guardrail";
+import { resolveUnlinkedIssueMatchDisposition } from "../review/unlinked-issue-guardrail";
 import { isOpsEnabled, runOpsAlerts } from "../review/ops-wire";
 import { isSelfTuneEnabled, runSelfTune } from "../review/selftune-wire";
 import {
@@ -2494,13 +2494,13 @@ async function runAgentMaintenancePlanAndExecute(
   // sign of a contributor slicing an issue into unlinked PRs to dodge scope scrutiny while still farming
   // merge-ratio credibility. Config-gated AND linked-issue-count-gated at the CALL SITE (not just inside the
   // resolver) so the diff-building work below is skipped entirely for the default-off / already-linked cases
-  // -- byte-identical extra cost, mirroring migrationCollisionHold's own gating above. A confirmed match only
-  // ever HOLDS the PR for manual review (folded into heldForManualReview) -- never auto-closes, never
-  // auto-merges past it.
+  // -- byte-identical extra cost, mirroring migrationCollisionHold's own gating above. A FIRST confirmed match
+  // only ever HOLDS the PR for manual review (folded into heldForManualReview); a CONFIRMED REPEAT by the
+  // same contributor (#unlinked-issue-guardrail-followup, tracked via audit_events) escalates to a CLOSE.
   const unlinkedIssueGuardrailConfig = settings.unlinkedIssueGuardrail ?? DEFAULT_UNLINKED_ISSUE_GUARDRAIL;
-  const unlinkedIssueMatchHold =
+  const unlinkedIssueMatchDisposition =
     unlinkedIssueGuardrailConfig.mode === "hold" && pr.linkedIssues.length === 0
-      ? await resolveUnlinkedIssueMatchHold(env, {
+      ? await resolveUnlinkedIssueMatchDisposition(env, {
           repoFullName,
           config: unlinkedIssueGuardrailConfig,
           linkedIssueCount: pr.linkedIssues.length,
@@ -2508,8 +2508,11 @@ async function runAgentMaintenancePlanAndExecute(
           prBody: pr.body,
           changedPaths,
           diff: buildAiReviewDiff(changedFiles),
+          prAuthorLogin: pr.authorLogin,
         })
       : undefined;
+  const unlinkedIssueMatchHold = unlinkedIssueMatchDisposition?.kind === "hold" ? unlinkedIssueMatchDisposition : undefined;
+  const unlinkedIssueMatchClose = unlinkedIssueMatchDisposition?.kind === "close" ? unlinkedIssueMatchDisposition : undefined;
 
   // Contributor blacklist (#1425): resolve whether the PR author is on the repo's blacklist (the shared/global
   // list unions in once its table lands). A match short-circuits the planner to a deterministic label + close
@@ -2684,6 +2687,7 @@ async function runAgentMaintenancePlanAndExecute(
     },
     ...(migrationCollisionHold !== undefined ? { migrationCollisionHold } : {}),
     ...(unlinkedIssueMatchHold !== undefined ? { unlinkedIssueMatchHold } : {}),
+    ...(unlinkedIssueMatchClose !== undefined ? { unlinkedIssueMatchClose } : {}),
     pr: {
       mergeableState: liveMergeState ?? pr.mergeableState,
       reviewDecision: liveReviewDecision ?? pr.reviewDecision,

@@ -558,6 +558,55 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
   });
 
+  describe("unlinked-issue-match CLOSE — confirmed repeat by the same contributor (#unlinked-issue-guardrail-followup)", () => {
+    const repeated = { unlinkedIssueMatchClose: { reason: "this PR appears to directly solve open issue #42 without linking it — a repeat of the same unlinked-issue pattern already flagged on an earlier PR from this contributor", comment: "Closing: please link the issue you're solving going forward." } };
+
+    it("closes one-shot even on a green, clean, approved PR — takes precedence over merge, and pins expectedHeadSha", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", close: "auto" }, ...repeated, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED", headSha: "abc123" } }));
+      expect(classes(plan)).toContain("close");
+      expect(classes(plan)).not.toContain("merge");
+      expect(plan.find((a) => a.actionClass === "close")?.expectedHeadSha).toBe("abc123");
+    });
+
+    it("cites the repeat-specific reason and the standard close message template, tagged closeKind: heuristic (subject to the precision breaker)", () => {
+      const action = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto" }, ...repeated, pr: { labels: [] } })).find((a) => a.actionClass === "close");
+      expect(action?.reason).toContain("#42");
+      expect(action?.reason).toContain("repeat");
+      expect(action?.closeKind).toBe("heuristic");
+      expect(action?.closeConcreteEvidence).not.toBe(true);
+      expect(action?.closeComment).toContain("Gittensory is closing this pull request");
+      expect(action?.closeComment).toContain("#42");
+    });
+
+    it("does not close when the close autonomy class is not acting (deny-by-default floor)", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: {}, ...repeated, pr: { labels: [] } }));
+      expect(plan).toEqual([]);
+    });
+
+    it("does not close an owner-authored PR (owner exemption applies the same as every other close path)", () => {
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto" }, ...repeated, authorIsOwner: true, pr: { labels: [] } })));
+      expect(plan).not.toContain("close");
+    });
+
+    it("takes precedence over a linked-issue hard-rule violation's own close reason when both are somehow true (linked-issue-hard-rule wins, per the existing disposition order)", () => {
+      // Documents the existing precedence, not a new requirement: willCloseForLinkedIssue is checked BEFORE
+      // unlinkedIssueMatchViolated in the disposition chain, so a deterministic hard-rule close still wins.
+      const plan = planAgentMaintenanceActions(input({
+        conclusion: "success",
+        autonomy: { close: "auto" },
+        linkedIssueHardRule: { violated: true, reason: "Linked issue #1 is assigned to the maintainer." },
+        ...repeated,
+        pr: { labels: [] },
+      })).find((a) => a.actionClass === "close");
+      expect(plan?.closeKind).toBe("linked-issue-hard-rule");
+    });
+
+    it("still auto-merges when no unlinked-issue-match close is present (absent input, byte-identical to today)", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      expect(classes(plan)).toContain("merge");
+    });
+  });
+
   describe("submission volume is NOT a manual-hold reason — only guardrail paths hold (#minimize-manual)", () => {
     it("a high-volume author's clean+green+approved PR MERGES (the quality gate, not a submission count, is the defense)", () => {
       const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", approve: "auto", close: "auto", review_state_label: "auto" }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));

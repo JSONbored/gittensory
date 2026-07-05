@@ -9799,12 +9799,12 @@ describe("queue processors", () => {
       });
     }
 
-    async function seedGuardrailRepo(env: Env, prNumber: number, opts: { guardrailMode?: "hold" | "off"; prBody?: string } = {}) {
+    async function seedGuardrailRepo(env: Env, prNumber: number, opts: { guardrailMode?: "hold" | "off"; prBody?: string; autonomy?: Record<string, string> } = {}) {
       await upsertInstallation(env, {
         installation: { id: 123, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { contents: "write", pull_requests: "write", issues: "write" }, events: [] },
       });
       await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 123);
-      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto", review_state_label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: opts.autonomy ?? { merge: "auto", review_state_label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
       if (opts.guardrailMode !== undefined) {
         await upsertRepoFocusManifest(env, "owner/repo", { settings: { unlinkedIssueGuardrail: { mode: opts.guardrailMode } } });
       }
@@ -9852,6 +9852,27 @@ describe("queue processors", () => {
 
       expect(run).not.toHaveBeenCalled();
       expect(seen.merged).toBe(true);
+    });
+
+    it("escalates to a CLOSE on a second confirmed match by the same contributor (#unlinked-issue-guardrail-followup)", async () => {
+      const run = vi.fn(async () => ({ response: JSON.stringify({ matched: true, confidence: 0.9, evidence: "adds the missing dedup key" }) }));
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai });
+
+      await seedGuardrailRepo(env, 90, { guardrailMode: "hold" });
+      const seenFirst = { closed: false, merged: false, labels: [] as string[], comments: [] as string[] };
+      stubUnlinkedIssueGuardrailFetch(90, seenFirst);
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "unlinked-issue-repeat-first", repoFullName: "owner/repo", prNumber: 90, installationId: 123 });
+      expect(seenFirst.closed).toBe(false); // first confirmed match: held, not closed
+      expect(seenFirst.merged).toBe(false);
+
+      // The second PR needs `close` autonomy acting for the escalated disposition to actually execute as a
+      // close (the first PR's hold path only ever needs `merge`/`review_state_label`).
+      await seedGuardrailRepo(env, 91, { guardrailMode: "hold", autonomy: { merge: "auto", review_state_label: "auto", close: "auto" } });
+      const seenSecond = { closed: false, merged: false, labels: [] as string[], comments: [] as string[] };
+      stubUnlinkedIssueGuardrailFetch(91, seenSecond);
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "unlinked-issue-repeat-second", repoFullName: "owner/repo", prNumber: 91, installationId: 123 });
+      expect(seenSecond.closed).toBe(true); // same contributor's SECOND confirmed match: closed
+      expect(seenSecond.merged).toBe(false);
     });
   });
 
