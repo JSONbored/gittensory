@@ -496,6 +496,14 @@ export interface SizeSmellFinding {
   name?: string;
 }
 
+/** An accessibility regression in newly-added markup (#2026, part of #1499).
+ *  Reports file, line, and rule only — never markup content. */
+export interface A11yFinding {
+  file: string;
+  line: number;
+  rule: "img-alt" | "click-events-have-key-events" | "label-control" | "positive-tabindex";
+}
+
 /** A user-facing string literal added without the repo's i18n convention (#2029, part of #1499).
  *  Reports file and line only — never string content. */
 export interface I18nFinding {
@@ -589,6 +597,7 @@ export interface BriefFindings {
   deepNesting?: DeepNestingFinding[];
   errorSwallow?: ErrorSwallowFinding[];
   i18n?: I18nFinding[];
+  a11y?: A11yFinding[];
   hardcodedUrl?: HardcodedUrlFinding[];
   commitLint?: CommitLintFinding[];
 }

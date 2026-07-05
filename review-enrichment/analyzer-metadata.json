@@ -1214,6 +1214,32 @@
       }
     },
     {
+      "name": "a11y",
+      "title": "Accessibility regressions",
+      "category": "quality",
+      "cost": "local",
+      "defaultEnabled": true,
+      "profiles": [
+        "fast",
+        "balanced",
+        "deep"
+      ],
+      "requires": [
+        "files"
+      ],
+      "limits": {
+        "maxFindings": 25,
+        "maxLineChars": 2000
+      },
+      "docs": {
+        "summary": "Flags common accessibility regressions in newly-added JSX/HTML markup: missing img alt, clickable non-interactive elements, unlabeled controls, positive tabindex.",
+        "looksAt": "Self-contained opening tags on added lines in changed non-test JSX/TSX/HTML/Vue files.",
+        "reports": "File, line, and rule id — never markup content.",
+        "network": "Pure local analyzer. No external network call.",
+        "notes": "Only tags fully contained on one added line are scanned. onKeyPress alone does not satisfy the keyboard-handler check."
+      }
+    },
+    {
       "name": "commitLint",
       "title": "Conventional-commit subjects",
       "category": "quality",

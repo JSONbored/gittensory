@@ -33,6 +33,7 @@ import { scanMagicNumbers } from "./magic-number.js";
 import { scanConflictMarkers } from "./conflict-marker.js";
 import { scanDebugLeftover } from "./debug-leftover.js";
 import { scanDeepNesting } from "./deep-nesting.js";
+import { scanA11y } from "./a11y-regression.js";
 import { scanI18nRegression } from "./i18n-regression.js";
 import { scanErrorSwallow } from "./error-swallow.js";
 import { scanFloatingPromise } from "./floating-promise.js";
@@ -1163,6 +1164,35 @@ export const ANALYZER_DESCRIPTORS = [
       return lines;
     },
     run: (req, { signal }) => scanI18nRegression(req, signal),
+  }),
+  descriptor({
+    name: "a11y",
+    title: "Accessibility regressions",
+    category: "quality",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: 25, maxLineChars: 2000 },
+    docs: {
+      summary:
+        "Flags common accessibility regressions in newly-added JSX/HTML markup: missing img alt, clickable non-interactive elements, unlabeled controls, positive tabindex.",
+      looksAt: "Self-contained opening tags on added lines in changed non-test JSX/TSX/HTML/Vue files.",
+      reports: "File, line, and rule id — never markup content.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Only tags fully contained on one added line are scanned. onKeyPress alone does not satisfy the keyboard-handler check.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### Accessibility regressions (added markup)"];
+      for (const item of findings) {
+        lines.push(
+          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} — ${helpers.safeCodeSpan(item.rule)}`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal }) => scanA11y(req, signal),
   }),
   descriptor({
     name: "commitLint",
