@@ -536,6 +536,7 @@ dashboard progress summaries:
 - `hasPlanRunningSteps(plan)` — any step is `running`
 - `hasPlanSkippedSteps(plan)` — any step is `skipped`
 - `hasPlanCompletedSteps(plan)` — any step is `completed`
+- `isPlanBlocked(plan)` — pending steps remain but none are runnable (deadlock; mirrors `planProgress`'s `blocked` status)
 
 ## Opportunity competition
 

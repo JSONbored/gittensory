@@ -146,6 +146,7 @@ export { hasPlanPendingSteps } from "./plan-pending.js";
 export { hasPlanRunningSteps } from "./plan-running.js";
 export { hasPlanSkippedSteps } from "./plan-skipped.js";
 export { hasPlanCompletedSteps } from "./plan-completed.js";
+export { isPlanBlocked } from "./plan-blocked.js";
 export * from "./plan-templates.js";
 export * from "./portfolio/queue.js";
 export {
