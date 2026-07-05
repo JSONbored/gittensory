@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CLAIM_STATUSES,
@@ -174,6 +175,41 @@ describe("gittensory-miner claim ledger (#2314)", () => {
     expect(listActiveClaims()).toEqual([claim]);
     expect(listActiveClaims("o/a")).toEqual([claim]);
     expect(listActiveClaims("o/missing")).toEqual([]);
+  });
+
+  it("creates miner_claims with the foundation schema (#3352)", () => {
+    const ledger = tempLedger();
+    const db = new DatabaseSync(ledger.dbPath, { readOnly: true });
+    type TableColumn = { name: string; notnull: number; dflt_value: string | null; pk: number };
+    const columns = db.prepare("PRAGMA table_info(miner_claims)").all() as TableColumn[];
+    expect(columns.map((column) => column.name)).toEqual([
+      "id",
+      "repo_full_name",
+      "issue_number",
+      "claimed_at",
+      "status",
+      "note",
+    ]);
+    for (const name of ["repo_full_name", "issue_number", "claimed_at", "status"]) {
+      expect(columns.find((column) => column.name === name)?.notnull).toBe(1);
+    }
+    expect(columns.find((column) => column.name === "status")?.dflt_value).toBe("'active'");
+    expect(columns.find((column) => column.name === "id")?.pk).toBe(1);
+
+    const uniqueIndexes = (db.prepare("PRAGMA index_list(miner_claims)").all() as Array<{ name: string; unique: number }>)
+      .filter((index) => index.unique === 1);
+    expect(uniqueIndexes.length).toBeGreaterThan(0);
+    const indexCols = db.prepare(`PRAGMA index_info('${uniqueIndexes[0]!.name}')`).all() as Array<{ name: string }>;
+    expect(indexCols.map((column) => column.name).sort()).toEqual(["issue_number", "repo_full_name"]);
+    db.close();
+
+    const writable = new DatabaseSync(ledger.dbPath);
+    expect(() =>
+      writable.exec(
+        "INSERT INTO miner_claims (repo_full_name, issue_number, claimed_at, status) VALUES ('o/a', 1, '2026-01-01T00:00:00.000Z', 'bogus')",
+      ),
+    ).toThrow();
+    writable.close();
   });
 });
 
