@@ -5665,7 +5665,8 @@ async function processGitHubWebhook(
                 agentPaused: issueSettings.agentPaused,
                 agentDryRun: issueSettings.agentDryRun,
               });
-              const newAccountLabel = issueSettings.newAccountLabel;
+              const newAccountLabel = issueSettings.newAccountLabel
+                ?? /* v8 ignore next -- settings resolution always supplies new-account before this handler runs */ "new-account";
               await ensurePullRequestLabel(
                 env,
                 installationId,
