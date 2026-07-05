@@ -308,21 +308,52 @@ jobs:
           if [ "$PRERELEASE" = "true" ]; then
             PRERELEASE_ARGS=(--prerelease --latest=false)
           fi
-          # `--generate-notes` appends GitHub's auto-generated "what's changed" body (every commit/PR
-          # description since the last release) on top of `$NOTES` -- confirmed by hitting GitHub's
-          # 125000-char release-body limit cutting the very first release here, where a single
-          # squash-merged PR's body alone was large. `$NOTES` (the pull command + version metadata) is
-          # what operators actually need; drop `--generate-notes` so an unusually large commit/PR history
-          # can never fail release creation outright.
+          # Find the orb-v tag immediately preceding this one, by actual tag-creation order -- NOT a
+          # semver sort (which mis-orders a prerelease against its own later stable tag, e.g.
+          # 0.1.0-beta.2 vs 0.1.0), and NOT the Release Notes API's own "previous release" auto-detection
+          # either (this repo's release list also carries mcp-v* releases on an independent cadence, which
+          # could get picked up by mistake once the two schemes' timestamps interleave). Excludes the tag
+          # being released so a workflow re-run never diffs a tag against itself.
+          PREV_TAG=$(git tag -l 'orb-v*' --sort=-creatordate | grep -vF -x "$REF_NAME" | head -1 || true)
+
+          # The very first orb release here hit GitHub's 125000-character release-body limit
+          # generating notes across the ENTIRE repo history, because no prior orb-v tag existed yet to
+          # bound the diff -- that's why `--generate-notes` was dropped entirely rather than just
+          # pinning its range. Every release from orb-v0.1.0 onward has a real previous tag (confirmed:
+          # orb-v0.1.0 -> orb-v0.2.0 generates ~11K chars, comfortably under the limit), so fetch the
+          # PR changelog explicitly scoped to that range via the same API `--generate-notes` uses,
+          # categorized by `.github/release.yml`. PREV_TAG empty (no prior orb-v tag) skips this and
+          # falls back to the plain notes below, the same as the original safe behavior.
+          CHANGELOG=""
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$REF_NAME" \
+              -f previous_tag_name="$PREV_TAG" \
+              --jq '.body' 2>/dev/null || true)
+          fi
+
+          FULL_NOTES="$NOTES"
+          if [ -n "$CHANGELOG" ]; then
+            FULL_NOTES="${NOTES}"$'\n\n'"${CHANGELOG}"
+          fi
+
+          # Never let an outlier changelog (an unusually large PR history, or a future change to what
+          # the categorization API returns) block publishing the image itself -- fall back to the plain
+          # pull-command notes plus a compare link if the combined body would exceed GitHub's limit.
+          if [ "${#FULL_NOTES}" -gt 120000 ]; then
+            echo "::warning::Generated release notes would be ${#FULL_NOTES} chars, near GitHub's 125000 release-body limit -- falling back to the plain notes without the changelog."
+            FULL_NOTES="${NOTES}"$'\n\n'"_Changelog omitted (too large for a GitHub Release body) -- see https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${REF_NAME}_"
+          fi
+
           if gh release view "$REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
               --title "gittensory-orb ${RELEASE_TAG}" \
-              --notes "$NOTES" \
+              --notes "$FULL_NOTES" \
               "${PRERELEASE_ARGS[@]}"
           else
             gh release create "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "gittensory-orb ${RELEASE_TAG}" \
               "${PRERELEASE_ARGS[@]}" \
-              --notes "$NOTES"
+              --notes "$FULL_NOTES"
           fi

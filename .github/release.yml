@@ -1,0 +1,21 @@
+# Categorization for GitHub's auto-generated release notes on orb-v<semver> tags. The release-orb
+# workflow (.github/workflows/release-selfhost.yml) calls the "Generate release notes content" API
+# with this repo's default branch as context, which groups merged PRs since the previous orb-v tag
+# into the categories below by label. `gittensor:feature` and `gittensor:bug` are applied
+# automatically by gittensory's own review engine on every merged PR, so this works without any
+# separate manual-labeling process.
+changelog:
+  exclude:
+    authors:
+      - dependabot
+      - github-actions
+  categories:
+    - title: 🚀 Features
+      labels:
+        - "gittensor:feature"
+    - title: 🐛 Fixes
+      labels:
+        - "gittensor:bug"
+    - title: 🧹 Other Changes
+      labels:
+        - "*"
