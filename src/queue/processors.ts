@@ -357,6 +357,7 @@ import { decidePublicSurface } from "../signals/settings-preview";
 import {
   buildFocusManifestGuidance,
   composeRepoReviewContext,
+  composeManifestReviewInstructions,
   filterReviewFilesForAi,
   resolvePullRequestAutoReviewSkipReason,
   resolveRepoEnrichmentToggles,
@@ -8136,6 +8137,7 @@ async function maybePublishPrPublicSurface(
             inlineComments: reviewInlineComments,
             pathInstructions: reviewPathInstructions,
             instructions: manifestReviewInstructions,
+            tone: reviewTone,
             excludePaths: reviewExcludePaths,
             pathFilters: reviewPathFilters,
           } = resolveReviewPromptOverrides(reviewManifest);
@@ -8153,7 +8155,7 @@ async function maybePublishPrPublicSurface(
           // byte-identical prompt. getReviewFiles() is memoized, so the second call reuses the loaded diff.
           const reviewInstructions =
             [
-              manifestReviewInstructions,
+              composeManifestReviewInstructions(manifestReviewInstructions, reviewTone),
               composeRepoReviewContext(
                 await loadRepoReviewContext(repoFullName),
                 changedPaths,

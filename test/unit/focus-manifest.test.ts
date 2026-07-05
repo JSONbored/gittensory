@@ -21,6 +21,7 @@ import {
   evaluateAutoReviewSkipReason,
   resolveAutoReviewConfig,
   resolveReviewPromptOverrides,
+  composeManifestReviewInstructions,
   EMPTY_AUTO_REVIEW_CONFIG,
   repoDocGenerationConfigToJson,
   reviewConfigToJson,
@@ -546,7 +547,7 @@ describe("compileFocusManifestPolicy", () => {
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
       gate: { present: false, enabled: null, checkMode: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, lockfileIntegrityMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null, claMode: null, claConsentPhrase: null, claCheckRunName: null, claCheckRunAppSlug: null, expectedCiContexts: null },
       settings: {},
-      review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG } },
+      review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG } },
       features: { present: false, rag: null, reputation: null, unifiedComment: null, safety: null },
       contentLane: { present: false, entryFileGlob: null, providerFileGlob: null, artifactGlob: null, collectionField: null, maxAppendedEntries: null, duplicateKeyFields: [], validatorId: null },
       repoDocGeneration: { present: false, enabled: false, scope: ["agents"], allowOverwriteExisting: false, refreshIntervalDays: 7 },
@@ -2426,6 +2427,30 @@ describe("parseFocusManifest review config", () => {
     expect(m2.warnings.some((w) => /review\.profile.*must be a string/.test(w))).toBe(true);
   });
 
+  it("parses review.tone, marks present, round-trips, and rejects non-public-safe values (#2044)", () => {
+    const m = parseFocusManifest({ review: { tone: " Be concise and cite line numbers. " } });
+    expect(m.review.tone).toBe("Be concise and cite line numbers.");
+    expect(m.review.present).toBe(true);
+    expect(parseFocusManifest({ review: reviewConfigToJson(m.review) }).review.tone).toBe(m.review.tone);
+    const unsafe = parseFocusManifest({ review: { tone: "estimate the contributor reward payout" } });
+    expect(unsafe.review.tone).toBeNull();
+    expect(unsafe.warnings.some((w) => /review\.tone.*not public-safe/.test(w))).toBe(true);
+    const long = parseFocusManifest({ review: { tone: "x".repeat(400) } });
+    expect(long.review.tone).toHaveLength(300);
+  });
+
+  it("composeManifestReviewInstructions: null tone is byte-identical; tone folds ahead of instructions (#2044)", () => {
+    expect(composeManifestReviewInstructions(null, null)).toBeNull();
+    expect(composeManifestReviewInstructions("Follow our conventions.", null)).toBe("Follow our conventions.");
+    expect(composeManifestReviewInstructions(null, "Be concise.")).toBe(
+      "Review tone (maintainer voice brief — complements review.profile): Be concise.",
+    );
+    expect(composeManifestReviewInstructions("Follow our conventions.", "Be concise.")).toBe(
+      "Review tone (maintainer voice brief — complements review.profile): Be concise.\n\nFollow our conventions.",
+    );
+    expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { tone: "Be concise." } })).tone).toBe("Be concise.");
+  });
+
   it("parses review.path_instructions, drops invalid/unsafe entries, marks present, and round-trips (#review-path-instructions)", () => {
     const m = parseFocusManifest({
       review: {
@@ -2522,9 +2547,9 @@ describe("resolveReviewPathInstructions (#review-path-instructions)", () => {
 
   it("resolveReviewPromptOverrides: non-null manifest passes the config through; null manifest → defaults", () => {
     const manifest = parseFocusManifest({ review: { profile: "chill", security_focus: true, inline_comments: true, path_instructions: [{ path: "src/**", instructions: "be strict" }], instructions: "Follow our async-error conventions.", exclude_paths: ["**/*.lock"], path_filters: ["src/**", "!src/generated/**"] } });
-    expect(resolveReviewPromptOverrides(manifest)).toEqual({ profile: "chill", securityFocus: true, inlineComments: true, pathInstructions: [{ path: "src/**", instructions: "be strict" }], instructions: "Follow our async-error conventions.", excludePaths: ["**/*.lock"], pathFilters: ["src/**", "!src/generated/**"] });
+    expect(resolveReviewPromptOverrides(manifest)).toEqual({ profile: "chill", tone: null, securityFocus: true, inlineComments: true, pathInstructions: [{ path: "src/**", instructions: "be strict" }], instructions: "Follow our async-error conventions.", excludePaths: ["**/*.lock"], pathFilters: ["src/**", "!src/generated/**"] });
     // A null manifest (load failure) yields the byte-identical defaults; inline comments + security focus default OFF.
-    expect(resolveReviewPromptOverrides(null)).toEqual({ profile: null, securityFocus: false, inlineComments: false, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [] });
+    expect(resolveReviewPromptOverrides(null)).toEqual({ profile: null, tone: null, securityFocus: false, inlineComments: false, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [] });
     // An explicit false / absent toggle both resolve to the strict-boolean false.
     expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { inline_comments: false } })).inlineComments).toBe(false);
     expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { profile: "chill" } })).inlineComments).toBe(false);
