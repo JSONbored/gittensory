@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const ALLOWED = [
   /^bin\/gittensory-miner\.js$/,
-  /^lib\/[a-z0-9-]+\.(js|d\.ts)$/,
+  /^lib\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.(js|d\.ts)$/,
   /^package\.json$/,
   /^README\.md$/,
 ];

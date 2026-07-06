@@ -23,6 +23,21 @@ describe("check-miner-package script", () => {
     expect(result.out).toContain("package.json");
   });
 
+  it("allows nested lib subdirectories such as lib/calibration/*.js", () => {
+    const result = runChecker({
+      CHECK_MINER_PACK_TEST_FILES: JSON.stringify([
+        "package.json",
+        "bin/gittensory-miner.js",
+        "lib/cli.js",
+        "lib/calibration/index.js",
+        "lib/calibration/types.js",
+        "lib/calibration/types.d.ts",
+      ]),
+    });
+    expect(result.status).toBe(0);
+    expect(result.out).toContain("lib/calibration/index.js");
+  });
+
   it("rejects a forbidden path", () => {
     const result = runChecker({ CHECK_MINER_PACK_TEST_FILES: JSON.stringify([".env"]) });
     expect(result.status).toBe(1);
