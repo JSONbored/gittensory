@@ -1186,9 +1186,16 @@ function branchEligibilityFailureReason(branchEligibility: BranchEligibilityResu
   if (branchEligibility.status === "ineligible") return "Branch eligibility is confirmed ineligible; standard issue multiplier is not applied.";
   if (branchEligibility.evidence === "missing") return "Branch eligibility evidence is missing; standard issue multiplier is not applied.";
   if (branchEligibility.status === "unknown") return "Branch eligibility is unknown; standard issue multiplier is not applied.";
+  // Unreachable-false branch: this is only called with !isConfirmedBranchEligible(branchEligibility) (see
+  // decideLinkedIssueMultiplier). Once evidence is "provided" and status isn't "ineligible"/"unknown", the
+  // only way isConfirmedBranchEligible can be false is stale === true -- so this always returns here, and
+  // the two lines below are an unreachable defensive fallback for a future second call site.
+  /* v8 ignore else */
   if (branchEligibility.stale) return "Branch eligibility evidence is stale; standard issue multiplier is not applied.";
+  /* v8 ignore start -- unreachable, see above. */
   if (branchEligibility.source === "user_supplied") return "Branch eligibility evidence is user-supplied; standard issue multiplier is not applied until verified metadata is available.";
   return "Branch eligibility is not confirmed; standard issue multiplier is not applied.";
+  /* v8 ignore stop */
 }
 
 function withValidatedLinkedIssueScenario(input: ScorePreviewInput): ScorePreviewInput {

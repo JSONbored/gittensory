@@ -403,6 +403,48 @@ describe("pending PR scenario detection", () => {
     ).toMatchObject({ pendingMergedPrCount: 1, pendingScenarioObserved: true, scenarioNotes: ["observed"] });
   });
 
+  it("falls back to empty reviews/checks when reviewsByPullNumber/checksByPullNumber are omitted", () => {
+    // No signal maps supplied -- classifyOpenPullRequest sees an empty reviews/checks array (via the `?? []`
+    // fallback), so the PR classifies as blocked (no approved review in cache) and there is nothing pending
+    // to project.
+    const detection = detectPendingPrScenario({
+      login: "miner-a",
+      repoFullName: "entrius/allways-ui",
+      pullRequests: [pr({ number: 80 })],
+      roleContext: outsideContributorRole,
+    });
+    expect(detection).toBeNull();
+  });
+
+  it("falls back to createdAt when updatedAt is absent, and treats missing/unparseable dates as infinitely stale", () => {
+    // Missing updatedAt -> daysSince falls back to createdAt.
+    const recentCreatedOnly = classifyOpenPullRequest({
+      pr: pr({ number: 90, updatedAt: undefined, createdAt: daysAgo(1) }),
+      roleContext: outsideContributorRole,
+      reviews: [approvedReview(90)],
+      checks: [],
+    });
+    expect(recentCreatedOnly.classification).toBe("merge_ready");
+
+    // Both updatedAt and createdAt absent -> daysSince treats the PR as infinitely stale.
+    const noDates = classifyOpenPullRequest({
+      pr: pr({ number: 91, updatedAt: undefined, createdAt: undefined }),
+      roleContext: outsideContributorRole,
+      reviews: [approvedReview(91)],
+      checks: [],
+    });
+    expect(noDates.classification).toBe("stale_likely_close");
+
+    // An unparseable date string is also treated as infinitely stale, not a crash.
+    const badDate = classifyOpenPullRequest({
+      pr: pr({ number: 92, updatedAt: "not-a-date", createdAt: undefined }),
+      roleContext: outsideContributorRole,
+      reviews: [approvedReview(92)],
+      checks: [],
+    });
+    expect(badDate.classification).toBe("stale_likely_close");
+  });
+
   it("loads cached reviews and checks for contributor open PRs", async () => {
     const env = {} as Env;
     vi.spyOn(repositories, "listPullRequestReviews").mockResolvedValue([approvedReview(70)]);

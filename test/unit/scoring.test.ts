@@ -971,6 +971,13 @@ NOVELTY_BONUS_SCALAR = 3
       snapshot,
       input: { ...baseInput, linkedIssueMode: "none", branchEligibility: { status: "eligible" } },
     });
+    // Eligible per metadata, but the evidence itself is stale — the standard multiplier still requires a
+    // fresh refresh, not just a positive status (exercises branchEligibilityFailureReason's stale branch).
+    const staleEligible = buildScorePreview({
+      repo,
+      snapshot,
+      input: { ...baseInput, branchEligibility: { status: "eligible", source: "github_metadata", stale: true } },
+    });
 
     expect(eligible.branchEligibility).toMatchObject({ required: true, status: "eligible", evidence: "provided" });
     expect(eligible.scoreEstimate.issueMultiplier).toBe(1.33);
@@ -990,7 +997,10 @@ NOVELTY_BONUS_SCALAR = 3
     expect(notRequired.branchEligibility).toMatchObject({ required: false, status: "not_required", evidence: "provided", source: "user_supplied" });
     expect(notRequired.scoreEstimate.issueMultiplier).toBe(1);
     expect(notRequired.blockedBy.map((blocker) => blocker.code)).not.toContain("branch_eligibility_missing");
-    expect(JSON.stringify({ eligible, ineligible, missing, unknown, implicitUnknown, notRequired })).not.toMatch(/guaranteed payout|wallet|hotkey|farming/i);
+    expect(staleEligible.branchEligibility).toMatchObject({ required: true, status: "eligible", evidence: "provided", stale: true });
+    expect(staleEligible.scoreEstimate.issueMultiplier).toBe(1);
+    expect(staleEligible.linkedIssueMultiplier.reason).toMatch(/branch eligibility evidence is stale/i);
+    expect(JSON.stringify({ eligible, ineligible, missing, unknown, implicitUnknown, notRequired, staleEligible })).not.toMatch(/guaranteed payout|wallet|hotkey|farming/i);
   });
 
   it("requires solved-by-PR validation before applying the standard linked-issue multiplier", () => {
@@ -2063,5 +2073,15 @@ describe("label pattern matcher memoization (#2106)", () => {
   it("a label pattern AT the safe cap (2 wildcards) still compiles and matches NORMALLY, not the fail-safe path — proves the cap is inclusive, not exclusive", () => {
     expect(labelMatchesPattern("type-bug-fix", "type-*-*")).toBe(true);
     expect(labelMatchesPattern("type-bug", "type-*-*")).toBe(false);
+  });
+
+  it("counts a `**` pair as ONE wildcard group, not two, mirroring change-guardrail.ts's globToRegExp tokenization", () => {
+    // "area/**" (a `**` with no trailing separator) exercises consuming the second star without also
+    // consuming a trailing "/". "area/**/bug" exercises consuming the trailing "/" too. Both patterns are a
+    // single wildcard group each, well under the safe cap, so they compile and match normally rather than
+    // hitting the ReDoS fail-safe path.
+    expect(labelMatchesPattern("area/foo/bug", "area/**")).toBe(true);
+    expect(labelMatchesPattern("area/foo/bug", "area/**/bug")).toBe(true);
+    expect(labelMatchesPattern("area/foo/nope", "area/**/bug")).toBe(false);
   });
 });
