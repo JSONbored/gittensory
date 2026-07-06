@@ -1231,18 +1231,37 @@ const INLINE_FINDINGS_LIMIT = 10;
 /** Compose the public-safe, deduped, capped inline findings from one or two model reviews — the line-anchored
  *  counterpart of {@link composeAdvisoryNotes}. Dedupes by path+line (first wins), drops any body that fails the
  *  public-safe filter, and caps the total. Empty array when there is nothing safe to anchor. (#inline-comments) */
+const INLINE_SEVERITY_ORDER: Record<InlineFinding["severity"], number> = { nit: 0, blocker: 1 };
+
+/** Merge two inline findings anchored to the SAME (path, line) — dual reviewers often flag one line twice. The
+ *  higher-severity finding supplies the severity + body (ties keep the first-seen one); a suggestion/category is
+ *  carried from whichever finding has one, preferring the higher-severity finding's. Pure. (#2158) */
+function mergeSameLineFindings(first: InlineFinding, next: InlineFinding): InlineFinding {
+  const nextStronger = INLINE_SEVERITY_ORDER[next.severity] > INLINE_SEVERITY_ORDER[first.severity];
+  const strong = nextStronger ? next : first;
+  const weak = nextStronger ? first : next;
+  const suggestion = strong.suggestion ?? weak.suggestion;
+  const category = strong.category ?? weak.category;
+  return {
+    path: first.path,
+    line: first.line,
+    severity: strong.severity,
+    body: strong.body,
+    ...(suggestion ? { suggestion } : {}),
+    ...(category ? { category } : {}),
+  };
+}
+
 export function composeInlineFindings(reviews: ModelReview[]): InlineFinding[] {
-  const seen = new Set<string>();
-  const out: InlineFinding[] = [];
+  // MERGE (not drop) findings that two reviewers anchored to the same (path, line): keep the max severity and any
+  // suggestion/category, so a consensus line surfaces once with the strongest note instead of silently losing the
+  // second reviewer's detail (#2158). Map insertion order = first-seen order; the cap bounds DISTINCT lines.
+  const byLine = new Map<string, InlineFinding>();
   for (const finding of reviews.flatMap((r) => r.inlineFindings)) {
-    if (out.length >= INLINE_FINDINGS_LIMIT) break;
-    const key = `${finding.path}:${finding.line}`;
-    if (seen.has(key)) continue;
     const safeBody = toPublicSafe(finding.body);
     if (!safeBody) continue;
     const safeSuggestion = toPublicSafe(finding.suggestion);
-    seen.add(key);
-    out.push({
+    const candidate: InlineFinding = {
       path: finding.path,
       line: finding.line,
       severity: finding.severity,
@@ -1251,9 +1270,16 @@ export function composeInlineFindings(reviews: ModelReview[]): InlineFinding[] {
       // `category` is a fixed enum literal (never free text), so it carries through as-is — no public-safe
       // scrubbing needed, unlike body/suggestion.
       ...(finding.category ? { category: finding.category } : {}),
-    });
+    };
+    const key = `${finding.path}:${finding.line}`;
+    const existing = byLine.get(key);
+    if (existing) {
+      byLine.set(key, mergeSameLineFindings(existing, candidate));
+    } else if (byLine.size < INLINE_FINDINGS_LIMIT) {
+      byLine.set(key, candidate);
+    }
   }
-  return out;
+  return [...byLine.values()];
 }
 
 /** A CONSENSUS defect = BOTH reviews independently name at least one concrete blocker (the severity-disciplined

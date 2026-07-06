@@ -3038,41 +3038,52 @@ describe("pure helpers", () => {
     ).toEqual([]);
   });
 
-  it("composeInlineFindings dedupes by path+line (first wins) and keeps safe suggestions (#inline-comments)", () => {
+  it("composeInlineFindings MERGES same-(path,line) findings across reviewers: max severity, suggestion carried from whichever had it; distinct lines untouched (#2158)", () => {
     const out = composeInlineFindings([
       reviewWithFindings([
         {
           path: "src/a.ts",
           line: 1,
           severity: "nit",
-          body: "First.",
-          suggestion: "  const renamed = first;  ",
+          body: "Rename this.",
+          suggestion: "  const renamed = x;  ", // the nit carries the only suggestion
         },
         {
           path: "src/a.ts",
           line: 1,
-          severity: "blocker",
-          body: "Duplicate line — dropped.",
-          suggestion: "const duplicate = true;",
+          severity: "blocker", // stronger → supplies severity + body; has no suggestion of its own
+          body: "This is a security hole.",
         },
         {
           path: "src/a.ts",
           line: 2,
           severity: "nit",
-          body: "reward payout farming",
+          body: "reward payout farming", // public-unsafe body → dropped, as before
         },
-        { path: "src/b.ts", line: 9, severity: "blocker", body: "Keep me." },
+        { path: "src/b.ts", line: 9, severity: "blocker", body: "Keep me." }, // distinct line untouched
       ]),
     ]);
     expect(out).toEqual([
       {
         path: "src/a.ts",
         line: 1,
-        severity: "nit",
-        body: "First.",
-        suggestion: "const renamed = first;",
+        severity: "blocker", // max of nit + blocker
+        body: "This is a security hole.", // from the higher-severity finding
+        suggestion: "const renamed = x;", // carried in from the nit (the only one with a suggestion), trimmed
       },
       { path: "src/b.ts", line: 9, severity: "blocker", body: "Keep me." },
+    ]);
+  });
+
+  it("composeInlineFindings merge keeps the first-seen on a severity TIE, and carries category + suggestion from either reviewer (#2158)", () => {
+    const out = composeInlineFindings([
+      reviewWithFindings([
+        { path: "src/a.ts", line: 5, severity: "blocker", body: "Blocker first.", category: "security" },
+        { path: "src/a.ts", line: 5, severity: "nit", body: "Nit second.", suggestion: "const y = 1;" }, // weaker; contributes only the suggestion
+      ]),
+    ]);
+    expect(out).toEqual([
+      { path: "src/a.ts", line: 5, severity: "blocker", body: "Blocker first.", category: "security", suggestion: "const y = 1;" },
     ]);
   });
 
