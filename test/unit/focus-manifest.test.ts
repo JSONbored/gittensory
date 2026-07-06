@@ -34,6 +34,7 @@ import {
   resolveReviewSelfHostAiModel,
   resolveReviewVisualConfig,
   repoDocGenerationConfigToJson,
+  resolveTestGenerationManifestToggle,
   reviewConfigToJson,
   settingsOverrideToJson,
   type FocusManifest,
@@ -370,6 +371,7 @@ describe(".gittensory.yml.example field-exhaustiveness (#1670)", () => {
     aiModel: "ai_model:",
     visual: "visual:",
     linkedIssueSatisfaction: "linkedIssueSatisfaction:",
+    testGeneration: "test_generation:",
   } satisfies Record<Exclude<keyof FocusManifestReviewConfig, "present">, string>;
 
   it.each(Object.entries(REVIEW_FIELD_TOKENS))("documents review.%s", (_field, token) => {
@@ -2993,6 +2995,30 @@ describe("resolveReviewPathInstructions (#review-path-instructions)", () => {
     const bad = parseFocusManifest({ review: { finding_categories: "yes" } });
     expect(bad.review.findingCategories).toBeNull();
     expect(bad.warnings.some((w) => /review\.finding_categories.*must be a boolean/.test(w))).toBe(true);
+  });
+
+  it("parses review.test_generation (default OFF), marks present, round-trips, and warns on a non-boolean (#2189)", () => {
+    expect(parseFocusManifest({ review: { test_generation: true } }).review.testGeneration).toBe(true);
+    const on = parseFocusManifest({ review: { test_generation: true } });
+    expect(on.review.present).toBe(true); // a test-generation-only manifest IS present
+    expect(parseFocusManifest({ review: reviewConfigToJson(on.review) }).review).toEqual(on.review); // survives round-trip
+    // Explicit false is retained (and marks present, since the maintainer set it).
+    const off = parseFocusManifest({ review: { test_generation: false } });
+    expect(off.review.testGeneration).toBe(false);
+    expect(off.review.present).toBe(true);
+    // Absent ⇒ null (the byte-identical default), config not present.
+    expect(parseFocusManifest({ review: {} }).review.testGeneration).toBeNull();
+    // A non-boolean is ignored with a warning.
+    const bad = parseFocusManifest({ review: { test_generation: "yes" } });
+    expect(bad.review.testGeneration).toBeNull();
+    expect(bad.warnings.some((w) => /review\.test_generation.*must be a boolean/.test(w))).toBe(true);
+  });
+
+  it("resolves review.test_generation's manifest toggle to a strict boolean (#2189)", () => {
+    expect(resolveTestGenerationManifestToggle(null)).toBe(false); // null manifest (load failure) ⇒ false
+    expect(resolveTestGenerationManifestToggle(parseFocusManifest({}))).toBe(false); // absent ⇒ false
+    expect(resolveTestGenerationManifestToggle(parseFocusManifest({ review: { test_generation: false } }))).toBe(false);
+    expect(resolveTestGenerationManifestToggle(parseFocusManifest({ review: { test_generation: true } }))).toBe(true);
   });
 
   it("parses review.min_finding_severity, round-trips, and warns on invalid values (#2048)", () => {

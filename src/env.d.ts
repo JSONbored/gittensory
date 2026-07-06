@@ -192,6 +192,12 @@ declare global {
      *  inline comments on specific changed lines, layered on top of the decision summary. Default OFF —
      *  unset/false keeps the review path byte-identical (the model is never asked for inline findings). */
     GITTENSORY_REVIEW_INLINE_COMMENTS?: string;
+    /** Boundary-safe test generation (#2189, config slice of #1972): when truthy (AND the repo's `.gittensory.yml`
+     *  sets `review.test_generation: true`), a missing-test-evidence finding is ALSO accompanied by a
+     *  `gittensory_generate_tests` local-write action spec — criteria/content supplied by gittensory, execution
+     *  on the contributor's own machine (no source upload, no server-side write). Default OFF — unset/false
+     *  keeps the review path byte-identical (no spec is ever built). */
+    GITTENSORY_REVIEW_TEST_GENERATION?: string;
     /** Convergence (safety): when truthy, the ported safety scan runs in the review path — (1) untrusted PR
      *  title/body/diff is defanged (prompt-injection neutralized) before it reaches the AI reviewer, and (2)
      *  the PR diff is scanned for leaked secrets, surfacing a `secret_leak` blocker. Default OFF —

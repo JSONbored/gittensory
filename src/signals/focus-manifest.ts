@@ -412,6 +412,13 @@ export type FocusManifestReviewConfig = {
    *  ONLY (#2173, for #1961): parsed + normalized here; the merge/close decision that reads this mode is a separate
    *  maintainer-only slice. null (default, absent) ⇒ byte-identical to today. */
   linkedIssueSatisfaction: LinkedIssueSatisfactionMode | null;
+  /** `review.test_generation` (#2189, config slice of #1972): when true, a missing-test-evidence finding is ALSO
+   *  accompanied by a boundary-safe gittensory_generate_tests local-write action spec (criteria supplied by
+   *  gittensory, executed by the contributor's own agent — see src/mcp/local-write-tools.ts's buildTestGenSpec).
+   *  Also gated by the operator's GITTENSORY_REVIEW_TEST_GENERATION kill-switch (src/review/test-generation.ts's
+   *  isTestGenerationEnabled) — the caller ANDs both. null/false (default, absent) ⇒ no spec is ever built =
+   *  byte-identical behavior. */
+  testGeneration: boolean | null;
 };
 
 /** `review.linkedIssueSatisfaction` modes (#2173). `off` = not evaluated (same as unset). */
@@ -1743,6 +1750,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
   const aiModel = parseSelfHostAiModelConfig(r.ai_model, warnings);
   const visual = parseVisualConfig(r.visual, warnings);
   const linkedIssueSatisfaction = normalizeOptionalEnum(r.linkedIssueSatisfaction, "review.linkedIssueSatisfaction", LINKED_ISSUE_SATISFACTION_MODES, warnings);
+  const testGeneration = normalizeOptionalBoolean(r.test_generation, "review.test_generation", warnings);
   return {
     present:
       footerText !== null ||
@@ -1768,6 +1776,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
       selfHostAiModelPresent(aiModel) ||
       visualConfigPresent(visual) ||
       linkedIssueSatisfaction !== null ||
+      testGeneration !== null ||
       Object.keys(fields).length > 0 ||
       Object.keys(enrichmentAnalyzers).length > 0,
     footerText,
@@ -1777,6 +1786,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
     aiModel,
     visual,
     linkedIssueSatisfaction,
+    testGeneration,
     enrichmentAnalyzers,
     profile,
     tone,
@@ -2317,6 +2327,7 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
     out.visual = visual;
   }
   if (review.linkedIssueSatisfaction !== null) out.linkedIssueSatisfaction = review.linkedIssueSatisfaction;
+  if (review.testGeneration !== null) out.test_generation = review.testGeneration;
   return out;
 }
 
@@ -2486,6 +2497,15 @@ export function resolveReviewPromptOverrides(manifest: FocusManifest | null): { 
   // findingCategories resolves the same way (#1958) — like suggestions, the caller further ANDs it with the
   // already-resolved inlineComments gate, since a category has nothing to categorize without an inline finding.
   return { profile: manifest?.review.profile ?? null, tone: manifest?.review.tone ?? null, securityFocus: manifest?.review.securityFocus === true, inlineComments: manifest?.review.inlineComments === true, suggestions: manifest?.review.suggestions === true, changedFilesSummary: manifest?.review.changedFilesSummary === true, effortScore: manifest?.review.effortScore === true, findingCategories: manifest?.review.findingCategories === true, minFindingSeverity: manifest?.review.minFindingSeverity ?? null, maxFindings: manifest?.review.maxFindings ?? { ...EMPTY_MAX_FINDINGS_CONFIG }, pathInstructions: manifest?.review.pathInstructions ?? [], instructions: manifest?.review.instructions ?? null, excludePaths: manifest?.review.excludePaths ?? [], pathFilters: manifest?.review.pathFilters ?? [], selfHostAiModel: resolveReviewSelfHostAiModel(manifest) };
+}
+
+/** Resolve `review.test_generation` (#2189, config slice of #1972) from a possibly-null manifest (null = load
+ *  failure ⇒ manifest toggle reads as unset/false). Mirrors resolveReviewPromptOverrides's inlineComments
+ *  resolution — true ONLY when the manifest explicitly set review.test_generation: true; null/false/absent ⇒
+ *  false. The caller further ANDs this with the operator's GITTENSORY_REVIEW_TEST_GENERATION kill-switch via
+ *  shouldOfferTestGenerationSpec (src/review/test-generation.ts) before ever building a test-gen spec. */
+export function resolveTestGenerationManifestToggle(manifest: FocusManifest | null): boolean {
+  return manifest?.review.testGeneration === true;
 }
 
 /** Resolve `review.pre_merge_checks` from a possibly-null manifest (null = load failure ⇒ no checks). Centralized
