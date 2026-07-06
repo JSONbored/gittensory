@@ -1,4 +1,9 @@
 import { AGENT_COMMAND_COMMENT_MARKER } from "./comments";
+import {
+  formatDidYouMeanLine,
+  suggestCommand as suggestCommandFromCatalog,
+  type CommandSuggestCatalog,
+} from "./command-suggest";
 import { gittensoryFooter } from "./footer";
 import type { AgentRunBundle } from "../services/agent-orchestrator";
 import type { GittensorContributorSnapshot, OfficialGittensorMinerDetection } from "../gittensor/api";
@@ -72,6 +77,8 @@ export type GittensoryMentionCommand = {
   question?: string | undefined;
   reason?: string | undefined;
   argument?: string | undefined;
+  /** Present when a non-empty verb was unrecognized and downgraded to `help` (#2170). */
+  unknownVerb?: string | undefined;
 };
 
 type PublicAnswerCard = {
@@ -175,6 +182,19 @@ export type MaintainerQueueDigest = {
 // supplied" (#1960). Every other action command (gate-override, pause, resolve) keeps the existing `reason` shape.
 const ARGUMENT_ACTION_COMMANDS = new Set<GittensoryActionCommandName>(["explain"]);
 
+function commandSuggestCatalog(): CommandSuggestCatalog {
+  return {
+    mentionCommands: GITTENSORY_MENTION_COMMAND_CATALOG.map((command) => command.id),
+    actionCommands: GITTENSORY_ACTION_COMMANDS,
+    actionAliases: GITTENSORY_ACTION_COMMAND_ALIASES,
+  };
+}
+
+/** Pure did-you-mean suggester for unrecognized @gittensory verbs (#2170). */
+export function suggestCommand(rawVerb: string): string | null {
+  return suggestCommandFromCatalog(rawVerb, commandSuggestCatalog());
+}
+
 export function parseGittensoryMentionCommand(body: string | null | undefined): GittensoryMentionCommand | null {
   if (!body) return null;
   // `(?![\w-])` requires the mention to end at a non-identifier char, so other usernames that merely
@@ -182,8 +202,11 @@ export function parseGittensoryMentionCommand(body: string | null | undefined): 
   // bare `@gittensory help` command. A space, end-of-string, or punctuation still matches.
   const match = body.match(/(?:^|\s)@gittensory(?![\w-])(?:\s+([a-z-]+))?([^\n\r]*)/i);
   if (!match) return null;
-  const rawVerb = (match[1]?.toLowerCase() || "help") as GittensoryMentionCommandName | GittensoryActionCommandName;
-  const requested = (GITTENSORY_ACTION_COMMAND_ALIASES[rawVerb] ?? rawVerb) as GittensoryMentionCommandName | GittensoryActionCommandName;
+  const rawVerbToken = match[1]?.toLowerCase();
+  if (!rawVerbToken) {
+    return { name: "help", raw: match[0].trim() };
+  }
+  const requested = (GITTENSORY_ACTION_COMMAND_ALIASES[rawVerbToken] ?? rawVerbToken) as GittensoryMentionCommandName | GittensoryActionCommandName;
   if (ACTION_COMMANDS.has(requested as GittensoryActionCommandName)) {
     // match[2] is captured by a `*`-quantified group outside any optional wrapper, so it always matches
     // (possibly empty) and is never actually undefined; the ?? below is a noUncheckedIndexedAccess guard only.
@@ -195,9 +218,16 @@ export function parseGittensoryMentionCommand(body: string | null | undefined): 
       ? { name, raw: match[0].trim(), argument: tail }
       : { name, raw: match[0].trim(), reason: tail };
   }
-  const name = COMMANDS.has(requested as GittensoryMentionCommandName) ? (requested as GittensoryMentionCommandName) : "help";
-  const question = name === "ask" ? (match[2] ?? "").trim() : undefined;
-  return { name, raw: match[0].trim(), question: question && question.length > 0 ? question : undefined };
+  if (COMMANDS.has(requested as GittensoryMentionCommandName)) {
+    const name = requested as GittensoryMentionCommandName;
+    const question = name === "ask" ? (match[2] ?? "").trim() : undefined;
+    return {
+      name,
+      raw: match[0].trim(),
+      question: question && question.length > 0 ? question : undefined,
+    };
+  }
+  return { name: "help", raw: match[0].trim(), unknownVerb: rawVerbToken };
 }
 
 export function isMaintainerAssociation(association: string | null | undefined): boolean {
@@ -289,7 +319,7 @@ export function buildPublicAgentCommandComment(args: {
   // Action commands (e.g. gate-override) never reach this Q&A renderer — they are handled and short-circuited
   // earlier — so narrow the widened parse name back to a Q&A command name for the answer-card helpers.
   const commandName = args.command.name as GittensoryMentionCommandName;
-  const sections = commandSections(commandName, args.bundle, args.officialMiner, args.maintainerDigest, args.command.question);
+  const sections = commandSections(commandName, args.bundle, args.officialMiner, args.maintainerDigest, args.command.question, args.command.unknownVerb);
   const card = buildPublicAnswerCard({
     command: commandName,
     sections,
@@ -624,10 +654,11 @@ function commandSections(
   officialMiner: GittensorContributorSnapshot | null | undefined,
   maintainerDigest: MaintainerQueueDigest | null | undefined,
   question?: string | undefined,
+  unknownVerb?: string | undefined,
 ): string[] {
   switch (command) {
     case "help":
-      return helpSections();
+      return helpSections(unknownVerb);
     case "ask":
       return askSections(bundle, question);
     case "miner-context":
@@ -659,10 +690,13 @@ function commandSections(
   }
 }
 
-function helpSections(): string[] {
+function helpSections(unknownVerb?: string | undefined): string[] {
+  const suggestion = unknownVerb ? suggestCommand(unknownVerb) : null;
+  const didYouMean = suggestion !== null ? [formatDidYouMeanLine(suggestion), ""] : [];
   return [
     "**Commands**",
     "",
+    ...didYouMean,
     "- `@gittensory help` shows this command list.",
     "- `@gittensory ask <question>` answers contribution-quality Q&A with source citations and freshness.",
     "- `@gittensory preflight` summarizes public PR hygiene.",
