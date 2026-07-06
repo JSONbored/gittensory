@@ -7465,28 +7465,8 @@ async function maybePublishPrPublicSurface(
       reviewEligibility.skipReason,
       webhook.deliveryId,
     );
-    if (gateEnabled) {
-      const gateCheckResult = await createOrUpdateSkippedGateCheckRun(
-        env,
-        installationId,
-        repoFullName,
-        advisory,
-        "Review skipped: ignored author.",
-        mode,
-      );
-      /* v8 ignore next -- permission-missing audit behavior mirrors the existing skipped-check path above. */
-      if (gateCheckResult?.kind === "permission_missing") {
-        await auditGateCheckPermissionMissing(
-          env,
-          author,
-          repoFullName,
-          pr.number,
-          webhook.deliveryId,
-          gateCheckResult.warning,
-        );
-      }
-    }
-    return undefined;
+    publicSurfaceSkipped = true;
+    if (!shouldEvaluateGate) return undefined;
   }
   // A missing author already forces publicSurfaceSkipped=true above (decidePublicSurface's own
   // "missing_author" skip), so the guard just above already returns undefined whenever `!author` combines with
@@ -7602,6 +7582,7 @@ async function maybePublishPrPublicSurface(
   // promise can gate the public-surface computation too, not just this label decision (#gate-only-type-labels).
   if (
     typeLabelsEnabled &&
+    !publicSurfaceSkipped &&
     !settings.agentPaused &&
     decision.skipReason !== "miner_detection_unavailable" &&
     decision.skipReason !== "not_official_gittensor_miner"

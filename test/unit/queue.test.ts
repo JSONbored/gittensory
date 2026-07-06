@@ -13765,7 +13765,7 @@ describe("queue processors", () => {
     expect(audit?.detail).toBe("bot_author");
   });
 
-  it("publishes a skipped review check and no gate failure for ignored authors", async () => {
+  it("evaluates the gate while suppressing public review output for ignored authors", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
       env,
@@ -13785,7 +13785,7 @@ describe("queue processors", () => {
       gateCheckMode: "enabled",
       linkedIssueGateMode: "block",
     });
-    const calls = { skippedChecks: 0, comments: 0, minerList: 0 };
+    const calls = { gateChecks: 0, comments: 0, minerList: 0 };
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       const method = init?.method ?? "GET";
@@ -13796,21 +13796,25 @@ describe("queue processors", () => {
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.includes("/commits/ignoredauthor123/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
       if (url.includes("/issues/56/comments")) {
-        calls.comments += 1;
+        if (method !== "GET") calls.comments += 1;
         return Response.json([]);
       }
       if (url.includes("/check-runs") && method === "POST") {
-        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string; output?: { title?: string; summary?: string } };
+        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string; output?: { title?: string } };
+        expect(body).toMatchObject({ status: "in_progress", output: { title: "Gittensory Orb Review Agent is evaluating" } });
+        expect(body.conclusion).toBeUndefined();
+        calls.gateChecks += 1;
+        return Response.json({ id: 930 }, { status: 201 });
+      }
+      if (url.includes("/check-runs/930") && method === "PATCH") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string; output?: { title?: string } };
         expect(body).toMatchObject({
           status: "completed",
-          conclusion: "skipped",
-          output: {
-            title: "Gittensory Orb Review Agent skipped",
-            summary: "Review skipped: ignored author.",
-          },
+          conclusion: "failure",
+          output: { title: "Gittensory Orb Review Agent: No linked issue detected" },
         });
-        calls.skippedChecks += 1;
-        return Response.json({ id: 930 }, { status: 201 });
+        calls.gateChecks += 1;
+        return Response.json({ id: 930 });
       }
       return new Response("not found", { status: 404 });
     });
@@ -13831,7 +13835,7 @@ describe("queue processors", () => {
       },
     });
 
-    expect(calls).toEqual({ skippedChecks: 1, comments: 0, minerList: 0 });
+    expect(calls).toEqual({ gateChecks: 2, comments: 1, minerList: 0 });
     const visibilitySkip = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = ? and target_key = ?")
       .bind("github_app.pr_visibility_skipped", "JSONbored/gittensory#56")
       .first<{ detail: string; metadata_json: string }>();
