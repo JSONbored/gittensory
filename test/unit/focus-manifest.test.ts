@@ -12,6 +12,7 @@ import {
   matchesManifestPath,
   parseFocusManifest,
   parseFocusManifestContent,
+  formatManifestValidationNotice,
   resolveEffectiveSettings,
   excludeReviewPaths,
   applyReviewPathFilters,
@@ -4104,5 +4105,50 @@ describe("gate.expectedCiContexts (#selfhost-ci-verification)", () => {
   it("is undefined when neither the DB nor the manifest sets expectedCiContexts (no DB column for this field)", () => {
     const eff = resolveEffectiveSettings({} as unknown as RepositorySettings, parseFocusManifest(null));
     expect(eff.expectedCiContexts).toBeUndefined();
+  });
+});
+
+describe("formatManifestValidationNotice (#2056)", () => {
+  it("returns null for an empty warnings array", () => {
+    expect(formatManifestValidationNotice([])).toBeNull();
+  });
+
+  it("returns null when every warning is blank/whitespace-only", () => {
+    expect(formatManifestValidationNotice(["", "   ", "\n"])).toBeNull();
+  });
+
+  it("formats a single warning as a bullet line", () => {
+    expect(formatManifestValidationNotice(["Manifest field \"review.tone\" must be a string; ignoring it."])).toBe(
+      "- Manifest field \"review.tone\" must be a string; ignoring it.",
+    );
+  });
+
+  it("groups multiple distinct warnings, preserving order", () => {
+    const result = formatManifestValidationNotice(["first warning", "second warning", "third warning"]);
+    expect(result).toBe("- first warning\n- second warning\n- third warning");
+  });
+
+  it("dedupes identical warnings (case-sensitive, exact-match), keeping the first occurrence's position", () => {
+    const result = formatManifestValidationNotice(["dup warning", "unique warning", "dup warning"]);
+    expect(result).toBe("- dup warning\n- unique warning");
+  });
+
+  it("trims surrounding whitespace from each warning before formatting/deduping", () => {
+    const result = formatManifestValidationNotice(["  padded warning  ", "padded warning"]);
+    expect(result).toBe("- padded warning");
+  });
+
+  it("round-trips through a real malformed manifest's warnings", () => {
+    const malformed = parseFocusManifest({ review: { tone: 42, profile: "loud" } });
+    expect(malformed.warnings.length).toBeGreaterThan(0);
+    const notice = formatManifestValidationNotice(malformed.warnings);
+    expect(notice).not.toBeNull();
+    expect(notice).toContain("- ");
+  });
+
+  it("returns null for a fully-valid manifest with zero warnings (byte-identical, no notice)", () => {
+    const valid = parseFocusManifest({ review: { profile: "chill" } });
+    expect(valid.warnings).toEqual([]);
+    expect(formatManifestValidationNotice(valid.warnings)).toBeNull();
   });
 });

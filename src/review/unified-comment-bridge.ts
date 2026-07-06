@@ -21,6 +21,7 @@
 import type { AdvisoryFinding } from "../types";
 import type { GateCheckConclusion, GateCheckEvaluation } from "../rules/advisory";
 import type { PublicPrPanelSignalRow } from "../signals/engine";
+import { formatManifestValidationNotice } from "../signals/focus-manifest";
 import type { CaptureRoute } from "./visual/capture";
 // Single-source the panel marker from its canonical home (the upsert reads it there); re-export so existing
 // importers of `PR_PANEL_COMMENT_MARKER` from this module keep working. The unified body MUST prepend this
@@ -327,6 +328,11 @@ export type UnifiedCommentBridgeArgs = {
    *  OFF (the processor passes this only when the manifest opts in — see `resolveReviewPromptOverrides`'s
    *  `commentVerbosity`). */
   commentVerbosity?: "quiet" | "normal" | "detailed" | null | undefined;
+  /** The manifest's parse `warnings[]` (#2056) — when non-empty, a "Manifest validation" collapsible listing
+   *  each grouped, deduped warning is appended, so an invalid/malformed `.gittensory.yml` value fails clearly
+   *  instead of silently falling back to a default. No AI, no network. Absent/empty ⇒ no section
+   *  (byte-identical) — always safe to pass the manifest's raw warnings unconditionally. */
+  manifestWarnings?: string[] | undefined;
   /** Line-anchored AI findings, one entry per inline finding (review.finding_categories port). When present +
    *  non-empty, a "Finding categories" collapsible (a count per security/correctness/performance/maintainability/
    *  tests/style category) is appended. A finding missing its own `category` falls back to
@@ -492,6 +498,18 @@ export function buildChangedFilesSummaryCollapsible(files: ChangedFileSummaryInp
   return { title: "Changed files", body };
 }
 
+/**
+ * Build the "Manifest validation" collapsible from a manifest's parse `warnings[]` (#2056) — grouped,
+ * deduped, so an invalid/malformed `.gittensory.yml` value fails clearly instead of silently falling back
+ * to a default. Returns null when there are no warnings, so the caller can unconditionally chain this
+ * alongside the other optional collapsibles (byte-identical when the manifest is fully valid).
+ */
+export function buildManifestValidationCollapsible(warnings: string[]): UnifiedCollapsible | null {
+  const notice = formatManifestValidationNotice(warnings);
+  if (notice === null) return null;
+  return { title: "Manifest validation", body: notice };
+}
+
 /** One impact-map entry — everything `buildImpactMapCollapsible` needs to render a row. Deliberately narrower
  *  than `ImpactMapEntry` (`src/review/impact-map.ts`) shape-wise (it IS that shape) so this bridge's import
  *  surface stays limited to what rendering actually reads. */
@@ -635,6 +653,13 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
   const visibleRows = args.panelRows.filter((row) => args.reviewFields?.[row.key] !== false);
   const signals = panelRowsToSignalRows(visibleRows);
 
+  // review-manifest validation (#2056): a broken/malformed .gittensory.yml value should fail clearly, so this
+  // is unconditional (no manifest opt-in) — prepended ahead of every content-shape summary since a config
+  // problem is more foundational than what changed. No warnings ⇒ extraCollapsibles is unchanged.
+  const manifestValidationCollapsible =
+    args.manifestWarnings && args.manifestWarnings.length > 0 ? buildManifestValidationCollapsible(args.manifestWarnings) : null;
+  const withManifestValidation =
+    manifestValidationCollapsible !== null ? [manifestValidationCollapsible, ...(args.extraCollapsibles ?? [])] : args.extraCollapsibles;
   // review.changed_files_summary port: when the manifest opts in, the processor hands us every changed file's
   // path + deltas here; append the grouped "Changed files" collapsible ahead of the visual preview (structure
   // before pixels). Flag-OFF (the processor passes undefined) ⇒ extraCollapsibles is unchanged. (#1957)
@@ -643,7 +668,7 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
       ? buildChangedFilesSummaryCollapsible(args.changedFilesSummary)
       : null;
   const withChangedFiles =
-    changedFilesCollapsible !== null ? [...(args.extraCollapsibles ?? []), changedFilesCollapsible] : args.extraCollapsibles;
+    changedFilesCollapsible !== null ? [...(withManifestValidation ?? []), changedFilesCollapsible] : withManifestValidation;
   // review.finding_categories port: when the manifest opts in, the processor hands us this review's line-anchored
   // AI findings here; append the "Finding categories" collapsible right after Changed files (both are structural
   // review-shape summaries, ahead of the visual preview). Flag-OFF (the processor passes undefined) ⇒

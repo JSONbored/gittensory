@@ -9445,8 +9445,8 @@ async function maybePublishPrPublicSurface(
   if (decision.willComment) {
     // Maintainer review-content overrides from `.gittensory.yml` (footer text, row toggles, intro note).
     // Cached, so this is a DB read after the settings resolution already loaded the manifest.
-    const reviewConfig = (await loadRepoFocusManifest(env, repoFullName))
-      .review;
+    const repoFocusManifestForComment = await loadRepoFocusManifest(env, repoFullName);
+    const reviewConfig = repoFocusManifestForComment.review;
     // Duplicate-winner adjudication (#dup-winner): thread the flag into the public panel builders so the
     // winner's hard-duplicate block is suppressed (they recompute the winner from their own open-only sibling
     // list). Flag-OFF (default) ⇒ false ⇒ the panels are byte-identical to today.
@@ -9718,6 +9718,10 @@ async function maybePublishPrPublicSurface(
           : {}),
         maxFindingsCaps: reviewConfig.maxFindings,
         commentVerbosity: reviewConfig.commentVerbosity,
+        // review-manifest validation (#2056): reuse the same manifest already loaded above for reviewConfig —
+        // unconditional (no manifest opt-in needed, a broken config should always fail clearly); no warnings
+        // ⇒ the bridge omits the section (byte-identical).
+        manifestWarnings: repoFocusManifestForComment.warnings,
       });
     } else {
       deterministicBody = buildPublicPrIntelligenceComment(commentArgs);

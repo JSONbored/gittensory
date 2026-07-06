@@ -2956,6 +2956,25 @@ export function parseFocusManifestContent(content: string | null | undefined, so
   return parseFocusManifest(parsed, source);
 }
 
+/**
+ * Format a manifest's parse `warnings[]` into one grouped, deduped, order-preserving notice for the review
+ * surface — an acceptance criterion of #1670: an invalid/malformed `.gittensory.yml` value should fail
+ * clearly instead of silently falling back to a default. Empty/no warnings ⇒ `null` (byte-identical, no
+ * notice). Pure; reuses the warnings every parser already accumulates rather than a parallel schema. (#2056)
+ */
+export function formatManifestValidationNotice(warnings: string[]): string | null {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const warning of warnings) {
+    const trimmed = warning.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    deduped.push(trimmed);
+  }
+  if (deduped.length === 0) return null;
+  return deduped.map((warning) => `- ${warning}`).join("\n");
+}
+
 function normalizePathForMatch(path: string): string {
   return String(path).replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "").toLowerCase();
 }

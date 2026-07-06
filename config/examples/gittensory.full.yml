@@ -44,6 +44,12 @@
 # WHO CAN BE BLOCKED: gate modes choose *which* deterministic checks run, never
 # *who* gets blocked. A hard block is always confirmed-contributor-gated.
 #
+# MANIFEST VALIDATION: any parse warning from this file (an unrecognized field, a
+# malformed value that got dropped) is surfaced as a single grouped "Manifest
+# validation" section in the unified PR review comment, so a misconfigured value
+# fails clearly instead of silently falling back to its default. A fully valid
+# manifest shows nothing here (byte-identical). Always on; not a config knob.
+#
 # NOTE: some capabilities (safety scanning, CI/full-file grounding, RAG,
 # reputation control, the unified comment) are switched on at the deployment
 # level by the operator's GITTENSORY_REVIEW_* feature flags AND a per-repo
