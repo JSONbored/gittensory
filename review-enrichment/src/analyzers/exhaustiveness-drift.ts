@@ -14,6 +14,7 @@ const MAX_FILES = 10;
 const MAX_FETCHES = 10;
 const MAX_FINDINGS = 25;
 const MAX_FETCH_BYTES = 1_000_000;
+const MAX_SWITCH_HEADER_LINES = 25;
 const SOURCE_RE = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const SKIP_RE = /(?:\.d\.ts$|\.min\.|(?:^|\/)(?:dist|build|vendor)\/)/;
 
@@ -230,6 +231,7 @@ function extractSwitchBlock(lines: string[], switchLine: number): string[] | nul
   let started = false;
   const block: string[] = [];
   for (let i = switchLine; i < lines.length; i++) {
+    if (!started && i - switchLine >= MAX_SWITCH_HEADER_LINES) return null;
     const line = lines[i]!;
     block.push(line);
     for (const ch of line) {

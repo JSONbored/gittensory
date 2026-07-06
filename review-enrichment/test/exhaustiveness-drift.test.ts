@@ -66,6 +66,17 @@ test("findExhaustivenessGap: does not flag when the switch already covers the ne
   assert.equal(findExhaustivenessGap(covered, "enum", "Status", oldMembers, "Archived"), null);
 });
 
+test("findExhaustivenessGap: bounds malformed switch headers before EOF", () => {
+  const oldMembers = new Set(["Active", "Pending"]);
+  const malformedSwitches = Array.from({ length: 5000 }, (_, i) => `switch (status${i})`).join("\n");
+  const started = performance.now();
+  assert.equal(
+    findExhaustivenessGap(malformedSwitches, "enum", "Status", oldMembers, "Archived"),
+    null,
+  );
+  assert.ok(performance.now() - started < 500);
+});
+
 test("extractUnionMembers: reads string-literal union members from a type alias", () => {
   const src = 'export type Role = "admin" | "user";';
   assert.deepEqual([...extractUnionMembers(src, "Role")!], ["admin", "user"]);
