@@ -380,8 +380,28 @@ describe("database row parser hardening", () => {
     expect(resynced.linkedIssueClaimedAt).toBe(claimed?.linkedIssueClaimedAt); // claim timestamp is untouched
 
     const stored = await getPullRequest(env, "owner/repo", 7);
+    expect(stored?.body).toBe("Closes #42");
     expect(stored?.linkedIssues).toEqual([42]);
     expect(stored?.linkedIssueClaimedAt).toBe(claimed?.linkedIssueClaimedAt);
+  });
+
+  it("REGRESSION: a sparse sync preserves cached body evidence for linked-issue overflow checks", async () => {
+    const env = createTestEnv();
+    const body = Array.from({ length: MAX_LINKED_ISSUE_NUMBERS + 1 }, (_, index) => `Fixes #${index + 1}`).join("\n");
+
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 10, title: "Too many claims", state: "open", user: { login: "bob" }, head: { sha: "a1" }, labels: [], body });
+    const claimed = await getPullRequest(env, "owner/repo", 10);
+    expect(claimed?.linkedIssues).toHaveLength(MAX_LINKED_ISSUE_NUMBERS);
+    expect(extractLinkedIssueNumbersWithOverflow(claimed?.body ?? "").overflow).toBe(true);
+
+    const resynced = await upsertPullRequestFromGitHub(env, "owner/repo", { number: 10, title: "Too many claims", state: "open", user: { login: "bob" }, head: { sha: "a1" }, labels: [] });
+    expect(resynced.body).toBe(body);
+    expect(resynced.linkedIssues).toHaveLength(MAX_LINKED_ISSUE_NUMBERS);
+
+    const stored = await getPullRequest(env, "owner/repo", 10);
+    expect(stored?.body).toBe(body);
+    expect(extractLinkedIssueNumbersWithOverflow(stored?.body ?? "").overflow).toBe(true);
+    expect(stored?.linkedIssues).toHaveLength(MAX_LINKED_ISSUE_NUMBERS);
   });
 
   it("a genuinely empty body (explicit null/\"\", not absent) DOES clear a previously-claimed linked issue", async () => {

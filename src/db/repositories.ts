@@ -321,7 +321,7 @@ export async function upsertPullRequestFromGitHub(
   const syncedAt = nowIso();
   const lastSeenOpenAt = pr.state === "open" ? (options.seenOpenAt ?? syncedAt) : null;
   const existingClaimRows = await db
-    .select({ linkedIssuesJson: pullRequests.linkedIssuesJson, linkedIssueClaimedAt: pullRequests.linkedIssueClaimedAt })
+    .select({ linkedIssuesJson: pullRequests.linkedIssuesJson, linkedIssueClaimedAt: pullRequests.linkedIssueClaimedAt, payloadJson: pullRequests.payloadJson })
     .from(pullRequests)
     .where(and(eq(pullRequests.repoFullName, repoFullName), eq(pullRequests.number, pr.number)))
     .limit(1);
@@ -332,13 +332,19 @@ export async function upsertPullRequestFromGitHub(
   // already-correctly-claimed linked issue (and reset its claim timestamp via resolveLinkedIssueClaimedAt's own
   // `linkedIssues.length === 0` branch) on any such upsert. Fall back to whatever is already stored in that
   // case; only a genuinely observed (possibly empty) body updates the claim. (#linked-issue-sparse-payload-preserve)
-  const linkedIssues = pr.body === undefined && existingClaimRows[0] ? parseLinkedIssuesJson(existingClaimRows[0].linkedIssuesJson) : record.linkedIssues;
-  const linkedIssuesJson = pr.body === undefined && existingClaimRows[0] ? existingClaimRows[0].linkedIssuesJson : jsonString(linkedIssues);
+  const existingClaimRow = existingClaimRows[0];
+  const preserveSparseBody = pr.body === undefined && existingClaimRow !== undefined;
+  const existingPayload = preserveSparseBody ? parseJson<{ body?: string | null }>(existingClaimRow.payloadJson, {}) : undefined;
+  const existingBody = existingPayload?.body ?? null;
+  const body = preserveSparseBody ? existingBody : record.body;
+  const payload = preserveSparseBody ? compactGitHubPayload({ ...pr, body: existingBody }) : compactGitHubPayload(pr);
+  const linkedIssues = preserveSparseBody ? parseLinkedIssuesJson(existingClaimRow.linkedIssuesJson) : record.linkedIssues;
+  const linkedIssuesJson = preserveSparseBody ? existingClaimRow.linkedIssuesJson : jsonString(linkedIssues);
   const observedLinkedIssueClaimedAt = linkedIssues.length > 0 ? syncedAt : null;
   const linkedIssueClaimedAt = resolveLinkedIssueClaimedAt(
     linkedIssues,
     linkedIssuesJson,
-    existingClaimRows[0],
+    existingClaimRow,
     observedLinkedIssueClaimedAt,
   );
   await db
@@ -360,7 +366,7 @@ export async function upsertPullRequestFromGitHub(
       linkedIssuesJson,
       linkedIssueClaimedAt,
       lastSeenOpenAt,
-      payloadJson: jsonString(compactGitHubPayload(pr)),
+      payloadJson: jsonString(payload),
       updatedAt: syncedAt,
     })
     .onConflictDoUpdate({
@@ -379,11 +385,11 @@ export async function upsertPullRequestFromGitHub(
         linkedIssuesJson,
         linkedIssueClaimedAt,
         lastSeenOpenAt,
-        payloadJson: jsonString(compactGitHubPayload(pr)),
+        payloadJson: jsonString(payload),
         updatedAt: syncedAt,
       },
     });
-  return { ...record, linkedIssues, linkedIssueClaimedAt };
+  return { ...record, body, linkedIssues, linkedIssueClaimedAt };
 }
 
 function resolveLinkedIssueClaimedAt(
