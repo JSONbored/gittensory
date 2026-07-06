@@ -47,6 +47,18 @@ function r2Env(objects: Record<string, Uint8Array>): Env {
   } as unknown as Env;
 }
 
+// A minimal (not fully spec-complete) PNG buffer whose IHDR chunk reports the given width/height -- enough
+// for readPngDimensions() to parse, which is all captureBoundedFullPageShot's post-capture check reads.
+function fakePng(width: number, height: number): Uint8Array<ArrayBuffer> {
+  const buf = new Uint8Array(24);
+  buf.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  buf.set([0x00, 0x00, 0x00, 0x0d], 8);
+  buf.set([0x49, 0x48, 0x44, 0x52], 12);
+  new DataView(buf.buffer).setUint32(16, width, false);
+  new DataView(buf.buffer).setUint32(20, height, false);
+  return buf;
+}
+
 function makeRequest(url: string, navigation = true) {
   return {
     url: () => url,
@@ -62,7 +74,7 @@ describe("visual screenshot on-demand SSRF guard", () => {
     mocks.finalUrl = "https://preview.pages.dev/page";
     mocks.scrollHeight = 900;
     mocks.evaluateCallCount = 0;
-    mocks.screenshot.mockResolvedValue(new Uint8Array([1, 2, 3]));
+    mocks.screenshot.mockResolvedValue(fakePng(1440, 900));
     mocks.evaluate.mockImplementation(async (fn: (...fnArgs: unknown[]) => unknown, ...fnArgs: unknown[]) => {
       mocks.evaluateCallCount++;
       // The real callback runs inside the browser's own realm (document/window), which this Node test
@@ -170,6 +182,39 @@ describe("visual screenshot on-demand SSRF guard", () => {
   it("rejects oversized PNG output before returning it from the public shot route", async () => {
     mocks.finalUrl = "https://preview.pages.dev/page";
     mocks.screenshot.mockResolvedValue(new Uint8Array(5 * 1024 * 1024 + 1));
+
+    const response = await handleShot(request("https://preview.pages.dev/page"), env());
+
+    expect(response.status).toBe(502);
+  });
+
+  it("REGRESSION (security review, #3712): rejects an oversized screenshot even when the page's own evaluate() height lies", async () => {
+    // A hostile page can override document.body/documentElement scrollHeight/offsetHeight getters to
+    // under-report its own height and sail through the pre-capture fast-path check.
+    mocks.finalUrl = "https://preview.pages.dev/page";
+    mocks.scrollHeight = 100;
+    mocks.screenshot.mockResolvedValue(fakePng(1440, 10_001));
+
+    const response = await handleShot(request("https://preview.pages.dev/page"), env());
+
+    expect(response.status).toBe(502);
+  });
+
+  it("REGRESSION (security review, #3712): rejects a spoofed page whose real PNG area (not height alone) exceeds the cap", async () => {
+    // Height (6000) is under MAX_SCREENSHOT_HEIGHT on its own -- only the width*height area check should
+    // catch this one, isolating that OR-branch from the height branch exercised by the test above.
+    mocks.finalUrl = "https://preview.pages.dev/page";
+    mocks.scrollHeight = 100;
+    mocks.screenshot.mockResolvedValue(fakePng(2560, 6000));
+
+    const response = await handleShot(shotRequest(`url=${encodeURIComponent("https://preview.pages.dev/page")}&w=2560&h=100`), env());
+
+    expect(response.status).toBe(502);
+  });
+
+  it("REGRESSION (security review, #3712): fails closed when the rasterized output is not a well-formed PNG", async () => {
+    mocks.finalUrl = "https://preview.pages.dev/page";
+    mocks.screenshot.mockResolvedValue(new Uint8Array([1, 2, 3]));
 
     const response = await handleShot(request("https://preview.pages.dev/page"), env());
 

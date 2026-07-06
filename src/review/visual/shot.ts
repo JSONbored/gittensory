@@ -122,7 +122,26 @@ function isAllowedHost(targetUrl: string, env: Env, productionUrl?: string): boo
   return false;
 }
 
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/** Reads a PNG's real width/height straight from its IHDR chunk -- Chromium's own rasterized output, not a
+ *  value the screenshotted page's JavaScript can influence. Returns null (fail-closed) for anything that
+ *  isn't a well-formed PNG IHDR header, which the caller must treat as "reject", not "skip the check". */
+function readPngDimensions(png: Uint8Array): { width: number; height: number } | null {
+  if (png.byteLength < 24) return null;
+  for (let i = 0; i < PNG_SIGNATURE.length; i++) {
+    if (png[i] !== PNG_SIGNATURE[i]) return null;
+  }
+  if (String.fromCharCode(png[12]!, png[13]!, png[14]!, png[15]!) !== "IHDR") return null;
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  return { width: view.getUint32(16, false), height: view.getUint32(20, false) };
+}
+
 async function captureBoundedFullPageShot(page: ScreenshotPage, viewport: Viewport): Promise<Uint8Array | null> {
+  // Fast-path only: this executes inside the screenshotted PAGE's own JS realm, so a hostile page can override
+  // scrollHeight/offsetHeight getters (e.g. via Object.defineProperty) to under-report its height and sail
+  // through this check -- it does not by itself guard anything (#3712 security review). Real enforcement is
+  // the post-capture dimension re-check below, against Chromium's actual rasterized output.
   const height = await page.evaluate(() => {
     const doc = (globalThis as unknown as { document: { body: { scrollHeight: number; offsetHeight: number }; documentElement: { clientHeight: number; scrollHeight: number; offsetHeight: number } } }).document;
     const body = doc.body;
@@ -145,6 +164,14 @@ async function captureBoundedFullPageShot(page: ScreenshotPage, viewport: Viewpo
   }
   if (shot.byteLength > MAX_SCREENSHOT_BYTES) {
     console.log(JSON.stringify({ ev: "render_screenshot_bytes_too_large", bytes: shot.byteLength, maxBytes: MAX_SCREENSHOT_BYTES }));
+    return null;
+  }
+  // Re-validate against the ACTUAL rendered PNG dimensions -- these come from Chromium's rasterizer, not page
+  // script, so the height spoof above cannot reach them. Anything that isn't a readable PNG header is rejected
+  // rather than let through, since that's precisely what a successful spoof would look like from here.
+  const dims = readPngDimensions(shot);
+  if (!dims || dims.height > MAX_SCREENSHOT_HEIGHT || dims.width * dims.height > MAX_SCREENSHOT_PIXELS) {
+    console.log(JSON.stringify({ ev: "render_screenshot_dimensions_too_large", width: dims?.width ?? null, height: dims?.height ?? null, maxHeight: MAX_SCREENSHOT_HEIGHT, maxPixels: MAX_SCREENSHOT_PIXELS }));
     return null;
   }
   return shot;
