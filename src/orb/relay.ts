@@ -148,7 +148,9 @@ export async function relayVerify(secret: string, body: string, header: string |
   const sigBytes = hexToBytes(hex);
   if (!sigBytes) return false;
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
-  return crypto.subtle.verify("HMAC", key, sigBytes, new TextEncoder().encode(body));
+  // sigBytes is always a plain (never shared) ArrayBuffer view — the cast only narrows the TYPE for the
+  // UI workspace's stricter DOM-lib BufferSource, which excludes SharedArrayBuffer from ArrayBufferLike.
+  return crypto.subtle.verify("HMAC", key, sigBytes as Uint8Array<ArrayBuffer>, new TextEncoder().encode(body));
 }
 
 export type RegisterResult =

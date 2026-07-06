@@ -59,8 +59,10 @@ const SECRET_KEY_VERSION_CURRENT = 2;
 
 async function deriveSecretAesKey(keyMaterial: string, salt: Uint8Array): Promise<CryptoKey> {
   const baseKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(keyMaterial), "PBKDF2", false, ["deriveKey"]);
+  // salt is always a plain (never shared) ArrayBuffer view — the cast only narrows the TYPE for the UI
+  // workspace's stricter DOM-lib Pbkdf2Params, which excludes SharedArrayBuffer from ArrayBufferLike.
   return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 100_000, hash: "SHA-256" },
+    { name: "PBKDF2", salt: salt as Uint8Array<ArrayBuffer>, iterations: 100_000, hash: "SHA-256" },
     baseKey,
     { name: "AES-GCM", length: 256 },
     false,
@@ -95,7 +97,9 @@ export async function decryptSecret(ciphertext: string, iv: string, keyMaterial:
   if (!keyMaterial) throw new Error("missing_encryption_secret");
   const saltBytes = salt ? base64ToBytes(salt) : SECRET_KDF_SALT_V1;
   const key = await deriveSecretAesKey(keyMaterial, saltBytes);
-  const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64ToBytes(iv) }, key, base64ToBytes(ciphertext));
+  // These decoded byte arrays are always plain (never shared) ArrayBuffer views — the cast only narrows the
+  // TYPE for the UI workspace's stricter DOM-lib AesGcmParams, which excludes SharedArrayBuffer.
+  const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64ToBytes(iv) as Uint8Array<ArrayBuffer> }, key, base64ToBytes(ciphertext) as Uint8Array<ArrayBuffer>);
   return new TextDecoder().decode(decrypted);
 }
 
@@ -122,8 +126,10 @@ function base64UrlDecode(value: string): Uint8Array {
 
 async function deriveDraftTokenAesKey(secret: string, salt: Uint8Array): Promise<CryptoKey> {
   const keyMaterial = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), "HKDF", false, ["deriveKey"]);
+  // salt is always a plain (never shared) ArrayBuffer view — the cast only narrows the TYPE for the UI
+  // workspace's stricter DOM-lib HkdfParams, which excludes SharedArrayBuffer from ArrayBufferLike.
   return crypto.subtle.deriveKey(
-    { name: "HKDF", hash: "SHA-256", salt, info: new TextEncoder().encode("gittensory:draft-user-token:v1") },
+    { name: "HKDF", hash: "SHA-256", salt: salt as Uint8Array<ArrayBuffer>, info: new TextEncoder().encode("gittensory:draft-user-token:v1") },
     keyMaterial,
     { name: "AES-GCM", length: 256 },
     false,
@@ -148,10 +154,12 @@ export async function decryptDraftToken(secret: string, encrypted: string): Prom
   const parts = encrypted.split(".");
   if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) throw new Error("Invalid encrypted payload.");
   try {
+    // These decoded byte arrays are always plain (never shared) ArrayBuffer views — the casts only narrow
+    // the TYPE for the UI workspace's stricter DOM-lib AesGcmParams, which excludes SharedArrayBuffer.
     const plaintext = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: base64UrlDecode(parts[1]) },
+      { name: "AES-GCM", iv: base64UrlDecode(parts[1]) as Uint8Array<ArrayBuffer> },
       await deriveDraftTokenAesKey(secret, base64UrlDecode(parts[0])),
-      base64UrlDecode(parts[2]),
+      base64UrlDecode(parts[2]) as Uint8Array<ArrayBuffer>,
     );
     return new TextDecoder().decode(plaintext);
   } catch {
@@ -198,9 +206,11 @@ async function importPkcs8PrivateKey(privateKeyPem: string): Promise<CryptoKey> 
     .replace("-----END RSA PRIVATE KEY-----", "")
     .replace(/\s+/g, "");
   const bytes = isPkcs1Rsa ? wrapPkcs1RsaPrivateKey(base64ToBytes(base64)) : base64ToBytes(base64);
+  // bytes is always a plain (never shared) ArrayBuffer view — the cast only narrows the TYPE for the UI
+  // workspace's stricter DOM-lib importKey overload, which excludes SharedArrayBuffer from ArrayBufferLike.
   return crypto.subtle.importKey(
     "pkcs8",
-    bytes,
+    bytes as Uint8Array<ArrayBuffer>,
     { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
     false,
     ["sign"],

@@ -231,7 +231,9 @@ export async function handleShot(request: Request, env: Env, opts: ShotOptions =
   const theme: ShotTheme | undefined = requestedTheme === "light" || requestedTheme === "dark" ? requestedTheme : undefined;
   const png = await renderScreenshot(env, target, viewport, { isAllowedUrl: (candidate) => isAllowedHost(candidate, env, opts.productionUrl), ...(theme ? { theme } : {}) });
   if (!png) return new Response("screenshot unavailable", { status: 502 });
-  return new Response(png, {
+  // png is always a plain (never shared) ArrayBuffer view — the cast only narrows the TYPE for the UI
+  // workspace's stricter DOM-lib BodyInit, which excludes SharedArrayBuffer from ArrayBufferLike.
+  return new Response(png as Uint8Array<ArrayBuffer>, {
     headers: { "content-type": "image/png", "cache-control": "public, max-age=300" },
   });
 }
