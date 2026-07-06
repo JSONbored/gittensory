@@ -92,7 +92,7 @@ function isGeneratedFileFrom(parts: NormalizedPath): boolean {
     /grpc\.cs$/.test(norm) ||
     /\.pbgrpc\.dart$/.test(norm) ||
     /\.pbobjc\.(h|m)$/.test(norm) ||
-    /\.pb\.objc\.(h|m)$/i.test(norm) ||
+    /\.pb\.objc\.(h|m)$/.test(norm) ||
     /\.pb\.m$/.test(norm) ||
     /\.pbrpc\.(h|m)$/.test(norm) ||
     // Python protobuf: message stubs are `*_pb2.py[i]`; the gRPC plugin emits sibling
