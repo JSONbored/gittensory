@@ -9,7 +9,8 @@ export const PUBLIC_COMMAND_ENTRIES = [
   {
     id: "ask",
     title: "Gittensory contribution context Q&A",
-    description: "Answer contribution-quality questions from connected cached sources with citations.",
+    description:
+      "Answer contribution-quality questions from connected cached sources with citations.",
   },
   {
     id: "preflight",
@@ -111,27 +112,32 @@ export const ACTION_COMMAND_ENTRIES = [
   {
     id: "gate-override",
     title: "Gate override",
-    description: "Record a maintainer override for this commit's gate check only (does not persist across new commits).",
+    description:
+      "Record a maintainer override for this commit's gate check only (does not persist across new commits).",
   },
   {
     id: "review",
     title: "Request review",
-    description: "Request an auto-review run on the current PR head (`@gittensory re-review` is an alias).",
+    description:
+      "Request an auto-review run on the current PR head (`@gittensory re-review` is an alias).",
   },
   {
     id: "pause",
     title: "Pause auto-review",
-    description: "Pause auto-review for this PR with an optional reason; does not change gate enforcement.",
+    description:
+      "Pause auto-review for this PR with an optional reason; does not change gate enforcement.",
   },
   {
     id: "resume",
     title: "Resume auto-review",
-    description: "Resume auto-review for this PR with an optional reason; does not change gate enforcement.",
+    description:
+      "Resume auto-review for this PR with an optional reason; does not change gate enforcement.",
   },
   {
     id: "resolve",
     title: "Resolve finding",
-    description: "Mark a review finding as resolved, optionally naming the finding in trailing text.",
+    description:
+      "Mark a review finding as resolved, optionally naming the finding in trailing text.",
   },
   {
     id: "configuration",
@@ -141,10 +147,10 @@ export const ACTION_COMMAND_ENTRIES = [
   {
     id: "explain",
     title: "Explain finding",
-    description: "Explain a specific review finding; supply the finding reference in trailing text.",
+    description:
+      "Explain a specific review finding; supply the finding reference in trailing text.",
   },
 ] as const;
 
 export const ACTION_COMMAND_LIST =
   "@gittensory gate-override\n@gittensory review\n@gittensory pause\n@gittensory resume\n@gittensory resolve\n@gittensory configuration\n@gittensory explain";
-

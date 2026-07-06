@@ -44,10 +44,20 @@ export function renderCommandList(entries) {
   return entries.map((entry) => `@gittensory ${entry.id}`).join("\n");
 }
 
+const PRETTIER_PRINT_WIDTH = 100;
+
+function renderDescriptionField(description) {
+  const inline = `    description: ${JSON.stringify(description)},`;
+  if (inline.length <= PRETTIER_PRINT_WIDTH) {
+    return inline;
+  }
+  return `    description:\n      ${JSON.stringify(description)},`;
+}
+
 function renderCommandEntries(entries) {
   const rows = entries.map(
     (entry) =>
-      `  {\n    id: ${JSON.stringify(entry.id)},\n    title: ${JSON.stringify(entry.title)},\n    description: ${JSON.stringify(entry.description)},\n  },`,
+      `  {\n    id: ${JSON.stringify(entry.id)},\n    title: ${JSON.stringify(entry.title)},\n${renderDescriptionField(entry.description)}\n  },`,
   );
   return `[\n${rows.join("\n")}\n]`;
 }
@@ -89,7 +99,7 @@ export const ACTION_COMMAND_ENTRIES = ${renderCommandEntries(actionCommands)} as
 export const ACTION_COMMAND_LIST =
   ${JSON.stringify(renderCommandList(actionCommands))};
 `;
-  return `${body}\n`;
+  return body;
 }
 
 export function writeCommandReference({
