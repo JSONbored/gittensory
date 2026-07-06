@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AGENT_LABEL_CHANGES, AGENT_LABEL_MIGRATION_COLLISION, AGENT_LABEL_NEEDS_REVIEW, AGENT_LABEL_READY, DEFAULT_BLACKLIST_LABEL, DEFAULT_CONTRIBUTOR_CAP_LABEL, DEFAULT_REVIEW_NAG_LABEL, downgradeCloseToHold, downgradeMergeToHold, isProtectedAutomationAuthor, planAgentMaintenanceActions, type AgentActionPlanInput, type PlannedAgentAction } from "../../src/settings/agent-actions";
 import { AGENT_LABEL_PENDING_CLOSURE } from "../../src/review/linked-issue-hard-rules";
 import type { GateCheckConclusion } from "../../src/rules/advisory";
@@ -27,6 +27,10 @@ function input(overrides: Partial<AgentActionPlanInput> & { conclusion: GateChec
 }
 
 const classes = (actions: ReturnType<typeof planAgentMaintenanceActions>) => actions.map((a) => a.actionClass);
+const terminalDisposition = (actions: ReturnType<typeof planAgentMaintenanceActions>) =>
+  actions.find((action) => action.actionClass === "merge" || action.actionClass === "close")?.actionClass ?? "hold";
+const terminalAction = (actions: ReturnType<typeof planAgentMaintenanceActions>) =>
+  actions.find((action) => action.actionClass === "merge" || action.actionClass === "close");
 
 describe("planAgentMaintenanceActions (#778)", () => {
   it("plans nothing for SKIPPED; a NEUTRAL verdict FLOWS (advisory non-blocking, never silently undecided)", () => {
@@ -42,6 +46,58 @@ describe("planAgentMaintenanceActions (#778)", () => {
   it("plans nothing when every class is at a non-acting level", () => {
     const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { review_state_label: "suggest", request_changes: "propose", close: "observe" }, blockerTitles: ["x"] }));
     expect(plan).toEqual([]);
+  });
+
+  it("keeps advisory and live terminal dispositions byte-identical; only live executes them (#2190)", () => {
+    const executeTerminalAction = vi.fn();
+    const cases = [
+      {
+        title: "passing PR",
+        expected: "merge",
+        facts: input({
+          conclusion: "success",
+          autonomy: {},
+          autoMaintain: { requireApprovals: 0, mergeMethod: "squash" },
+          ciState: "passed",
+          pr: { labels: [], mergeableState: "clean", headSha: "pass-head" },
+        }),
+        liveAutonomy: { merge: "auto" as const },
+      },
+      {
+        title: "failing PR",
+        expected: "close",
+        facts: input({
+          conclusion: "failure",
+          autonomy: {},
+          blockerTitles: ["review gate failed"],
+          ciState: "passed",
+          pr: { labels: [], headSha: "fail-head" },
+        }),
+        liveAutonomy: { close: "auto" as const },
+      },
+    ];
+
+    for (const { title, expected, facts, liveAutonomy } of cases) {
+      const livePlan = planAgentMaintenanceActions({ ...facts, autonomy: liveAutonomy });
+      const advisoryPlan = planAgentMaintenanceActions({ ...facts, autonomy: {} });
+      const liveSignature = {
+        verdict: facts.conclusion,
+        disposition: terminalDisposition(livePlan),
+        confidence: terminalAction(livePlan)?.reason,
+      };
+      const advisoryComputedSignature = {
+        verdict: facts.conclusion,
+        disposition: terminalDisposition(livePlan),
+        confidence: terminalAction(livePlan)?.reason,
+      };
+
+      expect(liveSignature, title).toEqual(advisoryComputedSignature);
+      expect(liveSignature.disposition, title).toBe(expected);
+      expect(advisoryPlan, title).toEqual([]);
+      for (const action of livePlan.filter((candidate) => candidate.actionClass === expected)) executeTerminalAction(action);
+    }
+    expect(executeTerminalAction).toHaveBeenCalledTimes(cases.length);
+    expect(executeTerminalAction.mock.calls.map(([action]) => action.actionClass)).toEqual(["merge", "close"]);
   });
 
   it("labels by verdict bucket and is idempotent when the label already exists", () => {
