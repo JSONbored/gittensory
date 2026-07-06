@@ -97,8 +97,11 @@ function isGeneratedFileFrom(parts: NormalizedPath): boolean {
     /_pb2(_grpc)?\.pyi?$/.test(norm) ||
     // Ruby protobuf: message stubs are `*_pb.rb`; the gRPC plugin emits sibling `*_services_pb.rb`.
     /_pb\.rb$/.test(norm) ||
-    // PHP protobuf: message stubs are `*_pb.php`; the gRPC plugin emits sibling `*_grpc_pb.php`.
+    // PHP protobuf: message stubs are `*_pb.php`; the gRPC plugin emits sibling `*_grpc_pb.php`
+    // and grpc-php service stubs (`*Grpc.php`, `*GrpcStub.php`).
     /_pb\.php$/.test(norm) ||
+    /grpc\.php$/.test(norm) ||
+    /grpcstub\.php$/i.test(norm) ||
     // Nim protobuf: message stubs are `*_pb.nim`.
     /_pb\.nim$/.test(norm) ||
     // Lua protobuf: message stubs are `*_pb.lua`.

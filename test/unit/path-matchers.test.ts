@@ -100,6 +100,8 @@ describe("isGeneratedFile", () => {
       "gen/service_services_pb.rb",
       "gen/service_pb.php",
       "gen/service_grpc_pb.php",
+      "gen/GreeterGrpc.php",
+      "gen/FooGrpcStub.php",
       "proto/messages.pb.rs",
       "lib/my_proto.pb.ex",
       "proto/service.grpc.swift",
@@ -110,6 +112,8 @@ describe("isGeneratedFile", () => {
       expect(isGeneratedFile(path)).toBe(false);
     }
     expect(classifyChangedFile("gen/service_grpc_pb.php")).toBe("generated");
+    expect(classifyChangedFile("gen/GreeterGrpc.php")).toBe("generated");
+    expect(classifyChangedFile("gen/FooGrpcStub.php")).toBe("generated");
     expect(classifyChangedFile("lib/my_proto.pb.ex")).toBe("generated");
     expect(classifyChangedFile("proto/service.grpc.swift")).toBe("generated");
   });
@@ -526,6 +530,8 @@ describe("classifyChangedFile", () => {
       ["dist/app.min.js", "minified"],
       ["src/api.generated.ts", "generated"],
       ["gen/service_grpc_pb.php", "generated"],
+      ["gen/GreeterGrpc.php", "generated"],
+      ["gen/FooGrpcStub.php", "generated"],
       ["lib/my_proto.pb.ex", "generated"],
       ["proto/service.grpc.swift", "generated"],
       ["proto/messages.pb.erl", "generated"],
