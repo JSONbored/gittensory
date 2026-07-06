@@ -12031,7 +12031,7 @@ async function maybeProcessGittensoryMentionCommand(
   if (!command) return false;
   // Action commands (e.g. gate-override) are handled by their own dispatch earlier in processGitHubWebhook;
   // they never produce a Q&A answer card here. Bail so the rest of this handler narrows to Q&A commands.
-  if (command.name === "gate-override") return false;
+  if (command.name === "gate-override" || command.name === "review" || command.name === "pause" || command.name === "resume" || command.name === "resolve" || command.name === "configuration" || command.name === "explain") return false;
   const repoFullName = payload.repository?.full_name;
   const issue = payload.issue;
   const installationId = getInstallationId(payload);

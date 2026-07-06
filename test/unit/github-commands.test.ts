@@ -47,6 +47,78 @@ describe("GitHub mention commands", () => {
     expect(isMaintainerOnlyCommand("preflight")).toBe(false);
   });
 
+  describe("@gittensory action commands (#2160)", () => {
+    it.each([
+      ["review", "review"],
+      ["re-review", "review"],
+      ["pause", "pause"],
+      ["resume", "resume"],
+      ["resolve", "resolve"],
+      ["configuration", "configuration"],
+      ["explain", "explain"],
+      ["gate-override", "gate-override"],
+    ] as const)("recognizes %s as canonical action command %s without trailing text", (verb, canonical) => {
+      expect(parseGittensoryMentionCommand(`@gittensory ${verb}`)).toMatchObject({
+        name: canonical,
+        reason: undefined,
+        raw: `@gittensory ${verb}`,
+      });
+    });
+
+    it("captures trailing free text as reason for explain and pause", () => {
+      expect(parseGittensoryMentionCommand("@gittensory explain finding-42")).toMatchObject({
+        name: "explain",
+        reason: "finding-42",
+        raw: "@gittensory explain finding-42",
+      });
+      expect(parseGittensoryMentionCommand("@gittensory pause maintainer vacation")).toMatchObject({
+        name: "pause",
+        reason: "maintainer vacation",
+        raw: "@gittensory pause maintainer vacation",
+      });
+    });
+
+    it("captures optional trailing reason for other action commands", () => {
+      expect(parseGittensoryMentionCommand("@gittensory review latest head")).toMatchObject({
+        name: "review",
+        reason: "latest head",
+      });
+      expect(parseGittensoryMentionCommand("@gittensory resolve stale thread")).toMatchObject({
+        name: "resolve",
+        reason: "stale thread",
+      });
+      expect(parseGittensoryMentionCommand("@gittensory configuration show")).toMatchObject({
+        name: "configuration",
+        reason: "show",
+      });
+      expect(parseGittensoryMentionCommand("@gittensory resume after deploy")).toMatchObject({
+        name: "resume",
+        reason: "after deploy",
+      });
+    });
+
+    it("leaves reason undefined when trailing text is whitespace only", () => {
+      expect(parseGittensoryMentionCommand("@gittensory explain   ")).toMatchObject({
+        name: "explain",
+        reason: undefined,
+      });
+      expect(parseGittensoryMentionCommand("@gittensory pause\t")).toMatchObject({
+        name: "pause",
+        reason: undefined,
+      });
+    });
+
+    it("still resolves unknown verbs and bare mentions to help", () => {
+      expect(parseGittensoryMentionCommand("@gittensory")).toMatchObject({ name: "help" });
+      expect(parseGittensoryMentionCommand("@gittensory unknown-verb")).toMatchObject({ name: "help" });
+    });
+
+    it("does not downgrade nearby Q&A commands that share the review prefix", () => {
+      expect(parseGittensoryMentionCommand("@gittensory reviewability")?.name).toBe("reviewability");
+      expect(parseGittensoryMentionCommand("@gittensory review-now")?.name).toBe("review-now");
+    });
+  });
+
   it("authorizes maintainers and confirmed miner PR authors only", () => {
     expect(isAuthorizedCommandActor({ commenterLogin: "reviewer", commenterAssociation: "OWNER" })).toMatchObject({
       authorized: true,

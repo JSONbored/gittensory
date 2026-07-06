@@ -24602,6 +24602,27 @@ describe("recordAgentCommandUsage (signal-snapshot fail-safe)", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("ignores newly-created @gittensory action commands — they never produce a Q&A answer card (#2160)", async () => {
+    const posts: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if ((init?.method ?? "GET") === "POST" && url.includes("/comments")) posts.push(url);
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    const payload: any = {
+      action: "created",
+      installation: { id: 123 },
+      repository: { id: 1, name: "gittensory", full_name: "JSONbored/gittensory", private: false, default_branch: "main", owner: { login: "JSONbored" } },
+      sender: { login: "maintainer", type: "User" },
+      comment: { id: 999, body: "@gittensory resume after deploy", user: { login: "maintainer", type: "User" } },
+      issue: { id: 1, number: 77, title: "some issue", pull_request: { url: "https://api.github.com/repos/JSONbored/gittensory/pulls/77" } },
+    };
+    await processJob(env, { type: "github-webhook", deliveryId: "mention-resume-action", eventName: "issue_comment", payload });
+    expect(posts).toEqual([]);
+  });
+
   it("ignores a @gittensory mention on an EDITED comment — only newly-created comments are answered (#review-audit)", async () => {
     const posts: string[] = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -55,8 +55,9 @@ type SnapshotCommandName = Exclude<GittensoryMentionCommandName, "help" | "miner
 // than producing a public answer card. They are intentionally kept OUT of the Q&A catalog/unions so the
 // exhaustive Q&A switches stay total, but parseGittensoryMentionCommand still recognizes them (so a bare
 // @gittensory gate-override is not silently downgraded to "help").
-export const GITTENSORY_ACTION_COMMANDS = ["gate-override"] as const;
+export const GITTENSORY_ACTION_COMMANDS = ["gate-override", "review", "pause", "resume", "resolve", "configuration", "explain"] as const;
 export type GittensoryActionCommandName = (typeof GITTENSORY_ACTION_COMMANDS)[number];
+const GITTENSORY_ACTION_COMMAND_ALIASES = { "re-review": "review" } as const satisfies Record<string, GittensoryActionCommandName>;
 
 export type GittensoryMentionCommand = {
   name: GittensoryMentionCommandName | GittensoryActionCommandName;
@@ -82,6 +83,7 @@ export type AgentCommandFeedbackContext = {
 
 const COMMANDS = new Set<GittensoryMentionCommandName>(GITTENSORY_MENTION_COMMAND_CATALOG.map((command) => command.id));
 const ACTION_COMMANDS = new Set<GittensoryActionCommandName>(GITTENSORY_ACTION_COMMANDS);
+const ACTION_COMMAND_LOOKUP = new Set<string>([...GITTENSORY_ACTION_COMMANDS, ...Object.keys(GITTENSORY_ACTION_COMMAND_ALIASES)]);
 const MAINTAINER_QUEUE_DIGEST_COMMANDS = new Set<MaintainerQueueDigestCommandName>(MAINTAINER_QUEUE_DIGEST_COMMAND_CATALOG.map((command) => command.id));
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const AGENT_COMMAND_FEEDBACK_MARKER = "gittensory-agent-command-answer";
@@ -169,9 +171,10 @@ export function parseGittensoryMentionCommand(body: string | null | undefined): 
   const match = body.match(/(?:^|\s)@gittensory(?![\w-])(?:\s+([a-z-]+))?([^\n\r]*)/i);
   if (!match) return null;
   const requested = (match[1]?.toLowerCase() || "help") as GittensoryMentionCommandName | GittensoryActionCommandName;
-  if (ACTION_COMMANDS.has(requested as GittensoryActionCommandName)) {
+  if (ACTION_COMMAND_LOOKUP.has(requested)) {
+    const name = (GITTENSORY_ACTION_COMMAND_ALIASES[requested as keyof typeof GITTENSORY_ACTION_COMMAND_ALIASES] ?? requested) as GittensoryActionCommandName;
     const reason = (match[2] ?? "").trim();
-    return { name: requested as GittensoryActionCommandName, raw: match[0].trim(), reason: reason.length > 0 ? reason : undefined };
+    return { name, raw: match[0].trim(), reason: reason.length > 0 ? reason : undefined };
   }
   const name = COMMANDS.has(requested as GittensoryMentionCommandName) ? (requested as GittensoryMentionCommandName) : "help";
   const question = name === "ask" ? (match[2] ?? "").trim() : undefined;
