@@ -376,6 +376,67 @@ describe("getPublicStats — live aggregate over the review ledger", () => {
     expect(out.totals.minutesSaved).not.toBe(2 * MINUTES_SAVED_PER_PR);
   });
 
+  it("deduplicates repeated public-surface publishes before averaging reviewEffortMinutes (real D1)", async () => {
+    const env = createTestEnv({ GITTENSORY_PUBLIC_STATS_REPOS: "JSONbored/gittensory" });
+    const db = env.DB;
+
+    await db
+      .prepare(
+        `INSERT INTO pull_requests (id, repo_full_name, number, title, state, merged_at)
+         VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        "pr-republished",
+        "JSONbored/gittensory",
+        20,
+        "republished large review",
+        "closed",
+        "2026-06-01T00:00:00.000Z",
+        "pr-single",
+        "JSONbored/gittensory",
+        21,
+        "single tiny review",
+        "closed",
+        "2026-06-01T00:00:00.000Z",
+      )
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO audit_events (id, event_type, target_key, outcome, metadata_json)
+         VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        "published-republished-a",
+        "github_app.pr_public_surface_published",
+        "JSONbored/gittensory#20",
+        "completed",
+        JSON.stringify({ reviewEffortMinutes: 100 }),
+        "published-republished-b",
+        "github_app.pr_public_surface_published",
+        "JSONbored/gittensory#20",
+        "completed",
+        JSON.stringify({ reviewEffortMinutes: 100 }),
+        "published-republished-c",
+        "github_app.pr_public_surface_published",
+        "JSONbored/gittensory#20",
+        "completed",
+        JSON.stringify({ reviewEffortMinutes: 100 }),
+        "published-single",
+        "github_app.pr_public_surface_published",
+        "JSONbored/gittensory#21",
+        "completed",
+        JSON.stringify({ reviewEffortMinutes: 1 }),
+      )
+      .run();
+
+    const out = await getPublicStats(env, NOW);
+
+    expect(out.totals.reviewed).toBe(2);
+    // Per-PR average: avg(avg(100, 100, 100), 1) = 50.5; reviewed = 2 -> 101.
+    // A raw event-level average would skew this to round(2 * avg(100, 100, 100, 1)) = 151.
+    expect(out.totals.minutesSaved).toBe(101);
+  });
+
   it("skips the own-ledger queries but still queries the Orb aggregate when the allowlist is empty", async () => {
     const env = {
       DB: {

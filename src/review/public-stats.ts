@@ -245,18 +245,28 @@ export async function getPublicStats(
       ...projects,
     ),
     // review-effort minutes (#1955): a deterministic, no-AI per-PR estimate persisted at publish time
-    // (processors.ts's pr_public_surface_published metadata.reviewEffortMinutes). AVG over every published event
-    // in the allowlist gives a real per-review time figure; a published row that predates this feature (or a
-    // files-fetch failure at publish time) simply has no `reviewEffortMinutes` key, so json_extract returns SQL
-    // NULL for that row and SQLite's AVG silently skips it — an all-historical ledger degrades to a NULL average
-    // (handled below via `?? MINUTES_SAVED_PER_PR`), never a crash or a skewed zero.
+    // (processors.ts's pr_public_surface_published metadata.reviewEffortMinutes). Fold repeated publish events
+    // down to one sample per distinct PR before the global AVG, matching the distinct-PR reviewed denominator
+    // below; a published row that predates this feature (or a files-fetch failure at publish time) simply has no
+    // `reviewEffortMinutes` key, so json_extract returns SQL NULL for that row and SQLite's AVG silently skips it
+    // — an all-historical ledger degrades to a NULL average (handled below via `?? MINUTES_SAVED_PER_PR`), never a
+    // crash or a skewed zero.
     safeAll<{ avgMinutes: number | null }>(
       env,
-      `SELECT AVG(json_extract(metadata_json, '$.reviewEffortMinutes')) AS avgMinutes
-         FROM audit_events
-        WHERE event_type = 'github_app.pr_public_surface_published'
-          AND LOWER(substr(target_key, 1, instr(target_key, '#') - 1)) IN (${inList})
-          AND instr(target_key, '#') > 0`,
+      `SELECT AVG(minutes) AS avgMinutes
+         FROM (
+           SELECT repo, number, AVG(minutes) AS minutes
+             FROM (
+               SELECT LOWER(substr(target_key, 1, instr(target_key, '#') - 1)) AS repo,
+                      CAST(substr(target_key, instr(target_key, '#') + 1) AS INTEGER) AS number,
+                      json_extract(metadata_json, '$.reviewEffortMinutes') AS minutes
+                 FROM audit_events
+                WHERE event_type = 'github_app.pr_public_surface_published'
+                  AND LOWER(substr(target_key, 1, instr(target_key, '#') - 1)) IN (${inList})
+                  AND instr(target_key, '#') > 0
+             )
+            GROUP BY repo, number
+         )`,
       ...projects,
     ),
   ]);
