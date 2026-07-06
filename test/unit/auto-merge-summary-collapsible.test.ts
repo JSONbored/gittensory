@@ -75,6 +75,26 @@ describe("deriveAutoMergeSummaryInput / buildAutoMergeSummaryCollapsible (#2051)
       }),
     ).toEqual({ ciGreen: false, gatePassing: true, mergeableClean: false, linkedIssueOk: false });
   });
+
+  it("marks linked issue failing when the row exists but is not green", () => {
+    expect(
+      deriveAutoMergeSummaryInput({
+        mergeReadiness: mergeReadinessPass,
+        gateConclusion: "success",
+        panelRows: [{ key: "linkedIssue", cells: ["Linked issue", "⚠️ Preferred", "#42", "Link one."] }],
+      }),
+    ).toEqual({ ciGreen: true, gatePassing: true, mergeableClean: true, linkedIssueOk: false });
+  });
+
+  it("treats missing mergeStateLabel as not mergeable-clean", () => {
+    expect(
+      deriveAutoMergeSummaryInput({
+        mergeReadiness: { ciState: "passed" },
+        gateConclusion: "success",
+        panelRows: panelRowsAllPass,
+      }),
+    ).toEqual({ ciGreen: true, gatePassing: true, mergeableClean: false, linkedIssueOk: true });
+  });
 });
 
 describe("buildUnifiedCommentBody auto_merge_summary wiring (#2051)", () => {
@@ -93,5 +113,20 @@ describe("buildUnifiedCommentBody auto_merge_summary wiring (#2051)", () => {
     expect(withSummary).toContain("| CI green | ✅ pass |");
     const withoutSummary = buildUnifiedCommentBody(baseArgs);
     expect(withoutSummary).not.toContain("Auto-merge conditions");
+    expect(buildUnifiedCommentBody({ ...baseArgs, autoMergeSummary: false })).not.toContain("Auto-merge conditions");
+  });
+
+  it("derives auto-merge conditions without mergeReadiness when the caller omits it (#2051)", () => {
+    const body = buildUnifiedCommentBody({
+      gate: gate(),
+      aiReview: { notes: "Clean change." },
+      panelRows: panelRowsAllPass,
+      readinessTotal: 88,
+      changedFiles: 1,
+      footerMarkdown: footer,
+      autoMergeSummary: true,
+    });
+    expect(body).toContain("Auto-merge conditions");
+    expect(body).toContain("| CI green | ❌ fail |");
   });
 });

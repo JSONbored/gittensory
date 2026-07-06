@@ -639,7 +639,7 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
     args.autoMergeSummary === true
       ? buildAutoMergeSummaryCollapsible(
         deriveAutoMergeSummaryInput({
-          ...(args.mergeReadiness !== undefined ? { mergeReadiness: args.mergeReadiness } : {}),
+          mergeReadiness: args.mergeReadiness,
           gateConclusion: args.gate.conclusion,
           panelRows: visibleRows,
         }),
