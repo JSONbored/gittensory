@@ -12,7 +12,9 @@ const mocks = vi.hoisted(() => ({
   evaluate: vi.fn(),
   // captureScrollFrames' FIRST page.evaluate() call queries scrollHeight; every later call (scrollTo, the
   // settle delay) discards its return value — so only the first call's resolved value matters to the code
-  // under test, regardless of exactly how many scroll/settle evaluate() calls happen after it.
+  // under test, regardless of exactly how many scroll/settle evaluate() calls happen after it. captureShot's
+  // own bounded-full-page-screenshot height check is likewise a single evaluate() call, so it reuses this
+  // same mock rather than introducing a second, redundant height property.
   scrollHeight: 900,
   evaluateCallCount: 0,
 }));
@@ -60,6 +62,7 @@ describe("visual screenshot on-demand SSRF guard", () => {
     mocks.finalUrl = "https://preview.pages.dev/page";
     mocks.scrollHeight = 900;
     mocks.evaluateCallCount = 0;
+    mocks.screenshot.mockResolvedValue(new Uint8Array([1, 2, 3]));
     mocks.evaluate.mockImplementation(async (fn: (...fnArgs: unknown[]) => unknown, ...fnArgs: unknown[]) => {
       mocks.evaluateCallCount++;
       // The real callback runs inside the browser's own realm (document/window), which this Node test
@@ -135,12 +138,57 @@ describe("visual screenshot on-demand SSRF guard", () => {
     expect(mocks.screenshot).toHaveBeenCalled();
   });
 
-  it("captures the FULL page, not just the viewport — before/after must show the same page position for a change however far down it is", async () => {
+  it("captures the full page for bounded review pages", async () => {
     mocks.finalUrl = "https://preview.pages.dev/page";
+    mocks.scrollHeight = 10_000;
 
     await handleShot(request("https://preview.pages.dev/page"), env());
 
     expect(mocks.screenshot).toHaveBeenCalledWith({ type: "png", fullPage: true });
+  });
+
+  it("rejects attacker-controlled pages taller than the full-page screenshot cap before rasterizing", async () => {
+    mocks.finalUrl = "https://preview.pages.dev/page";
+    mocks.scrollHeight = 10_001;
+
+    const response = await handleShot(request("https://preview.pages.dev/page"), env());
+
+    expect(response.status).toBe(502);
+    expect(mocks.screenshot).not.toHaveBeenCalled();
+  });
+
+  it("rejects full-page screenshots whose pixel area exceeds the cap", async () => {
+    mocks.finalUrl = "https://preview.pages.dev/page";
+    mocks.scrollHeight = 10_000;
+
+    const response = await handleShot(shotRequest(`url=${encodeURIComponent("https://preview.pages.dev/page")}&w=2560&h=900`), env());
+
+    expect(response.status).toBe(502);
+    expect(mocks.screenshot).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized PNG output before returning it from the public shot route", async () => {
+    mocks.finalUrl = "https://preview.pages.dev/page";
+    mocks.screenshot.mockResolvedValue(new Uint8Array(5 * 1024 * 1024 + 1));
+
+    const response = await handleShot(request("https://preview.pages.dev/page"), env());
+
+    expect(response.status).toBe(502);
+  });
+
+  it("times out screenshot rasterization that does not finish", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.finalUrl = "https://preview.pages.dev/page";
+      mocks.screenshot.mockReturnValue(new Promise(() => undefined));
+
+      const result = captureShot(env(), "https://preview.pages.dev/page");
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(result).resolves.toEqual({ png: null, authWalled: false });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("never emulates a color scheme when no theme is requested — every existing caller, byte-identical to today", async () => {
