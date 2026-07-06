@@ -64,6 +64,13 @@ describe("config/examples review templates (#1682)", () => {
     expect(full).not.toMatch(/Planned display toggle/);
   });
 
+  it("documents shipped inline-comment review toggles in gittensory.full.yml (#2156)", () => {
+    const full = readConfigExample("gittensory.full.yml");
+    for (const field of ["inline_comments", "suggestions", "finding_categories"]) {
+      expect(full, `missing review field ${field}`).toMatch(new RegExp(`# ${field}:`));
+    }
+  });
+
   it("parses gittensory.minimal.yml with zero warnings and enables no agent actions", () => {
     const manifest = parseFocusManifestContent(readConfigExample("gittensory.minimal.yml"), "repo_file");
     expect(manifest.warnings).toEqual([]);
