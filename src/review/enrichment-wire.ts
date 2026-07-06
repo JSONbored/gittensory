@@ -54,6 +54,14 @@ function sharedSecretWasNormalized(
 }
 
 /**
+ * Set to true when the startup probe confirms the shared secret is rejected by REES (401/403).
+ * Once set, buildReviewEnrichment skips all /v1/enrich calls for this process lifetime to avoid
+ * flooding Sentry with auth-rejected errors on every PR. Cleared only by a process restart.
+ */
+let reesAuthRejected = false;
+let reesAuthRejectedLoggedCount = 0;
+
+/**
  * Fire-and-forget startup probe that POSTs to REES /v1/ping to verify the shared secret matches.
  * Logs rees_ping_ok on success, or rees_secret_mismatch / rees_secret_missing / rees_ping_error on
  * failure so the misconfiguration is visible in logs and Sentry before any PR triggers a review.
@@ -109,13 +117,14 @@ export function probeReesSecretAtStartup(env: Env): void {
         );
       } else {
         const isAuthError = response.status === 401 || response.status === 403;
+        if (isAuthError) reesAuthRejected = true;
         console.error(
           JSON.stringify({
             level: "error",
             event: isAuthError ? "rees_secret_mismatch" : "rees_ping_error",
             status: response.status,
             message: isAuthError
-              ? `REES /v1/ping rejected the bearer token (${response.status}). The REES_SHARED_SECRET on this engine does not match the REES_SHARED_SECRET on the REES service. All /v1/enrich calls will fail until both are set to the same bare string.`
+              ? `REES /v1/ping rejected the bearer token (${response.status}). The REES_SHARED_SECRET on this engine does not match the REES_SHARED_SECRET on the REES service. All /v1/enrich calls are disabled for this process lifetime — restart the engine after fixing both secrets.`
               : `REES /v1/ping returned an unexpected status (${response.status}). Check the REES service logs.`,
           }),
         );
@@ -323,6 +332,22 @@ export async function buildReviewEnrichment(
   const cfg = reesConfig(env);
   const base = cfg.REES_URL?.trim();
   if (!base) return undefined;
+  if (reesAuthRejected) {
+    // Startup probe confirmed the shared secret is rejected. Skip silently (log only the first few
+    // times to avoid Sentry noise) until the operator fixes the secret and restarts the engine.
+    if (reesAuthRejectedLoggedCount < 3) {
+      reesAuthRejectedLoggedCount++;
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          event: "rees_enrich_skipped_auth_rejected",
+          message:
+            "Skipping REES /v1/enrich call: startup probe confirmed shared secret is rejected. Fix REES_SHARED_SECRET on both the engine and the REES service, then restart.",
+        }),
+      );
+    }
+    return undefined;
+  }
   const sharedSecret = normalizeSharedSecret(cfg.REES_SHARED_SECRET);
   const authConfigured = Boolean(sharedSecret);
   const authSecretNormalized = sharedSecretWasNormalized(
