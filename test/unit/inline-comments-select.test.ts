@@ -76,6 +76,22 @@ describe("selectAnchoredInlineFindings (#2159)", () => {
     expect(selected.filter((f) => inlineFindingCategory(f) === "style")).toHaveLength(2);
   });
 
+  it("preserves first-seen index order among equal-priority findings when sorting for caps", () => {
+    const findings: InlineFinding[] = [
+      { path: "src/a.ts", line: 1, severity: "nit", body: "first", category: "style" },
+      { path: "src/a.ts", line: 2, severity: "nit", body: "second", category: "style" },
+    ];
+    expect(selectAnchoredInlineFindings(findings, files, { perCategoryCap: 1 }).map((finding) => finding.body)).toEqual(["first"]);
+  });
+
+  it("dedupes same path:line anchors before capping", () => {
+    const findings: InlineFinding[] = [
+      { path: "src/a.ts", line: 1, severity: "blocker", body: "first", category: "security" },
+      { path: "src/a.ts", line: 1, severity: "blocker", body: "duplicate", category: "security" },
+    ];
+    expect(selectAnchoredInlineFindings(findings, files).map((finding) => finding.body)).toEqual(["first"]);
+  });
+
   it("still enforces the total cap after per-category trimming", () => {
     const findings: InlineFinding[] = Array.from({ length: 6 }, (_, index) => ({
       path: "src/a.ts",
