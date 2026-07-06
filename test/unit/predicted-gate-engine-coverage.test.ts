@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { evaluateGateCheck, buildPullRequestAdvisory } from "../../packages/gittensory-engine/src/advisory/gate-advisory";
-import { buildFocusManifestGuidance } from "../../packages/gittensory-engine/src/focus-manifest/guidance";
+import { buildFocusManifestGuidance, isFocusManifestPublicSafe, matchesManifestPath } from "../../packages/gittensory-engine/src/focus-manifest/guidance";
 import { sanitizePublicComment } from "../../packages/gittensory-engine/src/github/sanitize-public-comment";
-import { evaluatePreMergeChecks, PRE_MERGE_CHECK_UNRESOLVED_CODE } from "../../packages/gittensory-engine/src/review/pre-merge-checks";
+import {
+  CLA_CHECK_UNRESOLVED_CODE,
+  CLA_CONSENT_MISSING_CODE,
+  evaluateClaCheck,
+  type ClaCheckConfig,
+} from "../../packages/gittensory-engine/src/review/cla-check";
+import { evaluatePreMergeChecks, PRE_MERGE_CHECK_ADVISORY_CODE, PRE_MERGE_CHECK_BLOCKING_CODE, PRE_MERGE_CHECK_UNRESOLVED_CODE } from "../../packages/gittensory-engine/src/review/pre-merge-checks";
 import { diffFilePriority } from "../../packages/gittensory-engine/src/review/diff-file-priority";
 import {
   clearLabelPatternRegExpCacheForTest,
@@ -11,10 +17,16 @@ import {
   labelMatchesPattern,
   labelPatternRegExpCacheKeysForTest,
 } from "../../packages/gittensory-engine/src/scoring/label-match";
+import {
+  changedPathsHittingGuardrail,
+  globToRegExp,
+  guardrailPathMatches,
+  isGuardrailHit,
+  matchesAny,
+} from "../../packages/gittensory-engine/src/signals/change-guardrail";
 import { isDuplicateClusterWinner, isDuplicateClusterWinnerByClaim, resolveDuplicateClusterWinnerNumber } from "../../packages/gittensory-engine/src/signals/duplicate-winner";
-import { guardrailPathMatches, isGuardrailHit } from "../../packages/gittensory-engine/src/signals/change-guardrail";
 import { buildCollisionReport, buildPreflightResult, buildPublicReadinessScore, buildQueueHealth, classifyBountyLifecycle, unionScopedOverlapClusters } from "../../packages/gittensory-engine/src/signals/predicted-gate-engine";
-import type { FocusManifest, IssueQualityReport, PullRequestRecord, RepositoryRecord } from "../../packages/gittensory-engine/src/types/predicted-gate-types";
+import type { FocusManifest, IssueQualityReport, PreMergeCheck, PullRequestRecord, RepositoryRecord } from "../../packages/gittensory-engine/src/types/predicted-gate-types";
 
 const REPO: RepositoryRecord = {
   fullName: "acme/widgets",
@@ -43,6 +55,22 @@ const PR: PullRequestRecord = {
   linkedIssues: [7],
 };
 
+const claConfig = (over: Partial<ClaCheckConfig> = {}): ClaCheckConfig => ({
+  consentPhrase: null,
+  checkRunName: null,
+  ...over,
+});
+
+const preMergeCheck = (over: Partial<PreMergeCheck> = {}): PreMergeCheck => ({
+  name: "Check",
+  whenPaths: [],
+  titleContains: null,
+  descriptionContains: null,
+  requireLabel: null,
+  enforce: false,
+  ...over,
+});
+
 describe("predicted-gate engine module coverage (#2283)", () => {
   it("mirrors scoring label matcher semantics through the engine copy", () => {
     expect(labelMatchesPattern("type:bug-fix", "type:*")).toBe(true);
@@ -51,6 +79,8 @@ describe("predicted-gate engine module coverage (#2283)", () => {
     expect(labelMatchesPattern("priority:10", "priority:?")).toBe(false);
     expect(labelMatchesPattern("kind/bug", "kind/[bc]ug")).toBe(true);
     expect(labelMatchesPattern("kind/dug", "kind/[!bc]ug")).toBe(true);
+    expect(labelMatchesPattern("^ug", "[^x]ug")).toBe(true);
+    expect(labelMatchesPattern("bug", "[^x]ug")).toBe(false);
     expect(labelMatchesPattern("x", "[z-a]")).toBe(false);
     expect(labelMatchesPattern("[bug", "[bug")).toBe(true);
     expect(labelMatchesPattern("m", "[a-z-9]")).toBe(true);
@@ -98,14 +128,22 @@ describe("predicted-gate engine module coverage (#2283)", () => {
     expect(resolveDuplicateClusterWinnerNumber({ number: 1, createdAt: null }, [{ number: 2, createdAt: null }])).toBeNull();
   });
 
-  it("exercises diff-file priority and collision path overlap helpers", () => {
+  it("exercises diff-file priority tiers and guardrail glob helpers", () => {
     expect(diffFilePriority("src/app.ts")).toBe(0);
+    expect(diffFilePriority("src/app.test.ts")).toBe(1);
+    expect(diffFilePriority("README.md")).toBe(2);
     expect(diffFilePriority("package-lock.json")).toBe(4);
-    const collisions = buildCollisionReport("acme/widgets", [], [
-      { ...PR, changedFiles: ["src/a.ts"] },
-      { ...PR, number: 10, changedFiles: ["src/a.ts"] },
-    ]);
-    expect(collisions.clusters.length).toBeGreaterThan(0);
+    expect(diffFilePriority("dist/bundle.js")).toBe(4);
+    expect(globToRegExp("src/**/model.ts").test("src/a/deep/model.ts")).toBe(true);
+    expect(globToRegExp("public/**/*.json").test("public/release/config.json")).toBe(true);
+    expect(matchesAny("completely/unrelated.md", ["*/*/*/*/*/*/*/*/*/*/*/*/*/*/*/*/*/*/*/*"])).toBe(true);
+    expect(changedPathsHittingGuardrail(["src/a.ts"], [])).toEqual([]);
+    expect(isGuardrailHit(["docs/readme.md"], ["scripts/**"])).toBe(false);
+    expect(matchesManifestPath("", "src/**")).toBe(false);
+    expect(matchesManifestPath("src/a.ts", "")).toBe(false);
+    expect(matchesManifestPath("src/nested/a.ts", "src/")).toBe(true);
+    expect(isFocusManifestPublicSafe("wallet hotkey farming")).toBe(false);
+    expect(isFocusManifestPublicSafe("Keep changes focused.")).toBe(true);
   });
 
   it("exercises guardrail path matching", () => {
@@ -119,6 +157,7 @@ describe("predicted-gate engine module coverage (#2283)", () => {
     expect(sanitizePublicComment("score estimate 12.5 -> 41.2")).toContain("private context");
     expect(sanitizePublicComment("reviewability internals")).toContain("private context");
     expect(sanitizePublicComment("@gittensory reviewability score")).toContain("reviewability");
+    expect(sanitizePublicComment("likely_duplicate overlap")).toContain("possible overlap");
     expect(sanitizePublicComment("open pr count 12 exceeds threshold 10")).toContain("private context");
   });
 
@@ -559,5 +598,222 @@ describe("predicted-gate engine module coverage (#2283)", () => {
     );
     expect(sizeHold.conclusion).toBe("neutral");
     expect(sizeHold.warnings.some((w) => w.code === "oversized_pr")).toBe(true);
+  });
+
+  it("mirrors engine cla-check and pre-merge-check branches", () => {
+    expect(evaluateClaCheck(claConfig(), { body: "no consent" })).toEqual([]);
+    expect(evaluateClaCheck(claConfig({ consentPhrase: "agree to the CLA" }), { body: "I agree to the CLA." })).toEqual([]);
+    expect(evaluateClaCheck(claConfig({ consentPhrase: "agree to the CLA" }), { body: "missing" })[0]?.code).toBe(CLA_CONSENT_MISSING_CODE);
+    expect(evaluateClaCheck(claConfig({ checkRunName: "CLA Assistant Lite" }), { checkRunConclusion: "success" })).toEqual([]);
+    expect(evaluateClaCheck(claConfig({ checkRunName: "CLA Assistant Lite" }), { checkRunConclusion: undefined })[0]?.code).toBe(CLA_CHECK_UNRESOLVED_CODE);
+    expect(evaluateClaCheck(claConfig({ consentPhrase: "agree", checkRunName: "CLA Assistant Lite" }), { body: "no", checkRunConclusion: "failure" })[0]?.code).toBe(
+      CLA_CONSENT_MISSING_CODE,
+    );
+
+    expect(evaluatePreMergeChecks([], { title: "t", body: "b", labels: [], changedPaths: [] })).toEqual([]);
+    expect(
+      evaluatePreMergeChecks([preMergeCheck({ name: "All", titleContains: "FEAT", descriptionContains: "Migration", requireLabel: "Ship" })], {
+        title: "feat: add",
+        body: "includes a migration",
+        labels: ["ship"],
+        changedPaths: [],
+      }),
+    ).toEqual([]);
+    const advisoryFail = evaluatePreMergeChecks([preMergeCheck({ name: "Needs all", titleContains: "feat", descriptionContains: "why", requireLabel: "ready" })], {
+      title: "chore: x",
+      body: "no rationale",
+      labels: [],
+      changedPaths: [],
+    });
+    expect(advisoryFail[0]?.code).toBe(PRE_MERGE_CHECK_ADVISORY_CODE);
+    const blockingFail = evaluatePreMergeChecks([preMergeCheck({ name: "Required", requireLabel: "approved", enforce: true })], {
+      title: "t",
+      body: "b",
+      labels: ["other"],
+      changedPaths: [],
+    });
+    expect(blockingFail[0]?.code).toBe(PRE_MERGE_CHECK_BLOCKING_CODE);
+    const pathGated = evaluatePreMergeChecks(
+      [preMergeCheck({ name: "Migrations documented", whenPaths: ["migrations/**"], descriptionContains: "migration", enforce: true })],
+      { title: "t", body: "no note", labels: [], changedPaths: ["migrations/0099_x.sql"] },
+    );
+    expect(pathGated[0]?.code).toBe(PRE_MERGE_CHECK_BLOCKING_CODE);
+    const unresolved = evaluatePreMergeChecks(
+      [
+        preMergeCheck({ name: "Migrations documented", whenPaths: ["migrations/**"], descriptionContains: "migration", enforce: true }),
+        preMergeCheck({ name: "advisory path check", whenPaths: ["migrations/**"], descriptionContains: "migration", enforce: false }),
+        preMergeCheck({ name: "JIRA in title", titleContains: "JIRA-", enforce: true }),
+      ],
+      { title: "no ref", body: "", labels: [], changedPaths: [], filesResolved: false },
+    );
+    expect(unresolved.find((f) => f.title.includes("Migrations documented"))?.code).toBe(PRE_MERGE_CHECK_UNRESOLVED_CODE);
+    expect(unresolved.find((f) => f.title.includes("JIRA in title"))?.code).toBe(PRE_MERGE_CHECK_BLOCKING_CODE);
+    expect(evaluatePreMergeChecks([preMergeCheck({ name: "T", titleContains: "feat" })], { changedPaths: [] })).toHaveLength(1);
+  });
+
+  it("exercises collision, duplicate-winner, and gate-evaluation edge branches", () => {
+    const sharedIssueCollision = buildCollisionReport(
+      REPO.fullName,
+      [{ repoFullName: REPO.fullName, number: 7, title: "Issue", state: "open", labels: [], linkedPrs: [], authorLogin: "other" }],
+      [
+        { ...PR, number: 1, linkedIssues: [7] },
+        { ...PR, number: 2, linkedIssues: [7] },
+      ],
+    );
+    expect(sharedIssueCollision.clusters.length).toBeGreaterThan(0);
+
+    const pathOverlap = buildCollisionReport(REPO.fullName, [], [
+      { ...PR, number: 1, authorLogin: "alice", title: "alpha widget refactor", changedFiles: ["src/core/upload.ts"] },
+      { ...PR, number: 2, authorLogin: "bob", title: "beta service cleanup", changedFiles: ["src/core/upload.ts"] },
+    ]);
+    expect(pathOverlap.clusters.length).toBeGreaterThan(0);
+
+    expect(
+      isDuplicateClusterWinnerByClaim({ number: 1, linkedIssueClaimedAt: "invalid" }, [{ number: 2, linkedIssueClaimedAt: "2026-01-02T00:00:00.000Z" }]),
+    ).toBe(false);
+    expect(resolveDuplicateClusterWinnerNumber({ number: 1, createdAt: null }, [{ number: 2, createdAt: null }])).toBeNull();
+
+    const unregistered = buildPullRequestAdvisory({ ...REPO, isRegistered: false, registryConfig: null }, PR);
+    expect(unregistered.findings.some((f) => f.code === "repo_unregistered")).toBe(true);
+    const missingConfig = buildPullRequestAdvisory({ ...REPO, registryConfig: null }, PR);
+    expect(missingConfig.findings.some((f) => f.code === "repo_config_missing")).toBe(true);
+
+    const duplicateWinner = buildPullRequestAdvisory(
+      REPO,
+      { ...PR, number: 20, linkedIssues: [7], linkedIssueClaimedAt: "2026-01-01T00:00:00.000Z" },
+      {
+        otherOpenPullRequests: [{ ...PR, number: 21, linkedIssues: [7], linkedIssueClaimedAt: "2026-01-02T00:00:00.000Z" }],
+        duplicateWinnerEnabled: true,
+      },
+    );
+    expect(duplicateWinner.findings.some((f) => f.code === "duplicate_pr_risk")).toBe(false);
+
+    const held = evaluateGateCheck(
+      {
+        id: "a",
+        targetType: "pull_request",
+        targetKey: "k",
+        repoFullName: REPO.fullName,
+        conclusion: "neutral",
+        severity: "warning",
+        title: "t",
+        summary: "s",
+        findings: [{ code: "repo_not_registered", severity: "warning", title: "hold", detail: "hold" }],
+        generatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {},
+    );
+    expect(held.conclusion).toBe("neutral");
+
+    const claHeld = evaluateGateCheck(
+      {
+        id: "a",
+        targetType: "pull_request",
+        targetKey: "k",
+        repoFullName: REPO.fullName,
+        conclusion: "neutral",
+        severity: "warning",
+        title: "t",
+        summary: "s",
+        findings: [{ code: CLA_CHECK_UNRESOLVED_CODE, severity: "warning", title: "cla", detail: "cla" }],
+        generatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      { claGateMode: "block" },
+    );
+    expect(claHeld.conclusion).toBe("neutral");
+
+    const manifestBlocked = evaluateGateCheck(
+      {
+        id: "a",
+        targetType: "pull_request",
+        targetKey: "k",
+        repoFullName: REPO.fullName,
+        conclusion: "neutral",
+        severity: "warning",
+        title: "t",
+        summary: "s",
+        findings: [{ code: "manifest_missing_tests", severity: "warning", title: "tests", detail: "tests", action: "add tests" }],
+        generatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      { manifestPolicyGateMode: "block" },
+    );
+    expect(manifestBlocked.conclusion).toBe("failure");
+
+    const mergeReady = evaluateGateCheck(
+      {
+        id: "a",
+        targetType: "pull_request",
+        targetKey: "k",
+        repoFullName: REPO.fullName,
+        conclusion: "neutral",
+        severity: "warning",
+        title: "t",
+        summary: "s",
+        findings: [{ code: "missing_linked_issue", severity: "warning", title: "issue", detail: "issue" }],
+        generatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      { mergeReadinessGateMode: "block" },
+    );
+    expect(mergeReady.conclusion).toBe("failure");
+
+    const guardrailOnly = evaluateGateCheck(
+      {
+        id: "a",
+        targetType: "pull_request",
+        targetKey: "k",
+        repoFullName: REPO.fullName,
+        conclusion: "success",
+        severity: "info",
+        title: "t",
+        summary: "s",
+        findings: [],
+        generatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      { guardrailHit: true, sizeGateMode: "off" },
+    );
+    expect(guardrailOnly.conclusion).toBe("neutral");
+    expect(guardrailOnly.warnings.some((w) => w.code === "guardrail_hold")).toBe(true);
+
+    const criticalBlocker = evaluateGateCheck(
+      {
+        id: "a",
+        targetType: "pull_request",
+        targetKey: "k",
+        repoFullName: REPO.fullName,
+        conclusion: "neutral",
+        severity: "warning",
+        title: "t",
+        summary: "s",
+        findings: [{ code: "pre_merge_check_required", severity: "critical", title: "required", detail: "required", action: "fix it" }],
+        generatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {},
+    );
+    expect(criticalBlocker.conclusion).toBe("failure");
+    expect(criticalBlocker.summary).toContain("fix it");
+
+    const missingTests = buildFocusManifestGuidance({
+      manifest: {
+        present: true,
+        source: "repo_file",
+        wantedPaths: [],
+        preferredLabels: [],
+        linkedIssuePolicy: "optional",
+        testExpectations: ["paste your wallet hotkey here"],
+        issueDiscoveryPolicy: "neutral",
+        maintainerNotes: [],
+        publicNotes: [],
+        gate: { present: true } as FocusManifest["gate"],
+        settings: {},
+        review: { present: true, preMergeChecks: [] },
+        warnings: [],
+      },
+      changedPaths: ["src/a.ts"],
+      linkedIssueCount: 1,
+      testFileCount: 0,
+      passedValidationCount: 0,
+    });
+    expect(missingTests.findings.some((f) => f.code === "manifest_missing_tests")).toBe(true);
+    expect(missingTests.findings.find((f) => f.code === "manifest_missing_tests")?.detail).not.toContain("wallet");
   });
 });
