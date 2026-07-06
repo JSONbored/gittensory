@@ -1589,6 +1589,20 @@ export type GateOutcomeRecord = {
   updatedAt?: string | null | undefined;
 };
 
+// Review memory (#2178, data-model slice of #1964). One row per (repoFullName, category, pathGlob,
+// patternHash) — a maintainer-dismissed finding shape gittensory should suppress/demote if it recurs.
+// Privacy: repo + category (the finding's own deterministic `code`) + a path glob + a message HASH ONLY —
+// never the raw finding message/title, never an actor's trust/reward fields.
+export type ReviewSuppressionRecord = {
+  id: string;
+  repoFullName: string;
+  category: string;
+  pathGlob: string;
+  patternHash: string;
+  createdAt: string;
+  createdBy?: string | null | undefined;
+};
+
 export type AgentRecommendationOutcomeSummary = {
   login: string;
   generatedAt: string;

@@ -34,6 +34,7 @@ import {
   resolveReviewVisualConfig,
   repoDocGenerationConfigToJson,
   resolveTestGenerationManifestToggle,
+  resolveReviewMemoryManifestToggle,
   reviewConfigToJson,
   reviewRecapConfigToJson,
   settingsOverrideToJson,
@@ -362,6 +363,7 @@ describe(".gittensory.yml.example field-exhaustiveness (#1670)", () => {
     testGeneration: "test_generation:",
     impactMap: "impact_map:",
     cultureProfile: "culture_profile:",
+    reviewMemory: "memory:",
     findingCategories: "finding_categories:",
     minFindingSeverity: "min_finding_severity:",
     maxFindings: "max_findings:",
@@ -785,7 +787,7 @@ describe("compileFocusManifestPolicy", () => {
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
       gate: { present: false, enabled: null, checkMode: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, lockfileIntegrityMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null, claMode: null, claConsentPhrase: null, claCheckRunName: null, claCheckRunAppSlug: null, expectedCiContexts: null },
       settings: {},
-      review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, impactMap: null, cultureProfile: null, findingCategories: null, minFindingSeverity: null, maxFindings: { blockers: null, nits: null }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
+      review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, impactMap: null, cultureProfile: null, reviewMemory: null, findingCategories: null, minFindingSeverity: null, maxFindings: { blockers: null, nits: null }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
       features: { present: false, rag: null, reputation: null, unifiedComment: null, safety: null },
       contentLane: { present: false, entryFileGlob: null, providerFileGlob: null, artifactGlob: null, collectionField: null, maxAppendedEntries: null, duplicateKeyFields: [], validatorId: null },
       repoDocGeneration: { present: false, enabled: false, scope: ["agents"], allowOverwriteExisting: false, refreshIntervalDays: 7 },
@@ -3089,6 +3091,23 @@ describe("resolveReviewPathInstructions (#review-path-instructions)", () => {
     expect(bad.warnings.some((w) => /review\.culture_profile.*must be a boolean/.test(w))).toBe(true);
   });
 
+  it("parses review.memory (default OFF), marks present, round-trips, and warns on a non-boolean (#2179)", () => {
+    expect(parseFocusManifest({ review: { memory: true } }).review.reviewMemory).toBe(true);
+    const on = parseFocusManifest({ review: { memory: true } });
+    expect(on.review.present).toBe(true); // a memory-only manifest IS present
+    expect(parseFocusManifest({ review: reviewConfigToJson(on.review) }).review).toEqual(on.review); // survives round-trip
+    // Explicit false is retained (and marks present, since the maintainer set it).
+    const off = parseFocusManifest({ review: { memory: false } });
+    expect(off.review.reviewMemory).toBe(false);
+    expect(off.review.present).toBe(true);
+    // Absent ⇒ null (the byte-identical default), config not present.
+    expect(parseFocusManifest({ review: {} }).review.reviewMemory).toBeNull();
+    // A non-boolean is ignored with a warning.
+    const bad = parseFocusManifest({ review: { memory: "yes" } });
+    expect(bad.review.reviewMemory).toBeNull();
+    expect(bad.warnings.some((w) => /review\.memory.*must be a boolean/.test(w))).toBe(true);
+  });
+
   it("parses review.finding_categories (default OFF), marks present, round-trips, and warns on a non-boolean (#1958)", () => {
     expect(parseFocusManifest({ review: { finding_categories: true } }).review.findingCategories).toBe(true);
     const on = parseFocusManifest({ review: { finding_categories: true } });
@@ -3111,6 +3130,13 @@ describe("resolveReviewPathInstructions (#review-path-instructions)", () => {
     expect(resolveTestGenerationManifestToggle(parseFocusManifest({}))).toBe(false); // absent ⇒ false
     expect(resolveTestGenerationManifestToggle(parseFocusManifest({ review: { test_generation: false } }))).toBe(false);
     expect(resolveTestGenerationManifestToggle(parseFocusManifest({ review: { test_generation: true } }))).toBe(true);
+  });
+
+  it("resolves review.memory's manifest toggle to a strict boolean (#2179)", () => {
+    expect(resolveReviewMemoryManifestToggle(null)).toBe(false); // null manifest (load failure) ⇒ false
+    expect(resolveReviewMemoryManifestToggle(parseFocusManifest({}))).toBe(false); // absent ⇒ false
+    expect(resolveReviewMemoryManifestToggle(parseFocusManifest({ review: { memory: false } }))).toBe(false);
+    expect(resolveReviewMemoryManifestToggle(parseFocusManifest({ review: { memory: true } }))).toBe(true);
   });
 
   it("parses review.min_finding_severity, round-trips, and warns on invalid values (#2048)", () => {

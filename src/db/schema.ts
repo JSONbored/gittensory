@@ -764,6 +764,30 @@ export const activeReviewTracking = sqliteTable(
   }),
 );
 
+// Review memory (#2178, data-model slice of #1964): a bounded, public-safe per-repo store of "the maintainer
+// already dismissed this as a false positive" suppression signals (migrations/0114). `category` is the
+// finding's own deterministic `code` (never a private rubric term); `pathGlob` narrows the suppression to a
+// path pattern ("" = repo-wide); `patternHash` is a stable hash of the finding's NORMALIZED message — the raw
+// message itself is never stored, only its hash. One row per (repoFullName, category, pathGlob, patternHash);
+// re-recording the same shape upserts (bumps createdAt) rather than duplicating. Read-side matching (#2180)
+// and apply-to-findings wiring (#2181) are separate slices layered on top of this store.
+export const reviewSuppression = sqliteTable(
+  "review_suppression",
+  {
+    id: text("id").primaryKey(),
+    repoFullName: text("repo_full_name").notNull(),
+    category: text("category").notNull(),
+    pathGlob: text("path_glob").notNull().default(""),
+    patternHash: text("pattern_hash").notNull(),
+    createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
+    createdBy: text("created_by"),
+  },
+  (table) => ({
+    key: uniqueIndex("review_suppression_key_unique").on(table.repoFullName, table.category, table.pathGlob, table.patternHash),
+    repoCreated: index("review_suppression_repo_created_idx").on(table.repoFullName, table.createdAt),
+  }),
+);
+
 // Agent-layer approval queue (#779). An `auto_with_approval` action the write-actions layer (#778) staged for
 // a one-tap maintainer accept/reject. At most one row per (repo, pull, action_class).
 export const agentPendingActions = sqliteTable(

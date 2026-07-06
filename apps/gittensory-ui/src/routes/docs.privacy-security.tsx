@@ -87,6 +87,7 @@ GITTENSORY_REVIEW_GROUNDING="true"               # CI status + full changed-file
 GITTENSORY_REVIEW_RAG="true"                     # codebase vector-index context (needs index)
 GITTENSORY_REVIEW_IMPACT_MAP="true"              # deterministic impact map (needs review.impact_map too)
 GITTENSORY_REVIEW_CULTURE_PROFILE="true"         # repo quality-culture profile (needs review.culture_profile: true)
+GITTENSORY_REVIEW_MEMORY="true"                  # repeat-false-positive suppression (needs review.memory too)
 GITTENSORY_REVIEW_REPUTATION="true"              # submitter-reputation spend control (never shown)
 GITTENSORY_REVIEW_UNIFIED_COMMENT="true"         # one in-place unified PR comment
 GITTENSORY_REVIEW_ENRICHMENT="true"              # external analyzer registry (REES) findings

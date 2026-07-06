@@ -51,10 +51,12 @@ import {
   upsertRepositoryFromGitHub,
   putCachedAiReview,
   markAiReviewPublished,
+  recordReviewSuppression,
 } from "../../src/db/repositories";
 import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, claimAiReviewLock, claimPrActuationLock, contributorEvidenceBatchSize, enrichOpenPullRequestsWithChangedFiles, processJob, reconcileLiveDuplicateSiblings, releaseAiReviewLock, releasePrActuationLock } from "../../src/queue/processors";
 import type { PullRequestRecord } from "../../src/types";
 import { aiReviewCacheInputFingerprint } from "../../src/review/ai-review-cache-input";
+import { fingerprint as reviewMemoryFingerprint } from "../../src/review/review-memory-match";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
@@ -17075,6 +17077,247 @@ describe("queue processors", () => {
       expect(postedBody).toContain("_+1 more_");
     } finally {
       liveCiSpy.mockRestore();
+    }
+  });
+
+  // #2181 (apply slice of #1964): review.memory end-to-end through the real webhook path. A `qualityGateMode:
+  // "advisory"` + an unreachable `qualityGateMinScore: 100` deterministically produces the
+  // `readiness_score_below_threshold` ADVISORY (never a blocker — readiness stays advisory-only, see
+  // rules.test.ts) warning finding on every pass, giving a stable target to record a suppression signal against
+  // and verify it is (or is not) suppressed from the rendered unified comment. The manifest is seeded DIRECTLY
+  // via upsertRepoFocusManifest (bypassing the 6h .gittensory.yml fetch cache) so each test's `.gittensory.yml`
+  // fetch response is never actually needed on the hot path — it only serves as an inert 404 fallback.
+  async function runReadinessWarningPass(env: Env, opts: { deliveryId: string; headSha: string; reviewMemoryManifest: boolean }) {
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "detected_contributors_only",
+      publicAudienceMode: "gittensor_only",
+      publicSignalLevel: "standard",
+      publicSurface: "comment_and_label",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      gateCheckMode: "enabled",
+      backfillEnabled: true,
+      privateTrustEnabled: true,
+      autonomy: { update_branch: "auto" },
+      qualityGateMode: "advisory",
+      qualityGateMinScore: 100,
+    });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", opts.reviewMemoryManifest ? { review: { memory: true } } : {});
+    let postedBody = "";
+    let gateFinalized = false;
+    let failedPostGateMint = false;
+    const liveCiSpy = vi
+      .spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl")
+      .mockResolvedValue({
+        ciState: "passed",
+        hasPending: false,
+        hasVisiblePending: false,
+        hasMissingRequiredContext: false,
+        failingDetails: [],
+        nonRequiredFailingDetails: [],
+        ciCompletenessWarning: null,
+      });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          {
+            uid: 7,
+            githubUsername: "oktofeesh1",
+            githubId: "123",
+            totalPrs: 4,
+            totalMergedPrs: 3,
+            totalOpenPrs: 1,
+            totalClosedPrs: 0,
+            totalOpenIssues: 0,
+            totalClosedIssues: 0,
+            totalSolvedIssues: 0,
+            totalValidSolvedIssues: 0,
+            isEligible: true,
+            credibility: 1,
+            eligibleRepoCount: 1,
+            hotkey: "must-not-leak",
+          },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({
+          repositories: [
+            {
+              repositoryFullName: "JSONbored/gittensory",
+              totalPrs: "4",
+              totalMergedPrs: "3",
+              totalOpenPrs: "1",
+              totalClosedPrs: "0",
+              totalOpenIssues: "0",
+              totalClosedIssues: "0",
+              isEligible: true,
+              credibility: "1.000000",
+            },
+          ],
+        });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+        return new Response("not found", { status: 404 });
+      }
+      if (url.includes("/access_tokens")) {
+        if (gateFinalized && !failedPostGateMint) {
+          failedPostGateMint = true;
+          return new Response("mint failed", { status: 500 });
+        }
+        return Response.json({ token: "installation-token", expires_at: "2026-05-28T00:04:00.000Z" });
+      }
+      if (url.includes("/pulls/3/files"))
+        return Response.json([{ filename: "src/cache.ts", additions: 5, deletions: 1, status: "modified" }]);
+      if (/\/pulls\/3(?:\?|$)/.test(url)) return Response.json({ number: 3, mergeable_state: "clean" });
+      if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string };
+        if (body.status !== "in_progress" || body.conclusion) {
+          gateFinalized = true;
+          clearInstallationTokenCacheForTest();
+        }
+        return Response.json({ id: 901 }, { status: 201 });
+      }
+      if (url.includes("/check-runs/901") && method === "PATCH") {
+        gateFinalized = true;
+        clearInstallationTokenCacheForTest();
+        return Response.json({ id: 901 });
+      }
+      if (url.includes("/issues/3/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/3/comments") && method === "POST") {
+        postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        return Response.json({ id: 1, html_url: "https://github.com/comment/1" }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    try {
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: opts.deliveryId,
+        eventName: "pull_request",
+        payload: {
+          action: "synchronize",
+          installation: {
+            id: 123,
+            account: { login: "JSONbored", id: 1, type: "User" },
+            repository_selection: "selected",
+            permissions: { metadata: "read", pull_requests: "read", issues: "write", checks: "write" },
+            events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+          },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: {
+            number: 3,
+            title: "Fix webhook duplicate delivery again",
+            state: "open",
+            user: { login: "oktofeesh1" },
+            head: { sha: opts.headSha },
+            labels: [{ name: "bug" }],
+            // No linked issue AND no validation evidence -- keeps the readiness score comfortably below the
+            // unreachable qualityGateMinScore: 100 threshold above, so readiness_score_below_threshold fires
+            // deterministically regardless of the panel's exact scoring breakdown.
+            body: "No linked issue, no validation evidence on purpose.",
+          },
+        },
+      });
+    } finally {
+      liveCiSpy.mockRestore();
+    }
+    return postedBody;
+  }
+
+  it("FLAG-OFF (default): review.memory in .gittensory.yml alone never suppresses the readiness warning (operator kill-switch required)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
+    // review.memory: true in the manifest, but NO GITTENSORY_REVIEW_MEMORY env flag on this env -- byte-identical.
+    const postedBody = await runReadinessWarningPass(env, {
+      deliveryId: "review-memory-flag-off",
+      headSha: "revmem-flag-off",
+      reviewMemoryManifest: true,
+    });
+    expect(postedBody).toContain("Readiness score is below the configured threshold");
+  });
+
+  it("FLAG-ON: suppresses a readiness warning EXACTLY matching a previously recorded suppression signal", async () => {
+    const seedEnv = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
+    // A throwaway pass (flag/manifest both off — byte-identical review path) against a SEPARATE, disposable D1
+    // instance just to learn the finding's REAL, LIVE-computed readiness score (a pure function of the fixed
+    // PR/settings fixture above, so it reproduces identically for the real pass below on its own fresh `env`).
+    // The rendered nit itself only carries `title`+`action` (see buildDualReviewNotes's gateNits) — the score
+    // comes from the status chip.
+    const seedBody = await runReadinessWarningPass(seedEnv, { deliveryId: "review-memory-seed", headSha: "revmem-seed", reviewMemoryManifest: false });
+    expect(seedBody).toContain("Readiness score is below the configured threshold");
+    const scoreMatch = /readiness (\d+)\/100/.exec(seedBody);
+    expect(scoreMatch).not.toBeNull();
+    const score = Number(scoreMatch![1]);
+    // Reconstructs buildQualityGateWarning's exact title+detail template (src/rules/advisory.ts) from the live
+    // score + the qualityGateMinScore: 100 configured above, so the computed patternHash matches the real finding.
+    const detail = `The public readiness score is ${score}/100, below the repository threshold of 100/100.`;
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1", GITTENSORY_REVIEW_MEMORY: "true" });
+    await recordReviewSuppression(env, {
+      repoFullName: "JSONbored/gittensory",
+      category: "readiness_score_below_threshold",
+      patternHash: reviewMemoryFingerprint({
+        category: "readiness_score_below_threshold",
+        message: `Readiness score is below the configured threshold ${detail}`,
+      }),
+      createdBy: "maintainer1",
+    });
+    // The flag is ON (env + manifest) and the exact-match signal is now stored -- the warning must be
+    // suppressed from the rendered unified comment.
+    const postedBody = await runReadinessWarningPass(env, {
+      deliveryId: "review-memory-flag-on",
+      headSha: "revmem-flag-on",
+      reviewMemoryManifest: true,
+    });
+    expect(postedBody).not.toContain("Readiness score is below the configured threshold");
+  });
+
+  it("FLAG-ON: DEMOTES (keeps, but does not suppress) a same-category readiness warning that does not exactly match any stored signal", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1", GITTENSORY_REVIEW_MEMORY: "true" });
+    // A signal for the SAME category but a patternHash that can never match this PR's real finding -- exercises
+    // the "demote" (scope-matched, hash-mismatched) branch instead of "suppress".
+    await recordReviewSuppression(env, {
+      repoFullName: "JSONbored/gittensory",
+      category: "readiness_score_below_threshold",
+      patternHash: "never-matches-the-real-finding",
+      createdBy: "maintainer1",
+    });
+    const postedBody = await runReadinessWarningPass(env, {
+      deliveryId: "review-memory-demote",
+      headSha: "revmem-demote",
+      reviewMemoryManifest: true,
+    });
+    // Demoted (not suppressed) -- the finding still renders in the comment.
+    expect(postedBody).toContain("Readiness score is below the configured threshold");
+  });
+
+  it("FLAG-ON, fail-safe: a suppression-store read error leaves the readiness warning untouched rather than throwing", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1", GITTENSORY_REVIEW_MEMORY: "true" });
+    const listSpy = vi.spyOn(repositoriesModule, "listReviewSuppressions").mockRejectedValue(new Error("D1 unavailable"));
+    try {
+      const postedBody = await runReadinessWarningPass(env, {
+        deliveryId: "review-memory-store-error",
+        headSha: "revmem-store-error",
+        reviewMemoryManifest: true,
+      });
+      expect(postedBody).toContain("Readiness score is below the configured threshold");
+    } finally {
+      listSpy.mockRestore();
     }
   });
 

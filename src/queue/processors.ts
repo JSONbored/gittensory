@@ -62,6 +62,7 @@ import {
   getGateBlockOutcome,
   hasActiveReviewForHeadSha,
   isGlobalAgentFrozen,
+  listReviewSuppressions,
   markGateOutcomeOverridden,
   startActiveReviewTracking,
   terminalizeActiveReviewTracking,
@@ -370,6 +371,7 @@ import {
   resolveReviewPathInstructions,
   resolveReviewPreMergeChecks,
   resolveReviewPromptOverrides,
+  resolveReviewMemoryManifestToggle,
   resolveReviewVisualConfig,
   type FocusManifestFinding,
   type FocusManifest,
@@ -438,6 +440,7 @@ import {
   buildRepoCultureProfileContext,
   isRepoCultureProfileEnabled,
 } from "../review/repo-culture-profile-wire";
+import { applyReviewMemorySuppression, shouldApplyReviewMemory } from "../review/review-memory-wire";
 import {
   buildReviewEnrichment,
   isEnrichmentEnabled,
@@ -7976,6 +7979,7 @@ async function maybePublishPrPublicSurface(
   let suggestionsEnabledForReview = false;
   let changedFilesSummaryEnabledForReview = false;
   let effortScoreEnabledForReview = false;
+  let reviewMemoryEnabledForReview = false;
   let findingCategoriesEnabledForReview = false;
   let minFindingSeverityForReview: ReviewFindingSeverity | null = null;
   let aiReviewExpected = false;
@@ -8489,6 +8493,11 @@ async function maybePublishPrPublicSurface(
     changedFilesSummaryEnabledForReview = deterministicReviewOverrides.changedFilesSummary;
     effortScoreEnabledForReview = deterministicReviewOverrides.effortScore;
     minFindingSeverityForReview = deterministicReviewOverrides.minFindingSeverity;
+    // review.memory (#2179, part of #1964): deterministic, no-AI -- resolved the same unconditional way as
+    // changed_files_summary/effort_score above (must apply even when the AI review itself is skipped this
+    // pass). ANDed with the operator's GITTENSORY_REVIEW_MEMORY kill-switch at the actual apply site below
+    // (shouldApplyReviewMemory) — this flag alone only carries the per-repo manifest opt-in.
+    reviewMemoryEnabledForReview = shouldApplyReviewMemory(env, resolveReviewMemoryManifestToggle(reviewManifestForAutoReview));
     maybeAddRequiredAutoReviewSkipHold(env, {
       settings,
       advisory,
@@ -9683,8 +9692,47 @@ async function maybePublishPrPublicSurface(
           );
         }
       }
+      // review.memory (#2181, apply slice of #1964): before the unified comment renders, suppress/demote
+      // advisory (non-blocking) findings a maintainer already dismissed as false positives for this repo. ONLY
+      // ever applied to `commentGate.warnings` -- NEVER `commentGate.blockers` -- so this can never change the
+      // merge/close disposition, matching the ADVISORY-ONLY constraint. Fail-safe: a suppression-store read
+      // error leaves `renderedGate` as the original, untouched `commentGate` (the catch below never assigns
+      // renderedGate, so it keeps its `let` initializer). Flag-OFF (default, reviewMemoryEnabledForReview
+      // false) takes no new branch at all -- zero extra D1 read, byte-identical to today.
+      let renderedGate = commentGate;
+      if (reviewMemoryEnabledForReview && commentGate.warnings.length > 0) {
+        try {
+          const suppressionSignals = await listReviewSuppressions(env, repoFullName);
+          const { findings: suppressedWarnings, suppressedCount, demotedCount } = applyReviewMemorySuppression(
+            commentGate.warnings,
+            suppressionSignals,
+          );
+          if (suppressedCount > 0 || demotedCount > 0) {
+            renderedGate = { ...commentGate, warnings: suppressedWarnings };
+            incr("gittensory_review_memory_suppressed_total", { repo: repoFullName });
+            console.log(
+              JSON.stringify({
+                ev: "review_memory_applied",
+                repoFullName,
+                pull: pr.number,
+                suppressedCount,
+                demotedCount,
+              }),
+            );
+          }
+        } catch (error) {
+          console.log(
+            JSON.stringify({
+              ev: "review_memory_error",
+              repoFullName,
+              pull: pr.number,
+              message: errorMessage(error).slice(0, 200),
+            }),
+          );
+        }
+      }
       deterministicBody = buildUnifiedCommentBody({
-        gate: commentGate,
+        gate: renderedGate,
         ...(aiReview !== undefined ? { aiReview } : {}),
         advisoryFindings: advisory.findings,
         panelRows: rows,

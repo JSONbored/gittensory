@@ -256,6 +256,11 @@ declare global {
      *  OFF — unset/false performs NO extra D1 read and keeps the reviewer prompt byte-identical (the new branch
      *  is unreachable when off). ADVISORY GROUNDING ONLY: never a gate/scoring input. */
     GITTENSORY_REVIEW_CULTURE_PROFILE?: string;
+    /** Review memory (#2179, part of #1964): operator-level kill-switch for repeat-false-positive suppression,
+     *  ANDed with the per-repo `.gittensory.yml review.memory` opt-in (see review/review-memory-wire's
+     *  isReviewMemoryEnabled / shouldApplyReviewMemory). Default OFF — unset/false performs NO suppression-
+     *  store read and NO matching, byte-identical to today. ADVISORY-ONLY: never applied to gate blockers. */
+    GITTENSORY_REVIEW_MEMORY?: string;
     /** Review-enrichment service (REES): when truthy, the self-host review engine POSTs the PR diff/files to
      *  REES and splices any public-safe brief into the AI reviewer prompt. Requires REES_URL and the repo in
      *  GITTENSORY_REVIEW_REPOS. REES_ANALYZERS is an optional exact comma-list; unset/"all"/"*" lets REES run its

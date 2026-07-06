@@ -154,6 +154,14 @@ function Tuning() {
           in <code>.gittensory.yml</code>. Per-PR.
         </li>
         <li>
+          <code>GITTENSORY_REVIEW_MEMORY</code> — repeat-false-positive suppression: matches an
+          advisory (non-blocking) AI finding against this repo's stored suppression signals (a
+          maintainer's own past false-positive dismissals) and demotes or drops it before the
+          unified comment renders. Advisory-only by construction — never applied to gate blockers,
+          so it can never change the merge/close disposition. Also requires the per-repo{" "}
+          <code>review.memory: true</code> opt-in in <code>.gittensory.yml</code>. Per-PR.
+        </li>
+        <li>
           <code>GITTENSORY_REVIEW_REPUTATION</code> — submitter-reputation spend control. A new,
           burst, or low-reputation submitter is downgraded to a deterministic-only review; good
           reputation proceeds normally. Never surfaced publicly — no comment, label, or check shows

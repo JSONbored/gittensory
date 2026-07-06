@@ -51,6 +51,7 @@ import {
   repositoryAiKeys,
   repositoryLinearKeys,
   repositorySettings,
+  reviewSuppression,
   scorePreviews,
   scoringModelSnapshots,
   signalSnapshots,
@@ -149,6 +150,7 @@ import type {
   RepoSyncStateRecord,
   RepositorySettings,
   RepositoryRecord,
+  ReviewSuppressionRecord,
   ScorePreviewRecord,
   ScoringModelSnapshotRecord,
   SignalSnapshotRecord,
@@ -4725,6 +4727,106 @@ export async function terminalizeActiveReviewTracking(
     .where(and(...conditions));
   /* v8 ignore next -- D1 update metadata normally includes changes; the ?? 0 fallback protects driver anomalies. */
   return Number(result.meta.changes ?? 0) > 0;
+}
+
+// Review memory (#2178, data-model slice of #1964). Hard per-repo cap on stored suppression signals — mirrors
+// rag.ts's MAX_CHUNKS_PER_REPO discipline (bound a repo-controlled, unboundedly-growable store). A repo that
+// keeps dismissing NEW finding shapes evicts its OLDEST suppression first rather than growing forever.
+export const MAX_REVIEW_SUPPRESSIONS_PER_REPO = 500;
+
+function toReviewSuppressionRecord(row: typeof reviewSuppression.$inferSelect): ReviewSuppressionRecord {
+  return {
+    id: row.id,
+    repoFullName: row.repoFullName,
+    category: row.category,
+    pathGlob: row.pathGlob,
+    patternHash: row.patternHash,
+    createdAt: row.createdAt,
+    createdBy: row.createdBy,
+  };
+}
+
+/** Idempotently record a review-memory suppression signal: a maintainer dismissed a finding matching
+ *  (repoFullName, category, pathGlob, patternHash) as a false positive. Re-recording the SAME key is a true
+ *  no-op upsert (bumps createdAt/createdBy only) — mirrors startActiveReviewTracking's upsert shape — so
+ *  repeatedly dismissing the same recurring finding never creates duplicate rows. After the write, evicts the
+ *  OLDEST rows for this repo beyond MAX_REVIEW_SUPPRESSIONS_PER_REPO (fail-safe: eviction errors are swallowed
+ *  — a failed prune never blocks the recording write that already succeeded). */
+export async function recordReviewSuppression(
+  env: Env,
+  input: { repoFullName: string; category: string; pathGlob?: string | null | undefined; patternHash: string; createdBy?: string | null | undefined },
+): Promise<ReviewSuppressionRecord> {
+  const repoFullName = boundedString(input.repoFullName, 200);
+  const category = boundedString(input.category, 200);
+  const pathGlob = boundedString(input.pathGlob ?? "", 500);
+  const patternHash = boundedString(input.patternHash, 128);
+  const db = getDb(env.DB);
+  const values = {
+    id: crypto.randomUUID(),
+    repoFullName,
+    category,
+    pathGlob,
+    patternHash,
+    createdBy: input.createdBy ?? null,
+  };
+  await db
+    .insert(reviewSuppression)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [reviewSuppression.repoFullName, reviewSuppression.category, reviewSuppression.pathGlob, reviewSuppression.patternHash],
+      set: { createdAt: nowIso(), createdBy: values.createdBy },
+    });
+  const row = await db
+    .select()
+    .from(reviewSuppression)
+    .where(
+      and(
+        eq(reviewSuppression.repoFullName, repoFullName),
+        eq(reviewSuppression.category, category),
+        eq(reviewSuppression.pathGlob, pathGlob),
+        eq(reviewSuppression.patternHash, patternHash),
+      ),
+    )
+    .get();
+  await pruneReviewSuppressionsOverCap(env, repoFullName).catch(() => undefined);
+  /* v8 ignore next -- the row was just inserted/updated in this same call; a missing read-back would mean D1
+   *  itself failed silently, not a reachable application branch. */
+  return row ? toReviewSuppressionRecord(row) : { ...values, createdAt: nowIso() };
+}
+
+/** Evict the OLDEST review_suppression rows for repoFullName once the per-repo count exceeds
+ *  MAX_REVIEW_SUPPRESSIONS_PER_REPO — a repo that keeps dismissing new finding shapes never grows this table
+ *  unbounded. Internal to recordReviewSuppression; not exported. */
+async function pruneReviewSuppressionsOverCap(env: Env, repoFullName: string): Promise<void> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select({ id: reviewSuppression.id })
+    .from(reviewSuppression)
+    .where(eq(reviewSuppression.repoFullName, repoFullName))
+    .orderBy(desc(reviewSuppression.createdAt))
+    .offset(MAX_REVIEW_SUPPRESSIONS_PER_REPO);
+  if (rows.length === 0) return;
+  await db.delete(reviewSuppression).where(
+    and(
+      eq(reviewSuppression.repoFullName, repoFullName),
+      inArray(
+        reviewSuppression.id,
+        rows.map((row) => row.id),
+      ),
+    ),
+  );
+}
+
+/** List every stored suppression signal for repoFullName, newest first. Bounded by `limit` (default 500,
+ *  matching MAX_REVIEW_SUPPRESSIONS_PER_REPO) so a caller can never accidentally request an unbounded scan. */
+export async function listReviewSuppressions(env: Env, repoFullName: string, limit = MAX_REVIEW_SUPPRESSIONS_PER_REPO): Promise<ReviewSuppressionRecord[]> {
+  const rows = await getDb(env.DB)
+    .select()
+    .from(reviewSuppression)
+    .where(eq(reviewSuppression.repoFullName, boundedString(repoFullName, 200)))
+    .orderBy(desc(reviewSuppression.createdAt))
+    .limit(clampInteger(limit, 1, MAX_REVIEW_SUPPRESSIONS_PER_REPO));
+  return rows.map(toReviewSuppressionRecord);
 }
 
 export async function listGateOutcomes(
