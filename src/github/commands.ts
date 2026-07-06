@@ -654,6 +654,7 @@ function commandSections(
   officialMiner: GittensorContributorSnapshot | null | undefined,
   maintainerDigest: MaintainerQueueDigest | null | undefined,
   question?: string | undefined,
+  /** Only read when `command === "help"` (#2170 did-you-mean hint). */
   unknownVerb?: string | undefined,
 ): string[] {
   switch (command) {

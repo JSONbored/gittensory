@@ -126,6 +126,16 @@ describe("GitHub mention commands", () => {
       actorKind: "maintainer",
     });
     expect(okBody).not.toContain("Did you mean");
+    const bareHelp = parseGittensoryMentionCommand("@gittensory")!;
+    const bareHelpBody = buildPublicAgentCommandComment({
+      command: bareHelp,
+      repo: null,
+      issue: { number: 1, title: "t", state: "open" },
+      pullRequest: null,
+      actorKind: "maintainer",
+    });
+    expect(bareHelpBody).not.toContain("Did you mean");
+    expect(bareHelpBody).toContain("`@gittensory help` shows this command list.");
   });
 
   it("authorizes maintainers and confirmed miner PR authors only", () => {

@@ -58,7 +58,7 @@ export function suggestCommand(rawVerb: string, catalog: CommandSuggestCatalog):
       best = { name, distance };
     }
   }
-  if (!best || best.distance === 0 || best.distance > COMMAND_SUGGEST_MAX_DISTANCE) return null;
+  if (!best || best.distance > COMMAND_SUGGEST_MAX_DISTANCE) return null;
   return best.name;
 }
 
