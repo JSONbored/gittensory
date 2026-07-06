@@ -107,7 +107,7 @@ import {
   getGlobalAgentFrozenState,
   setGlobalAgentFrozen,
 } from "../db/repositories";
-import { pruneExpiredRecords, RETENTION_POLICY } from "../db/retention";
+import { dedupeSignalSnapshots, pruneExpiredRecords, RETENTION_POLICY } from "../db/retention";
 import {
   backfillOpenPullRequestDetails,
   backfillRegisteredRepositories,
@@ -3808,11 +3808,19 @@ export function createApp() {
     return c.json(await getRepositoryAiKeyStatus(c.env, fullName));
   });
 
-  // Read-only retention preview: counts the rows the daily prune cron would delete, per table. Does NOT
-  // delete anything (dry-run); the actual prune runs on the schedule via the prune-retention job.
+  // Read-only retention preview: counts the rows the daily prune cron would delete, per table, plus the
+  // duplicate signal_snapshots rows the dedup pass would remove. Does NOT delete anything (dry-run); the
+  // actual prune + dedup runs on the schedule via the prune-retention job.
   app.get("/v1/internal/retention/preview", async (c) => {
     const results = await pruneExpiredRecords(c.env, { dryRun: true });
-    return c.json({ policy: RETENTION_POLICY, eligible: results, totalEligible: results.reduce((sum, r) => sum + r.deleted, 0) });
+    const dedupeResults = await dedupeSignalSnapshots(c.env, { dryRun: true });
+    return c.json({
+      policy: RETENTION_POLICY,
+      eligible: results,
+      totalEligible: results.reduce((sum, r) => sum + r.deleted, 0),
+      signalSnapshotDuplicates: dedupeResults,
+      totalSignalSnapshotDuplicates: dedupeResults.reduce((sum, r) => sum + r.deleted, 0),
+    });
   });
 
   app.post("/v1/internal/repos/:owner/:repo/ai-key", async (c) => {

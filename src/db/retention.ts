@@ -88,3 +88,50 @@ export async function pruneExpiredRecords(
 
   return results;
 }
+
+export type SignalSnapshotDedupeResult = { signalType: string; deleted: number };
+
+/**
+ * signal_snapshots has no dedup: `generate-signal-snapshots` inserts a NEW row per (signal_type,
+ * target_key) on every run rather than replacing the prior one, so within RETENTION_POLICY's 90-day
+ * age window a key can accumulate hundreds of superseded snapshots (#3810 -- 342,243 rows for 2,183
+ * distinct keys contributed to hitting D1's size cap). This keeps only the latest row per
+ * (signal_type, target_key), batched PER signal_type (not one table-wide window-function delete) so
+ * each statement stays within D1's per-statement CPU budget -- the same batching split used during
+ * the incident's manual remediation. "Latest" is the highest rowid per key: signal_snapshots is
+ * populated by a single sequential batch job, so insertion order and generated_at agree, and rowid
+ * (unlike generated_at) can never tie.
+ */
+export async function dedupeSignalSnapshots(
+  env: Env,
+  options: { dryRun?: boolean; batchSize?: number; maxPerType?: number } = {},
+): Promise<SignalSnapshotDedupeResult[]> {
+  const dryRun = options.dryRun ?? false;
+  const batchSize = options.batchSize ?? BATCH_SIZE;
+  const maxPerType = options.maxPerType ?? MAX_DELETED_PER_TABLE;
+  const results: SignalSnapshotDedupeResult[] = [];
+
+  const types = await env.DB.prepare("SELECT DISTINCT signal_type FROM signal_snapshots").all<{ signal_type: string }>();
+  for (const { signal_type: signalType } of types.results) {
+    const staleCondition = `signal_type = ?1 AND rowid NOT IN (SELECT MAX(rowid) FROM signal_snapshots WHERE signal_type = ?1 GROUP BY target_key)`;
+
+    if (dryRun) {
+      const row = await env.DB.prepare(`SELECT count(*) AS n FROM signal_snapshots WHERE ${staleCondition}`).bind(signalType).first<{ n: number }>();
+      results.push({ signalType, deleted: Number(row?.n ?? 0) });
+      continue;
+    }
+
+    let deleted = 0;
+    for (;;) {
+      const result = await env.DB.prepare(`DELETE FROM signal_snapshots WHERE rowid IN (SELECT rowid FROM signal_snapshots WHERE ${staleCondition} LIMIT ${batchSize})`)
+        .bind(signalType)
+        .run();
+      const changes = Number(result.meta?.changes ?? 0);
+      deleted += changes;
+      if (changes < batchSize || deleted >= maxPerType) break;
+    }
+    results.push({ signalType, deleted });
+  }
+
+  return results;
+}
