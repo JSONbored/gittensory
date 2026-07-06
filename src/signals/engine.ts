@@ -2508,6 +2508,8 @@ export function buildPreflightResult(
   pullRequests: PullRequestRecord[],
   bounties: BountyRecord[] = [],
   issueQuality?: IssueQualityReport | null | undefined,
+  // Default true so every existing caller (which predates this param) keeps its exact prior behavior.
+  registryEverSynced = true,
 ): PreflightResult {
   const lane = buildLaneAdvice(repo, input.repoFullName);
   const linkedIssues = [...new Set([...(input.linkedIssues ?? []), ...extractLinkedIssueNumbers(truncateText(input.body ?? "", PREFLIGHT_LIMITS.bodyChars), input.repoFullName)])].sort(
@@ -2535,7 +2537,13 @@ export function buildPreflightResult(
     }),
   );
   const findings: SignalFinding[] = [];
-  const laneUnavailable = lane.lane === "unknown" || lane.lane === "inactive";
+  // An "unknown" lane means "not found in the local registry cache", which is genuinely ambiguous: it's the
+  // same result whether this repo simply isn't registered in a WORKING snapshot, or the registry sync has
+  // never once succeeded (a self-host connectivity/config problem with no bearing on this PR at all). Only
+  // treat "unknown" as a real signal once we know the sync mechanism itself has produced at least one
+  // snapshot; "inactive" (zero emission share) is unambiguous either way -- it is only reachable from real
+  // synced data.
+  const laneUnavailable = (lane.lane === "unknown" && registryEverSynced) || lane.lane === "inactive";
   const maintainerAuthored = isMaintainerAssociation(input.authorAssociation);
   if (laneUnavailable) {
     findings.push({

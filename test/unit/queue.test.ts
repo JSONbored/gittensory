@@ -2952,6 +2952,121 @@ describe("queue processors", () => {
     stampSpy.mockRestore();
   });
 
+  it("REGRESSION (registry-never-synced lane fix): a contributor PR panel does not show the lane-unavailable hold when no registry snapshot has ever synced", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commentMode: "all_prs", publicSurface: "comment_only", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", aiReviewMode: "off", gatePack: "oss-anti-slop" });
+    let commentBody = "";
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      // A confirmed official Gittensor contributor renders the FULL readiness panel (with the Validation
+      // posture row this test is about) instead of the minimal first-timer invite comment.
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          { uid: 7, githubUsername: "contributor", githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1 },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({ repositories: [{ repositoryFullName: "JSONbored/gittensory", totalPrs: "4", totalMergedPrs: "3", totalOpenPrs: "1", totalClosedPrs: "0", totalOpenIssues: "0", totalClosedIssues: "0", isEligible: true, credibility: "1.000000" }] });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/contributor")) return Response.json({ login: "contributor", public_repos: 2, followers: 1 });
+      if (url.includes("/users/contributor/repos")) return Response.json([]);
+      if (url.includes("/pulls/95/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.endsWith("/pulls/95")) return Response.json({ number: 95, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a95" }, labels: [], body: "Closes #1" });
+      if (url.includes("/commits/a95/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a95/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/issues/95/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/95/comments") && method === "POST") {
+        commentBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        return Response.json({ id: 1 }, { status: 201 });
+      }
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "no-registry-sync",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 95, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a95" }, labels: [], body: "Closes #1" },
+      },
+    });
+
+    expect(commentBody).toContain("gittensory-pr-panel");
+    expect(commentBody).not.toContain("the review lane is unavailable");
+  });
+
+  it("REGRESSION (registry-never-synced lane fix): the SAME setup still shows the lane-unavailable hold once a registry snapshot has synced at least once", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    // A real snapshot exists, but it does not list THIS repo -- a genuine "unregistered" signal, unlike the
+    // companion test above where no snapshot has EVER been produced.
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "some-other/repo": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commentMode: "all_prs", publicSurface: "comment_only", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", aiReviewMode: "off", gatePack: "oss-anti-slop" });
+    let commentBody = "";
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      // A confirmed official Gittensor contributor renders the FULL readiness panel (with the Validation
+      // posture row this test is about) instead of the minimal first-timer invite comment.
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          { uid: 7, githubUsername: "contributor", githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1 },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({ repositories: [{ repositoryFullName: "JSONbored/gittensory", totalPrs: "4", totalMergedPrs: "3", totalOpenPrs: "1", totalClosedPrs: "0", totalOpenIssues: "0", totalClosedIssues: "0", isEligible: true, credibility: "1.000000" }] });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/contributor")) return Response.json({ login: "contributor", public_repos: 2, followers: 1 });
+      if (url.includes("/users/contributor/repos")) return Response.json([]);
+      if (url.includes("/pulls/96/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.endsWith("/pulls/96")) return Response.json({ number: 96, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a96" }, labels: [], body: "Closes #1" });
+      if (url.includes("/commits/a96/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a96/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/issues/96/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/96/comments") && method === "POST") {
+        commentBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        return Response.json({ id: 1 }, { status: 201 });
+      }
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "registry-synced-unregistered",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 96, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a96" }, labels: [], body: "Closes #1" },
+      },
+    });
+
+    expect(commentBody).toContain("the review lane is unavailable");
+  });
+
   it("#regate-churn: a failing markAiReviewPublished stamp is swallowed (fail-open) — the publish still completes", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);

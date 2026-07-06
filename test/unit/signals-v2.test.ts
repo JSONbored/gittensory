@@ -746,6 +746,31 @@ describe("v2 signal builders", () => {
     expect(large.findings.map((finding) => finding.code)).toEqual(expect.arrayContaining(["large_local_diff", "local_diff_missing_tests"]));
   });
 
+  it("REGRESSION (registry-never-synced lane fix): an unavailable lane only holds a PR once the registry has actually synced at least once", () => {
+    // Before this fix, an "unknown" lane (repo not found in the local registry cache) held EVERY non-maintainer
+    // PR the same way, whether the repo genuinely isn't registered in a WORKING snapshot, or the registry sync
+    // has never once succeeded -- a self-host connectivity/config problem with no bearing on the PR at all.
+    const cleanInput = { repoFullName: "unknown/repo", title: "Docs-only change", body: "Fixes #1", changedFiles: ["docs/guide.md"], tests: ["manual docs check"] };
+    const neverSynced = buildPreflightResult(cleanInput, null, [], [], [], undefined, false);
+    expect(neverSynced.status).toBe("ready");
+    expect(neverSynced.findings.map((finding) => finding.code)).not.toContain("lane_not_recommended");
+
+    // Once the registry HAS synced at least once, an unregistered repo is a real signal again -- same as
+    // omitting the new param, which defaults to true (every pre-existing caller keeps its old behavior).
+    const syncedButUnregistered = buildPreflightResult(cleanInput, null, [], [], [], undefined, true);
+    expect(syncedButUnregistered.status).toBe("hold");
+    expect(syncedButUnregistered.findings.map((finding) => finding.code)).toContain("lane_not_recommended");
+
+    // An "inactive" lane (registered, but zero emission share) is never ambiguous -- it is only reachable from
+    // real synced registry data -- so it stays hold-worthy regardless of the never-synced flag.
+    const inactiveRepo: RepositoryRecord = {
+      ...repo,
+      registryConfig: { repo: repo.fullName, emissionShare: 0, issueDiscoveryShare: 0, labelMultipliers: {}, trustedLabelPipeline: true, maintainerCut: 0, raw: {} },
+    };
+    const inactiveNeverSynced = buildPreflightResult(cleanInput, inactiveRepo, [], [], [], undefined, false);
+    expect(inactiveNeverSynced.status).toBe("hold");
+  });
+
   it("builds clean, missing, and watch PR maintainer packets", () => {
     const cleanPr = { ...pullRequests[0]!, linkedIssues: [1], body: "Fixes #1" };
     const cleanPacket = buildPullRequestMaintainerPacket({

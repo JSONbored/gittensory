@@ -188,7 +188,7 @@ import { DEFAULT_TYPE_LABELS, resolvePrTypeLabel } from "../settings/pr-type-lab
 import { fetchLinkedIssueLabelsForPropagation } from "../review/linked-issue-label-propagation-fetch";
 import { shouldPublishReviewCheck } from "../review/check-names";
 import { fetchPublicContributorProfile } from "../github/public";
-import { refreshRegistry } from "../registry/sync";
+import { getLatestRegistrySnapshot, refreshRegistry } from "../registry/sync";
 import {
   buildIssueAdvisory,
   buildPullRequestAdvisory,
@@ -7963,11 +7963,16 @@ async function maybePublishPrPublicSurface(
     return gateEvaluation;
   };
   try {
-    const [repoIssues, repoPullRequests, repoBounties] = await Promise.all([
+    const [repoIssues, repoPullRequests, repoBounties, latestRegistrySnapshot] = await Promise.all([
       listIssues(env, repoFullName),
       listPullRequests(env, repoFullName),
       listBountiesByRepo(env, repoFullName),
+      getLatestRegistrySnapshot(env),
     ]);
+    // An unregistered repo is only a meaningful preflight signal once the registry sync has actually
+    // produced at least one snapshot (see buildPreflightResult's registryEverSynced param) -- otherwise every
+    // PR on a self-host instance whose registry feed has never succeeded gets held for no reason tied to the PR.
+    const registryEverSynced = latestRegistrySnapshot !== null;
     // Open-PR file-path collision (#2653): flag-gated, byte-identical when OFF (see enrichOpenPullRequestsWithChangedFiles).
     // Scoped to collision/preflight/queue-health inputs only — every OTHER use of repoPullRequests below (e.g. the
     // duplicate-winner adjudication, which is same-linked-issue-based, not path-based) keeps reading the un-enriched array.
@@ -8000,6 +8005,8 @@ async function maybePublishPrPublicSurface(
       repoIssues,
       collisionPullRequests,
       repoBounties,
+      undefined,
+      registryEverSynced,
     );
     // Duplicate-winner adjudication (#dup-winner): compute the winner ONCE for this review run from the SAME
     // open-only sibling source the gate uses, and thread the flag/result consistently into readiness, the slop
