@@ -127,12 +127,14 @@ describe("planAgentMaintenanceActions (#778)", () => {
       expect(plan).toContainEqual(expect.objectContaining({ actionClass: "label", label: AGENT_LABEL_CHANGES, labelOp: "remove" }));
     });
 
-    it("clears a stale manual-review label once the guardrail no longer hits", () => {
-      // No guardrailHit this pass (changedPaths/hardGuardrailGlobs empty, the default) — a prior pass's
-      // manual-review hold has resolved, so it must not linger once the PR is genuinely ready-to-merge.
-      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" }, pr: { labels: [AGENT_LABEL_NEEDS_REVIEW] } }));
+    it("does NOT clear manual-review when the PR becomes healthy because it may be a maintainer safety hold", () => {
+      // No guardrailHit this pass (changedPaths/hardGuardrailGlobs empty, the default), but the planner has no
+      // provenance bit proving manual-review was bot-owned rather than a maintainer-applied hold. It may still
+      // add the ready label, but it must not lift the live hold before approve/merge actions run.
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto", merge: "auto", review_state_label: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "squash" }, pr: { labels: [AGENT_LABEL_NEEDS_REVIEW], mergeableState: "clean" } }));
       expect(plan).toContainEqual(expect.objectContaining({ actionClass: "label", label: AGENT_LABEL_READY }));
-      expect(plan).toContainEqual(expect.objectContaining({ actionClass: "label", label: AGENT_LABEL_NEEDS_REVIEW, labelOp: "remove" }));
+      expect(plan.some((a) => a.actionClass === "label" && a.label === AGENT_LABEL_NEEDS_REVIEW && a.labelOp === "remove")).toBe(false);
+      expect(classes(plan)).toEqual(["label", "approve", "merge"]);
     });
 
     it("clears a stale ready-to-merge label when the PR newly becomes guarded", () => {

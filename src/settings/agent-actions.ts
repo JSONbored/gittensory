@@ -906,17 +906,15 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
               : {}),
       });
     }
-    // Stale disposition-label cleanup (#stale-disposition-label-cleanup): the four states above
-    // (readyToMerge/manualReview/migrationCollision/changesRequested) are mutually exclusive — a PR should
-    // carry exactly one. But the ternary above only ever ADDS the current one; a label from a PRIOR pass
+    // Stale disposition-label cleanup (#stale-disposition-label-cleanup): the review-state labels below
+    // (readyToMerge/migrationCollision/changesRequested) are mutually exclusive bot dispositions — a PR should
+    // carry at most one. But the ternary above only ever ADDS the current one; a label from a PRIOR pass
     // (e.g. changesRequested while CI was red) never got removed once the PR became healthy again, so it sat
     // on the PR forever alongside whatever the bot added next. Clear every OTHER configured sibling that is
-    // still live on the PR. `manualReview` is excluded from this pass's removal when `manualHoldReason` is
-    // non-null even though it isn't this ternary's own `label` choice (e.g. ciUnverified: reviewGood is false
-    // so the ternary picks changesRequested here, but the separate owner/automation fallback below still
-    // independently wants manualReview and may re-add it later in this SAME pass) — removing it here would
-    // race against that later add.
-    const dispositionLabelSiblings = [labels.readyToMerge, labels.manualReview, labels.migrationCollision, labels.changesRequested];
+    // still live on the PR. Intentionally do NOT remove `manualReview` here: that same label is also the live
+    // maintainer safety hold/freeze, and the planner has no provenance bit proving it was only a stale bot
+    // disposition rather than a human-applied hold. Only a maintainer removing the label should lift it.
+    const dispositionLabelSiblings = [labels.readyToMerge, labels.migrationCollision, labels.changesRequested];
     const livePrLabels = new Set(input.pr.labels.map((l) => l.toLowerCase()));
     // Dedupe defensively: if a repo ever misconfigures two of the four settings to the identical label
     // string, only clear it once (still correct — the label either belongs here or it doesn't — just
@@ -926,7 +924,6 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       if (stale === null || stale === label) continue;
       const staleLower = stale.toLowerCase();
       if (alreadyHandled.has(staleLower) || !livePrLabels.has(staleLower)) continue;
-      if (stale === labels.manualReview && manualHoldReason !== null) continue;
       alreadyHandled.add(staleLower);
       actions.push({
         actionClass: "label",
