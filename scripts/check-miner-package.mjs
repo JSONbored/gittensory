@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 
 const ALLOWED = [
   /^bin\/gittensory-miner\.js$/,
-  /^lib\/[a-z0-9-]+\.(js|d\.ts)$/,
+  // Nested subdirs (e.g. lib/calibration/* from #2332) must match npm pack output.
+  /^lib\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.(js|d\.ts)$/,
   /^package\.json$/,
   /^README\.md$/,
 ];
