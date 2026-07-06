@@ -5,6 +5,7 @@ import {
   buildCreateBranchSpec,
   buildDeleteBranchSpec,
   buildFileIssueSpec,
+  buildFollowUpIssueSpec,
   buildOpenPrSpec,
   buildPostEligibilityCommentSpec,
   buildTestGenSpec,
@@ -90,5 +91,74 @@ describe("buildTestGenSpec (#2188)", () => {
     const s = buildTestGenSpec({ repoFullName: "o/r", targetFiles: ["src/a.ts", "src/b.ts"], framework: "vitest", criteria: ["handle it's edge case"] });
     expect(s.description).toContain("src/a.ts, src/b.ts");
     expect(s.command).toContain("it'\\''s edge case");
+  });
+});
+
+// #2177 (follow-up-issue action spec slice of #1962).
+describe("buildFollowUpIssueSpec (#2177)", () => {
+  it("builds a follow_up_issue spec with composed title/body, labels, and the local-execution boundary", () => {
+    const s = buildFollowUpIssueSpec({
+      repoFullName: "o/r",
+      pullNumber: 42,
+      labels: ["gittensor:bug"],
+      finding: {
+        title: "Handle null branch in widget loader",
+        detail: "The loader never guards a null response.",
+        path: "src/widget.ts",
+        action: "Add a regression test for the null path.",
+      },
+    });
+    expect(s.action).toBe("follow_up_issue");
+    expect(s.boundary).toBe(LOCAL_WRITE_BOUNDARY);
+    expect(s.description).toContain("Follow-up: Handle null branch in widget loader");
+    expect(s.command).toBe(
+      "gh issue create --repo 'o/r' --title 'Follow-up: Handle null branch in widget loader' --body 'Deferred from review on PR #42.\nFile: `src/widget.ts`\n\nThe loader never guards a null response.\n\n**Suggested next step**\nAdd a regression test for the null path.\n\n_Filed locally from a deferred review finding — gittensory supplies content only._' --label 'gittensor:bug'",
+    );
+    expect(s.inputs).toMatchObject({ labels: ["gittensor:bug"], pullNumber: 42 });
+    expect(s.inputs.finding).toMatchObject({
+      title: "Handle null branch in widget loader",
+      detail: "The loader never guards a null response.",
+      path: "src/widget.ts",
+      action: "Add a regression test for the null path.",
+    });
+  });
+
+  it("omits labels and optional finding fields when absent, and strips HTML comment markers from the finding text", () => {
+    const s = buildFollowUpIssueSpec({
+      repoFullName: "o/r",
+      finding: {
+        title: "<!-- marker -->Follow-up: it's noisy",
+        detail: "Detail <!-- hidden --> stays public-safe.",
+      },
+    });
+    expect(s.command).toContain("--title 'Follow-up: it'\\''s noisy'");
+    expect(s.command).not.toContain("<!--");
+    expect(s.command).not.toContain("--label");
+    expect(s.inputs).toMatchObject({ labels: [] });
+    expect(s.inputs).not.toHaveProperty("pullNumber");
+    expect(s.description).toContain("Follow-up: it's noisy");
+  });
+
+  it("bounds an over-long finding title before delegating to gh issue create", () => {
+    const longTitle = "x".repeat(140);
+    const s = buildFollowUpIssueSpec({ repoFullName: "o/r", finding: { title: longTitle, detail: "short detail" } });
+    const titleMatch = s.command.match(/--title '([^']|'\\'')*'/);
+    expect(titleMatch).not.toBeNull();
+    const titleArg = titleMatch![0].replace(/^--title '/, "").replace(/'$/, "").replace(/'\\''/g, "'");
+    expect(titleArg.startsWith("Follow-up: ")).toBe(true);
+    expect(titleArg.length).toBeLessThanOrEqual(120);
+  });
+
+  it("preserves an existing Follow-up prefix and bounds an over-long composed body", () => {
+    const s = buildFollowUpIssueSpec({
+      repoFullName: "o/r",
+      finding: {
+        title: "Follow-up: tighten null handling",
+        detail: "d".repeat(5000),
+      },
+    });
+    expect(s.description).toContain("Follow-up: tighten null handling");
+    expect(s.command.length).toBeLessThan(7000);
+    expect(s.command.endsWith("'")).toBe(true);
   });
 });

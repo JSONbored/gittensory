@@ -43,6 +43,85 @@ export function buildFileIssueSpec(input: { repoFullName: string; title: string;
   return spec("file_issue", "File a new issue.", { repoFullName: input.repoFullName, title: input.title, body: input.body, labels }, command);
 }
 
+export type DeferredReviewFinding = {
+  title: string;
+  detail: string;
+  path?: string | undefined;
+  action?: string | undefined;
+};
+
+const FOLLOW_UP_ISSUE_TITLE_MAX = 120;
+const FOLLOW_UP_ISSUE_BODY_MAX = 4000;
+
+function stripFollowUpMarkers(value: string): string {
+  return value.replace(/<!--[\s\S]*?-->/g, "").replace(/\r\n/g, "\n").trim();
+}
+
+function boundFollowUpLine(value: string, max: number): string {
+  const cleaned = stripFollowUpMarkers(value).replace(/\s+/g, " ").trim();
+  if (cleaned.length <= max) return cleaned;
+  return `${cleaned.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+function boundFollowUpBody(value: string, max: number): string {
+  const cleaned = stripFollowUpMarkers(value).trim();
+  if (cleaned.length <= max) return cleaned;
+  return `${cleaned.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+function composeFollowUpIssueTitle(finding: DeferredReviewFinding): string {
+  const cleaned = stripFollowUpMarkers(finding.title);
+  if (/^follow-up:/i.test(cleaned)) {
+    return boundFollowUpLine(cleaned, FOLLOW_UP_ISSUE_TITLE_MAX);
+  }
+  const prefix = "Follow-up: ";
+  return `${prefix}${boundFollowUpLine(cleaned, FOLLOW_UP_ISSUE_TITLE_MAX - prefix.length)}`;
+}
+
+function composeFollowUpIssueBody(input: { finding: DeferredReviewFinding; pullNumber?: number | undefined }): string {
+  const lines: string[] = [];
+  if (input.pullNumber !== undefined) lines.push(`Deferred from review on PR #${input.pullNumber}.`);
+  if (input.finding.path) lines.push(`File: \`${input.finding.path}\``);
+  lines.push("", boundFollowUpLine(input.finding.detail, FOLLOW_UP_ISSUE_BODY_MAX));
+  if (input.finding.action) {
+    lines.push("", "**Suggested next step**", boundFollowUpLine(input.finding.action, 500));
+  }
+  lines.push("", "_Filed locally from a deferred review finding — gittensory supplies content only._");
+  return boundFollowUpBody(lines.join("\n"), FOLLOW_UP_ISSUE_BODY_MAX);
+}
+
+/** File a follow-up issue for a deferred review finding (#2177, #1962 slice). */
+export function buildFollowUpIssueSpec(input: {
+  repoFullName: string;
+  finding: DeferredReviewFinding;
+  labels?: string[] | undefined;
+  pullNumber?: number | undefined;
+}): LocalWriteActionSpec {
+  const title = composeFollowUpIssueTitle(input.finding);
+  const body = composeFollowUpIssueBody({ finding: input.finding, pullNumber: input.pullNumber });
+  const fileSpec = buildFileIssueSpec({
+    repoFullName: input.repoFullName,
+    title,
+    body,
+    labels: input.labels,
+  });
+  return {
+    ...fileSpec,
+    action: "follow_up_issue",
+    description: `File a follow-up issue for a deferred review finding: ${title}`,
+    inputs: {
+      ...fileSpec.inputs,
+      finding: {
+        title: input.finding.title,
+        detail: input.finding.detail,
+        ...(input.finding.path ? { path: input.finding.path } : {}),
+        ...(input.finding.action ? { action: input.finding.action } : {}),
+      },
+      ...(input.pullNumber !== undefined ? { pullNumber: input.pullNumber } : {}),
+    },
+  };
+}
+
 /** Add labels to an issue or PR (gh issue edit also targets PRs). */
 export function buildApplyLabelsSpec(input: { repoFullName: string; number: number; labels: string[] }): LocalWriteActionSpec {
   const labelArgs = input.labels.map((label) => ` --add-label ${sq(label)}`).join("");
