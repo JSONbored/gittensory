@@ -520,7 +520,12 @@ services:
     expose:
       - "9093" # in-network only; reach the UI/API via `docker compose port` or a tunnel
     volumes:
-      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Mounts the whole host directory (not just the yml) so an operator's private overrides are visible
+      # inside the container at the same paths, with no docker-compose.yml edit needed per file added:
+      # a real receiver config (e.g. ./alertmanager/alertmanager.local, gitignored via the *.local rule
+      # above -- point docker-compose.override.yml's alertmanager `command:` at it) and/or a secret file a
+      # local config's webhook_url_file /etc/alertmanager/<name> references.
+      - ./alertmanager:/etc/alertmanager:ro
       - alertmanager-data:/alertmanager
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
