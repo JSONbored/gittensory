@@ -363,6 +363,7 @@ import {
   filterReviewFilesForAi,
   resolvePullRequestAutoReviewSkipReason,
   resolveAutoReviewSkipSummary,
+  isContributorControlledAutoReviewSkipReason,
   resolveRepoEnrichmentToggles,
   resolveReviewAutoReviewConfig,
   resolveReviewPathInstructions,
@@ -6339,6 +6340,36 @@ export async function shouldStartAiReviewForAdvisory(
   return !(isReputationEnabled(env) && isConvergenceRepoAllowed(env, args.repoFullName) && (await shouldSkipAiForReputation(env, { project: args.repoFullName, submitter: args.author })));
 }
 
+export function maybeAddRequiredAutoReviewSkipHold(
+  env: Env,
+  args: {
+    settings: RepositorySettings;
+    advisory: Pick<Awaited<ReturnType<typeof buildPullRequestAdvisory>>, "headSha" | "findings">;
+    repoFullName: string;
+    author: string | null;
+    confirmedContributor: boolean;
+    skipAiReview?: boolean | undefined;
+    autoReviewSkipReason: string | null;
+  },
+): boolean {
+  if (
+    args.autoReviewSkipReason === null ||
+    !isContributorControlledAutoReviewSkipReason(args.autoReviewSkipReason) ||
+    !shouldRequirePublicAiReviewForAdvisory(env, args)
+  ) {
+    return false;
+  }
+  args.advisory.findings.push({
+    code: "ai_review_inconclusive",
+    severity: "warning",
+    title: "Required AI review was skipped by contributor-controlled metadata",
+    detail:
+      "The repository requires blocking AI review, but review.auto_review matched the PR title or base branch. The gate is held for human review instead of passing automatically.",
+    action: "Run AI review with a trusted override or remove the contributor-controlled auto_review match before merging.",
+  });
+  return true;
+}
+
 export function shouldRequirePublicAiReviewForAdvisory(
   env: Env,
   args: {
@@ -8265,6 +8296,15 @@ async function maybePublishPrPublicSurface(
     changedFilesSummaryEnabledForReview = deterministicReviewOverrides.changedFilesSummary;
     effortScoreEnabledForReview = deterministicReviewOverrides.effortScore;
     minFindingSeverityForReview = deterministicReviewOverrides.minFindingSeverity;
+    maybeAddRequiredAutoReviewSkipHold(env, {
+      settings,
+      advisory,
+      repoFullName,
+      author,
+      confirmedContributor,
+      skipAiReview: webhook.skipAiReview,
+      autoReviewSkipReason,
+    });
     const aiReviewWillRun =
       !authorBlacklisted &&
       !isFrozenForManualReview &&

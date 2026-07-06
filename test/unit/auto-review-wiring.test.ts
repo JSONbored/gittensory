@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   auditPullRequestAutoReviewSkip,
+  maybeAddRequiredAutoReviewSkipHold,
   resolveAutoReviewSkipForPullRequest,
   resolveReviewManifestForAiReview,
 } from "../../src/queue/processors";
@@ -404,4 +405,54 @@ describe("review.auto_review wiring (#1954)", () => {
 
     loadSpy.mockRestore();
   });
+  it("holds instead of quietly skipping when contributor-controlled metadata suppresses required AI review", () => {
+    const advisory = { headSha: "sha", findings: [] };
+    const added = maybeAddRequiredAutoReviewSkipHold(
+      { AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI: {} } as Env,
+      {
+        settings: { gatePack: "oss-anti-slop", aiReviewMode: "block", aiReviewAllAuthors: false } as any,
+        advisory,
+        repoFullName: "acme/widgets",
+        author: "alice",
+        confirmedContributor: false,
+        autoReviewSkipReason: "review skipped (WIP title)",
+      },
+    );
+
+    expect(added).toBe(true);
+    expect(advisory.findings).toEqual([
+      expect.objectContaining({
+        code: "ai_review_inconclusive",
+        severity: "warning",
+        title: "Required AI review was skipped by contributor-controlled metadata",
+      }),
+    ]);
+
+    const trustedSkip = { headSha: "sha", findings: [] };
+    expect(
+      maybeAddRequiredAutoReviewSkipHold({ AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI: {} } as Env, {
+        settings: { gatePack: "oss-anti-slop", aiReviewMode: "block", aiReviewAllAuthors: false } as any,
+        advisory: trustedSkip,
+        repoFullName: "acme/widgets",
+        author: "alice",
+        confirmedContributor: false,
+        autoReviewSkipReason: "review skipped (label)",
+      }),
+    ).toBe(false);
+    expect(trustedSkip.findings).toEqual([]);
+
+    const disabledAi = { headSha: "sha", findings: [] };
+    expect(
+      maybeAddRequiredAutoReviewSkipHold({ AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true", AI: {} } as Env, {
+        settings: { gatePack: "oss-anti-slop", aiReviewMode: "off", aiReviewAllAuthors: false } as any,
+        advisory: disabledAi,
+        repoFullName: "acme/widgets",
+        author: "alice",
+        confirmedContributor: false,
+        autoReviewSkipReason: "review skipped (base branch out of scope)",
+      }),
+    ).toBe(false);
+    expect(disabledAi.findings).toEqual([]);
+  });
+
 });

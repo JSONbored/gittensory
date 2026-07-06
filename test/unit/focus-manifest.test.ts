@@ -23,6 +23,7 @@ import {
   evaluateAutoReviewSkipReason,
   resolveAutoReviewSkipSummary,
   AUTO_REVIEW_SKIP_SUMMARY,
+  isContributorControlledAutoReviewSkipReason,
   resolveAutoReviewConfig,
   resolveReviewPromptOverrides,
   composeManifestReviewInstructions,
@@ -3189,6 +3190,15 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
       expect(summary.length).toBeGreaterThan(0);
     }
     expect(resolveAutoReviewSkipSummary("review skipped (unknown)")).toBe("review skipped (unknown)");
+  });
+
+  it("marks only contributor-controlled auto_review skip reasons as requiring a hold", () => {
+    expect(isContributorControlledAutoReviewSkipReason("review skipped (WIP title)")).toBe(true);
+    expect(isContributorControlledAutoReviewSkipReason("review skipped (base branch out of scope)")).toBe(true);
+    expect(isContributorControlledAutoReviewSkipReason("review skipped (draft)")).toBe(false);
+    expect(isContributorControlledAutoReviewSkipReason("review skipped (ignored author)")).toBe(false);
+    expect(isContributorControlledAutoReviewSkipReason("review skipped (label)")).toBe(false);
+    expect(isContributorControlledAutoReviewSkipReason("review skipped (unknown)")).toBe(false);
   });
 
   it("parses auto_pause_after_reviewed_commits with bounds validation (#2042)", () => {

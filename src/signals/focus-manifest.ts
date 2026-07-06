@@ -2373,6 +2373,10 @@ export const AUTO_REVIEW_SKIP_SUMMARY: Record<AutoReviewSkipReason, string> = {
   "review paused (commit threshold)": "Published AI review count reached review.auto_review.auto_pause_after_reviewed_commits, so further AI review is paused.",
 };
 
+export function isContributorControlledAutoReviewSkipReason(skipReason: string): boolean {
+  return skipReason === "review skipped (WIP title)" || skipReason === "review skipped (base branch out of scope)";
+}
+
 export function resolveAutoReviewSkipSummary(skipReason: string): string {
   if (Object.prototype.hasOwnProperty.call(AUTO_REVIEW_SKIP_SUMMARY, skipReason)) {
     return AUTO_REVIEW_SKIP_SUMMARY[skipReason as AutoReviewSkipReason];
