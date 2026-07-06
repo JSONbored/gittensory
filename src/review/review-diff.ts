@@ -35,15 +35,25 @@ export function addedLineCount(patch: string | undefined): number {
   return n;
 }
 
+function numericAddedLineCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 /** Sum added-line counts across a PR file list — used by auto-review size-cap eligibility (#2065). */
 export function totalAddedLineCount(
-  files: readonly { patch?: string | null | undefined; payload?: { patch?: unknown } | null | undefined }[],
+  files: readonly {
+    additions?: number | null | undefined;
+    patch?: string | null | undefined;
+    payload?: { additions?: unknown; patch?: unknown } | null | undefined;
+  }[],
 ): number {
   let total = 0;
   for (const file of files) {
+    const metadataCount =
+      numericAddedLineCount(file.additions) ?? numericAddedLineCount(file.payload?.additions);
     const patch =
       file.patch ?? (typeof file.payload?.patch === "string" ? file.payload.patch : undefined);
-    total += addedLineCount(patch);
+    total += metadataCount ?? addedLineCount(patch);
   }
   return total;
 }

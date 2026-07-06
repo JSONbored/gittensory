@@ -58,16 +58,27 @@ describe("addedLineCount — counts +lines, ignores +++ header", () => {
 });
 
 describe("totalAddedLineCount — sums added lines across PR files (#2065)", () => {
-  it("aggregates patch counts and treats missing patches as zero", () => {
+  it("uses GitHub additions metadata for patchless files so oversized diffs cannot bypass caps", () => {
     expect(totalAddedLineCount([
       { patch: "@@\n+a\n+b" },
-      { patch: "@@\n+c" },
+      { additions: 5, patch: null },
+      { payload: { additions: 7 } },
+      { payload: { patch: "@@\n+c" } },
       { patch: null },
-      { payload: { patch: "@@\n+d" } },
       { payload: {} },
       {},
-    ])).toBe(4);
+    ])).toBe(15);
     expect(totalAddedLineCount([])).toBe(0);
+  });
+
+  it("falls back to patches when additions metadata is absent or non-numeric", () => {
+    expect(totalAddedLineCount([
+      { additions: null, patch: "@@\n+a" },
+      { additions: Number.NaN, patch: "@@\n+b" },
+      { additions: Number.POSITIVE_INFINITY, patch: "@@\n+c" },
+      { payload: { additions: "4", patch: "@@\n+d" } },
+      { payload: { additions: null, patch: "@@\n+e" } },
+    ])).toBe(5);
   });
 });
 
