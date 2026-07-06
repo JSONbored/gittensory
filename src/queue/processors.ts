@@ -3356,6 +3356,21 @@ async function prReadyForReview(
         detail: "CI still stuck pending, but already finalized once for this head SHA — deferring again instead of re-spending a review",
         metadata: { deliveryId, repoFullName, headSha: pr.headSha },
       }).catch(() => undefined);
+      // level:"error" is deliberate, not a code failure: this line only fires once the guard above already
+      // stopped the wasteful re-review, so its OWN existence is the operator-visible signal (via the structured
+      // log → Sentry forwarder, forwardStructuredLogToSentry) that a PR's CI has been permanently stuck long
+      // enough to need a human — the same "surface an anomaly at error level" convention selfhost_ai_provider_
+      // failed / selfhost_ai_providers_exhausted already use in src/selfhost/ai.ts.
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "ci_stuck_review_repeat_suppressed",
+          repo: repoFullName,
+          pullNumber: pr.number,
+          headSha: pr.headSha,
+          deliveryId,
+        }),
+      );
       return false;
     }
     await recordAuditEvent(env, {

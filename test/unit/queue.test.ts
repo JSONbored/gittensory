@@ -1493,6 +1493,7 @@ describe("queue processors", () => {
       }
       return Response.json({});
     });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     try {
       // First evaluation: CI is stuck past the cap -- this SHOULD finalize and run a real review.
@@ -1507,6 +1508,7 @@ describe("queue processors", () => {
         .bind("github_app.review_finalized_ci_stuck_guard", "owner/agent-repo#7#a7")
         .first<{ n: number }>();
       expect(guardAfterFirst?.n).toBe(1);
+      expect(errors.mock.calls.some(([line]) => typeof line === "string" && line.includes("ci_stuck_review_repeat_suppressed"))).toBe(false);
 
       // Second evaluation, same head SHA, CI still stuck: must NOT finalize (and NOT pay for) another review.
       await processJob(env, { type: "agent-regate-pr", deliveryId: "stuck-ci-eval-2", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
@@ -1519,7 +1521,13 @@ describe("queue processors", () => {
         .bind("github_app.review_deferred_ci_pending", "owner/agent-repo#7")
         .first<{ n: number }>();
       expect(deferred?.n).toBe(1); // the second evaluation deferred instead
+      // Sentry-visible signal (via the structured-log forwarder) fires exactly once, on the guarded evaluation.
+      const repeatSuppressedLogs = errors.mock.calls.filter(([line]) => typeof line === "string" && line.includes("ci_stuck_review_repeat_suppressed"));
+      expect(repeatSuppressedLogs).toHaveLength(1);
+      const logged = JSON.parse(repeatSuppressedLogs[0]![0] as string) as Record<string, unknown>;
+      expect(logged).toMatchObject({ level: "error", event: "ci_stuck_review_repeat_suppressed", repo: "owner/agent-repo", pullNumber: 7, headSha: "a7" });
     } finally {
+      errors.mockRestore();
       liveCiSpy.mockRestore();
       requiredContextsSpy.mockRestore();
     }
