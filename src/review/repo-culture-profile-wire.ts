@@ -16,6 +16,7 @@
 // ever appends a reference-only block to the AI reviewer's USER prompt, exactly like the RAG/grounding/
 // enrichment sections it sits alongside in `services/ai-review.ts`'s buildUserPrompt.
 import { extractRepoCultureProfile, type RepoCultureProfile } from "./repo-culture-profile";
+import { neutralizePromptInjection } from "./prompt-injection";
 
 /** True when the culture-profile grounding capability is enabled at all. Flag-OFF (default) → the per-repo
  *  override below is never even consulted (mirrors isRagEnabled / isGroundingEnabled / isReputationEnabled). */
@@ -35,7 +36,11 @@ export function formatRepoCultureProfileSection(profile: RepoCultureProfile): st
     `- Typical PR description length: ~${pullRequestNorms.medianDescriptionLength} characters.`,
   ];
   if (commonLabels.length > 0) {
-    const labelSummary = commonLabels.map((entry) => `${entry.label} (${Math.round(entry.frequency * 100)}%)`).join(", ");
+    // entry.label is author/maintainer-controlled GitHub label text from merged PRs -- neutralize it the same
+    // way safeReviewTitle neutralizes an untrusted PR title before it reaches the reviewer prompt (#271).
+    const labelSummary = commonLabels
+      .map((entry) => `${neutralizePromptInjection(entry.label).text} (${Math.round(entry.frequency * 100)}%)`)
+      .join(", ");
     lines.push(`- Common labels on merged PRs: ${labelSummary}.`);
   }
   lines.push(

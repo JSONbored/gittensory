@@ -3071,6 +3071,23 @@ describe("resolveReviewPathInstructions (#review-path-instructions)", () => {
     expect(bad.warnings.some((w) => /review\.impact_map.*must be a boolean/.test(w))).toBe(true);
   });
 
+  it("parses review.culture_profile (default OFF), marks present, round-trips, and warns on a non-boolean (#2995)", () => {
+    expect(parseFocusManifest({ review: { culture_profile: true } }).review.cultureProfile).toBe(true);
+    const on = parseFocusManifest({ review: { culture_profile: true } });
+    expect(on.review.present).toBe(true); // a culture-profile-only manifest IS present
+    expect(parseFocusManifest({ review: reviewConfigToJson(on.review) }).review).toEqual(on.review); // survives round-trip
+    // Explicit false is retained (and marks present, since the maintainer set it).
+    const off = parseFocusManifest({ review: { culture_profile: false } });
+    expect(off.review.cultureProfile).toBe(false);
+    expect(off.review.present).toBe(true);
+    // Absent ⇒ null (the byte-identical default), config not present.
+    expect(parseFocusManifest({ review: {} }).review.cultureProfile).toBeNull();
+    // A non-boolean is ignored with a warning.
+    const bad = parseFocusManifest({ review: { culture_profile: "yes" } });
+    expect(bad.review.cultureProfile).toBeNull();
+    expect(bad.warnings.some((w) => /review\.culture_profile.*must be a boolean/.test(w))).toBe(true);
+  });
+
   it("parses review.finding_categories (default OFF), marks present, round-trips, and warns on a non-boolean (#1958)", () => {
     expect(parseFocusManifest({ review: { finding_categories: true } }).review.findingCategories).toBe(true);
     const on = parseFocusManifest({ review: { finding_categories: true } });
