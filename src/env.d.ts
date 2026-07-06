@@ -243,6 +243,11 @@ declare global {
      *  unreachable when off). Even when ON, retrieval is INERT until the self-host vector index is populated for
      *  the repo (a cold/missing index degrades to no context). */
     GITTENSORY_REVIEW_RAG?: string;
+    /** Deterministic impact map (#2184, part of #1971): operator-level kill-switch, ANDed with the per-repo
+     *  `.gittensory.yml review.impact_map` opt-in (see review/impact-map-wire's isImpactMapEnabled /
+     *  shouldComputeImpactMap). Default OFF — unset/false performs NO symbol extraction, NO RAG query, and adds
+     *  NO comment/prompt section, byte-identical to today. */
+    GITTENSORY_REVIEW_IMPACT_MAP?: string;
     /** Review-enrichment service (REES): when truthy, the self-host review engine POSTs the PR diff/files to
      *  REES and splices any public-safe brief into the AI reviewer prompt. Requires REES_URL and the repo in
      *  GITTENSORY_REVIEW_REPOS. REES_ANALYZERS is an optional exact comma-list; unset/"all"/"*" lets REES run its

@@ -140,6 +140,13 @@ function Tuning() {
           no context. Per-PR.
         </li>
         <li>
+          <code>GITTENSORY_REVIEW_IMPACT_MAP</code> — deterministic impact map: from the codebase
+          vector index plus the PR's changed exported symbols, computes which other repo files
+          plausibly need re-checking, and renders that as a compact section in the unified review
+          comment (also feeds it to the AI reviewer as additive reference context). ANDed with the
+          per-repo <code>review.impact_map</code> opt-in — neither alone is sufficient. Per-PR.
+        </li>
+        <li>
           <code>GITTENSORY_REVIEW_REPUTATION</code> — submitter-reputation spend control. A new,
           burst, or low-reputation submitter is downgraded to a deterministic-only review; good
           reputation proceeds normally. Never surfaced publicly — no comment, label, or check shows
