@@ -381,3 +381,92 @@ test("renderAuditMarkdown handles the fully-empty case without throwing", () => 
   assert.ok(markdown.includes("## Rejected Rows\n\n- none"));
   assert.ok(markdown.includes("## Contributing Repo Summary\n\n- none"));
 });
+
+test("composite sanitizes pre-ingested finding-severity rows before scoring or auditing", () => {
+  const forgedTier = {
+    tier: "blocker",
+    total: 2,
+    confirmed: 99,
+    confirmationRate: 99,
+    weight: 99,
+    score: 99,
+    rawReviewText: "private review details",
+  };
+  const forged = {
+    accepted: [
+      {
+        repoFullName: "ACME/Widgets",
+        replayRunId: " replay-1 ",
+        reviewRunId: "review-1",
+        observedAt: "2026-07-04T00:00:00Z",
+        tiers: [forgedTier, { tier: "mystery", total: 5, confirmed: 5, rawReviewText: "private tier" }],
+        score: 999,
+        privateMetadata: { rawReviewText: "private accepted" },
+      },
+      {
+        repoFullName: "not-a-repo",
+        replayRunId: "bad replay",
+        reviewRunId: "review-2",
+        tiers: [forgedTier],
+        score: 999,
+      },
+    ],
+    rejected: [
+      {
+        repoFullName: "ACME/Widgets",
+        replayRunId: "replay-2",
+        reviewRunId: "review-2",
+        reason: "not_opted_in",
+        privateMetadata: { rawReviewText: "private rejected" },
+      },
+      {
+        repoFullName: "ACME/Widgets",
+        replayRunId: "replay-3",
+        reviewRunId: "review-3",
+        reason: "attacker|reason",
+      },
+    ],
+  };
+
+  const result = computeFindingSeverityCompositeCalibrationScore({
+    objectiveAnchor: 0,
+    pairwise: null,
+    findingSeverity: forged as never,
+    weights: { objectiveAnchor: 0, pairwiseJudge: 0, structuredFindingSeverity: 1 },
+  });
+
+  assert.equal(result.structuredFindingSeverityScore, 1);
+  assert.equal(result.compositeScore, 1);
+  assert.deepEqual(result.audit.contributingRepos, [
+    {
+      repoFullName: "acme/widgets",
+      replayRunId: "replay-1",
+      reviewRunId: "review-1",
+      observedAt: "2026-07-04T00:00:00.000Z",
+      score: 1,
+      tiers: [{ tier: "blocker", total: 2, confirmed: 2, confirmationRate: 1, weight: 1, score: 1 }],
+    },
+  ]);
+  assert.deepEqual(result.audit.rejected, [
+    { repoFullName: "acme/widgets", replayRunId: "replay-2", reviewRunId: "review-2", reason: "not_opted_in" },
+  ]);
+  assert.notEqual(result.audit.contributingRepos[0]!.tiers[0], forgedTier);
+  assert.ok(!JSON.stringify(result.audit).includes("private"));
+});
+
+test("renderAuditMarkdown tolerates malformed pre-ingested rejected rows after sanitizing", () => {
+  const result = computeFindingSeverityCompositeCalibrationScore({
+    objectiveAnchor: 0.5,
+    pairwise: null,
+    findingSeverity: {
+      accepted: [],
+      rejected: [
+        { repoFullName: 42, replayRunId: "replay-1", reviewRunId: "review-1", reason: "not_opted_in" },
+        { repoFullName: "acme/widgets", replayRunId: "replay-2", reviewRunId: "review-2", reason: "surprise" },
+      ],
+    } as never,
+  });
+
+  assert.deepEqual(result.audit.rejected, []);
+  assert.doesNotThrow(() => renderFindingSeverityCalibrationAuditMarkdown(result));
+});

@@ -284,6 +284,71 @@ function isFindingSeverityCalibrationIngestion(value: unknown): value is Finding
   return isRecord(value) && Array.isArray(value.accepted) && Array.isArray(value.rejected);
 }
 
+function sanitizeFindingSeverityCalibrationIngestion(
+  ingestion: FindingSeverityCalibrationIngestion,
+): FindingSeverityCalibrationIngestion {
+  const accepted: FindingSeverityCalibrationSignal[] = [];
+  const rejected: FindingSeverityCalibrationIngestion["rejected"] = [];
+
+  for (const signal of ingestion.accepted) {
+    if (!isRecord(signal) || !Array.isArray(signal.tiers)) continue;
+    const repoFullName = typeof signal.repoFullName === "string" ? normalizeRepoFullName(signal.repoFullName) : null;
+    const replayRunId = typeof signal.replayRunId === "string" ? normalizeId(signal.replayRunId) : null;
+    const reviewRunId = typeof signal.reviewRunId === "string" ? normalizeId(signal.reviewRunId) : null;
+    if (!repoFullName || !replayRunId || !reviewRunId) continue;
+    const tierInputs = signal.tiers.flatMap((tier): FindingSeverityTierInput[] => {
+      if (
+        !isRecord(tier) ||
+        typeof tier.tier !== "string" ||
+        typeof tier.total !== "number" ||
+        typeof tier.confirmed !== "number"
+      ) {
+        return [];
+      }
+      return [
+        {
+          tier: tier.tier,
+          total: tier.total,
+          confirmed: tier.confirmed,
+        },
+      ];
+    });
+    const tiers = normalizeTiers(tierInputs);
+    const score = scoreTiers(tiers);
+    if (tiers.length === 0 || score === null) continue;
+    accepted.push({
+      repoFullName,
+      replayRunId,
+      reviewRunId,
+      observedAt: typeof signal.observedAt === "string" ? normalizeObservedAt(signal.observedAt) : null,
+      tiers,
+      score,
+    });
+  }
+
+  for (const row of ingestion.rejected) {
+    if (!isRecord(row)) continue;
+    const repoFullName =
+      typeof row.repoFullName === "string"
+        ? (normalizeRepoFullName(row.repoFullName) ?? normalizeId(row.repoFullName))
+        : null;
+    const replayRunId = typeof row.replayRunId === "string" ? normalizeId(row.replayRunId) : null;
+    const reviewRunId = typeof row.reviewRunId === "string" ? normalizeId(row.reviewRunId) : null;
+    const reason = row.reason;
+    if (
+      !repoFullName ||
+      !replayRunId ||
+      !reviewRunId ||
+      !["not_opted_in", "empty_tiers", "invalid_repo", "invalid_run_id"].includes(reason as string)
+    ) {
+      continue;
+    }
+    rejected.push({ repoFullName, replayRunId, reviewRunId, reason });
+  }
+
+  return { accepted, rejected };
+}
+
 function normalizeCompositeWeights(weights: FindingSeverityCalibrationWeights | undefined): {
   objectiveAnchor: number;
   pairwiseJudge: number;
@@ -447,7 +512,7 @@ export function computeFindingSeverityCompositeCalibrationScore(input: {
   weights?: FindingSeverityCalibrationWeights | undefined;
 }): FindingSeverityCompositeCalibrationScore {
   const ingestion = isFindingSeverityCalibrationIngestion(input.findingSeverity)
-    ? input.findingSeverity
+    ? sanitizeFindingSeverityCalibrationIngestion(input.findingSeverity)
     : ingestFindingSeverityCalibrationSignals(input.findingSeverity);
   const objectiveAnchorScore =
     typeof input.objectiveAnchor === "number" ? roundScore(input.objectiveAnchor) : input.objectiveAnchor.score;
