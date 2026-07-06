@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -47,12 +47,16 @@ describe("gittensory-miner package skeleton (#2287)", () => {
   });
 
   it("is discoverable from the repo root workspace", () => {
-    const listing = execFileSync(
+    // `npm ls` exits non-zero whenever ANY package anywhere in the WHOLE resolved tree is extraneous/invalid,
+    // even though `--workspace` only scopes the DISPLAYED subtree -- unrelated tree-wide dependency drift
+    // elsewhere in the monorepo (#3663) would otherwise fail this assertion via execFileSync's throw-on-nonzero
+    // behavior. spawnSync never throws; assert on stdout content directly, decoupled from the exit code.
+    const result = spawnSync(
       "npm",
       ["ls", "--workspace", "@jsonbored/gittensory-miner", "--depth=0"],
       { cwd: process.cwd(), encoding: "utf8" },
     );
-    expect(listing).toContain("@jsonbored/gittensory-miner@");
+    expect(result.stdout).toContain("@jsonbored/gittensory-miner@");
   });
 
   it("serves --help and --version from the bin entry", () => {
