@@ -396,6 +396,8 @@ review:
   # When true, the unified review comment gains a deterministic "Changed files" summary table.
   # effort_score: false
   # When true, the unified review comment gains a compact "review effort: N/5 (~M min)" chip.
+  # auto_merge_summary: false
+  # When true, the unified comment gains a read-only "Auto-merge conditions" table (display-only).
 
   # Boundary-safe test-generation advisory (#1972). Bool | null. Default: null/false -- byte-identical (no
   # boundary scan runs at all). When true, a diff that touches a small, precise set of boundary-condition

@@ -7941,6 +7941,7 @@ async function maybePublishPrPublicSurface(
   let suggestionsEnabledForReview = false;
   let changedFilesSummaryEnabledForReview = false;
   let effortScoreEnabledForReview = false;
+  let autoMergeSummaryEnabledForReview = false;
   let findingCategoriesEnabledForReview = false;
   let minFindingSeverityForReview: ReviewFindingSeverity | null = null;
   let aiReviewExpected = false;
@@ -8453,6 +8454,7 @@ async function maybePublishPrPublicSurface(
     const deterministicReviewOverrides = resolveReviewPromptOverrides(reviewManifestForAutoReview);
     changedFilesSummaryEnabledForReview = deterministicReviewOverrides.changedFilesSummary;
     effortScoreEnabledForReview = deterministicReviewOverrides.effortScore;
+    autoMergeSummaryEnabledForReview = deterministicReviewOverrides.autoMergeSummary;
     minFindingSeverityForReview = deterministicReviewOverrides.minFindingSeverity;
     maybeAddRequiredAutoReviewSkipHold(env, {
       settings,
@@ -9718,6 +9720,7 @@ async function maybePublishPrPublicSurface(
           : {}),
         maxFindingsCaps: reviewConfig.maxFindings,
         commentVerbosity: reviewConfig.commentVerbosity,
+        ...(autoMergeSummaryEnabledForReview ? { autoMergeSummary: true } : {}),
       });
     } else {
       deterministicBody = buildPublicPrIntelligenceComment(commentArgs);

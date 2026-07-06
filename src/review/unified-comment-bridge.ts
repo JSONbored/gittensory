@@ -339,6 +339,11 @@ export type UnifiedCommentBridgeArgs = {
    *  this only when BOTH the operator's GITTENSORY_REVIEW_IMPACT_MAP flag and the per-repo manifest opt-in
    *  are on — see `shouldComputeImpactMap`, `src/review/impact-map-wire.ts`). */
   impactMap?: ImpactMapSummaryInput[] | undefined;
+  /** When true, the unified comment gains a read-only "Auto-merge conditions" collapsible (CI green, gate passing,
+   *  mergeable-clean, linked issue) derived from readiness facts already on the comment path — display-only, never
+   *  changes merge decisions. Default OFF (the processor passes this only when the manifest opts in — see
+   *  `resolveReviewPromptOverrides`'s `autoMergeSummary`). (#2051) */
+  autoMergeSummary?: boolean | undefined;
   /** The disposition holds this PR for owner review because its diff touches a hard-guardrail path — so an
    *  otherwise-ready comment renders "held for review" instead of "safe to merge". (#guarded-hold-comment) */
   heldForReview?: boolean | undefined;
@@ -543,6 +548,47 @@ export function buildImpactMapCollapsible(entries: ImpactMapSummaryInput[]): Uni
   return { title: "Impact map", body };
 }
 
+/** Read-only pass/fail flags for the auto-merge conditions table — derived from readiness facts the unified
+ *  comment already resolved; never re-derives merge/close decisions. (#2051) */
+export type AutoMergeSummaryInput = {
+  ciGreen: boolean;
+  gatePassing: boolean;
+  mergeableClean: boolean;
+  linkedIssueOk: boolean;
+};
+
+/** Derive the four auto-merge condition flags from signals the caller already computed for the comment. */
+export function deriveAutoMergeSummaryInput(args: {
+  mergeReadiness?: MergeReadiness | undefined;
+  gateConclusion: GateCheckConclusion;
+  panelRows: PublicPrPanelSignalRow[];
+}): AutoMergeSummaryInput {
+  const linkedRow = args.panelRows.find((row) => row.key === "linkedIssue");
+  const mergeLabel = args.mergeReadiness?.mergeStateLabel?.trim().toLowerCase();
+  return {
+    ciGreen: args.mergeReadiness?.ciState === "passed",
+    gatePassing: args.gateConclusion === "success",
+    mergeableClean: mergeLabel === "clean",
+    linkedIssueOk: linkedRow !== undefined && linkedRow.cells[1].startsWith("✅"),
+  };
+}
+
+/** Build the read-only "Auto-merge conditions" collapsible — a pass/fail table only; never changes decisions. */
+export function buildAutoMergeSummaryCollapsible(conditions: AutoMergeSummaryInput): UnifiedCollapsible {
+  const row = (label: string, ok: boolean): string => `| ${label} | ${ok ? "✅ pass" : "❌ fail"} |`;
+  const body = [
+    "_Read-only — does not change merge decisions._",
+    "",
+    "| Condition | Status |",
+    "| --- | --- |",
+    row("CI green", conditions.ciGreen),
+    row("Gate passing", conditions.gatePassing),
+    row("Mergeable (clean)", conditions.mergeableClean),
+    row("Linked issue", conditions.linkedIssueOk),
+  ].join("\n");
+  return { title: "Auto-merge conditions", body };
+}
+
 /** A finding's path + body — everything `buildFindingCategoryCollapsible` needs to use the finding's own
  *  `category` when present, or fall back to `classifyFindingCategory` when it isn't. Deliberately narrower than
  *  `InlineFinding` (no line/severity/suggestion) so the bridge's pure-rendering surface stays minimal. */
@@ -661,10 +707,24 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
   const impactMapCollapsible = args.impactMap && args.impactMap.length > 0 ? buildImpactMapCollapsible(args.impactMap) : null;
   const withImpactMap =
     impactMapCollapsible !== null ? [...(withFindingCategories ?? []), impactMapCollapsible] : withFindingCategories;
+  // review.auto_merge_summary port (#2051): when the manifest opts in, append the read-only "Auto-merge conditions"
+  // collapsible right after Impact map (another structural, no-AI summary) and ahead of the visual preview.
+  const autoMergeCollapsible =
+    args.autoMergeSummary === true
+      ? buildAutoMergeSummaryCollapsible(
+        deriveAutoMergeSummaryInput({
+          mergeReadiness: args.mergeReadiness,
+          gateConclusion: args.gate.conclusion,
+          panelRows: visibleRows,
+        }),
+      )
+    : null;
+  const withAutoMergeSummary =
+    autoMergeCollapsible !== null ? [...(withImpactMap ?? []), autoMergeCollapsible] : withImpactMap;
   // Visual-capture port: when before/after routes are present, append a "Visual preview" collapsible to the
   // extra sections. Flag-OFF (the processor passes no beforeAfter) ⇒ extraCollapsibles is unchanged.
   const visualCollapsible = args.beforeAfter && args.beforeAfter.length > 0 ? buildBeforeAfterCollapsible(args.beforeAfter) : null;
-  const withVisual = visualCollapsible !== null ? [...(withImpactMap ?? []), visualCollapsible] : withImpactMap;
+  const withVisual = visualCollapsible !== null ? [...(withAutoMergeSummary ?? []), visualCollapsible] : withAutoMergeSummary;
   // #3612: "Scroll preview" renders ALONGSIDE "Visual preview" (never replacing it) — self-host + gif:true
   // only, so this is null (no section, no behavior change) for every repo that hasn't opted in.
   const scrollCollapsible = args.beforeAfter && args.beforeAfter.length > 0 ? buildScrollPreviewCollapsible(args.beforeAfter) : null;
