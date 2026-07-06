@@ -62,7 +62,7 @@ export function detectTerminology(
   const seen = new Set<string>();
   const hits: Array<{ term: string; suggestion: string }> = [];
   for (const token of tokenizeLine(line)) {
-    const suggestion = TERMS[token];
+    const suggestion = Object.prototype.hasOwnProperty.call(TERMS, token) ? TERMS[token] : undefined;
     if (suggestion && !seen.has(token)) {
       seen.add(token);
       hits.push({ term: token, suggestion });
