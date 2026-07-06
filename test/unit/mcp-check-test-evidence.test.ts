@@ -87,6 +87,29 @@ describe("buildCheckTestEvidenceReport (#2235)", () => {
     expect(adequate.guidance[0]).toMatch(/proportionally adequate/);
     expect(strong.guidance[0]).toMatch(/proportionally strong/);
   });
+
+  it("defaults nullish changedPaths and testPaths to empty lists", () => {
+    const emptyChanged = buildCheckTestEvidenceReport({ changedPaths: null as unknown as string[] });
+    expect(emptyChanged.docsOnly).toBe(true);
+    expect(emptyChanged.codeFileCount).toBe(0);
+    expect(emptyChanged.guidance[0]).toMatch(/docs-only churn/);
+
+    const nullTestPaths = buildCheckTestEvidenceReport({
+      changedPaths: ["src/a.ts"],
+      testPaths: null as unknown as string[],
+    });
+    expect(nullTestPaths.classification).toBe("absent");
+    expect(nullTestPaths.testFileCount).toBe(0);
+  });
+
+  it("deduplicates a test path repeated across changedPaths and testPaths", () => {
+    const report = buildCheckTestEvidenceReport({
+      changedPaths: ["src/a.ts", "test/shared.test.ts"],
+      testPaths: ["test/shared.test.ts"],
+    });
+    expect(report.testFileCount).toBe(1);
+    expect(report.classification).toBe("strong");
+  });
 });
 
 describe("MCP gittensory_check_test_evidence (#2235)", () => {
