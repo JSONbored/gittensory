@@ -32,6 +32,10 @@ The package also includes a local soft-claim ledger: `openClaimLedger` / `claimI
 `listActiveClaims` persist which issues this miner instance has claimed on this machine. The table is local
 bookkeeping only — duplicate winners are adjudicated elsewhere via `@jsonbored/gittensory-engine`. (#2291)
 
+The package also includes an append-only event ledger: `initEventLedger` / `appendEvent` / `readEvents` persist
+immutable miner-loop events in local SQLite for contributor audit. Insert-only — rows are never updated or
+deleted. (#2322)
+
 ## Install
 
 See [`docs/miner-goal-spec.md`](docs/miner-goal-spec.md) for the `.gittensory-miner.yml` field reference and [`.gittensory-miner.yml.example`](../../.gittensory-miner.yml.example) at the repo root.
