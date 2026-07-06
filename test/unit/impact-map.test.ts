@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeImpactMap, MAX_AFFECTED_MODULES_PER_ENTRY } from "../../src/review/impact-map";
+import { computeImpactMap, MAX_AFFECTED_MODULES_PER_ENTRY, MAX_IMPACT_MAP_INPUT_FILES } from "../../src/review/impact-map";
 import type { FileChangedSymbols } from "../../src/review/impact-symbols";
 import type { InferenceAdapter, RagInfra, StorageAdapter, VectorAdapter } from "../../src/review/rag";
 
@@ -65,6 +65,54 @@ describe("computeImpactMap", () => {
     expect(result[0]?.affectedModules).toHaveLength(MAX_AFFECTED_MODULES_PER_ENTRY);
     // Deterministic ordering: the highest-scoring match leads (RAG's own retrieval order).
     expect(result[0]?.affectedModules[0]).toBe("src/review/caller0.ts");
+  });
+
+  it("REGRESSION (Superagent P2): caps RAG queries at MAX_IMPACT_MAP_INPUT_FILES regardless of how many changed files carry symbols", async () => {
+    let queryCount = 0;
+    const countingVector: VectorAdapter = {
+      query: async () => {
+        queryCount += 1;
+        return { matches: [{ id: "src/review/caller.ts::0", score: 0.9, metadata: { path: "src/review/caller.ts" } }] };
+      },
+      upsert: async () => undefined,
+      deleteByIds: async () => undefined,
+    } as unknown as VectorAdapter;
+    const infra: RagInfra = { storage: storageStubWithText(5), vector: countingVector, inference: ai1024 };
+    // A PR touching far more symbol-bearing files than the cap -- e.g. an attacker-controlled diff with
+    // hundreds of changed files, each contributing at least one extracted symbol.
+    const symbols: FileChangedSymbols[] = Array.from({ length: MAX_IMPACT_MAP_INPUT_FILES + 25 }, (_, i) => ({
+      path: `src/review/module${i}.ts`,
+      symbols: [`fn${i}`],
+    }));
+    const result = await computeImpactMap(symbols, { infra, project: "acme", repo: "widgets" });
+    expect(queryCount).toBe(MAX_IMPACT_MAP_INPUT_FILES);
+    expect(result).toHaveLength(MAX_IMPACT_MAP_INPUT_FILES);
+    // Deterministic: the FIRST N input files are kept, not a sample.
+    expect(result[0]?.changedModule).toBe("src/review/module0.ts");
+    expect(result.at(-1)?.changedModule).toBe(`src/review/module${MAX_IMPACT_MAP_INPUT_FILES - 1}.ts`);
+  });
+
+  it("does not count a symbol-less file against the query cap", async () => {
+    let queryCount = 0;
+    const countingVector: VectorAdapter = {
+      query: async () => {
+        queryCount += 1;
+        return { matches: [{ id: "src/review/caller.ts::0", score: 0.9, metadata: { path: "src/review/caller.ts" } }] };
+      },
+      upsert: async () => undefined,
+      deleteByIds: async () => undefined,
+    } as unknown as VectorAdapter;
+    const infra: RagInfra = { storage: storageStubWithText(5), vector: countingVector, inference: ai1024 };
+    // MAX_IMPACT_MAP_INPUT_FILES symbol-bearing files, interleaved with symbol-less ones that must not
+    // consume any of the query budget.
+    const symbols: FileChangedSymbols[] = Array.from({ length: MAX_IMPACT_MAP_INPUT_FILES }, (_, i) => ({
+      path: `src/review/module${i}.ts`,
+      symbols: [`fn${i}`],
+    }));
+    symbols.splice(1, 0, { path: "README.md", symbols: [] }, { path: "docs/guide.md", symbols: [] });
+    const result = await computeImpactMap(symbols, { infra, project: "acme", repo: "widgets" });
+    expect(queryCount).toBe(MAX_IMPACT_MAP_INPUT_FILES);
+    expect(result).toHaveLength(MAX_IMPACT_MAP_INPUT_FILES);
   });
 
   it("produces no entry for a changed file whose own module is the only RAG match (self-only, excluded)", async () => {

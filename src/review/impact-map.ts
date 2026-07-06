@@ -29,6 +29,14 @@ export type ImpactMapEntry = {
  *  list, not a sprawling one). */
 export const MAX_AFFECTED_MODULES_PER_ENTRY = 8;
 
+/** Hard cap on how many changed-symbol files computeImpactMap will issue a RAG query for. Without this, the
+ *  number of vector queries scales directly with the (contributor-controlled) changed-file count — a PR
+ *  touching hundreds of files would issue hundreds of retrieveContextWithMetrics calls with no bound.
+ *  Matches boundary-test-generation.ts's MAX_TOUCHES precedent for the same "bound a per-changed-file loop"
+ *  concern. Input order is preserved (deterministic ordering doc above), so this simply stops processing
+ *  after the first N symbol-bearing files rather than sampling. */
+export const MAX_IMPACT_MAP_INPUT_FILES = 20;
+
 /** How many neighbours to request per changed-module query. Kept modest (< RAG's own RAG_MAX_TOPK=20) since
  *  we only keep MAX_AFFECTED_MODULES_PER_ENTRY of them anyway. */
 const IMPACT_MAP_TOP_K = 12;
@@ -58,8 +66,10 @@ export async function computeImpactMap(
   ragContext: { infra: RagInfra; project: string; repo: string },
 ): Promise<ImpactMapEntry[]> {
   const out: ImpactMapEntry[] = [];
-  for (const file of symbols) {
-    if (file.symbols.length === 0) continue;
+  // Symbol-less files never query (nothing to look up) and so never count against the cap below -- filter
+  // them out first so the cap applies to the actual query budget, not a raw slice of the input.
+  const queryableFiles = symbols.filter((file) => file.symbols.length > 0).slice(0, MAX_IMPACT_MAP_INPUT_FILES);
+  for (const file of queryableFiles) {
     const queryText = buildSymbolQueryText(file);
     let affectedModules: string[];
     try {
