@@ -35,21 +35,20 @@ describe("check-miner-package script", () => {
     expect(result.out).toContain("Unexpected file in miner package: scripts/extra.mjs");
   });
 
-  it("REGRESSION (main was red after #3704): accepts a lib module split into a one-level subdirectory", () => {
+  it("REGRESSION (#3704 caused main to go red, fixed by flattening lib/ instead of widening this allowlist): rejects a lib module nested one level under a subdirectory", () => {
     const result = runChecker({
       CHECK_MINER_PACK_TEST_FILES: JSON.stringify([
         "package.json",
         "bin/gittensory-miner.js",
+        "lib/cli.js",
         "lib/calibration/index.js",
-        "lib/calibration/index.d.ts",
       ]),
-      CHECK_MINER_PACK_TEST_CONTENT: "{}",
     });
-    expect(result.status).toBe(0);
-    expect(result.out).toContain("lib/calibration/index.js");
+    expect(result.status).toBe(1);
+    expect(result.out).toContain("Unexpected file in miner package: lib/calibration/index.js");
   });
 
-  it("still rejects a file nested two levels deep under lib/", () => {
+  it("rejects a file nested two levels deep under lib/", () => {
     const result = runChecker({
       CHECK_MINER_PACK_TEST_FILES: JSON.stringify([
         "package.json",
