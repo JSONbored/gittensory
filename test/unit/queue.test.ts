@@ -16482,6 +16482,168 @@ describe("queue processors", () => {
     }
   });
 
+  // #2049: with the unified comment on AND `.gittensory.yml` setting `review.max_findings`, the processor wires
+  // manifest caps into `buildUnifiedCommentBody` and the renderer truncates blocker/nit lists with a "+N more"
+  // footer. Mirrors the effort_score test above but asserts display-only truncation instead.
+  it("truncates unified-comment blockers when review.max_findings is set in .gittensory.yml (#2049)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "detected_contributors_only",
+      publicAudienceMode: "gittensor_only",
+      publicSignalLevel: "standard",
+      publicSurface: "comment_and_label",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      gateCheckMode: "enabled",
+      backfillEnabled: true,
+      privateTrustEnabled: true,
+      autonomy: { update_branch: "auto" },
+      linkedIssueGateMode: "block",
+    });
+    let postedBody = "";
+    const calls = { comments: 0, gateChecks: 0 };
+    let gateFinalized = false;
+    let failedPostGateMint = false;
+    const liveCiSpy = vi
+      .spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl")
+      .mockRejectedValueOnce(new Error("transient CI read failed"))
+      .mockResolvedValue({
+        ciState: "passed",
+        hasPending: false,
+        hasVisiblePending: false,
+        hasMissingRequiredContext: false,
+        failingDetails: [],
+        nonRequiredFailingDetails: [],
+        ciCompletenessWarning: null,
+      });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          {
+            uid: 7,
+            githubUsername: "oktofeesh1",
+            githubId: "123",
+            totalPrs: 4,
+            totalMergedPrs: 3,
+            totalOpenPrs: 1,
+            totalClosedPrs: 0,
+            totalOpenIssues: 0,
+            totalClosedIssues: 0,
+            totalSolvedIssues: 0,
+            totalValidSolvedIssues: 0,
+            isEligible: true,
+            credibility: 1,
+            eligibleRepoCount: 1,
+            hotkey: "must-not-leak",
+          },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({
+          repositories: [
+            {
+              repositoryFullName: "JSONbored/gittensory",
+              totalPrs: "4",
+              totalMergedPrs: "3",
+              totalOpenPrs: "1",
+              totalClosedPrs: "0",
+              totalOpenIssues: "0",
+              totalClosedIssues: "0",
+              isEligible: true,
+              credibility: "1.000000",
+            },
+          ],
+        });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+        return new Response("review:\n  max_findings:\n    blockers: 0\n");
+      }
+      if (url.includes("/access_tokens")) {
+        if (gateFinalized && !failedPostGateMint) {
+          failedPostGateMint = true;
+          return new Response("mint failed", { status: 500 });
+        }
+        return Response.json({ token: "installation-token", expires_at: "2026-05-28T00:04:00.000Z" });
+      }
+      if (url.includes("/pulls/3/files"))
+        return Response.json([{ filename: "src/cache.ts", additions: 5, deletions: 1, status: "modified" }]);
+      if (/\/pulls\/3(?:\?|$)/.test(url)) return Response.json({ number: 3, mergeable_state: "clean" });
+      if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && method === "POST") {
+        calls.gateChecks += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string };
+        if (body.status !== "in_progress" || body.conclusion) {
+          gateFinalized = true;
+          clearInstallationTokenCacheForTest();
+        }
+        return Response.json({ id: 901 }, { status: 201 });
+      }
+      if (url.includes("/check-runs/901") && method === "PATCH") {
+        calls.gateChecks += 1;
+        gateFinalized = true;
+        clearInstallationTokenCacheForTest();
+        return Response.json({ id: 901 });
+      }
+      if (url.includes("/issues/3/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/3/comments") && method === "POST") {
+        calls.comments += 1;
+        postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        return Response.json({ id: 1, html_url: "https://github.com/comment/1" }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    try {
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "pr-unified-comment-max-findings",
+        eventName: "pull_request",
+        payload: {
+          action: "synchronize",
+          installation: {
+            id: 123,
+            account: { login: "JSONbored", id: 1, type: "User" },
+            repository_selection: "selected",
+            permissions: { metadata: "read", pull_requests: "read", issues: "write", checks: "write" },
+            events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+          },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: {
+            number: 3,
+            title: "Fix webhook duplicate delivery again",
+            state: "open",
+            user: { login: "oktofeesh1" },
+            head: { sha: "unifiedmaxfindings" },
+            labels: [{ name: "bug" }],
+            body: "No linked issue on purpose.\n\nValidation: npm test",
+          },
+        },
+      });
+
+      expect(calls.comments).toBe(2);
+      expect(postedBody).toContain("<!-- gittensory-pr-panel:v1 -->");
+      expect(postedBody).toContain("_+1 more_");
+    } finally {
+      liveCiSpy.mockRestore();
+    }
+  });
+
   // #1955: the review-effort minutes persisted onto the public-stats audit event (independent of
   // review.effort_score, which only gates the unified-comment CHIP) must never block the publish itself when the
   // estimator throws — the publish still completes and simply omits `reviewEffortMinutes` from the event metadata

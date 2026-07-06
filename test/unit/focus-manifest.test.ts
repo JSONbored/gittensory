@@ -3000,6 +3000,18 @@ describe("resolveReviewPathInstructions (#review-path-instructions)", () => {
     const notObject = parseFocusManifest({ review: { max_findings: "nope" } });
     expect(notObject.warnings.some((w) => /max_findings.*mapping/.test(w))).toBe(true);
     expect(resolveReviewPromptOverrides(on).maxFindings).toEqual({ blockers: 5, nits: 8 });
+
+    const blockersOnly = parseFocusManifest({ review: { max_findings: { blockers: 3 } } });
+    expect(blockersOnly.review.maxFindings).toEqual({ blockers: 3, nits: null });
+    expect(parseFocusManifest({ review: reviewConfigToJson(blockersOnly.review) }).review.maxFindings).toEqual(
+      blockersOnly.review.maxFindings,
+    );
+
+    const nitsOnly = parseFocusManifest({ review: { max_findings: { nits: 2 } } });
+    expect(nitsOnly.review.maxFindings).toEqual({ blockers: null, nits: 2 });
+    expect(parseFocusManifest({ review: reviewConfigToJson(nitsOnly.review) }).review.maxFindings).toEqual(
+      nitsOnly.review.maxFindings,
+    );
   });
 });
 

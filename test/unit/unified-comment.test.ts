@@ -490,6 +490,17 @@ describe("buildUnifiedReviewInput", () => {
     const withoutEffort = buildUnifiedReviewInput({ changedFiles: 1, reviews: [reviewNote("merge")] });
     expect(withoutEffort.reviewEffort).toBeUndefined();
   });
+
+  it("threads optional maxFindingsCaps through to the input when provided (#2049)", () => {
+    const withCaps = buildUnifiedReviewInput({
+      changedFiles: 1,
+      reviews: [reviewNote("merge")],
+      maxFindingsCaps: { blockers: 2, nits: 3 },
+    });
+    expect(withCaps.maxFindingsCaps).toEqual({ blockers: 2, nits: 3 });
+    const withoutCaps = buildUnifiedReviewInput({ changedFiles: 1, reviews: [reviewNote("merge")] });
+    expect(withoutCaps.maxFindingsCaps).toBeUndefined();
+  });
 });
 
 describe("renderReviewingPlaceholder", () => {
@@ -558,10 +569,35 @@ describe("review.max_findings display caps (#2049)", () => {
     );
   });
 
-  it("truncateFindingsForDisplay handles nullish and zero caps", () => {
+  it("truncateFindingsForDisplay handles nullish, undefined, under-cap, and zero caps", () => {
     expect(truncateFindingsForDisplay(["a", "b"], null)).toEqual({ shown: ["a", "b"], hiddenCount: 0 });
+    expect(truncateFindingsForDisplay(["a", "b"], undefined)).toEqual({ shown: ["a", "b"], hiddenCount: 0 });
+    expect(truncateFindingsForDisplay(["a"], 5)).toEqual({ shown: ["a"], hiddenCount: 0 });
     expect(truncateFindingsForDisplay(["a", "b"], 1)).toEqual({ shown: ["a"], hiddenCount: 1 });
     expect(truncateFindingsForDisplay(["a", "b"], 0)).toEqual({ shown: [], hiddenCount: 2 });
+  });
+
+  it("renders cap=0 as a +N more placeholder without listing items", () => {
+    const capped = renderUnifiedReviewComment({
+      ...base,
+      recommendations: ["request_changes"],
+      blockers: ["alpha", "beta"],
+      nits: ["nit one"],
+      maxFindingsCaps: { blockers: 0, nits: 0 },
+    });
+    expect(capped).not.toContain("- alpha");
+    expect(capped).toContain("_+2 more_");
+    expect(capped).toContain("_+1 more_");
+  });
+
+  it("omits the +N more footer when the list fits within the cap", () => {
+    const capped = renderUnifiedReviewComment({
+      ...base,
+      nits: ["only nit"],
+      maxFindingsCaps: { blockers: null, nits: 5 },
+    });
+    expect(capped).toContain("only nit");
+    expect(capped).not.toMatch(/\+1 more/);
   });
 });
 
