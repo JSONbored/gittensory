@@ -3091,6 +3091,8 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
       ignoreTitleKeywords: ["WIP", "draft"],
       skipLabels: ["do-not-review", "wip"],
       skipDocsOnly: null,
+      maxAddedLines: null,
+      maxFiles: null,
       baseBranches: ["main", "release/**"],
       autoPauseAfterReviewedCommits: null,
     });
@@ -3122,7 +3124,7 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
 
   it("evaluateAutoReviewSkipReason: byte-identical when unset; skips with deterministic reasons when configured", () => {
     const empty = { ...EMPTY_AUTO_REVIEW_CONFIG };
-    const input = { isDraft: true, author: "dependabot[bot]", title: "WIP: bump deps", labels: [] as string[], changedPaths: [] as string[], baseRef: "develop", reviewedCommitCount: 0 };
+    const input = { isDraft: true, author: "dependabot[bot]", title: "WIP: bump deps", labels: [] as string[], changedPaths: [] as string[], addedLineCount: 0, changedFileCount: 0, baseRef: "develop", reviewedCommitCount: 0 };
     expect(evaluateAutoReviewSkipReason(empty, input)).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDrafts: true }, { ...input, isDraft: true })).toBe("review skipped (draft)");
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDrafts: true }, { ...input, isDraft: false })).toBeNull();
@@ -3142,6 +3144,11 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDocsOnly: true }, { ...input, changedPaths: ["README.md", "src/a.ts"] })).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDocsOnly: true }, { ...input, changedPaths: [] })).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDocsOnly: false }, { ...input, changedPaths: ["README.md"] })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, maxAddedLines: 100 }, { ...input, addedLineCount: 101 })).toBe("review skipped (too large)");
+    expect(evaluateAutoReviewSkipReason({ ...empty, maxAddedLines: 100 }, { ...input, addedLineCount: 100 })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, maxFiles: 3 }, { ...input, changedFileCount: 4 })).toBe("review skipped (too large)");
+    expect(evaluateAutoReviewSkipReason({ ...empty, maxFiles: 3 }, { ...input, changedFileCount: 3 })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, maxAddedLines: 0, maxFiles: 0 }, { ...input, addedLineCount: 999, changedFileCount: 999 })).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, baseBranches: ["main"] }, { ...input, baseRef: "develop" })).toBe(
       "review skipped (base branch out of scope)",
     );
@@ -3236,6 +3243,22 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
     });
     expect(many.review.autoReview.ignoreTitleKeywords).toHaveLength(50);
     expect(many.warnings.some((w) => /ignore_title_keywords.*capped/.test(w))).toBe(true);
+  });
+
+  it("parses max_added_lines/max_files caps, treats 0 as disabled, and round-trips", () => {
+    const m = parseFocusManifest({ review: { auto_review: { max_added_lines: 500, max_files: 20 } } });
+    expect(m.review.autoReview.maxAddedLines).toBe(500);
+    expect(m.review.autoReview.maxFiles).toBe(20);
+    expect(reviewConfigToJson(m.review)).toEqual({ auto_review: { max_added_lines: 500, max_files: 20 } });
+    expect(parseFocusManifest({ review: reviewConfigToJson(m.review) }).review.autoReview.maxAddedLines).toBe(500);
+    const zero = parseFocusManifest({ review: { auto_review: { max_added_lines: 0, max_files: 0 } } });
+    expect(zero.review.autoReview.maxAddedLines).toBeNull();
+    expect(zero.review.autoReview.maxFiles).toBeNull();
+    const bad = parseFocusManifest({ review: { auto_review: { max_added_lines: -1, max_files: "20" } } });
+    expect(bad.review.autoReview.maxAddedLines).toBeNull();
+    expect(bad.review.autoReview.maxFiles).toBeNull();
+    expect(bad.warnings.some((w) => /max_added_lines.*non-negative integer/.test(w))).toBe(true);
+    expect(bad.warnings.some((w) => /max_files.*non-negative integer/.test(w))).toBe(true);
   });
 });
 

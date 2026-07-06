@@ -57,6 +57,43 @@ describe("review.auto_review wiring (#1954)", () => {
     ).toBeNull();
   });
 
+  it("resolvePullRequestAutoReviewSkipReason: skips oversized PRs when configured", () => {
+    const manifest = parseFocusManifest({ review: { auto_review: { max_added_lines: 100, max_files: 2 } } });
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest,
+        isDraft: false,
+        author: "alice",
+        title: "feat: big change",
+        addedLineCount: 101,
+        changedFileCount: 1,
+        baseRef: "main",
+      }),
+    ).toBe("review skipped (too large)");
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest,
+        isDraft: false,
+        author: "alice",
+        title: "feat: many files",
+        addedLineCount: 50,
+        changedFileCount: 3,
+        baseRef: "main",
+      }),
+    ).toBe("review skipped (too large)");
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest,
+        isDraft: false,
+        author: "alice",
+        title: "feat: within caps",
+        addedLineCount: 100,
+        changedFileCount: 2,
+        baseRef: "main",
+      }),
+    ).toBeNull();
+  });
+
   it("resolvePullRequestAutoReviewSkipReason: skips docs-only PRs when configured", () => {
     const manifest = parseFocusManifest({ review: { auto_review: { skip_docs_only: true } } });
     expect(

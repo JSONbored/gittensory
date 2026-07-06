@@ -420,6 +420,10 @@ export type AutoReviewConfig = {
   /** `review.auto_review.skip_docs_only`: when true, PRs whose every changed file classifies as docs skip AI review.
    *  null (default) ⇒ docs PRs reviewed as today. Empty changed-file list ⇒ NOT docs-only (fail-safe eligible). (#2063) */
   skipDocsOnly: boolean | null;
+  /** `review.auto_review.max_added_lines`: skip AI review when added-line count exceeds this cap. null/0 ⇒ disabled. (#2065) */
+  maxAddedLines: number | null;
+  /** `review.auto_review.max_files`: skip AI review when changed-file count exceeds this cap. null/0 ⇒ disabled. (#2065) */
+  maxFiles: number | null;
   /** `review.auto_review.base_branches`: base-ref globs whose PRs ARE reviewed; empty/unset ⇒ every base. (#2041) */
   baseBranches: string[];
   /** `review.auto_review.auto_pause_after_reviewed_commits`: after N published AI reviews on this PR, pause further
@@ -433,6 +437,8 @@ export const EMPTY_AUTO_REVIEW_CONFIG: AutoReviewConfig = {
   ignoreTitleKeywords: [],
   skipLabels: [],
   skipDocsOnly: null,
+  maxAddedLines: null,
+  maxFiles: null,
   baseBranches: [],
   autoPauseAfterReviewedCommits: null,
 };
@@ -1778,6 +1784,8 @@ function autoReviewPresent(config: AutoReviewConfig): boolean {
     config.ignoreTitleKeywords.length > 0 ||
     config.skipLabels.length > 0 ||
     config.skipDocsOnly !== null ||
+    (config.maxAddedLines !== null && config.maxAddedLines > 0) ||
+    (config.maxFiles !== null && config.maxFiles > 0) ||
     config.baseBranches.length > 0 ||
     config.autoPauseAfterReviewedCommits !== null
   );
@@ -1797,6 +1805,8 @@ function parseAutoReviewConfig(value: JsonValue | undefined, warnings: string[])
     ignoreTitleKeywords: parseAutoReviewTitleKeywords(record.ignore_title_keywords, warnings),
     skipLabels: parseAutoReviewSkipLabels(record.skip_labels, warnings),
     skipDocsOnly: normalizeOptionalBoolean(record.skip_docs_only, "review.auto_review.skip_docs_only", warnings),
+    maxAddedLines: parseAutoReviewSizeCap(record.max_added_lines, "review.auto_review.max_added_lines", warnings),
+    maxFiles: parseAutoReviewSizeCap(record.max_files, "review.auto_review.max_files", warnings),
     baseBranches: parseManifestGlobList(record.base_branches, "review.auto_review.base_branches", warnings),
     autoPauseAfterReviewedCommits: normalizeOptionalNonNegativeInt(
       record.auto_pause_after_reviewed_commits,
@@ -1941,6 +1951,12 @@ function parseAutoReviewTitleKeywords(value: JsonValue | undefined, warnings: st
     if (safe !== null) out.push(safe);
   }
   return out;
+}
+
+function parseAutoReviewSizeCap(value: JsonValue | undefined, field: string, warnings: string[]): number | null {
+  const parsed = normalizeOptionalNonNegativeInt(value, field, warnings);
+  if (parsed === null || parsed === 0) return null;
+  return parsed;
 }
 
 function parseAutoReviewSkipLabels(value: JsonValue | undefined, warnings: string[]): string[] {
@@ -2164,6 +2180,8 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
     if (review.autoReview.ignoreTitleKeywords.length > 0) autoReview.ignore_title_keywords = [...review.autoReview.ignoreTitleKeywords];
     if (review.autoReview.skipLabels.length > 0) autoReview.skip_labels = [...review.autoReview.skipLabels];
     if (review.autoReview.skipDocsOnly !== null) autoReview.skip_docs_only = review.autoReview.skipDocsOnly;
+    if (review.autoReview.maxAddedLines !== null) autoReview.max_added_lines = review.autoReview.maxAddedLines;
+    if (review.autoReview.maxFiles !== null) autoReview.max_files = review.autoReview.maxFiles;
     if (review.autoReview.baseBranches.length > 0) autoReview.base_branches = [...review.autoReview.baseBranches];
     if (review.autoReview.autoPauseAfterReviewedCommits !== null) {
       autoReview.auto_pause_after_reviewed_commits = review.autoReview.autoPauseAfterReviewedCommits;
@@ -2240,6 +2258,8 @@ export type AutoReviewEligibilityInput = {
   title: string;
   labels: readonly string[];
   changedPaths: readonly string[];
+  addedLineCount: number;
+  changedFileCount: number;
   baseRef: string | null;
   reviewedCommitCount: number;
 };
@@ -2270,6 +2290,12 @@ export function evaluateAutoReviewSkipReason(config: AutoReviewConfig, input: Au
       return "review skipped (docs only)";
     }
   }
+  if (config.maxAddedLines !== null && config.maxAddedLines > 0 && input.addedLineCount > config.maxAddedLines) {
+    return "review skipped (too large)";
+  }
+  if (config.maxFiles !== null && config.maxFiles > 0 && input.changedFileCount > config.maxFiles) {
+    return "review skipped (too large)";
+  }
   if (config.baseBranches.length > 0) {
     const baseRef = input.baseRef?.trim() ?? "";
     if (!baseRef || !config.baseBranches.some((glob) => matchesManifestPath(baseRef, glob))) {
@@ -2292,16 +2318,21 @@ export function resolvePullRequestAutoReviewSkipReason(args: {
   title: string;
   labels?: readonly string[] | undefined;
   changedPaths?: readonly string[] | undefined;
+  addedLineCount?: number | undefined;
+  changedFileCount?: number | undefined;
   baseRef: string | null;
   reviewedCommitCount?: number | undefined;
 }): string | null {
   if (args.forceAiReview === true) return null;
+  const changedPaths = args.changedPaths ?? [];
   return evaluateAutoReviewSkipReason(resolveAutoReviewConfig(args.manifest), {
     isDraft: args.isDraft,
     author: args.author,
     title: args.title,
     labels: args.labels ?? [],
-    changedPaths: args.changedPaths ?? [],
+    changedPaths,
+    addedLineCount: args.addedLineCount ?? 0,
+    changedFileCount: args.changedFileCount ?? changedPaths.length,
     baseRef: args.baseRef,
     reviewedCommitCount: args.reviewedCommitCount ?? 0,
   });
