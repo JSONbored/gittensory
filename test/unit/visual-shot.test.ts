@@ -112,6 +112,14 @@ describe("visual screenshot on-demand SSRF guard", () => {
     expect(mocks.screenshot).toHaveBeenCalled();
   });
 
+  it("captures the FULL page, not just the viewport — before/after must show the same page position for a change however far down it is", async () => {
+    mocks.finalUrl = "https://preview.pages.dev/page";
+
+    await handleShot(request("https://preview.pages.dev/page"), env());
+
+    expect(mocks.screenshot).toHaveBeenCalledWith({ type: "png", fullPage: true });
+  });
+
   it("captureShot rejects an unsafe target before launching the browser (defense-in-depth)", async () => {
     const result = await captureShot(env(), "http://127.0.0.1/admin");
     expect(result).toEqual({ png: null, authWalled: false });

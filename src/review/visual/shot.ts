@@ -161,7 +161,12 @@ export async function captureShot(env: Env, url: string, viewport: Viewport = VI
       console.log(JSON.stringify({ ev: "render_screenshot_auth_walled", url, final: page.url().slice(0, 200) }));
       return { png: null, authWalled: true };
     }
-    const shot = (await page.screenshot({ type: "png", fullPage: false })) as Uint8Array;
+    // Full-page (not just the viewport): before/after must show the SAME position on the page for any
+    // change, however far down it is. A viewport-only shot only captures whatever happens to be in frame at
+    // load time, which for a change midway down a long page would silently miss it in both cells. Capturing
+    // the whole scrollable height means the changed region is always present in both images at the same
+    // relative offset, with no need to locate/scroll to it first.
+    const shot = (await page.screenshot({ type: "png", fullPage: true })) as Uint8Array;
     return { png: shot, authWalled: false };
   } catch (error) {
     // Log before degrading to null — otherwise a networkidle0 timeout, a binding quota error, or a render
