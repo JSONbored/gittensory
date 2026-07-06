@@ -4788,7 +4788,9 @@ export async function recordReviewSuppression(
       ),
     )
     .get();
-  await pruneReviewSuppressionsOverCap(env, repoFullName).catch(() => undefined);
+  await pruneReviewSuppressionsOverCap(env, repoFullName).catch((error) => {
+    console.warn("Failed to prune over-cap review suppressions", { repoFullName, error: errorMessage(error) });
+  });
   /* v8 ignore next -- the row was just inserted/updated in this same call; a missing read-back would mean D1
    *  itself failed silently, not a reachable application branch. */
   return row ? toReviewSuppressionRecord(row) : { ...values, createdAt: nowIso() };
@@ -4799,19 +4801,22 @@ export async function recordReviewSuppression(
  *  unbounded. Internal to recordReviewSuppression; not exported. */
 async function pruneReviewSuppressionsOverCap(env: Env, repoFullName: string): Promise<void> {
   const db = getDb(env.DB);
+  // Fetch every row for the repo (bounded: never more than MAX+1, since this runs after each insert) and slice
+  // the overflow off in JS, rather than a SQL OFFSET -- Drizzle's D1 dialect drops a `.limit(-1)` "unbounded
+  // limit" hint from the emitted SQL entirely, leaving a bare `OFFSET` clause that this driver rejects outright.
   const rows = await db
     .select({ id: reviewSuppression.id })
     .from(reviewSuppression)
     .where(eq(reviewSuppression.repoFullName, repoFullName))
-    .orderBy(desc(reviewSuppression.createdAt))
-    .offset(MAX_REVIEW_SUPPRESSIONS_PER_REPO);
-  if (rows.length === 0) return;
+    .orderBy(desc(reviewSuppression.createdAt));
+  const overflow = rows.slice(MAX_REVIEW_SUPPRESSIONS_PER_REPO);
+  if (overflow.length === 0) return;
   await db.delete(reviewSuppression).where(
     and(
       eq(reviewSuppression.repoFullName, repoFullName),
       inArray(
         reviewSuppression.id,
-        rows.map((row) => row.id),
+        overflow.map((row) => row.id),
       ),
     ),
   );

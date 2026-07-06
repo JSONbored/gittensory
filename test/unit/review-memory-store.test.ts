@@ -12,6 +12,13 @@ describe("review-memory suppression store (#2178)", () => {
       .first<{ id: string; created_at: string; created_by: string | null }>();
   }
 
+  async function rawCount(env: Env, repoFullName: string): Promise<number> {
+    const row = await env.DB.prepare("select count(*) as n from review_suppression where repo_full_name = ?")
+      .bind(repoFullName)
+      .first<{ n: number }>();
+    return row?.n ?? 0;
+  }
+
   it("records a suppression signal and lists it back for the repo", async () => {
     const env = createTestEnv();
     const record = await recordReviewSuppression(env, {
@@ -84,12 +91,25 @@ describe("review-memory suppression store (#2178)", () => {
     for (let i = 0; i < MAX_REVIEW_SUPPRESSIONS_PER_REPO + 1; i += 1) {
       await recordReviewSuppression(env, { repoFullName: "owner/repo", category: "ai_review_split", patternHash: `hash-${i}` });
     }
+    // REGRESSION: assert the underlying table itself shrank back to the cap, via a raw count query --
+    // listReviewSuppressions clamps its OWN `limit` param to MAX_REVIEW_SUPPRESSIONS_PER_REPO (see the test
+    // below), which would mask a completely broken eviction (e.g. a query that silently no-ops) by returning
+    // exactly MAX rows regardless of how many actually remain in the table.
+    expect(await rawCount(env, "owner/repo")).toBe(MAX_REVIEW_SUPPRESSIONS_PER_REPO);
     const listed = await listReviewSuppressions(env, "owner/repo", MAX_REVIEW_SUPPRESSIONS_PER_REPO + 5);
     expect(listed.length).toBe(MAX_REVIEW_SUPPRESSIONS_PER_REPO);
     // The very first inserted key ("hash-0") is the oldest and must have been evicted.
     expect(listed.some((row) => row.patternHash === "hash-0")).toBe(false);
     // The most recently inserted key must survive.
     expect(listed.some((row) => row.patternHash === `hash-${MAX_REVIEW_SUPPRESSIONS_PER_REPO}`)).toBe(true);
+  });
+
+  it("does NOT prune when a repo is at or under the cap (REGRESSION: pruneReviewSuppressionsOverCap's early-return branch)", async () => {
+    const env = createTestEnv();
+    for (let i = 0; i < 3; i += 1) {
+      await recordReviewSuppression(env, { repoFullName: "owner/repo", category: "ai_review_split", patternHash: `hash-${i}` });
+    }
+    expect(await rawCount(env, "owner/repo")).toBe(3);
   });
 
   it("listReviewSuppressions clamps an out-of-range limit into [1, MAX_REVIEW_SUPPRESSIONS_PER_REPO]", async () => {

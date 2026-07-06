@@ -17287,6 +17287,20 @@ describe("queue processors", () => {
     expect(postedBody).not.toContain("Readiness score is below the configured threshold");
   });
 
+  it("FLAG-ON, no stored signals: neither suppresses nor demotes -- the warning renders exactly as if review.memory were off (REGRESSION: the all-clear branch where the store read succeeds but finds nothing to apply)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1", GITTENSORY_REVIEW_MEMORY: "true" });
+    // Flag is fully ON (env + manifest) and the suppression-store read succeeds, but NO signal has ever been
+    // recorded for this repo -- applyReviewMemorySuppression's own empty-signals short-circuit returns
+    // suppressedCount: 0, demotedCount: 0, so processors.ts's "anything to apply?" check is false and
+    // renderedGate is never reassigned away from the original commentGate.
+    const postedBody = await runReadinessWarningPass(env, {
+      deliveryId: "review-memory-no-signals",
+      headSha: "revmem-no-signals",
+      reviewMemoryManifest: true,
+    });
+    expect(postedBody).toContain("Readiness score is below the configured threshold");
+  });
+
   it("FLAG-ON: DEMOTES (keeps, but does not suppress) a same-category readiness warning that does not exactly match any stored signal", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1", GITTENSORY_REVIEW_MEMORY: "true" });
     // A signal for the SAME category but a patternHash that can never match this PR's real finding -- exercises
