@@ -1266,6 +1266,9 @@ function safeRepoPath(path: string): string {
 // focus-manifest.ts, and local-branch.ts pulls in the whole review-scoring/Gittensor-API subsystem, which
 // breaks `ui:typecheck` under the UI's tsconfig (no Workers ambient types there). Re-exported here so this
 // file's own many existing importers of isTestFile/isCodeFile don't need to change their import path.
+// (path-matchers.ts's isCodeFile now excludes generated Dart part files -- .g.dart/.freezed.dart/.gr.dart
+// -- so that fix lands here for free through the re-export, mirroring the packages/gittensory-mcp and
+// gittensor-score-preview classifiers, #3724.)
 export { isCodeFile, isTestFile };
 
 function sameRepo(left: string, right: string): boolean {

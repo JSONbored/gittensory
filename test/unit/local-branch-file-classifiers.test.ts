@@ -170,6 +170,12 @@ describe("isCodeFile", () => {
     }
   });
 
+  it("excludes generated Dart part files from source classification", () => {
+    for (const path of ["lib/models/user.g.dart", "lib/models/user.freezed.dart", "lib/api/user.gr.dart"]) {
+      expect(isCodeFile(path)).toBe(false);
+    }
+  });
+
   it("excludes non-code assets and extensionless files", () => {
     for (const path of [
       "README.md",

@@ -41,6 +41,20 @@ describe("computeLocalScorerTokens (#782)", () => {
     expect(scorer.sourceLines).toBe(1);
   });
 
+  it("counts generated Dart part files as non-code in deterministic metadata scoring", () => {
+    const scorer = computeLocalScorerTokens({
+      changedFiles: [
+        { path: "lib/models/user.g.dart", additions: 4 },
+        { path: "lib/models/user.freezed.dart", additions: 5 },
+        { path: "lib/api/user.gr.dart", additions: 6 },
+        { path: "lib/models/user.dart", additions: 3 },
+      ],
+    });
+    expect(scorer.sourceTokenScore).toBe(3);
+    expect(scorer.nonCodeTokenScore).toBe(15);
+    expect(scorer.totalTokenScore).toBe(18);
+  });
+
   it("surfaces a warning when local validation reports failures, without changing the scores", () => {
     const scorer = computeLocalScorerTokens({
       changedFiles: [{ path: "src/a.ts", additions: 4 }],

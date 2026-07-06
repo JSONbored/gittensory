@@ -21,12 +21,15 @@ export function isTestFile(file: string): boolean {
  *  vue/svelte/astro align with review/rag.ts CODE_EXT_RE, review/visual/paths.ts, and rules/advisory.ts
  *  isCodePath so every classifier agrees. cc/hpp round out the C++ set alongside cpp/c/h (rag.ts already
  *  indexes all four). dart aligns with rag.ts and test-evidence's *_test.dart convention (hand-authored
- *  .dart is source; generated .g.dart/.freezed.dart stay non-code via isGeneratedFile). */
+ *  .dart is source; generated .g.dart/.freezed.dart/.gr.dart part files stay non-code, mirroring the
+ *  packages/gittensory-mcp and gittensor-score-preview classifiers, #3724). */
 export function isCodeFile(file: string): boolean {
   return (
     /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro|dart)$/i.test(
       file,
-    ) && !isTestFile(file)
+    ) &&
+    !isTestFile(file) &&
+    !/\.(g|freezed|gr)\.dart$/i.test(file)
   );
 }
 

@@ -130,6 +130,10 @@ def score_with_gittensor(metadata: dict) -> dict:
     }
 
 
+def is_generated_code_file(path: str) -> bool:
+    return path.lower().endswith((".g.dart", ".freezed.dart", ".gr.dart"))
+
+
 def metadata_fallback(metadata: dict) -> dict:
     source = 0
     tests = 0
@@ -142,7 +146,7 @@ def metadata_fallback(metadata: dict) -> dict:
         lines = max(int(entry.get("additions") or 0) + int(entry.get("deletions") or 0), 0)
         if is_test_file(path):
             tests += lines
-        elif lower_path.endswith((".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rb", ".rs", ".go", ".java", ".kt", ".scala", ".sql", ".cs", ".swift", ".groovy", ".php", ".cpp", ".cc", ".c", ".h", ".hpp", ".m", ".vue", ".svelte", ".astro", ".dart")):
+        elif lower_path.endswith((".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rb", ".rs", ".go", ".java", ".kt", ".scala", ".sql", ".cs", ".swift", ".groovy", ".php", ".cpp", ".cc", ".c", ".h", ".hpp", ".m", ".vue", ".svelte", ".astro", ".dart")) and not is_generated_code_file(lower_path):
             source += lines
         else:
             non_code += lines

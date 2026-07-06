@@ -138,6 +138,30 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
     expect(py.nonCodeTokenScore).toBe(0);
   });
 
+  it("classifies generated Dart part files as non-code in both .mjs and .py previews", () => {
+    const files = [
+      { path: "lib/models/user.g.dart", additions: 4, deletions: 0 },
+      { path: "lib/models/user.freezed.dart", additions: 5, deletions: 0 },
+      { path: "lib/api/user.gr.dart", additions: 6, deletions: 0 },
+      { path: "lib/models/user.dart", additions: 3, deletions: 0 },
+    ];
+    const mjs = runPreview(files);
+    expect(mjs.sourceTokenScore).toBe(3);
+    expect(mjs.testTokenScore).toBe(0);
+    expect(mjs.nonCodeTokenScore).toBe(15);
+
+    const python = findPython();
+    if (!python) return;
+    const env = { ...process.env };
+    delete env.GITTENSOR_ROOT;
+    const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: files }), encoding: "utf8", env });
+    expect(res.status, res.stderr).toBe(0);
+    const py = JSON.parse(res.stdout);
+    expect(py.sourceTokenScore).toBe(3);
+    expect(py.testTokenScore).toBe(0);
+    expect(py.nonCodeTokenScore).toBe(15);
+  });
+
   it("classifies Vue/Svelte/Astro source as code in both .mjs and .py previews", () => {
     // Parity with review/rag.ts CODE_EXT_RE and review/visual/paths.ts: front-end framework
     // source must count as code, not non-code, in every mirrored classifier.
