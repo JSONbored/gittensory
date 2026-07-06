@@ -890,6 +890,50 @@ describe("subscription CLI helpers + fail-safe", () => {
     expect(capturedEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe("t");
   });
 
+  it("threads the OTEL usage-telemetry vars into the subprocess env when the parent has them set (#claude-code-otel-passthrough)", async () => {
+    let capturedEnv: Record<string, string | undefined> = {};
+    const stub: StubSpawn = async (_c, _a, o) => {
+      capturedEnv = o.env;
+      return { stdout: JSON.stringify({ type: "result", result: "ok" }), code: 0 };
+    };
+    await createClaudeCodeAi(
+      {
+        CLAUDE_CODE_OAUTH_TOKEN: "t",
+        CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+        OTEL_METRICS_EXPORTER: "otlp",
+        OTEL_TRACES_EXPORTER: "otlp",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318",
+        OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
+        OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "cumulative",
+        OTEL_METRIC_EXPORT_INTERVAL: "10000",
+      },
+      stub,
+    ).run("sonnet", { prompt: "x" });
+    expect(capturedEnv.CLAUDE_CODE_ENABLE_TELEMETRY).toBe("1");
+    expect(capturedEnv.OTEL_METRICS_EXPORTER).toBe("otlp");
+    expect(capturedEnv.OTEL_TRACES_EXPORTER).toBe("otlp");
+    expect(capturedEnv.OTEL_EXPORTER_OTLP_ENDPOINT).toBe("http://otel-collector:4318");
+    expect(capturedEnv.OTEL_EXPORTER_OTLP_PROTOCOL).toBe("http/protobuf");
+    expect(capturedEnv.OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE).toBe("cumulative");
+    expect(capturedEnv.OTEL_METRIC_EXPORT_INTERVAL).toBe("10000");
+  });
+
+  it("omits the OTEL usage-telemetry vars from the subprocess env when the parent doesn't have them set", async () => {
+    let capturedEnv: Record<string, string | undefined> = {};
+    const stub: StubSpawn = async (_c, _a, o) => {
+      capturedEnv = o.env;
+      return { stdout: JSON.stringify({ type: "result", result: "ok" }), code: 0 };
+    };
+    await createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t" }, stub).run("sonnet", { prompt: "x" });
+    expect(capturedEnv.CLAUDE_CODE_ENABLE_TELEMETRY).toBeUndefined();
+    expect(capturedEnv.OTEL_METRICS_EXPORTER).toBeUndefined();
+    expect(capturedEnv.OTEL_TRACES_EXPORTER).toBeUndefined();
+    expect(capturedEnv.OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined();
+    expect(capturedEnv.OTEL_EXPORTER_OTLP_PROTOCOL).toBeUndefined();
+    expect(capturedEnv.OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE).toBeUndefined();
+    expect(capturedEnv.OTEL_METRIC_EXPORT_INTERVAL).toBeUndefined();
+  });
+
   it("Claude Code pins the default model (claude-sonnet-5) + --effort medium; CLAUDE_AI_* overrides explicitly", async () => {
     let seen: string[] = [];
     let timeout = 0;

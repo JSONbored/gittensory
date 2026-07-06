@@ -707,7 +707,23 @@ export function createClaudeCodeAi(parentEnv: Record<string, string | undefined>
       let stdoutForMetrics = "";
       try {
         if (!token) throw new Error("claude_code_no_oauth_token");
-        const env = subscriptionCliEnv(parentEnv, { CLAUDE_CODE_OAUTH_TOKEN: token });
+        // Usage telemetry (#claude-code-otel-passthrough): the allowlist deliberately excludes these -- they are
+        // plain, non-secret config (an exporter endpoint/protocol, a boolean, a poll interval), never PR content
+        // or credentials -- so they're threaded through explicitly here, the same way CLAUDE_CODE_OAUTH_TOKEN is,
+        // rather than widening SUBSCRIPTION_CLI_ENV_ALLOWLIST itself (which also gates the codex subprocess and
+        // should stay minimal). Without this the CLI silently never emits telemetry: the parent container has the
+        // OTEL vars, but the spawned subprocess previously received none of them, so the Claude usage dashboard
+        // (Grafana, via the OTEL collector → Prometheus) stayed empty regardless of `.env`.
+        const env = subscriptionCliEnv(parentEnv, {
+          CLAUDE_CODE_OAUTH_TOKEN: token,
+          CLAUDE_CODE_ENABLE_TELEMETRY: parentEnv.CLAUDE_CODE_ENABLE_TELEMETRY,
+          OTEL_METRICS_EXPORTER: parentEnv.OTEL_METRICS_EXPORTER,
+          OTEL_TRACES_EXPORTER: parentEnv.OTEL_TRACES_EXPORTER,
+          OTEL_EXPORTER_OTLP_ENDPOINT: parentEnv.OTEL_EXPORTER_OTLP_ENDPOINT,
+          OTEL_EXPORTER_OTLP_PROTOCOL: parentEnv.OTEL_EXPORTER_OTLP_PROTOCOL,
+          OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: parentEnv.OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE,
+          OTEL_METRIC_EXPORT_INTERVAL: parentEnv.OTEL_METRIC_EXPORT_INTERVAL,
+        });
         const systemAppend = normalizedSystemAppend(options);
         const prompt = toCliPrompt(options, systemAppend);
         const spawn = spawnImpl ?? (await defaultSpawn());
