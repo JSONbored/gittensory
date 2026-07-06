@@ -34,6 +34,15 @@ test("detectHardcodedUiString: flags JSX text and user-facing props", () => {
   assert.equal(detectHardcodedUiString('<input className="w-full" />'), false);
 });
 
+test("detectHardcodedUiString: scans malformed JSX text in linear time", () => {
+  const craftedLine = ">a".repeat(1000);
+  const startedAt = performance.now();
+
+  assert.equal(detectHardcodedUiString(craftedLine), false);
+
+  assert.ok(performance.now() - startedAt < 100);
+});
+
 test("scanPatchForI18nRegression: flags hardcoded UI strings when i18n is in use", () => {
   const findings = scanPatchForI18nRegression(
     "src/Widget.tsx",

@@ -23,8 +23,6 @@ const I18N_CONVENTION_RES = [
 const USER_FACING_PROP_RE =
   /\b(?:title|label|placeholder|aria-label|helperText|message|description|heading|tooltip|hint|alt|caption|subtitle|confirmText|cancelText|buttonText|emptyText)\s*=\s*["']([^"']+)["']/gi;
 
-const JSX_TEXT_RE = />\s*([^<{][^<]*?[A-Za-z][^<]*?)\s*</g;
-
 /** True when a line shows the repo uses an i18n/translation call convention. Pure. */
 export function detectI18nConvention(line: string): boolean {
   return I18N_CONVENTION_RES.some((re) => {
@@ -49,6 +47,24 @@ function isCommentOrImportLine(line: string): boolean {
   return /^(?:\/\/|\/\*|\*|<!--|import\b|from\b)/.test(trimmed);
 }
 
+function hasUserFacingJsxText(line: string): boolean {
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char !== ">") continue;
+
+    const textStart = i + 1;
+    const next = line[textStart];
+    if (next === undefined || next === "<" || next === "{") continue;
+
+    const close = line.indexOf("<", textStart);
+    if (close === -1) return false;
+    if (looksLikeUserFacingLiteral(line.slice(textStart, close))) return true;
+    i = close - 1;
+  }
+
+  return false;
+}
+
 /** True when one added UI line adds a hardcoded user-facing string, or null. Pure. */
 export function detectHardcodedUiString(line: string): boolean {
   if (isCommentOrImportLine(line)) return false;
@@ -59,12 +75,7 @@ export function detectHardcodedUiString(line: string): boolean {
     if (looksLikeUserFacingLiteral(propMatch[1] ?? "")) return true;
   }
 
-  JSX_TEXT_RE.lastIndex = 0;
-  let textMatch: RegExpExecArray | null;
-  while ((textMatch = JSX_TEXT_RE.exec(line))) {
-    const text = (textMatch[1] ?? "").trim();
-    if (looksLikeUserFacingLiteral(text)) return true;
-  }
+  if (hasUserFacingJsxText(line)) return true;
 
   return false;
 }
