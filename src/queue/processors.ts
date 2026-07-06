@@ -1258,27 +1258,44 @@ async function fanOutAgentRegateSweepJobs(
   }
   const configured: Array<{ fullName: string; installationId?: number }> = [];
   let skippedDraining = 0;
+  let skippedErrored = 0;
   for (const repo of byKey.values()) {
     const repoFullName = repo.fullName;
-    const settings = await resolveRepositorySettings(env, repoFullName);
-    if (
-      !(
-        isConvergenceRepoAllowed(env, repoFullName) ||
-        isAgentConfigured(settings.autonomy)
+    // #audit-sweep-fanout-isolation: one repo's settings/draining-check failure (a transient D1 read error, say)
+    // must not throw out of this loop and abort the fan-out for EVERY OTHER already-iterated-and-pending repo —
+    // it previously did, since an uncaught throw here escapes the whole function before the dispatch loop below
+    // ever runs. Skip just this repo (it gets picked up again next tick) and keep going.
+    try {
+      const settings = await resolveRepositorySettings(env, repoFullName);
+      if (
+        !(
+          isConvergenceRepoAllowed(env, repoFullName) ||
+          isAgentConfigured(settings.autonomy)
+        )
       )
-    )
-      continue;
-    // In-flight guard (#audit-sweep-fanout): skip a repo whose prior sweep is still draining — its per-PR jobs are
-    // mid-flight and stamping last_regated_at as they run, so the freshest stamp being within the sweep window
-    // means a sweep is active. Re-arming now would enqueue duplicate per-PR jobs for the not-yet-drained
-    // candidates, so this is what finally stops the 2-min cron piling a second full sweep on an unfinished one.
-    if (
-      isRegateSweepDraining(await getLatestRegatedAt(env, repoFullName), now)
-    ) {
-      skippedDraining += 1;
-      continue;
+        continue;
+      // In-flight guard (#audit-sweep-fanout): skip a repo whose prior sweep is still draining — its per-PR jobs are
+      // mid-flight and stamping last_regated_at as they run, so the freshest stamp being within the sweep window
+      // means a sweep is active. Re-arming now would enqueue duplicate per-PR jobs for the not-yet-drained
+      // candidates, so this is what finally stops the 2-min cron piling a second full sweep on an unfinished one.
+      if (
+        isRegateSweepDraining(await getLatestRegatedAt(env, repoFullName), now)
+      ) {
+        skippedDraining += 1;
+        continue;
+      }
+      configured.push(repo);
+    } catch (error) {
+      skippedErrored += 1;
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "sweep_fanout_repo_check_failed",
+          repository: repoFullName,
+          error: errorMessage(error),
+        }),
+      );
     }
-    configured.push(repo);
   }
   await Promise.all(
     configured.map((repo, index) => {
@@ -1289,15 +1306,27 @@ async function fanOutAgentRegateSweepJobs(
         ...(typeof repo.installationId === "number" ? { installationId: repo.installationId } : {}),
       };
       const delaySeconds = Math.min(index * 10, 600);
-      return delaySeconds > 0
-        ? env.JOBS.send(message, { delaySeconds })
-        : env.JOBS.send(message);
+      // #audit-sweep-fanout-isolation: one repo's dispatch failure (a transient queue-send error) must not reject
+      // this Promise.all and, with it, abort every OTHER repo's already-in-flight send AND the audit event below
+      // that records this fan-out's outcome. Swallow + log per-repo instead; a repo that fails to dispatch here
+      // simply gets picked up again next tick (it never got its convergence marker stamped, so it stays eligible).
+      const send = delaySeconds > 0 ? env.JOBS.send(message, { delaySeconds }) : env.JOBS.send(message);
+      return send.catch((error) => {
+        console.error(
+          JSON.stringify({
+            level: "error",
+            event: "sweep_fanout_dispatch_failed",
+            repository: repo.fullName,
+            error: errorMessage(error),
+          }),
+        );
+      });
     }),
   );
   await recordAuditEvent(env, {
     eventType: "agent.sweep.fanout",
     outcome: "queued",
-    metadata: { repoCount: configured.length, skippedDraining, requestedBy },
+    metadata: { repoCount: configured.length, skippedDraining, skippedErrored, requestedBy },
   });
 }
 

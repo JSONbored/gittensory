@@ -768,6 +768,61 @@ describe("queue processors", () => {
     expect(sent).toEqual(expect.arrayContaining([expect.objectContaining({ type: "agent-regate-sweep", repoFullName: "owner/advisory-repo", installationId: 9102 })]));
   });
 
+  it("REGRESSION (#audit-sweep-fanout-isolation): one repo's settings-check failure does not abort the fan-out for every other repo", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({
+      GITTENSORY_REVIEW_REPOS: "",
+      JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue,
+    });
+    await upsertRepositoryFromGitHub(env, { name: "agent-a", full_name: "owner/agent-a", private: false, owner: { login: "owner" } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-b", full_name: "owner/agent-b", private: false, owner: { login: "owner" } });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-a", autonomy: { label: "auto" } });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-b", autonomy: { label: "auto" } });
+    const realResolve = repositorySettingsModule.resolveRepositorySettings;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const resolveSpy = vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockImplementation(async (e, repoFullName) => {
+      if (repoFullName === "owner/agent-a") throw new Error("D1 read error");
+      return realResolve(e, repoFullName);
+    });
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "schedule" });
+
+    expect(sent).toEqual([expect.objectContaining({ type: "agent-regate-sweep", repoFullName: "owner/agent-b" })]); // agent-a's failure did not block agent-b
+    expect(errors.mock.calls.some((call) => String(call[0]).includes("sweep_fanout_repo_check_failed") && String(call[0]).includes("owner/agent-a"))).toBe(true);
+    const fanout = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("agent.sweep.fanout").first<{ outcome: string; metadata_json: string }>();
+    expect(fanout?.outcome).toBe("queued"); // the fan-out still completes and records its own outcome
+    expect(JSON.parse(fanout?.metadata_json ?? "{}")).toMatchObject({ repoCount: 1, skippedErrored: 1 });
+    errors.mockRestore();
+    resolveSpy.mockRestore();
+  });
+
+  it("REGRESSION (#audit-sweep-fanout-isolation): one repo's dispatch failure does not abort dispatch for every other repo, and the fan-out audit event still records", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({
+      GITTENSORY_REVIEW_REPOS: "",
+      JOBS: {
+        async send(m: import("../../src/types").JobMessage) {
+          if (m.type === "agent-regate-sweep" && m.repoFullName === "owner/agent-a") throw new Error("queue send error");
+          sent.push(m);
+        },
+      } as unknown as Queue,
+    });
+    await upsertRepositoryFromGitHub(env, { name: "agent-a", full_name: "owner/agent-a", private: false, owner: { login: "owner" } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-b", full_name: "owner/agent-b", private: false, owner: { login: "owner" } });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-a", autonomy: { label: "auto" } });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-b", autonomy: { label: "auto" } });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "schedule" });
+
+    expect(sent).toEqual([expect.objectContaining({ type: "agent-regate-sweep", repoFullName: "owner/agent-b" })]); // agent-a's failed send did not block agent-b's
+    expect(errors.mock.calls.some((call) => String(call[0]).includes("sweep_fanout_dispatch_failed") && String(call[0]).includes("owner/agent-a"))).toBe(true);
+    const fanout = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("agent.sweep.fanout").first<{ outcome: string; metadata_json: string }>();
+    expect(fanout?.outcome).toBe("queued"); // reached — the dispatch failure did not throw the fan-out itself
+    expect(JSON.parse(fanout?.metadata_json ?? "{}")).toMatchObject({ repoCount: 2 }); // both PASSED their settings/draining checks regardless of dispatch outcome
+    errors.mockRestore();
+  });
+
   it("agent re-gate sweep recomputes stale open PR verdicts as an advisory audit, never publishing (#777)", async () => {
     const sent: import("../../src/types").JobMessage[] = [];
     const env = createTestEnv({
