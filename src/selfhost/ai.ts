@@ -148,7 +148,16 @@ export function resolveCodexEffort(configured: string | undefined): string {
 // old fixed 120s cap silently SIGKILLed a large max-effort review mid-generation (the review then degrades to
 // nothing). These scale the ceiling with the provider-specific effort dial; provider-specific timeout vars override
 // them outright.
-const EFFORT_TIMEOUT_MS: Record<string, number> = { low: 120_000, medium: 120_000, high: 240_000, xhigh: 360_000, max: 600_000 };
+//
+// `medium` was left pinned to `low`'s 120s when this ladder was introduced (#3612-era), on the assumption that
+// capping it tightly would conserve subscription tokens. In production it did the opposite: `medium` is the
+// DEFAULT effort (see resolveEffort/resolveCodexEffort above), so a real medium-effort review that runs past 120s
+// gets SIGKILLed mid-generation — the tokens already spent are wasted, and because that PR's head SHA never gets
+// a completed gate check, the regate-repair sweep (queue/processors.ts's surfaceRepairPriorityPullNumbers) treats
+// it as an outage and bypasses its own staleness throttle to retry it every ~2 minutes, indefinitely. Giving
+// `medium` its own tier (rather than reusing `low`'s) lets a normal medium-effort review actually finish instead
+// of feeding that loop.
+const EFFORT_TIMEOUT_MS: Record<string, number> = { low: 120_000, medium: 180_000, high: 240_000, xhigh: 360_000, max: 600_000 };
 
 function resolveCliTimeoutFrom(configured: string | undefined, effort: string): number {
   const raw = Number(configured);

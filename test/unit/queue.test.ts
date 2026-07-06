@@ -6146,6 +6146,88 @@ describe("queue processors", () => {
     });
   });
 
+  it("REGRESSION (#orb-retry-storm): after MAX_ATTEMPTS repair dispatches for the SAME head SHA, the sweep stops bypassing freshness and records exactly one repair_exhausted audit event", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
+    await upsertInstallation(env, { action: "created", installation: { id: 9407, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9407);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    // PR 1: missing its current Gate check for its current head -- would ordinarily be flagged outage-repair
+    // priority on every tick. Pre-seed 3 prior repair-attempt audit events for this EXACT head SHA to simulate a
+    // review that keeps failing (e.g. a timeout) and never publishes a completed gate check.
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 1, title: "Stuck repair", state: "open", user: { login: "c" }, head: { sha: "stuck-sha" }, labels: [], body: "" });
+    await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 1, "stuck-sha");
+    const targetKey = "owner/agent-repo#1#stuck-sha";
+    for (let i = 0; i < 3; i += 1) {
+      await repositoriesModule.recordAuditEvent(env, {
+        eventType: "agent.sweep.regate.repair_attempt",
+        actor: "gittensory",
+        targetKey,
+        outcome: "queued",
+        detail: "prior attempt",
+        metadata: {},
+      });
+    }
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+
+    // No longer treated as priority repair -- either not fanned at all, or fanned as an ordinary "regate-sweep:"
+    // candidate, but never re-dispatched as "regate-repair:" once the same SHA has exhausted its attempt budget.
+    const fanned = sent.filter((job): job is Extract<import("../../src/types").JobMessage, { type: "agent-regate-pr" }> => job.type === "agent-regate-pr");
+    expect(fanned.every((job) => job.deliveryId !== "regate-repair:owner/agent-repo#1")).toBe(true);
+    const exhausted = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+      .bind("agent.sweep.regate.repair_exhausted", targetKey)
+      .first<{ n: number }>();
+    expect(exhausted?.n).toBe(1);
+    // No further repair-attempt event was recorded for the exhausted SHA this tick.
+    const attempts = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+      .bind("agent.sweep.regate.repair_attempt", targetKey)
+      .first<{ n: number }>();
+    expect(attempts?.n).toBe(3);
+  });
+
+  it("REGRESSION (#orb-retry-storm): a repair dispatch under the attempt cap records a repair_attempt audit event, and a second sweep tick does not duplicate the repair_exhausted event once already flagged", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
+    await upsertInstallation(env, { action: "created", installation: { id: 9408, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9408);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 2, title: "Fresh repair", state: "open", user: { login: "c" }, head: { sha: "fresh-sha" }, labels: [], body: "" });
+    await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 2, "fresh-sha");
+    const targetKey = "owner/agent-repo#2#fresh-sha";
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+
+    const fanned = sent.filter((job): job is Extract<import("../../src/types").JobMessage, { type: "agent-regate-pr" }> => job.type === "agent-regate-pr");
+    expect(fanned.map((job) => job.deliveryId)).toContain("regate-repair:owner/agent-repo#2");
+    const attemptsAfterFirst = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+      .bind("agent.sweep.regate.repair_attempt", targetKey)
+      .first<{ n: number }>();
+    expect(attemptsAfterFirst?.n).toBe(1);
+
+    // Manually push this SHA over the cap, then run the sweep twice more -- the exhausted event must be recorded
+    // only once even though the PR is (re-)evaluated on every tick.
+    for (let i = 0; i < 2; i += 1) {
+      await repositoriesModule.recordAuditEvent(env, {
+        eventType: "agent.sweep.regate.repair_attempt",
+        actor: "gittensory",
+        targetKey,
+        outcome: "queued",
+        detail: "prior attempt",
+        metadata: {},
+      });
+    }
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+    await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
+
+    const exhausted = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+      .bind("agent.sweep.regate.repair_exhausted", targetKey)
+      .first<{ n: number }>();
+    expect(exhausted?.n).toBe(1);
+  });
+
   it("agent re-gate sweep fail-opens when current Gate check reads fail during repair priority selection", async () => {
     const sent: import("../../src/types").JobMessage[] = [];
     const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });

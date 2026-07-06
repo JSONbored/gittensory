@@ -1356,6 +1356,25 @@ async function refreshOpenPullRequestsForScheduledSweep(
   });
 }
 
+// #orb-retry-storm: outage-repair priority (below) deliberately bypasses the normal staleness throttle
+// (priorityBypassesFreshness) so a PR missing its current-head gate check gets re-repaired on every ~2-minute
+// sweep tick instead of waiting out the ordinary cadence. That is correct for a transient blip, but
+// surfaceRepairPriorityPullNumbers has no memory of prior attempts -- if the repair keeps failing for the SAME
+// head SHA (e.g. every AI-provider attempt times out), it would otherwise re-select that PR forever, burning a
+// fresh review attempt every cycle for zero output. These two constants cap that: once a SHA has already had
+// REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA dispatches recorded, it drops back to ordinary staleness-gated candidacy
+// (still eventually re-checked, just not on every tick) and a single REGATE_REPAIR_EXHAUSTED_EVENT_TYPE audit
+// event is recorded so the stuck PR is visible instead of silently retried forever. A new commit changes the
+// head SHA, which resets the count naturally (the target key is scoped to repo+PR+SHA).
+const REGATE_REPAIR_ATTEMPT_EVENT_TYPE = "agent.sweep.regate.repair_attempt";
+const REGATE_REPAIR_EXHAUSTED_EVENT_TYPE = "agent.sweep.regate.repair_exhausted";
+const REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA = 3;
+const REGATE_REPAIR_ATTEMPT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
+function regateRepairTargetKey(repoFullName: string, prNumber: number, headSha: string): string {
+  return `${repoFullName}#${prNumber}#${headSha}`;
+}
+
 async function surfaceRepairPriorityPullNumbers(
   env: Env,
   repoFullName: string,
@@ -1367,20 +1386,55 @@ async function surfaceRepairPriorityPullNumbers(
     if (pr.headSha && pr.lastPublishedSurfaceSha !== pr.headSha)
       priorityPullNumbers.add(pr.number);
   }
-  if (!gateCheckEnabled) return [...priorityPullNumbers];
+  if (gateCheckEnabled) {
+    await Promise.all(
+      pulls.map(async (pr) => {
+        if (!pr.headSha) return;
+        const checks = await listCheckSummaries(env, repoFullName, pr.number).catch(
+          () => [],
+        );
+        const currentGateCheck = checks.find(
+          (check) =>
+            check.name === GITTENSORY_GATE_CHECK_NAME &&
+            check.headSha === pr.headSha &&
+            check.status === "completed",
+        );
+        if (!currentGateCheck) priorityPullNumbers.add(pr.number);
+      }),
+    );
+  }
+  const sinceIso = new Date(Date.now() - REGATE_REPAIR_ATTEMPT_LOOKBACK_MS).toISOString();
   await Promise.all(
-    pulls.map(async (pr) => {
-      if (!pr.headSha) return;
-      const checks = await listCheckSummaries(env, repoFullName, pr.number).catch(
-        () => [],
+    [...priorityPullNumbers].map(async (prNumber) => {
+      const pr = pulls.find((candidate) => candidate.number === prNumber);
+      /* v8 ignore next -- priorityPullNumbers is only ever populated (both loops above) from a `pr` in `pulls` that already had a truthy headSha, so this lookup always succeeds with one; the guard only satisfies Array#find's `| undefined` return type. */
+      if (!pr?.headSha) return;
+      const targetKey = regateRepairTargetKey(repoFullName, pr.number, pr.headSha);
+      const attempts = await countRecentAuditEventsForActorAndTarget(
+        env,
+        "gittensory",
+        REGATE_REPAIR_ATTEMPT_EVENT_TYPE,
+        targetKey,
+        sinceIso,
       );
-      const currentGateCheck = checks.find(
-        (check) =>
-          check.name === GITTENSORY_GATE_CHECK_NAME &&
-          check.headSha === pr.headSha &&
-          check.status === "completed",
+      if (attempts < REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA) return;
+      priorityPullNumbers.delete(prNumber);
+      const alreadyFlagged = await countRecentAuditEventsForActorAndTarget(
+        env,
+        "gittensory",
+        REGATE_REPAIR_EXHAUSTED_EVENT_TYPE,
+        targetKey,
+        sinceIso,
       );
-      if (!currentGateCheck) priorityPullNumbers.add(pr.number);
+      if (alreadyFlagged > 0) return;
+      await recordAuditEvent(env, {
+        eventType: REGATE_REPAIR_EXHAUSTED_EVENT_TYPE,
+        actor: "gittensory",
+        targetKey,
+        outcome: "denied",
+        detail: `re-gate repair exhausted after ${attempts} attempt(s) for the same head SHA; falling back to ordinary staleness cadence`,
+        metadata: { repoFullName, prNumber: pr.number, headSha: pr.headSha, attempts },
+      });
     }),
   );
   return [...priorityPullNumbers];
@@ -1687,10 +1741,11 @@ async function sweepRepoRegate(
     // candidates at once (#audit-sweep-fanout). The cheap verdict summary above is computed inline and recorded
     // below, preserving the advisory audit. The convergence marker was already stamped for every candidate at
     // dispatch (above); with no installation to act with there is simply no re-review to fan out (audit-only).
+    const isPriorityRepair = priorityPullNumberSet.has(pr.number);
     if (sweepInstallationId != null) {
       const job: JobMessage = {
         type: "agent-regate-pr",
-        deliveryId: priorityPullNumberSet.has(pr.number)
+        deliveryId: isPriorityRepair
           ? `regate-repair:${repoFullName}#${pr.number}`
           : `regate-sweep:${repoFullName}#${pr.number}`,
         repoFullName,
@@ -1702,6 +1757,19 @@ async function sweepRepoRegate(
       await (delaySeconds > 0
         ? env.JOBS.send(job, { delaySeconds })
         : env.JOBS.send(job));
+      // #orb-retry-storm: record every priority-repair dispatch so surfaceRepairPriorityPullNumbers can cap
+      // how many times the SAME head SHA gets bounced back through this bypass (see its own comment above).
+      /* v8 ignore next -- isPriorityRepair is only true for a pr.number surfaceRepairPriorityPullNumbers added to priorityPullNumbers, which requires that same pr to have a truthy headSha; `&& pr.headSha` only satisfies its optional TS type. */
+      if (isPriorityRepair && pr.headSha) {
+        await recordAuditEvent(env, {
+          eventType: REGATE_REPAIR_ATTEMPT_EVENT_TYPE,
+          actor: "gittensory",
+          targetKey: regateRepairTargetKey(repoFullName, pr.number, pr.headSha),
+          outcome: "queued",
+          detail: `outage-repair re-review dispatched for ${repoFullName}#${pr.number}`,
+          metadata: { repoFullName, prNumber: pr.number, headSha: pr.headSha },
+        });
+      }
     }
   }
   await recordAuditEvent(env, {

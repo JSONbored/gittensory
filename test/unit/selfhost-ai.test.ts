@@ -45,20 +45,20 @@ describe("resolveCodexEffort (#selfhost-effort — Codex reasoning effort, expli
 describe("provider-specific CLI timeouts (#selfhost — no shared timeout ambiguity)", () => {
   it("scales Claude timeout from CLAUDE_AI_EFFORT and honors CLAUDE_AI_TIMEOUT_MS", () => {
     expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_EFFORT: "low" })).toBe(120_000);
-    expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_EFFORT: "medium" })).toBe(120_000);
+    expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_EFFORT: "medium" })).toBe(180_000);
     expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_EFFORT: "high" })).toBe(240_000);
     expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_EFFORT: "xhigh" })).toBe(360_000);
     expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_EFFORT: "max" })).toBe(600_000);
-    expect(resolveClaudeCliTimeoutMs({})).toBe(120_000);
+    expect(resolveClaudeCliTimeoutMs({})).toBe(180_000);
     expect(resolveClaudeCliTimeoutMs({ CLAUDE_AI_TIMEOUT_MS: "300000", CLAUDE_AI_EFFORT: "low" })).toBe(300_000);
   });
   it("scales Codex timeout from CODEX_AI_EFFORT and honors CODEX_AI_TIMEOUT_MS", () => {
     expect(resolveCodexCliTimeoutMs({ CODEX_AI_EFFORT: "low" })).toBe(120_000);
-    expect(resolveCodexCliTimeoutMs({ CODEX_AI_EFFORT: "medium" })).toBe(120_000);
+    expect(resolveCodexCliTimeoutMs({ CODEX_AI_EFFORT: "medium" })).toBe(180_000);
     expect(resolveCodexCliTimeoutMs({ CODEX_AI_EFFORT: "high" })).toBe(240_000);
     expect(resolveCodexCliTimeoutMs({ CODEX_AI_EFFORT: "xhigh" })).toBe(360_000);
     expect(resolveCodexCliTimeoutMs({ CODEX_AI_EFFORT: "max" })).toBe(360_000);
-    expect(resolveCodexCliTimeoutMs({})).toBe(120_000);
+    expect(resolveCodexCliTimeoutMs({})).toBe(180_000);
     expect(resolveCodexCliTimeoutMs({ CODEX_AI_TIMEOUT_MS: "1000" })).toBe(30_000);
     expect(resolveCodexCliTimeoutMs({ CODEX_AI_TIMEOUT_MS: "9999999" })).toBe(1_800_000);
   });
@@ -947,7 +947,7 @@ describe("subscription CLI helpers + fail-safe", () => {
     expect(seen[seen.indexOf("--model") + 1]).toBe("claude-sonnet-5");
     expect(seen[seen.indexOf("--effort") + 1]).toBe("medium");
     expect(seen).not.toContain("--append-system-prompt");
-    expect(timeout).toBe(120_000); // medium → 120s by default to conserve fallback subscription tokens
+    expect(timeout).toBe(180_000); // medium → 180s: its own tier, distinct from low's 120s (#orb-retry-storm)
     // Provider-specific overrides flow through to the argv + timeout scale.
     await createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t", CLAUDE_AI_MODEL: "claude-opus-4-8", CLAUDE_AI_EFFORT: "max" }, cap).run("", { prompt: "x" });
     expect(seen[seen.indexOf("--model") + 1]).toBe("claude-opus-4-8");
@@ -1334,9 +1334,9 @@ describe("subscription CLI helpers + fail-safe", () => {
     await expect(
       createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, stalled, noAuthCheck).run("m", { prompt: "x" }),
     ).rejects.not.toThrow(/^codex_timeout/);
-    // The fast-fail deadline defaults to 30s and is strictly less than the (120s-default) full timeout.
+    // The fast-fail deadline defaults to 30s and is strictly less than the (180s-default) full timeout.
     expect(capturedOpts?.firstOutputTimeoutMs).toBe(30_000);
-    expect(capturedOpts?.timeoutMs).toBe(120_000);
+    expect(capturedOpts?.timeoutMs).toBe(180_000);
     expect(capturedOpts?.firstOutputTimeoutMs).toBeLessThan(capturedOpts!.timeoutMs);
   });
 
