@@ -414,6 +414,8 @@ export type AutoReviewConfig = {
   ignoreAuthors: string[];
   /** `review.auto_review.ignore_title_keywords`: case-insensitive title substrings that skip AI review. Empty ⇒ no skip. (#2040) */
   ignoreTitleKeywords: string[];
+  /** `review.auto_review.skip_labels`: case-insensitive PR label names that skip AI review. Empty ⇒ no skip. (#2062) */
+  skipLabels: string[];
   /** `review.auto_review.base_branches`: base-ref globs whose PRs ARE reviewed; empty/unset ⇒ every base. (#2041) */
   baseBranches: string[];
   /** `review.auto_review.auto_pause_after_reviewed_commits`: after N published AI reviews on this PR, pause further
@@ -425,6 +427,7 @@ export const EMPTY_AUTO_REVIEW_CONFIG: AutoReviewConfig = {
   skipDrafts: null,
   ignoreAuthors: [],
   ignoreTitleKeywords: [],
+  skipLabels: [],
   baseBranches: [],
   autoPauseAfterReviewedCommits: null,
 };
@@ -1768,6 +1771,7 @@ function autoReviewPresent(config: AutoReviewConfig): boolean {
     config.skipDrafts !== null ||
     config.ignoreAuthors.length > 0 ||
     config.ignoreTitleKeywords.length > 0 ||
+    config.skipLabels.length > 0 ||
     config.baseBranches.length > 0 ||
     config.autoPauseAfterReviewedCommits !== null
   );
@@ -1785,6 +1789,7 @@ function parseAutoReviewConfig(value: JsonValue | undefined, warnings: string[])
     skipDrafts: normalizeOptionalBoolean(record.skip_drafts, "review.auto_review.skip_drafts", warnings),
     ignoreAuthors: parseManifestGlobList(record.ignore_authors, "review.auto_review.ignore_authors", warnings),
     ignoreTitleKeywords: parseAutoReviewTitleKeywords(record.ignore_title_keywords, warnings),
+    skipLabels: parseAutoReviewSkipLabels(record.skip_labels, warnings),
     baseBranches: parseManifestGlobList(record.base_branches, "review.auto_review.base_branches", warnings),
     autoPauseAfterReviewedCommits: normalizeOptionalNonNegativeInt(
       record.auto_pause_after_reviewed_commits,
@@ -1927,6 +1932,34 @@ function parseAutoReviewTitleKeywords(value: JsonValue | undefined, warnings: st
     }
     const safe = parsePublicSafeText(raw, `review.auto_review.ignore_title_keywords[${index}]`, warnings);
     if (safe !== null) out.push(safe);
+  }
+  return out;
+}
+
+function parseAutoReviewSkipLabels(value: JsonValue | undefined, warnings: string[]): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    warnings.push(`Manifest "review.auto_review.skip_labels" must be a list of strings; ignoring it.`);
+    return [];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const [index, entry] of value.entries()) {
+    if (out.length >= MAX_PATH_INSTRUCTIONS) {
+      warnings.push(`Manifest "review.auto_review.skip_labels" is capped at ${MAX_PATH_INSTRUCTIONS} entries; dropping the rest.`);
+      break;
+    }
+    const raw = typeof entry === "string" ? entry.trim() : "";
+    if (!raw) {
+      warnings.push(`Manifest "review.auto_review.skip_labels[${index}]" must be a non-empty string; ignoring it.`);
+      continue;
+    }
+    const safe = parsePublicSafeText(raw, `review.auto_review.skip_labels[${index}]`, warnings);
+    if (safe === null) continue;
+    const key = safe.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
   }
   return out;
 }
@@ -2122,6 +2155,7 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
     if (review.autoReview.skipDrafts !== null) autoReview.skip_drafts = review.autoReview.skipDrafts;
     if (review.autoReview.ignoreAuthors.length > 0) autoReview.ignore_authors = [...review.autoReview.ignoreAuthors];
     if (review.autoReview.ignoreTitleKeywords.length > 0) autoReview.ignore_title_keywords = [...review.autoReview.ignoreTitleKeywords];
+    if (review.autoReview.skipLabels.length > 0) autoReview.skip_labels = [...review.autoReview.skipLabels];
     if (review.autoReview.baseBranches.length > 0) autoReview.base_branches = [...review.autoReview.baseBranches];
     if (review.autoReview.autoPauseAfterReviewedCommits !== null) {
       autoReview.auto_pause_after_reviewed_commits = review.autoReview.autoPauseAfterReviewedCommits;
@@ -2196,6 +2230,7 @@ export type AutoReviewEligibilityInput = {
   isDraft: boolean;
   author: string | null;
   title: string;
+  labels: readonly string[];
   baseRef: string | null;
   reviewedCommitCount: number;
 };
@@ -2213,6 +2248,12 @@ export function evaluateAutoReviewSkipReason(config: AutoReviewConfig, input: Au
     const titleLower = input.title.toLowerCase();
     if (config.ignoreTitleKeywords.some((keyword) => titleLower.includes(keyword.toLowerCase()))) {
       return "review skipped (WIP title)";
+    }
+  }
+  if (config.skipLabels.length > 0 && input.labels.length > 0) {
+    const prLabels = new Set(input.labels.map((label) => label.toLowerCase()));
+    if (config.skipLabels.some((label) => prLabels.has(label))) {
+      return "review skipped (label)";
     }
   }
   if (config.baseBranches.length > 0) {
@@ -2235,6 +2276,7 @@ export function resolvePullRequestAutoReviewSkipReason(args: {
   isDraft: boolean;
   author: string | null;
   title: string;
+  labels?: readonly string[] | undefined;
   baseRef: string | null;
   reviewedCommitCount?: number | undefined;
 }): string | null {
@@ -2243,6 +2285,7 @@ export function resolvePullRequestAutoReviewSkipReason(args: {
     isDraft: args.isDraft,
     author: args.author,
     title: args.title,
+    labels: args.labels ?? [],
     baseRef: args.baseRef,
     reviewedCommitCount: args.reviewedCommitCount ?? 0,
   });

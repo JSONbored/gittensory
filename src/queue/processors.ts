@@ -6329,7 +6329,7 @@ export async function resolveAutoReviewSkipForPullRequest(
     isFrozenForManualReview: boolean;
     forceAiReview?: boolean | undefined;
     repoFullName: string;
-    pr: { isDraft?: boolean | null; title: string; baseRef?: string | null; number: number };
+    pr: { isDraft?: boolean | null; title: string; baseRef?: string | null; number: number; labels?: readonly string[] };
     author: string | null;
     deliveryId: string;
     headSha: string | null | undefined;
@@ -6346,6 +6346,7 @@ export async function resolveAutoReviewSkipForPullRequest(
     isDraft: args.pr.isDraft === true,
     author: args.author,
     title: args.pr.title,
+    labels: args.pr.labels ?? [],
     baseRef: args.pr.baseRef ?? null,
     reviewedCommitCount,
   });
@@ -8148,7 +8149,7 @@ async function maybePublishPrPublicSurface(
       isFrozenForManualReview,
       forceAiReview: webhook.forceAiReview,
       repoFullName,
-      pr: { number: pr.number, title: pr.title, baseRef: pr.baseRef ?? null, isDraft: pr.isDraft ?? null },
+      pr: { number: pr.number, title: pr.title, baseRef: pr.baseRef ?? null, isDraft: pr.isDraft ?? null, labels: pr.labels },
       author,
       deliveryId: webhook.deliveryId,
       headSha: advisory.headSha ?? null,

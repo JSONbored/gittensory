@@ -24,6 +24,30 @@ describe("review.auto_review wiring (#1954)", () => {
     ).toBeNull();
   });
 
+  it("resolvePullRequestAutoReviewSkipReason: skips when a configured label is present", () => {
+    const manifest = parseFocusManifest({ review: { auto_review: { skip_labels: ["do-not-review"] } } });
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest,
+        isDraft: false,
+        author: "alice",
+        title: "feat: thing",
+        labels: ["Do-Not-Review"],
+        baseRef: "main",
+      }),
+    ).toBe("review skipped (label)");
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest,
+        isDraft: false,
+        author: "alice",
+        title: "feat: thing",
+        labels: ["feature"],
+        baseRef: "main",
+      }),
+    ).toBeNull();
+  });
+
   it("resolvePullRequestAutoReviewSkipReason: matches the documented *[bot] author glob", () => {
     const manifest = parseFocusManifest({ review: { auto_review: { ignore_authors: ["*[bot]"] } } });
     expect(
