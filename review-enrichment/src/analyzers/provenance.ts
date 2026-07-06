@@ -16,6 +16,7 @@ import { boundedFetchJson } from "../external-fetch.js";
 import { BINARY_EXT_RE } from "./binary-extensions.js";
 
 const MAX_ATTESTATION_CHECKS = 20; // bound network round-trips
+const NPM_REGISTRY_TIMEOUT_MS = 5000; // npm registry can be slow; 1200ms default is too aggressive
 const MAX_FINDINGS = 30; // keep the brief bounded
 
 // Compiled/non-source binary artifact extensions. Shared with asset-weight.ts via binary-extensions.ts so
@@ -74,6 +75,7 @@ export async function hasNpmAttestation(
       subcall: "npm-attestations",
       maxBytes: 256 * 1024,
       maxCallsPerCategory: MAX_ATTESTATION_CHECKS,
+      timeoutMs: NPM_REGISTRY_TIMEOUT_MS,
     };
     const res = options.analysis
       ? await options.analysis.fetchJson<{ attestations?: unknown[] }>(url, fetchOptions)

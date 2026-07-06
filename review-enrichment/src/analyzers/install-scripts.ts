@@ -18,6 +18,7 @@ const NPM_PACKAGE_RE =
 const SEMVER_RE =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const MAX_VERSION_LOOKUPS = 25;
+const NPM_REGISTRY_TIMEOUT_MS = 5000; // npm registry can be slow; 1200ms default is too aggressive
 // npm version-specific endpoint responses are typically small (< 50 KB); 128 KB gives enough headroom
 // while rejecting unexpectedly large responses quickly before they consume timeout budget.
 const MAX_VERSION_JSON_BYTES = 128 * 1024;
@@ -133,6 +134,7 @@ export async function scanInstallScripts(
       subcall: "npm-version",
       maxBytes: MAX_VERSION_JSON_BYTES,
       maxCallsPerCategory: MAX_VERSION_LOOKUPS,
+      timeoutMs: NPM_REGISTRY_TIMEOUT_MS,
     };
     const response = options.analysis
       ? await options.analysis.fetchJson<NpmVersionMetadata | NpmPackumentMetadata>(url, fetchOptions)
