@@ -333,6 +333,12 @@ export type UnifiedCommentBridgeArgs = {
    *  `classifyFindingCategory` — never omitted from the count. Default OFF (the processor passes this only when
    *  the manifest opts in — see `resolveReviewPromptOverrides`'s `findingCategories`). (#1958) */
   findingCategories?: FindingCategoryInput[] | undefined;
+  /** Deterministic impact-map entries (review.impact_map port, `src/review/impact-map.ts`, #2184/#2185). When
+   *  present + non-empty, an "Impact map" collapsible (changed module → changed symbols → plausibly affected
+   *  modules, bounded with a "+N more" overflow line) is appended. No AI. Default OFF (the processor passes
+   *  this only when BOTH the operator's GITTENSORY_REVIEW_IMPACT_MAP flag and the per-repo manifest opt-in
+   *  are on — see `shouldComputeImpactMap`, `src/review/impact-map-wire.ts`). */
+  impactMap?: ImpactMapSummaryInput[] | undefined;
   /** The disposition holds this PR for owner review because its diff touches a hard-guardrail path — so an
    *  otherwise-ready comment renders "held for review" instead of "safe to merge". (#guarded-hold-comment) */
   heldForReview?: boolean | undefined;
@@ -486,6 +492,57 @@ export function buildChangedFilesSummaryCollapsible(files: ChangedFileSummaryInp
   return { title: "Changed files", body };
 }
 
+/** One impact-map entry — everything `buildImpactMapCollapsible` needs to render a row. Deliberately narrower
+ *  than `ImpactMapEntry` (`src/review/impact-map.ts`) shape-wise (it IS that shape) so this bridge's import
+ *  surface stays limited to what rendering actually reads. */
+export type ImpactMapSummaryInput = { changedModule: string; affectedModules: string[]; callers: string[] };
+
+/** Hard cap on affected-module cells actually PRINTED per row — independent of (and typically smaller than)
+ *  the upstream `MAX_AFFECTED_MODULES_PER_ENTRY` compute-time cap, so a maintainer-facing table stays compact
+ *  even when the computation itself kept a slightly larger set for AI-grounding use (#2186). Overflow renders
+ *  as a trailing "+N more" instead of silently truncating with no indication more exist. */
+const MAX_RENDERED_AFFECTED_MODULES = 5;
+
+/** Public-safe inline-code escaping for a file path cell — mirrors `buildBeforeAfterCollapsible`'s
+ *  `markdownCode`: backtick/backslash/pipe/angle-bracket neutralized so an adversarial path can't break out of
+ *  the table or the inline-code span. Impact-map paths originate from the repo's own RAG-indexed file tree
+ *  (never raw user input), but this is defense-in-depth, matching the discipline every other path-rendering
+ *  helper in this file already applies. */
+function markdownPathCode(value: string): string {
+  return `\`${value
+    .replace(/\\/g, "\\\\")
+    .replace(/`/g, "\\`")
+    .replace(/\|/g, "\\|")
+    .replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;"))}\``;
+}
+
+/**
+ * Build the "Impact map" collapsible (#2185): one row per changed module that has at least one deterministic
+ * RAG-derived affected module, listing the changed symbols that drove the query and the (bounded, "+N more"
+ * on overflow) affected modules a maintainer should also glance at. No AI, no network — pure rendering over
+ * data the caller's (already flag-gated, #2184) impact-map computation produced. Returns null when there are
+ * no entries (an empty/absent impact map — RAG unavailable, cold index, or the feature off), so the caller
+ * can unconditionally chain this alongside the other optional collapsibles exactly like changedFilesSummary.
+ */
+export function buildImpactMapCollapsible(entries: ImpactMapSummaryInput[]): UnifiedCollapsible | null {
+  if (entries.length === 0) return null;
+  const rows = entries.map((entry) => {
+    const shown = entry.affectedModules.slice(0, MAX_RENDERED_AFFECTED_MODULES);
+    const overflow = entry.affectedModules.length - shown.length;
+    const affectedCell = `${shown.map(markdownPathCode).join(", ")}${overflow > 0 ? ` (+${overflow} more)` : ""}`;
+    const callersCell = entry.callers.length > 0 ? entry.callers.join(", ") : "—";
+    return `| ${markdownPathCode(entry.changedModule)} | ${callersCell} | ${affectedCell} |`;
+  });
+  const body = [
+    "| Changed module | Symbols | Plausibly affected |",
+    "| --- | --- | --- |",
+    ...rows,
+    "",
+    "_Deterministic — from the codebase index, not an AI guess. Files worth a second look, not a guaranteed-complete call graph._",
+  ].join("\n");
+  return { title: "Impact map", body };
+}
+
 /** A finding's path + body — everything `buildFindingCategoryCollapsible` needs to use the finding's own
  *  `category` when present, or fall back to `classifyFindingCategory` when it isn't. Deliberately narrower than
  *  `InlineFinding` (no line/severity/suggestion) so the bridge's pure-rendering surface stays minimal. */
@@ -597,10 +654,17 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
       : null;
   const withFindingCategories =
     findingCategoryCollapsible !== null ? [...(withChangedFiles ?? []), findingCategoryCollapsible] : withChangedFiles;
+  // review.impact_map port (#2184/#2185): when BOTH the operator flag and the manifest opt in, the processor
+  // hands us the deterministic impact-map entries here; append the "Impact map" collapsible right after
+  // Finding categories (another structural, no-AI summary) and ahead of the visual preview. Flag-OFF (the
+  // processor passes undefined) ⇒ extraCollapsibles is unchanged.
+  const impactMapCollapsible = args.impactMap && args.impactMap.length > 0 ? buildImpactMapCollapsible(args.impactMap) : null;
+  const withImpactMap =
+    impactMapCollapsible !== null ? [...(withFindingCategories ?? []), impactMapCollapsible] : withFindingCategories;
   // Visual-capture port: when before/after routes are present, append a "Visual preview" collapsible to the
   // extra sections. Flag-OFF (the processor passes no beforeAfter) ⇒ extraCollapsibles is unchanged.
   const visualCollapsible = args.beforeAfter && args.beforeAfter.length > 0 ? buildBeforeAfterCollapsible(args.beforeAfter) : null;
-  const withVisual = visualCollapsible !== null ? [...(withFindingCategories ?? []), visualCollapsible] : withFindingCategories;
+  const withVisual = visualCollapsible !== null ? [...(withImpactMap ?? []), visualCollapsible] : withImpactMap;
   // #3612: "Scroll preview" renders ALONGSIDE "Visual preview" (never replacing it) — self-host + gif:true
   // only, so this is null (no section, no behavior change) for every repo that hasn't opted in.
   const scrollCollapsible = args.beforeAfter && args.beforeAfter.length > 0 ? buildScrollPreviewCollapsible(args.beforeAfter) : null;
